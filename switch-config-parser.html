@@ -5103,6 +5103,18 @@ function parseExtremeXOSDHCP(cfg){
     const leaseM=cfg.match(new RegExp('^configure vlan\\s+"?'+nameEsc+'"?\\s+dhcp-lease-timer\\s+(\\d+)','m'));
     const leaseSec=parseInt((leaseM||[])[1]||'0');
     const lease=leaseSec?Math.floor(leaseSec/3600)+'h':'';
+    // 2026-07-24 對外查證官方 ExtremeXOS Command Reference 後新增：TFTP/Bootfile/NTP 皆掛在
+    // 既有 dhcp-options 通用 numbered option 機制底下（非具名關鍵字），"code 66/150 ipaddress"
+    // 為 TFTP 伺服器（150 優先，66 備援）、"code 67 string" 為開機檔名（Option67）、
+    // "code 42 ipaddress" 為 NTP(Option42)；next-server(BOOTP siaddr 表頭欄位)查無官方 CLI
+    // 對應項目，不臆測
+    const bootM=cfg.match(new RegExp('^configure vlan\\s+"?'+nameEsc+'"?\\s+dhcp-options\\s+code\\s+67\\s+string\\s+"?([^"\\n]+)"?','m'));
+    const bootFile=(bootM||[])[1]||'';
+    const nextM=cfg.match(new RegExp('^configure vlan\\s+"?'+nameEsc+'"?\\s+dhcp-options\\s+code\\s+150\\s+ipaddress\\s+([\\d.]+)','m'))||
+                 cfg.match(new RegExp('^configure vlan\\s+"?'+nameEsc+'"?\\s+dhcp-options\\s+code\\s+66\\s+ipaddress\\s+([\\d.]+)','m'));
+    const nextServer=(nextM||[])[1]||'';
+    const ntpM=cfg.match(new RegExp('^configure vlan\\s+"?'+nameEsc+'"?\\s+dhcp-options\\s+code\\s+42\\s+ipaddress\\s+([\\d.]+)','m'));
+    const ntpServer=(ntpM||[])[1]||'';
     // Derive network from IP
     const ipM=cfg.match(new RegExp('^configure(?:\\s+vlan)?\\s+"?'+nameEsc+'"?\\s+ipaddress\\s+([\\d.]+)\\s+([\\d.]+)','m'));
     const network=ipM?ipM[1]+'/'+maskToCIDR(ipM[2]):'';
@@ -5110,16 +5122,20 @@ function parseExtremeXOSDHCP(cfg){
     const vidM=cfg.match(new RegExp('^create vlan\\s+"?'+nameEsc+'"?\\s+tag\\s+(\\d+)','m'));
     const vid=(vidM||[])[1]||'';
     pools.push({name:vname,network,range:low&&high?low+'-'+high:'',gateway:gw,
-      dns,lease,excluded:'',interface:'vlan.'+vname,type:'server'});
+      dns,lease,excluded:'',bootFile,nextServer,ntpServer,interface:'vlan.'+vname,type:'server'});
   }
 
   // DHCP Relay: configure bootprelay vlan NAME add IP（2026-07-16 查證修正關鍵字順序，
   // 原本誤寫成 "configure bootprelay add IP vlan NAME"）
+  // 2026-07-24 對外查證官方文件後新增：Option82 為全域指令（非逐 VLAN），且與 DHCP Snooping
+  // 無關、不需先啟用 snooping——"configure bootprelay dhcp-agent information option"（裸行，
+  // 與帶參數的 policy/circuit-id/remote-id/check 變體用行尾錨點區分）
+  const option82=/^configure bootprelay dhcp-agent information option\s*$/m.test(cfg);
   const relayRe=/^configure bootprelay vlan\s+"?([^"\s]+)"?\s+add\s+([\d.]+)/gm;
   while((m=relayRe.exec(cfg))!==null){
     const vname=m[1].trim().replace(/"/g,'');
     pools.push({name:vname,network:'',range:'',gateway:'',dns:[],lease:'',
-      excluded:'',interface:'vlan.'+vname,type:'relay',relayServer:m[2]});
+      excluded:'',interface:'vlan.'+vname,type:'relay',relayServer:m[2],option82});
   }
 
   return pools;
@@ -6391,6 +6407,37 @@ function parseFortiSwitch(cfg){
   };
 }
 
+// 2026-07-24 新增：正確處理 FortiOS 巢狀 "config X ... edit N ... next ... end" 區塊邊界的通用
+// helper。既有簡易 regex（比對零縮排 "^end"／不看縮排量的 "[ \t]*next"）在本體不含巢狀
+// config 子區塊時安全（如既有 ACL/Security FortiSwitch parser），但 DHCP pool 底下有
+// "config ip-range"/"config exclude-range" 這類巢狀子區塊時，子區塊自己的 next/end 會被誤判
+// 為外層 edit 區塊的收尾、導致本體被提前截斷。改用逐行掃描＋深度計數正確追蹤巢狀邊界。
+function _fortiEditEntries(block){
+  const lines=block.split('\n');
+  const entries=[];
+  let i=0;
+  while(i<lines.length){
+    const m=lines[i].match(/^\s*edit\s+(\S+)/);
+    if(m){
+      const id=m[1];
+      let depth=0,body=[],j=i+1;
+      while(j<lines.length){
+        const l=lines[j];
+        if(/^\s*(config|edit)\b/.test(l))depth++;
+        else if(/^\s*(next|end)\b/.test(l)){
+          if(depth===0)break;
+          depth--;
+        }
+        body.push(l);
+        j++;
+      }
+      entries.push({id,body:body.join('\n')});
+      i=j+1;
+    }else i++;
+  }
+  return entries;
+}
+
 function parseDHCP(cfg, vendor){
   const pools=[];
   if(vendor==='comware'){
@@ -6557,30 +6604,46 @@ function parseDHCP(cfg, vendor){
         range:'',excluded:'',lease:'',interface:ifname,type:'relay',relayServer:srv,option82}));
     });
   }else if(vendor==='fortiswitch'){
+    // 2026-07-24 對外查證官方 Fortinet FortiSwitch Administration Guide + FortiSwitch 專屬
+    // Ansible 模組（fortiswitch_system_dhcp_server／fortiswitch_system_interface，直接對應
+    // FortiSwitchOS API schema）後重大修正：原本假設的 "set subnet" 欄位完全不存在，真實語法
+    // 是靠 interface + netmask + 巢狀 "config ip-range" 決定位址範圍，"config exclude-range"
+    // 巢狀決定排除範圍；新增 ntp-server1/tftp-server/filename(bootfile)/next-server/lease-time
+    // 皆為先前完全未解析的既有欄位。
+    // 巢狀 config ip-range/exclude-range 自己的 next/end 若用既有簡易 regex（比對零縮排 "^end"）
+    // 擷取外層 edit 區塊本體，會被巢狀子區塊自己的 next/end 提前誤判為外層收尾（因為 FortiOS
+    // 巢狀縮排通常比外層 edit 深，"next" 前面的縮排比對式 [ \t]*next 不看縮排量，會被誤配），
+    // 改用逐行掃描＋深度計數的 _fortiEditEntries() 正確處理巢狀邊界
     const block=(cfg.match(/^config system dhcp server\n([\s\S]*?)^end/m)||[])[1]||'';
-    const re=/edit\s+(\d+)\n([\s\S]*?)(?=^[ \t]*next|^end)/gm;
-    let m;
-    while((m=re.exec(block))!==null){
-      const body=m[2];
-      const network=(body.match(/set subnet\s+(\S+)\s+(\S+)/)||[])[0]||'';
+    for(const{id,body}of _fortiEditEntries(block)){
       const gateway=(body.match(/set default-gateway\s+(\S+)/)||[])[1]||'';
       const dns=(body.match(/set dns-server1\s+(\S+)/)||[])[1]||'';
       const ifaceName=(body.match(/set interface\s+"?([^"\n]+)"?/)||[])[1]||'';
-      pools.push({name:'Pool'+m[1],network,gateway,dns,interface:ifaceName});
+      const bootFile=(body.match(/set filename\s+"?([^"\n]+)"?/)||[])[1]||'';
+      const nextServer=(body.match(/set next-server\s+(\S+)/)||[])[1]||(body.match(/set tftp-server\s+(\S+)/)||[])[1]||'';
+      const ntpServer=(body.match(/set ntp-server1\s+(\S+)/)||[])[1]||'';
+      const leaseM=body.match(/set lease-time\s+(\d+)/);
+      const lease=leaseM?Math.floor(parseInt(leaseM[1])/3600)+'h':'';
+      const ipRangeBlock=(body.match(/config ip-range\n([\s\S]*?)\n\s*end\b/)||[])[1]||'';
+      const rangeM=ipRangeBlock.match(/set start-ip\s+(\S+)[\s\S]*?set end-ip\s+(\S+)/);
+      const range=rangeM?rangeM[1]+'-'+rangeM[2]:'';
+      const excludeBlock=(body.match(/config exclude-range\n([\s\S]*?)\n\s*end\b/)||[])[1]||'';
+      const excluded=[...excludeBlock.matchAll(/set start-ip\s+(\S+)[\s\S]*?set end-ip\s+(\S+)/g)].map(e=>e[1]+'-'+e[2]).join('; ');
+      pools.push({name:'Pool'+id,network:'',gateway,dns,interface:ifaceName,
+        bootFile,nextServer,ntpServer,lease,range,excluded,type:'server'});
     }
     // DHCP relay：Layer3 interface（config system interface）內的 set dhcp-relay-service enable
-    // + set dhcp-relay-ip（可多台，雙引號分隔）；語法為本專案設計（switch_analyzer 先前未涵蓋
-    // FortiSwitch relay），比照既有 FortiOS config/edit/next/end 區塊慣例撰寫，未對照實機驗證
+    // + set dhcp-relay-ip（可多台，雙引號分隔）；2026-07-24 對外查證確認語法正確（先前標註未對照
+    // 實機驗證，本輪查證官方文件與 Ansible 模組交叉確認一致）。Option82 為獨立旗標
+    // set dhcp-relay-option82 enable，不需要先啟用 DHCP Snooping
     const sysIfBlock=(cfg.match(/^config system interface\n([\s\S]*?)^end/m)||[])[1]||'';
-    const relayRe=/edit\s+"?([^"\n]+)"?\n([\s\S]*?)(?=^[ \t]*next|^end)/gm;
-    let rm;
-    while((rm=relayRe.exec(sysIfBlock))!==null){
-      const ifname=rm[1].trim(), body=rm[2];
+    for(const{id:ifname,body}of _fortiEditEntries(sysIfBlock)){
       if(!/set dhcp-relay-service\s+enable/.test(body))continue;
+      const option82=/set dhcp-relay-option82\s+enable/.test(body);
       const ipsLine=(body.match(/set dhcp-relay-ip\s+([^\n]+)/)||[])[1]||'';
       const ips=[...ipsLine.matchAll(/"([^"]+)"/g)].map(x=>x[1]);
-      ips.forEach(srv=>pools.push({name:'relay:'+ifname,network:'',gateway:'',dns:'',
-        range:'',excluded:'',lease:'',interface:ifname,type:'relay',relayServer:srv}));
+      ips.forEach(srv=>pools.push({name:'relay:'+ifname.replace(/^"|"$/g,''),network:'',gateway:'',dns:'',
+        range:'',excluded:'',lease:'',interface:ifname.replace(/^"|"$/g,''),type:'relay',relayServer:srv,option82}));
     }
   }else if(vendor==='aruba'){
     // Aruba CX: "dhcp-server pool NAME" blocks + ip helper-address relay
@@ -6627,15 +6690,20 @@ function parseDHCP(cfg, vendor){
     // 指令可用，DHCP Server 是透過上傳 ISC dhcpd 語法的 dhcpd.conf/dhcpd.cpy 檔案設定
     // （非逐行指令），三組猜測語法皆屬捏造，一併移除不臆測；產生器端（switch_config_generator
     // renderAlcatelDHCPPool()）已於同日稍早的 Style B 修復中一併停用。
+    // 2026-07-24 對外查證官方 OmniSwitch CLI Reference 後新增：Option82 掛在 DHCP Snooping
+    // 子系統下（"ip helper dhcp-snooping" + "ip helper dhcp-snooping option-82 data-insertion
+    // enable"），官方文件明確註記與純 "ip helper address" Relay 為互斥功能（二擇一），此處僅作
+    // 偵測用途、套用到解析出的全部 relay 條目，不強制檢查互斥關係
+    const option82=/^ip helper dhcp-snooping\s+enable\b/m.test(cfg)&&/^ip helper dhcp-snooping option-82 data-insertion\s+enable\b/m.test(cfg);
     const rA2=/^->\s*ip interface\s+(\S+)\s+helper-address\s+([\d.]+)/gm; let ra2;
-    while((ra2=rA2.exec(cfg))!==null)pools.push({name:ra2[1],network:'',range:'',gateway:'',dns:[],lease:'',excluded:'',interface:ra2[1],type:'relay',relayServer:ra2[2]});
+    while((ra2=rA2.exec(cfg))!==null)pools.push({name:ra2[1],network:'',range:'',gateway:'',dns:[],lease:'',excluded:'',interface:ra2[1],type:'relay',relayServer:ra2[2],option82});
     const rSM=cfg.match(/^dhcp relay server\s+([\d.]+)/m);
-    if(rSM&&/^dhcp relay enable/m.test(cfg))pools.push({name:'global-relay',network:'',range:'',gateway:'',dns:[],lease:'',excluded:'',interface:'all',type:'relay',relayServer:rSM[1]});
+    if(rSM&&/^dhcp relay enable/m.test(cfg))pools.push({name:'global-relay',network:'',range:'',gateway:'',dns:[],lease:'',excluded:'',interface:'all',type:'relay',relayServer:rSM[1],option82});
     // 2026-07-22 對外查證官方 AOS CLI Reference 後修正：真實關鍵字是空白分隔的
     // "ip helper address"（address 前無連字號），與 Cisco 的 "ip helper-address" 不同，
     // 原本猜測沿用了 Cisco 命名習慣
     const gRe=/^->\s*ip helper address\s+([\d.]+)(?:\s+vlan\s+(\d+))?/gm; let gr2;
-    while((gr2=gRe.exec(cfg))!==null){const vl=gr2[2]||'';pools.push({name:'global'+(vl?'-vlan'+vl:''),network:'',range:'',gateway:'',dns:[],lease:'',excluded:'',interface:vl?'vlan'+vl:'all',type:'relay',relayServer:gr2[1]});}
+    while((gr2=gRe.exec(cfg))!==null){const vl=gr2[2]||'';pools.push({name:'global'+(vl?'-vlan'+vl:''),network:'',range:'',gateway:'',dns:[],lease:'',excluded:'',interface:vl?'vlan'+vl:'all',type:'relay',relayServer:gr2[1],option82});}
   }
   return pools;
 }
@@ -6686,6 +6754,25 @@ function parseDNSServers(cfg, vendor){
     // Ruckus/Brocade ICX (FastIron)："ip dns server-address <ip1> [ip2] [ip3] [ip4]"，Global，最多4筆
     return [...cfg.matchAll(/^ip dns server-address\s+([^\n]+)/gm)].flatMap(m=>
       m[1].trim().split(/\s+/).filter(tok=>ipTok.test(tok)));
+  }
+  if(vendor==='fortiswitch'){
+    // "config system dns" 全域單一區塊（非 edit <id> 多筆），set primary/set secondary 各僅一筆
+    // （查證來源：FortiSwitch 專屬 Ansible 模組 fortiswitch_system_dns，直接對應 API schema）
+    const block=(cfg.match(/^config system dns\n([\s\S]*?)^end/m)||[])[1]||'';
+    const primary=(block.match(/set primary\s+(\S+)/)||[])[1]||'';
+    const secondary=(block.match(/set secondary\s+(\S+)/)||[])[1]||'';
+    return [primary,secondary].filter(tok=>ipTok.test(tok));
+  }
+  if(vendor==='alcatel'){
+    // "ip name-server <ip1> [ip2] [ip3]"，最多3筆，無 primary/secondary 關鍵字，純位置順序決定
+    // 優先權（查證來源：官方 OmniSwitch 6250/6450 CLI Reference Guide）
+    return [...cfg.matchAll(/^ip name-server\s+([^\n]+)/gm)].flatMap(m=>
+      m[1].trim().split(/\s+/).filter(tok=>ipTok.test(tok)));
+  }
+  if(vendor==='extreme'){
+    // "configure dns-client add name-server <ip> [vr <vr_name>]"，逐筆新增，最多8筆，無
+    // primary/secondary 區分（查證來源：官方 ExtremeXOS Command Reference Guide）
+    return [...cfg.matchAll(/^configure dns-client add name-server\s+(\S+)/gm)].map(m=>m[1]).filter(tok=>ipTok.test(tok));
   }
   return [];
 }
