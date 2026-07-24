@@ -3983,13 +3983,21 @@ function parseJuniperDHCP(cfg){
       const gw=(inetBlock.match(/router\s*\{\s*([\d.]+);/)||[])[1]||'';
       const dnsMatch=[...inetBlock.matchAll(/(?:name-server|dns-server)\s*\{\s*([\d.]+);?\s*(?:([\d.]+);?)?\s*\}/g)];
       const dns=dnsMatch.flatMap(m=>[m[1],m[2]].filter(Boolean));
+      // 2026-07-24 對外查證官方 Junos dhcp-attributes CLI Reference 後新增：boot-file(Option67)／
+      // boot-server(泛用下一台伺服器)／tftp-server(Option150 備援)／option 42 ip-address(NTP，取
+      // 第一筆)，皆位於同一個 family inet 區塊內（不論是否巢狀在 dhcp-attributes 子區塊，正則直接
+      // 對整個 inetBlock 文字掃描，與既有 dns 寫法一致不需額外拆解子區塊）
+      const bootFile=(inetBlock.match(/boot-file\s+"?([^"\n;]+)"?;/)||[])[1]||'';
+      const nextServer=(inetBlock.match(/boot-server\s+([\d.]+);/)||[])[1]||(inetBlock.match(/tftp-server\s+([\d.]+);/)||[])[1]||'';
+      const ntpM=inetBlock.match(/option\s+42\s+ip-address\s+([^;]+);/);
+      const ntpServer=ntpM?ntpM[1].trim().split(/\s+/)[0]:'';
       // Which interface binds this pool?
       const svcBlock=junosBlock(junosBlock(cfg,'system')||'','services')||'';
       const dhcpLSBlock=junosBlock(svcBlock,'dhcp-local-server')||'';
       const ifaceM=dhcpLSBlock.match(/interface\s+([\w./-]+);/);
       const iface=ifaceM?ifaceM[1]:'';
       pools.push({name:poolName,network,range:low&&high?low+'-'+high:'',
-        gateway:gw,dns,interface:iface,type:'server'});
+        gateway:gw,dns,interface:iface,bootFile,nextServer,ntpServer,type:'server'});
     }
   }
 
@@ -3997,6 +4005,10 @@ function parseJuniperDHCP(cfg){
   const fwdBlock=junosBlock(cfg,'forwarding-options');
   const relayBlock=fwdBlock?junosBlock(fwdBlock,'dhcp-relay'):'';
   if(relayBlock){
+    // 2026-07-24 對外查證官方 Junos relay-option-82 CLI Reference 後新增：Option82 掛在
+    // "forwarding-options dhcp-relay relay-option-82 { circuit-id; remote-id; }" 子區塊，不需要
+    // 先啟用類似 Cisco/Ruckus 的 DHCP Snooping 開關，套用到該廠牌全部 relay 條目
+    const option82=/relay-option-82\s*\{/.test(relayBlock);
     // Server groups: "server-group NAME { IP; IP; }"
     const serverGroups={};
     const sgSubs=junosSubBlocks(relayBlock);
@@ -4016,7 +4028,7 @@ function parseJuniperDHCP(cfg){
       for(const iface of ifaceM){
         pools.push({name:gname,network:'',range:'',gateway:'',
           dns:[],interface:iface,type:'relay',
-          relayServer:servers.join(', ')});
+          relayServer:servers.join(', '),option82});
       }
     }
   }
@@ -5658,7 +5670,15 @@ function parseBrocadeDHCP(cfg){
     const lease=leaseSec?Math.floor(leaseSec/3600)+'h':'';
     const exM=body.match(/^\s+excluded-address\s+([^\n]+)/m);
     const excluded=(exM||[])[1]?.trim()||'';
-    pools.push({name:poolName,network,range,gateway:gw,dns,lease,excluded,interface:'',type:'server'});
+    // 2026-07-24 對外查證官方 RUCKUS FastIron DHCP Configuration Guide 後新增：優先採用新版
+    // numbered option 語法(150/66/67/42)，舊版 tftp-server/bootfile 指令(08.0.61前)作備援
+    const bootM=body.match(/^\s+option\s+67\s+ascii\s+(\S+)/m)||body.match(/^\s+bootfile\s+(\S+)/m);
+    const bootFile=(bootM||[])[1]||'';
+    const nextM=body.match(/^\s+option\s+150\s+ip\s+([\d.]+)/m)||body.match(/^\s+option\s+66\s+ascii\s+(\S+)/m)||body.match(/^\s+tftp-server\s+([\d.]+)/m);
+    const nextServer=(nextM||[])[1]||'';
+    const ntpM=body.match(/^\s+option\s+42\s+ip\s+([^\n]+)/m);
+    const ntpServer=ntpM?ntpM[1].trim().split(/\s+/)[0]:'';
+    pools.push({name:poolName,network,range,gateway:gw,dns,lease,excluded,interface:'',bootFile,nextServer,ntpServer,type:'server'});
     poolName=''; poolLines=[];
   };
   for(const line of lines){
@@ -5673,6 +5693,11 @@ function parseBrocadeDHCP(cfg){
   flushPool();
 
   // DHCP Relay: "ip helper-address X.X.X.X" under ve interfaces
+  // 2026-07-24 對外查證官方 FastIron DHCP Configuration Guide 後新增：Option82 在啟用 DHCP
+  // Snooping 逐 VLAN 後「自動生效，無需額外指令」("DHCP option 82 is automatically enabled when
+  // you enable DHCP snooping on a VLAN")；簡化為全域訊號判斷（snooping 已啟用且未被全域
+  // `ip dhcp snooping relay information disable` 停用），不逐 VLAN/逐 interface 追蹤覆蓋範圍
+  const option82=/^ip dhcp snooping vlan\s+/m.test(cfg)&&!/^ip dhcp snooping relay information disable\b/m.test(cfg);
   const veBlocks=cfg.split(/^(?=interface\s+ve\s)/im);
   for(const blk of veBlocks.slice(1)){
     const ifM=blk.match(/^interface\s+ve\s+(\d+)/i);
@@ -5680,7 +5705,7 @@ function parseBrocadeDHCP(cfg){
     const iface='ve'+ifM[1];
     const relayRe=/^\s+ip helper-address\s+([\d.]+)/gm;
     while((m=relayRe.exec(blk))!==null){
-      pools.push({name:iface,network:'',range:'',gateway:'',dns:[],lease:'',excluded:'',interface:iface,type:'relay',relayServer:m[1]});
+      pools.push({name:iface,network:'',range:'',gateway:'',dns:[],lease:'',excluded:'',interface:iface,type:'relay',relayServer:m[1],option82});
     }
   }
   return pools;
@@ -6461,6 +6486,17 @@ function parseDHCP(cfg, vendor){
       const lease=(body.match(/lease\s+([^\n]+)/)||[])[1]?.trim()||'';
       pools.push({name,network,gateway,dns,range:'',excluded:'',lease,interface:'',type:'server'});
     }
+    // 2026-07-24 對外查證官方 Dell SmartFabric OS10 User Guide 後新增：DHCP Relay 完整缺口
+    // 補齊——"ip helper-address <addr> [vrf <name>]"（Interface config，逐介面，同介面可重複多行
+    // 指向不同伺服器）。Option82/TFTP-Bootfile/NTP(Option42) 官方 DHCP server commands 章節逐一
+    // 比對確認查無對應指令，不臆測實作（DHCP Snooping 章節明載 Option82 需由上游 DHCP Server 自行
+    // 支援，OS10 交換器本身不執行插入）
+    cfg.split(/^interface\s+/m).slice(1).forEach(blk=>{
+      const ifname=blk.split('\n')[0].trim();
+      const helpers=[...blk.matchAll(/^\s*ip helper-address\s+(\S+)/gm)].map(x=>x[1]);
+      helpers.forEach(srv=>pools.push({name:'relay:'+ifname,network:'',gateway:'',dns:'',
+        range:'',excluded:'',lease:'',interface:ifname,type:'relay',relayServer:srv}));
+    });
   }else if(vendor==='cisco'){
     const re=/ip dhcp pool\s+(\S+)\s*\n([\s\S]*?)(?=^ip dhcp pool|^interface|(?![\s\S]))/gm;
     let m;
@@ -6631,6 +6667,25 @@ function parseDNSServers(cfg, vendor){
       .map(m=>({p:+m[1],ip:m[2]})).filter(r=>ipTok.test(r.ip));
     rows.sort((a,b)=>a.p-b.p);
     return rows.map(r=>r.ip);
+  }
+  if(vendor==='juniper'){
+    // "system { name-server { <ip>; <ip>; } }"（此工具 Juniper 解析全面僅支援大括號階層式，
+    // 不支援 set 扁平式，比照既有 junosBlock()/junosSubBlocks() 既定範圍，不擴大）
+    const sysBlock=junosBlock(cfg,'system');
+    if(!sysBlock)return[];
+    const nsBlock=junosBlock(sysBlock,'name-server');
+    if(!nsBlock)return[];
+    return [...nsBlock.matchAll(/([\d.]+);/g)].map(m=>m[1]).filter(tok=>ipTok.test(tok));
+  }
+  if(vendor==='dell-os10'){
+    // "ip name-server <ip1> [ip2] [ip3] [vrf <name>]"，Global config，一行可列多筆，最多3筆
+    return [...cfg.matchAll(/^ip name-server\s+([^\n]+)/gm)].flatMap(m=>
+      m[1].trim().split(/\s+/).filter(tok=>ipTok.test(tok)));
+  }
+  if(vendor==='brocade'){
+    // Ruckus/Brocade ICX (FastIron)："ip dns server-address <ip1> [ip2] [ip3] [ip4]"，Global，最多4筆
+    return [...cfg.matchAll(/^ip dns server-address\s+([^\n]+)/gm)].flatMap(m=>
+      m[1].trim().split(/\s+/).filter(tok=>ipTok.test(tok)));
   }
   return [];
 }
