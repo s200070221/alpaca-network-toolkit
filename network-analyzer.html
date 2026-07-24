@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Network Analyzer Suite</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0e1a;--surface:#111827;--surface2:#1a2235;
+  --border:#1e3a5f;--text:#e2e8f0;--text-dim:#64748b;--text-mid:#94a3b8;
+  --accent:#00d4ff;--accent2:#7dd3fc;
+}
+:root[data-theme="light"],body[data-theme="light"]{
+  --bg:#f0f4f8;--surface:#ffffff;--surface2:#f8fafc;
+  --border:#cbd5e1;--text:#1e293b;--text-dim:#475569;--text-mid:#64748b;
+  --accent:#0090b8;--accent2:#0284c7;
+}
+body{font-family:'Noto Sans TC','IBM Plex Sans TC',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column}
+a{text-decoration:none;color:inherit}
+
+/* ── Header ────────────────────────────────────────────────── */
+.header{padding:28px 40px 20px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.logo{display:flex;align-items:center;gap:14px}
+.logo-icon{font-size:32px;line-height:1}
+.logo-text h1{font-size:22px;font-weight:700;
+  background:linear-gradient(90deg,#00d4ff,#7dd3fc);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.logo-text p{font-size:11px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;margin-top:2px}
+
+.lang-bar{display:flex;gap:6px}
+.lang-btn{background:var(--surface2);border:1px solid var(--border);border-radius:6px;
+  padding:5px 12px;font-size:11px;color:var(--text-dim);cursor:pointer;
+  transition:border-color .15s,color .15s;font-family:inherit}
+.lang-btn:hover,.lang-btn.active{border-color:var(--accent);color:var(--accent)}
+
+/* ── Hero ──────────────────────────────────────────────────── */
+.hero{padding:36px 40px 0;text-align:center}
+.hero-sub{font-size:13px;color:var(--text-dim);margin-top:6px}
+
+/* ── Cards grid ────────────────────────────────────────────── */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+  gap:20px;padding:32px 40px;flex:1}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  padding:24px;display:flex;flex-direction:column;gap:16px;
+  transition:border-color .2s,transform .2s,box-shadow .2s;cursor:pointer;position:relative;overflow:hidden}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,var(--card-color,#00d4ff),transparent)}
+.card:hover{border-color:var(--card-color,#00d4ff);transform:translateY(-3px);
+  box-shadow:0 8px 24px rgba(0,0,0,.4)}
+
+.card-icon{font-size:36px;line-height:1}
+.card-title{font-size:16px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px}
+.card-badge{font-size:10px;font-family:'JetBrains Mono',monospace;
+  background:rgba(0,212,255,.12);color:var(--accent);border-radius:4px;padding:2px 6px}
+.card-desc{font-size:12px;color:var(--text-mid);line-height:1.7;flex:1}
+.card-tags{display:flex;flex-wrap:wrap;gap:5px}
+.tag{font-size:10px;font-family:'JetBrains Mono',monospace;
+  background:var(--surface2);border:1px solid var(--border);
+  border-radius:4px;padding:2px 7px;color:var(--text-dim)}
+.card-features{border-top:1px solid var(--border);padding-top:14px;display:flex;flex-wrap:wrap;gap:6px}
+.feat{font-size:11px;color:var(--text-mid);display:flex;align-items:center;gap:4px}
+.feat::before{content:'✓';color:var(--card-color,#00d4ff);font-size:10px;font-weight:700}
+
+.card-open{margin-top:4px;background:linear-gradient(135deg,var(--card-color,#00d4ff) 0%,rgba(0,212,255,.6) 100%);
+  border:none;border-radius:8px;padding:10px 0;font-size:12px;font-weight:600;
+  color:#0a0e1a;cursor:pointer;font-family:inherit;
+  transition:opacity .15s,transform .15s}
+.card-open:hover{opacity:.9;transform:scale(.99)}
+
+/* ── Footer ─────────────────────────────────────────────────── */
+.footer{padding:16px 40px;border-top:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.footer-note{font-size:11px;color:var(--text-dim);font-family:'JetBrains Mono',monospace}
+.alpaca{opacity:.7;transition:opacity .2s;cursor:default;line-height:1}
+.alpaca:hover{opacity:1}
+
+/* ── Drop hint bar ──────────────────────────────────────────────── */
+.drop-hint-bar{margin:0 40px 24px;border:1.5px dashed var(--border);border-radius:10px;
+  padding:13px 20px;display:flex;align-items:center;justify-content:center;gap:10px;
+  color:var(--text-dim);font-size:12px;cursor:pointer;
+  transition:border-color .2s,background .2s,color .2s}
+.drop-hint-bar:hover{border-color:var(--accent);background:rgba(0,212,255,.04);color:var(--text-mid)}
+.drop-hint-bar .dhb-pick{background:rgba(0,212,255,.12);border:1px solid rgba(0,212,255,.3);
+  color:var(--accent);border-radius:6px;padding:4px 12px;font-size:11px;cursor:pointer;
+  font-family:inherit;transition:background .15s;flex-shrink:0}
+.drop-hint-bar .dhb-pick:hover{background:rgba(0,212,255,.22)}
+
+/* ── Konami bounce ───────────────────────────────────────────────── */
+@keyframes card-bounce{
+  0%,100%{transform:translateY(0)}
+  20%{transform:translateY(-14px)}
+  50%{transform:translateY(-7px)}
+  70%{transform:translateY(-11px)}
+}
+.card-bounce{animation:card-bounce .65s ease}
+
+/* ── Alpaca parade ───────────────────────────────────────────────── */
+@keyframes alpaca-run{from{transform:translateX(110vw)}to{transform:translateX(-110vw)}}
+.alpaca-parade{position:fixed;bottom:24px;left:0;white-space:nowrap;
+  font-size:30px;z-index:999;pointer-events:none;
+  animation:alpaca-run 3.2s linear forwards}
+
+/* ── Logo egg toast ──────────────────────────────────────────────── */
+.egg-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;cursor:pointer}
+.egg-toast{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:var(--surface);border:1px solid var(--accent);border-radius:14px;
+  padding:28px 36px;z-index:1001;min-width:300px;text-align:center;
+  box-shadow:0 0 40px rgba(0,212,255,.25);pointer-events:none}
+.egg-toast-icon{font-size:36px;margin-bottom:10px}
+.egg-toast-title{font-size:13px;font-weight:700;color:var(--accent);margin-bottom:18px}
+.egg-stat-row{display:flex;justify-content:space-between;align-items:center;
+  gap:20px;margin:7px 0;font-size:12px}
+.egg-stat-val{color:var(--accent);font-family:'JetBrains Mono',monospace;font-weight:700}
+.egg-toast-hint{margin-top:18px;font-size:10px;color:var(--text-dim);
+  font-family:'JetBrains Mono',monospace}
+
+/* ── Notice bar ─────────────────────────────────────────────────── */
+.notice{margin:16px 40px 0;padding:8px 16px;
+  background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);
+  border-radius:8px;font-size:12px;color:#fbbf24;text-align:center;
+  font-family:'JetBrains Mono',monospace;line-height:1.5}
+
+/* ── Klingon lang btn ────────────────────────────────────────────── */
+#lang-klingon{border-color:#c0392b;color:#e74c3c}
+#lang-klingon:hover,#lang-klingon.active{border-color:#e74c3c;color:#ff6b6b;
+  box-shadow:0 0 8px rgba(231,76,60,.4)}
+/* ── Easter egg lang btns ────────────────────────────────────────── */
+#lang-pirate{border-color:#b45309;color:#f59e0b}
+#lang-pirate:hover,#lang-pirate.active{border-color:#f59e0b;color:#fcd34d;box-shadow:0 0 8px rgba(245,158,11,.4)}
+#lang-leet{border-color:#047857;color:#10b981}
+#lang-leet:hover,#lang-leet.active{border-color:#10b981;color:#6ee7b7;box-shadow:0 0 8px rgba(16,185,129,.4)}
+#lang-emoji{border-color:#7c3aed;color:#a78bfa}
+#lang-emoji:hover,#lang-emoji.active{border-color:#a78bfa;color:#c4b5fd;box-shadow:0 0 8px rgba(167,139,250,.4)}
+#lang-uwu{border-color:#be185d;color:#f472b6}
+#lang-uwu:hover,#lang-uwu.active{border-color:#f472b6;color:#fbcfe8;box-shadow:0 0 8px rgba(244,114,182,.4)}
+#lang-bureau{border-color:#475569;color:#94a3b8}
+#lang-bureau:hover,#lang-bureau.active{border-color:#94a3b8;color:#cbd5e1;box-shadow:0 0 8px rgba(148,163,184,.4)}
+#lang-cat{border-color:#c2410c;color:#fb923c}
+#lang-cat:hover,#lang-cat.active{border-color:#fb923c;color:#fdba74;box-shadow:0 0 8px rgba(251,146,60,.4)}
+#lang-bean{border-color:#b45309;color:#4ade80}
+#lang-bean:hover,#lang-bean.active{border-color:#fbbf24;color:#bbf7d0;box-shadow:0 0 8px rgba(74,222,128,.4)}
+#lang-alpaca{border-color:#92400e;color:#fcd34d}
+#lang-alpaca:hover,#lang-alpaca.active{border-color:#fcd34d;color:#fef3c7;box-shadow:0 0 8px rgba(252,211,77,.4)}#lang-yanse{border-color:#64748b;color:#94a3b8}#lang-yanse:hover,#lang-yanse.active{border-color:#94a3b8;color:#cbd5e1;box-shadow:0 0 8px rgba(148,163,184,.3)}
+/* ── Lang egg triggers ───────────────────────────────────────────── */
+.lang-egg{opacity:.25;cursor:pointer;font-size:14px;padding:2px 3px;
+  user-select:none;transition:opacity .2s}
+.lang-egg:hover{opacity:.7}
+
+/* ── Qapla toast ─────────────────────────────────────────────────── */
+.qapla-toast{position:fixed;top:24px;left:50%;transform:translateX(-50%);
+  background:#1a0a0a;border:1px solid #e74c3c;border-radius:10px;
+  padding:12px 24px;z-index:2000;font-size:13px;color:#ff6b6b;
+  font-family:'JetBrains Mono',monospace;white-space:nowrap;pointer-events:none;
+  box-shadow:0 0 20px rgba(231,76,60,.4);
+  animation:qapla-in .3s ease,qapla-out .4s ease 2s forwards}
+@keyframes qapla-in{from{opacity:0;top:0}to{opacity:1;top:24px}}
+@keyframes qapla-out{to{opacity:0;top:0}}
+
+/* ── Missing card ────────────────────────────────────────────────── */
+.card-missing{opacity:.55;cursor:default}
+.card-missing:hover{border-color:var(--border)!important;transform:none!important;box-shadow:none!important}
+.card-warn{margin-top:4px;padding:9px 12px;
+  background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.35);
+  border-radius:8px;font-size:11px;color:#fbbf24;text-align:center;
+  font-family:'JetBrains Mono',monospace}
+
+@media(max-width:600px){
+  .header,.cards,.hero,.footer{padding-left:20px;padding-right:20px}
+  .notice{margin-left:20px;margin-right:20px}
+  .cards{grid-template-columns:1fr}
+}
+.global-tip{position:fixed;display:none;z-index:99999;pointer-events:none;background:#1e2035;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:7px 11px;font-size:11px;line-height:1.6;max-width:260px;white-space:pre-wrap;word-break:break-word;box-shadow:0 4px 14px rgba(0,0,0,.45);font-weight:400;font-family:inherit;text-transform:none;letter-spacing:0}
+/* ── Drop Overlay ─────────────────────────────────────────── */
+.drop-overlay{position:fixed;inset:0;z-index:9000;display:none;align-items:center;justify-content:center;flex-direction:column;gap:20px;background:rgba(10,14,26,.92);backdrop-filter:blur(6px)}
+.drop-overlay.active{display:flex}
+.drop-box{border:2px dashed #00d4ff;border-radius:16px;padding:40px 60px;text-align:center;color:#fff;font-size:18px;pointer-events:none;animation:drop-pulse 1.5s ease-in-out infinite}
+.drop-box small{display:block;font-size:12px;opacity:.5;margin-top:8px}
+@keyframes drop-pulse{0%,100%{border-color:#00d4ff}50%{border-color:#4ade80}}
+.drop-result-chip{font-size:15px;padding:10px 24px;border-radius:10px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;text-align:center}
+.drop-vendor-badge{font-size:11px;padding:3px 10px;border-radius:20px;background:#0d1b2a;border:1px solid #00d4ff;color:#00d4ff;margin-left:6px}
+.drop-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.da-primary{padding:9px 20px;border-radius:8px;border:none;background:linear-gradient(135deg,#00d4ff,#4ade80);color:#000;font-weight:700;font-size:13px;cursor:pointer}
+.da-secondary{padding:9px 20px;border-radius:8px;border:1px solid #a78bfa;background:none;color:#a78bfa;font-size:13px;cursor:pointer}
+.da-secondary:hover{background:#a78bfa;color:#000}
+.da-primary:hover{opacity:.85}
+.drop-manual-btn{font-size:11px;color:#64748b;cursor:pointer;border:none;background:none;text-decoration:underline dotted;padding:0}
+.drop-manual-btn:hover{color:#e2e8f0}
+.drop-choices{display:none;gap:8px;flex-wrap:wrap;justify-content:center}
+.drop-choices.open{display:flex}
+.drop-choices button{padding:7px 16px;border-radius:8px;font-size:12px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;cursor:pointer}
+.drop-choices button:hover{border-color:#00d4ff;color:#00d4ff}
+.drop-close{position:absolute;top:20px;right:24px;background:none;border:none;color:#64748b;font-size:22px;cursor:pointer;line-height:1;z-index:1}
+.drop-close:hover{color:#e2e8f0}
+@media print{
+  .header,.tool-grid{page-break-inside:avoid}
+  .upload-actions,.lang-bar,.drop-zone{display:none!important}
+  body{background:#fff!important;color:#000!important}
+  .tool-card{border:1px solid #ccc;box-shadow:none}
+  @page{margin:1.5cm}
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo" id="logo-btn" style="cursor:pointer" title="">
+    <div class="logo-icon">🌐</div>
+    <div class="logo-text">
+      <h1 id="h-suite">Network Analyzer Suite</h1>
+      <p id="h-sub">Pure JS · 零伺服器 · 單檔執行</p>
+    </div>
+  </div>
+  <div class="lang-bar">
+    <button class="lang-btn active" data-lang="zhTW" onclick="setLang('zhTW')">繁中</button>
+    <button class="lang-btn"        data-lang="en"   onclick="setLang('en')">EN</button>
+    <button class="lang-btn"        data-lang="ja"   onclick="setLang('ja')">日本語</button>
+    <button class="lang-btn" id="lang-klingon" data-lang="tlh"    onclick="setLang('tlh')"    style="display:none">Qo'noS</button>
+    <button class="lang-btn" id="lang-pirate"  data-lang="pirate" onclick="setLang('pirate')" style="display:none">☠ Arr</button>
+    <button class="lang-btn" id="lang-leet"    data-lang="leet"   onclick="setLang('leet')"   style="display:none">1337</button>
+    <button class="lang-btn" id="lang-emoji"   data-lang="emoji"  onclick="setLang('emoji')"  style="display:none">🌈</button>
+    <button class="lang-btn" id="lang-uwu"    data-lang="uwu"   onclick="setLang('uwu')"   style="display:none">UwU</button>
+    <button class="lang-btn" id="lang-bureau" data-lang="bureau" onclick="setLang('bureau')" style="display:none">公文</button>
+    <button class="lang-btn" id="lang-cat"    data-lang="cat"    onclick="setLang('cat')"    style="display:none">nyaa</button>
+    <button class="lang-btn" id="lang-bean"   data-lang="bean"   onclick="setLang('bean')"   style="display:none">🥕🫛🌽</button><button class="lang-btn" id="lang-alpaca" data-lang="alpaca" onclick="setLang('alpaca')" style="display:none">🦙咩</button><button class="lang-btn" id="lang-yanse" data-lang="yanse" onclick="setLang('yanse')" style="display:none">😮‍💨 算了</button>
+    <span class="lang-egg" id="egg-pirate" title="">⚓</span>
+    <span class="lang-egg" id="egg-leet"   title="">💾</span>
+    <span class="lang-egg" id="egg-emoji"  title="">🌈</span>
+    <span class="lang-egg" id="egg-uwu"    title="">🐾</span>
+    <span class="lang-egg" id="egg-bureau" title="">📋</span>
+    <span class="lang-egg" id="egg-cat"    title="">🐱</span>
+    <span class="lang-egg" id="egg-bean"   title="">🫛</span><span class="lang-egg" id="egg-alpaca">🦙</span><span class="lang-egg" id="egg-yanse">😮‍💨</span>
+    <button id="theme-btn" onclick="toggleTheme()" title="切換明/暗模式" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;font-size:14px;padding:3px 8px;margin-left:auto;line-height:1">☀️</button>
+  </div>
+</div>
+
+<div class="hero">
+  <p class="hero-sub" id="h-hero"></p>
+</div>
+
+<div class="notice" id="h-notice"></div>
+
+<div class="cards" id="cards"></div>
+
+<div class="drop-hint-bar" id="drop-hint-bar" onclick="document.getElementById('file-pick').click()">
+  <span id="drop-bar-txt"></span>
+  <button class="dhb-pick" id="drop-bar-btn" onclick="event.stopPropagation();document.getElementById('file-pick').click()"></button>
+  <input type="file" id="file-pick" style="display:none" accept=".conf,.cfg,.txt,.xml,.log,.json,.ini,text/*">
+</div>
+
+<div class="footer">
+  <span class="footer-note" id="h-footer">Pure JS Firewall / Switch / Config Anonymizer | Network Analyzer Suite</span>
+  <span class="alpaca" id="alpaca-btn" title="">🦙</span>
+</div>
+
+<script>
+// ── i18n ───────────────────────────────────────────────────────────
+const LANG = {
+  zhTW:{
+    'suite.sub':    'Pure JS · 零伺服器 · 單檔執行',
+    'suite.hero':   '選擇工具開始分析 — 所有解析均在瀏覽器本地執行，設定檔不會上傳至任何伺服器',
+    'suite.open':   '開啟工具 →',
+    'suite.footer': 'Pure JS 網路設定分析套件',
+    'tip.footer':   '就跟你說不是 AI 了',
+    'egg.alpaca':   '羊駝驅動的分析工具 🦙',
+
+    'fw.title':     '防火牆設定分析器',
+    'fw.badge':     'Firewall',
+    'fw.desc':      '解析多廠牌防火牆設定檔，視覺化介面、安全規則、路由表、VPN 通道、位址物件、WiFi 及 WWAN。支援設定檔格式互轉。',
+    'fw.f1':'匯出 CSV / JSON / HTML 報表',
+    'fw.f2':'設定檔格式互轉',
+    'fw.f3':'SD-WAN / WWAN / WiFi 解析',
+    'fw.f4':'三語切換',
+
+    'sw.title':     '交換器設定解析器',
+    'sw.badge':     'Switch',
+    'sw.desc':      '解析多廠牌交換器設定，視覺化 Port 狀態、VLAN 分佈、路由表、VRF、VXLAN/EVPN 及堆疊拓撲。',
+    'sw.f1':'堆疊拓撲圖（SVG）',
+    'sw.f2':'匯出 CSV / HTML 報表',
+    'sw.f3':'VXLAN / EVPN / VRF 解析',
+    'sw.f4':'三語切換',
+
+    'gen.title':    '交換器設定產生器',
+    'gen.badge':    'Generator',
+    'gen.desc':     '依表單輸入產生 13 家主流廠牌（HPE Comware／Cisco IOS-XE／NX-OS／Juniper／Aruba CX／ProCurve／FortiSwitch／Dell OS10／Arista／Brocade／Alcatel／Extreme／MikroTik 等）交換器設定指令，支援 VLAN、Interface（access/trunk/hybrid）、OSPF、BGP、RIP、靜態路由、LACP、VRRP 語法。匯出內容僅供參考。',
+    'gen.f1':'VLAN / Interface 產生',
+    'gen.f2':'Hybrid Port 語法支援',
+    'gen.f3':'OSPF 路由語法產生',
+    'gen.f4':'一鍵複製 / 下載設定檔',
+
+    'ca.title':     '設定檔去識別化工具',
+    'ca.badge':     'Anonymizer',
+    'ca.desc':      '掃描並替換設定檔中的 IP 位址、主機名稱、密碼等敏感資訊，支援 AES-256 加密還原，確保分享安全。',
+    'ca.f1':'IP / 主機名 / 密碼批次替換',
+    'ca.f2':'AES-256 加密還原',
+    'ca.f3':'替換對照表匯出',
+    'ca.f4':'三語切換',
+    'ca.vendor_generic':'通用文字設定',
+    'tip.fw_analyzer':'防火牆設定分析器：解析 FortiGate / Cisco / Palo Alto 等設定檔，視覺化規則、路由、VPN',
+    'tip.sw_analyzer':'交換器設定解析器：解析 Cisco / HPE / FortiSwitch 等設定，視覺化 Port / VLAN / 拓撲',
+    'tip.cfg_anon':'設定去識別化：移除 IP / 主機名 / 密碼等敏感資訊，AES-256 加密還原',
+    'notice.place':  '⚠ 請將所有網頁檔案放置於同一目錄',
+    'warn.missing':  '找不到工具檔案，請確認檔案已放置於同一目錄',
+    'egg.logo_hint':    '連按 5 下有彩蛋 🎉',
+    'egg.stats_title':  '🔧 套件統計',
+    'egg.vendors':      '個廠牌',
+    'egg.stats_hint':   '點擊任意處關閉',
+    'drop.hint':        '放開以分析設定檔',
+    'drop.sub':         '自動偵測廠牌並開啟對應工具',
+    'drop.open':        '開啟',
+    'drop.to_anon':     '改為去識別化',
+    'drop.anon_then_open': '去識別化後分析',
+    'drop.manual':      '偵測有誤？手動選擇 ▾',
+    'drop.unknown':     '無法自動識別廠牌，請手動選擇工具：',
+    'drop.bar':         '📂 拖放設定檔至此，或',
+    'drop.pick':        '選擇檔案',
+  'egg.cmd_overtime':'💀 overtime detected... 厭世模式啟動，反正早晚都要加班','egg.rage_quit':'😤 好啦好啦，你最大，我不幹了，下次再說','rpt.sec_stp':'生成樹','rpt.sec_acl':'存取控制清單','rpt.sec_security':'Port Security / 802.1X','rpt.sec_qos':'QoS 佇列','rpt.sec_lldp':'LLDP 鄰居','rpt.sec_nat':'NAT / VIP','rpt.sec_services':'服務物件','rpt.sec_dhcp':'DHCP','rpt.sec_dns':'DNS','rpt.sec_snmp':'SNMP','rpt.sec_log':'Log Server','rpt.sec_sched':'排程'},
+  en:{
+    'suite.sub':    'Pure JS · No Server · Single File',
+    'suite.hero':   'Select a tool to start — all parsing runs locally in your browser, no config is uploaded anywhere',
+    'suite.open':   'Open Tool →',
+    'suite.footer': 'Pure JS Network Config Analysis Suite',
+    'tip.footer':   "Told you it wasn't AI",
+    'egg.alpaca':   'Alpaca-powered analysis tools 🦙',
+
+    'fw.title':     'Firewall Config Analyzer',
+    'fw.badge':     'Firewall',
+    'fw.desc':      'Parse multi-vendor firewall configs and visualize interfaces, security policies, routes, VPN tunnels, address objects, WiFi and WWAN. Supports config format conversion.',
+    'fw.f1':'Export CSV / JSON / HTML Report',
+    'fw.f2':'Config Format Conversion',
+    'fw.f3':'SD-WAN / WWAN / WiFi Analysis',
+    'fw.f4':'Trilingual UI',
+
+    'sw.title':     'Switch Config Parser',
+    'sw.badge':     'Switch',
+    'sw.desc':      'Parse multi-vendor switch configs and visualize port status, VLAN distribution, routing tables, VRF, VXLAN/EVPN, and stack topology.',
+    'sw.f1':'Stack Topology Diagram (SVG)',
+    'sw.f2':'Export CSV / HTML Report',
+    'sw.f3':'VXLAN / EVPN / VRF Analysis',
+    'sw.f4':'Trilingual UI',
+
+    'gen.title':    'Switch Config Generator',
+    'gen.badge':    'Generator',
+    'gen.desc':     'Generate switch config commands for 13 major vendors (HPE Comware, Cisco IOS-XE/NX-OS, Juniper, Aruba CX/ProCurve, FortiSwitch, Dell OS10, Arista, Brocade, Alcatel, Extreme, MikroTik, etc.) from form input — supports VLAN, Interface (access/trunk/hybrid), OSPF, BGP, RIP, static routes, LACP, and VRRP syntax. Exported configs are for reference only.',
+    'gen.f1':'VLAN / Interface Generation',
+    'gen.f2':'Hybrid Port Syntax Support',
+    'gen.f3':'OSPF Routing Syntax Generation',
+    'gen.f4':'One-Click Copy / Download',
+
+    'ca.title':     'Config Anonymizer',
+    'ca.badge':     'Anonymizer',
+    'ca.desc':      'Scan and replace sensitive data in config files — IP addresses, hostnames, passwords — with AES-256 encrypted restore support for safe sharing.',
+    'ca.f1':'Batch Replace IP / Hostname / Password',
+    'ca.f2':'AES-256 Encrypted Restore',
+    'ca.f3':'Replacement Map Export',
+    'ca.f4':'Trilingual UI',
+    'ca.vendor_generic':'Generic Text Config',
+    'tip.fw_analyzer':'Firewall Config Analyzer: parse FortiGate / Cisco / Palo Alto configs, visualize rules, routes, VPN',
+    'tip.sw_analyzer':'Switch Config Parser: parse Cisco / HPE / FortiSwitch configs, visualize ports, VLANs, topology',
+    'tip.cfg_anon':'Config Anonymizer: remove IPs, hostnames, passwords — AES-256 encrypted restore',
+    'notice.place':  '⚠ Please place all HTML files in the same directory',
+    'warn.missing':  'Tool file not found — please ensure all files are in the same directory',
+    'egg.logo_hint':    'Click 5 times for a surprise 🎉',
+    'egg.stats_title':  '🔧 Suite Stats',
+    'egg.vendors':      'vendors',
+    'egg.stats_hint':   'Click anywhere to close',
+    'drop.hint':        'Drop config file here',
+    'drop.sub':         'Auto-detect vendor and open the matching tool',
+    'drop.open':        'Open',
+    'drop.to_anon':     'Anonymize instead',
+    'drop.anon_then_open': 'Anonymize & Analyze',
+    'drop.manual':      'Wrong detection? Pick manually ▾',
+    'drop.unknown':     'Vendor not recognized — pick a tool:',
+    'drop.bar':         '📂 Drop a config file here, or',
+    'drop.pick':        'Browse',
+  'egg.cmd_overtime':'💀 overtime detected... Burnout mode on. Like it matters.','egg.rage_quit':'😤 Fine! You win. I quit. See you next time.','rpt.sec_stp':'Spanning Tree','rpt.sec_acl':'Access Control Lists','rpt.sec_security':'Port Security / 802.1X','rpt.sec_qos':'QoS Queues','rpt.sec_lldp':'LLDP Neighbors','rpt.sec_nat':'NAT / VIP','rpt.sec_services':'Service Objects','rpt.sec_dhcp':'DHCP','rpt.sec_dns':'DNS','rpt.sec_snmp':'SNMP','rpt.sec_log':'Log Servers','rpt.sec_sched':'Schedules'},
+  ja:{
+    'suite.sub':    'Pure JS · サーバー不要 · 単一ファイル',
+    'suite.hero':   'ツールを選択して分析を開始 — すべての解析はブラウザのローカルで実行され、設定ファイルはどこにもアップロードされません',
+    'suite.open':   'ツールを開く →',
+    'suite.footer': 'Pure JS ネットワーク設定分析スイート',
+    'tip.footer':   'AIじゃないって言ったでしょ',
+    'egg.alpaca':   'アルパカ動力の分析ツール 🦙',
+
+    'fw.title':     'ファイアウォール設定アナライザー',
+    'fw.badge':     'Firewall',
+    'fw.desc':      'マルチベンダーのファイアウォール設定を解析し、インターフェース、セキュリティポリシー、ルート、VPNトンネル、アドレスオブジェクト、WiFi、WWANを可視化。設定フォーマット変換をサポート。',
+    'fw.f1':'CSV / JSON / HTMLレポート出力',
+    'fw.f2':'設定フォーマット変換',
+    'fw.f3':'SD-WAN / WWAN / WiFi 解析',
+    'fw.f4':'3言語UI',
+
+    'sw.title':     'スイッチ設定パーサー',
+    'sw.badge':     'Switch',
+    'sw.desc':      'マルチベンダーのスイッチ設定を解析し、ポート状態、VLAN分布、ルーティングテーブル、VRF、VXLAN/EVPN、スタックトポロジーを可視化。',
+    'sw.f1':'スタックトポロジー図（SVG）',
+    'sw.f2':'CSV / HTMLレポート出力',
+    'sw.f3':'VXLAN / EVPN / VRF 解析',
+    'sw.f4':'3言語UI',
+
+    'gen.title':    'スイッチ設定ジェネレーター',
+    'gen.badge':    'Generator',
+    'gen.desc':     'フォーム入力から 13 社の主要ベンダー（HPE Comware／Cisco IOS-XE・NX-OS／Juniper／Aruba CX・ProCurve／FortiSwitch／Dell OS10／Arista／Brocade／Alcatel／Extreme／MikroTik 等）向けスイッチ設定コマンドを生成 — VLAN、インターフェース（access/trunk/hybrid）、OSPF、BGP、RIP構文に対応。出力内容は参考用です。',
+    'gen.f1':'VLAN / インターフェース生成',
+    'gen.f2':'Hybrid Port 構文対応',
+    'gen.f3':'OSPF ルーティング構文生成',
+    'gen.f4':'ワンクリックコピー / ダウンロード',
+
+    'ca.title':     '設定ファイル匿名化ツール',
+    'ca.badge':     'Anonymizer',
+    'ca.desc':      '設定ファイル内のIPアドレス、ホスト名、パスワードなどの機密情報をスキャンして置換し、AES-256暗号化による復元をサポート。安全な共有を実現。',
+    'ca.f1':'IP / ホスト名 / パスワード一括置換',
+    'ca.f2':'AES-256 暗号化復元',
+    'ca.f3':'置換マッピング出力',
+    'ca.f4':'3言語UI',
+    'ca.vendor_generic':'汎用テキスト設定',
+    'tip.fw_analyzer':'ファイアウォール設定アナライザー：FortiGate / Cisco / Palo Alto などの設定を解析、ルール/ルート/VPN を可視化',
+    'tip.sw_analyzer':'スイッチ設定パーサー：Cisco / HPE / FortiSwitch などの設定を解析、ポート/VLAN/トポロジーを可視化',
+    'tip.cfg_anon':'設定匿名化：IP・ホスト名・パスワードなどの機密情報を削除、AES-256暗号化復元',
+    'notice.place':  '⚠ すべてのHTMLファイルを同じディレクトリに配置してください',
+    'warn.missing':  'ツールファイルが見つかりません — 同じディレクトリにファイルを配置してください',
+    'egg.logo_hint':    '5回クリックでサプライズ 🎉',
+    'egg.stats_title':  '🔧 スイート統計',
+    'egg.vendors':      'ベンダー',
+    'egg.stats_hint':   'クリックして閉じる',
+    'drop.hint':        '設定ファイルをドロップ',
+    'drop.sub':         'ベンダーを自動検出して対応ツールを開く',
+    'drop.open':        '開く',
+    'drop.to_anon':     '匿名化に変更',
+    'drop.anon_then_open': '匿名化して解析',
+    'drop.manual':      '誤検出？手動で選択 ▾',
+    'drop.unknown':     'ベンダーを特定できません — ツールを選択：',
+    'drop.bar':         '📂 設定ファイルをここにドロップ、または',
+    'drop.pick':        'ファイルを選択',
+  'egg.cmd_overtime':'💀 残業検知... もう限界、厭世モード突入','egg.rage_quit':'😤 わかった！あなたの勝ち。もう知らない、また今度ね','rpt.sec_stp':'スパニングツリー','rpt.sec_acl':'アクセス制御リスト','rpt.sec_security':'ポートセキュリティ','rpt.sec_qos':'QoS キュー','rpt.sec_lldp':'LLDP ネイバー','rpt.sec_nat':'NAT / VIP','rpt.sec_services':'サービスオブジェクト','rpt.sec_dhcp':'DHCP','rpt.sec_dns':'DNS','rpt.sec_snmp':'SNMP','rpt.sec_log':'ログサーバー','rpt.sec_sched':'スケジュール'},
+  tlh:{
+    'suite.sub':    "pure jabbI'ID · Server pagh · wa' nav",
+    'suite.hero':   "jan yIwIv — De' Hochlogh DaH wIqel, De' chu' yIlI'!",
+    'suite.open':   "yIghoS →",
+    'suite.footer': "pure jabbI'ID QaH Duj — tlhIngan Hol",
+    'tip.footer':   "jIH 'oHbe' - HIvje' AI Qaw'be'!",
+    'egg.alpaca':   "Ha'DIbaH QaH jan 🦙",
+
+    'fw.title':     "Hub botjan De' Qel",
+    'fw.badge':     "botjan",
+    'fw.desc':      "Hub botjan De' wIqel — nIS, Hub Qu', He, VPN jabbI'ID, De' Doch, WiFi, WWAN. De' mughmeH QaH.",
+    'fw.f1':        "CSV / JSON / HTML nav nIH",
+    'fw.f2':        "De' mughmeH QaH",
+    'fw.f3':        "SD-WAN / WWAN / WiFi Qel",
+    'fw.f4':        "wej Hol",
+
+    'sw.title':     "nISjan De' Qel",
+    'sw.badge':     "nISjan",
+    'sw.desc':      "nISjan De' wIqel — Port, VLAN, He, VRF, VXLAN/EVPN, HoS Duj topo.",
+    'sw.f1':        "HoS Duj topo (SVG)",
+    'sw.f2':        "CSV / HTML nav nIH",
+    'sw.f3':        "VXLAN / EVPN / VRF Qel",
+    'sw.f4':        "wej Hol",
+
+    'gen.title':    "De' chenmoHwI' Qel",
+    'gen.badge':    "chenmoHwI'",
+    'gen.desc':     "De' seq chenmoH — VLAN, ghom (access/trunk/hybrid), OSPF, BGP, RIP Qel.",
+    'gen.f1':       "VLAN / ghom chenmoH",
+    'gen.f2':       "Hybrid ghom QaH",
+    'gen.f3':       "OSPF He' chenmoH",
+    'gen.f4':       "wa' click cha'/bID",
+
+    'ca.title':     "pagh ngu' jan",
+    'ca.badge':     "pagh ngu'",
+    'ca.desc':      "De' Qaw'be' — IP, pong, lI'be' De' — AES-256 QaH batlh lI'.",
+    'ca.f1':        "IP / pong / lI'be' De' chenHa'moH",
+    'ca.f2':        "AES-256 QaH chen",
+    'ca.f3':        "chenHa'moH nav nIH",
+    'ca.f4':        "wej Hol",
+    'ca.vendor_generic': "Hoch nav Hol",
+
+    'notice.place':  "⚠ Hoch nav wa' Sep tIlan",
+    'warn.missing':  "nav tu'lu'be' — wa' Sep nav yIlan!",
+
+    'egg.logo_hint':    "vaghlogh yItap — QaH tu'lu'!",
+    'egg.stats_title':  '🔧 QaH De\' Qel',
+    'egg.vendors':      "chenmoHwI'",
+    'egg.stats_hint':   "yItap — SoH jaH",
+  'tip.fw_analyzer':'Firewall Config Analyzer: parse FortiGate / Cisco / Palo Alto configs, visualize rules, routes, VPN','tip.sw_analyzer':'Switch Config Parser: parse Cisco / HPE / FortiSwitch configs, visualize ports, VLANs, topology','tip.cfg_anon':'Config Anonymizer: remove IPs, hostnames, passwords — AES-256 encrypted restore','drop.hint':'Drop config file here','drop.sub':'Auto-detect vendor and open the matching tool','drop.open':'Open','drop.to_anon':'Anonymize instead','drop.anon_then_open':'Anonymize & Analyze','drop.manual':'Wrong detection? Pick manually ▾','drop.unknown':'Vendor not recognized — pick a tool:','drop.bar':'📂 Drop a config file','drop.pick':'Browse','egg.cmd_overtime':'💀 overtime detected.','egg.rage_quit':'😤 Fine! You win. I q','rpt.sec_stp':'Spanning Tree','rpt.sec_acl':'Access Control Lists','rpt.sec_security':'Port Security / 802.1X','rpt.sec_qos':'QoS Queues','rpt.sec_lldp':'LLDP Neighbors','rpt.sec_nat':'NAT / VIP','rpt.sec_services':'Service Objects','rpt.sec_dhcp':'DHCP','rpt.sec_dns':'DNS','rpt.sec_snmp':'SNMP','rpt.sec_log':'Log Servers','rpt.sec_sched':'Schedules'},
+  pirate:{
+    'suite.sub':        "No port needed · Single scroll · All on deck",
+    'suite.hero':       "Choose yer plunder, matey — all parsin' done in the hold, yer data never leaves the ship!",
+    'suite.open':       "⚓ Board Ship →",
+    'suite.footer':     "Alpaca-powered Pirate Network Suite ☠",
+    'tip.footer':       "Arr, told ya it ain't no AI, matey!",
+    'notice.place':     "⚓ Arr! Gather all yer scroll-maps in one cove, or face Davy Jones!",
+    'warn.missing':     "Arr, that chart be lost at sea — bring it to the same cove!",
+    'egg.alpaca':       "Arr, the alpaca be steerin' this ship 🦙",
+    'egg.logo_hint':    "Click 5 times, or walk the plank!",
+    'egg.stats_title':  "☠ Plunder Report",
+    'egg.vendors':      "ports",
+    'egg.stats_hint':   "Arr, click to dismiss, matey",
+    'fw.title':         "☠ Firewall Plunderer",
+    'fw.badge':         "Plunderer",
+    'tip.fw_analyzer':"Plunder yer firewall, matey",'tip.sw_analyzer':"Raid the switch decks",'tip.cfg_anon':"Bury yer secrets with AES",
+    'fw.desc':          "Pillage yer firewall configs — routes, rules, VPN booty, WiFi, WWAN. All parsin' in the hold.",
+    'fw.f1':            "CSV / JSON / HTML scroll export",
+    'fw.f2':            "Config translation plunder",
+    'fw.f3':            "SD-WAN / WWAN / WiFi raid",
+    'fw.f4':            "Three-tongue speaking",
+    'sw.title':         "☠ Switch Buccaneer",
+    'sw.badge':         "Buccaneer",
+    'sw.desc':          "Plunder yer switch configs — Ports, VLANs, Routes, VXLAN, Stack topology.",
+    'sw.f1':            "Stack topo chart (SVG)",
+    'sw.f2':            "CSV / HTML scroll export",
+    'sw.f3':            "VXLAN / EVPN / VRF raid",
+    'sw.f4':            "Three-tongue speaking",
+    'gen.title':        "☠ Config Shipwright",
+    'gen.badge':        "Shipwright",
+    'gen.desc':         "Forge Comware / FortiSwitch switch configs from yer charts — VLANs, Ports (access/trunk/hybrid), OSPF, BGP, and RIP routes.",
+    'gen.f1':           "VLAN / Port Forgin'",
+    'gen.f2':           "Hybrid Port Riggin'",
+    'gen.f3':           "OSPF Route Chartin'",
+    'gen.f4':           "One-Click Pinch / Stash",
+    'ca.title':         "☠ Secret Keeper",
+    'ca.badge':         "Keeper",
+    'ca.desc':          "Hide yer booty — IPs, hostnames, passwords — locked with AES-256, only yer key opens the chest.",
+    'ca.f1':            "IP / hostname / password swab",
+    'ca.f2':            "AES-256 treasure chest",
+    'ca.f3':            "Swab mapping export",
+    'ca.f4':            "Three-tongue speaking",
+    'ca.vendor_generic':"Generic Text Scrolls",
+    'drop.hint':"Drop yer cargo, matey!",
+    'drop.sub':"Auto-plunder the vendor an' open the right ship",
+    'drop.open':"Board",
+    'drop.to_anon':"Hide the booty instead",
+    'drop.manual':"Wrong ship? Pick yer own ▾",
+    'drop.unknown':"Can't spy the vendor — pick yer ship:",
+    'drop.bar':    "⚓ Drop yer cargo here, or",
+    'drop.pick':   "Grab File",
+  'drop.anon_then_open':'Anonymize & Analyze, arr!','egg.cmd_overtime':'💀 overtime detected... Burnout, arr!','egg.rage_quit':'😤 Fine! You win. I quit. See y, arr!','rpt.sec_stp':'Spanning Tree, arr!','rpt.sec_acl':'Access Control Lists, arr!','rpt.sec_security':'Port Security / 802.1X, arr!','rpt.sec_qos':'QoS Queues, arr!','rpt.sec_lldp':'LLDP Neighbors, arr!','rpt.sec_nat':'NAT / VIP, arr!','rpt.sec_services':'Service Objects, arr!','rpt.sec_dhcp':'DHCP, arr!','rpt.sec_dns':'DNS, arr!','rpt.sec_snmp':'SNMP, arr!','rpt.sec_log':'Log Servers, arr!','rpt.sec_sched':'Schedules, arr!'},
+  emoji:{
+    'suite.sub':        "🚫🖥 · ⚡📄 · 🔐",
+    'suite.hero':       "👇 🛠 🔍 — 🧠 💻 🔒 ✈",
+    'suite.open':       "🚀 ➡",
+    'suite.footer':     "🦙 ⚡ 🌐 🔍",
+    'tip.footer':       "🙅🤖❌ 👨‍💻✅",
+    'notice.place':     "⚠ 📁📁📁 = 📂 🙏",
+    'warn.missing':     "⚠ 🔍 ❌ — 📂 ➡ 📄 🙏",
+    'egg.alpaca':       "🦙 🦙 🦙",
+    'egg.logo_hint':    "5️⃣ 👆 = 🎉",
+    'egg.stats_title':  "🔧 📊 🌐",
+    'egg.vendors':      "🏭",
+    'egg.stats_hint':   "👆 ❌",
+    'fw.title':         "🔥 🧱 🔍",
+    'fw.badge':         "🔥🧱",
+    'tip.fw_analyzer':"🔥🧱 🔍",'tip.sw_analyzer':"🔀🔌 🔍",'tip.cfg_anon':"🙈🔒 📄",
+    'fw.desc':          "🔥🧱 📄 🔍 — 📡 🛡 🔒 📶 📱 💾 🔄",
+    'fw.f1':            "📤 CSV / JSON / HTML",
+    'fw.f2':            "🔄 ↔ 🔁",
+    'fw.f3':            "📡 / 📱 / 📶 🔍",
+    'fw.f4':            "🌍 × 3",
+    'sw.title':         "🔀 🔌 🔍",
+    'sw.badge':         "🔀🔌",
+    'sw.desc':          "🔌 📄 🔍 — 🔌 🏷 📡 VRF 🗺",
+    'sw.f1':            "🗺 SVG",
+    'sw.f2':            "📤 CSV / HTML",
+    'sw.f3':            "VXLAN / EVPN / VRF 🔍",
+    'sw.f4':            "🌍 × 3",
+    'gen.title':        "🔀⚙️🏭",
+    'gen.badge':        "⚙️🏭",
+    'gen.desc':         "📝➡️⚙️ — VLAN 🏷️ Port(🚪🌳🔀) OSPF/BGP/RIP 🛰️",
+    'gen.f1':           "🏷️⚙️",
+    'gen.f2':           "🔀🔌⚙️",
+    'gen.f3':           "🛰️⚙️",
+    'gen.f4':           "📋/💾 1️⃣👆",
+    'ca.title':         "🙈 🔒 📄",
+    'ca.badge':         "🙈 🔒",
+    'ca.desc':          "📄 🔒 — 🌐 🏠 🔑 → 🎭 AES-256 🔑 📦",
+    'ca.f1':            "🌐 / 🏠 / 🔑 🔄",
+    'ca.f2':            "AES-256 🔑 📦",
+    'ca.f3':            "🔄 📤",
+    'ca.f4':            "🌍 × 3",
+    'ca.vendor_generic':"📄 📝",
+    'drop.hint':"📂 ➡ 🔍",
+    'drop.sub':"🔍 🏭 → 🛠",
+    'drop.open':"🚀",
+    'drop.to_anon':"🙈 🔒",
+    'drop.manual':"❓ 👆 ▾",
+    'drop.unknown':"❓ 🏭 — 👆 🛠:",
+    'drop.bar':   "📂 ➡ 🖱, or",
+    'drop.pick':  "📁",
+  'drop.anon_then_open':'⚙️ Anonymize & Analyze','egg.cmd_overtime':'⚙️ 💀 overtime detected.','egg.rage_quit':'⚙️ 😤 Fine! You win. I q','rpt.sec_stp':'📋 Spanning Tree','rpt.sec_acl':'📋 Access Control Lists','rpt.sec_security':'📋 Port Security / 802.1X','rpt.sec_qos':'📋 QoS Queues','rpt.sec_lldp':'📋 LLDP Neighbors','rpt.sec_nat':'📋 NAT / VIP','rpt.sec_services':'📋 Service Objects','rpt.sec_dhcp':'📋 DHCP','rpt.sec_dns':'📋 DNS','rpt.sec_snmp':'📋 SNMP','rpt.sec_log':'📋 Log Servers','rpt.sec_sched':'📋 Schedules'},
+  bureau:{
+    'suite.hero':   '請選擇對應管理工具以啟動設定稽核程序 — 所有解析作業均於瀏覽器本端執行，設定文件不進行任何形式之外部傳輸',
+    'suite.sub':    '純 JavaScript 架構 · 無需伺服器部署 · 單一文件執行',
+    'suite.open':   '開啟管理系統 →',
+    'suite.footer': 'Pure JS 網路設定稽核管理套件',
+    'fw.title':'防火牆設定稽核管理系統','fw.badge':'Firewall',
+    'fw.desc':'解析多廠牌防火牆設定文件，彙整介面資源、安全規範清冊、路由策略、VPN 通道管理、位址物件、WiFi 及 WWAN 等業務資訊，支援設定格式互轉作業。',
+    'fw.f1':'匯出 CSV / JSON / HTML 稽核報表','fw.f2':'設定格式互轉作業',
+    'fw.f3':'SD-WAN / WWAN / WiFi 解析業務','fw.f4':'三語介面切換',
+    'sw.title':'交換器設定稽核管理系統','sw.badge':'Switch',
+    'sw.desc':'解析多廠牌交換器設定文件，彙整 Port 狀態、VLAN 劃分、路由策略、VRF、VXLAN/EVPN 及堆疊拓撲陳報。',
+    'sw.f1':'堆疊拓撲陳報（SVG）','sw.f2':'匯出 CSV / HTML 稽核報表',
+    'sw.f3':'VXLAN / EVPN / VRF 解析作業','sw.f4':'三語介面切換',
+    'gen.title':'交換器設定產生管理系統','gen.badge':'Generator',
+    'gen.desc':'依表單填報資料產生 13 家主流廠牌（HPE Comware／Cisco IOS-XE／NX-OS／Juniper／Aruba CX／ProCurve／FortiSwitch／Dell OS10／Arista／Brocade／Alcatel／Extreme／MikroTik 等）交換器設定指令文件，支援 VLAN 劃分、介面組態（access/trunk/hybrid）、OSPF、BGP、RIP 路由組態事項，匯出內容僅供業務參考。',
+    'gen.f1':'VLAN / 介面產生作業','gen.f2':'Hybrid Port 組態支援',
+    'gen.f3':'OSPF 路由組態產生','gen.f4':'一鍵複製 / 下載文件',
+    'ca.title':'設定文件去識別化管理系統','ca.badge':'Anonymizer',
+    'ca.desc':'掃描並替換設定文件中之 IP 位址、主機名稱、密碼等機敏資訊，支援 AES-256 加密還原，確保文件分享作業符合資安規範。',
+    'ca.f1':'IP / 主機名稱 / 密碼批次替換作業','ca.f2':'AES-256 加密還原機制',
+    'ca.f3':'替換對照表匯出作業','ca.f4':'三語介面切換',
+    'ca.vendor_generic':'通用文字設定文件',
+    'nav.open':'開啟對應管理系統','nav.anon':'啟動去識別化程序',
+    'drop.hint':'請提交設定文件以啟動分派作業','drop.pick':'選擇文件',
+    'drop.detected':'偵測結果陳報','drop.open_tool':'開啟管理系統',
+    'drop.go_anon':'啟動去識別化','drop.manual':'手動選擇工具',
+    'egg.alpaca_title':'本系統正式進入公文模式\n請依規定格式呈現',
+  'tip.footer':'就跟你說不是 AI 了，依規設定','egg.alpaca':'羊駝驅動的分析工具 🦙，依規','tip.fw_analyzer':'防火牆設定分析器：解析 FortiGate / Cisco / Palo Alt，依規設定','tip.sw_analyzer':'交換器設定解析器：解析 Cisco / HPE / FortiSwitch 等設，依規設定','tip.cfg_anon':'設定去識別化：移除 IP / 主機名 / 密碼等敏感資訊，AES-256 加密還，依規設定','notice.place':'⚠ 請將所有網頁檔案放置於同一目錄，依規','warn.missing':'找不到工具檔案，請確認檔案已放置於同一目錄，依規','egg.logo_hint':'連按 5 下有彩蛋 🎉，依規','egg.stats_title':'🔧 套件統計，依規','egg.vendors':'個廠牌，依規','egg.stats_hint':'點擊任意處關閉，依規','drop.sub':'自動偵測廠牌並開啟對應工具，依規','drop.open':'開啟，依規','drop.to_anon':'改為去識別化，依規','drop.anon_then_open':'去識別化後分析，依規','drop.unknown':'無法自動識別廠牌，請手動選擇工具：，依規','drop.bar':'📂 拖放設定檔至此，或，依規','egg.cmd_overtime':'💀 overtime detected... 厭世模式啟動，反正早晚都要加班，依規','egg.rage_quit':'😤 好啦好啦，你最大，我不幹了，下次再說，依規','rpt.sec_stp':'生成樹，依規紀錄','rpt.sec_acl':'存取控制清單，依規紀錄','rpt.sec_security':'Port Security / 802.1X，依規紀錄','rpt.sec_qos':'QoS 佇列，依規紀錄','rpt.sec_lldp':'LLDP 鄰居，依規紀錄','rpt.sec_nat':'NAT / VIP，依規紀錄','rpt.sec_services':'服務物件，依規紀錄','rpt.sec_dhcp':'DHCP，依規紀錄','rpt.sec_dns':'DNS，依規紀錄','rpt.sec_snmp':'SNMP，依規紀錄','rpt.sec_log':'Log Server，依規紀錄','rpt.sec_sched':'排程，依規紀錄'},
+  cat:{
+    'suite.hero':   '把設定檔丟進來喵~ 全部在瀏覽器跑，不會偷偷上傳喵！',
+    'suite.sub':    '純 JS 喵 · 不需要伺服器喵 · 單檔就好喵',
+    'suite.open':   '開啟喵 →',
+    'suite.footer': 'Pure JS 喵咪網路分析套件 🐱',
+    'fw.title':'防火牆分析喵','fw.badge':'🔥 Firewall',
+    'fw.desc':'解析防火牆設定喵~ 介面、規則、VPN 通通看得到喵！支援格式互轉喵。',
+    'fw.f1':'匯出報表喵','fw.f2':'格式轉換喵',
+    'fw.f3':'SD-WAN / WiFi 解析喵','fw.f4':'多語喵~',
+    'sw.title':'交換器解析喵','sw.badge':'🔀 Switch',
+    'sw.desc':'解析交換器設定喵~ Port / VLAN / 拓撲全都抓出來喵！',
+    'sw.f1':'拓撲圖喵（SVG）','sw.f2':'匯出報表喵',
+    'sw.f3':'VXLAN / VRF 喵','sw.f4':'多語喵~',
+    'gen.title':'交換器設定產生喵','gen.badge':'🛠️ Generator',
+    'gen.desc':'填表單就能生出設定喵~ VLAN、Interface、OSPF、BGP、RIP 通通支援喵！',
+    'gen.f1':'VLAN / Interface 生成喵','gen.f2':'Hybrid Port 喵',
+    'gen.f3':'OSPF 喵','gen.f4':'複製 / 下載喵',
+    'ca.title':'去識別化喵','ca.badge':'🔒 Secret',
+    'ca.desc':'把敏感資料藏起來喵~ IP、密碼全部換掉，AES-256 加密喵！',
+    'ca.f1':'IP / 密碼替換喵','ca.f2':'AES-256 加密喵',
+    'ca.f3':'對照表匯出喵','ca.f4':'多語喵~',
+    'ca.vendor_generic':'通用設定喵',
+    'drop.hint':'把設定檔丟這裡喵~','drop.pick':'選擇喵',
+    'drop.open_tool':'開啟分析喵','drop.go_anon':'去識別化喵',
+    'egg.alpaca_title':'🐱🐱🐱\n三連擊 = 喵語模式nyaa~',
+  'tip.footer':'就跟你說不是 AI 了喵','egg.alpaca':'羊駝驅動的分析工具 🦙喵','tip.fw_analyzer':'防火牆設定分析器：解析 FortiGate / Cisco / Pal喵','tip.sw_analyzer':'交換器設定解析器：解析 Cisco / HPE / FortiSwit喵','tip.cfg_anon':'設定去識別化：移除 IP / 主機名 / 密碼等敏感資訊，AES-25喵','notice.place':'⚠ 請將所有網頁檔案放置於同一目錄喵','warn.missing':'找不到工具檔案，請確認檔案已放置於同一目錄喵','egg.logo_hint':'連按 5 下有彩蛋 🎉喵','egg.stats_title':'🔧 套件統計喵','egg.vendors':'個廠牌喵','egg.stats_hint':'點擊任意處關閉喵','drop.sub':'自動偵測廠牌並開啟對應工具喵','drop.open':'開啟喵','drop.to_anon':'改為去識別化喵','drop.anon_then_open':'去識別化後分析喵','drop.manual':'偵測有誤？手動選擇 ▾喵','drop.unknown':'無法自動識別廠牌，請手動選擇工具：喵','drop.bar':'📂 拖放設定檔至此，或喵','egg.cmd_overtime':'💀 overtime detected... 厭世模式啟動，反正早晚都喵','egg.rage_quit':'😤 好啦好啦，你最大，我不幹了，下次再說喵','rpt.sec_stp':'生成樹喵','rpt.sec_acl':'存取控制清單喵','rpt.sec_security':'Port Security / 802.1X喵','rpt.sec_qos':'QoS 佇列喵','rpt.sec_lldp':'LLDP 鄰居喵','rpt.sec_nat':'NAT / VIP喵','rpt.sec_services':'服務物件喵','rpt.sec_dhcp':'DHCP喵','rpt.sec_dns':'DNS喵','rpt.sec_snmp':'SNMP喵','rpt.sec_log':'Log Server喵','rpt.sec_sched':'排程喵'},
+  bean:{
+    'title.analyzer':'🥕🫛🌽 豆語網路總管 🌽🫛🥕',
+    'drop.hint':'把設定檔丟給豆豆🥕🫛🌽','drop.pick':'🫛選豆',
+    'drop.open_tool':'🌽開豆析','drop.go_anon':'🥕豆識別化',
+    'ca.f1':'🥕IP替換豆','ca.f2':'🫛AES豆密','ca.f3':'🌽豆照表','ca.f4':'🥕多語豆',
+    'ca.vendor_generic':'🫛通用豆','egg.alpaca_title':'🦙🥕🫛🌽\n三連擊 = 豆語模式！\n🌽🫛🥕🌽🥕🫛',
+  'suite.sub':'Pure JS · 零伺豆器 豆 單檔執行','suite.hero':'豆擇工豆開始分析 — 所有解析均在瀏覽器本地執行，設定檔不會上傳至任何伺服器','suite.open':'豆啟工豆 →','suite.footer':'Pure JS 網豆設定豆析套件','tip.footer':'豆跟你豆不是 AI 了','egg.alpaca':'豆駝驅豆的分析工具 🦙','fw.title':'豆火牆豆定分析器','fw.badge':'Firewall','fw.desc':'豆析多豆牌防火牆設定檔，視覺化介面、安全規則、路由表、VPN 通道、位址物件、WiFi 及 WWAN。支援設定檔格式互轉。','fw.f1':'豆出 CSV / JSON / HTML 豆表','fw.f2':'豆定檔豆式互轉','fw.f3':'SD-WAN / WWAN / WiFi 豆析','fw.f4':'豆語切豆','sw.title':'豆換器豆定解析器','sw.badge':'Switch','sw.desc':'豆析多豆牌交換器設定，視覺化 Port 狀態、VLAN 分佈、路由表、VRF、VXLAN/EVPN 及堆疊拓撲。','sw.f1':'豆疊拓豆圖（SVG）','sw.f2':'豆出 CSV / HTML 報豆','sw.f3':'VXLAN / EVPN / VRF 解析','sw.f4':'豆語切豆','gen.title':'🥕🫛 豆換器設定豆生器 🌽','gen.badge':'Generator','gen.desc':'🥕🫛🌽豆生設定','gen.f1':'VLAN豆生','gen.f2':'Hybrid豆援','gen.f3':'OSPF豆生','gen.f4':'複製下載豆','ca.title':'豆定檔豆識別化工具','ca.badge':'Anonymizer','ca.desc':'豆描並豆換設定檔中的 IP 位址、主機名稱、密碼等敏感資訊，支援 AES-256 加密還原，確保分享安全。','tip.fw_analyzer':'豆火牆豆定分析器：解析 FortiGate / Cisco / Palo Alto 等設定檔，視覺化規則、路由、VPN','tip.sw_analyzer':'豆換器豆定解析器：解析 Cisco / HPE / FortiSwitch 等設定，視覺化 Port / VLAN / 拓撲','tip.cfg_anon':'豆定去豆別化：移除 IP / 主機名 / 密碼等敏感資訊，AES-256 加密還原','notice.place':'豆 請豆所有網頁檔案放置於同一目錄','warn.missing':'豆不到豆具檔案，請確認檔案已放置於同一目錄','egg.logo_hint':'豆按 5 下豆彩蛋 🎉','egg.stats_title':'豆 套豆統計','egg.vendors':'豆廠牌','egg.stats_hint':'豆擊任豆處關閉','drop.sub':'豆動偵豆廠牌並開啟對應工具','drop.open':'豆啟','drop.to_anon':'豆為去豆別化','drop.anon_then_open':'豆識別豆後分析','drop.manual':'豆測有豆？手動選擇 ▾','drop.unknown':'豆法自豆識別廠牌，請手動選擇工具：','drop.bar':'豆 拖豆設定檔至此，或','egg.cmd_overtime':'豆 overtime detected... 厭豆模式啟動，反正早晚都要加班','egg.rage_quit':'豆 好豆好啦，你最大，我不幹了，下次再說','rpt.sec_stp':'豆成樹','rpt.sec_acl':'豆取控豆清單','rpt.sec_security':'Port Security / 802.1X','rpt.sec_qos':'QoS 佇列','rpt.sec_lldp':'LLDP 鄰豆','rpt.sec_nat':'NAT / VIP','rpt.sec_services':'豆務物豆','rpt.sec_dhcp':'DHCP','rpt.sec_dns':'DNS','rpt.sec_snmp':'SNMP','rpt.sec_log':'Log Server','rpt.sec_sched':'豆程'},
+  alpaca:{'nav.upload':'上傳咩定-aca','suite.sub':'Pu咩re咩 J咩S · 零伺咩服器咩 · 單咩檔執咩行-aca','suite.hero':'選擇咩工具咩開始咩分析咩 —咩 所咩有解咩析均咩在瀏咩覽器咩本地咩執行咩，設咩定檔咩不會咩上傳咩至任咩何伺-aca','suite.open':'開啟咩工具咩 →-aca','suite.footer':'Pu咩re咩 J咩S 網路咩設定咩分析咩套件-aca','tip.footer':'就跟咩你說咩不是咩 A咩I 了-aca','egg.alpaca':'羊駝咩驅動咩的分咩析工咩具 🦙-aca','fw.title':'防火咩牆設咩定分咩析器-aca','fw.badge':'Fi咩re咩wa咩ll-aca','fw.desc':'解析咩多廠咩牌防咩火牆咩設定咩檔，視覺咩化介咩面、安全咩規則咩、路咩由表咩、V咩PN咩 通咩道、位址-aca','fw.f1':'匯出咩 C咩SV咩 /咩 J咩SO咩N / HT咩ML咩 報咩表-aca','fw.f2':'設定咩檔格咩式互咩轉-aca','fw.f3':'SD咩-W咩AN咩 /咩 W咩WA咩N / Wi咩Fi咩 解咩析-aca','fw.f4':'三語咩切換-aca','sw.title':'交換咩器設咩定解咩析器-aca','sw.badge':'Sw咩it咩ch-aca','sw.desc':'解析咩多廠咩牌交咩換器咩設定咩，視咩覺化咩 P咩or咩t 狀態咩、V咩LA咩N 分佈咩、路咩由表咩、V-aca','sw.f1':'堆疊咩拓撲咩圖（SV咩G）-aca','sw.f2':'匯出咩 C咩SV咩 /咩 H咩TM咩L 報表-aca','sw.f3':'VX咩LA咩N / EV咩PN咩 /咩 V咩RF咩 解咩析-aca','sw.f4':'三語咩切換-aca','gen.title':'交換咩器設咩定產咩生器-aca','gen.badge':'Ge咩ne咩ra咩to咩r-aca','gen.desc':'依表咩單輸咩入產咩生設咩定指咩令-aca','gen.f1':'VL咩AN 產咩生-aca','gen.f2':'Hy咩br咩id 支咩援-aca','gen.f3':'OS咩PF 產咩生-aca','gen.f4':'複咩製下咩載-aca','ca.title':'設定咩檔去咩識別咩化工咩具-aca','ca.badge':'An咩on咩ym咩iz咩er-aca','ca.desc':'掃描咩並替咩換設咩定檔咩中的咩 I咩P 位址咩、主咩機名咩稱、密碼咩等敏咩感資咩訊，支援咩 A咩ES-aca','ca.f1':'IP咩 /咩 主咩機名咩 /咩 密咩碼批咩次替咩換-aca','ca.f2':'AE咩S-咩25咩6 加密咩還原-aca','ca.f3':'替換咩對照咩表匯咩出-aca','ca.f4':'三語咩切換-aca','ca.vendor_generic':'通用咩文字咩設定-aca','tip.fw_analyzer':'防火咩牆設咩定分咩析器咩：解咩析 Fo咩rt咩iG咩at咩e / Ci咩sc咩o / Pa咩lo-aca','tip.sw_analyzer':'交換咩器設咩定解咩析器咩：解咩析 Ci咩sc咩o / HP咩E / Fo咩rt咩iS咩wi咩tc-aca','tip.cfg_anon':'設定咩去識咩別化咩：移咩除 IP咩 /咩 主咩機名咩 /咩 密咩碼等咩敏感咩資訊咩，A咩ES咩-2咩56-aca','notice.place':'⚠ 請將咩所有咩網頁咩檔案咩放置咩於同咩一目咩錄-aca','warn.missing':'找不咩到工咩具檔咩案，請確咩認檔咩案已咩放置咩於同咩一目咩錄-aca','egg.logo_hint':'連按咩 5咩 下咩有彩咩蛋 🎉-aca','egg.stats_title':'🔧 套件咩統計-aca','egg.vendors':'個廠咩牌-aca','egg.stats_hint':'點擊咩任意咩處關咩閉-aca','drop.hint':'放開咩以分咩析設咩定檔-aca','drop.sub':'自動咩偵測咩廠牌咩並開咩啟對咩應工咩具-aca','drop.open':'開啟咩-aca','drop.to_anon':'改為咩去識咩別化-aca','drop.anon_then_open':'去識咩別化咩後分咩析-aca','drop.manual':'偵測咩有誤咩？手咩動選咩擇 ▾-aca','drop.unknown':'無法咩自動咩識別咩廠牌咩，請咩手動咩選擇咩工具咩：-aca','drop.bar':'📂 拖放咩設定咩檔至咩此，或-aca','drop.pick':'選擇咩檔案-aca','egg.cmd_overtime':'💀 ov咩er咩ti咩me咩 d咩et咩ec咩te咩d.咩..咩 厭咩世模咩式啟咩動，反正咩早晚咩都要-aca','egg.rage_quit':'😤 好啦咩好啦咩，你咩最大咩，我咩不幹咩了，下次咩再說-aca','rpt.sec_stp':'生成咩樹-aca','rpt.sec_acl':'存取咩控制咩清單-aca','rpt.sec_security':'Po咩rt咩 S咩ec咩ur咩it咩y / 80咩2.咩1X-aca','rpt.sec_qos':'Qo咩S 佇列-aca','rpt.sec_lldp':'LL咩DP咩 鄰咩居-aca','rpt.sec_nat':'NA咩T / VI咩P-aca','rpt.sec_services':'服務咩物件-aca','rpt.sec_dhcp':'DH咩CP-aca','rpt.sec_dns':'DN咩S-aca','rpt.sec_snmp':'SN咩MP-aca','rpt.sec_log':'Lo咩g Se咩rv咩er-aca','rpt.sec_sched':'排程咩-aca'},yanse:{'suite.sub':'Pure JS · 零伺服器 · 單（嘆）','suite.hero':'選擇工具開始分析 — 所有解析均在瀏，隨便啦','suite.open':'開啟工具 →，隨便啦','suite.footer':'Pure JS 網路設定分析套件，算了','tip.footer':'就跟你說不是 AI 了（懶得讀）','egg.alpaca':'羊駝驅動的分析工具 🦙（勉強一笑）','fw.title':'防火牆設定分析器，算了','fw.badge':'Firewall，算了','fw.desc':'解析多廠牌防火牆設定檔，視覺化介面，反正都一樣','fw.f1':'匯出 CSV / JSON / HTML 報表（嘆）','fw.f2':'設定檔格式互轉（嘆）','fw.f3':'SD-WAN / WWAN / WiFi 解析（嘆）','fw.f4':'三語切換（嘆）','sw.title':'交換器設定解析器，算了','sw.badge':'Switch，算了','sw.desc':'解析多廠牌交換器設定，視覺化 Port 狀態，反正都一樣','sw.f1':'堆疊拓撲圖（SVG）（嘆）','sw.f2':'匯出 CSV / HTML 報表（嘆）','sw.f3':'VXLAN / EVPN / VRF（嘆）','sw.f4':'三語切換（嘆）','gen.title':'交換器設定產生器，算了','gen.badge':'Generator，算了','gen.desc':'依表單輸入產生設定，反正都一樣','gen.f1':'VLAN 產生（嘆）','gen.f2':'Hybrid 支援（嘆）','gen.f3':'OSPF 產生（嘆）','gen.f4':'複製下載，隨便','ca.title':'設定檔去識別化工具，算了','ca.badge':'Anonymizer，算了','ca.desc':'掃描並替換設定檔中的 IP 位址、主，反正都一樣','ca.f1':'IP / 主機名 / 密碼批次替換（嘆）','ca.f2':'AES-256 加密還原（嘆）','ca.f3':'替換對照表匯出（嘆）','ca.f4':'三語切換（嘆）','ca.vendor_generic':'通用文字設定（嘆）','tip.fw_analyzer':'防火牆設定分析器：解析 FortiGate 等設定檔，反正沒差','tip.sw_analyzer':'交換器設定解析器：解析 Cisco 等設定檔，反正沒差','tip.cfg_anon':'設定去識別化：移除 IP / 主機名，沒人會看','notice.place':'⚠ 請將所有網頁檔案放置於同一目錄，算了','warn.missing':'找不到工具檔案，請確認檔案已放置於同一目錄，算了','egg.logo_hint':'連按 5 下有彩蛋 🎉，笑不出來','egg.stats_title':'🔧 套件統計，算是彩蛋吧','egg.vendors':'個廠牌，算是彩蛋吧','egg.stats_hint':'點擊任意處關閉（勉強一笑）','drop.hint':'放開以分析設定檔（嘆）','drop.sub':'自動偵測廠牌並開啟對應工具，算了','drop.open':'開啟（嘆）','drop.to_anon':'改為去識別化，算了','drop.anon_then_open':'去識別化後分析，反正都一樣','drop.manual':'偵測有誤？手動選擇 ▾，反正都一樣','drop.unknown':'無法自動識別廠牌，請手動選擇工具：，算了','drop.bar':'📂 拖放設定檔至此，或，算了','drop.pick':'選擇檔案（嘆）','egg.cmd_overtime':'💀 overtime detected... 厭世模式啟動，反正早晚都要加班（連彩蛋也好累）','egg.rage_quit':'😤 好啦好啦，你最大，我不幹了，下次，笑不出來','rpt.sec_stp':'生成樹，反正沒差','rpt.sec_acl':'存取控制清單，反正沒差','rpt.sec_security':'Port Security / 802.1X，沒人會看','rpt.sec_qos':'QoS 佇列，反正沒差','rpt.sec_lldp':'LLDP 鄰居，沒人會看','rpt.sec_nat':'NAT / VIP，反正沒差','rpt.sec_services':'服務物件，沒人會看','rpt.sec_dhcp':'DHCP，沒人會看','rpt.sec_dns':'DNS，反正沒差','rpt.sec_snmp':'SNMP，沒人會看','rpt.sec_log':'Log Server，反正沒差','rpt.sec_sched':'排程，算了'},
+};
+
+const TOOLS = [
+  {
+    id:    'fw',
+    color: '#00d4ff',
+    icon:  '🛡️',
+    href:  'firewall-analyzer-fixed.html',
+    vendors: ['FortiGate','Sophos XG','Check Point','Palo Alto','Juniper','pfSense','SonicWall','MikroTik','Cisco ASA'],
+    features: ['fw.f1','fw.f2','fw.f3','fw.f4'],
+  },
+  {
+    id:    'sw',
+    color: '#4ade80',
+    icon:  '🔀',
+    href:  'switch-config-parser.html',
+    vendors: ['HPE Comware','Cisco IOS/IOS-XE','Cisco NX-OS','Aruba CX','Aruba ProCurve','FortiSwitch','Juniper EX/QFX','Extreme','Alcatel','Brocade/ICX','Dell OS10','Arista EOS','MikroTik RouterOS'],
+    features: ['sw.f1','sw.f2','sw.f3','sw.f4'],
+  },
+  {
+    id:    'ca',
+    color: '#a78bfa',
+    icon:  '🔒',
+    href:  'config-anonymizer.html',
+    vendors: ['FortiGate','FortiSwitch','Sophos','Check Point','Palo Alto','pfSense','SonicWall','MikroTik','Juniper','HPE Comware','Cisco IOS/NX-OS/ASA/FTD','Arista','Aruba CX/ProCurve','Dell OS10','Extreme','Alcatel','Brocade','$ca.vendor_generic'],
+    features: ['ca.f1','ca.f2','ca.f3','ca.f4'],
+  },
+  {
+    id:    'gen',
+    color: '#fb923c',
+    icon:  '🛠️',
+    href:  'switch-config-generator.html',
+    vendors: ['HPE Comware','FortiSwitch','Aruba CX','Aruba ProCurve','Cisco IOS/IOS-XE','Cisco NX-OS','Juniper','Dell OS10','Arista EOS','Brocade/ICX','Alcatel','Extreme','MikroTik RouterOS'],
+    features: ['gen.f1','gen.f2','gen.f3','gen.f4'],
+  },
+];
+
+// ── tr / setLang ───────────────────────────────────────────────────
+let _lang = 'zhTW';
+function tr(k){
+  if(_lang==='leet'){const s=LANG.en[k]||LANG.zhTW[k]||k;return s.replace(/a/gi,'4').replace(/e/gi,'3').replace(/i/gi,'1').replace(/o/gi,'0').replace(/s/gi,'5').replace(/t/gi,'7').replace(/l/gi,'|');}
+  if(_lang==='uwu'){const s=LANG.en[k]||LANG.zhTW[k]||k;return s.replace(/r/g,'w').replace(/R/g,'W').replace(/l/g,'w').replace(/L/g,'W').replace(/th/g,'d').replace(/Th/g,'D').replace(/n([aeiou])/g,'ny$1').replace(/N([AEIOU])/g,'Ny$1');}
+  if(_lang==='cat'){const d=LANG.cat&&LANG.cat[k];if(d)return d;const base=LANG.zhTW[k]||LANG.en[k]||k;return base+(/[一-鿿]$/.test(base)?'喵~':' nyaa~');}
+  if(_lang==='bean'){const d=LANG.bean&&LANG.bean[k];if(d)return d;const base=LANG.en[k]||LANG.zhTW[k]||k;const vg=['🥕','🫛','🌽'];return base.split('').map(c=>c===' '?' ':vg[c.charCodeAt(0)%3]).join('');}
+  return (LANG[_lang]||LANG.zhTW)[k]||LANG.en[k]||k;
+}
+
+function tip(key, label) {
+  const t = tr(key);
+  if (!t || t === key) return label;
+  return `<span data-tip="${t.replace(/"/g,'&quot;')}">${label}<sup style="font-size:8px;opacity:.45;margin-left:2px;cursor:help">ⓘ</sup></span>`;
+}
+function setLang(lang) {
+  _lang = lang;
+  document.documentElement.lang = lang === 'zhTW' ? 'zh-TW' : lang;
+  document.querySelectorAll('.lang-btn[data-lang]').forEach(b => {
+    b.classList.toggle('active', b.dataset.lang === lang);
+  });
+  document.getElementById('h-sub').textContent = tr('suite.sub');
+  document.getElementById('h-hero').textContent = tr('suite.hero');
+  document.getElementById('h-notice').textContent = tr('notice.place');
+  document.getElementById('h-footer').innerHTML = tip('tip.footer', tr('suite.footer'));
+  document.getElementById('alpaca-btn').title = tr('egg.alpaca');
+  document.getElementById('logo-btn').title = tr('egg.logo_hint');
+  _updateDropText();
+  renderCards();
+}
+
+// ── renderCards ───────────────────────────────────────────────────
+const _missing = new Set();
+
+function renderCards() {
+  const wrap = document.getElementById('cards');
+  wrap.innerHTML = TOOLS.map(t => {
+    const miss = _missing.has(t.id);
+    return `
+    <div class="card${miss ? ' card-missing' : ''}" style="--card-color:${t.color}"${miss ? '' : ` onclick="openTool('${t.href}')"`}>
+      <div class="card-icon">${t.icon}</div>
+      <div>
+        <div class="card-title">
+          ${tip('tip.' + (t.id==='fw'?'fw_analyzer':t.id==='sw'?'sw_analyzer':'cfg_anon'), tr(t.id + '.title'))}
+          <span class="card-badge">${tr(t.id + '.badge')}</span>
+        </div>
+      </div>
+      <p class="card-desc">${tr(t.id + '.desc')}</p>
+      <div class="card-tags">
+        ${t.vendors.map(v => `<span class="tag">${v.startsWith('$') ? tr(v.slice(1)) : v}</span>`).join('')}
+      </div>
+      <div class="card-features">
+        ${t.features.map(f => `<span class="feat">${tr(f)}</span>`).join('')}
+      </div>
+      ${miss
+        ? `<div class="card-warn">⚠ ${tr('warn.missing')}</div>`
+        : `<button class="card-open">${tr('suite.open')}</button>`}
+    </div>`;
+  }).join('');
+}
+
+function openTool(href) { window.open(href, '_blank'); }
+
+async function checkFiles() {
+  if (location.protocol === 'file:') {
+    document.getElementById('h-notice').style.display = 'none';
+    renderCards();
+    return;
+  }
+  await Promise.all(TOOLS.map(async t => {
+    try {
+      const r = await fetch(t.href, { method: 'HEAD' });
+      if (!r.ok) _missing.add(t.id);
+    } catch { _missing.add(t.id); }
+  }));
+  renderCards();
+  document.getElementById('h-notice').style.display = _missing.size === 0 ? 'none' : '';
+}
+
+// ── showEggToast（共用）────────────────────────────────────────────
+function showEggToast(msg) {
+  const t = document.createElement('div');
+  t.className = 'qapla-toast';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  t.addEventListener('animationend', e => { if(e.animationName==='qapla-out') t.remove(); });
+}
+
+// ── Easter egg C：Alpaca 三連擊 → 克林貢 ─────────────────────────
+let _alpacaN = 0, _alpacaTimer;
+document.getElementById('alpaca-btn').addEventListener('click', () => {
+  clearTimeout(_alpacaTimer);
+  _alpacaN++;
+  _alpacaTimer = setTimeout(() => { _alpacaN = 0; }, 1500);
+  if (_alpacaN >= 3) {
+    _alpacaN = 0;
+    document.getElementById('lang-klingon').style.display = '';
+    setLang('tlh');
+    showEggToast("🖖 Qapla'! tlhIngan Hol DaghojneS!");
+  }
+});
+
+// ── Easter egg D：lang-egg 代表物三連擊 ──────────────────────────
+const _EGG = {
+  'egg-pirate': {lang:'pirate', btn:'lang-pirate', toast:"☠️ Ahoy! Ye be speakin' pirate now, matey! Arr!"},
+  'egg-leet':   {lang:'leet',   btn:'lang-leet',   toast:'1337 5P34K 4C71V473D. H4X0R M0D3 0N.'},
+  'egg-emoji':  {lang:'emoji',  btn:'lang-emoji',  toast:'🌈✨🎉 3moji mod3 4ctiv4t3d! 🦄💫🌟'},
+  'egg-uwu':    {lang:'uwu',   btn:'lang-uwu',   toast:'🐾 Hewwo fwend~ UwU wanguage activeated! OwO'},
+  'egg-bureau': {lang:'bureau',btn:'lang-bureau',toast:'📋 啟動跨部門作業流程。本系統正式進入公文模式。請依規定格式呈現。'},
+  'egg-cat':    {lang:'cat',   btn:'lang-cat',   toast:'🐱 Nyaa~！喵語模式啟動了喵！meow meow owo'},
+  'egg-bean':   {lang:'bean',  btn:'lang-bean',  toast:'🥕🫛🌽 豆語模式啟動！蔬菜智慧已降臨！🌽🫛🥕'},
+    'egg-alpaca':{lang:'alpaca',btn:'lang-alpaca',toast:'🦙 咩咩咩！羊咩碼啟動-aca！網路咩析-aca！🦙'},'egg-yanse':{lang:'yanse',btn:'lang-yanse',toast:'💀 overtime detected...厭世工程師模式啟動，反正早晚都要加班'},
+};
+const _eggN={}, _eggT={};
+document.querySelectorAll('.lang-egg').forEach(el => {
+  _eggN[el.id]=0;
+  el.addEventListener('click', () => {
+    clearTimeout(_eggT[el.id]);
+    _eggN[el.id]++;
+    _eggT[el.id]=setTimeout(()=>{ _eggN[el.id]=0; }, 1500);
+    if(_eggN[el.id]>=3){
+      _eggN[el.id]=0;
+      const c=_EGG[el.id];
+      document.getElementById(c.btn).style.display='';
+      setLang(c.lang);
+      showEggToast(c.toast);
+    }
+  });
+});
+
+// ── Easter egg A：Konami Code ─────────────────────────────────────
+const _KONAMI = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown',
+                 'ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'];
+let _kIdx = 0;
+document.addEventListener('keydown', e => {
+  _kIdx = (e.key === _KONAMI[_kIdx]) ? _kIdx + 1 : (e.key === _KONAMI[0] ? 1 : 0);
+  if (_kIdx === _KONAMI.length) {
+    _kIdx = 0;
+    // 卡片彈跳
+    document.querySelectorAll('.card').forEach(c => {
+      c.classList.remove('card-bounce');
+      void c.offsetWidth;
+      c.classList.add('card-bounce');
+      c.addEventListener('animationend', () => c.classList.remove('card-bounce'), {once:true});
+    });
+    // 羊駝遊行
+    const parade = document.createElement('div');
+    parade.className = 'alpaca-parade';
+    parade.textContent = '🦙'.repeat(10);
+    document.body.appendChild(parade);
+    parade.addEventListener('animationend', () => parade.remove());
+  }
+});
+
+// ── Easter egg B：Logo 連按 5 下 ──────────────────────────────────
+let _logoN = 0, _logoTimer;
+document.getElementById('logo-btn').addEventListener('click', () => {
+  clearTimeout(_logoTimer);
+  _logoN++;
+  _logoTimer = setTimeout(() => { _logoN = 0; }, 2000);
+  if (_logoN >= 5) {
+    _logoN = 0;
+    const overlay = document.createElement('div');
+    overlay.className = 'egg-overlay';
+    const toast = document.createElement('div');
+    toast.className = 'egg-toast';
+    toast.innerHTML = `
+      <div class="egg-toast-icon">🦙</div>
+      <div class="egg-toast-title">${tr('egg.stats_title')}</div>
+      ${TOOLS.map(t => `
+        <div class="egg-stat-row">
+          <span>${t.icon} ${tr(t.id + '.title')}</span>
+          <span class="egg-stat-val">${t.vendors.length} ${tr('egg.vendors')}</span>
+        </div>`).join('')}
+      <div class="egg-toast-hint">${tr('egg.stats_hint')}</div>`;
+    overlay.addEventListener('click', () => { overlay.remove(); toast.remove(); });
+    document.body.appendChild(overlay);
+    document.body.appendChild(toast);
+  }
+});
+
+// ── 拖入自動分派 ──────────────────────────────────────────────────
+const VENDOR_NAMES = {f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS'};
+let _dropPending = null;
+
+function detectTool(text) {
+  const t = text.slice(0, 8000);
+  if (/config firewall policy|config vdom/i.test(t))                        return {idx:0, vendor:'f'};
+  if (/set security policies/i.test(t))                                      return {idx:0, vendor:'j'};
+  if (/^set hostname\s+\S+/m.test(t) && /^set interface\s+\S+\s+ipv4-address/m.test(t)) return {idx:0, vendor:'c'};
+  if (/<config>[\s\S]{0,300}<devices>/m.test(t))                             return {idx:0, vendor:'p'};
+  if (/\/ip firewall|\/interface bridge/i.test(t))                           return {idx:0, vendor:'m'};
+  if (/nameif\s+\w+/i.test(t) && /access-list/i.test(t))                    return {idx:0, vendor:'a'};
+  if (/firewall-policy\s*\{/im.test(t))                                      return {idx:0, vendor:'s'};
+  if (/<SonicWALL/i.test(t))                                                 return {idx:0, vendor:'w'};
+  if (/pfctl\b|set filterip/i.test(t))                                       return {idx:0, vendor:'x'};
+  // Arista EOS: unique signatures (must check before generic Cisco patterns)
+  if (/^!\s*device:\s*\S+.*\(Arista\s/m.test(t) || /^!\s*Software image version:\s*EOS/m.test(t) ||
+      (/^interface\s+Ethernet\d+(?:\/\d+)*\s*$/m.test(t) && /^ip routing$/m.test(t)))
+    return {idx:1, vendor:'arista'};
+  if (/spanning-tree|interface\s+(GigabitEthernet|FastEthernet|TenGigabitEthernet)/i.test(t)) return {idx:1, vendor:null};
+  if (/^feature\s+\w+/m.test(t) && (/Cisco\s+Nexus/i.test(t)||/^vdc\s+\S+\s+id/m.test(t))) return {idx:1, vendor:null};
+  if (/^;\s*(?:HP\s|Aruba\s|J\d{4}[A-Z])/m.test(t)||/^oobm$/m.test(t)||/^trunk\s+\S+\s+[Tt]rk\d+/m.test(t)) return {idx:1, vendor:null};
+  if (/feature\s+(vpc|lacp)|vlan database/i.test(t))                        return {idx:1, vendor:null};
+  if (/sysname\s+\w|irf domain/i.test(t))                                   return {idx:1, vendor:null};
+  return null;
+}
+
+function _dispatchWithPending(toolIdx, vendor) {
+  if (!_dropPending) return;
+  localStorage.setItem('_netAnalyzer_pending', JSON.stringify({
+    name: _dropPending.name, text: _dropPending.text, ts: Date.now(), vendor: vendor || null
+  }));
+  window.open(TOOLS[toolIdx].href, '_blank');
+  setTimeout(() => document.getElementById('drop-overlay').classList.remove('active'), 350);
+  _dropPending = null;
+}
+function _dispatchWithAnon(toolIdx, vendor) {
+  if (!_dropPending) return;
+  localStorage.setItem('_netAnalyzer_anonThenOpen', JSON.stringify({
+    name: _dropPending.name, text: _dropPending.text, ts: Date.now(), toolIdx, vendor: vendor || null
+  }));
+  window.open(TOOLS[2].href, '_blank');
+  setTimeout(() => document.getElementById('drop-overlay').classList.remove('active'), 350);
+  _dropPending = null;
+}
+
+function _showDropResult(name, detected, text) {
+  _dropPending = { name, text };
+  const box = document.getElementById('drop-box');
+  const result = document.getElementById('drop-result');
+  const chip = document.getElementById('drop-chip');
+  const actions = document.getElementById('drop-actions');
+  const choices = document.getElementById('drop-choices');
+  const manualBtn = document.getElementById('drop-manual-btn');
+  box.style.display = 'none';
+  result.style.display = 'flex';
+  choices.classList.remove('open');
+  if (detected) {
+    const vname = detected.vendor ? VENDOR_NAMES[detected.vendor] : null;
+    chip.innerHTML = vname
+      ? `🔍 偵測到 <span class="drop-vendor-badge">${vname}</span> 設定`
+      : `🔍 偵測到交換機設定`;
+    actions.innerHTML = `
+      <button class="da-primary" onclick="_dispatchWithPending(${detected.idx},${JSON.stringify(detected.vendor)})">${TOOLS[detected.idx].icon} ${tr('drop.open')} ${tr(TOOLS[detected.idx].id+'.title')}</button>
+      <button class="da-secondary" onclick="_dispatchWithAnon(${detected.idx},${JSON.stringify(detected.vendor)})">🔒🔀 ${tr('drop.anon_then_open')}</button>
+      <button class="da-secondary" onclick="_dispatchWithPending(2,null)">🔒 ${tr('drop.to_anon')}</button>`;
+    manualBtn.textContent = tr('drop.manual');
+    manualBtn.style.display = '';
+  } else {
+    chip.textContent = tr('drop.unknown');
+    actions.innerHTML = '';
+    manualBtn.style.display = 'none';
+    choices.classList.add('open');
+  }
+  choices.innerHTML = TOOLS.map((t, i) =>
+    `<button onclick="_dispatchWithPending(${i},null)">${t.icon} ${tr(t.id+'.title')}</button>`
+  ).join('');
+}
+
+function _updateDropText() {
+  const h = document.getElementById('drop-hint-txt');
+  const s = document.getElementById('drop-sub-txt');
+  if (h) h.textContent = tr('drop.hint');
+  if (s) s.textContent = tr('drop.sub');
+  const b = document.getElementById('drop-bar-txt');
+  const p = document.getElementById('drop-bar-btn');
+  if (b) b.textContent = tr('drop.bar');
+  if (p) p.textContent = tr('drop.pick');
+}
+
+(function(){
+  let _dragCounter = 0;
+  const overlay = document.getElementById('drop-overlay');
+  document.addEventListener('dragenter', e => {
+    if (![...e.dataTransfer.types].includes('Files')) return;
+    _dragCounter++;
+    overlay.classList.add('active');
+    document.getElementById('drop-box').style.display = '';
+    document.getElementById('drop-result').style.display = 'none';
+    _dropPending = null;
+  });
+  document.addEventListener('dragleave', e => {
+    _dragCounter--;
+    if (_dragCounter <= 0) { _dragCounter = 0; overlay.classList.remove('active'); }
+  });
+  document.addEventListener('dragover', e => { e.preventDefault(); });
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    _dragCounter = 0;
+    const file = e.dataTransfer.files[0];
+    if (!file) { overlay.classList.remove('active'); return; }
+    const reader = new FileReader();
+    reader.onload = ev => _showDropResult(file.name, detectTool(ev.target.result), ev.target.result);
+    reader.readAsText(file, 'UTF-8');
+  });
+})();
+
+document.getElementById('file-pick').addEventListener('change', function() {
+  const file = this.files[0];
+  if (!file) return;
+  this.value = '';
+  const overlay = document.getElementById('drop-overlay');
+  overlay.classList.add('active');
+  document.getElementById('drop-box').style.display = 'none';
+  document.getElementById('drop-result').style.display = 'none';
+  const reader = new FileReader();
+  reader.onload = ev => _showDropResult(file.name, detectTool(ev.target.result), ev.target.result);
+  reader.readAsText(file, 'UTF-8');
+});
+
+// ── Init ──────────────────────────────────────────────────────────
+setLang('zhTW');
+// ── 彩蛋：Rage quit（連按 Esc 三次）────────────────────────
+(function(){
+  var _rq=0,_rqT;
+  document.addEventListener('keydown',function(e){
+    if(e.key!=='Escape')return;
+    clearTimeout(_rqT);
+    _rq++;
+    _rqT=setTimeout(function(){_rq=0;},1500);
+    if(_rq>=3){_rq=0;showEggToast(tr('egg.rage_quit'));}
+  });
+})();
+document.getElementById('alpaca-btn').title = tr('egg.alpaca');
+checkFiles();
+(function(){
+  var _t = document.createElement('div');
+  _t.className = 'global-tip';
+  document.body.appendChild(_t);
+  document.addEventListener('mouseover', function(e) {
+    var el = e.target.closest('[data-tip]');
+    if (!el) return;
+    _t.textContent = el.dataset.tip;
+    _t.style.display = 'block';
+    var r = el.getBoundingClientRect(), tw = _t.offsetWidth, th = _t.offsetHeight;
+    var x = r.left + r.width / 2 - tw / 2;
+    x = Math.max(8, Math.min(x, window.innerWidth - tw - 8));
+    var y = r.top - th - 8;
+    _t.style.left = x + 'px';
+    _t.style.top = (y < 8 ? r.bottom + 8 : y) + 'px';
+  });
+  document.addEventListener('mouseout', function(e) { if (e.target.closest('[data-tip]')) _t.style.display = 'none'; });
+  document.addEventListener('scroll', function() { _t.style.display = 'none'; }, true);
+})();
+
+// 黑/白模式切換
+function setTheme(t){document.documentElement.setAttribute('data-theme',t);document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';localStorage.setItem('cw_theme',t);}
+function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
+(function(){const s=localStorage.getItem('cw_theme');const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
+
+</script>
+
+<div id="drop-overlay" class="drop-overlay">
+  <button class="drop-close" onclick="document.getElementById('drop-overlay').classList.remove('active')">✕</button>
+  <div id="drop-box" class="drop-box">
+    📂 <span id="drop-hint-txt"></span>
+    <small id="drop-sub-txt"></small>
+  </div>
+  <div id="drop-result" style="display:none;text-align:center;display:none;flex-direction:column;align-items:center;gap:12px">
+    <div class="drop-result-chip" id="drop-chip"></div>
+    <div class="drop-actions" id="drop-actions"></div>
+    <button class="drop-manual-btn" id="drop-manual-btn" onclick="document.getElementById('drop-choices').classList.toggle('open')"></button>
+    <div class="drop-choices" id="drop-choices"></div>
+  </div>
+</div>
+</body>
+</html>
