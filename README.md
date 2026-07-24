@@ -1,0 +1,33 @@
+# 🦙 Alpaca Network Toolkit（羊駝網管工具包）
+
+多廠牌防火牆／交換器設定檔解析、匿名化、比對與產生工具組。純前端 JavaScript 實作，單一 HTML 檔案即可離線執行，**所有解析與運算皆在瀏覽器本地端完成，設定檔內容不會上傳至任何伺服器**。
+
+線上體驗（無需下載）：**https://s200070221.github.io/alpaca-network-toolkit/**
+
+或直接下載本 repo 後，用瀏覽器開啟 `network-analyzer.html`（五工具入口頁）。
+
+## 工具一覽
+
+| 工具 | 檔案 | 說明 |
+|---|---|---|
+| 🛡️ 防火牆設定分析器 | `firewall-analyzer-fixed.html` | 解析 FortiGate／Sophos XG／Check Point／Palo Alto／Juniper／pfSense／SonicWall／MikroTik／Cisco ASA 等設定檔，視覺化規則、路由、VPN、位址物件；支援設定檔格式互轉與稽核 |
+| 🔀 交換器設定解析器 | `switch-config-parser.html` | 解析 HPE Comware／Cisco IOS-XE／NX-OS／Aruba CX／ProCurve／FortiSwitch／Juniper／Extreme／Alcatel／Brocade-ICX／Dell OS10／Arista／MikroTik RouterOS 等 13 家廠牌，視覺化 Port/VLAN/路由/堆疊拓撲 |
+| 🛠️ 交換器設定產生器 | `switch-config-generator.html` | 表單輸入產生上述廠牌的交換器設定指令，並支援反向匯入既有設定檔自動帶入表單 |
+| 🔒 設定檔去識別化工具 | `config-anonymizer.html` | 掃描並一致性替換設定檔中的 IP／主機名稱／密碼等敏感資訊，供分享/求助使用，支援 AES-256 加密還原對照表 |
+| 🌐 五工具入口頁 | `network-analyzer.html` | 自動偵測拖入設定檔的廠牌並導向對應工具 |
+
+## 特色
+
+- **零伺服器、零安裝**：純 JS + HTML，下載即用，或直接透過 GitHub Pages 線上開啟
+- **多語系**：繁體中文／English／日本語（另有多組隱藏彩蛋語言）
+- **廣泛廠牌支援**：合計涵蓋近 20 家網通設備廠牌的設定檔語法
+
+## 授權與使用限制
+
+本 repository **未提供任何開源授權（No License）**。原始碼與內容僅供瀏覽與個人評估使用，**不得複製、修改、再散布或用於商業用途**。如需授權使用，請自行聯繫作者。
+
+This repository does **not** grant any open-source license. Content is provided for viewing and personal evaluation only — copying, modification, and redistribution are **not permitted** without explicit permission from the author.
+
+## 免責聲明
+
+本工具組所有匯出/產生之設定文字僅供參考，實際套用前請自行審閱並謹慎驗證，使用者需自行承擔風險。
