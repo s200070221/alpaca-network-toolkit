@@ -10215,6 +10215,19 @@ const Converter = (() => {
     const b=mask?(mask.includes('.')?bits(mask):mask):32;
     return ip+'/'+b;
   }
+  // 2026-07-24 新增：位址物件的 a.subnet 來源格式不一定是 CIDR，也可能是「IP 空白 遮罩」
+  // 空格分隔格式；部分轉換函式（如原本的 toPaloAlto）曾直接對非 CIDR 字串尾端加 "/32"，
+  // 產生「192.168.1.0 255.255.255.0/32」這種畸形值。統一用此 helper 正確判斷格式後轉真正 CIDR，
+  // 保證回傳值必定是合法的 "ip/bits" 形式
+  function addrCidr(a){
+    const sub=a.subnet;
+    if(sub){
+      if(sub.includes('/')) return sub;
+      if(sub.includes(' ')){ const p=sub.trim().split(/\s+/); return cidr(p[0],p[1]); }
+      return sub+'/32';
+    }
+    return (a.ip&&a.ip!=='-'&&a.ip!=='DHCP')?a.ip+'/32':'0.0.0.0/0';
+  }
   // 各廠牌路由的網段+遮罩來源形狀不一（CIDR「IP/prefix」、CIDR-with-dotted-mask「IP/255.x」、
   // 空白分隔「網段 遮罩」、獨立欄位 r.mask），統一還原成 {net,mask}（dotted mask）
   function netMaskOf(dst, maskField) {
@@ -10282,7 +10295,10 @@ const Converter = (() => {
     return map.sha256||'sha256';
   }
   function normDH(dh, target) {
-    const d=String(dh||'14').replace(/[^0-9]/g,'');
+    let d=String(dh||'14').replace(/[^0-9]/g,'');
+    // 2026-07-24 修復：來源值完全無法解析出數字時（如非標準命名）d 會變成空字串，導致輸出
+    // "group "（後面空白），退回所有目標廠牌 DH 對照表皆有收錄的 group 2（業界最通用值）
+    if(!d) d='2';
     return (DH[target]||DH.fortigate)[d]||d;
   }
 
@@ -10825,13 +10841,16 @@ const Converter = (() => {
     L.push(`set hostname "${d.hostname}"`);
     L.push('');
     // Interfaces
+    // 2026-07-24 修復：原本整個介面輸出包在 "if(i.ip...)" 底下，沒有 IP 的介面（如僅作為
+    // L2/管理用途的埠）會整個消失、無任何提示。改為介面本身一律輸出，只有 ipv4-address
+    // 這行才依 IP 是否存在決定要不要輸出
     parsed.interfaces.forEach(i=>{
       if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP') {
         const pfx=bits(i.mask);
         L.push(`set interface ${i.name} ipv4-address ${i.ip} mask-length ${pfx}`);
-        if(i.desc&&i.desc!=='-') L.push(`set interface ${i.name} comments "${i.desc}"`);
-        L.push(`set interface ${i.name} state on`);
       }
+      if(i.desc&&i.desc!=='-') L.push(`set interface ${i.name} comments "${i.desc}"`);
+      L.push(`set interface ${i.name} state ${i.status==='down'?'off':'on'}`);
     });
     L.push('');
     // Routes
@@ -10933,12 +10952,37 @@ const Converter = (() => {
     L.push('    </system></deviceconfig>');
     L.push('    <network>');
     // Interfaces
+    // 2026-07-24 修復：原本把 VLAN 子介面跟實體介面同層對待，直接產生 <entry name="port5.100">
+    // 掛在 <ethernet> 底下，不符合 PAN-OS 真實子介面規範（必須巢狀在父介面 <layer3><units>
+    // 底下＋帶 <tag>）。改為兩層迴圈：先跑實體介面，各自查詢屬於它的 VLAN 子介面巢狀輸出到
+    // <units>；找不到對應父介面的孤兒子介面（來源資料不完整時）退回原本的扁平輸出，避免資料消失
     if(parsed.interfaces.length) {
       L.push('      <interface><ethernet>');
-      parsed.interfaces.filter(i=>!i.type||i.type==='physical'||i.type==='vlan').forEach(i=>{
+      const physicals=parsed.interfaces.filter(i=>!i.type||i.type==='physical');
+      const vlans=parsed.interfaces.filter(i=>i.type==='vlan');
+      physicals.forEach(i=>{
         L.push(`        <entry name="${esc(i.name)}">`);
-        if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP') { L.push(`          <layer3><ip><entry name="${esc(cidr(i.ip,i.mask))}"/></ip></layer3>`); }
+        const kids=vlans.filter(v=>v.interface===i.name);
+        if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP'||kids.length){
+          L.push('          <layer3>');
+          if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP') L.push(`            <ip><entry name="${esc(cidr(i.ip,i.mask))}"/></ip>`);
+          if(kids.length){
+            L.push('            <units>');
+            kids.forEach(v=>{
+              const vip=v.ip&&v.ip!=='-'&&v.ip!=='DHCP'?`<ip><entry name="${esc(cidr(v.ip,v.mask))}"/></ip>`:'';
+              L.push(`              <entry name="${esc(v.name)}"><tag>${esc(v.vlanId)}</tag>${vip}</entry>`);
+            });
+            L.push('            </units>');
+          }
+          L.push('          </layer3>');
+        }
         if(i.desc&&i.desc!=='-') L.push(`          <comment>${esc(i.desc)}</comment>`);
+        L.push('        </entry>');
+      });
+      vlans.filter(v=>!physicals.some(i=>i.name===v.interface)).forEach(v=>{
+        L.push(`        <entry name="${esc(v.name)}">`);
+        if(v.ip&&v.ip!=='-'&&v.ip!=='DHCP') L.push(`          <layer3><ip><entry name="${esc(cidr(v.ip,v.mask))}"/></ip></layer3>`);
+        if(v.desc&&v.desc!=='-') L.push(`          <comment>${esc(v.desc)}</comment>`);
         L.push('        </entry>');
       });
       L.push('      </ethernet></interface>');
@@ -10981,7 +11025,7 @@ const Converter = (() => {
         L.push(`        <entry name="${esc(a.name)}">`);
         if(a.type==='fqdn') L.push(`          <fqdn>${esc(a.fqdn)}</fqdn>`);
         else if(a.type==='iprange') L.push(`          <ip-range>${esc(a.startIp+'-'+a.endIp)}</ip-range>`);
-        else { const sub=a.subnet||(a.ip?a.ip+'/32':'0.0.0.0/0'); L.push(`          <ip-netmask>${esc(sub.includes('/')?sub:sub+'/32')}</ip-netmask>`); }
+        else { L.push(`          <ip-netmask>${esc(addrCidr(a))}</ip-netmask>`); }
         if(a.comment&&a.comment!=='-') L.push(`          <description>${esc(a.comment)}</description>`);
         L.push('        </entry>');
       });
@@ -11230,10 +11274,14 @@ const Converter = (() => {
     L.push('  </system>');
 
     // interfaces
-    const pfIfKeys=['wan','lan','opt1','opt2','opt3','opt4','opt5','opt6'];
+    // 2026-07-24 修復：原本 pfIfKeys 陣列只有 8 筆、.slice(0,8) 直接砍掉多餘介面，超過 8 個
+    // 的介面（含其上的 VLAN 子介面）會靜默消失、無任何提示。pfSense 的 <interfaces> schema
+    // 本身沒有數量上限（optN 可無限延伸），拿掉截斷；同時修正 key 產生公式的既有 off-by-one
+    // （原本 fallback "opt${idx}" 在 idx=8 時會產生 "opt8"，直接跳過 "opt7"）
+    const pfIfKey=idx=>idx===0?'wan':idx===1?'lan':`opt${idx-1}`;
     L.push('  <interfaces>');
-    parsed.interfaces.slice(0,8).forEach((ifc,idx)=>{
-      const key=pfIfKeys[idx]||`opt${idx}`;
+    parsed.interfaces.forEach((ifc,idx)=>{
+      const key=pfIfKey(idx);
       L.push(`    <${key}>`);
       L.push(`      <if>${esc(ifc.name)}</if>`);
       L.push(`      <descr>${esc(ifc.alias&&ifc.alias!=='-'?ifc.alias:ifc.role||key.toUpperCase())}</descr>`);
@@ -11263,7 +11311,7 @@ const Converter = (() => {
         L.push(`    <alias><name>${esc(a.name)}</name>`);
         if(a.type==='fqdn') L.push(`      <type>url</type><address>${esc(a.fqdn)}</address>`);
         else if(a.type==='iprange') L.push(`      <type>host</type><address>${esc(a.startIp+'-'+a.endIp)}</address>`);
-        else { const s3=a.subnet||(a.ip?a.ip+'/32':'0.0.0.0/0'); L.push(`      <type>${s3.endsWith('/32')||!s3.includes('/')?'host':'network'}</type><address>${esc(s3)}</address>`); }
+        else { const s3=addrCidr(a); L.push(`      <type>${s3.endsWith('/32')?'host':'network'}</type><address>${esc(s3)}</address>`); }
         L.push(`      <descr>${esc(a.comment&&a.comment!=='-'?a.comment:'')}</descr></alias>`);
       });
       allGrps2.forEach(g=>L.push(`    <alias><name>${esc(g.name)}</name><type>host</type><address>${esc(sl(g.members).join(' '))}</address><descr>${esc(g.comment&&g.comment!=='-'?g.comment:'')}</descr></alias>`));
@@ -11360,6 +11408,15 @@ const Converter = (() => {
     };
     // ASA ACL 沒有天然的「any」介面，找不到明確來源介面時退回 inside 而非 mapZone() 的通用 fallback 'any'
     const intfOf = role => { const z=mapZone(role,'ciscoasa'); return z==='any'?'inside':z; };
+    // 2026-07-24 修復：來源若有兩個以上同角色介面（如 wan1+wan2-pppoe 皆對應 outside），
+    // 原本會產生兩個介面同時 "nameif outside"，真實 ASA 上 nameif 必須唯一、會被拒絕。
+    // 先算好一份計數表，重複時自動加編號區分（outside/outside2/outside3...）
+    const nameifCounts={};
+    const nameifOf=i=>{
+      const base=i.nameif||intfOf(i.role);
+      nameifCounts[base]=(nameifCounts[base]||0)+1;
+      return nameifCounts[base]===1?base:`${base}${nameifCounts[base]}`;
+    };
 
     L.push(`: ${hdr(parsed.vendor||'?','Cisco ASA 9.x',d.hostname)}`);
     L.push(`hostname ${d.hostname}`);
@@ -11369,9 +11426,11 @@ const Converter = (() => {
     // 其餘廠牌來源用 role 概略對應
     parsed.interfaces.forEach(i=>{
       L.push(`interface ${i.name}`);
-      L.push(` nameif ${i.nameif||intfOf(i.role)}`);
+      L.push(` nameif ${nameifOf(i)}`);
       const sec = (typeof i.secLevel==='number'&&i.secLevel>=0) ? i.secLevel : (/wan|untrust|outside|external/i.test(i.role||'')?0:/dmz/i.test(i.role||'')?50:100);
       L.push(` security-level ${sec}`);
+      // 2026-07-24 新增：VLAN 子介面需要 "vlan N" 子指令才能真正生效，原本完全沒有輸出
+      if(i.type==='vlan'&&i.vlanId&&i.vlanId!=='-') L.push(` vlan ${i.vlanId}`);
       if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP') {
         const mask=i.mask&&i.mask!=='-'?(i.mask.includes('.')?i.mask:maskOf(i.mask)):'255.255.255.0';
         L.push(` ip address ${i.ip} ${mask}`);
@@ -11585,12 +11644,22 @@ const Converter = (() => {
     L.push(`/system identity set name=${d.hostname}`);
     L.push('');
 
+    // 2026-07-24 修復：原本直接把 "port5.100" 這種點號子介面名稱塞進 interface= 參數，
+    // RouterOS 完全沒有這種命名慣例（會被當成一個不存在的介面字面字串，語意錯誤）。
+    // 改為先產生原生的 /interface vlan 區塊，/ip address 的 VLAN 介面改引用這個新名稱
+    const vlanIfs=parsed.interfaces.filter(i=>i.type==='vlan'&&i.vlanId&&i.vlanId!=='-'&&i.interface);
+    if(vlanIfs.length){
+      L.push('/interface vlan');
+      vlanIfs.forEach(v=>L.push(`add name=vlan${v.vlanId} vlan-id=${v.vlanId} interface=${v.interface}`));
+      L.push('');
+    }
     if(parsed.interfaces.length) {
       L.push('/ip address');
       parsed.interfaces.forEach(i=>{
         if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP') {
           const pfx=i.mask&&i.mask!=='-'?(i.mask.includes('.')?bits(i.mask):i.mask):'24';
-          L.push(`add address=${i.ip}/${pfx} interface=${i.name}${i.desc&&i.desc!=='-'?' comment="'+i.desc+'"':''}`);
+          const ifName=(i.type==='vlan'&&i.vlanId&&i.vlanId!=='-'&&i.interface)?`vlan${i.vlanId}`:i.name;
+          L.push(`add address=${i.ip}/${pfx} interface=${ifName}${i.desc&&i.desc!=='-'?' comment="'+i.desc+'"':''}`);
         }
       });
       L.push('');
@@ -11683,7 +11752,29 @@ const Converter = (() => {
     return LOSS_FIELDS.filter(f=>hasAnyData(parsed[f.key])).map(f=>f.label);
   }
 
-  return { convert, getConversionLoss, toFortigate, toSophos, toCheckpoint, toPaloAlto, toJuniper, toPfsense, toCiscoASA, toCiscoFTD, toSonicWall, toMikrotik };
+  // 2026-07-24 新增：轉換警語——回答「不同 port 數量/型號能否轉換」的疑慮：能跑，但介面
+  // 實體命名/埠位對應本質上無法從來源設定檔自動判斷目標設備的真實硬體規格，10 個 to*()
+  // 全部直接沿用來源介面名稱，不做（也不應該做）猜測性的命名轉換。比起假裝能自動判斷正確，
+  // 統一在此集中偵測並誠實告知使用者需要人工核對的項目，與 getConversionLoss()（資料真的
+  // 被拿掉）區分開來——這裡回報的是「資料還在，但正確性需要人工複核」
+  function getConversionCaveats(parsed, targetVendor){
+    const notes=['介面實體名稱／埠位對應皆直接沿用來源設定，未轉換為目標設備慣用命名，請依目標設備實際型號與埠數量人工核對介面清單'];
+    const ifs=parsed.interfaces||[];
+    if(targetVendor==='ciscoasa'||targetVendor==='ciscoftd'){
+      const intfOf=role=>{const z=mapZone(role,'ciscoasa');return z==='any'?'inside':z;};
+      const counts={};
+      ifs.forEach(i=>{const base=i.nameif||intfOf(i.role);counts[base]=(counts[base]||0)+1;});
+      if(Object.values(counts).some(n=>n>1)) notes.push('偵測到多個相同角色介面，已自動編號區分 nameif 避免命名衝突，靜態路由的介面對應為概略猜測，請人工核對');
+    }
+    if(targetVendor==='mikrotik'){
+      const noIp=ifs.filter(i=>!i.ip||i.ip==='-'||i.ip==='DHCP').length;
+      if(noIp) notes.push(`${noIp} 個無 IP 位址的介面未輸出於 /ip address（RouterOS 此區塊僅列出已指派 IP 的介面）`);
+    }
+    if(ifs.some(i=>i.type==='vlan')) notes.push('VLAN 子介面語法為近似對應，實機匯入前請人工確認子介面設定是否完整');
+    return notes;
+  }
+
+  return { convert, getConversionLoss, getConversionCaveats, toFortigate, toSophos, toCheckpoint, toPaloAlto, toJuniper, toPfsense, toCiscoASA, toCiscoFTD, toSonicWall, toMikrotik };
 })();
 
 
@@ -14994,6 +15085,12 @@ function onParsed(){
       if(lossFields.length){
         convStatusHtml+=`<br><span style="color:var(--orange)">${tr('conv.data_loss_warning').replace('{list}',lossFields.join(', '))}</span>`;
       }
+      // 2026-07-24 新增：轉換警語（與上方資料遺失提示區分——這裡的資料仍在輸出內，但正確性
+      // 需要人工複核，例如介面命名/埠位對應、nameif 自動編號、VLAN 子介面近似對應等）
+      const caveats=Converter.getConversionCaveats(srcParsed, targetVendor);
+      if(caveats.length){
+        convStatusHtml+=`<br><span style="color:var(--text-dim);font-size:12px">⚠️ ${caveats.map(esc).join('<br>⚠️ ')}</span>`;
+      }
       $('conv-status').innerHTML=convStatusHtml;
       // Highlight active button
       document.querySelectorAll('.conv-btn').forEach(b=>b.classList.remove('conv-btn-running'));
@@ -15008,7 +15105,7 @@ function onParsed(){
 
   function downloadConv(){
     if(!CONV_RESULT){showErr(tr('conv.no_result'));return;}
-    const ext={fortigate:'conf',sophos:'xml',checkpoint:'txt',paloalto:'xml',sonicwall:'xml',mikrotik:'rsc',ciscoasa:'txt',ciscoftd:'txt'}[CONV_TARGET]||'txt';
+    const ext={fortigate:'conf',sophos:'xml',checkpoint:'txt',paloalto:'xml',juniper:'conf',pfsense:'xml',sonicwall:'xml',mikrotik:'rsc',ciscoasa:'txt',ciscoftd:'txt'}[CONV_TARGET]||'txt';
     Reporter.download(CONV_RESULT,`fw_converted_${CONV_TARGET}_${dateStr()}.${ext}`,'text/plain');
   }
   window.downloadConv=downloadConv;
