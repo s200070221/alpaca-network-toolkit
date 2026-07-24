@@ -383,6 +383,16 @@ input.valid,select.valid{border-color:var(--green)!important}
       <label data-i18n="lbl.bgpNetworks">Networks</label>
       <input id="bgp-networks" style="flex:1;min-width:200px" placeholder="10.0.0.0/24 10.1.0.0/24">
     </div>
+    <div class="row">
+      <label data-i18n="lbl.bgpPeerGroup">Peer Group</label>
+      <input id="bgp-peer-group" style="flex:1;min-width:200px" placeholder="ISP-GROUP" data-tip="目前僅 Comware 有對應輸出；其餘廠牌會忽略此欄位">
+    </div>
+    <div class="row">
+      <label data-i18n="lbl.bgpTimerKeepalive">Timer Keepalive</label>
+      <input id="bgp-timer-keepalive" placeholder="60" data-tip="目前僅 Comware 有對應輸出；其餘廠牌會忽略此欄位">
+      <label data-i18n="lbl.bgpTimerHold">Timer Hold</label>
+      <input id="bgp-timer-hold" placeholder="180" data-tip="目前僅 Comware 有對應輸出；其餘廠牌會忽略此欄位">
+    </div>
     <table class="tbl">
       <thead><tr>
         <th data-i18n="th.peerIp">Peer IP</th>
@@ -410,6 +420,18 @@ input.valid,select.valid{border-color:var(--green)!important}
     <div class="row">
       <label data-i18n="lbl.ripRedist">Redistribute</label>
       <input id="rip-redist" style="flex:1;min-width:200px" placeholder="static">
+    </div>
+    <div class="row">
+      <label data-i18n="lbl.ripSilent">Silent Interface</label>
+      <input id="rip-silent" style="flex:1;min-width:200px" placeholder="Vlan-interface99" data-tip="目前僅 Comware 有對應輸出；其餘廠牌會忽略此欄位">
+    </div>
+    <div class="row">
+      <label style="display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="rip-summary" data-tip="目前僅 Comware 有對應輸出；其餘廠牌會忽略此欄位">
+        <span data-i18n="lbl.ripSummary">Auto Summary</span>
+      </label>
+      <label data-i18n="lbl.ripDefaultCost">Default Cost</label>
+      <input id="rip-default-cost" placeholder="1" data-tip="目前僅 Comware 有對應輸出；其餘廠牌會忽略此欄位">
     </div>
   </div>
 
@@ -1176,11 +1198,16 @@ function renderComwareOSPF(list){return (list||[]).map(renderComwareOSPFProcess)
 function renderComwareBGP(b){
   const lines=[`bgp ${b.asn}`];
   if(b.routerId)lines.push(` router-id ${b.routerId}`);
+  // 2026-07-24 新增：peer-group／timer 皆為 BGP process 層級欄位（非逐 peer），比照
+  // switch_analyzer parseBGP() 既有查證結果——group 語法 "group NAME [external|internal]"、
+  // timer 語法 "timer keepalive N hold N"（官方查證確認關鍵字是 hold 非 holdtime）
+  (b.peerGroups||[]).forEach(g=>lines.push(` group ${g.name}${g.type?' '+g.type:''}`));
   (b.peers||[]).forEach(p=>{
     lines.push(` peer ${p.ip} as-number ${p.as}`);
     if(p.desc)lines.push(` peer ${p.ip} description ${p.desc}`);
   });
   (b.networks||[]).forEach(n=>lines.push(` network ${n}`));
+  if(b.timers&&b.timers.keepalive&&b.timers.holdtime)lines.push(` timer keepalive ${b.timers.keepalive} hold ${b.timers.holdtime}`);
   lines.push('#');
   return lines.join('\n');
 }
@@ -1191,6 +1218,12 @@ function renderComwareRIP(r){
   if(r.version)lines.push(` version ${r.version}`);
   (r.networks||[]).forEach(n=>lines.push(` network ${n}`));
   (r.redistribute||[]).forEach(x=>lines.push(` import-route ${x}`));
+  // 2026-07-24 新增：比照 switch_analyzer parseRIPBlock() 既有查證結果——silent-interface
+  // 是 passive-interface 的 Comware 對應、裸 summary 是 auto-summary 對應、default cost N
+  // 是 default-metric 對應
+  (r.passive||[]).forEach(i=>lines.push(` silent-interface ${i}`));
+  if(r.autoSummary)lines.push(` summary`);
+  if(r.defaultMetric)lines.push(` default cost ${r.defaultMetric}`);
   lines.push('#');
   return lines.join('\n');
 }
@@ -5053,11 +5086,15 @@ function collectModel(){
     const peers=rowsOf('#bgp-peer-body tr').map(tr=>({
       ip:val(tr,'p-ip'), as:val(tr,'p-as'), desc:val(tr,'p-desc'),
     })).filter(p=>p.ip);
+    const bgpKeepalive=document.getElementById('bgp-timer-keepalive').value.trim();
+    const bgpHold=document.getElementById('bgp-timer-hold').value.trim();
     bgp.push({
       asn:bgpAsn,
       routerId:document.getElementById('bgp-rid').value.trim(),
       peers,
       networks:document.getElementById('bgp-networks').value.trim().split(/\s+/).filter(Boolean),
+      peerGroups:document.getElementById('bgp-peer-group').value.trim().split(/\s+/).filter(Boolean).map(name=>({name,type:''})),
+      timers:(bgpKeepalive&&bgpHold)?{keepalive:bgpKeepalive,holdtime:bgpHold}:null,
     });
   }
 
@@ -5069,6 +5106,9 @@ function collectModel(){
       version:document.getElementById('rip-version').value.trim(),
       networks:document.getElementById('rip-networks').value.trim().split(/\s+/).filter(Boolean),
       redistribute:document.getElementById('rip-redist').value.trim().split(/\s+/).filter(Boolean),
+      passive:document.getElementById('rip-silent').value.trim().split(/\s+/).filter(Boolean),
+      autoSummary:document.getElementById('rip-summary').checked,
+      defaultMetric:document.getElementById('rip-default-cost').value.trim(),
     });
   }
 
@@ -5260,6 +5300,9 @@ function applyModelToForm(model){
   document.getElementById('bgp-asn').value=b?.asn||'';
   document.getElementById('bgp-rid').value=b?.routerId||'';
   document.getElementById('bgp-networks').value=(b?.networks||[]).join(' ');
+  document.getElementById('bgp-peer-group').value=(b?.peerGroups||[]).map(g=>g.name).join(' ');
+  document.getElementById('bgp-timer-keepalive').value=b?.timers?.keepalive||'';
+  document.getElementById('bgp-timer-hold').value=b?.timers?.holdtime||'';
   (b?.peers||[]).forEach(p=>addBgpPeerRow(p.ip,p.as,p.desc||''));
 
   const r=(model.rip||[])[0];
@@ -5267,6 +5310,9 @@ function applyModelToForm(model){
   document.getElementById('rip-version').value=r?.version||'';
   document.getElementById('rip-networks').value=(r?.networks||[]).join(' ');
   document.getElementById('rip-redist').value=(r?.redistribute||[]).join(' ');
+  document.getElementById('rip-silent').value=(r?.passive||[]).join(' ');
+  document.getElementById('rip-summary').checked=!!r?.autoSummary;
+  document.getElementById('rip-default-cost').value=r?.defaultMetric||'';
 
   (model.routes||[]).forEach(rt=>addRouteRow(rt.dst,rt.gw,rt.metric));
 
@@ -6064,6 +6110,11 @@ async function parseAndImport(){
   document.getElementById('bgp-asn').value=b?.asn||'';
   document.getElementById('bgp-rid').value=b?.routerId||'';
   document.getElementById('bgp-networks').value=(b?.networks||[]).join(' ');
+  // peerGroups/timers 僅在使用者上傳過 switch-config-parser.html（走沙箱抽取的真實
+  // parseBGP()）那條匯入路徑才有資料，內建 BasicParser 對 BGP 永遠回傳空陣列，此為既有限制
+  document.getElementById('bgp-peer-group').value=(b?.peerGroups||[]).map(g=>g.name).join(' ');
+  document.getElementById('bgp-timer-keepalive').value=b?.timers?.keepalive||'';
+  document.getElementById('bgp-timer-hold').value=b?.timers?.holdtime||'';
   (b?.peers||[]).forEach(p=>addBgpPeerRow(p.ip,p.as,p.desc||''));
 
   const r=(parsed.rip||[])[0];
@@ -6072,16 +6123,24 @@ async function parseAndImport(){
     // 共用表單的 Process ID 欄位借用作為「是否啟用」觸發旗標（沿用既有 collectModel()
     // 邏輯，非其真實語意），Networks 欄位比照 renderBrocadeRIPGlobal()／
     // brocadeRipEnabledPorts() 慣例改填要啟用 RIP 的介面清單；distance/timer/
-    // learn-default/default-metric/redistribute 因共用表單無對應欄位，匯入後無法回填
+    // learn-default/default-metric/redistribute 因共用表單無對應欄位，匯入後無法回填。
+    // 2026-07-24 新增的 silent-interface/summary/default-cost 三欄位同理，Brocade 語意不同
+    // （FastIron 無對應概念），不映射
     document.getElementById('rip-pid').value=r?'1':'';
     document.getElementById('rip-version').value='';
     document.getElementById('rip-networks').value=(r?.interfaces||[]).map(i=>i.name).join(' ');
     document.getElementById('rip-redist').value='';
+    document.getElementById('rip-silent').value='';
+    document.getElementById('rip-summary').checked=false;
+    document.getElementById('rip-default-cost').value='';
   }else{
     document.getElementById('rip-pid').value=r?.pid||'';
     document.getElementById('rip-version').value=r?.version||'';
     document.getElementById('rip-networks').value=(r?.networks||[]).join(' ');
     document.getElementById('rip-redist').value=(r?.redistribute||[]).join(' ');
+    document.getElementById('rip-silent').value=(r?.passive||[]).join(' ');
+    document.getElementById('rip-summary').checked=!!r?.autoSummary;
+    document.getElementById('rip-default-cost').value=r?.defaultMetric||'';
   }
 
   (parsed.routes||[]).forEach(rt=>addRouteRow(rt.dst,rt.gw,rt.metric));
@@ -6890,8 +6949,8 @@ const LANG={
     'sec.import':'匯入既有設定檔','lbl.importUpload':'上傳設定檔（或直接貼於下方）','lbl.importPaste':'貼上設定檔內容','lbl.importFile':'此欄僅用於上傳 switch-config-parser.html 這支程式檔案（不是您的交換器設定檔）','lbl.importFallbackSummary':'⚙️ 疑難排解：找不到解析引擎時手動上傳','btn.parseImport':'解析並帶入表單',
     'msg.importEmpty':'請先貼上設定檔內容','msg.importBasicFallback':'因無法與大型解析工具同步或尚未匯入完整解析器，將使用內建基礎解析模式','msg.importNoVendor':'無法辨識廠牌，請確認貼上的內容是否為支援的設定檔格式','msg.importSuccess':'解析成功，已帶入表單','msg.appliedModel':'✓ 目前套用 {vendor} 的 {model} 之預設設定',
     'th.areaType':'Type','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'No-Summary',
-    'sec.bgp':'BGP 設定','lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':'Networks','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'描述',
-    'sec.rip':'RIP 設定','lbl.ripPid':'Process ID','lbl.ripVersion':'Version','lbl.ripNetworks':'Networks','lbl.ripRedist':'Redistribute',
+    'sec.bgp':'BGP 設定','lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':'Networks','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'描述','lbl.bgpPeerGroup':'Peer Group','lbl.bgpTimerKeepalive':'Timer Keepalive','lbl.bgpTimerHold':'Timer Hold',
+    'sec.rip':'RIP 設定','lbl.ripPid':'Process ID','lbl.ripVersion':'Version','lbl.ripNetworks':'Networks','lbl.ripRedist':'Redistribute','lbl.ripSilent':'Silent Interface','lbl.ripSummary':'自動彙總','lbl.ripDefaultCost':'預設成本',
     'btn.addRow':'+ 新增列','btn.loadExample':'📋 載入範例資料','btn.generate':'產生設定','btn.copy':'複製','btn.copied':'已複製！','btn.copyFailed':'複製失敗','btn.download':'下載','btn.doc':'文檔','btn.diff':'對比','diff.title':'🔄 設定對比','diff.oldLabel':'舊版本設定','diff.newLabel':'新版本設定','diff.runBtn':'執行對比','diff.uploadBothAlert':'請上傳兩份設定檔','diff.added':'新增','diff.deleted':'刪除','diff.total':'共計','doc.disclaimerText':'此文檔由 Switch Config Generator 自動生成，僅供參考。部署前務必經過完整測試和審核。','doc.chooseFormat':'選擇文檔格式','doc.enterChoice':'輸入 1、2 或 3','doc.invalidChoice':'無效選擇','doc.areaCount':'Area 數','doc.peerCount':'Peer 數','doc.routeCount':'路由數','doc.portCount':'埠數','doc.wordGenFailed':'Word 文檔生成失敗。請檢查瀏覽器控制臺。','btn.chooseFile':'選擇檔案','btn.noFileSelected':'未選擇任何檔案',
     'footer':'Switch Config Generator · Comware / FortiSwitch',
     'lbl.breakoutParent':'母埠名稱','lbl.breakoutRatio':'拆分比例','lbl.breakoutEmitEnable':'同時輸出啟用指令','btn.breakoutExpand':'+ 展開子埠','opt.breakout4x10G':'4x10G','opt.breakout4x25G':'4x25G','opt.breakout2x50G':'2x50G','opt.breakoutSchemeRenumber':'9300X 模組換位編號','opt.breakoutSchemeSuffix':'9500-32C 後綴編號','notice.nxosBreakoutWarning':'警告：執行此指令將導致該模組重新載入並清除既有設定，請於維護時段執行',
@@ -6935,8 +6994,8 @@ const LANG={
     'sec.import':'Import Existing Config','lbl.importUpload':'Upload Config File (or paste below)','lbl.importPaste':'Paste Config Content','lbl.importFile':'This field is only for uploading the switch-config-parser.html program file (not your switch config)','lbl.importFallbackSummary':"⚙️ Troubleshooting: manual upload if the parser engine isn't found",'btn.parseImport':'Parse & Fill Form',
     'msg.importEmpty':'Please paste config content first','msg.importBasicFallback':'Could not sync with the full parser tool, or none has been loaded yet — using built-in basic parsing mode','msg.importNoVendor':'Vendor not recognized — please check the pasted content is a supported config format','msg.importSuccess':'Parsed successfully — form has been filled','msg.appliedModel':'✓ Now applying default settings for {vendor} {model}','btn.downloadJson':'Download JSON','btn.downloadTxt':'Download Text','btn.downloadWord':'Download Word','col.ifDesc':'Description','col.ifMode':'Mode','col.ifName':'Interface Name','col.ifVlan':'VLAN','col.remark':'Remark','col.vlanId':'VLAN ID','col.vlanName':'VLAN Name','doc.deviceInfo':'Device Info','doc.disclaimer':'Disclaimer','doc.ifaceTitle':'Interface Configuration','doc.redundancyTitle':'Redundancy Summary','doc.routingTitle':'Routing Protocol Summary','doc.timestamp':'Generated Time','doc.title':'Switch Config Document','doc.vlanTitle':'VLAN Planning','doc.wordError':'Word library not loaded. This feature requires network access.','fmt.json':'JSON','fmt.txt':'Text','fmt.word':'Word',
     'th.areaType':'Type','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'No-Summary',
-    'sec.bgp':'BGP Settings','lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':'Networks','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'Description',
-    'sec.rip':'RIP Settings','lbl.ripPid':'Process ID','lbl.ripVersion':'Version','lbl.ripNetworks':'Networks','lbl.ripRedist':'Redistribute',
+    'sec.bgp':'BGP Settings','lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':'Networks','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'Description','lbl.bgpPeerGroup':'Peer Group','lbl.bgpTimerKeepalive':'Timer Keepalive','lbl.bgpTimerHold':'Timer Hold',
+    'sec.rip':'RIP Settings','lbl.ripPid':'Process ID','lbl.ripVersion':'Version','lbl.ripNetworks':'Networks','lbl.ripRedist':'Redistribute','lbl.ripSilent':'Silent Interface','lbl.ripSummary':'Auto Summary','lbl.ripDefaultCost':'Default Cost',
     'btn.addRow':'+ Add Row','btn.loadExample':'📋 Load Example Data','btn.generate':'Generate','btn.copy':'Copy','btn.copied':'Copied!','btn.copyFailed':'Copy Failed','btn.download':'Download','btn.doc':'Documentation','btn.diff':'Compare','diff.title':'🔄 Config Diff','diff.oldLabel':'Old Version','diff.newLabel':'New Version','diff.runBtn':'Run Compare','diff.uploadBothAlert':'Please upload both config files','diff.added':'Added','diff.deleted':'Deleted','diff.total':'Total','doc.disclaimerText':'This document was auto-generated by Switch Config Generator, for reference only. Please fully test and review before deployment.','doc.chooseFormat':'Choose document format','doc.enterChoice':'Enter 1, 2 or 3','doc.invalidChoice':'Invalid choice','doc.areaCount':'Areas','doc.peerCount':'Peers','doc.routeCount':'Route Count','doc.portCount':'Port Count','doc.wordGenFailed':'Word document generation failed. Check browser console.','btn.chooseFile':'Choose File','btn.noFileSelected':'No File Selected',
     'footer':'Switch Config Generator · Comware / FortiSwitch',
     'lbl.breakoutParent':'Parent Port','lbl.breakoutRatio':'Split Ratio','lbl.breakoutEmitEnable':'Also emit enable command','btn.breakoutExpand':'+ Expand Sub-ports','opt.breakout4x10G':'4x10G','opt.breakout4x25G':'4x25G','opt.breakout2x50G':'2x50G','opt.breakoutSchemeRenumber':'9300X Module Renumbering','opt.breakoutSchemeSuffix':'9500-32C Subport Suffix','notice.nxosBreakoutWarning':'Warning: this command reloads the module and clears its existing configuration — run during a maintenance window',
@@ -6980,8 +7039,8 @@ const LANG={
     'sec.import':'既存設定のインポート','lbl.importUpload':'設定ファイルをアップロード（または下に貼り付け）','lbl.importPaste':'設定内容を貼り付け','lbl.importFile':'この欄は switch-config-parser.html プログラムファイルのアップロード専用です（お使いの設定ファイルではありません）','lbl.importFallbackSummary':'⚙️ トラブルシューティング：解析エンジンが見つからない場合の手動アップロード','btn.parseImport':'解析してフォームに反映',
     'msg.importEmpty':'先に設定内容を貼り付けてください','msg.importBasicFallback':'大型解析ツールと同期できないか、まだ読み込まれていないため、内蔵の簡易解析モードを使用します','msg.importNoVendor':'ベンダーを識別できません。貼り付けた内容が対応形式か確認してください','msg.importSuccess':'解析に成功しました。フォームに反映されました','msg.appliedModel':'✓ 現在 {vendor} の {model} のデフォルト設定を適用しています','btn.downloadJson':'JSON をダウンロード','btn.downloadTxt':'テキストをダウンロード','btn.downloadWord':'Word をダウンロード','col.ifDesc':'説明','col.ifMode':'モード','col.ifName':'インターフェース名','col.ifVlan':'VLAN','col.remark':'備考','col.vlanId':'VLAN ID','col.vlanName':'VLAN 名','doc.deviceInfo':'デバイス情報','doc.disclaimer':'免責事項','doc.ifaceTitle':'インターフェース設定','doc.redundancyTitle':'冗長性設定','doc.routingTitle':'ルーティング設定','doc.timestamp':'生成時間','doc.title':'スイッチ設定文書','doc.vlanTitle':'VLAN計画','doc.wordError':'Word ライブラリが読み込まれていません。','fmt.json':'JSON','fmt.txt':'テキスト','fmt.word':'Word',
     'th.areaType':'タイプ','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'No-Summary',
-    'sec.bgp':'BGP設定','lbl.bgpAsn':'ASN','lbl.bgpRid':'ルーターID','lbl.bgpNetworks':'ネットワーク','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'説明',
-    'sec.rip':'RIP設定','lbl.ripPid':'プロセスID','lbl.ripVersion':'バージョン','lbl.ripNetworks':'ネットワーク','lbl.ripRedist':'再配布',
+    'sec.bgp':'BGP設定','lbl.bgpAsn':'ASN','lbl.bgpRid':'ルーターID','lbl.bgpNetworks':'ネットワーク','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'説明','lbl.bgpPeerGroup':'ピアグループ','lbl.bgpTimerKeepalive':'タイマー Keepalive','lbl.bgpTimerHold':'タイマー Hold',
+    'sec.rip':'RIP設定','lbl.ripPid':'プロセスID','lbl.ripVersion':'バージョン','lbl.ripNetworks':'ネットワーク','lbl.ripRedist':'再配布','lbl.ripSilent':'サイレントインターフェース','lbl.ripSummary':'自動集約','lbl.ripDefaultCost':'デフォルトコスト',
     'btn.addRow':'+ 行を追加','btn.loadExample':'📋 サンプルデータを読み込む','btn.generate':'設定を生成','btn.copy':'コピー','btn.copied':'コピー済み！','btn.copyFailed':'コピー失敗','btn.download':'ダウンロード','btn.doc':'ドキュメント','btn.diff':'比較','diff.title':'🔄 設定差分','diff.oldLabel':'旧バージョン設定','diff.newLabel':'新バージョン設定','diff.runBtn':'比較を実行','diff.uploadBothAlert':'設定ファイルを2つともアップロードしてください','diff.added':'追加','diff.deleted':'削除','diff.total':'合計','doc.disclaimerText':'このドキュメントは Switch Config Generator により自動生成されました。参考用です。導入前に十分なテストと確認を行ってください。','doc.chooseFormat':'ドキュメント形式を選択','doc.enterChoice':'1、2、または3を入力','doc.invalidChoice':'無効な選択です','doc.areaCount':'エリア数','doc.peerCount':'ピア数','doc.routeCount':'ルート数','doc.portCount':'ポート数','doc.wordGenFailed':'Word文書の生成に失敗しました。ブラウザのコンソールを確認してください。','btn.chooseFile':'ファイルを選択','btn.noFileSelected':'ファイルが選択されていません',
     'footer':'Switch Config Generator · Comware / FortiSwitch',
     'lbl.breakoutParent':'親ポート名','lbl.breakoutRatio':'分割比率','lbl.breakoutEmitEnable':'有効化コマンドも出力','btn.breakoutExpand':'+ 子ポート展開','opt.breakout4x10G':'4x10G','opt.breakout4x25G':'4x25G','opt.breakout2x50G':'2x50G','opt.breakoutSchemeRenumber':'9300X モジュール番号振替','opt.breakoutSchemeSuffix':'9500-32C サフィックス方式','notice.nxosBreakoutWarning':'警告：このコマンドを実行するとモジュールが再起動し既存設定が消去されます。メンテナンス時間帯に実行してください',
@@ -7025,8 +7084,8 @@ const LANG={
     'val.hostname_format':'Hostname format invalid (only letters, digits, -, _ allowed, max 32 chars)','val.required':'{item} is required','val.format_invalid':'{item} format is invalid','val.example':'e.g. {example}','val.invalid':'{item} is invalid','val.dup':'{item} is duplicated','val.field_name':'Name','val.field_as':'AS Number','val.field_vip':'Virtual IP','val.field_priority':'Priority','val.field_lagid':'Aggregation ID','val.static_route':'Static Route','val.native_vlan_not_in_list':'Interface {name}: Native VLAN {vlan} not in VLAN list','val.vendor_no_hybrid':'{vendor} does not support Hybrid port (Interface {name})','val.ospf_no_network':'OSPF {n}: no network defined, routes will not be advertised','val.acl_src_suspect':'ACL {name} Rule {n}: source "{value}" format may be incorrect, please verify','val.acl_dst_suspect':'ACL {name} Rule {n}: destination "{value}" format may be incorrect, please verify','val.vendor_unsupported_feature':'{vendor} does not support {feature}; this field data will be ignored when generating','val.bgp_networks_ignored':'{vendor} currently only supports BGP Peer settings; Networks data will be ignored when generating','val.dhcp_iface_mismatch':'DHCP Interface "{iface}" has no matching VLAN, please check the name','val.importResultTitle':'Import Validation Results','val.generateCheckTitle':'Pre-Generation Check','val.allPassed':'All checks passed!','val.errorsFound':'Found {n} error(s)','val.tipsCount':'Tips ({n})','sec.bulk':'📦 Bulk Config Generator','lbl.bulkUpload':'Upload CSV File (device list)','btn.bulkTemplate':'📋 View Format','btn.bulkStart':'Start Bulk Generation','btn.bulkDownloadZip':'⬇️ Download All Configs (ZIP)','btn.bulkToggle':'📦 Bulk','msg.bulkTemplate':'CSV Format Example:\nDeviceName,Vendor,Hostname,Model\nsw-core-01,comware,SW-CORE-01,HPE 5140\nsw-core-02,comware,SW-CORE-02,HPE 5140\nsw-access-01,cisco,SW-ACC-01,Cisco 9300\nsw-access-02,aruba,SW-ACC-02,Aruba CX 6300\n\nRequired fields: DeviceName, Vendor, Hostname\nSupported vendors: comware, cisco, aruba, fortiswitch, juniper\nOptional field: Model (applies default device model)\n\nUses the current form\'s VLAN/Interface settings, changing only the Hostname per row\nGenerated filename: DeviceName.txt','msg.bulkNoFile':'Please select a CSV file','msg.bulkNeedHeaderRow':'CSV file needs a header row and at least 1 data row','msg.bulkMissingColumns':'CSV must include columns: {cols}','msg.bulkProgress':'Generating configs... ({current}/{total})','msg.bulkMissingFields':'❌ Missing required fields','msg.bulkGenerateFailed':'❌ Generation failed: {error}','msg.bulkDone':'✅ Done! Generated {count} configs','msg.bulkNothingToDownload':'No configs to download','msg.bulkManifestTitle':'Config File List','msg.bulkManifestTimestamp':'Generated at: {time}','msg.bulkManifestCount':'{count} configs total','msg.bulkManifestHeader':'Filename,Lines',
     'th.aclDst':'Destination','th.aclDstPort':'Destination','th.aclRemark':'Remark','th.aclSrc':'Source',
     'th.areaType':'Segh','opt.typeNormal':'motlh','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'Hoch-mIw',
-    'sec.bgp':'BGP chenmoH','lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':"De' ghom",'th.peerIp':'jan IP','th.peerAs':'AS','th.peerDesc':"De' bID",
-    'sec.rip':'RIP chenmoH','lbl.ripPid':'Process ID','lbl.ripVersion':'chab','lbl.ripNetworks':'De\' ghom','lbl.ripRedist':'De\' chelmoH',
+    'sec.bgp':'BGP chenmoH','lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':"De' ghom",'th.peerIp':'jan IP','th.peerAs':'AS','th.peerDesc':"De' bID",'lbl.bgpPeerGroup':"May' ghom",'lbl.bgpTimerKeepalive':'poH yIpaw','lbl.bgpTimerHold':'poH yIloS',
+    'sec.rip':'RIP chenmoH','lbl.ripPid':'Process ID','lbl.ripVersion':'chab','lbl.ripNetworks':'De\' ghom','lbl.ripRedist':'De\' chelmoH','lbl.ripSilent':"tam De' ghom",'lbl.ripSummary':'chenmoH','lbl.ripDefaultCost':"motlh malja'",
     'btn.addRow':"+ raS chel",'btn.loadExample':"nu' De' chel",'btn.generate':"chenmoH!",'btn.copy':'cha\'','btn.copied':"cha'ta'!",'btn.copyFailed':"cha' Qaw'",'btn.download':'bID','btn.doc':'SoQ','btn.diff':'jup','diff.title':'🔄 diff','diff.oldLabel':'old','diff.newLabel':'new','diff.runBtn':'qet','diff.uploadBothAlert':'need 2 files','diff.added':'chu\'','diff.deleted':'chIm','diff.total':'Hoch','doc.disclaimerText':'📄⚠️ ref only','doc.chooseFormat':'choose','doc.enterChoice':'1 2 3?','doc.invalidChoice':'Qaghbe\'','doc.areaCount':'Area','doc.peerCount':'Peer','doc.routeCount':'route','doc.portCount':'port','doc.wordGenFailed':'fail','btn.chooseFile':'nav chel','btn.noFileSelected':'nav ghobe\'',
     'footer':"nISjan De' chenmoHwI' · Comware / FortiSwitch",
     'lbl.breakoutParent':"SoS lojmIt",'lbl.breakoutRatio':"vegh mI'",'lbl.breakoutEmitEnable':"ra'ghach chel",'btn.breakoutExpand':"+ vegh puchpa'",'opt.breakout4x10G':'4x10G','opt.breakout4x25G':'4x25G','opt.breakout2x50G':'2x50G','opt.breakoutSchemeRenumber':"9300X mI' choH",'opt.breakoutSchemeSuffix':"9500-32C mI' chel",'notice.nxosBreakoutWarning':"yIqIm: ra'ghach QaS DuHmey chIm chen; maintenance poH lo'",
@@ -7069,8 +7128,8 @@ const LANG={
     'sec.import':"Chart Salvagin'",'lbl.importUpload':"Hoist yer chart file (or paste below)",'lbl.importPaste':"Paste yer old chart",'lbl.importFile':"This be fer the salvage engine file only, not yer treasure map!",'lbl.importFallbackSummary':"⚙️ Trouble on deck: hoist the engine file by hand",'btn.parseImport':"Salvage & Fill!",
     'msg.importEmpty':"Paste a chart first, matey!",'msg.importBasicFallback':"Can't sync with the big salvage engine, so usin' the ship's own basic rigging instead",'msg.importNoVendor':"Can't tell whose ship this be",'msg.importSuccess':"Salvaged! All aboard",'msg.appliedModel':"✓ Rigged fer {vendor} {model}, ye scallywag!",'btn.downloadJson':'Download JSON, matey','btn.downloadTxt':'Download Text, aye','btn.downloadWord':'Download Word, arr','col.ifDesc':'Description, matey','col.ifMode':'Mode, arr','col.ifName':'Interface, cap\'n','col.ifVlan':'VLAN, aye','col.remark':'Remark, savvy','col.vlanId':'VLAN ID, arr','col.vlanName':'VLAN, ye scallywag','doc.deviceInfo':'Device, cap\'n','doc.disclaimer':'Heed this, landlubber','doc.ifaceTitle':'Interface, arr','doc.redundancyTitle':'Redundancy, arr','doc.routingTitle':'Routing, cap\'n','doc.timestamp':'Time, cap\'n','doc.title':'Switch Config, aye','doc.vlanTitle':'VLAN Plan, matey','doc.wordError':'Word be not ready, matey','fmt.json':'JSON, arr','fmt.txt':'Text, cap\'n','fmt.word':'Word, savvy',
     'th.areaType':'Kind','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'No-Summary, matey',
-    'sec.bgp':"BGP Riggin'",'lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':'Waters','th.peerIp':"Mate's IP",'th.peerAs':'AS','th.peerDesc':'Log Entry',
-    'sec.rip':"RIP Riggin'",'lbl.ripPid':'Process ID','lbl.ripVersion':'Version','lbl.ripNetworks':'Waters','lbl.ripRedist':'Redistribute',
+    'sec.bgp':"BGP Riggin'",'lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':'Waters','th.peerIp':"Mate's IP",'th.peerAs':'AS','th.peerDesc':'Log Entry','lbl.bgpPeerGroup':'Crew Group','lbl.bgpTimerKeepalive':'Watch Bell','lbl.bgpTimerHold':'Hold Bell',
+    'sec.rip':"RIP Riggin'",'lbl.ripPid':'Process ID','lbl.ripVersion':'Version','lbl.ripNetworks':'Waters','lbl.ripRedist':'Redistribute','lbl.ripSilent':'Quiet Port','lbl.ripSummary':'Auto Summary','lbl.ripDefaultCost':'Default Booty',
     'btn.addRow':'+ Add Plank','btn.loadExample':'📋 Hoist Sample Cargo','btn.generate':'Forge Config!','btn.copy':'Pinch','btn.copied':'Pinched!','btn.copyFailed':"Pinch Bungled!",'btn.download':'Stash','btn.doc':'Scroll','btn.diff':'Map','diff.title':'🔄 Compare Map','diff.oldLabel':'Old Chart','diff.newLabel':'New Chart','diff.runBtn':'Chart It','diff.uploadBothAlert':'Need both maps, arr','diff.added':'Added','diff.deleted':'Deleted','diff.total':'Total','doc.disclaimerText':'Auto chart, check first','doc.chooseFormat':'Pick Format','doc.enterChoice':'Pick 1 2 or 3','doc.invalidChoice':'Bad Choice','doc.areaCount':'Areas','doc.peerCount':'Peers','doc.routeCount':'Routes','doc.portCount':'Ports','doc.wordGenFailed':'Word sank, arr','btn.chooseFile':'Hoist Treasure','btn.noFileSelected':'No Booty Yet',
     'footer':'☠ Switch Config Forger · Comware / FortiSwitch',
     'lbl.breakoutParent':'Mother Plank','lbl.breakoutRatio':"Splittin' Ratio",'lbl.breakoutEmitEnable':'Also carve the order, arr','btn.breakoutExpand':'+ Splinter the Plank','opt.breakout4x10G':'4x10G','opt.breakout4x25G':'4x25G','opt.breakout2x50G':'2x50G','opt.breakoutSchemeRenumber':"9300X Module Renumberin'",'opt.breakoutSchemeSuffix':'9500-32C Suffix Rig','notice.nxosBreakoutWarning':"Arr! This order scuttles the whole module and wipes her clean — only give the word in dry dock, matey!",
@@ -7113,8 +7172,8 @@ const LANG={
     'sec.import':'📥⚙️','lbl.importUpload':'📤📄(⬇️貼)','lbl.importPaste':'📋➡️','lbl.importFile':'📄🔧≠📤📄❗','lbl.importFallbackSummary':'⚙️❓✋📄','btn.parseImport':'🔍➡️📝',
     'msg.importEmpty':'📋❓','msg.importBasicFallback':'🔗❌🏭➡️🔧📉','msg.importNoVendor':'🏭❓','msg.importSuccess':'✅📝','msg.appliedModel':'✓ ⚙️ {vendor} {model} ✨','btn.downloadJson':'📥 JSON','btn.downloadTxt':'📄 Text','btn.downloadWord':'📘 Word','col.ifDesc':'📝 Desc','col.ifMode':'⚙ Mode','col.ifName':'🔌 Iface','col.ifVlan':'🌐 VLAN','col.remark':'📌 Remark','col.vlanId':'🏷 VLAN ID','col.vlanName':'🏷 Name','doc.deviceInfo':'🖥 Device','doc.disclaimer':'⚠ Notice','doc.ifaceTitle':'🔌 Config','doc.redundancyTitle':'🔄 Redundancy','doc.routingTitle':'🛣 Routing','doc.timestamp':'⏰ Time','doc.title':'📄 Config','doc.vlanTitle':'📋 VLAN','doc.wordError':'⚠ Word unavailable','fmt.json':'{ JSON }','fmt.txt':'📄 Text','fmt.word':'📘 Word',
     'th.areaType':'🏷️','opt.typeNormal':'⚪','opt.typeStub':'🔸','opt.typeNssa':'🔹','th.noSummary':'🚫📋',
-    'sec.bgp':'🛰️⚙️','lbl.bgpAsn':'🆔','lbl.bgpRid':'🆔🛰️','lbl.bgpNetworks':'🌐','th.peerIp':'🔌🌐','th.peerAs':'🆔','th.peerDesc':'📝',
-    'sec.rip':'🛰️⚙️','lbl.ripPid':'🆔','lbl.ripVersion':'🔢','lbl.ripNetworks':'🌐','lbl.ripRedist':'🔁',
+    'sec.bgp':'🛰️⚙️','lbl.bgpAsn':'🆔','lbl.bgpRid':'🆔🛰️','lbl.bgpNetworks':'🌐','th.peerIp':'🔌🌐','th.peerAs':'🆔','th.peerDesc':'📝','lbl.bgpPeerGroup':'👥','lbl.bgpTimerKeepalive':'⏱️💓','lbl.bgpTimerHold':'⏱️✋',
+    'sec.rip':'🛰️⚙️','lbl.ripPid':'🆔','lbl.ripVersion':'🔢','lbl.ripNetworks':'🌐','lbl.ripRedist':'🔁','lbl.ripSilent':'🔇🔌','lbl.ripSummary':'🔁📦','lbl.ripDefaultCost':'💰⚙️',
     'btn.addRow':'➕','btn.loadExample':'📋📥','btn.generate':'⚙️✅','btn.copy':'📋','btn.copied':'✅📋','btn.copyFailed':'❌📋','btn.download':'💾','btn.doc':'📄','btn.diff':'🔄','diff.title':'🔄📊','diff.oldLabel':'📜','diff.newLabel':'📄','diff.runBtn':'▶️','diff.uploadBothAlert':'⚠️📁📁','diff.added':'➕','diff.deleted':'➖','diff.total':'🧮','doc.disclaimerText':'📄⚠️✅','doc.chooseFormat':'📋','doc.enterChoice':'🔢','doc.invalidChoice':'❌','doc.areaCount':'🗺️','doc.peerCount':'🤝','doc.routeCount':'🛤️','doc.portCount':'🔌','doc.wordGenFailed':'❌📄','btn.chooseFile':'📂➕','btn.noFileSelected':'📭',
     'footer':'🔀⚙️🏭 · Comware / FortiSwitch',
     'lbl.breakoutParent':'🔌👆','lbl.breakoutRatio':'✂️📊','lbl.breakoutEmitEnable':'➕📤⚡','btn.breakoutExpand':'➕✂️🔌','opt.breakout4x10G':'4x10G','opt.breakout4x25G':'4x25G','opt.breakout2x50G':'2x50G','opt.breakoutSchemeRenumber':'9300X 🔢🔄','opt.breakoutSchemeSuffix':'9500-32C ➕🔢','notice.nxosBreakoutWarning':'⚠️🔄📦❌ = 🛠️⏰only',
@@ -7157,8 +7216,8 @@ const LANG={
     'sec.import':'既有設定文件匯入作業','lbl.importUpload':'請上傳設定文件（或於下方貼上內容）','lbl.importPaste':'請貼上設定文件內容','lbl.importFile':'本欄僅供上傳 switch-config-parser.html 應用程式檔案之用（非交換器設定文件）','lbl.importFallbackSummary':'⚙️ 疑難排解事項：解析引擎未能載入時之人工上傳作業','btn.parseImport':'執行解析並套入表單',
     'msg.importEmpty':'請先貼上設定文件內容以利執行作業','msg.importBasicFallback':'因無法與完整版解析工具同步或尚未載入完整版解析引擎，本次將採用內建基礎解析模式進行作業','msg.importNoVendor':'無法辨識設備廠牌，請確認文件格式是否符合規範','msg.importSuccess':'解析作業已完成，資料已套入表單','msg.appliedModel':'✓ 爰以 {vendor} {model} 之預設設定供應中','btn.downloadJson':'下載 JSON','btn.downloadTxt':'下載文本','btn.downloadWord':'下載 Word','col.ifDesc':'描述','col.ifMode':'模式','col.ifName':'介面名稱','col.ifVlan':'VLAN','col.remark':'備註','col.vlanId':'VLAN ID','col.vlanName':'VLAN 名稱','doc.deviceInfo':'設備信息','doc.disclaimer':'免責聲明','doc.ifaceTitle':'介面配置','doc.redundancyTitle':'冗餘配置','doc.routingTitle':'路由協議','doc.timestamp':'生成時間','doc.title':'交換器設定文檔','doc.vlanTitle':'VLAN 規劃','doc.wordError':'Word 庫未加載。需要網路。','fmt.json':'JSON','fmt.txt':'文本','fmt.word':'Word',
     'th.areaType':'區域類型','opt.typeNormal':'一般區域','opt.typeStub':'Stub 區域','opt.typeNssa':'NSSA 區域','th.noSummary':'不彙總路由事項',
-    'sec.bgp':'BGP 路由組態事項','lbl.bgpAsn':'自治系統編號','lbl.bgpRid':'路由器識別碼','lbl.bgpNetworks':'廣播網段','th.peerIp':'鄰居位址欄位','th.peerAs':'AS 編號欄位','th.peerDesc':'說明欄位',
-    'sec.rip':'RIP 路由組態事項','lbl.ripPid':'處理程序編號','lbl.ripVersion':'版本','lbl.ripNetworks':'網段清單','lbl.ripRedist':'路由重分配作業',
+    'sec.bgp':'BGP 路由組態事項','lbl.bgpAsn':'自治系統編號','lbl.bgpRid':'路由器識別碼','lbl.bgpNetworks':'廣播網段','th.peerIp':'鄰居位址欄位','th.peerAs':'AS 編號欄位','th.peerDesc':'說明欄位','lbl.bgpPeerGroup':'鄰居群組欄位','lbl.bgpTimerKeepalive':'保活計時器欄位','lbl.bgpTimerHold':'保持計時器欄位',
+    'sec.rip':'RIP 路由組態事項','lbl.ripPid':'處理程序編號','lbl.ripVersion':'版本','lbl.ripNetworks':'網段清單','lbl.ripRedist':'路由重分配作業','lbl.ripSilent':'靜默介面事項','lbl.ripSummary':'自動彙總事項','lbl.ripDefaultCost':'預設成本事項',
     'btn.addRow':'+ 新增列項','btn.loadExample':'📋 載入範例資料事項','btn.generate':'產生設定文件','btn.copy':'複製內容','btn.copied':'已複製完成','btn.copyFailed':'複製作業失敗','btn.download':'下載文件','btn.doc':'相關文件','btn.diff':'比對檔案','diff.title':'🔄 設定檔案版本比對','diff.oldLabel':'舊版本設定檔案','diff.newLabel':'新版本設定檔案','diff.runBtn':'執行版本比對作業','diff.uploadBothAlert':'請先上傳兩份完整設定檔案後再執行','diff.added':'新增行數','diff.deleted':'刪除行數','diff.total':'總行數','doc.disclaimerText':'本文件由本系統自動產生，僅供業務參考，正式部署前請務必完成完整測試與審核程序。','doc.chooseFormat':'請選擇欲匯出之文檔格式','doc.enterChoice':'請輸入對應選項編號（1、2 或 3）','doc.invalidChoice':'所輸入之選項無效','doc.areaCount':'Area 總數','doc.peerCount':'Peer 總數','doc.routeCount':'靜態路由總筆數','doc.portCount':'成員埠總數','doc.wordGenFailed':'Word 文檔產製作業失敗，請查閱瀏覽器主控台以了解詳情。','btn.chooseFile':'選擇文件','btn.noFileSelected':'尚未選擇檔案',
     'footer':'交換器設定產生作業系統 · Comware / FortiSwitch',
     'lbl.breakoutParent':'母埠名稱欄位','lbl.breakoutRatio':'拆分比例欄位','lbl.breakoutEmitEnable':'同步輸出啟用指令事項','btn.breakoutExpand':'+ 執行子埠展開作業','opt.breakout4x10G':'4x10G','opt.breakout4x25G':'4x25G','opt.breakout2x50G':'2x50G','opt.breakoutSchemeRenumber':'9300X 模組編號變更方式','opt.breakoutSchemeSuffix':'9500-32C 編號後綴方式','notice.nxosBreakoutWarning':'警告事項：執行本指令將導致該模組依規重新載入並清除既有設定資料，請於維護窗口時段辦理',
@@ -7201,8 +7260,8 @@ const LANG={
     'sec.import':'匯入設定喵','lbl.importUpload':'上傳設定檔喵（或貼上喵）','lbl.importPaste':'貼上設定喵~','lbl.importFile':'這欄只能傳解析器檔案喵，不是設定檔喵！','lbl.importFallbackSummary':'⚙️ 疑難排解喵：找不到解析器時手動傳喵','btn.parseImport':'解析帶入喵！',
     'msg.importEmpty':'先貼設定喵！','msg.importBasicFallback':'跟不上大解析器喵，用內建簡單版喵！','msg.importNoVendor':'認不出廠牌喵…','msg.importSuccess':'解析成功喵！','msg.appliedModel':'✓ 套用 {vendor} {model} 設定喵🐱','btn.downloadJson':'🐱 JSON','btn.downloadTxt':'🐱 Text','btn.downloadWord':'🐱 Word','col.ifDesc':'🐱 Desc','col.ifMode':'🐱 Mode','col.ifName':'🐱 Iface','col.ifVlan':'🐱 VLAN','col.remark':'🐱 Remark','col.vlanId':'🐱 ID','col.vlanName':'🐱 Name','doc.deviceInfo':'🐱 Device','doc.disclaimer':'🐱 Notice','doc.ifaceTitle':'🐱 Config','doc.redundancyTitle':'🐱 Redundancy','doc.routingTitle':'🐱 Routing','doc.timestamp':'🐱 Time','doc.title':'🐱 Config','doc.vlanTitle':'🐱 VLAN','doc.wordError':'🐱 Word error','fmt.json':'🐱 JSON','fmt.txt':'🐱 Text','fmt.word':'🐱 Word','opt.vendorNXOS':'🐱 NXOS',
     'th.areaType':'Type喵','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'不彙總喵',
-    'sec.bgp':'BGP 設定喵','lbl.bgpAsn':'ASN喵','lbl.bgpRid':'Router ID喵','lbl.bgpNetworks':'Networks喵','th.peerIp':'Peer IP喵','th.peerAs':'AS喵','th.peerDesc':'描述喵',
-    'sec.rip':'RIP 設定喵','lbl.ripPid':'Process ID喵','lbl.ripVersion':'Version喵','lbl.ripNetworks':'Networks喵','lbl.ripRedist':'Redistribute喵',
+    'sec.bgp':'BGP 設定喵','lbl.bgpAsn':'ASN喵','lbl.bgpRid':'Router ID喵','lbl.bgpNetworks':'Networks喵','th.peerIp':'Peer IP喵','th.peerAs':'AS喵','th.peerDesc':'描述喵','lbl.bgpPeerGroup':'Peer Group喵','lbl.bgpTimerKeepalive':'Timer Keepalive喵','lbl.bgpTimerHold':'Timer Hold喵',
+    'sec.rip':'RIP 設定喵','lbl.ripPid':'Process ID喵','lbl.ripVersion':'Version喵','lbl.ripNetworks':'Networks喵','lbl.ripRedist':'Redistribute喵','lbl.ripSilent':'Silent Interface喵','lbl.ripSummary':'自動彙總喵','lbl.ripDefaultCost':'預設成本喵',
     'btn.addRow':'+ 新增列喵','btn.loadExample':'📋 載入範例喵','btn.generate':'產生設定喵！','btn.copy':'複製喵','btn.copied':'複製好了喵！','btn.copyFailed':'複製失敗了喵…','btn.download':'下載喵','btn.doc':'文檔喵','btn.diff':'對比喵','diff.title':'🔄 設定對比喵','diff.oldLabel':'舊版本設定喵','diff.newLabel':'新版本設定喵','diff.runBtn':'執行對比喵','diff.uploadBothAlert':'請上傳兩份設定檔喵','diff.added':'新增喵','diff.deleted':'刪除喵','diff.total':'共計喵','doc.disclaimerText':'這份文檔是自動生成的喵～僅供參考，部署前記得測試喵！','doc.chooseFormat':'選擇文檔格式喵','doc.enterChoice':'輸入 1、2 或 3 喵','doc.invalidChoice':'無效選擇喵','doc.areaCount':'Area 數喵','doc.peerCount':'Peer 數喵','doc.routeCount':'路由數喵','doc.portCount':'埠數喵','doc.wordGenFailed':'Word 生成失敗了喵...','btn.chooseFile':'選擇喵','btn.noFileSelected':'沒選喵',
     'footer':'交換器設定產生喵 · Comware / FortiSwitch',
     'lbl.breakoutParent':'母埠名稱喵','lbl.breakoutRatio':'拆分比例喵','lbl.breakoutEmitEnable':'同時輸出指令喵','btn.breakoutExpand':'+ 展開子埠喵','opt.breakout4x10G':'4x10G','opt.breakout4x25G':'4x25G','opt.breakout2x50G':'2x50G','opt.breakoutSchemeRenumber':'9300X 換編號喵','opt.breakoutSchemeSuffix':'9500-32C 加後綴喵','notice.nxosBreakoutWarning':'警告喵：這指令會讓模組重開機並清空設定喵，要小心用喵！',
@@ -7245,8 +7304,8 @@ const LANG={
     'sec.import':'🥕匯入豆定','lbl.importUpload':'🥕上傳豆定（或貼豆）','lbl.importPaste':'貼上豆定','lbl.importFile':'這裡只能傳解析豆案，不是設定豆喔！','lbl.importFallbackSummary':'⚙️ 疑難排豆：找不到解析豆時手動傳豆','btn.parseImport':'解析帶入豆！',
     'msg.importEmpty':'先貼豆定！','msg.importBasicFallback':'跟不上大解析豆，用內建豆豆版！','msg.importNoVendor':'認不出豆牌…','msg.importSuccess':'解析成功豆！','msg.appliedModel':'✓ 套用 {vendor} {model} 豆定🫛','btn.downloadJson':'💚 JSON','btn.downloadTxt':'💚 Text','btn.downloadWord':'💚 Word','col.ifDesc':'💚 Desc','col.ifMode':'💚 Mode','col.ifName':'💚 Iface','col.ifVlan':'💚 VLAN','col.remark':'💚 Remark','col.vlanId':'💚 ID','col.vlanName':'💚 Name','doc.deviceInfo':'💚 Device','doc.disclaimer':'💚 Notice','doc.ifaceTitle':'💚 Config','doc.redundancyTitle':'💚 Redundancy','doc.routingTitle':'💚 Routing','doc.timestamp':'💚 Time','doc.title':'💚 Config','doc.vlanTitle':'💚 VLAN','doc.wordError':'💚 Word error','fmt.json':'💚 JSON','fmt.txt':'💚 Text','fmt.word':'💚 Word','opt.vendorNXOS':'💚 NXOS',
     'th.areaType':'Type','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'不彙總豆',
-    'sec.bgp':'BGP 豆定','lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':'Networks','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'豆述',
-    'sec.rip':'RIP 豆定','lbl.ripPid':'Process ID','lbl.ripVersion':'Version','lbl.ripNetworks':'Networks','lbl.ripRedist':'Redistribute',
+    'sec.bgp':'BGP 豆定','lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':'Networks','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'豆述','lbl.bgpPeerGroup':'Peer 豆roup','lbl.bgpTimerKeepalive':'Timer 豆eepalive','lbl.bgpTimerHold':'Timer 豆old',
+    'sec.rip':'RIP 豆定','lbl.ripPid':'Process ID','lbl.ripVersion':'Version','lbl.ripNetworks':'Networks','lbl.ripRedist':'Redistribute','lbl.ripSilent':'豆lent Interface','lbl.ripSummary':'自動豆總','lbl.ripDefaultCost':'預設豆本',
     'btn.addRow':'🫛+ 新增列','btn.loadExample':'📋豆載入範例','btn.generate':'🌽豆生設定','btn.copy':'🥕複製','btn.copied':'🥕複製好豆！','btn.copyFailed':'🥕複製失敗豆','btn.download':'🫛下載','btn.doc':'📋豆文檔','btn.diff':'🌽豆對比','diff.title':'🔄🌽豆比對','diff.oldLabel':'🥕舊版豆定','diff.newLabel':'🌽新版豆定','diff.runBtn':'🫛執行豆比','diff.uploadBothAlert':'🥕請上傳兩豆設定檔','diff.added':'🌽新增','diff.deleted':'🥕刪除','diff.total':'🫛共計','doc.disclaimerText':'🌽這份豆檔是自動生成豆～僅供參考，部署前記得測試豆！','doc.chooseFormat':'🥕選擇豆檔格式','doc.enterChoice':'🌽輸入 1、2 或 3','doc.invalidChoice':'🥕無效選擇','doc.areaCount':'🌽Area 數','doc.peerCount':'🥕Peer 數','doc.routeCount':'🫛路由數','doc.portCount':'🌽埠數','doc.wordGenFailed':'🥕Word 生成失敗豆','btn.chooseFile':'🌽選豆','btn.noFileSelected':'🥕無豆',
     'footer':'🥕🫛🌽 豆換器豆定產生豆 · Comware / FortiSwitch',
     'lbl.breakoutParent':'母豆埠名稱','lbl.breakoutRatio':'拆豆比例','lbl.breakoutEmitEnable':'同豆輸出指令','btn.breakoutExpand':'🫘+ 展開豆埠','opt.breakout4x10G':'4x10G','opt.breakout4x25G':'4x25G','opt.breakout2x50G':'2x50G','opt.breakoutSchemeRenumber':'9300X 豆編號','opt.breakoutSchemeSuffix':'9500-32C 豆後綴','notice.nxosBreakoutWarning':'🥕警告豆：這指令會讓模組重開機並清空設定豆，小心用豆！',
@@ -7289,8 +7348,8 @@ const LANG={
     'sec.import':'匯咩入設咩定-aca','lbl.importUpload':'上咩傳設咩定檔-aca','lbl.importPaste':'貼咩上設咩定-aca','lbl.importFile':'此咩欄僅咩傳解咩析器檔咩案-aca（非咩設咩定檔-aca）','lbl.importFallbackSummary':'⚙️ 疑咩難排咩解-aca','btn.parseImport':'解咩析帶咩入-aca',
     'msg.importEmpty':'先貼咩設定-aca','msg.importBasicFallback':'同咩步不咩了-aca，用內咩建基咩礎解咩析-aca','msg.importNoVendor':'認不咩出廠咩牌-aca','msg.importSuccess':'解析咩成功-aca','msg.appliedModel':'✓ 套用 {vendor} {model} 咩-aca🦙','btn.downloadJson':'🦙 JSON','btn.downloadTxt':'🦙 Text','btn.downloadWord':'🦙 Word','col.ifDesc':'🦙 Desc','col.ifMode':'🦙 Mode','col.ifName':'🦙 Iface','col.ifVlan':'🦙 VLAN','col.remark':'🦙 Remark','col.vlanId':'🦙 ID','col.vlanName':'🦙 Name','doc.deviceInfo':'🦙 Device','doc.disclaimer':'🦙 Notice','doc.ifaceTitle':'🦙 Config','doc.redundancyTitle':'🦙 Redundancy','doc.routingTitle':'🦙 Routing','doc.timestamp':'🦙 Time','doc.title':'🦙 Config','doc.vlanTitle':'🦙 VLAN','doc.wordError':'🦙 Word error','fmt.json':'🦙 JSON','fmt.txt':'🦙 Text','fmt.word':'🦙 Word','opt.vendorNXOS':'🦙 NXOS',
     'th.areaType':'Ty咩pe-aca','opt.typeNormal':'No咩rm-aca','opt.typeStub':'St咩ub-aca','opt.typeNssa':'NS咩SA-aca','th.noSummary':'不咩彙總-aca',
-    'sec.bgp':'B咩GP 設咩定-aca','lbl.bgpAsn':'AS咩N-aca','lbl.bgpRid':'Ro咩ut咩er ID-aca','lbl.bgpNetworks':'Ne咩tw咩orks-aca','th.peerIp':'Pe咩er IP-aca','th.peerAs':'AS-aca','th.peerDesc':'描咩述-aca',
-    'sec.rip':'RI咩P 設咩定-aca','lbl.ripPid':'Pr咩oc咩ess ID-aca','lbl.ripVersion':'Ve咩rs咩ion-aca','lbl.ripNetworks':'Ne咩tw咩orks-aca','lbl.ripRedist':'Re咩di咩stribute-aca',
+    'sec.bgp':'B咩GP 設咩定-aca','lbl.bgpAsn':'AS咩N-aca','lbl.bgpRid':'Ro咩ut咩er ID-aca','lbl.bgpNetworks':'Ne咩tw咩orks-aca','th.peerIp':'Pe咩er IP-aca','th.peerAs':'AS-aca','th.peerDesc':'描咩述-aca','lbl.bgpPeerGroup':'Pe咩er Gr咩oup-aca','lbl.bgpTimerKeepalive':'Ti咩me咩r Ke咩ep-aca','lbl.bgpTimerHold':'Ti咩me咩r Ho咩ld-aca',
+    'sec.rip':'RI咩P 設咩定-aca','lbl.ripPid':'Pr咩oc咩ess ID-aca','lbl.ripVersion':'Ve咩rs咩ion-aca','lbl.ripNetworks':'Ne咩tw咩orks-aca','lbl.ripRedist':'Re咩di咩stribute-aca','lbl.ripSilent':'Si咩le咩nt If-aca','lbl.ripSummary':'自咩動彙咩總-aca','lbl.ripDefaultCost':'預咩設成咩本-aca',
     'btn.addRow':'+ 新咩增列-aca','btn.loadExample':'📋 載咩入範咩例-aca','btn.generate':'產咩生設咩定！-aca','btn.copy':'複咩製-aca','btn.copied':'複咩製好咩了！-aca','btn.copyFailed':'複咩製失咩敗-aca','btn.download':'下咩載-aca','btn.doc':'文咩檔-aca','btn.diff':'對咩比-aca','diff.title':'🔄 設咩定對咩比-aca','diff.oldLabel':'舊咩版本咩設定-aca','diff.newLabel':'新咩版本咩設定-aca','diff.runBtn':'執咩行對咩比-aca','diff.uploadBothAlert':'請咩上傳咩兩份咩設定檔-aca','diff.added':'新咩增-aca','diff.deleted':'刪咩除-aca','diff.total':'共咩計-aca','doc.disclaimerText':'此咩文檔咩由系咩統自咩動生咩成，僅咩供參咩考-aca','doc.chooseFormat':'選咩擇文咩檔格咩式-aca','doc.enterChoice':'輸咩入 1咩、2咩或3-aca','doc.invalidChoice':'無咩效選咩擇-aca','doc.areaCount':'Are咩a 數-aca','doc.peerCount':'Pee咩r 數-aca','doc.routeCount':'路咩由數-aca','doc.portCount':'埠咩數-aca','doc.wordGenFailed':'Wor咩d生咩成失咩敗-aca','btn.chooseFile':'選咩檔-aca','btn.noFileSelected':'無咩檔-aca',
     'footer':'交換咩器設咩定產咩生器 🦙 · Comware / FortiSwitch-aca',
     'lbl.breakoutParent':'母咩埠名咩稱-aca','lbl.breakoutRatio':'拆咩分比咩例-aca','lbl.breakoutEmitEnable':'同咩時輸咩出指咩令-aca','btn.breakoutExpand':'+ 展咩開子咩埠-aca','opt.breakout4x10G':'4x10G-aca','opt.breakout4x25G':'4x25G-aca','opt.breakout2x50G':'2x50G-aca','opt.breakoutSchemeRenumber':'9300X 換咩編號-aca','opt.breakoutSchemeSuffix':'9500-32C 加咩後綴-aca','notice.nxosBreakoutWarning':'警咩告：此咩指令會咩讓模咩組重咩開機並咩清空設咩定-aca🦙',
@@ -7333,8 +7392,8 @@ const LANG={
     'sec.import':'匯入設定，好啦','lbl.importUpload':'上傳設定檔，算了','lbl.importPaste':'貼上設定（嘆）','lbl.importFile':'這欄只能傳解析器，不是設定檔，看清楚（嘆）','lbl.importFallbackSummary':'⚙️ 疑難排解，找不到就手動傳，隨便','btn.parseImport':'解析帶入，好啦',
     'msg.importEmpty':'先貼設定啦','msg.importBasicFallback':'跟不上完整版，算了，用內建陽春版','msg.importNoVendor':'認不出廠牌，反正都一樣','msg.importSuccess':'解析成功，隨便','msg.appliedModel':'✓ 套用 {vendor} {model}，算了','btn.downloadJson':'下載 JSON，隨便','btn.downloadTxt':'下載文字檔，算了','btn.downloadWord':'下載 Word，反正都一樣','col.ifDesc':'描述（嘆）','col.ifMode':'模式，隨便','col.ifName':'介面名稱，反正都一樣','col.ifVlan':'VLAN，隨便','col.remark':'備註，反正沒差','col.vlanId':'VLAN ID','col.vlanName':'VLAN 名稱，算了','doc.deviceInfo':'設備資訊（嘆）','doc.disclaimer':'免責聲明，反正你也不會看','doc.ifaceTitle':'介面配置，隨便','doc.redundancyTitle':'冗餘配置摘要，反正都一樣','doc.routingTitle':'路由協議摘要，算了','doc.timestamp':'生成時間（嘆）','doc.title':'交換器設定文檔，隨便','doc.vlanTitle':'VLAN 規劃，反正都一樣','doc.wordError':'Word 元件尚未載入，反正也沒差（嘆）','fmt.json':'JSON','fmt.txt':'文字檔，隨便','fmt.word':'Word，算了','opt.vendorNXOS':'Cisco NXOS，隨便',
     'th.areaType':'Type（嘆）','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'不彙總，隨便',
-    'sec.bgp':'BGP 設定，隨便','lbl.bgpAsn':'ASN（嘆）','lbl.bgpRid':'Router ID（嘆）','lbl.bgpNetworks':'Networks，反正都一樣','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'描述，算了',
-    'sec.rip':'RIP 設定，沒差','lbl.ripPid':'Process ID','lbl.ripVersion':'Version（嘆）','lbl.ripNetworks':'Networks','lbl.ripRedist':'Redistribute，反正都一樣',
+    'sec.bgp':'BGP 設定，隨便','lbl.bgpAsn':'ASN（嘆）','lbl.bgpRid':'Router ID（嘆）','lbl.bgpNetworks':'Networks，反正都一樣','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'描述，算了','lbl.bgpPeerGroup':'Peer Group（嘆）','lbl.bgpTimerKeepalive':'Timer Keepalive，隨便','lbl.bgpTimerHold':'Timer Hold，反正都一樣',
+    'sec.rip':'RIP 設定，沒差','lbl.ripPid':'Process ID','lbl.ripVersion':'Version（嘆）','lbl.ripNetworks':'Networks','lbl.ripRedist':'Redistribute，反正都一樣','lbl.ripSilent':'Silent Interface，沒差','lbl.ripSummary':'自動彙總（嘆）','lbl.ripDefaultCost':'預設成本，算了',
     'btn.addRow':'+ 新增列，算了','btn.loadExample':'📋 載入範例，隨便','btn.generate':'產生設定，好啦','btn.copy':'複製（嘆）','btn.copied':'複製好了，隨便','btn.copyFailed':'複製失敗，反正也沒差','btn.download':'下載，算了','btn.doc':'文檔，隨便','btn.diff':'對比，算了','diff.title':'🔄 設定對比，算了','diff.oldLabel':'舊版本設定，算了','diff.newLabel':'新版本設定，算了','diff.runBtn':'執行對比，算了','diff.uploadBothAlert':'請上傳兩份設定檔，不然沒得比','diff.added':'新增，算了','diff.deleted':'刪除，算了','diff.total':'共計，算了','doc.disclaimerText':'此文檔是自動生成的，僅供參考，反正你部署前也不會測試（嘆）','doc.chooseFormat':'選擇文檔格式，隨便啦','doc.enterChoice':'輸入 1、2 或 3，隨你','doc.invalidChoice':'無效選擇，不意外','doc.areaCount':'Area 數，反正沒差','doc.peerCount':'Peer 數，反正沒差','doc.routeCount':'路由數，反正沒差','doc.portCount':'埠數，反正沒差','doc.wordGenFailed':'Word 生成失敗，反正也沒人在用 Word','btn.chooseFile':'選檔案，隨便','btn.noFileSelected':'沒選，算了',
     'footer':'交換器設定產生器，反正都一樣 · Comware / FortiSwitch',
     'lbl.breakoutParent':'母埠名稱，隨便','lbl.breakoutRatio':'拆分比例，反正都一樣','lbl.breakoutEmitEnable':'同時輸出指令，算了','btn.breakoutExpand':'+ 展開子埠，好啦','opt.breakout4x10G':'4x10G','opt.breakout4x25G':'4x25G','opt.breakout2x50G':'2x50G','opt.breakoutSchemeRenumber':'9300X 換編號，隨便','opt.breakoutSchemeSuffix':'9500-32C 加後綴，反正都一樣','notice.nxosBreakoutWarning':'警告：這指令會讓模組重開機並清空設定，反正你也不會看（嘆）',
