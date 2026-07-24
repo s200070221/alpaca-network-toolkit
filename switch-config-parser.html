@@ -4246,20 +4246,84 @@ function parseRouterOSBridgeSTP(cfg){
   const priority=prioM?parseInt(prioM[1],prioM[1].toLowerCase().startsWith('0x')?16:10):32768;
   return{enabled:mode!=='none',mode,priority};
 }
+// 2026-07-24 對外查證官方 help.mikrotik.com「DHCP」/「IP Pools」/「DNS」文件後整段重寫：原本
+// 回傳的資料形狀 {name,interface,status,leaseTime,type} 與其餘 12 廠牌共用的
+// {name,network,gateway,dns,range,excluded,interface,lease,type,relayServer} 完全不相容
+// （UI 表格對應欄位一律顯示 "—"），leaseTime 更是寫死常數 600、從未真正解析。真實 RouterOS
+// DHCP Server 設定拆成三個關聯區塊："/ip pool"(位址範圍)、"/ip dhcp-server"(interface 綁定+
+// lease-time，靠 address-pool= 引用 pool 名稱)、"/ip dhcp-server network"(gateway/dns/
+// next-server/boot-file-name/ntp-server，與 dhcp-server 之間沒有直接命名關聯欄位，官方文件
+// 確認純靠 CIDR 網段涵蓋比對決定要套用哪一筆 network)。excluded 沒有獨立官方欄位（官方文件
+// 全文查無 "excluded" 相關關鍵字），是靠 pool 的 ranges= 多組逗號分隔範圍之間的間隙達成同等
+// 效果，不臆測欄位，range 改為完整列出全部範圍。Option82 (add-relay-info/relay-info-remote-id)
+// 查證確認掛在 "/ip dhcp-relay"（獨立於 dhcp-server 的 Relay 角色），非 dhcp-server 底下。
 function parseRouterOSDHCP(cfg){
-  const dhcp=[];
-  // 各欄位順序不定，分別提取 name= 和 interface=
-  const re=/^add\s+(.*)/gm;
-  let inDhcpSection=false;
-  for(const line of cfg.split('\n')){
-    if(/^\/ip\s+dhcp-server\b/.test(line)){inDhcpSection=true;continue;}
-    if(/^\//.test(line)&&!/^\/ip\s+dhcp/.test(line))inDhcpSection=false;
-    if(!inDhcpSection)continue;
-    const nm=line.match(/name=([^\s]+)/);
-    const im=line.match(/interface=([^\s]+)/);
-    if(nm&&im)dhcp.push({name:nm[1],interface:im[1],status:'enabled',leaseTime:600,type:'server'});
+  const pools=[];
+  const ipNum=ip=>ip.split('.').reduce((n,o)=>(n<<8)+parseInt(o,10),0)>>>0;
+  const inCidr=(ip,cidr)=>{
+    const parts=cidr.split('/');
+    if(parts.length!==2||!ip)return false;
+    const bits=parseInt(parts[1]);
+    const mask=bits<=0?0:(~0<<(32-bits))>>>0;
+    return (ipNum(ip)&mask)===(ipNum(parts[0])&mask);
+  };
+  const sectionBlock=name=>(cfg.match(new RegExp('^'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s*\\n([\\s\\S]*?)(?=^\\/|(?![\\s\\S]))','m'))||[])[1]||'';
+
+  // 1) /ip pool：位址範圍（ranges= 可逗號分隔多組）
+  const roPools=[];
+  for(const line of sectionBlock('/ip pool').split('\n')){
+    if(!/^add\s/.test(line))continue;
+    const name=(line.match(/\bname=(\S+)/)||[])[1]||'';
+    const rangesRaw=(line.match(/\branges=(\S+)/)||[])[1]||'';
+    if(!name)continue;
+    roPools.push({name,ranges:rangesRaw.split(',').filter(Boolean)});
   }
-  return dhcp;
+
+  // 2) /ip dhcp-server network：gateway/dns/next-server/boot-file-name/ntp-server，供 CIDR 涵蓋比對
+  const networks=[];
+  for(const line of sectionBlock('/ip dhcp-server network').split('\n')){
+    if(!/^add\s/.test(line))continue;
+    const address=(line.match(/\baddress=(\S+)/)||[])[1]||'';
+    if(!address)continue;
+    networks.push({
+      address,
+      gateway:(line.match(/\bgateway=(\S+)/)||[])[1]||'',
+      dns:((line.match(/\bdns-server=(\S+)/)||[])[1]||'').split(',').filter(Boolean),
+      nextServer:(line.match(/\bnext-server=(\S+)/)||[])[1]||'',
+      bootFile:(line.match(/\bboot-file-name=(\S+)/)||[])[1]||'',
+      ntpServer:((line.match(/\bntp-server=(\S+)/)||[])[1]||'').split(',')[0]||'',
+    });
+  }
+
+  // 3) /ip dhcp-server：interface/lease-time，靠 address-pool= 名稱關聯 pool
+  for(const line of sectionBlock('/ip dhcp-server').split('\n')){
+    if(!/^add\s/.test(line))continue;
+    const name=(line.match(/\bname=(\S+)/)||[])[1]||'';
+    const iface=(line.match(/\binterface=(\S+)/)||[])[1]||'';
+    const poolName=(line.match(/\baddress-pool=(\S+)/)||[])[1]||'';
+    const lease=(line.match(/\blease-time=(\S+)/)||[])[1]||'';
+    const pool=roPools.find(p=>p.name===poolName);
+    const ranges=pool?pool.ranges:[];
+    const firstLow=ranges.length?ranges[0].split('-')[0]:'';
+    const net=firstLow?networks.find(n=>inCidr(firstLow,n.address)):null;
+    pools.push({name:name||poolName||'dhcp',network:net?net.address:'',
+      gateway:net?net.gateway:'',dns:net?net.dns:[],range:ranges.join('; '),excluded:'',
+      interface:iface,lease,bootFile:net?net.bootFile:'',nextServer:net?net.nextServer:'',
+      ntpServer:net?net.ntpServer:'',type:'server'});
+  }
+
+  // 4) /ip dhcp-relay：獨立於 Server 角色，dhcp-server= 可逗號分隔多筆轉發目標
+  for(const line of sectionBlock('/ip dhcp-relay').split('\n')){
+    if(!/^add\s/.test(line))continue;
+    const iface=(line.match(/\binterface=(\S+)/)||[])[1]||'';
+    const name=(line.match(/\bname=(\S+)/)||[])[1]||iface;
+    const option82=/\badd-relay-info=yes\b/.test(line);
+    const servers=((line.match(/\bdhcp-server=(\S+)/)||[])[1]||'').split(',').filter(Boolean);
+    servers.forEach(srv=>pools.push({name:'relay:'+name,network:'',gateway:'',dns:[],
+      range:'',excluded:'',interface:iface,lease:'',type:'relay',relayServer:srv,option82}));
+  }
+
+  return pools;
 }
 // QoS：2026-07-19 對外查證官方 help.mikrotik.com「Queues」頁確認 RouterOS 有兩套獨立
 // 機制：/queue simple（單一 target 的頻寬限制，max-limit/limit-at 皆為 "上傳/下載"
@@ -6773,6 +6837,14 @@ function parseDNSServers(cfg, vendor){
     // "configure dns-client add name-server <ip> [vr <vr_name>]"，逐筆新增，最多8筆，無
     // primary/secondary 區分（查證來源：官方 ExtremeXOS Command Reference Guide）
     return [...cfg.matchAll(/^configure dns-client add name-server\s+(\S+)/gm)].map(m=>m[1]).filter(tok=>ipTok.test(tok));
+  }
+  if(vendor==='routeros'){
+    // "/ip dns\nset servers=<ip1>,<ip2> ..."（set 非 add，全域唯一設定物件；servers= 可能不是
+    // set 那行的第一個參數，如 "set servers=1.1.1.1 allow-remote-requests=yes"）
+    // 查證來源：官方 help.mikrotik.com「DNS」文件
+    const block=(cfg.match(/^\/ip dns\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m)||[])[1]||'';
+    const m=block.match(/\bservers=(\S+)/);
+    return m?m[1].split(',').filter(tok=>ipTok.test(tok)):[];
   }
   return [];
 }
