@@ -16,6 +16,10 @@
 | 🔒 設定檔去識別化工具 | `config-anonymizer.html` | 掃描並一致性替換設定檔中的 IP／主機名稱／密碼等敏感資訊，供分享/求助使用，支援 AES-256 加密還原對照表 |
 | 🌐 五工具入口頁 | `network-analyzer.html` | 自動偵測拖入設定檔的廠牌並導向對應工具 |
 
+## 使用說明文件
+
+`docs/` 資料夾內提供各工具的詳細使用說明（.docx）：[防火牆設定分析器](docs/firewall-analyzer-guide.docx)／[交換器設定解析器](docs/switch-config-parser-guide.docx)／[交換器設定產生器](docs/switch-config-generator-guide.docx)／[設定檔去識別化工具](docs/config-anonymizer-guide.docx)／[五工具入口頁](docs/network-analyzer-guide.docx)。
+
 ## 特色
 
 - **零伺服器、零安裝**：純 JS + HTML，下載即用，或直接透過 GitHub Pages 線上開啟
