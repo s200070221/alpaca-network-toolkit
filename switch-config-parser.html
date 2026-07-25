@@ -5327,13 +5327,12 @@ function parseBrocadeStack(cfg){
   members.forEach(x=>{
     x.role=maxPrio>0?(x.priority===maxPrio?'Active':'Standby'):(x.id==='1'?'Active':'Standby');
   });
-  // Stack links: "stack-port A B" — each line declares one link between two port IDs
+  // 2026-07-25 對外查證官方 FastIron Stacking 文件後修正：先前假設的 "stack-port A B"
+  // （兩埠一行宣告鏈路）查無此語法，真實 "stack-port" 是巢狀在 "stack unit N" 底下、
+  // 只接受一個埠參數（作用是指定該 unit 用哪個實體埠做堆疊鏈路，非宣告任意兩埠間的鏈路）；
+  // 官方查無任何指令能在設定檔宣告堆疊拓撲鏈路（僅能用 "show stack" 運行時查看），
+  // 比照既有 parseExtremeXOSStack() 的結論，固定回傳空陣列
   const links=[];
-  const linkRe=/^stack-port\s+(\S+)\s+(\S+)/gm;
-  let li=0;
-  while((m=linkRe.exec(cfg))!==null){
-    links.push({id:String(++li),ports:[m[1],m[2]],desc:m[1]+'↔'+m[2]});
-  }
   return{type:'ICX-Stack',members,links};
 }
 
