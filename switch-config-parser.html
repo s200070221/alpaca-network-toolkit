@@ -9429,7 +9429,7 @@ function renderVLANMatrix(){
     row+='</tr>';
     tbody+=row;
   }
-  return`<div class="tbar"><div class="search-wrap"><span class="search-ico">🔍</span><input class="search-inp" id="search-inp" placeholder="${tr('vlan_m.search')}" oninput="debouncedRenderView('vlan-matrix')"</div>`
+  return`<div class="tbar"><div class="search-wrap"><span class="search-ico">🔍</span><input class="search-inp" id="search-inp" placeholder="${tr('vlan_m.search')}" oninput="debouncedRenderView('vlan-matrix')"></div>`
     +`<span style="font-size:11px;color:var(--text-muted);white-space:nowrap"><span class="pill p-trunk" style="font-size:10px">T</span>&nbsp;Tagged&nbsp;&nbsp;<span class="pill p-access" style="font-size:10px">U</span>&nbsp;Untagged&nbsp;&nbsp;<span class="pill p-hybrid" style="font-size:10px">H</span>&nbsp;Hybrid</span></div>`
     +`<div style="overflow-x:auto;flex:1;min-height:0"><table class="data-table" style="width:max-content;min-width:max-content;border-collapse:separate;border-spacing:0;table-layout:fixed"><thead>${th}</thead><tbody>${tbody}</tbody></table></div>`
     +`<div class="tbl-foot"><span>${fVlans.length} VLANs · ${fPorts.length} ports</span></div>`;
@@ -9930,7 +9930,7 @@ function renderACL(){
       </div>
     </details>`;
   }).join('');
-  return`<div class="tbar"><div class="search-wrap"><span class="search-ico">🔍</span><input class="search-inp" id="search-inp" placeholder="${tr('search.placeholder')}" oninput="debouncedRenderView('acl')"</div></div>`
+  return`<div class="tbar"><div class="search-wrap"><span class="search-ico">🔍</span><input class="search-inp" id="search-inp" placeholder="${tr('search.placeholder')}" oninput="debouncedRenderView('acl')"></div></div>`
     +cards
     +`<div style="overflow-y:auto;flex:1;min-height:0;padding:8px 16px">${aclCards}</div>`
     +(filtered.length<acls.length?`<div class="tbl-foot"><span>${filtered.length} / ${acls.length} ACLs</span></div>`:'');
@@ -10147,7 +10147,7 @@ function renderSTP(){
   let portTable='';
   if(s.ports.length){
     portTable=`<h3 style="margin:16px 0 8px;font-size:14px;color:var(--text)">${tr('stp.col_port')}</h3>
-    <div class="search-wrap"><span class="search-ico">🔍</span><input class="search-inp" id="search-inp" placeholder="${tr('search.placeholder')}" oninput="debouncedRenderView('stp')"</div>
+    <div class="search-wrap"><span class="search-ico">🔍</span><input class="search-inp" id="search-inp" placeholder="${tr('search.placeholder')}" oninput="debouncedRenderView('stp')"></div>
     <div class="tbl-wrap"><table class="data-table"><thead><tr>
       <th>${tr('stp.col_port')}</th>
       <th>${tr('stp.col_portfast')}</th>
@@ -11764,7 +11764,7 @@ function renderVRRP(){
 
   return`<div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
     <div class="tbar">
-      <div class="search-wrap"><span class="search-ico">🔍</span><input class="search-inp" id="search-inp" placeholder="${tr('search.prefix')} ${proto}..." oninput="debouncedRenderView('vrrp')"</div>
+      <div class="search-wrap"><span class="search-ico">🔍</span><input class="search-inp" id="search-inp" placeholder="${tr('search.prefix')} ${proto}..." oninput="debouncedRenderView('vrrp')"></div>
       <button class="btn btn-ghost btn-sm" onclick="exportVRRPCSV()">${tr('btn.export_csv')}</button>
     </div>
     <div class="tbl-wrap"><table class="data-tbl"><thead><tr>${thRow}</tr></thead><tbody>${body}</tbody></table></div>
@@ -11940,7 +11940,7 @@ function renderDHCP(){
     <div style="padding:4px 18px 10px">
     <div class="tbar" style="margin-bottom:6px">
       <div class="search-wrap"><span class="search-ico">🔍</span>
-        <input class="search-inp" id="search-inp" placeholder="${tr('search.placeholder')}" oninput="debouncedRenderView('dhcp')"
+        <input class="search-inp" id="search-inp" placeholder="${tr('search.placeholder')}" oninput="debouncedRenderView('dhcp')">
       </div>
       <button class="btn btn-ghost btn-sm" onclick="exportDHCPCSV()">⬇ CSV</button>
     </div>

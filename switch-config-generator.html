@@ -1291,11 +1291,16 @@ function renderComwareDHCP(list){
 // 取 alias），一律輸出 name 別名，數字則依廠牌慣例用 basic=2000+idx / advanced=3000+idx
 // 自動分配，使用者不需關心實際編號
 function renderComwareACLEntry(a,idx){
-  const num=(a.type==='basic'?2000:3000)+idx;
+  // ACL Type 下拉是全廠牌共用元件（value 僅有 extended/standard 兩種，對應 Cisco 等廠牌的
+  // 慣用術語），Comware 官方術語雖是 basic/advanced，但表單／collectModel()/parseAndImport()
+  // 一律只會產生 'standard'/'extended' 字面值，故此處與匯入橋接改比照共用值判斷，不用
+  // 'basic'（原判斷式因表單永遠不會產生 'basic'，等同永遠走 advanced 分支，見稽核記錄）
+  const isBasic=a.type==='standard';
+  const num=(isBasic?2000:3000)+idx;
   const lines=[`acl number ${num} name ${a.name}`];
   (a.rules||[]).forEach(r=>{
     let line=` rule ${r.seq||0} ${r.action||'permit'}`;
-    if(a.type!=='basic')line+=` ${r.protocol||'ip'}`;
+    if(!isBasic)line+=` ${r.protocol||'ip'}`;
     if(r.src)line+=` source ${r.src}`;
     if(r.dst)line+=` destination ${r.dst}`;
     if(r.dstPort)line+=` destination-port eq ${r.dstPort}`;
@@ -4093,15 +4098,22 @@ function isValidCIDR(s){
 
 // 22 個 addXxxRow() 函式逐字重複的刪除按鈕儲存格，抽成共用常數（純去重，行為不變）
 const RM_BTN_TD='<td><button class="rm-btn" onclick="this.closest(\'tr\').remove()">✕</button></td>';
+
+// addXxxRow() 系列函式一律用字串內插組 `value="${x}"` 這類雙引號屬性寫進 innerHTML，
+// 範本/匯入資料若含雙引號（如備註欄位填 `Uplink to "Core-SW"`）會提前結束屬性，
+// 讓後面的字元變成裸露在標籤內的內容，導致該列 HTML 結構損毀。統一escape後供全部
+// addXxxRow() 函式使用，只跳脫雙引號本身（這些欄位都是塞進 value="..." 屬性，非
+// innerHTML 內容本身，不需要跳脫 &/</>）
+const escAttr=v=>String(v==null?'':v).replace(/"/g,'&quot;');
 function addVlanRow(id='',name=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="v-id" value="${id}"></td><td><input class="v-name" value="${name}"></td>${RM_BTN_TD}`;
+  tr.innerHTML=`<td><input class="v-id" value="${escAttr(id)}"></td><td><input class="v-name" value="${escAttr(name)}"></td>${RM_BTN_TD}`;
   document.getElementById('vlan-body').appendChild(tr);
 }
 
 function addIfaceRow(name='',mode='access',speed='1G',poeMode='none',fortilinkDiscovery='',qosPriority='',trustDscp=false){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="i-name" value="${name}"></td>
+  tr.innerHTML=`<td><input class="i-name" value="${escAttr(name)}"></td>
     <td><input class="i-desc"></td>
     <td><select class="i-speed" onchange="onSpeedChange(this)">
       <option value="1G" data-i18n="opt.speed1G">1G</option>
@@ -4658,7 +4670,7 @@ function expandBreakoutPorts(){
 
 function addAreaRow(area='',network='',wildcard='',type='normal',noSummary=false){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="a-area" value="${area}"></td><td><input class="a-network" value="${network}"></td><td><input class="a-wildcard" value="${wildcard}"></td>
+  tr.innerHTML=`<td><input class="a-area" value="${escAttr(area)}"></td><td><input class="a-network" value="${escAttr(network)}"></td><td><input class="a-wildcard" value="${escAttr(wildcard)}"></td>
     <td><select class="a-type">
       <option value="normal" data-i18n="opt.typeNormal">Normal</option>
       <option value="stub" data-i18n="opt.typeStub">Stub</option>
@@ -4674,18 +4686,18 @@ function addAreaRow(area='',network='',wildcard='',type='normal',noSummary=false
 
 function addVxlanVniRow(vni='',vlan='',name='',peers='',rd='',rtImport='',rtExport='',gw=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="vx-vni" value="${vni}"></td><td><input class="vx-vlan" value="${vlan}"></td>
-    <td><input class="vx-name" value="${name}"></td><td><input class="vx-peers" value="${peers}" placeholder="BGP-EVPN"></td>
-    <td><input class="vx-rd" value="${rd}" placeholder="1:1"></td><td><input class="vx-rt-import" value="${rtImport}" placeholder="1:1"></td>
-    <td><input class="vx-rt-export" value="${rtExport}" placeholder="1:1"></td><td><input class="vx-gw" value="${gw}"></td>
+  tr.innerHTML=`<td><input class="vx-vni" value="${escAttr(vni)}"></td><td><input class="vx-vlan" value="${escAttr(vlan)}"></td>
+    <td><input class="vx-name" value="${escAttr(name)}"></td><td><input class="vx-peers" value="${escAttr(peers)}" placeholder="BGP-EVPN"></td>
+    <td><input class="vx-rd" value="${escAttr(rd)}" placeholder="1:1"></td><td><input class="vx-rt-import" value="${escAttr(rtImport)}" placeholder="1:1"></td>
+    <td><input class="vx-rt-export" value="${escAttr(rtExport)}" placeholder="1:1"></td><td><input class="vx-gw" value="${escAttr(gw)}"></td>
     ${RM_BTN_TD}`;
   document.getElementById('vxlan-vni-body').appendChild(tr);
 }
 
 function addQosDscpRow(dscpValues='',priority=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="qos-dscp-values" value="${dscpValues}" placeholder="46"></td>
-    <td><input class="qos-dscp-priority" value="${priority}" placeholder="7"></td>
+  tr.innerHTML=`<td><input class="qos-dscp-values" value="${escAttr(dscpValues)}" placeholder="46"></td>
+    <td><input class="qos-dscp-priority" value="${escAttr(priority)}" placeholder="7"></td>
     ${RM_BTN_TD}`;
   document.getElementById('qos-dscp-body').appendChild(tr);
 }
@@ -4700,21 +4712,21 @@ function _exQosOptions(list,selected){
 function addExtremeQosProfileRow(name='QP2',minbw='',maxbw=''){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><select class="exq-profile">${_exQosOptions(EXTREME_QOS_CREATABLE,name)}</select></td>
-    <td><input class="exq-minbw" value="${minbw}" placeholder="10"></td>
-    <td><input class="exq-maxbw" value="${maxbw}" placeholder="80"></td>
+    <td><input class="exq-minbw" value="${escAttr(minbw)}" placeholder="10"></td>
+    <td><input class="exq-maxbw" value="${escAttr(maxbw)}" placeholder="80"></td>
     ${RM_BTN_TD}`;
   document.getElementById('extreme-qos-profile-body').appendChild(tr);
 }
 function addExtremeQosDscpRow(codePoint='',profile='QP1'){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="exq-dscp-cp" value="${codePoint}" placeholder="46"></td>
+  tr.innerHTML=`<td><input class="exq-dscp-cp" value="${escAttr(codePoint)}" placeholder="46"></td>
     <td><select class="exq-dscp-profile">${_exQosOptions(EXTREME_QOS_ALL,profile)}</select></td>
     ${RM_BTN_TD}`;
   document.getElementById('extreme-qos-dscp-body').appendChild(tr);
 }
 function addExtremeQosPortRow(port='',profile='QP1',diffservExam=false){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="exq-port" value="${port}" placeholder="1:1"></td>
+  tr.innerHTML=`<td><input class="exq-port" value="${escAttr(port)}" placeholder="1:1"></td>
     <td><select class="exq-port-profile">${_exQosOptions(EXTREME_QOS_ALL,profile)}</select></td>
     <td style="text-align:center"><input type="checkbox" class="exq-port-diffserv"${diffservExam?' checked':''}></td>
     ${RM_BTN_TD}`;
@@ -4733,12 +4745,12 @@ function addRouterOSAclRow(chain='forward',action='accept',protocol='',srcAddres
       <option value="accept"${action==='accept'?' selected':''}>accept</option>
       <option value="drop"${action==='drop'?' selected':''}>drop</option>
     </select></td>
-    <td><input class="ros-acl-protocol" value="${protocol}" placeholder="tcp"></td>
-    <td><input class="ros-acl-src" value="${srcAddress}" placeholder="10.0.0.0/8"></td>
-    <td><input class="ros-acl-dst" value="${dstAddress}" placeholder="10.0.0.0/8"></td>
-    <td><input class="ros-acl-dstport" value="${dstPort}" placeholder="22"></td>
-    <td><input class="ros-acl-inif" value="${inInterface}" placeholder="ether1"></td>
-    <td><input class="ros-acl-comment" value="${comment}"></td>
+    <td><input class="ros-acl-protocol" value="${escAttr(protocol)}" placeholder="tcp"></td>
+    <td><input class="ros-acl-src" value="${escAttr(srcAddress)}" placeholder="10.0.0.0/8"></td>
+    <td><input class="ros-acl-dst" value="${escAttr(dstAddress)}" placeholder="10.0.0.0/8"></td>
+    <td><input class="ros-acl-dstport" value="${escAttr(dstPort)}" placeholder="22"></td>
+    <td><input class="ros-acl-inif" value="${escAttr(inInterface)}" placeholder="ether1"></td>
+    <td><input class="ros-acl-comment" value="${escAttr(comment)}"></td>
     ${RM_BTN_TD}`;
   document.getElementById('routeros-acl-body').appendChild(tr);
 }
@@ -4747,45 +4759,45 @@ function addRouterOSAclRow(chain='forward',action='accept',protocol='',srcAddres
 // 兩套獨立機制，資料形狀與其餘廠牌共用 policy-map QoS 完全不同
 function addRouterOSSimpleQueueRow(name='',target='',maxUp='',maxDown='',atUp='',atDown=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="ros-qos-name" value="${name}"></td>
-    <td><input class="ros-qos-target" value="${target}" placeholder="192.168.1.100/32"></td>
-    <td><input class="ros-qos-maxup" value="${maxUp}" placeholder="10M"></td>
-    <td><input class="ros-qos-maxdown" value="${maxDown}" placeholder="5M"></td>
-    <td><input class="ros-qos-atup" value="${atUp}" placeholder="2M"></td>
-    <td><input class="ros-qos-atdown" value="${atDown}" placeholder="1M"></td>
+  tr.innerHTML=`<td><input class="ros-qos-name" value="${escAttr(name)}"></td>
+    <td><input class="ros-qos-target" value="${escAttr(target)}" placeholder="192.168.1.100/32"></td>
+    <td><input class="ros-qos-maxup" value="${escAttr(maxUp)}" placeholder="10M"></td>
+    <td><input class="ros-qos-maxdown" value="${escAttr(maxDown)}" placeholder="5M"></td>
+    <td><input class="ros-qos-atup" value="${escAttr(atUp)}" placeholder="2M"></td>
+    <td><input class="ros-qos-atdown" value="${escAttr(atDown)}" placeholder="1M"></td>
     ${RM_BTN_TD}`;
   document.getElementById('routeros-simple-queue-body').appendChild(tr);
 }
 function addRouterOSQueueTreeRow(name='',parent='global',maxLimit=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="ros-qtree-name" value="${name}"></td>
-    <td><input class="ros-qtree-parent" value="${parent}"></td>
-    <td><input class="ros-qtree-max" value="${maxLimit}" placeholder="50M"></td>
+  tr.innerHTML=`<td><input class="ros-qtree-name" value="${escAttr(name)}"></td>
+    <td><input class="ros-qtree-parent" value="${escAttr(parent)}"></td>
+    <td><input class="ros-qtree-max" value="${escAttr(maxLimit)}" placeholder="50M"></td>
     ${RM_BTN_TD}`;
   document.getElementById('routeros-queue-tree-body').appendChild(tr);
 }
 
 function addBgpPeerRow(ip='',as='',desc=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="p-ip" value="${ip}"></td><td><input class="p-as" value="${as}"></td><td><input class="p-desc" value="${desc}"></td>${RM_BTN_TD}`;
+  tr.innerHTML=`<td><input class="p-ip" value="${escAttr(ip)}"></td><td><input class="p-as" value="${escAttr(as)}"></td><td><input class="p-desc" value="${escAttr(desc)}"></td>${RM_BTN_TD}`;
   document.getElementById('bgp-peer-body').appendChild(tr);
 }
 
 function addRouteRow(dst='',gw='',metric=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="rt-dst" value="${dst}" placeholder="10.0.0.0/24"></td><td><input class="rt-gw" value="${gw}"></td><td><input class="rt-metric" value="${metric}"></td>${RM_BTN_TD}`;
+  tr.innerHTML=`<td><input class="rt-dst" value="${escAttr(dst)}" placeholder="10.0.0.0/24"></td><td><input class="rt-gw" value="${escAttr(gw)}"></td><td><input class="rt-metric" value="${escAttr(metric)}"></td>${RM_BTN_TD}`;
   document.getElementById('route-body').appendChild(tr);
 }
 
 function addLacpRow(id='',mode='static',members=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="lg-id" value="${id}"></td>
+  tr.innerHTML=`<td><input class="lg-id" value="${escAttr(id)}"></td>
     <td><select class="lg-mode">
       <option value="static" data-i18n="opt.lacpStatic">Static</option>
       <option value="active" data-i18n="opt.lacpActive">Active</option>
       <option value="passive" data-i18n="opt.lacpPassive">Passive</option>
     </select></td>
-    <td><input class="lg-members" value="${members}" placeholder="port1 port2"></td>
+    <td><input class="lg-members" value="${escAttr(members)}" placeholder="port1 port2"></td>
     ${RM_BTN_TD}`;
   tr.querySelector('.lg-mode').value=mode;
   document.getElementById('lacp-body').appendChild(tr);
@@ -4794,11 +4806,11 @@ function addLacpRow(id='',mode='static',members=''){
 
 function addVrrpRow(vlanId='',ip='',vrid='',vip='',priority='100',preempt=false,authMode='',authKey='',trackIf='',trackReduced=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="vr-vlan" value="${vlanId}"></td><td><input class="vr-ip" value="${ip}" placeholder="192.168.10.1/24"></td><td><input class="vr-id" value="${vrid}"></td><td><input class="vr-vip" value="${vip}"></td><td><input class="vr-priority" value="${priority}"></td><td style="text-align:center"><input type="checkbox" class="vr-preempt"></td>
+  tr.innerHTML=`<td><input class="vr-vlan" value="${escAttr(vlanId)}"></td><td><input class="vr-ip" value="${escAttr(ip)}" placeholder="192.168.10.1/24"></td><td><input class="vr-id" value="${escAttr(vrid)}"></td><td><input class="vr-vip" value="${escAttr(vip)}"></td><td><input class="vr-priority" value="${escAttr(priority)}"></td><td style="text-align:center"><input type="checkbox" class="vr-preempt"></td>
     <td><select class="vr-authmode"><option value="">-</option><option value="simple">simple</option><option value="md5">md5</option></select></td>
-    <td><input class="vr-authkey" value="${authKey}"></td>
-    <td><input class="vr-trackif" value="${trackIf}"></td>
-    <td><input class="vr-trackreduced" value="${trackReduced}"></td>
+    <td><input class="vr-authkey" value="${escAttr(authKey)}"></td>
+    <td><input class="vr-trackif" value="${escAttr(trackIf)}"></td>
+    <td><input class="vr-trackreduced" value="${escAttr(trackReduced)}"></td>
     ${RM_BTN_TD}`;
   tr.querySelector('.vr-preempt').checked=!!preempt;
   tr.querySelector('.vr-authmode').value=authMode||'';
@@ -4807,14 +4819,14 @@ function addVrrpRow(vlanId='',ip='',vrid='',vip='',priority='100',preempt=false,
 
 function addDhcpPoolRow(name='',network='',gateway='',dns='',range='',excluded='',lease='',iface=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="dp-name" value="${name}"></td>
-    <td><input class="dp-network" value="${network}" placeholder="10.0.0.0/24"></td>
-    <td><input class="dp-gateway" value="${gateway}"></td>
-    <td><input class="dp-dns" value="${dns}" placeholder="8.8.8.8 8.8.4.4"></td>
-    <td><input class="dp-range" value="${range}" placeholder="10.0.0.10-10.0.0.100"></td>
-    <td><input class="dp-excluded" value="${excluded}"></td>
-    <td><input class="dp-lease" value="${lease}" placeholder="1"></td>
-    <td><input class="dp-iface" value="${iface}" placeholder="vlan10"></td>
+  tr.innerHTML=`<td><input class="dp-name" value="${escAttr(name)}"></td>
+    <td><input class="dp-network" value="${escAttr(network)}" placeholder="10.0.0.0/24"></td>
+    <td><input class="dp-gateway" value="${escAttr(gateway)}"></td>
+    <td><input class="dp-dns" value="${escAttr(dns)}" placeholder="8.8.8.8 8.8.4.4"></td>
+    <td><input class="dp-range" value="${escAttr(range)}" placeholder="10.0.0.10-10.0.0.100"></td>
+    <td><input class="dp-excluded" value="${escAttr(excluded)}"></td>
+    <td><input class="dp-lease" value="${escAttr(lease)}" placeholder="1"></td>
+    <td><input class="dp-iface" value="${escAttr(iface)}" placeholder="vlan10"></td>
     ${RM_BTN_TD}`;
   document.getElementById('dhcp-pool-body').appendChild(tr);
 }
@@ -4822,29 +4834,29 @@ function addDhcpPoolRow(name='',network='',gateway='',dns='',range='',excluded='
 function addDhcpRelayRow(iface='',server=''){
   const relayPh=tr('ph.dhcpRelayIface');
   const tr2=document.createElement('tr');
-  tr2.innerHTML=`<td><input class="dr-iface" value="${iface}" placeholder="${relayPh}"></td>
-    <td><input class="dr-server" value="${server}"></td>
+  tr2.innerHTML=`<td><input class="dr-iface" value="${escAttr(iface)}" placeholder="${relayPh}"></td>
+    <td><input class="dr-server" value="${escAttr(server)}"></td>
     ${RM_BTN_TD}`;
   document.getElementById('dhcp-relay-body').appendChild(tr2);
 }
 
 function addAclRuleRow(name='',type='extended',seq='',action='permit',protocol='ip',src='any',dst='any',dstPort='',remark=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="ar-name" value="${name}"></td>
+  tr.innerHTML=`<td><input class="ar-name" value="${escAttr(name)}"></td>
     <td><select class="ar-type">
       <option value="extended" data-i18n="opt.aclExtended">Extended/Advanced</option>
       <option value="standard" data-i18n="opt.aclStandard">Standard/Basic</option>
     </select></td>
-    <td><input class="ar-seq" value="${seq}" placeholder="10"></td>
+    <td><input class="ar-seq" value="${escAttr(seq)}" placeholder="10"></td>
     <td><select class="ar-action">
       <option value="permit" data-i18n="opt.aclPermit">Permit</option>
       <option value="deny" data-i18n="opt.aclDeny">Deny</option>
     </select></td>
-    <td><input class="ar-protocol" value="${protocol}" placeholder="ip/tcp/udp"></td>
-    <td><input class="ar-src" value="${src}" placeholder="any / host 1.2.3.4"></td>
-    <td><input class="ar-dst" value="${dst}"></td>
-    <td><input class="ar-dstport" value="${dstPort}" placeholder="80"></td>
-    <td><input class="ar-remark" value="${remark}"></td>
+    <td><input class="ar-protocol" value="${escAttr(protocol)}" placeholder="ip/tcp/udp"></td>
+    <td><input class="ar-src" value="${escAttr(src)}" placeholder="any / host 1.2.3.4"></td>
+    <td><input class="ar-dst" value="${escAttr(dst)}"></td>
+    <td><input class="ar-dstport" value="${escAttr(dstPort)}" placeholder="80"></td>
+    <td><input class="ar-remark" value="${escAttr(remark)}"></td>
     ${RM_BTN_TD}`;
   tr.querySelector('.ar-type').value=type;
   tr.querySelector('.ar-action').value=action;
@@ -4854,8 +4866,8 @@ function addAclRuleRow(name='',type='extended',seq='',action='permit',protocol='
 
 function addAclApplyRow(name='',iface='',direction='in'){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="aa-name" value="${name}"></td>
-    <td><input class="aa-iface" value="${iface}"></td>
+  tr.innerHTML=`<td><input class="aa-name" value="${escAttr(name)}"></td>
+    <td><input class="aa-iface" value="${escAttr(iface)}"></td>
     <td><select class="aa-dir">
       <option value="in" data-i18n="opt.aclIn">In</option>
       <option value="out" data-i18n="opt.aclOut">Out</option>
@@ -4868,17 +4880,17 @@ function addAclApplyRow(name='',iface='',direction='in'){
 
 function addQosRow(policy='',cls='',behavior='',action='police',rate='',burst=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="q-policy" value="${policy}"></td>
-    <td><input class="q-cls" value="${cls}"></td>
-    <td><input class="q-behavior" value="${behavior}"></td>
+  tr.innerHTML=`<td><input class="q-policy" value="${escAttr(policy)}"></td>
+    <td><input class="q-cls" value="${escAttr(cls)}"></td>
+    <td><input class="q-behavior" value="${escAttr(behavior)}"></td>
     <td><select class="q-action">
       <option value="police" data-i18n="opt.qosPolice">Police</option>
       <option value="priority" data-i18n="opt.qosPriority">Priority</option>
       <option value="shape" data-i18n="opt.qosShape">Shape</option>
       <option value="bandwidth" data-i18n="opt.qosBandwidth">Bandwidth</option>
     </select></td>
-    <td><input class="q-rate" value="${rate}" placeholder="1000000"></td>
-    <td><input class="q-burst" value="${burst}" placeholder="10000"></td>
+    <td><input class="q-rate" value="${escAttr(rate)}" placeholder="1000000"></td>
+    <td><input class="q-burst" value="${escAttr(burst)}" placeholder="10000"></td>
     ${RM_BTN_TD}`;
   tr.querySelector('.q-action').value=action;
   document.getElementById('qos-body').appendChild(tr);
@@ -4887,16 +4899,16 @@ function addQosRow(policy='',cls='',behavior='',action='police',rate='',burst=''
 
 function addSecurityRow(port='',dot1x='-',portSec=false,maxMac='',violation='',guestVlan=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="sec-port" value="${port}"></td>
+  tr.innerHTML=`<td><input class="sec-port" value="${escAttr(port)}"></td>
     <td><select class="sec-dot1x">
       <option value="-" data-i18n="opt.secNone">-</option>
       <option value="auth" data-i18n="opt.secAuth">Authenticator</option>
       <option value="supp" data-i18n="opt.secSupp">Supplicant</option>
     </select></td>
     <td style="text-align:center"><input type="checkbox" class="sec-portsec"></td>
-    <td><input class="sec-maxmac" value="${maxMac}" placeholder="1"></td>
-    <td><input class="sec-violation" value="${violation}" placeholder="shutdown/restrict/protect"></td>
-    <td><input class="sec-guestvlan" value="${guestVlan}"></td>
+    <td><input class="sec-maxmac" value="${escAttr(maxMac)}" placeholder="1"></td>
+    <td><input class="sec-violation" value="${escAttr(violation)}" placeholder="shutdown/restrict/protect"></td>
+    <td><input class="sec-guestvlan" value="${escAttr(guestVlan)}"></td>
     ${RM_BTN_TD}`;
   tr.querySelector('.sec-dot1x').value=dot1x;
   tr.querySelector('.sec-portsec').checked=!!portSec;
@@ -4906,20 +4918,20 @@ function addSecurityRow(port='',dot1x='-',portSec=false,maxMac='',violation='',g
 
 function addStpInstanceRow(id='',priority=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="sti-id" value="${id}"></td>
-    <td><input class="sti-priority" value="${priority}" placeholder="32768"></td>
+  tr.innerHTML=`<td><input class="sti-id" value="${escAttr(id)}"></td>
+    <td><input class="sti-priority" value="${escAttr(priority)}" placeholder="32768"></td>
     ${RM_BTN_TD}`;
   document.getElementById('stp-instance-body').appendChild(tr);
 }
 
 function addStpPortRow(port='',portfast=false,bpduguard=false,guardRoot=false,cost='',priority=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="stp-port" value="${port}"></td>
+  tr.innerHTML=`<td><input class="stp-port" value="${escAttr(port)}"></td>
     <td style="text-align:center"><input type="checkbox" class="stp-portfast"></td>
     <td style="text-align:center"><input type="checkbox" class="stp-bpduguard"></td>
     <td style="text-align:center"><input type="checkbox" class="stp-rootguard"></td>
-    <td><input class="stp-cost" value="${cost}" placeholder="20000"></td>
-    <td><input class="stp-priority" value="${priority}" placeholder="128"></td>
+    <td><input class="stp-cost" value="${escAttr(cost)}" placeholder="20000"></td>
+    <td><input class="stp-priority" value="${escAttr(priority)}" placeholder="128"></td>
     ${RM_BTN_TD}`;
   tr.querySelector('.stp-portfast').checked=!!portfast;
   tr.querySelector('.stp-bpduguard').checked=!!bpduguard;
@@ -6184,12 +6196,17 @@ async function parseAndImport(){
   const aclList=fns?fns.parseACL(text,vendor):[];
   (aclList||[]).forEach(a=>{
     let lastRow=null;
+    // Comware parser 回傳的是官方術語 'basic'/'advanced'，但 Type 下拉是全廠牌共用元件、
+    // 只有 'extended'/'standard' 兩個 <option>；'basic' 塞進 select.value 會因找不到相符
+    // option 而靜默失敗（維持在預設的 extended），造成匯入的 Comware basic ACL 被誤植為
+    // advanced。這裡統一轉換成表單認得的字面值，其餘廠牌（本來就是 extended/standard）不受影響
+    const formType=a.type==='basic'?'standard':a.type==='advanced'?'extended':(a.type||'extended');
     (a.rules||[]).forEach(r=>{
       if(r.action==='remark'){
         if(lastRow)lastRow.querySelector('.ar-remark').value=r.remark;
         return;
       }
-      addAclRuleRow(a.name,a.type||'extended',r.seq,r.action,r.protocol,r.src,r.dst,r.dstPort,r.remark);
+      addAclRuleRow(a.name,formType,r.seq,r.action,r.protocol,r.src,r.dst,r.dstPort,r.remark);
       const rows=rowsOf('#acl-rule-body tr'); lastRow=rows[rows.length-1];
     });
     (a.appliedOn||[]).forEach(ap=>addAclApplyRow(a.name,ap.interface,ap.direction));
@@ -6411,6 +6428,15 @@ function processBulkCSV(){
     const progressDiv=document.getElementById('bulk-progress');
     const listDiv=document.getElementById('bulk-list');
 
+    // 批量處理前先快照原始表單狀態。原本 originalVendor/originalHostname 宣告在 for 迴圈
+    // 內部（block-scoped const），迴圈結束後在外層讀取會直接拋 ReferenceError，導致下面的
+    // 「恢復原始值」與完成訊息從未真正執行過；另外 updateModeOptions() 切到非 Comware 廠牌時
+    // 會把 Hybrid 介面強制改成 Trunk，且事後只會補回下拉選單的 hybrid <option>、不會把
+    // select 的實際選取值改回來，故一併快照每列 .i-mode 的原始值供事後手動復原
+    const originalVendor=document.getElementById('vendor').value;
+    const originalHostname=document.getElementById('hostname').value;
+    const originalModeValues=rowsOf('#iface-body tr').map(tr=>tr.querySelector('.i-mode')?.value);
+
     progressDiv.innerHTML=`<div style="color:var(--accent);font-weight:600">${tr('msg.bulkProgress').replace('{current}','0').replace('{total}',lines.length-1)}</div>`;
     listDiv.innerHTML='';
 
@@ -6428,10 +6454,8 @@ function processBulkCSV(){
         continue;
       }
 
-      // 產生設定：複製現有表單資料，改變 hostname 和 vendor
-      const originalVendor=document.getElementById('vendor').value;
-      const originalHostname=document.getElementById('hostname').value;
-
+      // 產生設定：複製現有表單資料，改變 hostname 和 vendor（originalVendor/originalHostname
+      // 已移到迴圈外快照，見上方說明）
       try{
         // 臨時改變表單值
         document.getElementById('vendor').value=row.vendor;
@@ -6474,10 +6498,16 @@ function processBulkCSV(){
       progressDiv.innerHTML=`<div style="color:var(--accent);font-weight:600">${tr('msg.bulkProgress').replace('{current}',i).replace('{total}',lines.length-1)}</div>`;
     }
 
-    // 恢復原始值
+    // 恢復原始值：vendor/hostname 需先復原，updateModeOptions() 才會依原本廠牌正確處理
+    // hybrid 選項的顯示/隱藏；接著手動把每列 .i-mode 的實際選取值復原成快照的原始值，因為
+    // updateModeOptions() 本身只會補回 hybrid <option>，不會把 select 的值改回 hybrid
     document.getElementById('vendor').value=originalVendor;
     document.getElementById('hostname').value=originalHostname;
     updateModeOptions();
+    rowsOf('#iface-body tr').forEach((tr,idx)=>{
+      const sel=tr.querySelector('.i-mode');
+      if(sel&&originalModeValues[idx]!==undefined)sel.value=originalModeValues[idx];
+    });
 
     // 顯示結果
     progressDiv.innerHTML=`<div style="color:var(--green);font-weight:600">${tr('msg.bulkDone').replace('{count}',Object.keys(window.bulkConfigs).length)}</div>`;
@@ -7678,6 +7708,26 @@ updateIfaceTableDisplay();
 updateAppliedModelNotice();
 renderTemplateList();
 generate();
+
+// network_analyzer 拖放交接：比照 firewall_analyzer/switch_analyzer 既有 `_netAnalyzer_pending`
+// 讀取慣例（10 秒新鮮度檢查＋讀取後即刻 removeItem，避免重複帶入）。此工具原本完全沒有接收端
+// 程式碼，使用者從 network_analyzer 拖放檔案後手動選擇本工具，內容會被靜默丟棄、只看到空白表單
+// （2026-07-26 全工具再稽核發現並修復）。本工具沒有像其餘三工具那樣的「view」切換機制，
+// 匯入卡片本來就常駐頁面上，故只需帶入 #import-text 並呼叫既有的 parseAndImport()
+(function(){
+  var _p = localStorage.getItem('_netAnalyzer_pending');
+  if (!_p) return;
+  try {
+    var d = JSON.parse(_p);
+    if (Date.now() - d.ts > 10000) { localStorage.removeItem('_netAnalyzer_pending'); return; }
+    localStorage.removeItem('_netAnalyzer_pending');
+    var ta = document.getElementById('import-text');
+    if (ta) ta.value = d.text;
+    var fnameEl = document.getElementById('import-config-file-name');
+    if (fnameEl && d.name) fnameEl.textContent = d.name;
+    parseAndImport();
+  } catch(e) {}
+})();
 </script>
 <div class="mini-alpaca" id="mini-alpaca" onclick="startRain(true)" onmouseenter="eggMouseOver()" title="100% 非 AI 生成 — 純手工製作">
   🦙

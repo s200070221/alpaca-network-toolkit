@@ -878,6 +878,10 @@ document.getElementById('logo-btn').addEventListener('click', () => {
 // ── 拖入自動分派 ──────────────────────────────────────────────────
 const VENDOR_NAMES = {f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS'};
 let _dropPending = null;
+// 快速連續拖放/選檔的競態防呆：每次啟動新的 FileReader 讀取時遞增，onload 觸發時比對
+// 是否仍是最新一次讀取的世代號，避免較舊、讀取較慢（如檔案較大）的結果晚於較新的讀取
+// 完成，反而覆蓋畫面上顯示/寫入 _dropPending 的較新結果
+let _dropGen = 0;
 
 function detectTool(text) {
   const t = text.slice(0, 8000);
@@ -885,7 +889,11 @@ function detectTool(text) {
   if (/set security policies/i.test(t))                                      return {idx:0, vendor:'j'};
   if (/^set hostname\s+\S+/m.test(t) && /^set interface\s+\S+\s+ipv4-address/m.test(t)) return {idx:0, vendor:'c'};
   if (/<config>[\s\S]{0,300}<devices>/m.test(t))                             return {idx:0, vendor:'p'};
-  if (/\/ip firewall|\/interface bridge/i.test(t))                           return {idx:0, vendor:'m'};
+  // MikroTik 防火牆訊號：僅認 /ip firewall（真正的防火牆規則區塊）。原本連 /interface bridge
+  // 也一併判定為防火牆，但 /interface bridge 是純交換器功能（VLAN filtering／橋接），純交換器
+  // 匯出檔（無任何 /ip firewall 規則）會被誤導向防火牆分析器；/interface bridge 判斷改移到
+  // 下方與其餘交換器廠牌訊號同一批次（見下方 idx:1 區塊）
+  if (/\/ip firewall/i.test(t))                                              return {idx:0, vendor:'m'};
   if (/nameif\s+\w+/i.test(t) && /access-list/i.test(t))                    return {idx:0, vendor:'a'};
   if (/firewall-policy\s*\{/im.test(t))                                      return {idx:0, vendor:'s'};
   if (/<SonicWALL/i.test(t))                                                 return {idx:0, vendor:'w'};
@@ -899,6 +907,8 @@ function detectTool(text) {
   if (/^;\s*(?:HP\s|Aruba\s|J\d{4}[A-Z])/m.test(t)||/^oobm$/m.test(t)||/^trunk\s+\S+\s+[Tt]rk\d+/m.test(t)) return {idx:1, vendor:null};
   if (/feature\s+(vpc|lacp)|vlan database/i.test(t))                        return {idx:1, vendor:null};
   if (/sysname\s+\w|irf domain/i.test(t))                                   return {idx:1, vendor:null};
+  // MikroTik RouterOS 純交換器訊號（VLAN filtering／橋接，無 /ip firewall 規則時走到這裡）
+  if (/\/interface bridge/i.test(t))                                        return {idx:1, vendor:null};
   return null;
 }
 
@@ -994,8 +1004,9 @@ function _updateDropText() {
     _dragCounter = 0;
     const file = e.dataTransfer.files[0];
     if (!file) { overlay.classList.remove('active'); return; }
+    const myGen = ++_dropGen;
     const reader = new FileReader();
-    reader.onload = ev => _showDropResult(file.name, detectTool(ev.target.result), ev.target.result);
+    reader.onload = ev => { if (myGen !== _dropGen) return; _showDropResult(file.name, detectTool(ev.target.result), ev.target.result); };
     reader.readAsText(file, 'UTF-8');
   });
 })();
@@ -1008,8 +1019,9 @@ document.getElementById('file-pick').addEventListener('change', function() {
   overlay.classList.add('active');
   document.getElementById('drop-box').style.display = 'none';
   document.getElementById('drop-result').style.display = 'none';
+  const myGen = ++_dropGen;
   const reader = new FileReader();
-  reader.onload = ev => _showDropResult(file.name, detectTool(ev.target.result), ev.target.result);
+  reader.onload = ev => { if (myGen !== _dropGen) return; _showDropResult(file.name, detectTool(ev.target.result), ev.target.result); };
   reader.readAsText(file, 'UTF-8');
 });
 
@@ -1049,9 +1061,9 @@ checkFiles();
 })();
 
 // 黑/白模式切換
-function setTheme(t){document.documentElement.setAttribute('data-theme',t);document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';localStorage.setItem('cw_theme',t);}
+function setTheme(t){document.documentElement.setAttribute('data-theme',t);document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';try{localStorage.setItem('cw_theme',t);}catch(e){}}
 function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
-(function(){const s=localStorage.getItem('cw_theme');const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
+(function(){let s=null;try{s=localStorage.getItem('cw_theme');}catch(e){}const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
 
 </script>
 

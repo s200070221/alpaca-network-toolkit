@@ -9806,7 +9806,16 @@ const CiscoASAParser = (() => {
       else if (parts[i]==='range'&&parts[i+1]&&parts[i+2]) svc=`${proto}/${parts[i+1]}-${parts[i+2]}`;
       const srcAddrSplit = _splitAddr(src);
       const dstAddrSplit = _splitAddr(dst);
-      policies.push({ id:id++, name:aclName, srcAddr:src, dstAddr:dst, srcAddr4:srcAddrSplit.v4, srcAddr6:srcAddrSplit.v6, dstAddr4:dstAddrSplit.v4, dstAddr6:dstAddrSplit.v6, service:svc, action, vdom:aclName, enabled:true, color:'0' });
+      // ASA 原生支援的 ACE 修飾字：行尾 `inactive` 停用該筆規則（不刪除）；`log disable`
+      // 明確關閉該筆日誌（預設情況下 ASA 對每筆 ACE 皆會記錄，非顯式停用即視為有記錄）。
+      // status/logtraffic 欄位值須與其餘廠牌 parser 共用慣例一致（'enable'/'disable'，全小寫），
+      // 否則 analyzeCompliance()/analyzeRuleShadowing()/_runPolicyQuery()/computeFirewallHealth()
+      // 等共用函式會誤判 ASA/FTD 規則永遠是「未停用」「無日誌」。utm 為固定佔位物件
+      // （ASA 無 UTM profile 概念，比照 Juniper/MikroTik 等其餘無 UTM 廠牌既有慣例），
+      // 避免 exportCSV('policies') 讀取 r.utm.av 時因 utm 為 undefined 而拋例外。
+      const status = /\binactive\b/.test(rest) ? 'disable' : 'enable';
+      const logtraffic = /\blog\s+disable\b/.test(rest) ? 'disable' : 'all';
+      policies.push({ id:id++, name:aclName, srcIntf:'-', dstIntf:'-', srcAddr:src, dstAddr:dst, srcAddr4:srcAddrSplit.v4, srcAddr6:srcAddrSplit.v6, dstAddr4:dstAddrSplit.v4, dstAddr6:dstAddrSplit.v6, service:svc, action, schedule:'-', nat:'disable', ippool:'disable', poolname:'-', logtraffic, logstart:'-', utm:{av:'-',webfilter:'-',ips:'-',ssl:'-',appctrl:'-'}, status, comments:'-', users:'-', groups:'-', vdom:aclName, enabled: status==='enable', color:'0' });
     }
     return policies;
   }
@@ -12129,6 +12138,12 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
     const vendor = parsed.vendor;
     const info   = parsed.deviceInfo;
     const now    = new Date().toLocaleString(_lang==='ja'?'ja-JP':_lang==='en'?'en-US':'zh-TW');
+    // 設定檔內容（規則名稱/介面說明/物件備註等管理者可自由輸入的欄位）在組 HTML 報表時
+    // 必須跳脫，否則含 < 等字元會破壞表格結構，畸形/惡意內容甚至可在報表於瀏覽器開啟時
+    // 執行任意 JS。本函式後段的 WiFi 區塊（buildWifiSection）已有自己的 esc2()，但最早、
+    // 也最核心的 policies/interfaces/routes/vpn/addresses/users 等區塊先前完全遺漏，
+    // 這裡補上共用的 esc()。
+    const esc = v => String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
     const stat = (label, val, color, sid='') =>
       `<div class="stat-card${sid?' stat-link':''}" style="border-top:3px solid ${color}"${sid?` onclick="document.getElementById('${sid}').scrollIntoView({behavior:'smooth'})" title="${label}"`:''}">
@@ -12138,63 +12153,63 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
 
     const policyRows = parsed.policies.map(p =>
       `<tr>
-        <td>${p.id}</td><td>${p.name}</td>
-        <td>${p.srcIntf}</td><td>${p.dstIntf}</td>
-        <td>${p.srcAddr}</td><td>${p.dstAddr}</td>
-        <td>${p.service}</td>
-        <td><span class="badge ${p.action==='accept'?'badge-allow':'badge-deny'}">${p.action.toUpperCase()}</span></td>
-        <td>${p.nat}</td>
-        <td><span class="badge ${p.status==='enable'||p.status==='Enable'?'badge-on':'badge-off'}">${p.status}</span></td>
-        <td>${p.comments}</td>
+        <td>${esc(p.id)}</td><td>${esc(p.name)}</td>
+        <td>${esc(p.srcIntf)}</td><td>${esc(p.dstIntf)}</td>
+        <td>${esc(p.srcAddr)}</td><td>${esc(p.dstAddr)}</td>
+        <td>${esc(p.service)}</td>
+        <td><span class="badge ${p.action==='accept'?'badge-allow':'badge-deny'}">${esc(p.action.toUpperCase())}</span></td>
+        <td>${esc(p.nat)}</td>
+        <td><span class="badge ${p.status==='enable'||p.status==='Enable'?'badge-on':'badge-off'}">${esc(p.status)}</span></td>
+        <td>${esc(p.comments)}</td>
       </tr>`).join('');
 
     const ifaceRows = parsed.interfaces.map(i =>
       `<tr>
-        <td><b>${i.name}</b></td><td>${i.alias}</td>
-        <td>${i.ip}</td><td>${i.mask}</td>
-        <td>${i.type}</td><td>${i.vlanId}</td>
-        <td><span class="badge" style="background:#334155;color:#94a3b8">${i.role}</span></td>
-        <td>${i.status}</td><td>${i.desc}</td>
+        <td><b>${esc(i.name)}</b></td><td>${esc(i.alias)}</td>
+        <td>${esc(i.ip)}</td><td>${esc(i.mask)}</td>
+        <td>${esc(i.type)}</td><td>${esc(i.vlanId)}</td>
+        <td><span class="badge" style="background:#334155;color:#94a3b8">${esc(i.role)}</span></td>
+        <td>${esc(i.status)}</td><td>${esc(i.desc)}</td>
       </tr>`).join('');
 
     const routeRows = parsed.routes.map(r =>
       `<tr>
-        <td><span class="badge" style="background:#1e3a5f;color:#7dd3fc">${r.type.toUpperCase()}</span></td>
-        <td>${r.dst}</td><td>${r.gateway}</td><td>${r.device}</td>
-        <td>${r.distance}</td><td>${r.status}</td><td>${r.comment}</td>
+        <td><span class="badge" style="background:#1e3a5f;color:#7dd3fc">${esc(r.type.toUpperCase())}</span></td>
+        <td>${esc(r.dst)}</td><td>${esc(r.gateway)}</td><td>${esc(r.device)}</td>
+        <td>${esc(r.distance)}</td><td>${esc(r.status)}</td><td>${esc(r.comment)}</td>
       </tr>`).join('');
 
     const vpnRows = parsed.vpn.map(v =>
       `<tr>
-        <td><span class="badge" style="background:#1e1b4b;color:#a78bfa">${v.type}</span></td>
-        <td><b>${v.name}</b></td><td>${v.remote}</td><td>${v.iface}</td>
-        <td>${v.ikeVer}</td><td>${v.authMethod}</td><td>${v.proposal}</td>
-        <td>${v.dhgrp}</td><td>${v.status}</td>
+        <td><span class="badge" style="background:#1e1b4b;color:#a78bfa">${esc(v.type)}</span></td>
+        <td><b>${esc(v.name)}</b></td><td>${esc(v.remote)}</td><td>${esc(v.iface)}</td>
+        <td>${esc(v.ikeVer)}</td><td>${esc(v.authMethod)}</td><td>${esc(v.proposal)}</td>
+        <td>${esc(v.dhgrp)}</td><td>${esc(v.status)}</td>
       </tr>`).join('');
 
     const ph2Rows = parsed.vpn.filter(v => v.phase2 && v.phase2.length).flatMap(v =>
       v.phase2.map(p =>
         `<tr>
-          <td>${v.name}</td><td>${p.name}</td><td>${p.proposal}</td>
-          <td>${p.dhgrp}</td><td>${p.lifetime}</td>
-          <td>${p.localSub}</td><td>${p.remoteSub}</td>
+          <td>${esc(v.name)}</td><td>${esc(p.name)}</td><td>${esc(p.proposal)}</td>
+          <td>${esc(p.dhgrp)}</td><td>${esc(p.lifetime)}</td>
+          <td>${esc(p.localSub)}</td><td>${esc(p.remoteSub)}</td>
         </tr>`)
     ).join('');
 
     const addrRows = parsed.addresses.slice(0, 200).map(a =>
       `<tr>
-        <td><span class="badge" style="background:#0f2027;color:#38bdf8">${a.category}</span></td>
-        <td>${a.name}</td><td>${a.type}</td>
-        <td>${a.subnet||a.startIp+' ~ '+a.endIp||a.fqdn||'-'}</td>
-        <td>${a.members||'-'}</td><td>${a.comment}</td>
+        <td><span class="badge" style="background:#0f2027;color:#38bdf8">${esc(a.category)}</span></td>
+        <td>${esc(a.name)}</td><td>${esc(a.type)}</td>
+        <td>${esc(a.subnet||a.startIp+' ~ '+a.endIp||a.fqdn||'-')}</td>
+        <td>${esc(a.members||'-')}</td><td>${esc(a.comment)}</td>
       </tr>`).join('');
 
     const userRows = parsed.users.map(u =>
       `<tr>
-        <td><span class="badge" style="background:#0f2027;color:#34d399">${u.type}</span></td>
-        <td>${u.name}</td><td>${u.status}</td>
-        <td>${u.authType||u.groupType||'-'}</td>
-        <td>${u.members||'-'}</td><td>${u.email||u.server||'-'}</td>
+        <td><span class="badge" style="background:#0f2027;color:#34d399">${esc(u.type)}</span></td>
+        <td>${esc(u.name)}</td><td>${esc(u.status)}</td>
+        <td>${esc(u.authType||u.groupType||'-')}</td>
+        <td>${esc(u.members||'-')}</td><td>${esc(u.email||u.server||'-')}</td>
       </tr>`).join('');
 
     // SD-WAN section for exportHTML
@@ -12207,17 +12222,17 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       // Members
       h+=`<div style="font-size:11px;font-weight:600;color:#7dd3fc;margin-bottom:6px">${tr('sdwan.members_title')}</div><div class="overflow"><table>`;
       h+=`<thead><tr><th>ID</th><th>${tr('col.intf')}</th><th>Zone</th><th>${tr('col.gateway')}</th><th>${tr('col.priority')}</th><th>${tr('sdwan.col_weight')}</th><th>Cost</th><th>${tr('col.status')}</th><th>${tr('col.comment')}</th></tr></thead><tbody>`;
-      sd.members.forEach(m=>{ h+=`<tr><td>${m.id}</td><td><b>${m.iface}</b></td><td>${m.zone}</td><td>${m.gateway}</td><td>${m.priority}</td><td>${m.weight}</td><td>${m.cost}</td><td>${m.status}</td><td>${m.comment}</td></tr>`; });
+      sd.members.forEach(m=>{ h+=`<tr><td>${esc(m.id)}</td><td><b>${esc(m.iface)}</b></td><td>${esc(m.zone)}</td><td>${esc(m.gateway)}</td><td>${esc(m.priority)}</td><td>${esc(m.weight)}</td><td>${esc(m.cost)}</td><td>${esc(m.status)}</td><td>${esc(m.comment)}</td></tr>`; });
       h+='</tbody></table></div>';
       // Health Checks
       h+=`<div style="font-size:11px;font-weight:600;color:#fbbf24;margin-bottom:6px;margin-top:12px">${tr('sdwan.health_title')}</div><div class="overflow"><table>`;
       h+=`<thead><tr><th>${tr('col.name')}</th><th>${tr('sdwan.col_server')}</th><th>${tr('col.proto')}</th><th>${tr('sdwan.col_interval')}</th><th>Failtime</th><th>${tr('sdwan.col_members')}</th><th>SLA</th></tr></thead><tbody>`;
-      sd.healthChecks.forEach(hc=>{ const sla=hc.slaThresholds.map(s=>`L≤${s.latency} J≤${s.jitter} PL≤${s.packetLoss}%`).join('; ')||'-'; h+=`<tr><td><b>${hc.name}</b></td><td>${hc.server}</td><td>${hc.protocol}</td><td>${hc.interval}ms</td><td>${hc.failtime}</td><td>${hc.members}</td><td style="font-size:11px">${sla}</td></tr>`; });
+      sd.healthChecks.forEach(hc=>{ const sla=esc(hc.slaThresholds.map(s=>`L≤${s.latency} J≤${s.jitter} PL≤${s.packetLoss}%`).join('; ')||'-'); h+=`<tr><td><b>${esc(hc.name)}</b></td><td>${esc(hc.server)}</td><td>${esc(hc.protocol)}</td><td>${esc(hc.interval)}ms</td><td>${esc(hc.failtime)}</td><td>${esc(hc.members)}</td><td style="font-size:11px">${sla}</td></tr>`; });
       h+='</tbody></table></div>';
       // Rules
       h+=`<div style="font-size:11px;font-weight:600;color:#4ade80;margin-bottom:6px;margin-top:12px">${tr('sdwan.rules_title')}</div><div class="overflow"><table>`;
       h+=`<thead><tr><th>#</th><th>${tr('col.name')}</th><th>${tr('col.mode')}</th><th>${tr('sdwan.col_src')}</th><th>${tr('sdwan.col_dst')}</th><th>${tr('sdwan.col_priority_zone')}</th><th>SLA</th><th>${tr('col.status')}</th></tr></thead><tbody>`;
-      sd.services.forEach(s=>{ const sla=s.slaRefs.map(r=>r.healthCheck+'#'+r.id).join(', ')||'-'; const tgt=s.priorityZone!=='-'?s.priorityZone:s.priorityMembers; h+=`<tr><td>${s.id}</td><td><b>${s.name}</b></td><td>${s.mode}</td><td>${s.src}</td><td>${s.dst}</td><td>${tgt}</td><td style="font-size:11px">${sla}</td><td>${s.status}</td></tr>`; });
+      sd.services.forEach(s=>{ const sla=esc(s.slaRefs.map(r=>r.healthCheck+'#'+r.id).join(', ')||'-'); const tgt=esc(s.priorityZone!=='-'?s.priorityZone:s.priorityMembers); h+=`<tr><td>${esc(s.id)}</td><td><b>${esc(s.name)}</b></td><td>${esc(s.mode)}</td><td>${esc(s.src)}</td><td>${esc(s.dst)}</td><td>${tgt}</td><td style="font-size:11px">${sla}</td><td>${esc(s.status)}</td></tr>`; });
       h+='</tbody></table></div></div>';
       return h;
     })();
@@ -12229,7 +12244,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       h+='<div class="overflow"><table><thead><tr>';
       h+=`<th>${tr('ha.mode')}</th><th>${tr('ha.group_id')}</th><th>${tr('ha.priority')}</th><th>${tr('ha.peer_ip')}</th><th>${tr('ha.sync_interface')}</th><th>${tr('ha.vip')}</th>`;
       h+='</tr></thead><tbody>';
-      h+=`<tr><td>${ha.mode}</td><td>${ha.groupId}</td><td>${ha.priority}</td><td>${ha.peerIp}</td><td>${ha.syncInterface}</td><td>${ha.vip}</td></tr>`;
+      h+=`<tr><td>${esc(ha.mode)}</td><td>${esc(ha.groupId)}</td><td>${esc(ha.priority)}</td><td>${esc(ha.peerIp)}</td><td>${esc(ha.syncInterface)}</td><td>${esc(ha.vip)}</td></tr>`;
       h+='</tbody></table></div></div>';
       return h;
     })();
@@ -12440,18 +12455,18 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<title>${tr('rpt.fw_title')} - ${info.hostname}</title>
+<title>${tr('rpt.fw_title')} - ${esc(info.hostname)}</title>
 <style>${REPORT_CSS_FW}</style>
 </head>
 <body>
 <h1>🛡️ ${tr('rpt.fw_title')}</h1>
-<div class="subtitle">Generated by FW-Analyzer · ${info.vendor||info.hostname} · ${now}</div>
+<div class="subtitle">Generated by FW-Analyzer · ${esc(info.vendor||info.hostname)} · ${now}</div>
 
 <div class="info-grid">
-  <div class="info-item"><div class="k">${tr('rpt.vendor_label')}</div><div class="v">${info.vendor}</div></div>
-  <div class="info-item"><div class="k">${tr('rpt.hostname_label')}</div><div class="v">${info.hostname}</div></div>
-  <div class="info-item"><div class="k">${tr('rpt.firmware_label')}</div><div class="v">${info.firmware}</div></div>
-  <div class="info-item"><div class="k">${tr('rpt.model_label')}</div><div class="v">${info.model}</div></div>
+  <div class="info-item"><div class="k">${tr('rpt.vendor_label')}</div><div class="v">${esc(info.vendor)}</div></div>
+  <div class="info-item"><div class="k">${tr('rpt.hostname_label')}</div><div class="v">${esc(info.hostname)}</div></div>
+  <div class="info-item"><div class="k">${tr('rpt.firmware_label')}</div><div class="v">${esc(info.firmware)}</div></div>
+  <div class="info-item"><div class="k">${tr('rpt.model_label')}</div><div class="v">${esc(info.model)}</div></div>
 </div>
 
 <div class="stats">
@@ -12592,12 +12607,12 @@ ${(parsed.nat&&parsed.nat.length)?`<div class="section" id="sec-nat">
   <div class="overflow"><table>
     <thead><tr><th>${tr('col.type')}</th><th>${tr('col.name')}</th><th>Ext IP</th><th>Map IP</th><th>Ext Port</th><th>Map Port</th><th>Proto</th><th>${tr('col.status')}</th><th>${tr('col.comment')}</th></tr></thead>
     <tbody>${parsed.nat.slice(0,200).map(n=>`<tr>
-      <td>${n.type||'&#x2014;'}</td><td>${n.name||'&#x2014;'}</td>
-      <td class="mono">${n.extIp||'&#x2014;'}</td><td class="mono">${n.mapIp||'&#x2014;'}</td>
-      <td class="mono">${n.extPort||'&#x2014;'}</td><td class="mono">${n.mapPort||'&#x2014;'}</td>
-      <td>${n.proto||'&#x2014;'}</td>
-      <td><span class="badge" style="background:${n.status==='enable'?'rgba(34,197,94,.2);color:#22c55e':'rgba(100,116,139,.2);color:#94a3b8'}">${n.status||'&#x2014;'}</span></td>
-      <td>${n.comment||'&#x2014;'}</td>
+      <td>${esc(n.type)||'&#x2014;'}</td><td>${esc(n.name)||'&#x2014;'}</td>
+      <td class="mono">${esc(n.extIp)||'&#x2014;'}</td><td class="mono">${esc(n.mapIp)||'&#x2014;'}</td>
+      <td class="mono">${esc(n.extPort)||'&#x2014;'}</td><td class="mono">${esc(n.mapPort)||'&#x2014;'}</td>
+      <td>${esc(n.proto)||'&#x2014;'}</td>
+      <td><span class="badge" style="background:${n.status==='enable'?'rgba(34,197,94,.2);color:#22c55e':'rgba(100,116,139,.2);color:#94a3b8'}">${esc(n.status)||'&#x2014;'}</span></td>
+      <td>${esc(n.comment)||'&#x2014;'}</td>
     </tr>`).join('')}</tbody>
   </table></div>
 </div>`:''}
@@ -12606,10 +12621,10 @@ ${(parsed.services&&parsed.services.filter(s=>s.category==='custom'||s.category=
   <div class="overflow"><table>
     <thead><tr><th>${tr('col.category')}</th><th>${tr('col.name')}</th><th>Proto</th><th>TCP</th><th>UDP</th><th>${tr('col.members')}</th><th>${tr('col.comment')}</th></tr></thead>
     <tbody>${parsed.services.filter(s=>s.category==='custom'||s.category==='group').slice(0,200).map(s=>`<tr>
-      <td><span class="badge" style="background:#0f2027;color:#38bdf8">${s.category}</span></td>
-      <td>${s.name||'&#x2014;'}</td><td>${s.proto||'&#x2014;'}</td>
-      <td class="mono">${s.tcpPorts||'&#x2014;'}</td><td class="mono">${s.udpPorts||'&#x2014;'}</td>
-      <td>${s.members||'&#x2014;'}</td><td>${s.comment||'&#x2014;'}</td>
+      <td><span class="badge" style="background:#0f2027;color:#38bdf8">${esc(s.category)}</span></td>
+      <td>${esc(s.name)||'&#x2014;'}</td><td>${esc(s.proto)||'&#x2014;'}</td>
+      <td class="mono">${esc(s.tcpPorts)||'&#x2014;'}</td><td class="mono">${esc(s.udpPorts)||'&#x2014;'}</td>
+      <td>${esc(s.members)||'&#x2014;'}</td><td>${esc(s.comment)||'&#x2014;'}</td>
     </tr>`).join('')}</tbody>
   </table></div>
 </div>`:''}
@@ -12618,26 +12633,26 @@ ${(parsed.dhcp&&((parsed.dhcp.servers&&parsed.dhcp.servers.length)||(parsed.dhcp
   ${(parsed.dhcp.servers&&parsed.dhcp.servers.length)?`<div class="overflow"><table>
     <thead><tr><th>${tr('col.name')}</th><th>Mask</th><th>Range</th><th>Gateway</th><th>DNS</th><th>Interface</th></tr></thead>
     <tbody>${parsed.dhcp.servers.map(s=>`<tr>
-      <td>${s.name||'&#x2014;'}</td><td class="mono">${s.mask||'&#x2014;'}</td>
-      <td class="mono">${(s.startIp||s.start)&&(s.endIp||s.end)?(s.startIp||s.start)+' - '+(s.endIp||s.end):'&#x2014;'}</td><td class="mono">${s.gateway||'&#x2014;'}</td>
-      <td class="mono">${(s.dns1||s.dns2)?[s.dns1,s.dns2].filter(Boolean).join(', '):(s.dns||'&#x2014;')}</td>
-      <td class="mono">${s.iface||'&#x2014;'}</td>
+      <td>${esc(s.name)||'&#x2014;'}</td><td class="mono">${esc(s.mask)||'&#x2014;'}</td>
+      <td class="mono">${(s.startIp||s.start)&&(s.endIp||s.end)?esc((s.startIp||s.start)+' - '+(s.endIp||s.end)):'&#x2014;'}</td><td class="mono">${esc(s.gateway)||'&#x2014;'}</td>
+      <td class="mono">${(s.dns1||s.dns2)?esc([s.dns1,s.dns2].filter(Boolean).join(', ')):(esc(s.dns)||'&#x2014;')}</td>
+      <td class="mono">${esc(s.iface)||'&#x2014;'}</td>
     </tr>`).join('')}</tbody>
   </table></div>`:''}
   ${(parsed.dhcp.relays&&parsed.dhcp.relays.length)?`<p style="margin:8px 0 4px;color:#94a3b8;font-size:12px">Relay</p><div class="overflow"><table>
     <thead><tr><th>Interface</th><th>Server IP</th></tr></thead>
-    <tbody>${parsed.dhcp.relays.map(r=>`<tr><td class="mono">${r.iface||'&#x2014;'}</td><td class="mono">${r.serverIp||'&#x2014;'}</td></tr>`).join('')}</tbody>
+    <tbody>${parsed.dhcp.relays.map(r=>`<tr><td class="mono">${esc(r.iface)||'&#x2014;'}</td><td class="mono">${esc(r.serverIp)||'&#x2014;'}</td></tr>`).join('')}</tbody>
   </table></div>`:''}
 </div>`:''}
 ${(parsed.dns&&((parsed.dns.servers&&parsed.dns.servers.length)||(parsed.dns.static&&parsed.dns.static.length)))?`<div class="section" id="sec-dns">
-  <div class="section-title">&#x1F310; ${tr('rpt.sec_dns')}${parsed.dns.domain?' &#x2014; '+parsed.dns.domain:''}</div>
+  <div class="section-title">&#x1F310; ${tr('rpt.sec_dns')}${parsed.dns.domain?' &#x2014; '+esc(parsed.dns.domain):''}</div>
   ${(parsed.dns.servers&&parsed.dns.servers.length)?`<div class="overflow"><table>
     <thead><tr><th>DNS Server</th></tr></thead>
-    <tbody>${parsed.dns.servers.map(s=>`<tr><td class="mono">${typeof s==='string'?s:(s.ip||JSON.stringify(s))}</td></tr>`).join('')}</tbody>
+    <tbody>${parsed.dns.servers.map(s=>`<tr><td class="mono">${esc(typeof s==='string'?s:(s.ip||JSON.stringify(s)))}</td></tr>`).join('')}</tbody>
   </table></div>`:''}
   ${(parsed.dns.static&&parsed.dns.static.length)?`<p style="margin:8px 0 4px;color:#94a3b8;font-size:12px">Static DNS</p><div class="overflow"><table>
     <thead><tr><th>${tr('col.name')}</th><th>IP</th><th>${tr('col.type')}</th></tr></thead>
-    <tbody>${parsed.dns.static.map(s=>`<tr><td>${s.fqdn||s.name||'&#x2014;'}</td><td class="mono">${s.ip||'&#x2014;'}</td><td>${s.type||'&#x2014;'}</td></tr>`).join('')}</tbody>
+    <tbody>${parsed.dns.static.map(s=>`<tr><td>${esc(s.fqdn||s.name)||'&#x2014;'}</td><td class="mono">${esc(s.ip)||'&#x2014;'}</td><td>${esc(s.type)||'&#x2014;'}</td></tr>`).join('')}</tbody>
   </table></div>`:''}
 </div>`:''}
 ${(parsed.snmp&&((parsed.snmp.communities&&parsed.snmp.communities.length)||(parsed.snmp.trapServers&&parsed.snmp.trapServers.length)))?`<div class="section" id="sec-snmp">
@@ -12645,17 +12660,17 @@ ${(parsed.snmp&&((parsed.snmp.communities&&parsed.snmp.communities.length)||(par
   ${(parsed.snmp.communities&&parsed.snmp.communities.length)?`<div class="overflow"><table>
     <thead><tr><th>Community</th><th>Permission</th><th>Hosts</th></tr></thead>
     <tbody>${parsed.snmp.communities.map(s=>`<tr>
-      <td class="mono">${s.name||s.community||'&#x2014;'}</td>
-      <td>${s.permission||s.perm||'&#x2014;'}</td>
-      <td class="mono">${Array.isArray(s.hosts)?s.hosts.join(', '):(s.hosts||'&#x2014;')}</td>
+      <td class="mono">${esc(s.name||s.community)||'&#x2014;'}</td>
+      <td>${esc(s.permission||s.perm)||'&#x2014;'}</td>
+      <td class="mono">${esc(Array.isArray(s.hosts)?s.hosts.join(', '):s.hosts)||'&#x2014;'}</td>
     </tr>`).join('')}</tbody>
   </table></div>`:''}
   ${(parsed.snmp.trapServers&&parsed.snmp.trapServers.length)?`<p style="margin:8px 0 4px;color:#94a3b8;font-size:12px">Trap Servers</p><div class="overflow"><table>
     <thead><tr><th>Server</th><th>Community</th><th>Port</th><th>Version</th></tr></thead>
     <tbody>${parsed.snmp.trapServers.map(s=>`<tr>
-      <td class="mono">${s.ip||s.host||s.server||'&#x2014;'}</td>
-      <td class="mono">${s.community||'&#x2014;'}</td>
-      <td>${s.port||'162'}</td><td>${s.version||s.ver||'&#x2014;'}</td>
+      <td class="mono">${esc(s.ip||s.host||s.server)||'&#x2014;'}</td>
+      <td class="mono">${esc(s.community)||'&#x2014;'}</td>
+      <td>${esc(s.port||'162')}</td><td>${esc(s.version||s.ver)||'&#x2014;'}</td>
     </tr>`).join('')}</tbody>
   </table></div>`:''}
 </div>`:''}
@@ -12663,15 +12678,15 @@ ${(parsed.logservers&&((parsed.logservers.syslog&&parsed.logservers.syslog.lengt
   <div class="section-title">&#x1F4CB; ${tr('rpt.sec_log')}</div>
   ${(parsed.logservers.syslog&&parsed.logservers.syslog.length)?`<p style="margin:4px 0;color:#94a3b8;font-size:12px">Syslog (${parsed.logservers.syslog.length})</p><div class="overflow"><table>
     <thead><tr><th>Server</th><th>Port</th><th>Facility</th><th>Level</th><th>Status</th></tr></thead>
-    <tbody>${parsed.logservers.syslog.map(s=>`<tr><td class="mono">${s.ip||s.server||'&#x2014;'}</td><td>${s.port||'514'}</td><td>${s.facility||'&#x2014;'}</td><td>${s.level||s.severity||'&#x2014;'}</td><td>${s.status||'enable'}</td></tr>`).join('')}</tbody>
+    <tbody>${parsed.logservers.syslog.map(s=>`<tr><td class="mono">${esc(s.ip||s.server)||'&#x2014;'}</td><td>${esc(s.port||'514')}</td><td>${esc(s.facility)||'&#x2014;'}</td><td>${esc(s.level||s.severity)||'&#x2014;'}</td><td>${esc(s.status||'enable')}</td></tr>`).join('')}</tbody>
   </table></div>`:''}
   ${(parsed.logservers.fortianalyzer&&parsed.logservers.fortianalyzer.length)?`<p style="margin:8px 0 4px;color:#94a3b8;font-size:12px">FortiAnalyzer</p><div class="overflow"><table>
     <thead><tr><th>Server</th><th>Status</th><th>Upload Day</th></tr></thead>
-    <tbody>${parsed.logservers.fortianalyzer.map(s=>`<tr><td class="mono">${s.ip||s.server||'&#x2014;'}</td><td>${s.status||'&#x2014;'}</td><td>${s.uploadDay||'&#x2014;'}</td></tr>`).join('')}</tbody>
+    <tbody>${parsed.logservers.fortianalyzer.map(s=>`<tr><td class="mono">${esc(s.ip||s.server)||'&#x2014;'}</td><td>${esc(s.status)||'&#x2014;'}</td><td>${esc(s.uploadDay)||'&#x2014;'}</td></tr>`).join('')}</tbody>
   </table></div>`:''}
   ${(parsed.logservers.netflow&&parsed.logservers.netflow.length)?`<p style="margin:8px 0 4px;color:#94a3b8;font-size:12px">NetFlow</p><div class="overflow"><table>
     <thead><tr><th>Collector</th><th>Port</th><th>Version</th></tr></thead>
-    <tbody>${parsed.logservers.netflow.map(s=>`<tr><td class="mono">${s.collector||s.ip||'&#x2014;'}</td><td>${s.port||'2055'}</td><td>${s.version||s.ver||'&#x2014;'}</td></tr>`).join('')}</tbody>
+    <tbody>${parsed.logservers.netflow.map(s=>`<tr><td class="mono">${esc(s.collector||s.ip)||'&#x2014;'}</td><td>${esc(s.port||'2055')}</td><td>${esc(s.version||s.ver)||'&#x2014;'}</td></tr>`).join('')}</tbody>
   </table></div>`:''}
 </div>`:''}
 ${(parsed.schedules&&parsed.schedules.length)?`<div class="section" id="sec-sched">
@@ -12679,10 +12694,10 @@ ${(parsed.schedules&&parsed.schedules.length)?`<div class="section" id="sec-sche
   <div class="overflow"><table>
     <thead><tr><th>${tr('col.name')}</th><th>${tr('col.type')}</th><th>Start</th><th>End</th><th>Day</th></tr></thead>
     <tbody>${parsed.schedules.map(s=>`<tr>
-      <td>${s.name||'&#x2014;'}</td>
-      <td><span class="badge" style="background:#0f2027;color:#38bdf8">${s.type||'&#x2014;'}</span></td>
-      <td class="mono">${s.start||'&#x2014;'}</td><td class="mono">${s.end||'&#x2014;'}</td>
-      <td>${s.day||'&#x2014;'}</td>
+      <td>${esc(s.name)||'&#x2014;'}</td>
+      <td><span class="badge" style="background:#0f2027;color:#38bdf8">${esc(s.type)||'&#x2014;'}</span></td>
+      <td class="mono">${esc(s.start)||'&#x2014;'}</td><td class="mono">${esc(s.end)||'&#x2014;'}</td>
+      <td>${esc(s.day)||'&#x2014;'}</td>
     </tr>`).join('')}</tbody>
   </table></div>
 </div>`:''}
@@ -14964,11 +14979,11 @@ function onParsed(){
     const shadowMap = buildShadowMap(policies);
     const shadowCount = Object.values(shadowMap).reduce((s, arr) => s + arr.length, 0);
     if (shadowCount) { score -= shadowCount * 5; issues.push({sev:'warn', label:tr('health.shadowed'), count:shadowCount}); }
-    // T3: disabled rules
-    const disabled = policies.filter(p => p.status === 'disabled' || p.enabled === false || p.enabled === 'disable');
+    // T3: disabled rules（欄位值一律是 'disable'，非 'disabled'，見 _runPolicyQuery()/各 assemble 函式既有慣例）
+    const disabled = policies.filter(p => p.status === 'disable' || p.enabled === false || p.enabled === 'disable');
     if (disabled.length > 3) { score -= (disabled.length - 3) * 2; issues.push({sev:'info', label:tr('health.disabled'), count:disabled.length}); }
-    // T4: accept without log
-    const noLog = policies.filter(p => p.action === 'accept' && (p.logTraffic === 'disable' || p.logTraffic === 'all'?(false):(p.logTraffic == null || p.logTraffic === 'disable' || p.logTraffic === 'utm' ? true : false)));
+    // T4: accept without log（欄位名稱是全小寫 logtraffic，非 logTraffic；判斷式比照 analyzeCompliance() 既有慣例）
+    const noLog = policies.filter(p => p.action === 'accept' && (!p.logtraffic || p.logtraffic === 'disable' || p.logtraffic === 'utm'));
     if (noLog.length > 2) { score -= (noLog.length - 2) * 3; issues.push({sev:'warn', label:tr('health.no_log'), count:noLog.length}); }
     score = Math.max(0, Math.min(100, score));
     const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';

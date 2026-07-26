@@ -1011,7 +1011,11 @@ function _onLangChange() {
 // ============================================================
 // [1] STATE
 // ============================================================
-const STATE = { original:'', anonymized:'', filename:'', vendor:null };
+// mappings 快照：runAnonymize() 完成後把當次全域 mappings 複製一份存在這裡，
+// exportMapping()/doExportEncrypted() 一律讀這份快照而非即時全域 mappings，避免使用者
+// 切去「批次處理」跑完後，回到單檔案畫面點擊匯出時，實際匯出的是批次最後一個檔案的映射
+// （批次流程與單檔案流程共用同一份全域 mappings 物件，批次跑完會把它覆蓋成最後一筆資料）
+const STATE = { original:'', anonymized:'', filename:'', vendor:null, mappings:null };
 let _anonChainTarget = null; // {href} — set when opened from network_analyzer "anonymize & analyze"
 function _sendToAnalysisTool() {
   if (!STATE.anonymized || !_anonChainTarget) return;
@@ -1246,8 +1250,10 @@ function replaceDescLine(line, opts) {
 
 // IPv4 regex — avoid matching bare version-number segments
 const IPv4_RE = /(?<![.\d])(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?![.\d])/g;
-// Simplified IPv6 — covers most real-world formats
-const IPv6_RE = /(?<![:\w])(?:[0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{0,4}(?![:\w])/g;
+// IPv6（含 :: 零壓縮縮寫）— 原本的簡化版本只認得展開式（8 組或至少 3 組以冒號結尾），
+// 完全無法匹配真實世界最常見的 :: 縮寫格式（如 2001:db8::1、fe80::1），已改用涵蓋
+// 全 8 組/:: 縮寫全部位置（開頭/中間/結尾/單獨 ::）的完整寫法
+const IPv6_RE = /(?<![:\w])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}|(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}|(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}|(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}|:(?:(?::[0-9a-fA-F]{1,4}){1,7}|:))(?![:\w])/g;
 // 冒號格式 MAC（恰好 6 組、每組恰好 2 碼）與 IPv6_RE 的形狀重疊，真實 IPv6 地址不會是這個形狀
 // （沒有 :: 縮寫、每組固定 2 碼），排除避免誤判成 IPv6（不論 opts.mac 是否開啟皆須排除，這是
 // IPv6_RE 本身既有的誤判風險，非僅本次新增 MAC 功能才會踩到）
@@ -1712,14 +1718,15 @@ function anonMikroTik(text, opts) {
       const comR2 = line.replace(/^(set\s+(?:\d+\s+)?name=)(\S+)/, '$1REDACTED_COMMUNITY');
       if (comR2 !== line) { stats.community++; line = comR2; }
     }
-    // IPs in key=value (address=, gateway=, etc.) - handle separately before generic replaceIPsInLine
+    // IPv4 in key=value (address=, gateway=, etc.) - handle separately before generic replaceIPsInLine
     if (opts.ip) {
       line = line.replace(/\b(address|gateway|dns-server|ntp-server|peer|server)=([\d.]+)(\/\d+)?/g, (m, key, ip, pfx = '') => {
         if (!isValidIPv4(ip) || classifyIP(ip) === 'skip') return m;
         return `${key}=${anonIP(ip, opts)}${pfx}`;
       });
-      // Remaining IPs not in key=value format
-      line = line.replace(IPv4_RE, m => (isValidIPv4(m) && classifyIP(m) !== 'skip' ? anonIP(m, opts) : m));
+      // 其餘 IPv4（不含 key=value 格式）＋ IPv6（如 /ipv6 address／/ipv6 dns 等，key=value 格式
+      // 未特別處理故需交給共用 helper 掃描整行才不會遺漏）
+      line = replaceIPsInLine(line, opts);
     }
     if (opts.mac) line = replaceMACsInLine(line, opts);
     out.push(line);
@@ -2305,6 +2312,9 @@ function anonymize(text, vendor, opts) {
   anonOutputIPs.clear();
   Object.assign(ctrs, { n1:0, n2:0, n3:0, ip6:0, dev:0, usr:0, ssid:0, alias:0, vdom:0, mac:0 });
   Object.assign(stats, { ip:0, hostname:0, user:0, password:0, key:0, community:0, ssid:0, comment:0, vdom:0, mac:0 });
+  // 254 位址回捲警告用的追蹤集合，先前只有 runBatch() 逐檔重置，單檔案流程（本函式）
+  // 從未重置過，導致同一 session 內連續處理多份互不相關的檔案時警告會跨檔案累積誤報
+  Object.keys(bucketSeen).forEach(k => bucketSeen[k].clear());
 
   const fn = VENDOR_FNS[vendor] || anonGeneric;
   return fn(text, opts);
@@ -2324,7 +2334,9 @@ function checkResidual(text) {
   lines.forEach((line, i) => {
     const t = line.trim();
     if (!t || t.startsWith('#') || t.startsWith('!') || t.startsWith('//')) return;
-    if (/REDACTED/.test(t)) return;  // already redacted
+    // 注意：不可在此整行短路略過（同一行可能同時有「已正確遮罩的欄位」與「規則沒涵蓋到、
+    // 仍是明碼的另一個欄位」，例如 `set psk REDACTED_PSK peer 10.20.30.40`）；REDACTED
+    // 排除改在下方各檢查點對「實際比對到的內容」個別判斷。
 
     const lineNum = i + 1;
     if (sensitiveKw.test(t) && /\S+/.test(t.replace(/\s+/g, ' ').split(/password|passwd|secret|psk|community/i).pop().trim())) {
@@ -2337,21 +2349,19 @@ function checkResidual(text) {
       }
     }
     // 排除已正確匿名化的 IP：anonIP() 一律輸出 RFC5737 文件用網段
-    // （192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24），不視為殘留
-    if (ipLike.test(t)) {
-      const m = t.match(ipLike);
-      if (m && !/^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(m[0])) {
-        warnings.push({ line: lineNum, text: t });
-      }
+    // （192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24），不視為殘留。
+    // 一行可能有多個 IP（如 NAT/ACL 常見的 src/dst 對），須逐一檢查每個相符項目，
+    // 不能只驗證第一個就判定整行安全（`.match()` 不加 g 只會回傳第一個匹配）
+    const ipMatches = t.match(new RegExp(ipLike.source, 'g'));
+    if (ipMatches && ipMatches.some(m => !/^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(m))) {
+      warnings.push({ line: lineNum, text: t });
     }
     // 排除已正確匿名化的 MAC：anonMAC() 一律將第一 octet 設為 02（locally administered
-    // bit），不視為殘留，避免對已去識別化完成的內容持續假警報
-    if (macLike.test(t)) {
-      const m = t.match(macLike);
-      const macHex = m ? m[0].replace(/[:.-]/g, '') : '';
-      if (!/^02/i.test(macHex)) {
-        warnings.push({ line: lineNum, text: t });
-      }
+    // bit），不視為殘留，避免對已去識別化完成的內容持續假警報。同樣須逐一檢查每個
+    // 相符項目，理由同上（一行可能有多個 MAC）
+    const macMatches = t.match(new RegExp(macLike.source, 'g'));
+    if (macMatches && macMatches.some(m => !/^02/i.test(m.replace(/[:.-]/g, '')))) {
+      warnings.push({ line: lineNum, text: t });
     }
   });
 
@@ -2398,13 +2408,14 @@ function renderDiff(original, anonymized) {
 // ============================================================
 function exportMapping() {
   if (!confirm(tr('warn.export_map_confirm'))) return;
+  const m = STATE.mappings || mappings; // 快照優先，理論上 runAnonymize() 後必定存在
   const obj = {
     vendor: STATE.vendor,
     generatedAt: new Date().toISOString(),
     mappings: {
-      ip: Object.fromEntries(mappings.ip),
-      hostname: Object.fromEntries(mappings.hostname),
-      user: Object.fromEntries(mappings.user)
+      ip: Object.fromEntries(m.ip),
+      hostname: Object.fromEntries(m.hostname),
+      user: Object.fromEntries(m.user)
     }
   };
   const blob = new Blob([JSON.stringify(obj, null, 2)], { type:'application/json' });
@@ -2806,6 +2817,12 @@ function runAnonymize() {
 
   // Run anonymization
   STATE.anonymized = applyCustomRules(anonymize(text, vendor, opts));
+  // 快照這次的 mappings（見 STATE 宣告處註解），供匯出功能專用，不受後續批次操作影響
+  STATE.mappings = {
+    ip: new Map(mappings.ip),
+    hostname: new Map(mappings.hostname),
+    user: new Map(mappings.user)
+  };
 
   // Update vendor badge
   const badge = document.getElementById('vendor-badge');
@@ -2963,7 +2980,7 @@ function renderMappingTable() {
 }
 
 function resetAll() {
-  STATE.original = ''; STATE.anonymized = ''; STATE.filename = ''; STATE.vendor = null;
+  STATE.original = ''; STATE.anonymized = ''; STATE.filename = ''; STATE.vendor = null; STATE.mappings = null;
   document.getElementById('paste-input').value = '';
   document.getElementById('file-name-label').style.display = 'none';
   document.getElementById('vendor-badge').style.display = 'none';
@@ -3288,14 +3305,15 @@ async function doExportEncrypted(password) {
   // 算雜湊存入還原包，讓 doRestore() 可比對上傳檔案是否為同一批次產生，非本次強制要求
   // 一致，僅示警不阻擋還原（見 doRestore() 內 hashMismatch 判斷）
   const sourceHash = await sha256Hex(STATE.anonymized || '');
+  const m = STATE.mappings || mappings; // 快照優先，理由見 STATE 宣告處註解
   const reverseMap = {
     vendor: STATE.vendor,
     created: new Date().toISOString(),
     sourceHash,
     reverse: {
-      ip:       Object.fromEntries([...mappings.ip].map(([k,v]) => [v, k])),
-      hostname: Object.fromEntries([...mappings.hostname].map(([k,v]) => [v, k])),
-      user:     Object.fromEntries([...mappings.user].map(([k,v]) => [v, k]))
+      ip:       Object.fromEntries([...m.ip].map(([k,v]) => [v, k])),
+      hostname: Object.fromEntries([...m.hostname].map(([k,v]) => [v, k])),
+      user:     Object.fromEntries([...m.user].map(([k,v]) => [v, k]))
     }
   };
   try {
