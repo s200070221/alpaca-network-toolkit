@@ -2857,8 +2857,10 @@ function parseBGP(cfg){
       if(nm[2])nets.push(dst+'/'+cidrFromMask(nm[2]));
       else nets.push(dst);
     }
-    // Peer groups (Comware: "group NAME external/internal")
-    const peerGroups=[]; const pgr=/group\s+(\S+)(?:\s+(external|internal))?/g; let pgm;
+    // Peer groups (Comware: "group NAME external/internal" 建立群組)。regex 需錨定在行首
+    // （第一個 token 必須是 group），否則會誤吃到「peer IP group NAME」這種把 peer 加入
+    // 群組的指派行（H3C BGP Commands 官方文件確認兩者是各自獨立指令），導致重複/錯誤項目。
+    const peerGroups=[]; const pgr=/^\s*group\s+(\S+)(?:\s+(external|internal))?/gm; let pgm;
     while((pgm=pgr.exec(body))!==null)peerGroups.push({name:pgm[1],type:pgm[2]||''});
     // Timers: 2026-07-22 對外查證官方 H3C 文件後修正：真實關鍵字是 "timer keepalive N
     // hold N"，非 "holdtime"（原始猜測與 Cisco/其他廠牌用詞混淆）；Cisco 式 "timers bgp

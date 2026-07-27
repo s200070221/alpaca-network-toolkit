@@ -2466,10 +2466,10 @@ function renderAristaQoS(list){
 // Guide、Command Reference）；OSPF/BGP 語法在查證時發現 switch_analyzer 原本
 // 套用未經查證的 Cisco 式假設語法，已同步修正 parseBrocadeOSPF/parseBrocadeBGP
 // （見該函式上方註解與 now.md 2026-07-14 段落）。
-// RIP／QoS／Port Security-802.1X／STP 因 switch_analyzer 現有 parser 對這些
-// 區塊仍是未經查證的 Cisco-style fallback／臆測語法（非本次查證範圍），本輪
-// 不產生，維持排除，避免產生「round-trip 測試會過、但真實設備吃不進去」的
-// 錯誤功能。
+// RIP／QoS／Port Security-802.1X／STP 已於後續批次對外查證官方 FastIron 文件並補上
+// （見 renderBrocadeRIPGlobal()／renderBrocadeQoSGlobal()／renderBrocadeAuthGlobal()／
+// renderBrocadeSTP() 各處註解與 now.md 對應段落），此段落原本「本輪不產生」的敘述已過時，
+// 僅保留作為 Brocade 廠牌整體範圍的歷史說明。
 // ══════════════════════════════════════════════════════════════════
 
 // interfaces 表格內 iface.name 慣例存純埠號（如 "1/1/1"），去掉使用者可能誤填的
