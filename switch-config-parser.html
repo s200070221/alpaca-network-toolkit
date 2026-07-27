@@ -2474,13 +2474,16 @@ function parseInterfaces(cfg){
     if(/^Vlan-interface/i.test(name)){
       const ipRaw=(blk.match(/^\s*ip address\s+(\S+)\s+(\S+)/m)||[]);
       const ip=ipRaw[1]&&ipRaw[2]?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(blk.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
+      // vrf（2026-07-27 補上）：SVI 一樣支援 `ip binding vpn-instance NAME`（與下方實體埠
+      // 分支用的是同一個真實 H3C 關鍵字），先前只有實體埠分支有解析，SVI 一律回傳空字串
+      const vrf=(blk.match(/ip binding vpn-instance\s+(\S+)/)||[])[1]||'';
       const vrrpList=[]; let vvm;
       const vr=/vrrp vrid\s+(\d+)\s+virtual-ip\s+(\S+)/g;
       while((vvm=vr.exec(blk))!==null){
         const prio=(blk.match(new RegExp('vrrp vrid\\s+'+vvm[1]+'\\s+priority\\s+(\\d+)'))||[])[1]||'100';
         vrrpList.push({vrid:vvm[1],vip:vvm[2],priority:prio});
       }
-      ifaces.push({name,type:'svi',desc,ip,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:vrrpList,breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      ifaces.push({name,type:'svi',desc,ip,mode:'',vlans:'',nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:vrrpList,breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     if(/^LoopBack/i.test(name)){
@@ -3689,6 +3692,24 @@ function parseJuniperInterfaces(cfg){
     ifaces.push({name,type:'physical',desc,mode,vlans:vlanM,nativeVlan:native,
       vrf,ip,shutdown:disabled,member:'1',hybrid:null,vrrp:[],lagMember,breakoutChild,breakoutParent,breakoutMode:''});
   }
+  // vrf 逆向掃描（2026-07-27 對外查證修正）：真實 Junos VRF 介面綁定語法方向是反過來的
+  // routing-instances { NAME { interface X; } }，並非本函式上面 `routing-instance\s+(\S+);`
+  // 這個猜測式的介面內部欄位（對外查證確認 interfaces{} 階層底下根本沒有這個關鍵字，該
+  // regex 在真實設定檔上永遠不會命中）。改成逆向掃描 routing-instances{} 底下宣告的
+  // interface X; 陳述式，回填對應介面的 vrf 欄位；X 可能是 unit-qualified（如 irb.20）
+  // 或裸實體埠名稱（預設 unit 0，如 ge-0/0/1.0 對應到 ge-0/0/1）
+  const riBlockForVrf=junosBlock(cfg,'routing-instances');
+  if(riBlockForVrf){
+    for(const{name:vrfName,content:vrfBody}of junosSubBlocks(riBlockForVrf)){
+      const vrf=vrfName.trim();
+      const refs=[...vrfBody.matchAll(/^\s*interface\s+([\w./-]+);/gm)].map(x=>x[1]);
+      refs.forEach(ref=>{
+        let target=ifaces.find(i=>i.name===ref);
+        if(!target&&ref.endsWith('.0'))target=ifaces.find(i=>i.name===ref.slice(0,-2));
+        if(target)target.vrf=vrf;
+      });
+    }
+  }
   return ifaces;
 }
 
@@ -4135,13 +4156,17 @@ function applyRouterOSVlanMembership(vlans,ifaces){
     }
   });
 }
+// 欄位命名（2026-07-27 修正）：原本回傳 {destination,gateway}，是 13 家廠牌中唯一沒有
+// 用共通命名 dst/gw 的孤例，導致匯入橋接 parseAndImport()/applyModelToForm()（統一讀
+// r.dst/r.gw）在 RouterOS 設定檔匯入時整批路由資料消失（物件裡根本沒有 dst/gw 這兩個
+// key）。改用與其餘 12 家廠牌一致的 dst/gw 命名，非新增欄位。
 function parseRouterOSRoutes(cfg){
   const routes=[];
   // RouterOS 導出格式：destination= 或 dst-address= 均支持
   const re=/^add\s+.*?(?:destination|dst-address)=([^\s]+).*?gateway=([^\s]+)/gm;
   let m;
   while((m=re.exec(cfg))!==null){
-    routes.push({destination:m[1],gateway:m[2],metric:0,type:'static'});
+    routes.push({dst:m[1],gw:m[2],metric:0,type:'static'});
   }
   return routes;
 }
@@ -4238,15 +4263,22 @@ function parseRouterOSLACP(cfg){
 // priority 是 `/interface bridge` 這個既有區塊本身的屬性（非獨立子選單），priority 用十六進位
 // 表示（如 `0x8000`）。原本 parseRouterOSBridgeSTP() 對整份設定檔任意位置出現 "priority="
 // 或 "rstp" 字樣就誤判為啟用且回傳寫死的 32768，未實際掃描 bridge 區塊、也未真正讀值
+// 資料形狀（2026-07-27 修正）：原本回傳扁平 {enabled,mode,priority}，與全廠牌共用的巢狀
+// STP 形狀 {mode,instances:[],ports:[],rootMode,timers:{}}（見 CLAUDE.md「DHCP/ACL/QoS/
+// Security/STP 資料形狀」段落）不符，導致 renderRouterOSBridge() 讀取的 stp.instances[0].priority
+// 路徑永遠讀不到值，且 switch_analyzer 自身 renderSTP() UI 對 s.instances.length/s.ports.length
+// 做無條件存取，RouterOS 設定檔在 STP 頁籤會直接因 undefined.length 而拋錯。改為回傳符合共用
+// 形狀的資料（priority 掛在唯一一個 instance 底下，RouterOS 無逐 port/逐 VLAN 概念，ports 固定
+// 空陣列），而非要求 render 端遷就這個孤例
 function parseRouterOSBridgeSTP(cfg){
   const block=cfg.match(/^\/interface\s+bridge\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
-  if(!block)return{enabled:false};
+  if(!block)return{mode:'',instances:[],ports:[],rootMode:'',timers:{}};
   const body=block[1];
   const modeM=body.match(/protocol-mode=(\S+)/);
   const mode=modeM?modeM[1]:'rstp'; // RouterOS 預設 protocol-mode 即為 rstp
   const prioM=body.match(/priority=(0x[0-9a-fA-F]+|\d+)/);
   const priority=prioM?parseInt(prioM[1],prioM[1].toLowerCase().startsWith('0x')?16:10):32768;
-  return{enabled:mode!=='none',mode,priority};
+  return{mode,instances:[{id:'0',priority}],ports:[],rootMode:'',timers:{}};
 }
 // 2026-07-24 對外查證官方 help.mikrotik.com「DHCP」/「IP Pools」/「DNS」文件後整段重寫：原本
 // 回傳的資料形狀 {name,interface,status,leaseTime,type} 與其餘 12 廠牌共用的
@@ -7647,8 +7679,12 @@ function _parseACLJuniper(cfg){
     while((tm=termRe.exec(cfg))!==null){
       const t=tm[1];
       if(!terms[t])terms[t]={from:[],then:[]};
-      if(tm[2].includes(' from '))terms[t].from.push(tm[2]);
-      if(tm[2].includes(' then '))terms[t].then.push(tm[2]);
+      // 2026-07-27 對外查證修正：原本的 `.includes(' from ')`/`.includes(' then ')` 要求
+      // 子字串前面要有空格，但 tm[2] 擷取到的內容本身就是從 "from"/"then" 開頭（沒有
+      // 前導空格），實機常見的逐行 "set ... term T from ...;"／"set ... term T then ...;"
+      // 格式永遠不會命中，導致 rules 恆為空陣列；改用開頭比對
+      if(/^from\b/.test(tm[2]))terms[t].from.push(tm[2]);
+      if(/^then\b/.test(tm[2]))terms[t].then.push(tm[2]);
     }
     for(const[term,body]of Object.entries(terms)){
       const action=body.then.join(' ').includes('accept')?'permit':'deny';
@@ -8494,9 +8530,9 @@ function parseAny(cfg){
   // 2026-07-24 新增：系統層級 DNS Server，獨立新頂層欄位，不受上方 DHCP dispatcher 排除清單影響
   // （parseDNSServers() 內部自行處理各廠牌 branch，無需比照 dhcp 那樣繞過 dispatcher）
   res.dns=parseDNSServers(cfg, vendor);
-  // RouterOS 的 stp 同樣是 parseRouterOSBridgeSTP() 外部覆蓋模式（形狀還跟共用 dispatcher
-  // 的 {mode,instances,ports} 不同，是 {enabled,mode,priority}），此處原本對任何廠牌都
-  // 無排除，同樣會被蓋掉，一併修復
+  // RouterOS 的 stp 同樣是 parseRouterOSBridgeSTP() 外部覆蓋模式（2026-07-27 起已改為
+  // 回傳與共用 dispatcher 相同的 {mode,instances,ports,rootMode,timers} 巢狀形狀），此處
+  // 原本對任何廠牌都無排除，會被下方共用 dispatcher 蓋掉，一併修復
   if(vendor!=='routeros')res.stp=parseSTP(cfg, vendor);
   res.acls=parseACL(cfg, vendor);
   res.security=parseSecurity(cfg, vendor);
