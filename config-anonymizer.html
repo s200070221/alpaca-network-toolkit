@@ -1507,14 +1507,18 @@ function anonSophosXML(text, opts) {
     return t.replace(new RegExp(`(<${tag}>)(<!\\[CDATA\\[)[^\\]]*(\\]\\]>)(<\\/${tag}>)`, 'g'), `$1$2${newVal}$3$4`)
             .replace(new RegExp(`(<${tag}>)[^<]*(<\\/${tag}>)`, 'g'), `$1${newVal}$2`);
   }
+  // 2026-07-27 查證官方 Sophos Firewall API 文件（docs.sophos.com）＋真實 fixture
+  // （firewall_analyzer/test_config/sophos_test.xml）後，改呼叫共用 replaceIPsInLine()
+  // 取代原本的 isValidIPv4() 嚴格全值比對：(1) 補上 IPv6 支援（原本任何 IPv6 值皆會因
+  // isValidIPv4() 判 false 而原樣外洩）；(2) 涵蓋官方 DHCP Server 範圍標籤 <IP> 是
+  // "start-end" 連字號格式（非單純一個 IP），全值比對會直接判定不符而放行，
+  // replaceIPsInLine() 逐一掃描比對則可正確找到並替換範圍內的兩個位址
   function replaceTagIP(t, tag, opts2) {
-    return t.replace(new RegExp(`(<${tag}>)(<!\\[CDATA\\[)([^\\]]+)(\\]\\]>)(<\\/${tag}>)`, 'g'), (m, o, cd, val, ce, c) => {
-      const v = val.trim();
-      return isValidIPv4(v) ? o + cd + anonIP(v, opts2) + ce + c : m;
-    }).replace(new RegExp(`(<${tag}>)([^<]+)(<\\/${tag}>)`, 'g'), (m, o, val, c) => {
-      const v = val.trim();
-      return isValidIPv4(v) ? o + anonIP(v, opts2) + c : m;
-    });
+    return t.replace(new RegExp(`(<${tag}>)(<!\\[CDATA\\[)([^\\]]+)(\\]\\]>)(<\\/${tag}>)`, 'g'), (m, o, cd, val, ce, c) =>
+      o + cd + replaceIPsInLine(val.trim(), opts2) + ce + c
+    ).replace(new RegExp(`(<${tag}>)([^<]+)(<\\/${tag}>)`, 'g'), (m, o, val, c) =>
+      o + replaceIPsInLine(val.trim(), opts2) + c
+    );
   }
 
   text = replaceTag(text, 'Password', 'REDACTED_HASH');
@@ -1530,7 +1534,18 @@ function anonSophosXML(text, opts) {
       o + (cd||'') + anonHostname(name.trim(), 'fw', opts) + (ce||'') + c);
   }
   if (opts.ip) {
-    for (const tag of ['IPAddress','ExternalAddress','PrimaryAddress','SecondaryAddress','Gateway','DNSServer','NTPServer','SyslogServer']) {
+    // 標籤清單依官方 Sophos Firewall API 文件（docs.sophos.com/nsg/sophos-firewall；
+    // VPNIPSecConnection 用 RemoteHost 而非先前假設的 RemoteGateway；DHCPRelay 用
+    // DHCPServerIP；IPRange 型別 IPHost 物件用 StartIPAddress/EndIPAddress；IPv4 DHCP
+    // Server 用 IP（start-end 連字號範圍）＋PrimaryDNSServer/SecondaryDNSServer）＋真實
+    // fixture（StaticRoute Destination、DHCPServer 巢狀 IPRange From/To 與舊式平坦
+    // StartIP/EndIP 兩種格式並存）交叉比對後補齊，原本 8 個標籤會讓 IPsec 對端位址、
+    // DHCP 位址範圍、DHCP Relay 伺服器位址、靜態路由目的網段全部明碼外洩；RemoteGateway/
+    // ServerIP/StartIP/EndIP/From/To 為既有 fixture 出現過的變體名稱一併保留防禦性涵蓋
+    for (const tag of ['IPAddress','ExternalAddress','PrimaryAddress','SecondaryAddress','Gateway',
+                        'DNSServer','NTPServer','SyslogServer','PrimaryDNSServer','SecondaryDNSServer',
+                        'RemoteHost','RemoteGateway','Destination','StartIPAddress','EndIPAddress',
+                        'DHCPServerIP','ServerIP','IP','StartIP','EndIP','From','To']) {
       text = replaceTagIP(text, tag, opts);
     }
     // SSL VPN split-tunnel 允許清單（SSLVPNPolicy/PermittedNetworkResourcesIPv4|IPv6/Resource，
@@ -1603,12 +1618,11 @@ function anonPaloAlto(text, opts) {
 function anonPfSense(text, opts) {
   const lines = text.split('\n');
   const out = [];
-  let inUser = false, inAuthserver = false;
+  let inUser = false;
 
   for (let line of lines) {
     // 先開啟 context flag，再做所有替換，最後才關閉 flag（避免單行含 <user>…</user> 時 flag 被同一行清除）
     if (/<user>/.test(line)) inUser = true;
-    if (/<authserver>/.test(line)) inAuthserver = true;
 
     // Passwords
     const pR = line.replace(/(<(?:password|bcrypt-hash|md5-hash)>)([^<]*)(<\/[^>]+>)/, '$1REDACTED_HASH$3');
@@ -1632,23 +1646,26 @@ function anonPfSense(text, opts) {
 
     // 替換完畢後才關閉 context flag（處理單行含 open+close tag 的情況）
     if (/<\/user>/.test(line)) inUser = false;
-    if (/<\/authserver>/.test(line)) inAuthserver = false;
     if (opts.ip) {
-      line = line.replace(/(<(?:ipaddr|gateway|ntpserver|dnsserver|nameserver|syslogip|server)>)([^<]+)(<\/[^>]+>)/, (m, o, val, c) => {
-        const v = val.trim();
-        if (isValidIPv4(v)) return o + anonIP(v, opts) + c;
-        return m;
-      });
-      if (inAuthserver) {
-        line = line.replace(/(<host>)([^<]+)(<\/host>)/, (m, o, val, c) => {
-          const v = val.trim();
-          return isValidIPv4(v) ? o + anonIP(v, opts) + c : m;
-        });
-      }
-      line = line.replace(/(<(?:network|address|destination|source)>)([^<]+)(<\/[^>]+>)/, (m, o, val, c) => {
+      // 單一 IP 值標籤：對外查證官方 pfSense/OPNsense config.xml 匯出結構＋真實 fixture
+      // （firewall_analyzer/test_config/pfsense_complex_test.xml）後發現，原本只認 7 個標籤
+      // 且僅 IPv4，導致 DNS/NTP 的 IPv6 值、interface IPv6 位址（ipaddrv6）、IPsec
+      // remote-gateway、RADIUS host（原本僅限 authserver 區塊內才替換，radius server 的
+      // host 完全漏掉）、DHCP range from/to、syslog remoteserver 系列/sourceip、unbound 靜態
+      // host ip、timeservers（多值，空白分隔）皆明碼外洩；改呼叫共用 replaceIPsInLine() 對
+      // 擷取出的單一標籤內容做掃描（同時涵蓋 IPv4/IPv6，且因內部為 /g 全域比對，天然支援
+      // timeservers 這種單一標籤內含多個空白分隔位址的情況），非 IP 內容（如 host 標籤下的
+      // 純 hostname、schedule 的 from/to 時間值）因不符合 IPv4/IPv6 格式會被自動跳過，不會誤傷
+      line = line.replace(/(<(?:ipaddr|ipaddrv6|gateway|remote-gateway|ntpserver|dnsserver|nameserver|syslogip|server|host|ip|from|to|dns_server[1-4]|remoteserver\d?|sourceip|timeservers)>)([^<]+)(<\/[^>]+>)/, (m, o, val, c) => o + replaceIPsInLine(val.trim(), opts) + c);
+      // CIDR / 多值標籤：新增 tunnel_network／local_network（OpenVPN，可能逗號分隔多筆）／
+      // target（NAT），replaceIPCIDR() 本身即支援 /g 多筆與可選 CIDR 遮罩
+      line = line.replace(/(<(?:network|address|destination|source|tunnel_network|local_network|target)>)([^<]+)(<\/[^>]+>)/, (m, o, val, c) => {
         return o + replaceIPCIDR(val, opts) + c;
       });
     }
+    // MAC address（staticmap 靜態 DHCP／ARP 綁定等）：原本完全未接線，static-map 的
+    // <mac>aa:bb:cc:dd:ee:ff</mac> 不論 opts.mac 開關為何皆會明碼外洩
+    if (opts.mac) line = replaceMACsInLine(line, opts);
     out.push(line);
   }
   return out.join('\n');
@@ -2354,6 +2371,15 @@ function checkResidual(text) {
     // 不能只驗證第一個就判定整行安全（`.match()` 不加 g 只會回傳第一個匹配）
     const ipMatches = t.match(new RegExp(ipLike.source, 'g'));
     if (ipMatches && ipMatches.some(m => !/^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(m))) {
+      warnings.push({ line: lineNum, text: t });
+    }
+    // IPv6 殘留檢查（2026-07-27 補上）：先前 ipLike 只認 IPv4，checkResidual 對 IPv6 完全
+    // 沒有偵測能力——即使某廠牌函式確實有呼叫 anonIPv6()，一旦未來哪次修改不慎漏接，這道
+    // 安全網也無法察覺，等同於 IPv6 位址沒有任何救援機制。排除已正確匿名化的 anonIPv6()
+    // 固定輸出前綴 2001:db8::，並排除冒號格式 MAC（理由同上方 IPv4/MAC 邏輯，IPv6_RE／
+    // MAC_SHAPE_RE 沿用共用引擎定義，不重新定義一份僅供殘留檢查用的近似正則）
+    const ip6Matches = t.match(new RegExp(IPv6_RE.source, 'g'));
+    if (ip6Matches && ip6Matches.some(m => !/^2001:db8::/i.test(m) && !MAC_SHAPE_RE.test(m))) {
       warnings.push({ line: lineNum, text: t });
     }
     // 排除已正確匿名化的 MAC：anonMAC() 一律將第一 octet 設為 02（locally administered
