@@ -6159,13 +6159,27 @@ function parseArubaOSPF(cfg){
   while((m=re.exec(cfg))!==null){
     const pid=m[1],body=m[2];
     const rid=(body.match(/router-id\s+(\S+)/)||[])[1]||'';
-    const areas=[]; const ar=/area\s+([\d.]+)([\s\S]*?)(?=\n\s*area\s|\n\S|$)/g; let am;
-    while((am=ar.exec(body))!==null){
-      const networks=[]; const nr=/network\s+([\d./]+)/g; let nm;
-      while((nm=nr.exec(am[2]))!==null)networks.push({network:nm[1],wildcard:''});
-      areas.push({area:am[1],networks});
+    // 2026-07-27 對外查證官方 HPE Aruba Lab Guide＋真實 AOS-CX 生產設定檔後修正：
+    // router ospf 區塊內的 area 只是 bare 宣告（不巢狀 network 或 interface），真正的
+    // 網段/介面關聯是在各自 interface 區塊內用 `ip ospf <pid> area <area>` 逐一指派
+    // （實體埠/SVI/Loopback 皆可），與 ArubaOS-Switch/ProCurve 既有的「逐 VLAN
+    // ip ospf area」模式相同、只是 CX 多一個 process-id 參數且不限 VLAN 介面。
+    const areaMap=new Map();
+    const ar=/^\s*area\s+([\d.]+)\s*$/gm; let am;
+    while((am=ar.exec(body))!==null)if(!areaMap.has(am[1]))areaMap.set(am[1],{area:am[1],networks:[]});
+    // 借用既有 areas[].networks[].network 欄位存介面名稱（比照 ProCurve parseOSPF() 把
+    // network 欄位重新詮釋為 VLAN ID 的既有慣例），逐 interface 區塊掃描是否有
+    // `ip ospf <pid> area <area>`，找到的介面名稱視為該 area 的關聯對象。
+    const ifRe=/^interface\s+([^\n]+)\n((?:(?!^(?:interface|router|vlan|ip\s+route|user)\b)[^\n]*\n)*)/gm; let ifm;
+    while((ifm=ifRe.exec(cfg))!==null){
+      const ifName=ifm[1].trim().replace(/^(vlan)\s+(\d+)$/i,'$1$2').replace(/^(loopback)\s+(\d+)$/i,'$1$2');
+      const aim=ifm[2].match(new RegExp('ip ospf\\s+'+pid+'\\s+area\\s+([\\d.]+)'));
+      if(!aim)continue;
+      const area=aim[1];
+      if(!areaMap.has(area))areaMap.set(area,{area,networks:[]});
+      areaMap.get(area).networks.push({network:ifName,wildcard:''});
     }
-    processes.push({pid,routerId:rid,areas});
+    processes.push({pid,routerId:rid,areas:Array.from(areaMap.values())});
   }
   return processes;
 }

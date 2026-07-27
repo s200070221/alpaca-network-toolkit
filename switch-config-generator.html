@@ -1679,7 +1679,7 @@ function renderArubaVXLAN(vxlan){
   return `vxlan\n    source-interface ${vxlan.vtep}`;
 }
 
-function renderArubaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,breakouts){
+function renderArubaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,breakouts,areaOfIface){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(`    description ${iface.desc}`);
   const bk=findBreakoutForPort(breakouts,iface.name);
@@ -1687,6 +1687,22 @@ function renderArubaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,b
     const [count,speed]=bk.mode.split('x');
     lines.push(`    split ${count} ${speed.toLowerCase()} confirm`);
   }
+  // L3 欄位（2026-07-27 補上，先前完全沒有輸出：parser 端 parseArubaInterfaces() 有
+  // 正確解析 ip address/vrf attach，但 generator 從未寫回設定文字）。官方文件＋真實
+  // AOS-CX 設定檔確認：SVI/Loopback 直接 `ip address`；實體埠需先 `routing`（L3 模式）
+  // 或顯式 `no routing`（L2 模式，真機對非路由埠一律顯式宣告，非必要但合法冗餘）。
+  if(iface.type==='svi'||iface.type==='loopback'){
+    if(iface.ip)lines.push(`    ip address ${iface.ip}`);
+  }else{
+    // 實體埠（含未標示 type 的手動輸入資料，預設視為實體埠）
+    if(iface.mode==='routed'&&iface.ip){
+      lines.push('    routing');
+      lines.push(`    ip address ${iface.ip}`);
+    }else if(iface.mode==='trunk'||iface.mode==='access'){
+      lines.push('    no routing');
+    }
+  }
+  if(iface.vrf)lines.push(`    vrf attach ${iface.vrf}`);
   if(iface.mode==='trunk'){
     if(iface.nativeVlan)lines.push(`    vlan trunk native ${iface.nativeVlan}`);
     if(iface.trunkVlans)lines.push(`    vlan trunk allowed ${iface.trunkVlans}`);
@@ -1701,6 +1717,11 @@ function renderArubaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,b
   }
   if(iface.jumbo&&iface.jumbo.enabled&&iface.jumbo.mtu)lines.push(`    mtu ${iface.jumbo.mtu}`);
   if(iface.shutdown)lines.push('    shutdown');
+  // OSPF area 指派（2026-07-27 對外查證後修正，見 renderArubaOSPFProcess() 上方註解）：
+  // 真實語法是逐 interface `ip ospf <pid> area <area>`，areaOfIface 由 renderArubaInterfaces()
+  // 從 model.ospf（Area/Network 表格，Network 欄位重新詮釋為介面名稱）建立一次查詢表傳入
+  const aOf=areaOfIface&&areaOfIface[iface.name];
+  if(aOf)lines.push(`    ip ospf ${aOf.pid} area ${aOf.area}`);
   findDhcpRelays(dhcpList,iface.name).forEach(srv=>lines.push(`    ip helper-address ${srv}`));
   findAclApplications(aclList,iface.name).forEach(ap=>lines.push(`    apply access-list ip ${ap.name} ${ap.direction}`));
   // Port Security/802.1X：已查證官方 HPE Aruba Networking AOS-CX CLI Reference 後修正，
@@ -1721,7 +1742,16 @@ function renderArubaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,b
   }
   return lines.join('\n');
 }
-function renderArubaInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,breakouts){return ifaces.map(i=>renderArubaInterface(i,lacpList,dhcpList,aclList,securityList,stp,breakouts)).join('\n!\n');}
+function renderArubaInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,breakouts,ospf){
+  // areaOfIface：interface 名稱 → {pid,area}，比照 renderProCurveVLANs() 的 areaOfVlan 寫法
+  // 只建立一次，避免每個介面都重新掃描一次 model.ospf
+  const areaOfIface={};
+  const proc=ospf&&ospf[0];
+  ((proc&&proc.areas)||[]).forEach(a=>{
+    (a.networks||[]).forEach(n=>{ if(n.network)areaOfIface[String(n.network)]={pid:proc.pid,area:a.area}; });
+  });
+  return ifaces.map(i=>renderArubaInterface(i,lacpList,dhcpList,aclList,securityList,stp,breakouts,areaOfIface)).join('\n!\n');
+}
 
 // Port Security/802.1X（Aruba CX）：已查證官方 HPE Aruba Networking AOS-CX CLI
 // Reference 後新增，真實語法是全域指令＋interface 參數："aaa authentication
@@ -1770,12 +1800,13 @@ function renderArubaVRRPGroup(g){
 function renderArubaVRRP(list){return groupVrrpByVlan(list).map(renderArubaVRRPGroup).join('\n!\n');}
 
 function renderArubaOSPFProcess(o){
+  // 2026-07-27 對外查證官方 HPE Aruba Lab Guide＋真實 AOS-CX 生產設定檔後修正：
+  // router ospf 區塊只有 router-id／area（bare 宣告），不巢狀 network 或 interface；
+  // 真正的介面關聯改在 renderArubaInterface() 用 `ip ospf <pid> area <area>` 逐一輸出
+  // （見該函式與 renderArubaInterfaces() 的 areaOfIface 查詢表）
   const lines=[`router ospf ${o.pid}`];
   if(o.routerId)lines.push(`    router-id ${o.routerId}`);
-  (o.areas||[]).forEach(a=>{
-    lines.push(`    area ${a.area}`);
-    (a.networks||[]).forEach(n=>lines.push(`        network ${n.network}`));
-  });
+  (o.areas||[]).forEach(a=>lines.push(`    area ${a.area}`));
   return lines.join('\n');
 }
 function renderArubaOSPF(list){return (list||[]).map(renderArubaOSPFProcess).join('\n!\n');}
@@ -1828,7 +1859,7 @@ function assembleArubaConfig(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`hostname ${model.sysname||'Switch'}`];
   if(model.vlans&&model.vlans.length)blocks.push(renderArubaVLANs(model.vlans,model.vxlan&&model.vxlan.vnis));
   if(model.acl&&model.acl.length)blocks.push(renderArubaACL(model.acl));
-  if(model.interfaces&&model.interfaces.length)blocks.push(renderArubaInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.breakouts));
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderArubaInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.breakouts,model.ospf));
   const arubaLacpExtra=renderArubaLACPExtra(model.lacp,model.interfaces);
   if(arubaLacpExtra)blocks.push(arubaLacpExtra);
   const arSecBlock=renderArubaCXSecurity(model.security);
