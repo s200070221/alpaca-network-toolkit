@@ -527,7 +527,7 @@ input[type=file]{display:none}
           <input type="file" id="xi" accept=".xml,.conf" onchange="pickFile('x',this)">
         </div>
         <div class="ucard" style="border-color:rgba(244,123,32,.4)" id="wc" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('wc').classList.add('drag-over')" ondragleave="document.getElementById('wc').classList.remove('drag-over')" ondrop="handleDrop(event,'w')" onclick="document.getElementById('wi').click()">
-          <div class="ucard-head"><div class="vendor-dot" style="background:rgba(244,123,32,.15)">🔶</div><div><h3 style="color:var(--sonicwall)">SonicWall</h3><div class="ver">SonicOS 6.x/7.x · .exp XML</div></div></div>
+          <div class="ucard-head"><div class="vendor-dot" style="background:rgba(244,123,32,.15)">🔶</div><div><h3 style="color:var(--sonicwall)">SonicWall</h3><div class="ver">SonicOS &lt;6.2 · .exp XML</div></div></div>
           <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_sonicwall">Export Settings (.exp) XML 格式</div></div>
           <div class="file-chip" id="wc-chip" style="display:none"><span>📄</span><span class="fn" id="wc-name"></span><span class="rm" onclick="clearFile(event,'w')">✕</span></div>
           <input type="file" id="wi" accept=".exp,.xml" onchange="pickFile('w',this)">
@@ -762,7 +762,7 @@ const LANG_FW = {
     'upload.hint_pa':'running-config.xml / set format CLI',
     'upload.hint_juniper':'Junos CLI hierarchical { } 格式',
     'upload.hint_pfsense':'config.xml 匯出格式',
-    'upload.hint_sonicwall':'Export Settings (.exp) XML 格式',
+    'upload.hint_sonicwall':'Export Settings (.exp) XML 格式（僅適用 SonicOS 6.2 之前版本，6.2+ 已停用 XML 匯出）',
     'upload.hint_mikrotik':'/export 或 /export verbose 輸出格式',
     'upload.hint_asa':'show running-config 輸出格式',
     'analyze.hint_none':'請選擇至少一個設定檔案','analyze.selected_prefix':'已選擇：',
@@ -1005,7 +1005,7 @@ const LANG_FW = {
     'upload.hint_pa':'running-config.xml / set format CLI',
     'upload.hint_juniper':'Junos CLI hierarchical { } format',
     'upload.hint_pfsense':'config.xml export format',
-    'upload.hint_sonicwall':'Export Settings (.exp) XML format',
+    'upload.hint_sonicwall':'Export Settings (.exp) XML format (SonicOS < 6.2 only; XML export removed in 6.2+)',
     'upload.hint_mikrotik':'/export or /export verbose format',
     'upload.hint_asa':'show running-config output format',
     'analyze.hint_none':'Please select at least one config file','analyze.selected_prefix':'Selected: ',
@@ -1248,7 +1248,7 @@ const LANG_FW = {
     'upload.hint_pa':'running-config.xml / set形式 CLI',
     'upload.hint_juniper':'Junos CLI 階層型 { } 形式',
     'upload.hint_pfsense':'config.xml エクスポート形式',
-    'upload.hint_sonicwall':'Export Settings (.exp) XML形式',
+    'upload.hint_sonicwall':'Export Settings (.exp) XML形式（SonicOS 6.2以前のみ対応、6.2以降はXML出力廃止）',
     'upload.hint_mikrotik':'/export または /export verbose 出力形式',
     'upload.hint_asa':'show running-config 出力形式',
     'analyze.hint_none':'少なくとも1つの設定ファイルを選択してください','analyze.selected_prefix':'選択済み：',
