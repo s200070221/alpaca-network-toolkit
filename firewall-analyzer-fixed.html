@@ -8268,7 +8268,7 @@ function parseFortigateSwitchController(text) {
 // ═══ parser-sonicwall.js ═══
 /**
  * SonicWall SonicOS Parser v1.0
- * Supports: .exp XML export (SonicOS 6.x / 7.x)
+ * Supports: .exp XML export（僅 SonicOS <6.2；6.2+ 已停用 XML 匯出，非本解析器支援範圍）
  * Sections: Interfaces, Access Rules, Address Objects/Groups,
  *           Service Objects/Groups, Routes, NAT Policies,
  *           VPN (Site-to-Site), Users/Groups, Schedules
@@ -8372,8 +8372,9 @@ const SonicWallParser = (() => {
   // ── Interfaces ──────────────────────────────────────────────────────────────
   function parseInterfaces(doc) {
     const ifaces = [];
-    // SonicOS 6.x: <InterfaceSettings><InterfaceEntry>
-    // SonicOS 7.x: <Interfaces><Interface>
+    // 主要標籤：<InterfaceSettings><InterfaceEntry>
+    // 另保留 <Interfaces><Interface> 作為未證實對應版本的欄位命名容錯
+    // （XML 匯出僅存在於 SonicOS <6.2，並無 7.x 對照樣本可查證此別名的真實來源）
     const selectors = ['InterfaceEntry', 'Interface', 'NetworkInterface'];
     for (const sel of selectors) {
       const els = qsa(doc, sel);
@@ -8472,7 +8473,7 @@ const SonicWallParser = (() => {
   function parsePolicies(doc) {
     const out = [];
     let seq = 1;
-    // SonicOS 6.x: <AccessRules><Rule>  SonicOS 7.x: <AccessRules><AccessRule>
+    // 主要標籤：<AccessRules><Rule>；另保留 <AccessRules><AccessRule> 作為未證實對應版本的欄位命名容錯（同上，7.x 無 XML 對照樣本）
     for (const el of qsa(doc, 'Rule, AccessRule')) {
       // Skip if this is a child of something else (e.g. VPN rule container)
       const parent = el.parentElement;
@@ -8546,7 +8547,7 @@ const SonicWallParser = (() => {
   // ── NAT Policies ────────────────────────────────────────────────────────────
   function parseNAT(doc) {
     const out = [];
-    // Container-scoped to avoid cross-contamination; support SonicOS 6.x and 7.x tags
+    // Container-scoped to avoid cross-contamination; 標籤別名同上，未證實對應版本，僅為欄位命名容錯
     const containers = qsa(doc, 'NATPolicies, NATSettings, NATRules');
     const natEls = containers.length
       ? Array.from(containers[0].childNodes).filter(n=>n.nodeType===1)
@@ -11565,7 +11566,7 @@ const Converter = (() => {
   function toSonicWall(parsed) {
     const L=[], d=parsed.deviceInfo;
     L.push('<?xml version="1.0" encoding="UTF-8"?>');
-    L.push(`<!-- ${hdr(parsed.vendor||'?','SonicOS 7',d.hostname)} -->`);
+    L.push(`<!-- ${hdr(parsed.vendor||'?','SonicOS <6.2',d.hostname)} -->`);
     L.push('<SonicWALLConfig>');
     L.push('  <DeviceInfo>');
     L.push(`    <Name>${esc(d.hostname)}</Name>`);
@@ -11780,6 +11781,7 @@ const Converter = (() => {
       if(noIp) notes.push(`${noIp} 個無 IP 位址的介面未輸出於 /ip address（RouterOS 此區塊僅列出已指派 IP 的介面）`);
     }
     if(ifs.some(i=>i.type==='vlan')) notes.push('VLAN 子介面語法為近似對應，實機匯入前請人工確認子介面設定是否完整');
+    if(targetVendor==='sonicwall') notes.push('SonicWall 僅支援 SonicOS 6.2 之前版本的 XML 匯入格式（6.2+ 已停用 XML 匯出），本輸出僅適用於舊版韌體裝置');
     return notes;
   }
 
@@ -12765,7 +12767,7 @@ const App = (() => {
     juniper:    { p:[/^set system host-name/m, /^set interfaces .* family inet/m, /Juniper Networks|JUNOS/i, /^system\s*\{/m, /^\s*host-name\s+\S+;/m], min:1 },
     checkpoint: { p:[/^set hostname /m, /^set interface .* ipv4-address/m, /Check Point/i], min:2 },
     pfsense:    { p:[/<pfsense>/i, /pfSense|OPNsense/i, /<version>[\d.]+<\/version>/], min:1 },
-    sonicwall:  { p:[/^sonicwall hostname/m, /SonicWall|SonicOS/i], min:1 },
+    sonicwall:  { p:[/<SonicWALLconfig/i, /SonicWall|SonicOS/i], min:1 },
     mikrotik:   { p:[/^\/ip\s+(?:firewall|address|route)/m, /^\/system\s+identity/m, /RouterOS/i], min:1 },
     ciscoasa:   { p:[/^ASA Version\s+\S+/m, /^NGFW Version\s+\S+/m, /^nameif\s+\S+/m, /^failover\s*$/m], min:1 },
     // min 由 1 提高為 2：單靠字面 "Sophos" 一個訊號太寬鬆，其他廠牌設定檔內若剛好有一行
@@ -15090,7 +15092,7 @@ function onParsed(){
         }
       }
       CONV_RESULT=Converter.convert(srcParsed,targetVendor);
-      const vendorNames={fortigate:'FortiGate 7.4',sophos:'Sophos XGS XML',checkpoint:'Check Point Gaia',paloalto:'Palo Alto XML',juniper:'Juniper SRX Junos',pfsense:'pfSense config.xml',sonicwall:'SonicOS XML',mikrotik:'RouterOS script',ciscoasa:'Cisco ASA CLI',ciscoftd:'Cisco FTD CLI'};
+      const vendorNames={fortigate:'FortiGate 7.4',sophos:'Sophos XGS XML',checkpoint:'Check Point Gaia',paloalto:'Palo Alto XML',juniper:'Juniper SRX Junos',pfsense:'pfSense config.xml',sonicwall:'SonicOS <6.2 XML',mikrotik:'RouterOS script',ciscoasa:'Cisco ASA CLI',ciscoftd:'Cisco FTD CLI'};
       $('conv-src-label').textContent=`${vendorNames[srcVendor]||srcVendor} ${tr('conv.src_suffix')}`;
       $('conv-dst-label').textContent=`${vendorNames[targetVendor]||targetVendor} ${tr('conv.dst_suffix')}`;
       $('conv-src').value=rawMap[srcVendor]||JSON.stringify(srcParsed,null,2);
