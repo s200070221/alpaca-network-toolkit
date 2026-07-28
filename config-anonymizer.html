@@ -1054,7 +1054,7 @@ const VENDOR_SIGS = {
   // Sophos XG XML 匯出檔仍可命中 2 個訊號（<Sophos/> 文字 + XML schema 標籤）
   sophos:      { p:[/Sophos/i, /<Configuration[^>]*SophosFirewall/, /^set admin-settings/m, /<(?:IPHostList|FirewallRuleList|WebFilterPolicy|IPsecVPNList)>/], min:2 },
   pfsense:     { p:[/<pfsense>/i, /pfSense|OPNsense/i, /<version>[\d.]+<\/version>/], min:1 },
-  sonicwall:   { p:[/^sonicwall hostname/m, /SonicWall|SonicOS/i], min:1 },
+  sonicwall:   { p:[/<SonicWALLconfig/i, /SonicWall|SonicOS/i], min:1 },
   mikrotik:    { p:[/^\/ip\s+(?:firewall|address|route)/m, /^\/system\s+identity/m, /RouterOS/i], min:1 },
   arista:      { p:[/^! device:.* EOS/m, /Arista Networks/i, /^management api http-commands/m], min:1 },
   extreme:     { p:[/^create vlan\s+/m, /^configure sys-name/m, /ExtremeXOS|ExtremeEOS/i], min:1 },
@@ -1671,29 +1671,46 @@ function anonPfSense(text, opts) {
   return out.join('\n');
 }
 
-// ---- SonicWall CLI ----
+// ---- SonicWall XML（<6.2，6.2+ 已停用 XML 匯出，見 firewall_analyzer SonicWallParser 同一限制）----
 function anonSonicWall(text, opts) {
-  return text.split('\n').map(line => {
-    if (opts.hostname) {
-      line = line.replace(/^(sonicwall\s+hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'fw', opts));
+  // 標籤清單依 firewall_analyzer SonicWallParser 已驗證的真實欄位命名（parseDeviceInfo/parseSnmp/
+  // parseInterfaces/parseRoutes/parseVPN/parseNAT），非憑空猜測
+  function replaceTag(t, tag, newVal) {
+    return t.replace(new RegExp(`(<${tag}>)[^<]*(<\\/${tag}>)`, 'g'), `$1${newVal}$2`);
+  }
+  function replaceTagIP(t, tag, opts2) {
+    return t.replace(new RegExp(`(<${tag}>)([^<]+)(<\\/${tag}>)`, 'g'), (m, o, val, c) =>
+      o + replaceIPsInLine(val.trim(), opts2) + c);
+  }
+  if (opts.hostname) {
+    for (const tag of ['DeviceName', 'HostName', 'Hostname']) {
+      text = text.replace(new RegExp(`(<${tag}>)([^<]*)(<\\/${tag}>)`, 'g'), (m, o, n, c) => o + anonHostname(n.trim(), 'fw', opts) + c);
     }
-    if (opts.user) {
-      line = line.replace(/^(user\s+local\s+)(\S+)(\s+password\s+)(\S+)/, (m, p, n, mid, h) => p + anonUser(n) + mid + 'REDACTED_HASH');
-    } else {
-      const pR = line.replace(/^(user\s+local\s+\S+\s+password\s+)(\S+)/, '$1REDACTED_HASH');
-      if (pR !== line) { stats.password++; line = pR; }
+  }
+  for (const tag of ['Community', 'ROCommunity', 'TrapCommunity']) {
+    const before = text;
+    text = replaceTag(text, tag, 'REDACTED_COMMUNITY');
+    if (text !== before) stats.community++;
+  }
+  if (opts.ip) {
+    // 標籤清單經 SonicWallParser 全部 parse* 函式的 gv() 呼叫逐一交叉比對，涵蓋
+    // Interfaces/AddressObjects/Routes/NAT/VPN/DHCP/DNS/SNMP trap 各區塊出現過的別名
+    for (const tag of ['IPAddress', 'IpAddress', 'IP', 'Gateway', 'PrimaryGateway', 'PrimaryPeer',
+                        'RemoteGateway', 'PeerIP', 'LocalNetwork', 'LocalSubnet', 'RemoteNetwork', 'RemoteSubnet',
+                        'Destination', 'DestNetwork', 'StartIP', 'StartIp', 'EndIP', 'EndIp',
+                        'DNS1', 'DNS2', 'PrimaryDNS', 'SecondaryDNS',
+                        'TranslatedSource', 'PublicIP', 'MappedIP',
+                        'Server', 'ServerIP', 'AcceptedHost',
+                        'TrapServer1', 'TrapServer2', 'TrapServer3', 'TrapServer']) {
+      text = replaceTagIP(text, tag, opts);
     }
-    const comR = line.replace(/^(snmp\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
-    if (comR !== line) { stats.community++; line = comR; }
-    const pskR = line.replace(/^(vpn\s+policy\s+\S+\s+preshared-key\s+)(\S+)/, '$1REDACTED_PSK');
-    if (pskR !== line) { stats.key++; line = pskR; }
-    const kR = line.replace(/^((?:radius|tacacs)\s+server\s+\S+\s+(?:secret|key)\s+)(\S+)/, '$1REDACTED_KEY');
-    if (kR !== line) { stats.key++; line = kR; }
-    line = replaceDescLine(line, opts);
-    if (opts.ip) line = replaceIPsInLine(line, opts);
-    if (opts.mac) line = replaceMACsInLine(line, opts);
-    return line;
-  }).join('\n');
+  }
+  if (opts.mac) text = replaceMACsInLine(text, opts);
+  // 已知缺口：官方 .exp 匯出是否包含管理者密碼／VPN 預先共用金鑰(PSK)／RADIUS-TACACS 密鑰
+  // 的明碼欄位，目前查無官方文件或真實 fixture 佐證——SonicWallParser 的 parseVPN()／
+  // parseUsers() 皆未解析任何此類欄位。故本函式不對特定標籤做金鑰遮蔽，避免重演「憑空
+  // 猜測標籤名稱、事後被真實資料打臉」的既有教訓，待未來取得真實範例再補上。
+  return text;
 }
 
 // ---- MikroTik RouterOS ----
