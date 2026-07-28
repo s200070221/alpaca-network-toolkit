@@ -8582,7 +8582,7 @@ const SonicWallParser = (() => {
     const out = [];
     for (const el of qsa(doc, 'VPNPolicy, VPNTunnel, VpnPolicy, SiteToSiteVPN')) {
       const name    = gv(el,'Name') || gv(el,'TunnelName') || '-';
-      const peer    = gv(el,'PrimaryGateway') || gv(el,'RemoteGateway') || gv(el,'PeerIP') || '-';
+      const peer    = gv(el,'PrimaryGateway') || gv(el,'PrimaryPeer') || gv(el,'RemoteGateway') || gv(el,'PeerIP') || '-';
       const local   = gv(el,'LocalNetwork') || gv(el,'LocalSubnet') || 'any';
       const remote  = gv(el,'RemoteNetwork') || gv(el,'RemoteSubnet') || 'any';
       const auth    = gv(el,'AuthMethod') || gv(el,'Authentication') || 'psk';
