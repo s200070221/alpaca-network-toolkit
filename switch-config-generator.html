@@ -4825,6 +4825,34 @@ const DEVICE_MODELS={
       {prefix:'Twenty-FiveGigE1/0/',from:1,to:48,speed:'25G'},
       {prefix:'HundredGigabitEthernet1/0/',from:49,to:56,speed:'100G'},
       {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
+    {value:'hpe5720-32',label:'HPE 5720 32×SFP+ 1G/10G + 6×QSFP28 100G (S2N57A)',ports:[
+      {prefix:'Ten-GigabitEthernet1/0/',from:1,to:32,speed:'10G'},
+      {prefix:'HundredGigabitEthernet1/0/',from:33,to:38,speed:'100G'},
+      {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
+    {value:'hpe5720-48',label:'HPE 5720 48×SFP+ 1G/10G + 6×QSFP28 100G (S2N58A)',ports:[
+      {prefix:'Ten-GigabitEthernet1/0/',from:1,to:48,speed:'10G'},
+      {prefix:'HundredGigabitEthernet1/0/',from:49,to:54,speed:'100G'},
+      {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
+    {value:'hpe5720-24t',label:'HPE 5720 24×10GBASE-T + 8×SFP+ 1G/10G + 6×QSFP28 100G (S2N59A)',ports:[
+      {prefix:'Ten-GigabitEthernet1/0/',from:1,to:32,speed:'10G'},
+      {prefix:'HundredGigabitEthernet1/0/',from:33,to:38,speed:'100G'},
+      {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
+    {value:'hpe5720-40t',label:'HPE 5720 40×10GBASE-T + 8×SFP+ 1G/10G + 6×QSFP28 100G (S2N60A)',ports:[
+      {prefix:'Ten-GigabitEthernet1/0/',from:1,to:48,speed:'10G'},
+      {prefix:'HundredGigabitEthernet1/0/',from:49,to:54,speed:'100G'},
+      {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
+    {value:'hpe5510-24',label:'HPE FlexNetwork 5510 24G 4SFP+ HI (JH145A)',ports:[
+      {prefix:'GigabitEthernet1/0/',from:1,to:24,speed:'1G'},
+      {prefix:'Ten-GigabitEthernet1/0/',from:25,to:28,speed:'10G'},
+      {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
+    {value:'hpe5510-48',label:'HPE FlexNetwork 5510 48G 4SFP+ HI (JH146A)',ports:[
+      {prefix:'GigabitEthernet1/0/',from:1,to:48,speed:'1G'},
+      {prefix:'Ten-GigabitEthernet1/0/',from:49,to:52,speed:'10G'},
+      {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
+    {value:'hpe5510-24poe',label:'HPE FlexNetwork 5510 24G PoE+ 4SFP+ HI (JH147A)',ports:[
+      {prefix:'GigabitEthernet1/0/',from:1,to:24,speed:'1G'},
+      {prefix:'Ten-GigabitEthernet1/0/',from:25,to:28,speed:'10G'},
+      {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,24]},
   ],
   cisco:[
     {value:'c9300-24',label:'Catalyst 9300-24T',ports:[
@@ -4861,6 +4889,18 @@ const DEVICE_MODELS={
     {value:'c9400-lc-48ux',label:'Catalyst 9400 (C9400-LC-48UX 線卡，模組化核心)',ports:[
       {prefix:'GigabitEthernet1/0/',from:1,to:48,speed:'10G'},
       {name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
+    {value:'c9350-24',label:'Catalyst 9350-24 (9300 後繼機，24×up to 10G UPOE+ + 選配 40G/100G 上聯模組)',ports:[
+      {prefix:'GigabitEthernet1/0/',from:1,to:24,speed:'10G'},
+      {prefix:'HundredGigE1/1/',from:1,to:2,speed:'100G'},
+      {name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,24]},
+    {value:'c9350-48',label:'Catalyst 9350-48 (9300 後繼機，48×up to 10G UPOE+ + 選配 40G/100G 上聯模組)',ports:[
+      {prefix:'GigabitEthernet1/0/',from:1,to:48,speed:'10G'},
+      {prefix:'HundredGigE1/1/',from:1,to:2,speed:'100G'},
+      {name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
+    {value:'c9200cx-12p',label:'Catalyst 9200CX-12P-2X2G (緊湊桌上型入門款，12×1G PoE+ + 2×2.5G mGig 上聯，信心中等)',ports:[
+      {prefix:'GigabitEthernet1/0/',from:1,to:12,speed:'1G'},
+      {prefix:'GigabitEthernet1/1/',from:1,to:2,speed:'2.5G'},
+      {name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,12]},
   ],
   aruba:[
     {value:'aruba6300m-24',label:'Aruba CX 6300M-24G',ports:[
@@ -4886,6 +4926,18 @@ const DEVICE_MODELS={
       {prefix:'1/1/',from:1,to:24,speed:'10G'},
       {prefix:'1/1/',from:25,to:28,speed:'1G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'aruba9300-32d',label:'Aruba CX 9300-32D (新一代400G資料中心 leaf/spine)',ports:[
+      {prefix:'1/1/',from:1,to:32,speed:'100G'},
+      {prefix:'1/1/',from:33,to:34,speed:'10G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'aruba6100-24',label:'Aruba CX 6100-24G (分公司/SMB入門級)',ports:[
+      {prefix:'1/1/',from:1,to:24,speed:'1G'},
+      {prefix:'1/1/',from:25,to:26,speed:'10G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'aruba6100-48p',label:'Aruba CX 6100-48G-PoE4 (48×802.3at PoE+ 370W)',ports:[
+      {prefix:'1/1/',from:1,to:48,speed:'1G'},
+      {prefix:'1/1/',from:49,to:50,speed:'10G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
   ],
   fortiswitch:[
     {value:'fs-124f',label:'FortiSwitch 124F',ports:[
@@ -4947,6 +4999,34 @@ const DEVICE_MODELS={
       {prefix:'port',from:1,to:24,speed:'1G'},
       {prefix:'port',from:25,to:28,speed:'10G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'fs-624f',label:'FortiSwitch 624F (24×1/2.5/5G Multi-Gig RJ45 + 4×25G SFP28 Uplink，硬體MACsec)',ports:[
+      {prefix:'port',from:1,to:24,speed:'5G'},
+      {prefix:'port',from:25,to:28,speed:'25G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'fs-624f-fpoe',label:'FortiSwitch 624F-FPOE (24×802.3bt Multi-Gig PoE + 4×25G SFP28 Uplink)',ports:[
+      {prefix:'port',from:1,to:24,speed:'5G'},
+      {prefix:'port',from:25,to:28,speed:'25G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,24]},
+    {value:'fs-648f',label:'FortiSwitch 648F (48×1/2.5/5G Multi-Gig RJ45 + 8×25G SFP28 Uplink)',ports:[
+      {prefix:'port',from:1,to:48,speed:'5G'},
+      {prefix:'port',from:49,to:56,speed:'25G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'fs-648f-fpoe',label:'FortiSwitch 648F-FPOE (48×802.3bt Multi-Gig PoE 1800W + 8×25G SFP28 Uplink)',ports:[
+      {prefix:'port',from:1,to:48,speed:'5G'},
+      {prefix:'port',from:49,to:56,speed:'25G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
+    {value:'fs-108f',label:'FortiSwitch 108F (桌上型入門，8×1G RJ45 + 2×1G SFP)',ports:[
+      {prefix:'port',from:1,to:8,speed:'1G'},
+      {prefix:'port',from:9,to:10,speed:'1G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'fs-108f-poe',label:'FortiSwitch 108F-POE (同108F + 802.3at PoE+ 130W)',ports:[
+      {prefix:'port',from:1,to:8,speed:'1G'},
+      {prefix:'port',from:9,to:10,speed:'1G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,8]},
+    {value:'fs-108f-fpoe',label:'FortiSwitch 108F-FPOE (同108F + 802.3at PoE+ 全速率)',ports:[
+      {prefix:'port',from:1,to:8,speed:'1G'},
+      {prefix:'port',from:9,to:10,speed:'1G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,8]},
   ],
   juniper:[
     {value:'ex2300-24',label:'Juniper EX2300-24T',ports:[
@@ -4977,6 +5057,11 @@ const DEVICE_MODELS={
       {prefix:'xe-0/0/',from:0,to:47,speed:'10G'},
       {prefix:'et-0/1/',from:0,to:5,speed:'40G'},
       {name:'me0',speed:'1G',mgmt:true}],poe:false},
+    {value:'ex4000-48mp',label:'Juniper EX4000-48MP (Wi-Fi 7 UPOE++，EX2300 官方後繼機，40×1G+8×2.5G PoE++ + 2×1/10G SFP+ Uplink)',ports:[
+      {prefix:'ge-0/0/',from:0,to:39,speed:'1G'},
+      {prefix:'ge-0/0/',from:40,to:47,speed:'2.5G'},
+      {prefix:'xe-0/1/',from:0,to:1,speed:'10G'},
+      {name:'me0',speed:'1G',mgmt:true}],poe:true,poeRange:[0,47]},
   ],
   cisco_nxos:[
     {value:'n3k-c3064pq-10ge',label:'Nexus 3064-PQ (48×10G)',ports:[
@@ -5038,6 +5123,14 @@ const DEVICE_MODELS={
     {value:'7060cx2-32s',label:'Arista 7060CX2-32S (32×100G Leaf)',ports:[
       {prefix:'Ethernet',from:1,to:32,speed:'100G'},
       {name:'Management1',speed:'1G',mgmt:true}],poe:false},
+    {value:'arista750-48-1g',label:'Arista 750 Series 校園存取 (模組化機箱代表性線卡，Wi-Fi 7準備，48×1G PoE 30W + 25G SFP28上聯)',ports:[
+      {prefix:'Ethernet',from:1,to:48,speed:'1G'},
+      {prefix:'Ethernet',from:49,to:50,speed:'25G'},
+      {name:'Management1',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
+    {value:'arista750-48-10g',label:'Arista 750 Series 校園存取 (模組化機箱代表性線卡，48×2.5/5/10G Multi-Gig PoE 90W + 25G SFP28上聯)',ports:[
+      {prefix:'Ethernet',from:1,to:48,speed:'10G'},
+      {prefix:'Ethernet',from:49,to:50,speed:'25G'},
+      {name:'Management1',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
   ],
   brocade:[
     {value:'icx7150-48p',label:'Ruckus ICX7150-48P (48×1G PoE+ + 4×10G Uplink)',ports:[
@@ -5057,6 +5150,14 @@ const DEVICE_MODELS={
       {prefix:'1/1/',from:1,to:48,speed:'10G'},
       {prefix:'1/1/',from:49,to:56,speed:'25G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:true},
+    {value:'icx8200-24',label:'Ruckus ICX8200-24 (24×1G + 4×25G SFP28 Uplink，官方標示為 ICX7150 後繼機)',ports:[
+      {prefix:'1/1/',from:1,to:24,speed:'1G'},
+      {prefix:'1/1/',from:25,to:28,speed:'25G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'icx8200-48p',label:'Ruckus ICX8200-48PF2 (48×1G PoE+ 740W + 4×25G SFP28 Uplink)',ports:[
+      {prefix:'1/1/',from:1,to:48,speed:'1G'},
+      {prefix:'1/1/',from:49,to:52,speed:'25G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true},
   ],
   alcatel:[
     {value:'os6560-p24',label:'Alcatel OmniSwitch 6560-P24 (24×1G PoE+ + 4×10G Uplink)',ports:[
@@ -5071,6 +5172,18 @@ const DEVICE_MODELS={
       {prefix:'1/1/',from:1,to:20,speed:'10G'},
       {prefix:'1/1/',from:21,to:24,speed:'40G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'os6900-x24c2',label:'Alcatel OmniSwitch 6900-X24C2 (26×SFP+ 1G/10G + 2×QSFP28 100G)',ports:[
+      {prefix:'1/1/',from:1,to:26,speed:'10G'},
+      {prefix:'1/1/',from:27,to:28,speed:'100G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'os2360-p24',label:'Alcatel OmniSwitch 2360-P24 (SMB/分公司入門堆疊式，24×802.3at PoE+)',ports:[
+      {prefix:'1/1/',from:1,to:24,speed:'1G'},
+      {prefix:'1/1/',from:25,to:28,speed:'1G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,24]},
+    {value:'os6870-24',label:'Alcatel OmniSwitch 6870-24 (中階，24×2.5/5/10G Multi-Gig PoE 95W，信心中等：官方上聯埠數未列出明確整機拆分，採4×25G保守估計)',ports:[
+      {prefix:'1/1/',from:1,to:24,speed:'10G'},
+      {prefix:'1/1/',from:25,to:28,speed:'25G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,24]},
   ],
   extreme:[
     {value:'x440-g2-48p',label:'Extreme Summit X440-G2-48p (48×1G PoE+ + 4×10G Uplink)',ports:[
@@ -5081,12 +5194,26 @@ const DEVICE_MODELS={
       {prefix:'1:',from:1,to:48,speed:'10G'},
       {prefix:'1:',from:49,to:52,speed:'40G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'x5420-24',label:'ExtremeSwitching 5420F-24 (Universal Edge，取代已停產的 Summit X440-G2)',ports:[
+      {prefix:'1:',from:1,to:24,speed:'1G'},
+      {prefix:'1:',from:25,to:28,speed:'10G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'x5420-48p',label:'ExtremeSwitching 5420F-48P (48×802.3bt PoE+ + 4×1/10G SFP+ Uplink)',ports:[
+      {prefix:'1:',from:1,to:48,speed:'1G'},
+      {prefix:'1:',from:49,to:52,speed:'10G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
   ],
   procurve:[
     {value:'aruba2530-24g',label:'Aruba 2530-24G (J9776A)',ports:[
       {prefix:'',from:1,to:24,speed:'1G'},
       {prefix:'',from:25,to:28,speed:'1G'}],poe:false},
     {value:'aruba2930f-48g',label:'Aruba 2930F-48G-4SFP+ (JL256A)',ports:[
+      {prefix:'',from:1,to:48,speed:'1G'},
+      {prefix:'',from:49,to:52,speed:'10G'}],poe:true},
+    {value:'aruba2540-24g',label:'Aruba 2540 24G 4SFP+ (JL354A，較2530新且內建10G上聯)',ports:[
+      {prefix:'',from:1,to:24,speed:'1G'},
+      {prefix:'',from:25,to:28,speed:'10G'}],poe:true},
+    {value:'aruba2540-48g',label:'Aruba 2540 48G 4SFP+ (JL355A)',ports:[
       {prefix:'',from:1,to:48,speed:'1G'},
       {prefix:'',from:49,to:52,speed:'10G'}],poe:true},
   ],
@@ -5097,6 +5224,20 @@ const DEVICE_MODELS={
     {value:'ccr1072',label:'MikroTik CCR1072-1G-8S+ (8×SFP+ + 1×1G)',ports:[
       {prefix:'ether',from:1,to:1,speed:'1G'},
       {prefix:'sfp-sfpplus',from:1,to:8,speed:'10G'}],poe:false},
+    {value:'crs328-24p',label:'MikroTik CRS328-24P-4S+RM (24×1G PoE+ + 4×SFP+ 10G)',ports:[
+      {prefix:'ether',from:1,to:24,speed:'1G'},
+      {prefix:'sfp-sfpplus',from:1,to:4,speed:'10G'}],poe:true},
+    {value:'rb5009',label:'MikroTik RB5009UG+S+IN (7×1G + 1×2.5G + 1×SFP+ 10G)',ports:[
+      {prefix:'ether',from:1,to:7,speed:'1G'},
+      {name:'ether8',speed:'2.5G'},
+      {prefix:'sfp-sfpplus',from:1,to:1,speed:'10G'}],poe:false},
+    {value:'ccr2216',label:'MikroTik CCR2216-1G-12XS-2XQ (1×1G + 12×SFP28 up to 25G + 2×QSFP28 100G)',ports:[
+      {name:'ether1',speed:'1G'},
+      {prefix:'sfp28-',from:1,to:12,speed:'25G'},
+      {prefix:'qsfp28-',from:1,to:2,speed:'100G'}],poe:false},
+    {value:'crs112-8g4s',label:'MikroTik CRS112-8G-4S-IN (入門級，8×1G + 4×SFP 1G)',ports:[
+      {prefix:'ether',from:1,to:8,speed:'1G'},
+      {prefix:'sfp',from:1,to:4,speed:'1G'}],poe:false},
   ],
 };
 
