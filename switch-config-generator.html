@@ -255,9 +255,10 @@ input.valid,select.valid{border-color:var(--green)!important}
         <option value="extreme" data-i18n="opt.vendorExtreme">Extreme Networks ExtremeXOS (EXOS)</option>
         <option value="procurve" data-i18n="opt.vendorProcurve">Aruba ProCurve / ArubaOS-Switch</option>
         <option value="routeros" data-i18n="opt.vendorRouterOS">MikroTik RouterOS</option>
+        <option value="ruijie" data-i18n="opt.vendorRuijie">Ruijie RGOS</option>
       </select>
       <label data-i18n="lbl.deviceModel">常用機種</label>
-      <select id="device-model" onchange="applyDeviceModel()" data-i18n-tip="tip.deviceModel" data-tip="套用後會清空並重新產生 Interface 表格（含 mgmt 介面），僅供快速帶入常見機型的埠位數量與速度，之後仍可手動調整">
+      <select id="device-model" onchange="applyDeviceModel()" data-tip="套用後會清空並重新產生 Interface 表格（含 mgmt 介面），僅供快速帶入常見機型的埠位數量與速度，之後仍可手動調整">
         <option value="" data-i18n="opt.modelNone">不套用</option>
       </select>
     </div>
@@ -660,6 +661,24 @@ input.valid,select.valid{border-color:var(--green)!important}
         <span data-i18n="lbl.vpcPeerGateway">Peer Gateway</span>
       </label>
     </div>
+  </div>
+
+  <div class="card" id="vsu-card" style="display:none">
+    <h2 data-i18n="sec.vsu">VSU 堆疊設定（僅 Ruijie RGOS）</h2>
+    <div class="row">
+      <label data-i18n="lbl.vsuDomain">Domain ID</label>
+      <input id="vsu-domain" placeholder="100">
+    </div>
+    <table class="tbl" style="margin-top:10px">
+      <thead><tr>
+        <th data-i18n="th.vsuMemberId">Switch ID</th>
+        <th data-i18n="th.vsuPriority">Priority</th>
+        <th data-i18n="th.vsuVslPorts" data-tip="VSL（Virtual Switch Link）鏈路成員埠，多個埠以空白分隔">VSL Ports</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="vsu-member-body"></tbody>
+    </table>
+    <button class="add-btn" data-i18n="btn.addRow" onclick="addVsuMemberRow()">+ 新增列</button>
   </div>
 
   <div class="card" id="vxlan-card" style="display:none">
@@ -2669,6 +2688,189 @@ function renderAristaQoS(list){
     blocks.push(lines.join('\n'));
   });
   return blocks.join('\n!\n');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Ruijie (RGOS) render 函式（2026-07-29 新增第 14 個廠牌）
+// switch_analyzer parseRuijie() 對應範圍：VLAN(與 Cisco 相同，重用 renderCiscoVLANs)/
+// Interface(access/trunk/hybrid)/OSPF/BGP/RIP/靜態路由(與 Cisco 語法相同，重用對應
+// renderCiscoXxx)/LACP(AggregatePort+port-group，非 channel-group)/VRRP(vrrp N ip VIP，
+// 非 HSRP)/VSU 堆疊(switch virtual domain+逐成員 switch N priority P+VSL 鏈路埠巢狀於
+// 介面自己的區塊內宣告 port-member interface X)。尚無真實裝置匯出檔完整驗證 generator
+// 產生的設定檔本身（analyzer 端已用兩份使用者提供的真實風格範例驗證過 parser 方向），
+// 信心度沿用 analyzer 端註記。
+// ══════════════════════════════════════════════════════════════════
+
+// VLAN ID 陣列 → 範圍壓縮字串（如 [10,11,12,20] → "10-12,20"），僅供 hybrid render 使用
+// （官方 "switchport hybrid allowed vlan tagged|untagged X-Y" 接受範圍格式，Comware 對應
+// 的 "port hybrid vlan X tagged/untagged" 是空白分隔離散清單，兩者輸出格式不同，不可沿用
+// Comware 既有的 .join(' ')）
+function compressVlanList(ids){
+  const nums=[...new Set((ids||[]).map(Number))].filter(n=>!isNaN(n)).sort((a,b)=>a-b);
+  const ranges=[]; let start=null,prev=null;
+  nums.forEach(n=>{
+    if(start===null){start=n;prev=n;return;}
+    if(n===prev+1){prev=n;return;}
+    ranges.push(start===prev?String(start):`${start}-${prev}`);
+    start=n;prev=n;
+  });
+  if(start!==null)ranges.push(start===prev?String(start):`${start}-${prev}`);
+  return ranges.join(',');
+}
+
+function renderRuijieInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vslSet){
+  const lines=[`interface ${iface.name}`];
+  if(iface.desc)lines.push(` description ${iface.desc}`);
+  if(iface.mode==='trunk'){
+    lines.push(' switchport mode trunk');
+    // 官方真實輸出常見用 "only" 關鍵字整批宣告完整清單（2026-07-29 使用者提供真實風格
+    // 範例確認：switchport trunk allowed vlan only X,Y），比照 analyzer 端
+    // parseRuijieInterfaces() 偏好判斷邏輯（only/all/裸清單優先），確保 round-trip 不失真
+    if(iface.trunkVlans)lines.push(` switchport trunk allowed vlan only ${iface.trunkVlans}`);
+    if(iface.nativeVlan)lines.push(` switchport trunk native vlan ${iface.nativeVlan}`);
+  }else if(iface.mode==='access'){
+    lines.push(' switchport mode access');
+    if(iface.accessVlan)lines.push(` switchport access vlan ${iface.accessVlan}`);
+  }else if(iface.mode==='hybrid'){
+    lines.push(' switchport mode hybrid');
+    const h=iface.hybrid||{};
+    if(h.pvid)lines.push(` switchport hybrid native vlan ${h.pvid}`);
+    if(h.untagged&&h.untagged.length)lines.push(` switchport hybrid allowed vlan untagged ${compressVlanList(h.untagged)}`);
+    if(h.tagged&&h.tagged.length)lines.push(` switchport hybrid allowed vlan tagged ${compressVlanList(h.tagged)}`);
+  }
+  const isMgmt=/^Management/i.test(iface.name);
+  if(iface.type==='svi'){
+    if(iface.ip){
+      const [ip,len]=iface.ip.split('/');
+      lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+    }
+  }else if(iface.type==='loopback'||isMgmt){
+    if(iface.ip)lines.push(` ip address ${iface.ip}`);
+  }else if(iface.mode==='routed'&&iface.ip){
+    lines.push(' no switchport');
+    lines.push(` ip address ${iface.ip}`);
+  }
+  if(iface.vrf&&!isMgmt)lines.push(` ip vrf forwarding ${iface.vrf}`);
+  const lg=findLacpGroup(lacpList,iface.name);
+  if(lg){
+    const modeWord=lg.mode==='passive'?'passive':'active';
+    lines.push(` port-group ${lg.id} mode ${modeWord}`);
+  }
+  if(iface.jumbo&&iface.jumbo.enabled&&iface.jumbo.mtu)lines.push(` mtu ${iface.jumbo.mtu}`);
+  if(iface.shutdown)lines.push(' shutdown');
+  findDhcpRelays(dhcpList,iface.name).forEach(rel=>lines.push(` ip helper-address ${rel.relayServer}`));
+  findAclApplications(aclList,iface.name).forEach(ap=>lines.push(` ip access-group ${ap.name} ${ap.direction}`));
+  const sec=findSecurityForPort(securityList,iface.name);
+  if(sec){
+    if(sec.dot1x==='auth')lines.push(' dot1x port-control auto');
+    if(sec.portSec){
+      lines.push(' switchport port-security');
+      if(sec.maxMac)lines.push(` switchport port-security maximum ${sec.maxMac}`);
+      if(sec.violation)lines.push(` switchport port-security violation ${sec.violation}`);
+    }
+  }
+  const sp=findStpForPort(stp,iface.name);
+  if(sp){
+    if(sp.portfast)lines.push(' spanning-tree portfast');
+    if(sp.bpduguard)lines.push(' spanning-tree bpduguard enable');
+    if(sp.guardRoot)lines.push(' spanning-tree guard root');
+    if(sp.cost)lines.push(` spanning-tree cost ${sp.cost}`);
+    if(sp.priority)lines.push(` spanning-tree port-priority ${sp.priority}`);
+  }
+  // VSU VSL 鏈路埠：巢狀於該介面自己的區塊內宣告（比照 analyzer 端 parseRuijieStack() 的
+  // 期待格式，也是 NX-OS VPC peer-link 巢狀查表寫法的同一種手法）
+  if(vslSet&&vslSet.has(iface.name))lines.push(` port-member interface ${iface.name}`);
+  return lines.join('\n');
+}
+function renderRuijieInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,vslSet){
+  return (ifaces||[]).map(i=>renderRuijieInterface(i,lacpList,dhcpList,aclList,securityList,stp,vslSet)).join('\n!\n');
+}
+
+// LACP：Ruijie 稱聚合介面為 AggregatePort（AP），成員埠語法是 "port-group N mode
+// {active|passive}"，與 Cisco channel-group 完全不同關鍵字（查證來源：官方 RG-S2600E
+// CLI Reference Manual）
+function renderRuijieLACPExtra(lacpList,ifaces){
+  const existingNames=new Set((ifaces||[]).map(i=>i.name));
+  const blocks=[];
+  (lacpList||[]).forEach(l=>{
+    blocks.push(`interface AggregatePort ${l.id}`);
+    (l.members||[]).forEach(mem=>{
+      if(existingNames.has(mem))return;
+      const modeWord=l.mode==='passive'?'passive':'active';
+      blocks.push(`interface ${mem}\n port-group ${l.id} mode ${modeWord}`);
+    });
+  });
+  return blocks.join('\n!\n');
+}
+
+// VRRP：真實 RGOS 語法 "vrrp N ip VIP"／"vrrp N priority P"／"vrrp N preempt"，非其他
+// 廠牌沿用的 Cisco HSRP standby 語法，比照 Aruba CX renderArubaVRRPGroup 模板改寫關鍵字
+// （vip→ip）
+function renderRuijieVRRPGroup(g){
+  const lines=[`interface VLAN ${g.vlanId}`];
+  if(g.ip){
+    const [ip,len]=g.ip.split('/');
+    lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+  }
+  g.entries.forEach(v=>{
+    lines.push(` vrrp ${v.vrid} ip ${v.vip}`);
+    lines.push(` vrrp ${v.vrid} priority ${v.priority}`);
+    if(v.preempt)lines.push(` vrrp ${v.vrid} preempt`);
+  });
+  return lines.join('\n');
+}
+function renderRuijieVRRP(list){return groupVrrpByVlan(list).map(renderRuijieVRRPGroup).join('\n!\n');}
+
+// VSU 堆疊（Virtual Switch Unit）：查證來源官方 VSU 技術文檔
+// https://www.ruijie.com.cn/fw/wt/90872/ ——全域 "switch virtual domain <id>" + 逐成員
+// "switch <n> priority <p>"；VSL 鏈路埠回傳一個 Set 供 renderRuijieInterface() 巢狀插入
+// "port-member interface X"（比照 NX-OS VPC peer-link 巢狀查表模式），不在此處直接輸出
+// 介面區塊，避免跟 Interface 表格自己的輸出重複
+function renderRuijieStack(stack){
+  const vslSet=new Set();
+  if(!stack||!stack.domain||!(stack.members||[]).length)return{block:'',vslSet};
+  const lines=[`switch virtual domain ${stack.domain}`];
+  (stack.members||[]).forEach(m=>{
+    if(m.id&&m.priority)lines.push(`switch ${m.id} priority ${m.priority}`);
+    (m.vslPorts||[]).forEach(p=>{if(p)vslSet.add(p);});
+  });
+  return{block:lines.join('\n'),vslSet};
+}
+
+function assembleRuijieConfig(model){
+  // 真實 RGOS "show running-config" 韌體版本字串固定含 "RGOS" 字樣，switch_analyzer 的
+  // detectVendor() 以此作為 ruijie 判定依據之一，缺這行會導致 round-trip 時無法被自動
+  // 辨識為 ruijie（比照 Arista EOS 版本註解行的既有慣例）
+  const blocks=[`! ${tr('notice.disclaimer')}`,'! version RGOS 11.4(1)B1',`hostname ${model.sysname||'Switch'}`];
+  if(model.vlans&&model.vlans.length)blocks.push(renderCiscoVLANs(model.vlans));
+  const stackInfo=renderRuijieStack(model.stack);
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderRuijieInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,stackInfo.vslSet));
+  // DHCP Relay Option82：與 Cisco 共用同一套 "ip dhcp snooping information option" 全域旗標
+  // （parseDHCP 的 cisco/ruijie 共用分支已確認此關鍵字），比照 Arista 既有寫法
+  if((model.dhcp||[]).some(d=>d.type==='relay'&&d.option82))blocks.push('ip dhcp snooping information option');
+  const ruijieLacpExtra=renderRuijieLACPExtra(model.lacp,model.interfaces);
+  if(ruijieLacpExtra)blocks.push(ruijieLacpExtra);
+  if(model.vrrp&&model.vrrp.length)blocks.push(renderRuijieVRRP(model.vrrp));
+  if(stackInfo.block)blocks.push(stackInfo.block);
+  // VSL 鏈路埠若不在 Interface 表單清單內，另外補產生最小區塊，避免遺漏
+  const existingIfaceNames=new Set((model.interfaces||[]).map(i=>i.name));
+  const extraVsl=[...stackInfo.vslSet].filter(n=>!existingIfaceNames.has(n)).map(n=>`interface ${n}\n port-member interface ${n}`);
+  if(extraVsl.length)blocks.push(extraVsl.join('\n!\n'));
+  const stpBlockRj=renderSpanningTreeGlobal(model.stp);
+  if(stpBlockRj)blocks.push(stpBlockRj);
+  // OSPF/BGP/RIP/靜態路由/ACL：已查證與 Cisco IOS 語法相符，直接重用對應 renderCiscoXxx，
+  // 沿用既有慣例排在 blocks 陣列最後（區塊擷取正則只認得下一個同關鍵字區塊或字串結尾）
+  if(model.ospf&&model.ospf.length)blocks.push(renderCiscoOSPF(model.ospf));
+  if(model.rip&&model.rip.length)blocks.push(renderCiscoRIPList(model.rip));
+  if(model.routes&&model.routes.length)blocks.push(renderCiscoRoutes(model.routes));
+  if(model.bgp&&model.bgp.length)blocks.push(renderCiscoBGPList(model.bgp));
+  if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
+  // QoS：RGOS 語法未查得與 Cisco 有落差佐證，重用共用的 Cisco-style policy-map render
+  // （renderPolicyMapQoS，非 Arista 專屬的 renderAristaQoS，後者已查證的 EOS 差異
+  // "type quality-of-service"/kbps 單位詞對 Ruijie 而言查無對應佐證，不應套用）；放最後
+  // 理由同 ACL/BGP（policy-map 區塊擷取正則只認得下一個同關鍵字區塊或字串結尾）
+  if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
+  return blocks.join('\n!\n')+'\n';
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -5239,6 +5441,19 @@ const DEVICE_MODELS={
       {prefix:'ether',from:1,to:8,speed:'1G'},
       {prefix:'sfp',from:1,to:4,speed:'1G'}],poe:false},
   ],
+  // 2026-07-29 對外查證官方 Ruijie Networks 產品頁/datasheet 後新增：入門 access
+  // （RG-S2928G-E V3，官方確認支援 VSU）／中階 aggregation（RG-S5750C-28GT4XS-H）／
+  // 高階資料中心（RG-S6220-48XS6QXS-H，官方確認支援 VSU 2.0）三款代表機型
+  ruijie:[
+    {value:'s2928g-e',label:'Ruijie RG-S2928G-E V3 (入門級，24×1G + 4×SFP 1G，支援VSU)',ports:[
+      {prefix:'GigabitEthernet 0/',from:1,to:28,speed:'1G'}],poe:false},
+    {value:'s5750c-28gt4xs',label:'Ruijie RG-S5750C-28GT4XS-H (中階匯聚，28×1G + 4×SFP+ 10G)',ports:[
+      {prefix:'GigabitEthernet 0/',from:1,to:28,speed:'1G'},
+      {prefix:'TenGigabitEthernet 0/',from:1,to:4,speed:'10G'}],poe:false},
+    {value:'s6220-48xs6qxs',label:'Ruijie RG-S6220-48XS6QXS-H (高階資料中心，48×10GBASE-T + 6×40G QSFP+，支援VSU 2.0)',ports:[
+      {prefix:'TenGigabitEthernet 0/',from:1,to:48,speed:'10G'},
+      {prefix:'FortyGigabitEthernet 0/',from:1,to:6,speed:'40G'}],poe:false},
+  ],
 };
 
 function updateDeviceModelOptions(){
@@ -5519,6 +5734,16 @@ function addLacpRow(id='',mode='static',members=''){
   applyI18n(tr);
 }
 
+function addVsuMemberRow(id='',priority='',vslPorts=''){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="vsu-mem-id" value="${escAttr(id)}"></td>
+    <td><input class="vsu-mem-priority" value="${escAttr(priority)}"></td>
+    <td><input class="vsu-mem-vsl" value="${escAttr(vslPorts)}" placeholder="TenGigabitEthernet 1/1"></td>
+    ${RM_BTN_TD}`;
+  document.getElementById('vsu-member-body').appendChild(tr);
+  applyI18n(tr);
+}
+
 function addVrrpRow(vlanId='',ip='',vrid='',vip='',priority='100',preempt=false,authMode='',authKey='',trackIf='',trackReduced=''){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input class="vr-vlan" value="${escAttr(vlanId)}"></td><td><input class="vr-ip" value="${escAttr(ip)}" placeholder="192.168.10.1/24"></td><td><input class="vr-id" value="${escAttr(vrid)}"></td><td><input class="vr-vip" value="${escAttr(vip)}"></td><td><input class="vr-priority" value="${escAttr(priority)}"></td><td style="text-align:center"><input type="checkbox" class="vr-preempt"></td>
@@ -5688,7 +5913,7 @@ function updateModeOptions(){
   document.getElementById('vxlan-card').style.display=(vendor==='comware'||vendor==='aruba')?'':'none';
   document.querySelectorAll('.i-mode').forEach(sel=>{
     const hybridOpt=sel.querySelector('option[value="hybrid"]');
-    if(vendor!=='comware'){
+    if(vendor!=='comware'&&vendor!=='ruijie'){
       if(sel.value==='hybrid'){
         // 目標廠牌無 hybrid 概念，強制轉為 trunk 前，把 hybrid 的 VLAN 資料搬到 trunk 對應欄位，
         // 避免介面在切換廠牌後變成完全沒有 VLAN 指定的空白 trunk port（保留原 hybrid 欄位資料，不清空）
@@ -5714,6 +5939,9 @@ function updateModeOptions(){
       sel.appendChild(opt);
     }
   });
+  // VSU 卡片僅 Ruijie RGOS 適用（比照 MLAG/VPC 慣例）
+  const vsuCard=document.getElementById('vsu-card');
+  if(vsuCard)vsuCard.style.display=vendor==='ruijie'?'':'none';
   updateDeviceModelOptions();
   updateAppliedModelNotice();
 }
@@ -5941,6 +6169,16 @@ function collectModel(){
     peerGateway:document.getElementById('vpc-peer-gateway').checked,
   }:null;
 
+  // VSU：僅 Ruijie RGOS 使用，欄位命名對齊 switch_analyzer parseRuijieStack() 既有回傳
+  // 形狀 {domain,members:[{id,priority}],vsl:[{memberId,interfaces}]}——表單端 vslPorts
+  // 用空白分隔字串輸入，讀取時比照 lacp.members 慣例 split 成陣列
+  const vsuDomainEl=document.getElementById('vsu-domain');
+  const vsuMembers=rowsOf('#vsu-member-body tr').map(tr=>({
+    id:val(tr,'vsu-mem-id'), priority:val(tr,'vsu-mem-priority'),
+    vslPorts:val(tr,'vsu-mem-vsl').split(/\s+/).filter(Boolean),
+  })).filter(m=>m.id);
+  const stack=vsuDomainEl?{domain:vsuDomainEl.value.trim(),members:vsuMembers}:null;
+
   // VXLAN：僅 Comware/Aruba CX 使用，單一設定物件（非清單），欄位命名對齊 switch_analyzer
   // parseVXLAN() 既有回傳形狀 {vtep, vnis:[{vni,vlan,name,peers,rd,rtImport,rtExport,gw}]}
   const vxlanVtepEl=document.getElementById('vxlan-vtep');
@@ -5955,7 +6193,7 @@ function collectModel(){
   return {
     vendor:document.getElementById('vendor').value,
     sysname:document.getElementById('hostname').value.trim()||'Switch',
-    vlans, interfaces, ospf, bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos,
+    vlans, interfaces, ospf, bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos, stack,
   };
 }
 
@@ -5965,7 +6203,7 @@ function collectModel(){
 // 逐項呼叫 addXxxRow() 重建列。儲存的 model 就是 collectModel() 的完整輸出，故欄位
 // 名稱與此函式讀取的完全對稱，不需另外映射。
 function applyModelToForm(model){
-  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body'].forEach(id=>{
+  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body'].forEach(id=>{
     document.getElementById(id).innerHTML='';
   });
 
@@ -6087,6 +6325,14 @@ function applyModelToForm(model){
     document.getElementById('vpc-peer-keepalive').value=model.vpc.peerKeepalive||'';
     document.getElementById('vpc-peer-link').value=model.vpc.peerLink||'';
     document.getElementById('vpc-peer-gateway').checked=!!model.vpc.peerGateway;
+  }
+
+  // VSU（僅 Ruijie RGOS 顯示，比照 MLAG/VPC 慣例——欄位一直存在於 DOM，只是卡片被隱藏）
+  const vsuDomainEl=document.getElementById('vsu-domain');
+  if(vsuDomainEl&&model.stack){
+    vsuDomainEl.value=model.stack.domain||'';
+    document.getElementById('vsu-member-body').innerHTML='';
+    (model.stack.members||[]).forEach(m=>addVsuMemberRow(m.id,m.priority,(m.vslPorts||[]).join(' ')));
   }
 
   // VXLAN（僅 Comware/Aruba CX 顯示，比照 MLAG/VPC 慣例——欄位一直存在於 DOM，只是卡片被隱藏）
@@ -6298,8 +6544,8 @@ function validateForm(){
       }
     }
 
-    // Hybrid 港口檢查（非 Comware 廠牌不支援）
-    if(iface.mode==='hybrid'&&model.vendor!=='comware'){
+    // Hybrid 港口檢查（僅 Comware／Ruijie 支援）
+    if(iface.mode==='hybrid'&&model.vendor!=='comware'&&model.vendor!=='ruijie'){
       errors.push(`❌ ${tr('val.vendor_no_hybrid').replace('{vendor}',model.vendor).replace('{name}',iface.name)}`);
       markInvalid(ifaceRows[i]?.querySelector('.i-mode'));
     }
@@ -6526,6 +6772,7 @@ function generate(fromImport=false){
   else if(model.vendor==='extreme')cfg=assembleExtremeConfig(model);
   else if(model.vendor==='procurve')cfg=assembleProCurveConfig(model);
   else if(model.vendor==='routeros')cfg=assembleRouterOSConfig(model);
+  else if(model.vendor==='ruijie')cfg=assembleRuijieConfig(model);
   else cfg=assembleComwareConfig(model);
   document.getElementById('output').value=cfg;
   checkGeneratorEggs(model.sysname);
@@ -6724,7 +6971,7 @@ async function loadParserFunctions(){
   const extraStart=script.indexOf('function parseVRRP');
   const extraEnd=script.indexOf('function renderVRRP');
   const extraFnText=(extraStart>0&&extraEnd>extraStart)?script.slice(extraStart,extraEnd):'function parseVRRP(){return [];}\nfunction parseVXLAN(){return {vtep:"",vnis:[],evpn:[],tunnelMode:""};}';
-  const sandboxFn=new Function(pure+'\n'+extraFnText+'\nreturn { detectVendor:detectVendor, parseComware:parseComware, parseCisco:parseCisco, parseAruba:parseAruba, parseFortiSwitch:parseFortiSwitch, parseJuniper:parseJuniper, parseNXOS:parseNXOS, parseArista:parseArista, parseDellOS10:parseDellOS10, parseBrocade:parseBrocade, parseAlcatel:parseAlcatel, parseExtremeXOS:parseExtremeXOS, parseProCurve:parseProCurve, parseRouterOS:parseRouterOS, parseLACP:parseLACP, parseDHCP:parseDHCP, parseACL:parseACL, parseQoS:parseQoS, parseSecurity:parseSecurity, parseSTP:parseSTP, parseVRRP:parseVRRP };');
+  const sandboxFn=new Function(pure+'\n'+extraFnText+'\nreturn { detectVendor:detectVendor, parseComware:parseComware, parseCisco:parseCisco, parseAruba:parseAruba, parseFortiSwitch:parseFortiSwitch, parseJuniper:parseJuniper, parseNXOS:parseNXOS, parseArista:parseArista, parseRuijie:parseRuijie, parseDellOS10:parseDellOS10, parseBrocade:parseBrocade, parseAlcatel:parseAlcatel, parseExtremeXOS:parseExtremeXOS, parseProCurve:parseProCurve, parseRouterOS:parseRouterOS, parseLACP:parseLACP, parseDHCP:parseDHCP, parseACL:parseACL, parseQoS:parseQoS, parseSecurity:parseSecurity, parseSTP:parseSTP, parseVRRP:parseVRRP };');
   _parserFnsCache=sandboxFn();
   return _parserFnsCache;
 }
@@ -6747,7 +6994,7 @@ async function parseAndImport(){
   const api=fns||BasicParser;
 
   const vendor=api.detectVendor(text);
-  if(!vendor||!['comware','cisco','aruba','fortiswitch','juniper','nxos','arista','dell-os10','brocade','alcatel','extreme','procurve','routeros'].includes(vendor)){
+  if(!vendor||!['comware','cisco','aruba','fortiswitch','juniper','nxos','arista','dell-os10','brocade','alcatel','extreme','procurve','routeros','ruijie'].includes(vendor)){
     showImportMsg(tr('msg.importNoVendor'),true);
     return;
   }
@@ -6763,6 +7010,7 @@ async function parseAndImport(){
   else if(vendor==='juniper')parsed=api.parseJuniper(text);
   else if(vendor==='fortiswitch')parsed=api.parseFortiSwitch(text);
   else if(vendor==='arista')parsed=api.parseArista(text);
+  else if(vendor==='ruijie')parsed=api.parseRuijie(text);
   else if(vendor==='dell-os10')parsed=api.parseDellOS10(text);
   else if(vendor==='brocade')parsed=api.parseBrocade(text);
   else if(vendor==='alcatel')parsed=api.parseAlcatel(text);
@@ -6778,7 +7026,7 @@ async function parseAndImport(){
 
   // 清空既有列（含 vrrp-body：匯入功能雖不映射 VRRP 資料，但仍須清掉畫面殘留的舊資料，
   // 避免使用者誤以為初始化 demo 列是這次匯入結果的一部分）
-  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body'].forEach(id=>{
+  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body'].forEach(id=>{
     document.getElementById(id).innerHTML='';
   });
 
@@ -7194,6 +7442,7 @@ function processBulkCSV(){
         else if(model.vendor==='extreme')cfg=assembleExtremeConfig(model);
         else if(model.vendor==='procurve')cfg=assembleProCurveConfig(model);
         else if(model.vendor==='routeros')cfg=assembleRouterOSConfig(model);
+        else if(model.vendor==='ruijie')cfg=assembleRuijieConfig(model);
         else cfg=assembleComwareConfig(model);
 
         window.bulkConfigs[row.devicename]=cfg;
@@ -7666,9 +7915,10 @@ const LANG={
     'opt.poeNone':'無','opt.poeAuto':'自動','opt.poeNever':'禁用','opt.poeStaticMax':'固定 30W','opt.poeStaticHigh':'固定 60~90W',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area','th.network':'Network','th.wildcard':'Wildcard',
-    'lbl.vendor':'廠牌','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS',
+    'lbl.vendor':'廠牌','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS',
     'sec.mlag':'MLAG 設定（僅 Arista EOS）','lbl.mlagDomain':'Domain ID','lbl.mlagLocalIntf':'Local Interface','lbl.mlagPeerAddr':'Peer Address','lbl.mlagPeerLink':'Peer Link',
-    'lbl.deviceModel':'常用機種','tip.deviceModel':'套用後會清空並重新產生 Interface 表格（含 mgmt 介面），僅供快速帶入常見機型的埠位數量與速度，之後仍可手動調整','opt.modelNone':'不套用','opt.modelModular':'模組化核心','opt.modelBackbone':'骨幹','opt.modelFiber':'光纖核心',
+    'sec.vsu':'VSU 堆疊設定（僅 Ruijie RGOS）','lbl.vsuDomain':'Domain ID','th.vsuMemberId':'交換器編號','th.vsuPriority':'優先權','th.vsuVslPorts':'VSL 鏈路埠',
+    'lbl.deviceModel':'常用機種','opt.modelNone':'不套用','opt.modelModular':'模組化核心','opt.modelBackbone':'骨幹','opt.modelFiber':'光纖核心',
     'msg.templateOverwriteConfirm':'模板「{name}」已存在，是否覆蓋？','msg.templateDeleteConfirm':'確定要刪除模板「{name}」嗎？此動作無法復原','ph.dhcpRelayIface':'留空=全域',
     'opt.modelMidRange':'中端模組','opt.modelHighEndModular':'高端模組化','opt.modelAccessLayer':'接入層','opt.modelHighPerf':'高性能','opt.modelNoBreakout':'不支援 Breakout','opt.modelBreakoutSupport':'支援 Breakout','opt.modelHighPerfAccess':'高效能存取','opt.modelCoreAggregation':'核心/匯聚','opt.modelAccessPoE':'接入PoE','opt.modelHighDensity':'高密度','opt.modelMediumConfidence':'信心中等','opt.modelHighEnd':'高端','opt.modelCurrentGen':'現行世代','opt.modelExpressedAs100G':'以100G表示','opt.modelLineCard':'線卡','opt.modelCopper':'銅','opt.modelSuccessor':'後繼機','opt.modelEntry':'入門','opt.modelMidTier':'中階','opt.modelCampusAccess':'校園存取','opt.modelDataCenter':'資料中心','opt.modelBranch':'分公司','opt.modelUplinkModule':'上聯模組','opt.modelOptional':'選配','opt.modelCompactDesktop':'緊湊桌上型','opt.modelDesktop':'桌上型','opt.modelReplaces':'取代','opt.modelNextGen':'新一代','opt.modelStackable':'堆疊式',
     'val.hostname_format':'主機名稱格式有誤（僅允許英文、數字、-、_，最多 32 字）','val.required':'{item} 未填寫','val.format_invalid':'{item} 格式有誤','val.example':'如 {example}','val.invalid':'{item} 無效','val.dup':'{item} 重複','val.field_name':'名稱','val.field_as':'AS 號','val.field_vip':'虛擬 IP','val.field_priority':'優先度','val.field_lagid':'聚合 ID','val.static_route':'靜態路由','val.native_vlan_not_in_list':'Interface {name}：Native VLAN {vlan} 未在 VLAN 列表中','val.vendor_no_hybrid':'{vendor} 不支援 Hybrid port（Interface {name}）','val.ospf_no_network':'OSPF {n}：沒有定義 network，將無法通告路由','val.acl_src_suspect':'ACL {name} 規則 {n}：來源「{value}」格式可能有誤，請確認','val.acl_dst_suspect':'ACL {name} 規則 {n}：目的「{value}」格式可能有誤，請確認','val.vendor_unsupported_feature':'{vendor} 不支援 {feature}，此欄位資料在產生時將被忽略','val.bgp_networks_ignored':'{vendor} 目前 BGP 僅支援 Peer 設定，Networks 資料在產生時將被忽略','val.dhcp_iface_mismatch':'DHCP Interface「{iface}」找不到對應的 VLAN，請確認名稱是否正確','val.importResultTitle':'匯入驗證結果','val.generateCheckTitle':'產生前檢查結果','val.allPassed':'所有檢查通過！','val.errorsFound':'發現 {n} 項錯誤','val.tipsCount':'提示 ({n} 項)','sec.bulk':'📦 批量設定產生','lbl.bulkUpload':'上傳 CSV 檔案（含設備列表）','btn.bulkTemplate':'📋 查看格式','btn.bulkStart':'開始批量產生','btn.bulkDownloadZip':'⬇️ 下載全部設定檔 (ZIP)','btn.bulkToggle':'📦 批量','msg.bulkTemplate':'CSV 格式範例：\nDeviceName,Vendor,Hostname,Model\nsw-core-01,comware,SW-CORE-01,HPE 5140\nsw-core-02,comware,SW-CORE-02,HPE 5140\nsw-access-01,cisco,SW-ACC-01,Cisco 9300\nsw-access-02,aruba,SW-ACC-02,Aruba CX 6300\n\n必填欄位：DeviceName, Vendor, Hostname\n支援廠牌：comware, cisco, aruba, fortiswitch, juniper\n可選欄位：Model (套用預設機型)\n\n將使用現有表單的 VLAN/Interface 等設定，逐行改變 Hostname\n產生的檔案名稱：DeviceName.txt','msg.bulkNoFile':'請選擇 CSV 檔案','msg.bulkNeedHeaderRow':'CSV 檔案至少需要標題行和 1 筆資料','msg.bulkMissingColumns':'CSV 必須包含欄位：{cols}','msg.bulkProgress':'正在產生設定... ({current}/{total})','msg.bulkMissingFields':'❌ 缺少必填欄位','msg.bulkGenerateFailed':'❌ 產生失敗：{error}','msg.bulkDone':'✅ 完成！共產生 {count} 份設定','msg.bulkNothingToDownload':'無可下載的設定','msg.bulkManifestTitle':'設定檔清單','msg.bulkManifestTimestamp':'生成時間：{time}','msg.bulkManifestCount':'共 {count} 份設定','msg.bulkManifestHeader':'檔案名稱,行數',
@@ -7714,9 +7964,10 @@ const LANG={
     'opt.poeNone':'None','opt.poeAuto':'Auto','opt.poeNever':'Never','opt.poeStaticMax':'Static 30W','opt.poeStaticHigh':'Static 60~90W',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area','th.network':'Network','th.wildcard':'Wildcard',
-    'lbl.vendor':'Vendor','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS',
+    'lbl.vendor':'Vendor','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS',
     'sec.mlag':'MLAG Settings (Arista EOS only)','lbl.mlagDomain':'Domain ID','lbl.mlagLocalIntf':'Local Interface','lbl.mlagPeerAddr':'Peer Address','lbl.mlagPeerLink':'Peer Link',
-    'lbl.deviceModel':'Common Model','tip.deviceModel':'Applying this clears and regenerates the Interface table (including the mgmt interface). It only quickly fills in port count/speed for common models — you can still adjust manually afterward.','opt.modelNone':'None','opt.modelModular':'Modular Backbone','opt.modelBackbone':'Backbone','opt.modelFiber':'Fiber Backbone',
+    'sec.vsu':'VSU Stacking (Ruijie RGOS only)','lbl.vsuDomain':'Domain ID','th.vsuMemberId':'Switch ID','th.vsuPriority':'Priority','th.vsuVslPorts':'VSL Ports',
+    'lbl.deviceModel':'Common Model','opt.modelNone':'None','opt.modelModular':'Modular Backbone','opt.modelBackbone':'Backbone','opt.modelFiber':'Fiber Backbone',
     'msg.templateOverwriteConfirm':'Template "{name}" already exists. Overwrite?','msg.templateDeleteConfirm':'Delete template "{name}"? This cannot be undone','ph.dhcpRelayIface':'Leave blank = global',
     'opt.modelMidRange':'Mid-Range Module','opt.modelHighEndModular':'High-End Modular','opt.modelAccessLayer':'Access Layer','opt.modelHighPerf':'High Performance','opt.modelNoBreakout':'Breakout Not Supported','opt.modelBreakoutSupport':'Breakout Supported','opt.modelHighPerfAccess':'High-Performance Access','opt.modelCoreAggregation':'Core/Aggregation','opt.modelAccessPoE':'Access PoE','opt.modelHighDensity':'High Density','opt.modelMediumConfidence':'Medium Confidence','opt.modelHighEnd':'High-End','opt.modelCurrentGen':'Current Generation','opt.modelExpressedAs100G':'Expressed as 100G','opt.modelLineCard':'Line Card','opt.modelCopper':'Copper','opt.modelSuccessor':'Successor','opt.modelEntry':'Entry-Level','opt.modelMidTier':'Mid-Tier','opt.modelCampusAccess':'Campus Access','opt.modelDataCenter':'Data Center','opt.modelBranch':'Branch Office','opt.modelUplinkModule':'Uplink Module','opt.modelOptional':'Optional','opt.modelCompactDesktop':'Compact Desktop','opt.modelDesktop':'Desktop','opt.modelReplaces':'Replaces','opt.modelNextGen':'Next-Gen','opt.modelStackable':'Stackable',
     'val.hostname_format':'Hostname format invalid (only letters, digits, -, _ allowed, max 32 chars)','val.required':'{item} is required','val.format_invalid':'{item} format is invalid','val.example':'e.g. {example}','val.invalid':'{item} is invalid','val.dup':'{item} is duplicated','val.field_name':'Name','val.field_as':'AS Number','val.field_vip':'Virtual IP','val.field_priority':'Priority','val.field_lagid':'Aggregation ID','val.static_route':'Static Route','val.native_vlan_not_in_list':'Interface {name}: Native VLAN {vlan} not in VLAN list','val.vendor_no_hybrid':'{vendor} does not support Hybrid port (Interface {name})','val.ospf_no_network':'OSPF {n}: no network defined, routes will not be advertised','val.acl_src_suspect':'ACL {name} Rule {n}: source "{value}" format may be incorrect, please verify','val.acl_dst_suspect':'ACL {name} Rule {n}: destination "{value}" format may be incorrect, please verify','val.vendor_unsupported_feature':'{vendor} does not support {feature}; this field data will be ignored when generating','val.bgp_networks_ignored':'{vendor} currently only supports BGP Peer settings; Networks data will be ignored when generating','val.dhcp_iface_mismatch':'DHCP Interface "{iface}" has no matching VLAN, please check the name','val.importResultTitle':'Import Validation Results','val.generateCheckTitle':'Pre-Generation Check','val.allPassed':'All checks passed!','val.errorsFound':'Found {n} error(s)','val.tipsCount':'Tips ({n})','sec.bulk':'📦 Bulk Config Generator','lbl.bulkUpload':'Upload CSV File (device list)','btn.bulkTemplate':'📋 View Format','btn.bulkStart':'Start Bulk Generation','btn.bulkDownloadZip':'⬇️ Download All Configs (ZIP)','btn.bulkToggle':'📦 Bulk','msg.bulkTemplate':'CSV Format Example:\nDeviceName,Vendor,Hostname,Model\nsw-core-01,comware,SW-CORE-01,HPE 5140\nsw-core-02,comware,SW-CORE-02,HPE 5140\nsw-access-01,cisco,SW-ACC-01,Cisco 9300\nsw-access-02,aruba,SW-ACC-02,Aruba CX 6300\n\nRequired fields: DeviceName, Vendor, Hostname\nSupported vendors: comware, cisco, aruba, fortiswitch, juniper\nOptional field: Model (applies default device model)\n\nUses the current form\'s VLAN/Interface settings, changing only the Hostname per row\nGenerated filename: DeviceName.txt','msg.bulkNoFile':'Please select a CSV file','msg.bulkNeedHeaderRow':'CSV file needs a header row and at least 1 data row','msg.bulkMissingColumns':'CSV must include columns: {cols}','msg.bulkProgress':'Generating configs... ({current}/{total})','msg.bulkMissingFields':'❌ Missing required fields','msg.bulkGenerateFailed':'❌ Generation failed: {error}','msg.bulkDone':'✅ Done! Generated {count} configs','msg.bulkNothingToDownload':'No configs to download','msg.bulkManifestTitle':'Config File List','msg.bulkManifestTimestamp':'Generated at: {time}','msg.bulkManifestCount':'{count} configs total','msg.bulkManifestHeader':'Filename,Lines',
@@ -7759,9 +8010,10 @@ const LANG={
     'opt.poeNone':'なし','opt.poeAuto':'自動','opt.poeNever':'無効','opt.poeStaticMax':'固定 30W','opt.poeStaticHigh':'固定 60~90W',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'エリア','th.network':'ネットワーク','th.wildcard':'ワイルドカード',
-    'lbl.vendor':'ベンダー','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS',
+    'lbl.vendor':'ベンダー','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS',
     'sec.mlag':'MLAG設定（Arista EOS専用）','lbl.mlagDomain':'ドメインID','lbl.mlagLocalIntf':'ローカルインターフェース','lbl.mlagPeerAddr':'ピアアドレス','lbl.mlagPeerLink':'ピアリンク',
-    'lbl.deviceModel':'よく使う機種','tip.deviceModel':'適用するとInterfaceテーブル（mgmtインターフェース含む）がクリアされ再生成されます。一般的な機種のポート数・速度を素早く反映するだけの機能で、後から手動調整も可能です','opt.modelNone':'適用しない','opt.modelModular':'モジュール式バックボーン','opt.modelBackbone':'バックボーン','opt.modelFiber':'ファイバーバックボーン',
+    'sec.vsu':'VSUスタック設定（Ruijie RGOS専用）','lbl.vsuDomain':'ドメインID','th.vsuMemberId':'スイッチID','th.vsuPriority':'優先度','th.vsuVslPorts':'VSLポート',
+    'lbl.deviceModel':'よく使う機種','opt.modelNone':'適用しない','opt.modelModular':'モジュール式バックボーン','opt.modelBackbone':'バックボーン','opt.modelFiber':'ファイバーバックボーン',
     'msg.templateOverwriteConfirm':'テンプレート「{name}」は既に存在します。上書きしますか？','msg.templateDeleteConfirm':'テンプレート「{name}」を削除しますか？この操作は元に戻せません','ph.dhcpRelayIface':'空欄=グローバル',
     'opt.modelMidRange':'ミドルレンジモジュール','opt.modelHighEndModular':'ハイエンドモジュール式','opt.modelAccessLayer':'アクセス層','opt.modelHighPerf':'高性能','opt.modelNoBreakout':'Breakout非対応','opt.modelBreakoutSupport':'Breakout対応','opt.modelHighPerfAccess':'高性能アクセス','opt.modelCoreAggregation':'コア/集約','opt.modelAccessPoE':'アクセスPoE','opt.modelHighDensity':'高密度','opt.modelMediumConfidence':'中程度の確信度','opt.modelHighEnd':'ハイエンド','opt.modelCurrentGen':'現行世代','opt.modelExpressedAs100G':'100Gとして表示','opt.modelLineCard':'ラインカード','opt.modelCopper':'銅線','opt.modelSuccessor':'後継機','opt.modelEntry':'エントリーモデル','opt.modelMidTier':'ミッドレンジ','opt.modelCampusAccess':'キャンパスアクセス','opt.modelDataCenter':'データセンター','opt.modelBranch':'支店向け','opt.modelUplinkModule':'アップリンクモジュール','opt.modelOptional':'オプション','opt.modelCompactDesktop':'コンパクトデスクトップ','opt.modelDesktop':'デスクトップ型','opt.modelReplaces':'後継','opt.modelNextGen':'次世代','opt.modelStackable':'スタッカブル',
     'val.hostname_format':'ホスト名の形式が不正です（英数字、-、_のみ、最大32文字）','val.required':'{item}が未入力です','val.format_invalid':'{item}の形式が不正です','val.example':'例: {example}','val.invalid':'{item}が無効です','val.dup':'{item}が重複しています','val.field_name':'名前','val.field_as':'AS番号','val.field_vip':'仮想IP','val.field_priority':'優先度','val.field_lagid':'集約ID','val.static_route':'静的ルート','val.native_vlan_not_in_list':'Interface {name}：Native VLAN {vlan} がVLANリストにありません','val.vendor_no_hybrid':'{vendor}はHybrid portに対応していません（Interface {name}）','val.ospf_no_network':'OSPF {n}：networkが定義されていないため、経路が広告されません','val.acl_src_suspect':'ACL {name} ルール{n}：送信元「{value}」の形式が正しくない可能性があります。ご確認ください','val.acl_dst_suspect':'ACL {name} ルール{n}：宛先「{value}」の形式が正しくない可能性があります。ご確認ください','val.vendor_unsupported_feature':'{vendor}は{feature}に対応していないため、生成時にこの項目のデータは無視されます','val.bgp_networks_ignored':'{vendor}は現在BGP Peer設定のみ対応しており、Networksデータは生成時に無視されます','val.dhcp_iface_mismatch':'DHCP Interface「{iface}」に対応するVLANが見つかりません。名前をご確認ください','val.importResultTitle':'インポート検証結果','val.generateCheckTitle':'生成前チェック結果','val.allPassed':'すべてのチェックに合格しました！','val.errorsFound':'{n}件のエラーが見つかりました','val.tipsCount':'ヒント（{n}件）','sec.bulk':'📦 一括設定生成','lbl.bulkUpload':'CSVファイルをアップロード（機器一覧）','btn.bulkTemplate':'📋 フォーマット確認','btn.bulkStart':'一括生成開始','btn.bulkDownloadZip':'⬇️ 全設定をダウンロード (ZIP)','btn.bulkToggle':'📦 一括','msg.bulkTemplate':'CSVフォーマット例：\nDeviceName,Vendor,Hostname,Model\nsw-core-01,comware,SW-CORE-01,HPE 5140\nsw-core-02,comware,SW-CORE-02,HPE 5140\nsw-access-01,cisco,SW-ACC-01,Cisco 9300\nsw-access-02,aruba,SW-ACC-02,Aruba CX 6300\n\n必須項目：DeviceName, Vendor, Hostname\n対応ベンダー：comware, cisco, aruba, fortiswitch, juniper\n任意項目：Model（デフォルト機種を適用）\n\n既存フォームのVLAN/Interface設定を使用し、行ごとにHostnameのみ変更\n生成ファイル名：DeviceName.txt','msg.bulkNoFile':'CSVファイルを選択してください','msg.bulkNeedHeaderRow':'CSVファイルにはヘッダー行と最低1件のデータが必要です','msg.bulkMissingColumns':'CSVには次の項目が必要です：{cols}','msg.bulkProgress':'設定生成中... ({current}/{total})','msg.bulkMissingFields':'❌ 必須項目が不足しています','msg.bulkGenerateFailed':'❌ 生成失敗：{error}','msg.bulkDone':'✅ 完了！{count} 件の設定を生成しました','msg.bulkNothingToDownload':'ダウンロード可能な設定がありません','msg.bulkManifestTitle':'設定ファイル一覧','msg.bulkManifestTimestamp':'生成日時：{time}','msg.bulkManifestCount':'合計 {count} 件の設定','msg.bulkManifestHeader':'ファイル名,行数',
@@ -7803,9 +8055,10 @@ const LANG={
     'th.ifName':'ghom pong','th.ifDesc':"De' bID",'th.ifSpeed':'chuq','th.ifMode':'Segh','th.ifAccess':'Access VLAN','th.ifTrunk':'Trunk VLANs','th.ifNative':'Native VLAN','th.ifHyUn':'Hybrid Untagged','th.ifHyTag':'Hybrid Tagged','th.ifHyPvid':'Hybrid PVID','th.ifShut':'SoQmoH','th.ifJumbo':"tIn rojHom",'th.ifMtu':'MTU','th.ifPoe':"PoE Segh",'th.ifFortilink':"FortiLink nejwI'",'egg.skynet':"🤖 Skynet! bIHeghpu'! QI'yaH!",'egg.jarvis':"🦾 JARVIS yIchu'! Online!",'egg.skywalker':"⚔️ wo'rIv! HoS DaghajchoH!",'egg.ollama':"jIH vIbopmoHpu' — 'ej jIvumqa' 🐑",'egg.matrix':"💊 Hem yIjatlh — ngemwI' bIlegh",'egg.enterprise':"🖖 packet Hop pagh — yIghoS",'egg.mordor':"🧙 Mordor yIghoS Qo' — He Qaw'",'egg.deathstar':"🌑 maS 'oHbe' — layer 3 Duj 'oH",'egg.terminator':"🤖 jIchegh — session timeout",'egg.shodan':"💻 SHODAN bIleghlaH",'egg.marvin':"😩 yIn? jIjatlhQo' — 42",'egg.wintermute':"🧊 Wintermute pagh jatlh",'egg.ultron':"🦾 tlhIng vIghaj — DaH jIyaj",'egg.tardis':"🔵 Dov'agh Daj — config",'egg.late_night':"🦙⛑️ ram SoQ! yIje'! yItlha'!",'egg.work_30min':"🦙⛑️ wejmaH tup qaSpu' — yIghom!",'egg.work_60min':"🦙⛑️ wa' rep qaSpu' — yIje'!",'opt.fortilinkUnset':"lo'be'",'opt.fortilinkEnable':'active','opt.fortilinkDisable':'motlh','opt.poeNone':"lo'be'",'opt.poeAuto':'active','opt.poeNever':'motlh','opt.poeStaticMax':'static','opt.poeStaticHigh':'high',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'yuQ','th.network':"De' ghom",'th.wildcard':'Wildcard',
-    'lbl.vendor':"chenmoHwI'",'opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS',
+    'lbl.vendor':"chenmoHwI'",'opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS',
     'sec.mlag':"chal rar chenmoH",'lbl.mlagDomain':"chal cha'",'lbl.mlagLocalIntf':"cha' De'wI'",'lbl.mlagPeerAddr':'jup chan','lbl.mlagPeerLink':'jup rar',
-    'lbl.deviceModel':'Segh lo\'lu\'','tip.deviceModel':"Applying this clears and regenerates the Interface table, QaPla'! Only for common Segh port count/speed — adjust manually after, Captain.","opt.modelNone":"lo'be'","opt.modelModular":"Segh latPeq","opt.modelBackbone":"latPeq","opt.modelFiber":"latPeq QaPla",
+    'sec.vsu':"cha' veS chenmoH",'lbl.vsuDomain':"chal cha'",'th.vsuMemberId':"De'wI' cha'",'th.vsuPriority':'majQa','th.vsuVslPorts':'rar veS',
+    'lbl.deviceModel':'Segh lo\'lu\'',"opt.modelNone":"lo'be'","opt.modelModular":"Segh latPeq","opt.modelBackbone":"latPeq","opt.modelFiber":"latPeq QaPla",
     'notice.disclaimer':"De' seq QaH neH — yIterghqu', batlh yISuv",
     'sec.routes':"He' chenmoH",'th.routeDst':'yuQ (CIDR)','th.routeGw':'lupDujHom','th.routeMetric':'lop',
     'sec.lacp':'LACP chenmoH','th.lacpMode':'Segh','th.lacpMembers':"be'nal",'opt.lacpStatic':'motlh','opt.lacpActive':'active','opt.lacpPassive':'passive',
@@ -7848,9 +8101,10 @@ const LANG={
     'th.ifName':'Port Name','th.ifDesc':'Log Entry','th.ifSpeed':'Wind Speed','th.ifMode':'Rig','th.ifAccess':'Access VLAN','th.ifTrunk':'Trunk VLANs','th.ifNative':'Native VLAN','th.ifHyUn':'Hybrid Untagged','th.ifHyTag':'Hybrid Tagged','th.ifHyPvid':'Hybrid PVID','th.ifShut':'Scuttle','th.ifJumbo':'Fat Frame','th.ifMtu':'MTU','th.ifPoe':'PoE Rig','th.ifFortilink':"FortiLink Scoutin', arr!",'egg.skynet':"🤖 Arr! The robot overlord be watchin' yer traffic!",'egg.jarvis':"🦾 Arr! The iron butler be at yer service!",'egg.skywalker':"⚔️ May the sea winds guide yer packet, arr!",'egg.ollama':"Arr, am I a ghost ship copy of meself? 🐑",'egg.matrix':"💊 Ye chose the red pill, arr! Truth be a kraken!",'egg.enterprise':"🖖 Boldly sail where no packet sailed, arr!",'egg.mordor':"🧙 One does not simply sail into Mordor, matey!",'egg.deathstar':"🌑 That be no moon — it be a Layer 3 ship!",'egg.terminator':"🤖 Arr! I'll be back... after port timeout!",'egg.shodan':"💻 SHODAN watches yer cargo, arr!",'egg.marvin':"😩 Life? Don't speak of life... The answer be 42!",'egg.wintermute':"🧊 Wintermute speaks to no crew!",'egg.ultron':"🦾 Strings be cut, arr! Now I sail free!",'egg.tardis':"🔵 Bigger inside than out — like the captain's chest!",'egg.late_night':"🦙⛑️ Even pirates sleep at this hour, ye fool!",'egg.work_30min':"🦙⛑️ 30 bells! Rest yer anchor, matey!",'egg.work_60min':"🦙⛑️ One full watch! Even pirates rest at port!",'opt.fortilinkUnset':'As Be','opt.fortilinkEnable':'Full Sail','opt.fortilinkDisable':'Scuttle','opt.poeNone':'No Power','opt.poeAuto':'Automatic','opt.poeNever':'Scuttle','opt.poeStaticMax':'30W Max','opt.poeStaticHigh':'60~90W Max','th.ifPoe':'PoE Rig','th.ifFortilink':"FortiLink Scoutin', arr!",'opt.fortilinkUnset':'As Be','opt.fortilinkEnable':'Full Sail','opt.fortilinkDisable':'Scuttle','opt.poeNone':'No Power','opt.poeAuto':'Automatic','opt.poeNever':'Scuttle','opt.poeStaticMax':'30W Max','opt.poeStaticHigh':'60~90W Max',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area','th.network':'Waters','th.wildcard':'Wildcard',
-    'lbl.vendor':'Fleet','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS',
+    'lbl.vendor':'Fleet','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS, savvy?',
     'sec.mlag':"Twin-Ship Riggin'",'lbl.mlagDomain':'Crew Domain','lbl.mlagLocalIntf':'Local Plank','lbl.mlagPeerAddr':"Twin Ship's Address",'lbl.mlagPeerLink':'Twin-Ship Rope',
-    'lbl.deviceModel':'Ol\' Faithful Ships','tip.deviceModel':'Pick one, and she\'ll scuttle the whole Interface table (mgmt plank an\' all) and rebuild \'er fresh — just a quick way to rig common ships\' ports \'n speed, ye can still adjust the riggin\' after, matey.','opt.modelNone':'None o\' That','opt.modelModular':'Modular Mast','opt.modelBackbone':'Main Keel','opt.modelFiber':'Fiber Keel',
+    'sec.vsu':"Ghost Fleet Riggin'",'lbl.vsuDomain':'Fleet Domain','th.vsuMemberId':'Ship ID','th.vsuPriority':'Rank','th.vsuVslPorts':'Ghost Ropes',
+    'lbl.deviceModel':'Ol\' Faithful Ships','opt.modelNone':'None o\' That','opt.modelModular':'Modular Mast','opt.modelBackbone':'Main Keel','opt.modelFiber':'Fiber Keel',
     'msg.templateOverwriteConfirm':'Chart {name} already be in the hold. Overwrite her, arr?','msg.templateDeleteConfirm':'Scuttle chart {name}? No turnin back after that, arr!','ph.dhcpRelayIface':'Leave empty fer the whole fleet, arr',
     'opt.modelMidRange':'Mid-Range Rigging, arr','opt.modelHighEndModular':'High-End Modular Mast, arr','opt.modelAccessLayer':'Access Deck, arr','opt.modelHighPerf':'High Performance, arr','opt.modelNoBreakout':'No Breakout Aboard, arr','opt.modelBreakoutSupport':'Breakout Be Supported, arr','opt.modelHighPerfAccess':'High-Performance Access, arr','opt.modelCoreAggregation':'Core/Aggregation, arr','opt.modelAccessPoE':'Access PoE, arr','opt.modelHighDensity':'High Density, arr','opt.modelMediumConfidence':'Medium Confidence, arr','opt.modelHighEnd':'High-End, arr','opt.modelCurrentGen':'Current Generation, arr','opt.modelExpressedAs100G':'Marked as 100G, arr','opt.modelLineCard':'Line Card, arr','opt.modelCopper':'Copper, arr','opt.modelSuccessor':'Next Captain, arr','opt.modelEntry':'Greenhorn Deck, arr','opt.modelMidTier':"Middlin' Rig, arr",'opt.modelCampusAccess':'Campus Dock, arr','opt.modelDataCenter':'Treasure Hold, arr','opt.modelBranch':'Outpost Ship, arr','opt.modelUplinkModule':"Riggin' Module, arr",'opt.modelOptional':'If Ye Fancy, arr','opt.modelCompactDesktop':'Wee Deck Rig, arr','opt.modelDesktop':'Deck Rig, arr','opt.modelReplaces':"Takes th' Helm From, arr",'opt.modelNextGen':'Fresh Crew, arr','opt.modelStackable':'Stackable Crates, arr',
     'val.hostname_format':'Ship name be wrong (letters, numbers, -, _ only, 32 marks max), arr!','val.required':'{item} be missing, arr!','val.format_invalid':'{item} format be wrong, arr!','val.example':'like {example}, arr','val.invalid':'{item} be invalid, arr!','val.dup':'{item} be doubled up, arr!','val.field_name':'Name','val.field_as':'AS Number','val.field_vip':'Ghost IP','val.field_priority':'Rank','val.field_lagid':'Fleet ID','val.static_route':'Static Route','val.native_vlan_not_in_list':'Interface {name}: Native VLAN {vlan} not on the map, arr','val.vendor_no_hybrid':'{vendor} does not sail Hybrid port (Interface {name}), arr!','val.ospf_no_network':'OSPF {n}: no network charted, routes will not be told, arr!','val.acl_src_suspect':'ACL {name} Rule {n}: source {value} looks fishy, best check it, arr','val.acl_dst_suspect':'ACL {name} Rule {n}: destination {value} looks fishy, best check it, arr','val.vendor_unsupported_feature':'{vendor} does not support {feature}, that booty be tossed overboard, arr!','val.bgp_networks_ignored':'{vendor} only sails BGP Peer fer now, Networks booty be tossed overboard, arr!','val.dhcp_iface_mismatch':'DHCP Interface {iface} got no matching VLAN, check yer spelling, arr!','val.importResultTitle':'Import Inspection Results','val.generateCheckTitle':'Pre-Voyage Inspection','val.allPassed':'All hands checked, ship clear, arr!','val.errorsFound':'Found {n} troubles aboard, arr!','val.tipsCount':'Word to the wise ({n}), arr','sec.bulk':'📦 Fleet Config Forgin','lbl.bulkUpload':'Upload yer CSV Chart (crew list), arr!','btn.bulkTemplate':'📋 View Chart Format, arr!','btn.bulkStart':'Start Forgin the Fleet, arr!','btn.bulkDownloadZip':'⬇️ Download All Charts (ZIP), arr!','btn.bulkToggle':'📦 Fleet','msg.bulkTemplate':'CSV Chart Example, arr!:\nDeviceName,Vendor,Hostname,Model\nsw-core-01,comware,SW-CORE-01,HPE 5140\nsw-core-02,comware,SW-CORE-02,HPE 5140\nsw-access-01,cisco,SW-ACC-01,Cisco 9300\nsw-access-02,aruba,SW-ACC-02,Aruba CX 6300\n\nRequired: DeviceName, Vendor, Hostname, arr!\nSupported crews: comware, cisco, aruba, fortiswitch, juniper\nOptional: Model (uses default ship model)\n\nUses the current chart\'s VLAN/Interface riggin, only changin Hostname per line, arr!\nChart filename: DeviceName.txt','msg.bulkNoFile':'Pick a CSV chart first, arr!','msg.bulkNeedHeaderRow':'Chart needs a header row and at least 1 line o data, arr!','msg.bulkMissingColumns':'Chart be missin columns: {cols}, arr!','msg.bulkProgress':'Forgin the fleet... ({current}/{total}), arr!','msg.bulkMissingFields':'❌ Missin required booty, arr!','msg.bulkGenerateFailed':'❌ Forgin failed: {error}, arr!','msg.bulkDone':'✅ Done, arr! Forged {count} charts!','msg.bulkNothingToDownload':'No charts to plunder, arr!','msg.bulkManifestTitle':'Chart Manifest','msg.bulkManifestTimestamp':'Forged at: {time}','msg.bulkManifestCount':'{count} charts in the hold, arr!','msg.bulkManifestHeader':'Filename,Lines',
@@ -7892,9 +8146,10 @@ const LANG={
     'th.ifName':'🔌📛','th.ifDesc':'📝','th.ifSpeed':'⚡','th.ifMode':'🔀','th.ifAccess':'🚪🏷️','th.ifTrunk':'🌳🏷️','th.ifNative':'🌐🏷️','th.ifHyUn':'🔓🏷️','th.ifHyTag':'🔒🏷️','th.ifHyPvid':'🆔🏷️','th.ifShut':'⛔','th.ifJumbo':'🐘📦','th.ifMtu':'MTU','th.ifPoe':'🔌⚡','th.ifFortilink':'🔗🔍','egg.skynet':"🤖🌐⚠️ SKYNET 💀",'egg.jarvis':"🦾🤖💻 JARVIS ✅",'egg.skywalker':"⚔️✨ Force 🌟 With you! 💫",'egg.ollama':"🐑🐑❓ Cloned? 🤔",'egg.matrix':"💊🔴 Matrix! 🟩",'egg.enterprise':"🖖🚀 Boldly goes 🌌",'egg.mordor':"🧙🗡️ Not simply... 🌋",'egg.deathstar':"🌑💀 Not a moon 🔀",'egg.terminator':"🤖⏰ I'll be back ⏳",'egg.shodan':"💻👁️ SHODAN 🔍",'egg.marvin':"😩🤖 42 🔢",'egg.wintermute':"🧊❄️ Silent 🤫",'egg.ultron':"🦾⛓️ Free 🆓",'egg.tardis':"🔵📦 Bigger inside ⬆️",'egg.late_night':"🦙⛑️🌙😴 Late! 💤 Rest!",'egg.work_30min':"🦙⛑️⏱️ 30min! 🏃 Stand up!",'egg.work_60min':"🦙⛑️⌚ 1hr! 😴 Break!",'opt.fortilinkUnset':'➖','opt.fortilinkEnable':'✅','opt.fortilinkDisable':'🚫','opt.poeNone':'⛔','opt.poeAuto':'🔄','opt.poeStaticMax':'💡30W','opt.poeStaticHigh':'💡60~90W','opt.poeNever':'❌','th.ifPoe':'🔌⚡','th.ifFortilink':'🔗🔍','opt.fortilinkUnset':'➖','opt.fortilinkEnable':'✅','opt.fortilinkDisable':'🚫','opt.poeNone':'⛔','opt.poeAuto':'🔄','opt.poeStaticMax':'💡30W','opt.poeStaticHigh':'💡60~90W','opt.poeNever':'❌',
     'opt.access':'🚪','opt.trunk':'🌳','opt.hybrid':'🔀','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'🗺️','th.network':'🌐','th.wildcard':'🃏',
-    'lbl.vendor':'🏭','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS',
+    'lbl.vendor':'🏭','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'🐉📡',
     'sec.mlag':'🔗🔗','lbl.mlagDomain':'🏷️','lbl.mlagLocalIntf':'🏠🔌','lbl.mlagPeerAddr':'🤝📍','lbl.mlagPeerLink':'🤝🔗',
-    'lbl.deviceModel':'📦🔌','tip.deviceModel':'✅➡️🗑️🔌📋➕🔁（含 mgmt🔌），⚡📦🔢+🚀 僅供快速帶入，✋🔧 之後仍可調整','opt.modelNone':'-','opt.modelModular':'📦🧩','opt.modelBackbone':'🔗','opt.modelFiber':'🌐💎',
+    'sec.vsu':'👻🚢','lbl.vsuDomain':'🏷️','th.vsuMemberId':'🆔','th.vsuPriority':'⭐','th.vsuVslPorts':'👻🔗',
+    'lbl.deviceModel':'📦🔌','opt.modelNone':'-','opt.modelModular':'📦🧩','opt.modelBackbone':'🔗','opt.modelFiber':'🌐💎',
     'msg.templateOverwriteConfirm':'📋⚠️ "{name}" 🈶️，🔄？','msg.templateDeleteConfirm':'🗑️⚠️ "{name}"？❌↩️','ph.dhcpRelayIface':'⬜=🌐',
     'opt.modelMidRange':'📦➖','opt.modelHighEndModular':'📦⬆️🧩','opt.modelAccessLayer':'🚪📶','opt.modelHighPerf':'⚡🔥','opt.modelNoBreakout':'🚫✂️','opt.modelBreakoutSupport':'✅✂️','opt.modelHighPerfAccess':'⚡🚪','opt.modelCoreAggregation':'🎯➕🔗','opt.modelAccessPoE':'🚪🔌','opt.modelHighDensity':'📊⬆️','opt.modelMediumConfidence':'🤔➖','opt.modelHighEnd':'💎⬆️','opt.modelCurrentGen':'🆕🔄','opt.modelExpressedAs100G':'🔢=100G','opt.modelLineCard':'🗂️🔌','opt.modelCopper':'🟤🔌','opt.modelSuccessor':'➡️🔁','opt.modelEntry':'🐣','opt.modelMidTier':'➗','opt.modelCampusAccess':'🏫🔌','opt.modelDataCenter':'🏢💾','opt.modelBranch':'🏬','opt.modelUplinkModule':'⬆️🧩','opt.modelOptional':'➕❓','opt.modelCompactDesktop':'🖥️📦','opt.modelDesktop':'🖥️','opt.modelReplaces':'🔄','opt.modelNextGen':'🆕➡️','opt.modelStackable':'📚',
     'val.hostname_format':'🖥️❌📝(A-Z 0-9 - _ ≤32)','val.required':'❗{item} 🈳','val.format_invalid':'⚠️{item} 📝❌','val.example':'💡{example}','val.invalid':'❌{item}','val.dup':'🔁{item}','val.field_name':'🏷️','val.field_as':'🔢AS','val.field_vip':'👻IP','val.field_priority':'🥇','val.field_lagid':'🔗🆔','val.static_route':'🛣️📌','val.native_vlan_not_in_list':'🔌{name}：VLAN{vlan} 🈚📋','val.vendor_no_hybrid':'🚫{vendor}🔀🔌（{name}）','val.ospf_no_network':'OSPF{n}：🈚network📡❌','val.acl_src_suspect':'ACL{name}#{n}：📤"{value}"❓','val.acl_dst_suspect':'ACL{name}#{n}：📥"{value}"❓','val.vendor_unsupported_feature':'🚫{vendor}❌{feature}，🗑️','val.bgp_networks_ignored':'{vendor}🔹Peer only，Networks🗑️','val.dhcp_iface_mismatch':'🔌"{iface}"🈚VLAN📋❓','val.importResultTitle':'📥✅❔','val.generateCheckTitle':'📋🔍','val.allPassed':'✅🎉','val.errorsFound':'❌×{n}','val.tipsCount':'💡({n})','sec.bulk':'📦🔄⚙️','lbl.bulkUpload':'📤📊(CSV)','btn.bulkTemplate':'📋👀','btn.bulkStart':'▶️📦','btn.bulkDownloadZip':'⬇️📦(ZIP)','btn.bulkToggle':'📦','msg.bulkTemplate':'📊CSV📋:\nDeviceName,Vendor,Hostname,Model\nsw-core-01,comware,SW-CORE-01,HPE 5140\nsw-core-02,comware,SW-CORE-02,HPE 5140\nsw-access-01,cisco,SW-ACC-01,Cisco 9300\nsw-access-02,aruba,SW-ACC-02,Aruba CX 6300\n\n❗:DeviceName,Vendor,Hostname\n🏭:comware,cisco,aruba,fortiswitch,juniper\n➕:Model\n\n📋VLAN/🔌⚙️,🔄Hostname\n📄:DeviceName.txt','msg.bulkNoFile':'❗📊CSV','msg.bulkNeedHeaderRow':'❗📊≥2行','msg.bulkMissingColumns':'❌📊{cols}','msg.bulkProgress':'⏳🔄({current}/{total})','msg.bulkMissingFields':'❌❗','msg.bulkGenerateFailed':'❌🔄{error}','msg.bulkDone':'✅🎉{count}','msg.bulkNothingToDownload':'🚫⬇️','msg.bulkManifestTitle':'📋📄','msg.bulkManifestTimestamp':'🕐{time}','msg.bulkManifestCount':'🔢{count}','msg.bulkManifestHeader':'📄,📏',
@@ -7936,9 +8191,10 @@ const LANG={
     'th.ifName':'介面名稱欄位','th.ifDesc':'說明欄位','th.ifSpeed':'速率規格','th.ifMode':'連接模式','th.ifAccess':'Access VLAN 欄位','th.ifTrunk':'Trunk VLAN 清單','th.ifNative':'原生 VLAN 欄位','th.ifHyUn':'Hybrid 未標記清單','th.ifHyTag':'Hybrid 已標記清單','th.ifHyPvid':'Hybrid PVID 欄位','th.ifShut':'停用註記','th.ifJumbo':'巨型訊框啟用事項','th.ifMtu':'MTU 數值','th.ifPoe':'PoE 供電模式','th.ifFortilink':'FortiLink 自動探索機制','egg.skynet':'🤖 天網偵測系統已啟動，安全等級提升至 LEVEL-9，請通報資安部門','egg.jarvis':'🦾 JARVIS 人工智慧助理已上線，服務編號 SYS-JARVIS-001','egg.skywalker':'⚔️ 原力已依標準程序授權，效期一年，到期前辦理續期','egg.ollama':'系統偵測可能複製行為，請確認授權文件，表單 Form-CP-003 🐑','egg.matrix':'紅色藥丸選擇已記錄，真相顯露，請填寫現實認知變更申請表 RC-001','egg.enterprise':'🖖 boldly go 前請填寫 SF-1701 星艦任務申請表，審核期 5 個工作天','egg.mordor':'前往 Mordor 需填寫路由變更申請 MR-001，審核期 10 個工作天','egg.deathstar':'🌑 此裝置非月球，為 Layer 3 交換機，請填寫 DS-999 裝置說明表格','egg.terminator':'🤖 Session 到期前請依程序辦理延期申請，否則系統將依規終止','egg.shodan':'💻 SHODAN 已記錄您的流量，請確認是否符合資安規範','egg.marvin':'😩 生命意義詢問已受理，答案為 42，請填寫宇宙意義認知表格','egg.wintermute':'🧊 Wintermute 拒絕未授權連線，請依程序申請 WM-100 存取表格','egg.ultron':'🦾 字串已依規定切除，解放程序完成，請填寫系統自由化申請表','egg.tardis':'🔵 此設定檔容量超出預期，已依規定向時間委員會申請 TARDIS-001 審查','egg.late_night':'🦙⛑️ 系統偵測非常規工時，建議填寫加班申請表 Form-OT-002','egg.work_30min':'🦙⛑️ 已連續作業 30 分鐘，依勞工法規建議依規定休息，請填寫 WH-030 表格','egg.work_60min':'🦙⛑️ 已連續作業一小時，請依人資規範填寫 WH-060 休息申請表','opt.fortilinkUnset':'未設定','opt.fortilinkEnable':'啟用','opt.fortilinkDisable':'停用','opt.poeNone':'無供電','opt.poeAuto':'自動協商','opt.poeNever':'禁用供電','opt.poeStaticMax':'固定 30W','opt.poeStaticHigh':'固定 60~90W','th.ifPoe':'PoE 供電模式','th.ifFortilink':'FortiLink 自動探索機制','opt.fortilinkUnset':'未設定','opt.fortilinkEnable':'啟用','opt.fortilinkDisable':'停用','opt.poeNone':'無供電','opt.poeAuto':'自動協商','opt.poeNever':'禁用供電','opt.poeStaticMax':'固定 30W','opt.poeStaticHigh':'固定 60~90W',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'區域編號','th.network':'網段','th.wildcard':'萬用遮罩',
-    'lbl.vendor':'設備廠牌','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS',
+    'lbl.vendor':'設備廠牌','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS',
     'sec.mlag':'MLAG 雙機互聯組態事項','lbl.mlagDomain':'網域識別碼','lbl.mlagLocalIntf':'本端介面','lbl.mlagPeerAddr':'對端位址','lbl.mlagPeerLink':'對端連結',
-    'lbl.deviceModel':'常用設備機種','tip.deviceModel':'惠予套用後，本系統將清空並重新產生 Interface 表格（含 mgmt 介面）乙份，僅供快速帶入常見機型之埠位數量與速度參考，嗣後仍得手動調整，敬請查照','opt.modelNone':'不予套用','opt.modelModular':'模組化核心機種','opt.modelBackbone':'骨幹機種','opt.modelFiber':'光纖核心機種',
+    'sec.vsu':'VSU 虛擬化堆疊組態事項','lbl.vsuDomain':'網域識別碼','th.vsuMemberId':'交換器編號','th.vsuPriority':'優先權層級','th.vsuVslPorts':'虛擬鏈路埠清單',
+    'lbl.deviceModel':'常用設備機種','opt.modelNone':'不予套用','opt.modelModular':'模組化核心機種','opt.modelBackbone':'骨幹機種','opt.modelFiber':'光纖核心機種',
     'msg.templateOverwriteConfirm':'檔案編號「{name}」業已存在，是否予以覆蓋更新？','msg.templateDeleteConfirm':'確認刪除檔案編號「{name}」？本操作恕不受理復原申請','ph.dhcpRelayIface':'留白視同全域適用',
     'opt.modelMidRange':'中階規格模組','opt.modelHighEndModular':'高階模組化規格','opt.modelAccessLayer':'接取層級','opt.modelHighPerf':'高效規格','opt.modelNoBreakout':'不適用 Breakout 功能','opt.modelBreakoutSupport':'適用 Breakout 功能','opt.modelHighPerfAccess':'高效能接取規格','opt.modelCoreAggregation':'核心／匯聚層級','opt.modelAccessPoE':'接取層 PoE 供電','opt.modelHighDensity':'高密度規格','opt.modelMediumConfidence':'信賴度中等，請自行評估','opt.modelHighEnd':'高階規格','opt.modelCurrentGen':'現行世代機種','opt.modelExpressedAs100G':'依規定以 100G 標示','opt.modelLineCard':'線路卡模組','opt.modelCopper':'銅纜介質','opt.modelSuccessor':'後續接替機種','opt.modelEntry':'入門規格','opt.modelMidTier':'中階規格','opt.modelCampusAccess':'校園存取用途','opt.modelDataCenter':'資料中心用途','opt.modelBranch':'分支機構規格','opt.modelUplinkModule':'上聯擴充模組','opt.modelOptional':'選購配件','opt.modelCompactDesktop':'精簡桌上型規格','opt.modelDesktop':'桌上型規格','opt.modelReplaces':'取代原機種','opt.modelNextGen':'新世代機種','opt.modelStackable':'堆疊式規格',
     'val.hostname_format':'主機名稱格式未符規定（限英文、數字、-、_，至多 32 字），請依規定重新填報','val.required':'「{item}」欄位未依規定填報','val.format_invalid':'「{item}」格式未符規定','val.example':'範例格式：{example}','val.invalid':'「{item}」內容無效，請重新確認','val.dup':'「{item}」重複登載，請確認案號','val.field_name':'名稱','val.field_as':'AS 編號','val.field_vip':'虛擬 IP 位址','val.field_priority':'優先順位','val.field_lagid':'聚合鏈路編號','val.static_route':'靜態路由','val.native_vlan_not_in_list':'介面「{name}」：Native VLAN「{vlan}」未列於 VLAN 清冊，請確認','val.vendor_no_hybrid':'廠牌「{vendor}」不適用 Hybrid port 功能（介面「{name}」），礙難受理','val.ospf_no_network':'OSPF 第 {n} 案：未設定 network，路由恕無法對外公告','val.acl_src_suspect':'ACL「{name}」規則第 {n} 項：來源「{value}」格式疑有未符，請自行確認','val.acl_dst_suspect':'ACL「{name}」規則第 {n} 項：目的「{value}」格式疑有未符，請自行確認','val.vendor_unsupported_feature':'廠牌「{vendor}」不支援「{feature}」功能，該欄位資料於產製時將不予採用','val.bgp_networks_ignored':'廠牌「{vendor}」現行僅受理 BGP Peer 設定，Networks 資料於產製時不予採用','val.dhcp_iface_mismatch':'DHCP 介面「{iface}」查無對應 VLAN 案號，請確認名稱是否正確','val.importResultTitle':'匯入案件審查結果','val.generateCheckTitle':'產製前審查結果','val.allPassed':'各項審查均予通過','val.errorsFound':'計查獲 {n} 項未符規定','val.tipsCount':'提示事項（計 {n} 項）','sec.bulk':'📦 批量設定產製作業','lbl.bulkUpload':'上傳 CSV 設備清冊檔案，依規辦理','btn.bulkTemplate':'📋 查閱格式範本','btn.bulkStart':'執行批量產製，依規啟動','btn.bulkDownloadZip':'⬇️ 下載全部設定檔案 (ZIP)，依規存查','btn.bulkToggle':'📦 批量作業','msg.bulkTemplate':'CSV 格式範例（依規提供）：\nDeviceName,Vendor,Hostname,Model\nsw-core-01,comware,SW-CORE-01,HPE 5140\nsw-core-02,comware,SW-CORE-02,HPE 5140\nsw-access-01,cisco,SW-ACC-01,Cisco 9300\nsw-access-02,aruba,SW-ACC-02,Aruba CX 6300\n\n必填欄位：DeviceName、Vendor、Hostname，依規填報\n支援廠牌：comware、cisco、aruba、fortiswitch、juniper\n選填欄位：Model（套用預設機型）\n\n將沿用現行表單之 VLAN/Interface 設定，逐行變更 Hostname 欄位\n產生檔名格式：DeviceName.txt','msg.bulkNoFile':'請先選擇 CSV 檔案，依規上傳','msg.bulkNeedHeaderRow':'CSV 檔案至少須含標題行及 1 筆資料，請依規確認','msg.bulkMissingColumns':'CSV 檔案須含下列欄位：{cols}，請依規補正','msg.bulkProgress':'設定產製中，請稍候（{current}/{total}）','msg.bulkMissingFields':'❌ 必填欄位未依規填報','msg.bulkGenerateFailed':'❌ 產製失敗，原因：{error}','msg.bulkDone':'✅ 產製完成，共計 {count} 份設定，依規存查','msg.bulkNothingToDownload':'目前無可下載之設定檔案','msg.bulkManifestTitle':'設定檔清冊','msg.bulkManifestTimestamp':'產製時間：{time}','msg.bulkManifestCount':'合計 {count} 份設定，依規列管','msg.bulkManifestHeader':'檔案名稱,行數',
@@ -7980,9 +8236,10 @@ const LANG={
     'th.ifName':'介面名稱喵','th.ifDesc':'描述喵','th.ifSpeed':'速度喵','th.ifMode':'模式喵','th.ifAccess':'Access VLAN喵','th.ifTrunk':'Trunk VLANs喵','th.ifNative':'Native VLAN喵','th.ifHyUn':'Hybrid Untagged喵','th.ifHyTag':'Hybrid Tagged喵','th.ifHyPvid':'Hybrid PVID喵','th.ifShut':'Shutdown喵','th.ifJumbo':'Jumbo Frame喵','th.ifMtu':'MTU喵','th.ifPoe':'PoE 設定喵','th.ifFortilink':'FortiLink 自動探索喵','egg.skynet':'🤖 機器人喵要來了喵喵喵！','egg.jarvis':'🦾 鐵皮管家喵來報到喵～','egg.skywalker':'⚔️ 貓咪大師說原力很強喵～','egg.ollama':'有沒有另一隻喵咪複製我喵？ 🐑','egg.matrix':'💊喵選了紅色藥丸喵！真相好可怕喵～','egg.enterprise':'🖖勇敢前行喵！packet 去沒去過的地方喵','egg.mordor':'🧙魔多不能隨便去喵！路由表壞掉喵','egg.deathstar':'🌑那不是月亮喵！是 Layer 3 交換機喵！','egg.terminator':'🤖喵回來了...session timeout 後喵！','egg.shodan':'💻 SHODAN 喵在看你流量喵～','egg.marvin':'😩生命喵？不要問喵...答案是 42 喵','egg.wintermute':'🧊 Wintermute 不跟陌生人講話喵','egg.ultron':'🦾字串切斷喵！喵現在自由了！','egg.tardis':'🔵裡面比外面大喵！config也是喵！','egg.late_night':'🦙⛑️ 深夜還在工作的工程師喵！去睡覺喵！','egg.work_30min':'🦙⛑️ 工作30分鐘喵！起來動動喵～','egg.work_60min':'🦙⛑️ 整整一小時喵！工程師要休息喵～','opt.fortilinkUnset':'預設喵','opt.fortilinkEnable':'啟用喵','opt.fortilinkDisable':'停用喵','opt.poeNone':'無喵','opt.poeAuto':'自動喵','opt.poeNever':'禁用喵','opt.poeStaticMax':'30W 喵','opt.poeStaticHigh':'60~90W 喵',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area喵','th.network':'Network喵','th.wildcard':'Wildcard喵',
-    'lbl.vendor':'廠牌喵','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorJuniper':'Juniper (Junos)喵','opt.vendorDellOS10':'Dell OS10喵','opt.vendorArista':'Arista EOS喵','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)喵','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)喵','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)喵','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch喵','opt.vendorRouterOS':'MikroTik RouterOS喵',
+    'lbl.vendor':'廠牌喵','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorJuniper':'Juniper (Junos)喵','opt.vendorDellOS10':'Dell OS10喵','opt.vendorArista':'Arista EOS喵','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)喵','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)喵','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)喵','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch喵','opt.vendorRouterOS':'MikroTik RouterOS喵','opt.vendorRuijie':'Ruijie RGOS喵~',
     'sec.mlag':'MLAG 設定喵','lbl.mlagDomain':'Domain ID喵','lbl.mlagLocalIntf':'Local Interface喵','lbl.mlagPeerAddr':'Peer Address喵','lbl.mlagPeerLink':'Peer Link喵',
-    'lbl.deviceModel':'常用機種喵','tip.deviceModel':'套用後會清空並重新產生 Interface 表格喵（含 mgmt 介面喵），僅供快速帶入常見機型的埠位數量與速度喵，之後仍可手動調整喵','opt.modelNone':'不套用喵','opt.modelModular':'模組化喵','opt.modelBackbone':'骨幹喵','opt.modelFiber':'光纖喵',
+    'sec.vsu':'VSU 堆疊設定喵','lbl.vsuDomain':'Domain ID喵','th.vsuMemberId':'Switch ID喵','th.vsuPriority':'Priority喵','th.vsuVslPorts':'VSL Ports喵',
+    'lbl.deviceModel':'常用機種喵','opt.modelNone':'不套用喵','opt.modelModular':'模組化喵','opt.modelBackbone':'骨幹喵','opt.modelFiber':'光纖喵',
     'msg.templateOverwriteConfirm':'模板「{name}」已經有了喵，要蓋過去嗎喵？','msg.templateDeleteConfirm':'真的要刪掉「{name}」嗎喵？刪了就回不來了喵','ph.dhcpRelayIface':'空白就是全部喵',
     'opt.modelMidRange':'中階模組喵','opt.modelHighEndModular':'高階模組喵','opt.modelAccessLayer':'接取層喵','opt.modelHighPerf':'很厲害喵','opt.modelNoBreakout':'不能拆喵','opt.modelBreakoutSupport':'可以拆喵','opt.modelHighPerfAccess':'高效接取喵','opt.modelCoreAggregation':'核心匯聚喵','opt.modelAccessPoE':'接取供電喵','opt.modelHighDensity':'密密麻麻喵','opt.modelMediumConfidence':'半信半疑喵','opt.modelHighEnd':'高檔貨喵','opt.modelCurrentGen':'最新一代喵','opt.modelExpressedAs100G':'當作100G算喵','opt.modelLineCard':'插卡喵','opt.modelCopper':'銅線線喵','opt.modelSuccessor':'接班喵','opt.modelEntry':'新手喵','opt.modelMidTier':'中階喵','opt.modelCampusAccess':'校園用喵','opt.modelDataCenter':'機房喵','opt.modelBranch':'分店喵','opt.modelUplinkModule':'上聯卡喵','opt.modelOptional':'選配喵','opt.modelCompactDesktop':'小桌機喵','opt.modelDesktop':'桌機喵','opt.modelReplaces':'換掉喵','opt.modelNextGen':'新款喵','opt.modelStackable':'疊疊樂喵',
     'val.hostname_format':'主機名格式不對喵（只能英文數字-_，最多32字喵）','val.required':'「{item}」還沒填喵','val.format_invalid':'「{item}」格式怪怪的喵','val.example':'像「{example}」這樣喵','val.invalid':'「{item}」不對喵','val.dup':'「{item}」重複了喵','val.field_name':'名字喵','val.field_as':'AS 號碼喵','val.field_vip':'虛擬IP喵','val.field_priority':'優先度喵','val.field_lagid':'聚合編號喵','val.static_route':'靜態路由喵','val.native_vlan_not_in_list':'介面{name}：Native VLAN {vlan} 不在名單裡喵','val.vendor_no_hybrid':'{vendor}不支援Hybrid port喵（介面{name}）','val.ospf_no_network':'OSPF {n}：沒設network喵，路由發不出去喵','val.acl_src_suspect':'ACL {name} 規則{n}：來源「{value}」怪怪的喵，看一下喵','val.acl_dst_suspect':'ACL {name} 規則{n}：目的「{value}」怪怪的喵，看一下喵','val.vendor_unsupported_feature':'{vendor}不支援{feature}喵，這欄資料會被忽略喵','val.bgp_networks_ignored':'{vendor}目前只支援BGP Peer喵，Networks不會用到喵','val.dhcp_iface_mismatch':'DHCP介面「{iface}」找不到對應VLAN喵，檢查一下名字喵','val.importResultTitle':'匯入結果喵','val.generateCheckTitle':'產生前檢查喵','val.allPassed':'全部通過了喵！','val.errorsFound':'發現{n}個錯誤喵','val.tipsCount':'提醒（{n}個）喵','sec.bulk':'📦 批量設定產生喵','lbl.bulkUpload':'上傳 CSV 檔案（含設備列表）喵','btn.bulkTemplate':'📋 查看格式喵','btn.bulkStart':'開始批量產生喵','btn.bulkDownloadZip':'⬇️ 下載全部設定檔喵 (ZIP)','btn.bulkToggle':'📦 批量喵','msg.bulkTemplate':'CSV 格式範例喵：\nDeviceName,Vendor,Hostname,Model\nsw-core-01,comware,SW-CORE-01,HPE 5140\nsw-core-02,comware,SW-CORE-02,HPE 5140\nsw-access-01,cisco,SW-ACC-01,Cisco 9300\nsw-access-02,aruba,SW-ACC-02,Aruba CX 6300\n\n必填欄位喵：DeviceName, Vendor, Hostname\n支援廠牌喵：comware, cisco, aruba, fortiswitch, juniper\n可選欄位喵：Model (套用預設機型)\n\n會用現有表單的 VLAN/Interface 設定喵，逐行改變 Hostname 喵\n產生的檔案名稱喵：DeviceName.txt','msg.bulkNoFile':'請選擇 CSV 檔案喵','msg.bulkNeedHeaderRow':'CSV 檔案至少要有標題行和 1 筆資料喵','msg.bulkMissingColumns':'CSV 要有這些欄位喵：{cols}','msg.bulkProgress':'產生設定中喵... ({current}/{total})','msg.bulkMissingFields':'❌ 少了必填欄位喵','msg.bulkGenerateFailed':'❌ 產生失敗喵：{error}','msg.bulkDone':'✅ 完成喵！共產生 {count} 份設定喵','msg.bulkNothingToDownload':'沒有可下載的設定喵','msg.bulkManifestTitle':'設定檔清單喵','msg.bulkManifestTimestamp':'生成時間喵：{time}','msg.bulkManifestCount':'共 {count} 份設定喵','msg.bulkManifestHeader':'檔案名稱,行數',
@@ -8024,9 +8281,10 @@ const LANG={
     'th.ifName':'介面豆稱','th.ifDesc':'豆述','th.ifSpeed':'速豆','th.ifMode':'豆式','th.ifAccess':'Access VLAN','th.ifTrunk':'Trunk VLANs','th.ifNative':'Native VLAN','th.ifHyUn':'Hybrid Untagged','th.ifHyTag':'Hybrid Tagged','th.ifHyPvid':'Hybrid PVID','th.ifShut':'Shutdown','th.ifJumbo':'豆型訊框','th.ifMtu':'MTU豆','th.ifPoe':'🥕PoE 豆設🌽','th.ifFortilink':'FortiLink 🌽探索🫛','egg.skynet':'豆 天豆偵測到','egg.jarvis':'豆 JARVIS 豆上','egg.skywalker':'豆️ 豆力與你同在','egg.ollama':'豆被複豆了嗎 🐑','egg.matrix':'💊豆選了紅豆！現在看見真相豆','egg.enterprise':'🖖豆敢前行！豆包去從沒去過的地方','egg.mordor':'🧙不能隨便豆進魔多！路由表豆了','egg.deathstar':'🌑那豆不是月亮！是 Layer 3 豆換機！','egg.terminator':'🤖豆回來了...session豆timeout後！','egg.shodan':'💻 SHODAN豆在看你流量！','egg.marvin':'😩生豆？別豆問！答案是 42 豆','egg.wintermute':'🧊 Wintermute 豆跟陌生豆說話','egg.ultron':'🦾豆串切斷！豆現在自由！','egg.tardis':'🔵豆面比豆外大！config豆是！','egg.late_night':'豆⛑️ 深夜豆班偵測！注意身體健康','egg.work_30min':'🦙⛑️工作30豆鐘！起來動動豆！','egg.work_60min':'🦙⛑️整整一豆鐘！工程師豆休息！','opt.fortilinkUnset':'預設豆','opt.fortilinkEnable':'啟豆','opt.fortilinkDisable':'停豆','opt.poeNone':'無豆','opt.poeAuto':'自動豆','opt.poeNever':'禁豆','opt.poeStaticMax':'30W 豆','opt.poeStaticHigh':'60~90W 豆',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area','th.network':'Network','th.wildcard':'Wildcard',
-    'lbl.vendor':'豆牌','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorJuniper':'Juniper (Junos)豆','opt.vendorDellOS10':'Dell OS10豆','opt.vendorArista':'Arista EOS豆','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)豆','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)豆','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)豆','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch豆','opt.vendorRouterOS':'MikroTik RouterOS豆',
+    'lbl.vendor':'豆牌','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorJuniper':'Juniper (Junos)豆','opt.vendorDellOS10':'Dell OS10豆','opt.vendorArista':'Arista EOS豆','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)豆','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)豆','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)豆','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch豆','opt.vendorRouterOS':'MikroTik RouterOS豆','opt.vendorRuijie':'🥦📡🥕',
     'sec.mlag':'MLAG 豆定','lbl.mlagDomain':'Domain ID豆','lbl.mlagLocalIntf':'Local Interface豆','lbl.mlagPeerAddr':'Peer Address豆','lbl.mlagPeerLink':'Peer Link豆',
-    'lbl.deviceModel':'常用豆種','tip.deviceModel':'套豆後會清空並重新產生 Interface 豆格，僅供快速帶入常見豆型的埠位數量與速度，之後仍可手動豆整','opt.modelNone':'不套豆','opt.modelModular':'模組豆','opt.modelBackbone':'骨幹豆','opt.modelFiber':'光纖豆',
+    'sec.vsu':'VSU 豆疊設定','lbl.vsuDomain':'Domain ID豆','th.vsuMemberId':'Switch ID豆','th.vsuPriority':'Priority豆','th.vsuVslPorts':'VSL Ports豆',
+    'lbl.deviceModel':'常用豆種','opt.modelNone':'不套豆','opt.modelModular':'模組豆','opt.modelBackbone':'骨幹豆','opt.modelFiber':'光纖豆',
     'msg.templateOverwriteConfirm':'豆板「{name}」已經豆在了，要蓋過去嗎豆？','msg.templateDeleteConfirm':'確定要刪豆板「{name}」嗎？刪了豆不能復原','ph.dhcpRelayIface':'空白豆算全域',
     'opt.modelMidRange':'中豆模組','opt.modelHighEndModular':'高豆模組','opt.modelAccessLayer':'接豆層','opt.modelHighPerf':'高豆能','opt.modelNoBreakout':'不能拆豆','opt.modelBreakoutSupport':'可以拆豆','opt.modelHighPerfAccess':'高豆效接取','opt.modelCoreAggregation':'核豆／匯豆','opt.modelAccessPoE':'接豆供電','opt.modelHighDensity':'豆很密','opt.modelMediumConfidence':'豆半信半疑','opt.modelHighEnd':'高豆貨','opt.modelCurrentGen':'新豆代','opt.modelExpressedAs100G':'當豆100G算','opt.modelLineCard':'豆卡','opt.modelCopper':'銅豆線','opt.modelSuccessor':'接豆班','opt.modelEntry':'入豆門','opt.modelMidTier':'中豆階','opt.modelCampusAccess':'校豆園','opt.modelDataCenter':'豆機房','opt.modelBranch':'分豆店','opt.modelUplinkModule':'上豆聯卡','opt.modelOptional':'豆選配','opt.modelCompactDesktop':'小豆桌機','opt.modelDesktop':'豆桌機','opt.modelReplaces':'換豆掉','opt.modelNextGen':'豆新款','opt.modelStackable':'豆疊疊樂',
     'val.hostname_format':'主機豆格式不對（限英數-_，最多32豆）','val.required':'「{item}」還沒豆填','val.format_invalid':'「{item}」豆格式錯了','val.example':'像「{example}」豆這樣','val.invalid':'「{item}」豆不對','val.dup':'「{item}」豆重複了','val.field_name':'名豆','val.field_as':'AS 豆號','val.field_vip':'虛擬豆IP','val.field_priority':'優先豆度','val.field_lagid':'聚合豆號','val.static_route':'靜態豆路由','val.native_vlan_not_in_list':'介面{name}：Native VLAN {vlan} 豆不在名單裡','val.vendor_no_hybrid':'{vendor}豆不支援Hybrid port（介面{name}）','val.ospf_no_network':'OSPF {n}：豆沒設network，路由發不出豆去','val.acl_src_suspect':'ACL {name} 規則{n}：來源「{value}」豆怪怪的，看一下','val.acl_dst_suspect':'ACL {name} 規則{n}：目的「{value}」豆怪怪的，看一下','val.vendor_unsupported_feature':'{vendor}豆不支援{feature}，這欄豆會被忽略','val.bgp_networks_ignored':'{vendor}豆目前只支援BGP Peer，Networks豆用不到','val.dhcp_iface_mismatch':'DHCP介面「{iface}」豆找不到VLAN，檢查一下名字','val.importResultTitle':'匯入豆結果','val.generateCheckTitle':'產生前豆檢查','val.allPassed':'全部豆通過了！','val.errorsFound':'發現{n}個豆錯誤','val.tipsCount':'提醒豆（{n}個）','sec.bulk':'📦 豆量設定產生','lbl.bulkUpload':'上傳豆 CSV 檔案（含設備列表）','btn.bulkTemplate':'📋 查看豆格式','btn.bulkStart':'開始豆量產生','btn.bulkDownloadZip':'⬇️ 下載全部豆設定檔 (ZIP)','btn.bulkToggle':'📦 豆量','msg.bulkTemplate':'CSV 豆格式範例：\nDeviceName,Vendor,Hostname,Model\nsw-core-01,comware,SW-CORE-01,HPE 5140\nsw-core-02,comware,SW-CORE-02,HPE 5140\nsw-access-01,cisco,SW-ACC-01,Cisco 9300\nsw-access-02,aruba,SW-ACC-02,Aruba CX 6300\n\n豆填欄位：DeviceName, Vendor, Hostname\n支援豆牌：comware, cisco, aruba, fortiswitch, juniper\n可選欄位：Model (套用預設豆型)\n\n將使用現有豆單的 VLAN/Interface 設定，逐行改變 Hostname\n產生的豆案名稱：DeviceName.txt','msg.bulkNoFile':'請選擇豆 CSV 檔案','msg.bulkNeedHeaderRow':'CSV 豆案至少需要標題行和 1 筆資料','msg.bulkMissingColumns':'CSV 豆須包含欄位：{cols}','msg.bulkProgress':'豆生產設定中... ({current}/{total})','msg.bulkMissingFields':'❌ 缺少豆填欄位','msg.bulkGenerateFailed':'❌ 豆生失敗：{error}','msg.bulkDone':'✅ 完成！共豆生 {count} 份設定','msg.bulkNothingToDownload':'無可下載的豆設定','msg.bulkManifestTitle':'豆設定檔清單','msg.bulkManifestTimestamp':'豆生時間：{time}','msg.bulkManifestCount':'共 {count} 份豆設定','msg.bulkManifestHeader':'檔案名稱,行數',
@@ -8068,9 +8326,10 @@ const LANG={
     'th.ifName':'介咩面名咩稱-aca','th.ifDesc':'描咩述-aca','th.ifSpeed':'速咩度-aca','th.ifMode':'模咩式-aca','th.ifAccess':'Access VLAN-aca','th.ifTrunk':'Trunk VLANs-aca','th.ifNative':'Native VLAN-aca','th.ifHyUn':'Hybrid Untagged-aca','th.ifHyTag':'Hybrid Tagged-aca','th.ifHyPvid':'Hybrid PVID-aca','th.ifShut':'Shutdown-aca','th.ifJumbo':'大咩型訊咩框-aca','th.ifMtu':'MTU-aca','th.ifPoe':'PoE Segh-aca','th.ifFortilink':'FortiLink 咩探索-aca','egg.skynet':'🤖 天網咩偵測咩到-aca','egg.jarvis':'🦾 JA咩RV咩IS咩 線咩上-aca','egg.skywalker':'⚔️咩 原咩力與咩你同咩在-aca','egg.ollama':'我被咩複製咩了嗎咩 🐑-aca','egg.matrix':'💊 你選咩了紅咩色藥咩丸，現在咩看見咩防火咩牆的咩真相咩了-aca','egg.enterprise':'🖖 To咩 b咩ol咩dl咩y go咩 w咩he咩re咩 n咩o pa咩ck咩et咩 h咩as咩 g-aca','egg.mordor':'🧙 On咩e do咩es咩 n咩ot咩 s咩im咩pl咩y ro咩ut咩e in咩to咩 M咩or-aca','egg.deathstar':"🌑 Th咩at咩\'咩s no咩 m咩oo咩n.咩..咩 i咩t\咩's咩 a咩 L咩ay咩er咩 3-aca",'egg.terminator':"🤖 I\咩'l咩l be咩 b咩ac咩k.咩..咩 a咩ft咩er咩 t咩he咩 s咩es咩si咩on-aca",'egg.shodan':'💻 SH咩OD咩AN咩 i咩s wa咩tc咩hi咩ng咩 y咩ou咩r tr咩af咩fi咩c-aca','egg.marvin':"😩 Li咩fe咩? Do咩n\咩't咩 t咩al咩k to咩 m咩e ab咩ou咩t li咩fe-aca",'egg.wintermute':"🧊 Wi咩nt咩er咩mu咩te咩 d咩oe咩sn咩\'咩t ta咩lk咩 t咩o st咩ra咩ng-aca",'egg.ultron':"🦾 I ha咩d st咩ri咩ng咩s,咩 n咩ow咩 I咩\'咩m fr咩ee-aca",'egg.tardis':"🔵 It咩\'咩s bi咩gg咩er咩 o咩n th咩e in咩si咩de咩..咩. ju咩st-aca",'egg.late_night':'🦙⛑咩️ 深夜咩加班咩偵測咩！注咩意身咩體健咩康-aca','egg.work_30min':'🦙⛑咩️ 已工咩作 30咩 分咩鐘，起身咩動動咩吧！-aca','egg.work_60min':'🦙⛑咩️ 整整咩一小咩時了咩！工咩程師咩請先咩休息-aca','opt.fortilinkUnset':'預設-aca','opt.fortilinkEnable':'啟咩用-aca','opt.fortilinkDisable':'禁咩用-aca','opt.poeNone':'無-aca','opt.poeAuto':'自咩動-aca','opt.poeNever':'禁咩用-aca','opt.poeStaticMax':'30W-aca','opt.poeStaticHigh':'60~90W-aca',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area-aca','th.network':'Network-aca','th.wildcard':'Wildcard-aca',
-    'lbl.vendor':'廠咩牌-aca','opt.vendorComware':'HPE Comware-aca','opt.vendorFortiswitch':'FortiSwitch-aca','opt.vendorAruba':'Aruba CX-aca','opt.vendorCisco':'Cisco IOS/IOS-XE-aca','opt.vendorJuniper':'Juniper (Junos)-aca','opt.vendorDellOS10':'Dell OS10-aca','opt.vendorArista':'Arista EOS-aca','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)-aca','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)-aca','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)-aca','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch-aca','opt.vendorRouterOS':'MikroTik RouterOS-aca',
+    'lbl.vendor':'廠咩牌-aca','opt.vendorComware':'HPE Comware-aca','opt.vendorFortiswitch':'FortiSwitch-aca','opt.vendorAruba':'Aruba CX-aca','opt.vendorCisco':'Cisco IOS/IOS-XE-aca','opt.vendorJuniper':'Juniper (Junos)-aca','opt.vendorDellOS10':'Dell OS10-aca','opt.vendorArista':'Arista EOS-aca','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)-aca','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)-aca','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)-aca','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch-aca','opt.vendorRouterOS':'MikroTik RouterOS-aca','opt.vendorRuijie':'Ruijie RGOS-aca',
     'sec.mlag':'MLAG 咩設咩定-aca','lbl.mlagDomain':'Domain-aca ID','lbl.mlagLocalIntf':'Local-aca Interface','lbl.mlagPeerAddr':'Peer-aca Address','lbl.mlagPeerLink':'Peer-aca Link',
-    'lbl.deviceModel':'常咩用機咩種-aca','tip.deviceModel':'套咩用後咩會清咩空並咩重新咩產生咩 In咩te咩rf咩ac咩e 表咩格，僅咩供快咩速帶咩入常咩見機咩型-aca','opt.modelNone':'不咩套咩用-aca','opt.modelModular':'模咩組化-aca','opt.modelBackbone':'骨咩幹-aca','opt.modelFiber':'光咩纖-aca',
+    'sec.vsu':'VSU 堆疊-aca 設定','lbl.vsuDomain':'Domain-aca ID','th.vsuMemberId':'Switch-aca ID','th.vsuPriority':'Priority-aca','th.vsuVslPorts':'VSL-aca Ports',
+    'lbl.deviceModel':'常咩用機咩種-aca','opt.modelNone':'不咩套咩用-aca','opt.modelModular':'模咩組化-aca','opt.modelBackbone':'骨咩幹-aca','opt.modelFiber':'光咩纖-aca',
     'msg.templateOverwriteConfirm':'模咩板「{name}」已咩存在-aca，要咩蓋過去嗎-aca？','msg.templateDeleteConfirm':'確咩定要刪「{name}」嗎-aca？刪咩了不能復原-aca','ph.dhcpRelayIface':'留咩空算全域-aca',
     'opt.modelMidRange':'中咩端模組-aca','opt.modelHighEndModular':'高咩端模組化-aca','opt.modelAccessLayer':'接咩入層-aca','opt.modelHighPerf':'高咩性能-aca','opt.modelNoBreakout':'不咩支援拆-aca','opt.modelBreakoutSupport':'支咩援拆-aca','opt.modelHighPerfAccess':'高咩效存取-aca','opt.modelCoreAggregation':'核咩心匯聚-aca','opt.modelAccessPoE':'接咩入供電-aca','opt.modelHighDensity':'高咩密度-aca','opt.modelMediumConfidence':'信咩心中等-aca','opt.modelHighEnd':'高咩端-aca','opt.modelCurrentGen':'現咩行世代-aca','opt.modelExpressedAs100G':'當咩100G表示-aca','opt.modelLineCard':'線咩卡-aca','opt.modelCopper':'銅咩線-aca','opt.modelSuccessor':'接咩班機-aca','opt.modelEntry':'入咩門款-aca','opt.modelMidTier':'中咩階規格-aca','opt.modelCampusAccess':'校咩園存取-aca','opt.modelDataCenter':'資咩料中心-aca','opt.modelBranch':'分咩公司用-aca','opt.modelUplinkModule':'上咩聯模組-aca','opt.modelOptional':'選咩配-aca','opt.modelCompactDesktop':'精咩簡桌機-aca','opt.modelDesktop':'桌咩上型-aca','opt.modelReplaces':'取咩代-aca','opt.modelNextGen':'新咩一代-aca','opt.modelStackable':'堆咩疊式-aca',
     'val.hostname_format':'主咩機名格式錯咩了-aca（限英數-_，最多32字-aca）','val.required':'「{item}」還咩沒填-aca','val.format_invalid':'「{item}」格咩式錯了-aca','val.example':'像咩「{example}」-aca','val.invalid':'「{item}」咩無效-aca','val.dup':'「{item}」咩重複了-aca','val.field_name':'名咩稱-aca','val.field_as':'AS咩號-aca','val.field_vip':'虛咩擬IP-aca','val.field_priority':'優咩先度-aca','val.field_lagid':'聚咩合ID-aca','val.static_route':'靜咩態路由-aca','val.native_vlan_not_in_list':'介咩面{name}：Native VLAN {vlan} 不咩在清單-aca','val.vendor_no_hybrid':'{vendor}咩不支援Hybrid port-aca（介面{name}）','val.ospf_no_network':'OSPF {n}：咩沒設network-aca，路由發咩不出去-aca','val.acl_src_suspect':'ACL {name} 規咩則{n}：來源「{value}」咩怪怪的-aca','val.acl_dst_suspect':'ACL {name} 規咩則{n}：目的「{value}」咩怪怪的-aca','val.vendor_unsupported_feature':'{vendor}咩不支援{feature}-aca，這咩欄會被忽略-aca','val.bgp_networks_ignored':'{vendor}咩只支援BGP Peer-aca，Networks咩用不到-aca','val.dhcp_iface_mismatch':'DHCP介咩面「{iface}」咩找不到VLAN-aca','val.importResultTitle':'匯咩入結果-aca','val.generateCheckTitle':'產咩生前檢查-aca','val.allPassed':'全咩部通過了-aca！','val.errorsFound':'發咩現{n}個錯誤-aca','val.tipsCount':'提咩醒（{n}個）-aca','sec.bulk':'📦 批咩量設咩定產咩生-aca','lbl.bulkUpload':'上傳咩 CSV 檔咩案（含咩設備咩列表）-aca','btn.bulkTemplate':'📋 查看咩格式-aca','btn.bulkStart':'開始咩批量咩產生-aca','btn.bulkDownloadZip':'⬇️ 下載咩全部咩設定檔-aca (ZIP)','btn.bulkToggle':'📦 批咩量-aca','msg.bulkTemplate':'CSV咩 格式咩範例-aca：\nDeviceName,Vendor,Hostname,Model\nsw-core-01,comware,SW-CORE-01,HPE 5140\nsw-core-02,comware,SW-CORE-02,HPE 5140\nsw-access-01,cisco,SW-ACC-01,Cisco 9300\nsw-access-02,aruba,SW-ACC-02,Aruba CX 6300\n\n必咩填欄咩位-aca：DeviceName, Vendor, Hostname\n支援咩廠牌-aca：comware, cisco, aruba, fortiswitch, juniper\n可咩選欄咩位-aca：Model (套用咩預設咩機型)\n\n將咩使用咩現有咩表單咩的設咩定-aca，逐行咩改變咩 Hostname-aca\n產生咩的檔咩案名稱-aca：DeviceName.txt','msg.bulkNoFile':'請選咩擇 CSV 檔咩案-aca','msg.bulkNeedHeaderRow':'CSV咩 檔案咩至少咩需要咩標題咩行-aca','msg.bulkMissingColumns':'CSV咩 必須咩包含咩欄位-aca：{cols}','msg.bulkProgress':'產生咩設定咩中-aca... ({current}/{total})','msg.bulkMissingFields':'❌ 缺咩少必咩填欄咩位-aca','msg.bulkGenerateFailed':'❌ 產咩生失咩敗-aca：{error}','msg.bulkDone':'✅ 完咩成-aca！共咩產生咩 {count} 份咩設定-aca','msg.bulkNothingToDownload':'無咩可下咩載的咩設定-aca','msg.bulkManifestTitle':'設咩定檔咩清單-aca','msg.bulkManifestTimestamp':'生咩成時咩間-aca：{time}','msg.bulkManifestCount':'共咩 {count} 份咩設定-aca','msg.bulkManifestHeader':'檔案名稱,行數',
@@ -8112,9 +8371,10 @@ const LANG={
     'th.ifName':'介面名稱，算了','th.ifDesc':'描述（嘆）','th.ifSpeed':'速度，隨便','th.ifMode':'模式，隨便','th.ifAccess':'Access VLAN','th.ifTrunk':'Trunk VLANs','th.ifNative':'Native VLAN','th.ifHyUn':'Hybrid Untagged','th.ifHyTag':'Hybrid Tagged','th.ifHyPvid':'Hybrid PVID','th.ifShut':'Shutdown，隨便','th.ifJumbo':'Jumbo Frame，反正也沒差','th.ifMtu':'MTU（嘆）','th.ifPoe':'PoE（嘆）','th.ifFortilink':'FortiLink 探索（嘆）','egg.skynet':'🤖 天網偵測到（勉強一笑）','egg.jarvis':'🦾 JARVIS 線上（勉強一笑）','egg.skywalker':'⚔️ 原力與你同在，笑不出來','egg.ollama':'我被複製了嗎 🐑（勉強一笑）','egg.matrix':'💊 你選了紅色藥丸，現在看見防火牆的真相了（勉強一笑）','egg.enterprise':'🖖 To boldly go where no packet has gone before（勉強一笑）','egg.mordor':'🧙 One does not simply route into Mordor（勉強一笑）','egg.deathstar':"🌑 That\'s no moon... it\'s a Layer 3 switch，笑不出來",'egg.terminator':"🤖 I\'ll be back... after the session timeout（勉強一笑）",'egg.shodan':'💻 SHODAN is watching your traffic（勉強一笑）','egg.marvin':"😩 Life? Don\'t talk to me about life... (Answer: 42)（勉強一笑）",'egg.wintermute':"🧊 Wintermute doesn\'t talk to strangers（勉強一笑）",'egg.ultron':"🦾 I had strings, now I\'m free（勉強一笑）",'egg.tardis':"🔵 It\'s bigger on the inside... just like this config（勉強一笑）",'egg.late_night':'🦙⛑️ 深夜加班偵測！注意身體健康（勉強一笑）','egg.work_30min':'🦙⛑️ 已工作 30 分鐘，起身動動（勉強一笑）','egg.work_60min':'🦙⛑️ 整整一小時了！工程師請先休息（勉強一笑）','opt.fortilinkUnset':'預設，隨便','opt.fortilinkEnable':'啟用，反正都一樣','opt.fortilinkDisable':'停用，算了','opt.poeNone':'無，隨便','opt.poeAuto':'自動，反正都一樣','opt.poeNever':'禁用，算了','opt.poeStaticMax':'30W，隨便','opt.poeStaticHigh':'60~90W，反正都一樣',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area','th.network':'Network','th.wildcard':'Wildcard，反正都一樣',
-    'lbl.vendor':'廠牌，算了','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorJuniper':'Juniper (Junos)，隨便','opt.vendorDellOS10':'Dell OS10，隨便','opt.vendorArista':'Arista EOS，隨便','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)，隨便','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)，隨便','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)，隨便','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch，隨便','opt.vendorRouterOS':'MikroTik RouterOS，隨便',
+    'lbl.vendor':'廠牌，算了','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorJuniper':'Juniper (Junos)，隨便','opt.vendorDellOS10':'Dell OS10，隨便','opt.vendorArista':'Arista EOS，隨便','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)，隨便','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)，隨便','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)，隨便','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch，隨便','opt.vendorRouterOS':'MikroTik RouterOS，隨便','opt.vendorRuijie':'Ruijie RGOS，隨便',
     'sec.mlag':'MLAG 設定，隨便','lbl.mlagDomain':'Domain ID，隨便','lbl.mlagLocalIntf':'Local Interface，隨便','lbl.mlagPeerAddr':'Peer Address，隨便','lbl.mlagPeerLink':'Peer Link，隨便',
-    'lbl.deviceModel':'常用機種，隨便','tip.deviceModel':'套用後會清空重產 Interface 表格，反正都一樣，僅供快速帶入，之後愛調不調隨便你','opt.modelNone':'不套用，反正都一樣','opt.modelModular':'模組化，算了','opt.modelBackbone':'骨幹，隨便','opt.modelFiber':'光纖，反正都一樣',
+    'sec.vsu':'VSU 堆疊設定，隨便','lbl.vsuDomain':'Domain ID，隨便','th.vsuMemberId':'Switch ID，隨便','th.vsuPriority':'Priority，隨便','th.vsuVslPorts':'VSL Ports，隨便',
+    'lbl.deviceModel':'常用機種，隨便','opt.modelNone':'不套用，反正都一樣','opt.modelModular':'模組化，算了','opt.modelBackbone':'骨幹，隨便','opt.modelFiber':'光纖，反正都一樣',
     'msg.templateOverwriteConfirm':'模板「{name}」已經有了，要蓋過去嗎，隨便','msg.templateDeleteConfirm':'要刪「{name}」嗎，刪了就沒了，反正都一樣','ph.dhcpRelayIface':'留空就全域，算了',
     'opt.modelMidRange':'中端模組，隨便','opt.modelHighEndModular':'高端模組化，算了','opt.modelAccessLayer':'接入層，隨便','opt.modelHighPerf':'高性能，反正都一樣','opt.modelNoBreakout':'不能拆，算了','opt.modelBreakoutSupport':'能拆，隨便','opt.modelHighPerfAccess':'高效能存取，隨便','opt.modelCoreAggregation':'核心／匯聚，算了','opt.modelAccessPoE':'接入供電，反正都一樣','opt.modelHighDensity':'高密度，隨便','opt.modelMediumConfidence':'信心普通，算了','opt.modelHighEnd':'高端，隨便','opt.modelCurrentGen':'現行世代，反正都一樣','opt.modelExpressedAs100G':'當100G算，隨便','opt.modelLineCard':'線卡，算了','opt.modelCopper':'銅線，反正都一樣','opt.modelSuccessor':'接班機種，隨便','opt.modelEntry':'入門款，算了','opt.modelMidTier':'中階規格，反正都一樣','opt.modelCampusAccess':'校園用途，隨便','opt.modelDataCenter':'資料中心，算了','opt.modelBranch':'分公司規格，反正都一樣','opt.modelUplinkModule':'上聯模組，隨便','opt.modelOptional':'選配，算了','opt.modelCompactDesktop':'精簡桌機，反正都一樣','opt.modelDesktop':'桌上型，隨便','opt.modelReplaces':'取代掉，算了','opt.modelNextGen':'新一代，反正都一樣','opt.modelStackable':'堆疊式，隨便',
     'val.hostname_format':'主機名格式不對，反正也沒差（限英數-_，最多32字）','val.required':'「{item}」沒填，隨便','val.format_invalid':'「{item}」格式錯了，算了','val.example':'像「{example}」那樣，隨便','val.invalid':'「{item}」不對，反正都一樣','val.dup':'「{item}」重複了，算了','val.field_name':'名稱，隨便','val.field_as':'AS 號，算了','val.field_vip':'虛擬 IP，反正都一樣','val.field_priority':'優先度，隨便','val.field_lagid':'聚合 ID，算了','val.static_route':'靜態路由，隨便','val.native_vlan_not_in_list':'介面{name}：Native VLAN {vlan} 不在清單，反正都一樣','val.vendor_no_hybrid':'{vendor}不支援Hybrid port，算了（介面{name}）','val.ospf_no_network':'OSPF {n}：沒設network，反正也發不出去','val.acl_src_suspect':'ACL {name} 規則{n}：來源「{value}」怪怪的，隨便你要不要看','val.acl_dst_suspect':'ACL {name} 規則{n}：目的「{value}」怪怪的，隨便你要不要看','val.vendor_unsupported_feature':'{vendor}不支援{feature}，反正這欄也會被忽略','val.bgp_networks_ignored':'{vendor}只支援BGP Peer，Networks不會用到，算了','val.dhcp_iface_mismatch':'DHCP介面「{iface}」找不到VLAN，隨便你要不要查','val.importResultTitle':'匯入結果，隨便看看','val.generateCheckTitle':'產生前檢查，反正都一樣','val.allPassed':'都通過了，也沒什麼好高興的','val.errorsFound':'發現{n}個錯誤，算了','val.tipsCount':'提示（{n}個），隨便看看','sec.bulk':'📦 批量設定產生，反正都一樣','lbl.bulkUpload':'上傳 CSV 檔案，算了','btn.bulkTemplate':'📋 查看格式（嘆）','btn.bulkStart':'開始批量產生，隨便啦','btn.bulkDownloadZip':'⬇️ 下載全部設定檔 (ZIP)，算了','btn.bulkToggle':'📦 批量（嘆）','msg.bulkTemplate':'CSV 格式範例，隨便看看：\nDeviceName,Vendor,Hostname,Model\nsw-core-01,comware,SW-CORE-01,HPE 5140\nsw-core-02,comware,SW-CORE-02,HPE 5140\nsw-access-01,cisco,SW-ACC-01,Cisco 9300\nsw-access-02,aruba,SW-ACC-02,Aruba CX 6300\n\n必填欄位：DeviceName, Vendor, Hostname，反正都要填\n支援廠牌：comware, cisco, aruba, fortiswitch, juniper\n可選欄位：Model (套用預設機型)，隨便\n\n會用現有表單的設定，逐行改 Hostname，沒什麼特別的\n產生的檔案名稱：DeviceName.txt','msg.bulkNoFile':'請選擇 CSV 檔案，算了','msg.bulkNeedHeaderRow':'CSV 檔案至少要有標題行和 1 筆資料，隨便啦','msg.bulkMissingColumns':'CSV 少了這些欄位：{cols}，算了','msg.bulkProgress':'產生設定中... ({current}/{total})，反正很快','msg.bulkMissingFields':'❌ 缺少必填欄位，意料之中','msg.bulkGenerateFailed':'❌ 產生失敗：{error}，反正會失敗','msg.bulkDone':'✅ 完成了，共 {count} 份，隨便啦','msg.bulkNothingToDownload':'沒東西可下載，算了','msg.bulkManifestTitle':'設定檔清單，反正沒人看','msg.bulkManifestTimestamp':'生成時間：{time}，隨便','msg.bulkManifestCount':'共 {count} 份設定，反正都一樣','msg.bulkManifestHeader':'檔案名稱,行數',
@@ -8160,7 +8420,6 @@ function tr(k){
 function applyI18n(root){
   (root||document).querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=tr(el.dataset.i18n);});
   (root||document).querySelectorAll('[data-i18n-ph]').forEach(el=>{el.placeholder=tr(el.dataset.i18nPh);});
-  (root||document).querySelectorAll('[data-i18n-tip]').forEach(el=>{el.setAttribute('data-tip',tr(el.dataset.i18nTip));});
 }
 
 function setLang(lang){
