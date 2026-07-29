@@ -5950,8 +5950,12 @@ function detectVendor(cfg){
   if(/^\s*\/interface|\/ip\s+(?:address|firewall|route)|\/system\s+identity/m.test(cfg))return'routeros';
   // Ruijie RGOS：語法系出 Cisco IOS 風格，必須在 cisco 之前判斷。用 Ruijie 專屬（Cisco 沒有）
   // 的關鍵字組合避免誤判其他 12 家：AggregatePort 聚合介面命名（Cisco 是 channel-group／
-  // Port-channel）／switchport mode hybrid（Cisco 無 hybrid 模式）／VSU 堆疊 switch virtual domain
-  if(/^interface\s+AggregatePort\s*\d+/im.test(cfg)||/switchport mode hybrid/m.test(cfg)||/^switch virtual domain\s+\d+/m.test(cfg))return'ruijie';
+  // Port-channel）／switchport mode hybrid（Cisco 無 hybrid 模式）／VSU 堆疊 switch virtual domain。
+  // 2026-07-29 使用者提供真實裝置匯出檔測出：不含 AggregatePort/hybrid/VSU 的一般 access
+  // switch（無堆疊/聚合/hybrid 功能）原本會被誤判為 cisco，補上更通用、幾乎不會與其他廠牌
+  // 碰撞的訊號——"RGOS" 字面（幾乎必然出現在 version 這行的韌體版本字串）／rldp（Ruijie
+  // 自有 Loop Detection Protocol）／nfpp（Ruijie 自有 Network Foundation Protection Policy）
+  if(/^interface\s+AggregatePort\s*\d+/im.test(cfg)||/switchport mode hybrid/m.test(cfg)||/^switch virtual domain\s+\d+/m.test(cfg)||/\bRGOS\b/i.test(cfg)||/^rldp\b/im.test(cfg)||/^nfpp\s*$/im.test(cfg))return'ruijie';
   if(/^hostname\s+|switchport mode|ip route\s|^vlan\s+\d+\s*\n\s*name/m.test(cfg))return'cisco';
   // ExtremeXOS: verb-object CLI — zero overlap with other vendors
   if(/^create vlan\s+"?\S/m.test(cfg)||
@@ -8601,7 +8605,14 @@ function parseRuijieInterfaces(cfg){
     let mode='',vlans='',nativeVlan='',hybrid=null;
     if(/switchport mode trunk/.test(body)){
       mode='trunk';
-      vlans=(body.match(/switchport trunk allowed vlan\s+([^\n]+)/)||[])[1]?.trim()||'all';
+      // 官方語法允許 "switchport trunk allowed vlan {add|remove|only|all} <list>" 多行累加
+      // 修改，而非單行完整清單（2026-07-29 由使用者提供的真實風格範例測出：只抓第一行會
+      // 誤把 "remove 1" 這種增量修改指令當成完整清單）。only/all 代表「整批取代」，取最後
+      // 一次出現為準；若全篇只有 add/remove（無 only/all/裸清單當基準），因無法重建原始
+      // 基準清單，維持保守回傳 'all'（與未設定時的既有預設值相同，不臆測）
+      const vlanLines=[...body.matchAll(/switchport trunk allowed vlan\s+(?:(add|remove|only|all)\s+)?([^\n]+)/g)];
+      const fullList=[...vlanLines].reverse().find(m=>m[1]==='only'||m[1]==='all'||!m[1]);
+      vlans=fullList?fullList[2].trim():'all';
       nativeVlan=(body.match(/switchport trunk native vlan\s+(\d+)/)||[])[1]||'1';
     }else if(/switchport mode access/.test(body)){
       mode='access';
@@ -8646,11 +8657,36 @@ function parseRuijieStack(cfg){
   const vsl=Object.entries(vslByMember).map(([memberId,interfaces])=>({memberId,interfaces}));
   return{type:'VSU',domain,members,vsl};
 }
+// Ruijie 靜態路由：不可直接重用 parseCiscoRoutes()——RGOS 慣例介面名稱「類型與數字間帶空格」
+// （如 "VLAN 1"／"GigabitEthernet 0/1"），若下一跳寫成介面時會多佔一個 token，Cisco 版本
+// 用單一 \S+ 擷取第4個 token 會只抓到 "VLAN"，後面真正的閘道 IP 被漏解析（2026-07-29 使用者
+// 提供真實裝置匯出檔測出：ip route 0.0.0.0 0.0.0.0 VLAN 1 192.168.202.1）
+function parseRuijieRoutes(cfg){
+  const routes=[]; let m;
+  const re=/^ip route(?:\s+vrf\s+(\S+))?\s+(\S+)\s+(\S+)\s+(.+)$/gm;
+  while((m=re.exec(cfg))!==null){
+    const vrf=m[1]||'';
+    let dst=m[2];const mask=m[3];const rest=m[4].trim();
+    if(/^\d+\.\d+\.\d+\.\d+$/.test(mask)){dst=dst+'/'+cidrFromMask(mask);}
+    else if(/^\d+$/.test(mask)){dst=dst+'/'+mask;}
+    const ifaceMatch=rest.match(/^(VLAN|GigabitEthernet|TenGigabitEthernet|AggregatePort|Loopback|Null|MTGigabitEthernet)\s+(\S+)(?:\s+(\S+))?$/i);
+    let gw,gwIsInterface;
+    if(ifaceMatch){
+      if(ifaceMatch[3]){gw=ifaceMatch[3];gwIsInterface=false;}
+      else{gw=`${ifaceMatch[1]} ${ifaceMatch[2]}`;gwIsInterface=true;}
+    }else{
+      gw=rest.split(/\s+/)[0];
+      gwIsInterface=!/^\d+\.\d+\.\d+\.\d+/.test(gw);
+    }
+    routes.push({dst,gw,vrf,gwIsInterface});
+  }
+  return routes;
+}
 function parseRuijie(cfg){
   const sys=parseRuijieSysInfo(cfg);
   const vlans=parseCiscoVLANs(cfg);
   const interfaces=parseRuijieInterfaces(cfg);
-  const routes=parseCiscoRoutes(cfg);
+  const routes=parseRuijieRoutes(cfg);
   const vrfs=parseCiscoVRFs(cfg);
   const users=parseCiscoUsers(cfg);
   const ospf=parseCiscoOSPF(cfg);
