@@ -2317,7 +2317,7 @@ function _onLangChange() {
   // 更新 nav-irf-lbl（依廠牌決定文字，不含 data-i18n）
   var irfLbl = document.getElementById('nav-irf-lbl');
   if (irfLbl && typeof parsed !== 'undefined' && parsed) {
-    irfLbl.textContent = parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='cisco'?tr('nav.irf.cisco'):parsed.vendor==='nxos'?tr('nav.irf.cisco'):parsed.vendor==='comware'?tr('nav.irf.comware'):parsed.vendor==='aruba'?tr('nav.irf.aruba'):parsed.vendor==='procurve'?tr('nav.irf.default'):parsed.vendor==='fortiswitch'?tr('nav.irf.forti'):parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?'Virtual Chassis':parsed.vendor==='alcatel'&&parsed.stack?'Alcatel Stack':parsed.vendor==='extreme'&&parsed.stack?'ExtremeStack':parsed.vendor==='brocade'&&parsed.stack?tr('nav.irf.brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('nav.irf.dell_vlt'):parsed.vendor==='dell-os10'&&parsed.stack?tr('nav.irf.dell_stack'):tr('nav.irf.default');
+    irfLbl.textContent = parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('nav.irf.cisco'):parsed.vendor==='nxos'?tr('nav.irf.cisco'):parsed.vendor==='comware'?tr('nav.irf.comware'):parsed.vendor==='aruba'?tr('nav.irf.aruba'):parsed.vendor==='procurve'?tr('nav.irf.default'):parsed.vendor==='fortiswitch'?tr('nav.irf.forti'):parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?'Virtual Chassis':parsed.vendor==='alcatel'&&parsed.stack?'Alcatel Stack':parsed.vendor==='extreme'&&parsed.stack?'ExtremeStack':parsed.vendor==='brocade'&&parsed.stack?tr('nav.irf.brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('nav.irf.dell_vlt'):parsed.vendor==='dell-os10'&&parsed.stack?tr('nav.irf.dell_stack'):tr('nav.irf.default');
   }
   // data-tip 更新（sidebar 折疊時的 CSS tooltip，attribute 無法用 data-i18n）
   [['nav-upload','nav.upload'],['nav-overview','nav.overview'],
@@ -2682,9 +2682,10 @@ function parseMgmtAccess(cfg, vendor){
     // 官方 AOS-CX 查證：telnet 預設關閉，須明確 telnet-server（非 no telnet-server）
     telnet=/^\s*telnet-server\b/m.test(cfg)&&!/^\s*no\s+telnet-server\b/m.test(cfg);
     ssh=/^\s*ssh server\b/m.test(cfg)&&!/^\s*no\s+ssh server\b/m.test(cfg);
-  }else if(vendor==='cisco'){
+  }else if(vendor==='cisco'||vendor==='ruijie'){
     // 官方 Cisco IOS-XE 查證：line vty 下 transport input {telnet|ssh|all|none}，
-    // 未設定時原廠預設 all（兩者皆開放）
+    // 未設定時原廠預設 all（兩者皆開放）。Ruijie RGOS 管理線路語法與 Cisco 同源，
+    // 尚無真實範例逐字驗證，先併入同一套邏輯，信心度較低
     const hasVty=/^line vty\b/m.test(cfg);
     const tm=/transport input\s+([^\n]+)/i.exec(cfg);
     if(tm){ const v=tm[1].toLowerCase(); telnet=/\btelnet\b|\ball\b/.test(v); ssh=/\bssh\b|\ball\b/.test(v); }
@@ -2760,7 +2761,9 @@ function parseRoutingAuth(cfg, vendor){
   }else if(vendor==='aruba'){
     ospf=/ip ospf authentication message-digest|ip ospf message-digest-key/i.test(cfg);
     bgp=/neighbor\s+\S+\s+password\s+\S+/i.test(cfg)||/neighbor\s+\S+\s+ao\s+\S+/i.test(cfg);
-  }else if(vendor==='cisco'){
+  }else if(vendor==='cisco'||vendor==='ruijie'){
+    // Ruijie RGOS OSPF/BGP/RIP 語法與 Cisco 同源，尚無真實範例逐字驗證，先併入同一套
+    // 邏輯，信心度較低
     ospf=/ip ospf message-digest-key|area\s+\S+\s+authentication message-digest/i.test(cfg);
     bgp=/neighbor\s+\S+\s+password\s+\S+/i.test(cfg);
     rip=/ip rip authentication (?:mode|key-chain)/i.test(cfg);
@@ -5945,6 +5948,10 @@ function detectVendor(cfg){
      (/^interface\s+Ethernet\d+(?:\/\d+)?\s*$/m.test(cfg)&&/^ip routing$/m.test(cfg)))return'arista';
   // RouterOS / MikroTik: 必須在 cisco 之前，避免 /ip route 行觸發 cisco 誤判
   if(/^\s*\/interface|\/ip\s+(?:address|firewall|route)|\/system\s+identity/m.test(cfg))return'routeros';
+  // Ruijie RGOS：語法系出 Cisco IOS 風格，必須在 cisco 之前判斷。用 Ruijie 專屬（Cisco 沒有）
+  // 的關鍵字組合避免誤判其他 12 家：AggregatePort 聚合介面命名（Cisco 是 channel-group／
+  // Port-channel）／switchport mode hybrid（Cisco 無 hybrid 模式）／VSU 堆疊 switch virtual domain
+  if(/^interface\s+AggregatePort\s*\d+/im.test(cfg)||/switchport mode hybrid/m.test(cfg)||/^switch virtual domain\s+\d+/m.test(cfg))return'ruijie';
   if(/^hostname\s+|switchport mode|ip route\s|^vlan\s+\d+\s*\n\s*name/m.test(cfg))return'cisco';
   // ExtremeXOS: verb-object CLI — zero overlap with other vendors
   if(/^create vlan\s+"?\S/m.test(cfg)||
@@ -6655,7 +6662,9 @@ function parseDHCP(cfg, vendor){
       helpers.forEach(srv=>pools.push({name:'relay:'+ifname,network:'',gateway:'',dns:'',
         range:'',excluded:'',lease:'',interface:ifname,type:'relay',relayServer:srv}));
     });
-  }else if(vendor==='cisco'){
+  }else if(vendor==='cisco'||vendor==='ruijie'){
+    // Ruijie RGOS 官方 DHCP 命令與 Cisco IOS 同源（"ip dhcp pool NAME"／"ip helper-address"），
+    // 尚無真實範例逐字驗證，先併入 cisco 分支重用同一套邏輯，信心度較低
     const re=/ip dhcp pool\s+(\S+)\s*\n([\s\S]*?)(?=^ip dhcp pool|^interface|(?![\s\S]))/gm;
     let m;
     while((m=re.exec(cfg))!==null){
@@ -6830,9 +6839,10 @@ function parseDNSServers(cfg, vendor){
     // Command Reference DNS Commands）
     return [...cfg.matchAll(/^dns server\s+([\d.]+)/gm)].map(m=>m[1]);
   }
-  if(vendor==='cisco'||vendor==='nxos'||vendor==='arista'){
+  if(vendor==='cisco'||vendor==='nxos'||vendor==='arista'||vendor==='ruijie'){
     // "ip name-server [vrf <name>] <ip1> [ip2...] [priority N] [use-vrf <vrf>] [source-interface <if>]"
-    // 三廠牌語法結構相同（Global config，一行可列多筆），僅選填參數不同，用 IP 格式過濾即可通用處理
+    // 四廠牌語法結構相同（Global config，一行可列多筆），僅選填參數不同，用 IP 格式過濾即可通用處理。
+    // Ruijie 尚無真實範例逐字驗證，比照 Cisco 語系推測，信心度較低
     return [...cfg.matchAll(/^\s*ip name-server\s+([^\n]+)/gm)].flatMap(m=>
       m[1].trim().split(/\s+/).filter(tok=>ipTok.test(tok)));
   }
@@ -6987,6 +6997,31 @@ function parseLACP(cfg, vendor){
       const members=memberNames.map(m=>({name:m,lacpMode:mode!=='Static'?mode:null}));
       lacp.push({name,mode,members});
     }
+  }else if(vendor==='ruijie'){
+    // Ruijie RGOS：聚合介面稱為 AggregatePort（AP），不是 channel-group／Port-channel。
+    // 成員埠在自己的 interface 區塊內用 "port-group N mode {active|passive}" 宣告
+    // （查證來源：官方 RG-S2600E CLI Reference Manual），關鍵字順序與 Cisco 完全不同，
+    // 不可塞進上面 cisco/arista/nxos/dell-os10 共用分支
+    const ifaceMap={};
+    cfg.split(/\ninterface /).slice(1).forEach(blk=>{
+      const name=blk.split('\n')[0].trim();
+      ifaceMap[name]=blk;
+    });
+    const membersByGid={}, modeByGid={};
+    Object.entries(ifaceMap).forEach(([name,blk])=>{
+      const pgm=blk.match(/port-group\s+(\d+)\s+mode\s+(active|passive)/i);
+      if(pgm){
+        const lm=pgm[2][0].toUpperCase()+pgm[2].slice(1).toLowerCase();
+        membersByGid[pgm[1]]=(membersByGid[pgm[1]]||[]).concat({name,lacpMode:lm});
+        if(!modeByGid[pgm[1]])modeByGid[pgm[1]]=lm;
+      }
+    });
+    Object.entries(ifaceMap).forEach(([name,blk])=>{
+      if(!/^AggregatePort\s*\d+/i.test(name))return;
+      const gid=name.match(/\d+/)[0];
+      lacp.push({name:name.replace(/\s+/g,''),mode:modeByGid[gid]||'Static',members:membersByGid[gid]||[]});
+    });
+    lacp.sort((a,b)=>parseInt(a.name.match(/\d+/)[0])-parseInt(b.name.match(/\d+/)[0]));
   }
   return lacp;
 }
@@ -8498,6 +8533,134 @@ function parseArista(cfg){
   const vrrp=parseVRRP(cfg,'arista');
   return{sys,irf:null,stack:mlag,vlans,interfaces,routes,vrfs,users,ospf,bgp,rip,vrrp,vxlan:null,breakouts,vendor:'arista'};
 }
+
+// ════════════════════════════════════════════════════
+//  RUIJIE (RGOS) PARSER
+// ════════════════════════════════════════════════════
+// 依官方 RGOS Command Reference/Configuration Guide 與 VSU 技術文檔
+// （https://www.ruijie.com.cn/fw/wt/90872/）語法推測實作，尚無真實匯出設定檔驗證，
+// 信心度低於其他已用真實範例校正過的廠牌，待未來取得真實設定檔再校正（見 now.md）。
+// RGOS 語法系出 Cisco IOS 風格，VLAN/OSPF/BGP/RIP/靜態路由重用 Cisco 對應 parser；
+// LACP（AggregatePort/port-group）、hybrid port、VRRP、VSU 堆疊四項語法與 Cisco
+// 實質不同，各自獨立實作。
+function parseRuijieSysInfo(cfg){
+  return{
+    hostname:(cfg.match(/^hostname\s+(\S+)/m)||[])[1]||'unknown',
+    version:(cfg.match(/version\s+(\S+)/)||[])[1]?.trim()||'',
+    platform:'',
+  };
+}
+function parseRuijieHybrid(blk){
+  // 官方語法：switchport hybrid native vlan N（PVID）／switchport hybrid allowed vlan
+  // tagged|untagged X-Y（可重複多行）。與 Comware 的 "port hybrid vlan X tagged/untagged"
+  // 用詞不同，不可重用 parseHybrid()，但回傳形狀沿用全廠牌共用的 hybrid 資料形狀
+  // （UI／匯出報告已通用支援此形狀），Ruijie 無 QinQ/vlan-mapping/subscriber-vlan 對應
+  // 語法佐證，固定回傳空值/false
+  const pvid=(blk.match(/switchport hybrid native vlan\s+(\d+)/)||[])[1]||'';
+  const untagged=[],tagged=[]; let m;
+  const ur=/switchport hybrid allowed vlan untagged\s+([^\n]+)/g;
+  while((m=ur.exec(blk))!==null)untagged.push(...m[1].trim().split(/\s+/));
+  const tgr=/switchport hybrid allowed vlan tagged\s+([^\n]+)/g;
+  while((m=tgr.exec(blk))!==null)tagged.push(...m[1].trim().split(/\s+/));
+  return{
+    pvid,
+    untagged:[...new Set(untagged)],
+    tagged:[...new Set(tagged)],
+    hasIPSub:false,vlanMaps:[],hasQinQ:false,
+  };
+}
+function parseRuijieInterfaces(cfg){
+  const ifaces=[];
+  const blocks=cfg.split(/^interface\s+/m).slice(1);
+  for(const blk of blocks){
+    const lines=blk.split('\n');
+    const name=lines[0].trim();
+    const body=lines.slice(1).join('\n');
+    const desc=(body.match(/^\s*description\s+(.+)/m)||[])[1]?.trim()||'';
+    const shutdown=/^\s*shutdown\s*$/m.test(body)&&!/no shutdown/.test(body);
+    // Ruijie 介面命名可能含空白（如 "GigabitEthernet 0/1"），先去除空白再取 member 編號
+    const memberMatch=name.replace(/\s+/g,'').match(/^[A-Za-z]+(\d+)\//);
+    const member=memberMatch?memberMatch[1]:'1';
+
+    if(/^Loopback/i.test(name)){
+      const ip=(body.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+      ifaces.push({name,type:'loopback',desc,ip,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      continue;
+    }
+    if(/^Vlan/i.test(name)){
+      const ipRaw=(body.match(/^\s*ip address\s+(\S+)\s+(\S+)/m)||[]);
+      const ip=ipRaw[1]&&ipRaw[2]?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
+      // VRRP 由共用 parseVRRP(cfg,'ruijie') 在頂層統一解析（見 parseRuijie()），此處介面
+      // 物件的 vrrp 欄位固定空陣列，比照多數非 Cisco/Comware 廠牌的既有慣例
+      ifaces.push({name,type:'svi',desc,ip,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      continue;
+    }
+    // 實體埠與 AggregatePort 聚合介面共用同一段解析（AggregatePort 本身也是可設定
+    // switchport 的邏輯介面）；成員埠的 port-group 宣告由共用 parseLACP() 的 ruijie
+    // 分支獨立處理，不在此重複解析
+    let mode='',vlans='',nativeVlan='',hybrid=null;
+    if(/switchport mode trunk/.test(body)){
+      mode='trunk';
+      vlans=(body.match(/switchport trunk allowed vlan\s+([^\n]+)/)||[])[1]?.trim()||'all';
+      nativeVlan=(body.match(/switchport trunk native vlan\s+(\d+)/)||[])[1]||'1';
+    }else if(/switchport mode access/.test(body)){
+      mode='access';
+      vlans=(body.match(/switchport access vlan\s+(\d+)/)||[])[1]||'1';
+    }else if(/switchport mode hybrid/.test(body)){
+      mode='hybrid';
+      hybrid=parseRuijieHybrid(body);
+      vlans=[...hybrid.untagged,...hybrid.tagged].filter((v,i,a)=>a.indexOf(v)===i).join(' ');
+      nativeVlan=hybrid.pvid;
+    }
+    const ip=(body.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+    ifaces.push({name,type:'physical',desc,mode,vlans:vlans.trim(),nativeVlan,vrf:'',ip,shutdown,member,hybrid,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+  }
+  return ifaces;
+}
+// VSU（Virtual Switch Unit）堆疊，查證來源：官方 VSU 技術文檔
+// https://www.ruijie.com.cn/fw/wt/90872/ ——尚無真實設定檔驗證，信心度較低。
+// switch virtual domain <id> 宣告堆疊域；逐一 switch <n> priority <p> 決定成員編號與
+// 優先權（優先權最大者判定為 Active）；VSL（Virtual Switch Link）鏈路成員埠
+// "port-member interface X" 巢狀宣告於該埠自己的 interface 區塊內，依介面名稱前綴數字
+// （member 編號慣例，與其餘介面 member 判斷一致）回推歸屬的 switch 成員
+function parseRuijieStack(cfg){
+  const domainM=cfg.match(/^switch virtual domain\s+(\d+)/m);
+  if(!domainM)return null;
+  const domain=domainM[1];
+  const members=[]; let m;
+  const prRe=/^switch\s+(\d+)\s+priority\s+(\d+)/gm;
+  while((m=prRe.exec(cfg))!==null)members.push({id:m[1],priority:parseInt(m[2]),role:''});
+  if(!members.length)return null;
+  const maxPrio=Math.max(...members.map(x=>x.priority));
+  members.forEach(x=>{x.role=x.priority===maxPrio?'Active':'Standby';});
+  members.sort((a,b)=>parseInt(a.id)-parseInt(b.id));
+  const vslByMember={};
+  cfg.split(/^interface\s+/m).slice(1).forEach(blk=>{
+    const name=blk.split('\n')[0].trim();
+    if(!/port-member interface/.test(blk))return;
+    const midMatch=name.replace(/\s+/g,'').match(/^[A-Za-z]+(\d+)\//);
+    const mid=midMatch?midMatch[1]:members[0]?.id;
+    if(!mid)return;
+    (vslByMember[mid]=vslByMember[mid]||[]).push(name);
+  });
+  const vsl=Object.entries(vslByMember).map(([memberId,interfaces])=>({memberId,interfaces}));
+  return{type:'VSU',domain,members,vsl};
+}
+function parseRuijie(cfg){
+  const sys=parseRuijieSysInfo(cfg);
+  const vlans=parseCiscoVLANs(cfg);
+  const interfaces=parseRuijieInterfaces(cfg);
+  const routes=parseCiscoRoutes(cfg);
+  const vrfs=parseCiscoVRFs(cfg);
+  const users=parseCiscoUsers(cfg);
+  const ospf=parseCiscoOSPF(cfg);
+  const bgp=parseCiscoBGP(cfg);
+  const rip=parseCiscoRIP(cfg);
+  const vrrp=parseVRRP(cfg,'ruijie');
+  const stack=parseRuijieStack(cfg);
+  return{sys,irf:null,stack,vlans,interfaces,routes,vrfs,users,ospf,bgp,rip,vrrp,vxlan:null,vendor:'ruijie',breakouts:[]};
+}
+
 function parseAny(cfg){
   // 統一在此正規化 CRLF，避免各廠牌逐行正則（如 stack unit 區塊）因 \r 悄悄比對失敗
   cfg=cfg.replace(/\r\n/g,'\n');
@@ -8506,6 +8669,7 @@ function parseAny(cfg){
   if(vendor==='comware') res=parseComware(cfg);
   else if(vendor==='dell-os10') res=parseDellOS10(cfg);
   else if(vendor==='arista') res=parseArista(cfg);
+  else if(vendor==='ruijie') res=parseRuijie(cfg);
   else if(vendor==='cisco') res=parseCisco(cfg);
   else if(vendor==='aruba') res=parseAruba(cfg);
   else if(vendor==='fortiswitch') res=parseFortiSwitch(cfg);
@@ -8783,22 +8947,22 @@ function showResultViews(){
     // 統一回傳 'brocade'（避免動到既有派送邏輯），品牌顯示改依 parseBrocadeSysInfo() 抓到的
     // brand 欄位（cfg 內含 Ruckus/CommScope 字樣時判定）動態切換標籤
     const brocadeTitle=parsed.sys?.brand==='ruckus'?`Ruckus ICX ${_a}`:`Brocade FastIron/ICX ${_a}`;
-    const titleMap={'comware':'HPE Comware '+_a,'arista':'Arista EOS '+_a,'cisco':'Cisco IOS/IOS-XE '+_a,'nxos':'Cisco NX-OS '+_a,'aruba':'Aruba CX '+_a,'procurve':'Aruba ProCurve '+_a,'fortiswitch':'FortiSwitch '+_a,'juniper':'Juniper EX/QFX '+_a,'extreme':'Extreme Networks ExtremeXOS '+_a,'alcatel':'Alcatel OmniSwitch '+_a,'brocade':brocadeTitle,'dell-os10':dellTitle,'unknown':tr('sl.unknown_vendor')+' '+_a};
+    const titleMap={'comware':'HPE Comware '+_a,'arista':'Arista EOS '+_a,'ruijie':'Ruijie RGOS '+_a,'cisco':'Cisco IOS/IOS-XE '+_a,'nxos':'Cisco NX-OS '+_a,'aruba':'Aruba CX '+_a,'procurve':'Aruba ProCurve '+_a,'fortiswitch':'FortiSwitch '+_a,'juniper':'Juniper EX/QFX '+_a,'extreme':'Extreme Networks ExtremeXOS '+_a,'alcatel':'Alcatel OmniSwitch '+_a,'brocade':brocadeTitle,'dell-os10':dellTitle,'unknown':tr('sl.unknown_vendor')+' '+_a};
     titleEl.textContent=titleMap[parsed.vendor]||tr('sl.unknown_vendor')+' '+_a;
   }
   const vbEl=document.getElementById('tb-vendor');
   if(vbEl){
     const dellLabel=parsed.sys?.osGen?`Dell EMC ${parsed.sys.osGen}`:'Dell EMC Networking OS';
     const brocadeLabel=parsed.sys?.brand==='ruckus'?'Ruckus ICX':'Brocade FastIron/ICX';
-    const vLabel={'comware':'HPE Comware','arista':'Arista EOS','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':brocadeLabel,'dell-os10':dellLabel,'unknown':tr('sl.unknown_vendor')}[parsed.vendor]||parsed.vendor;
-    const vClass={'comware':'vb-comware','arista':'vb-cisco','cisco':'vb-cisco','nxos':'vb-cisco','aruba':'vb-aruba','procurve':'vb-aruba','fortiswitch':'vb-forti','juniper':'vb-juniper','extreme':'vb-extreme','alcatel':'vb-alcatel','brocade':'vb-brocade','dell-os10':'vb-dell','unknown':'vb-unknown'}[parsed.vendor]||'vb-unknown';
+    const vLabel={'comware':'HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':brocadeLabel,'dell-os10':dellLabel,'unknown':tr('sl.unknown_vendor')}[parsed.vendor]||parsed.vendor;
+    const vClass={'comware':'vb-comware','arista':'vb-cisco','ruijie':'vb-cisco','cisco':'vb-cisco','nxos':'vb-cisco','aruba':'vb-aruba','procurve':'vb-aruba','fortiswitch':'vb-forti','juniper':'vb-juniper','extreme':'vb-extreme','alcatel':'vb-alcatel','brocade':'vb-brocade','dell-os10':'vb-dell','unknown':'vb-unknown'}[parsed.vendor]||'vb-unknown';
     vbEl.innerHTML=`<span class="vendor-badge ${vClass}">${vLabel}</span>`;
     _setupVendorPersona();
   }
   // Update stack nav label based on vendor
   const irfLbl=document.getElementById('nav-irf-lbl');
   if(irfLbl){
-    irfLbl.textContent=parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='cisco'?tr('nav.irf.cisco'):parsed.vendor==='nxos'?tr('nav.irf.cisco'):parsed.vendor==='comware'?tr('nav.irf.comware'):parsed.vendor==='aruba'?tr('nav.irf.aruba'):parsed.vendor==='procurve'?tr('nav.irf.default'):parsed.vendor==='fortiswitch'?tr('nav.irf.forti'):parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?'Virtual Chassis':parsed.vendor==='alcatel'&&parsed.stack?'Alcatel Stack':parsed.vendor==='extreme'&&parsed.stack?'ExtremeStack':parsed.vendor==='brocade'&&parsed.stack?tr('nav.irf.brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('nav.irf.dell_vlt'):parsed.vendor==='dell-os10'&&parsed.stack?tr('nav.irf.dell_stack'):tr('nav.irf.default');
+    irfLbl.textContent=parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('nav.irf.cisco'):parsed.vendor==='nxos'?tr('nav.irf.cisco'):parsed.vendor==='comware'?tr('nav.irf.comware'):parsed.vendor==='aruba'?tr('nav.irf.aruba'):parsed.vendor==='procurve'?tr('nav.irf.default'):parsed.vendor==='fortiswitch'?tr('nav.irf.forti'):parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?'Virtual Chassis':parsed.vendor==='alcatel'&&parsed.stack?'Alcatel Stack':parsed.vendor==='extreme'&&parsed.stack?'ExtremeStack':parsed.vendor==='brocade'&&parsed.stack?tr('nav.irf.brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('nav.irf.dell_vlt'):parsed.vendor==='dell-os10'&&parsed.stack?tr('nav.irf.dell_stack'):tr('nav.irf.default');
   }
   // Show nav items
   ['lbl-result','nav-overview','nav-irf','nav-vlans','nav-vlan-matrix','nav-ports','nav-lacp','nav-routes','nav-routing','nav-vrrp','nav-vxlan','nav-vrfs','nav-dhcp','nav-users','nav-lldp','nav-stp','nav-acl','nav-security','nav-qos','nav-audit'].forEach(id=>{
@@ -8878,6 +9042,38 @@ function renderAristaMlag(){
     </div>
   </div>`;
 }
+// Ruijie VSU（Virtual Switch Unit）堆疊——member+priority+role 形狀與 StackWise/VLT 較接近，
+// 但目前無真實範例可支撐一套完整拓撲 SVG（如 buildStackWiseSVG／renderDellStack 那樣），
+// 先用簡單卡片呈現域資訊＋成員表＋VSL 鏈路埠清單，避免對低信心度功能過度投入
+function renderRuijieVSU(){
+  const vsu=parsed.stack;
+  if(!vsu)return'<div class="nodata">'+tr('msg.no_data')+'</div>';
+  const vslMap={};
+  (vsu.vsl||[]).forEach(v=>{vslMap[v.memberId]=v.interfaces;});
+  return`<div style="padding:16px;display:flex;flex-direction:column;gap:12px">
+    <div class="card"><div class="card-head">Ruijie VSU</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;padding:14px 18px">
+        <div class="ov-card"><div class="ov-card-title">Domain</div><div style="font-size:22px;font-weight:700;color:var(--accent)">${esc(vsu.domain)}</div></div>
+        <div class="ov-card"><div class="ov-card-title">${tr('stack.member_count')}</div><div style="font-size:22px;font-weight:700;color:var(--teal)">${vsu.members.length}</div></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-head">${tr('irf.member_list_card')}</div>
+      <table class="data-tbl" style="margin:4px 18px 14px;width:calc(100% - 36px)">
+        <tr><th>ID</th><th>${tr('col.priority')}</th><th>${tr('col.role')}</th><th>VSL</th></tr>
+        ${vsu.members.map(m=>{
+          const roleClass=m.role==='Active'?'p-master':'p-standby';
+          const vslPorts=(vslMap[m.id]||[]).join(', ')||'—';
+          return`<tr>
+            <td>${pill('p-stack','VSU'+m.id)}</td>
+            <td class="mono">${m.priority}</td>
+            <td>${pill(roleClass,m.role||'—')}</td>
+            <td class="mono">${esc(vslPorts)}</td>
+          </tr>`;
+        }).join('')}
+      </table>
+    </div>
+  </div>`;
+}
 function renderLACP(){
   const l=parsed.lacp||[];
   if(!l.length)return'<div class="nodata">'+tr('msg.no_lacp')+'</div>';
@@ -8924,7 +9120,7 @@ function buildSumCards(){
   const hyb=ph.filter(i=>i.mode==='hybrid').length;
   const ipSubVlans=parsed.vlans.filter(v=>v.ipSubnets.length>0).length;
   document.getElementById('sum-wrap').innerHTML=[
-    [parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='cisco'?tr('sl.stack_cisco'):parsed.vendor==='aruba'?tr('sl.stack_aruba'):parsed.vendor==='fortiswitch'?tr('sl.stack_forti'):parsed.vendor==='brocade'?tr('sl.stack_brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('sl.vlt_node'):parsed.vendor==='dell-os10'?tr('sl.dell_stack'):tr('sl.irf'),parsed.stack?.members?.length || parsed.irf?.members?.length || 0,'var(--accent)','irf'],
+    [parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('sl.stack_cisco'):parsed.vendor==='aruba'?tr('sl.stack_aruba'):parsed.vendor==='fortiswitch'?tr('sl.stack_forti'):parsed.vendor==='brocade'?tr('sl.stack_brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('sl.vlt_node'):parsed.vendor==='dell-os10'?tr('sl.dell_stack'):tr('sl.irf'),parsed.stack?.members?.length || parsed.irf?.members?.length || 0,'var(--accent)','irf'],
     ['VLAN',parsed.vlans.length,'var(--teal)','vlans'],
     [tr('sl.phy_ports'),ph.length,'var(--text)','ports'],
     [tr('sl.enabled'),ph.length-dn,'var(--green)','ports'],
@@ -8973,7 +9169,7 @@ function renderView(view){
   if(!parsed){tc.innerHTML='<div class="nodata">'+tr('msg.no_config')+'</div>';return;}
   switch(view){
     case'overview': tc.innerHTML=renderOverview();break;
-    case'irf':      tc.innerHTML=parsed.vendor==='cisco'?renderStackWise():parsed.vendor==='aruba'?renderVSF():parsed.vendor==='fortiswitch'?renderMCLAG():parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?renderVC():parsed.vendor==='alcatel'&&parsed.stack?renderAlcatelStack():parsed.vendor==='extreme'&&parsed.stack?renderExtremeStack():parsed.vendor==='brocade'&&parsed.stack?renderBrocadeStack():(parsed.vendor==='arista'||parsed.vendor==='nxos')&&parsed.stack?renderAristaMlag():parsed.vendor==='dell-os10'&&parsed.stack?renderDellStack():renderIRF();break;
+    case'irf':      tc.innerHTML=parsed.vendor==='cisco'?renderStackWise():parsed.vendor==='aruba'?renderVSF():parsed.vendor==='fortiswitch'?renderMCLAG():parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?renderVC():parsed.vendor==='alcatel'&&parsed.stack?renderAlcatelStack():parsed.vendor==='extreme'&&parsed.stack?renderExtremeStack():parsed.vendor==='brocade'&&parsed.stack?renderBrocadeStack():parsed.vendor==='ruijie'&&parsed.stack?renderRuijieVSU():(parsed.vendor==='arista'||parsed.vendor==='nxos')&&parsed.stack?renderAristaMlag():parsed.vendor==='dell-os10'&&parsed.stack?renderDellStack():renderIRF();break;
     case'routing':  tc.innerHTML=renderRoutingProtocols();break;
     case'vrrp':    tc.innerHTML=renderVRRP();break;
     case'vxlan':   tc.innerHTML=renderVXLAN();break;
@@ -10788,7 +10984,7 @@ function exportHTMLReport(){
   }
   // exportHTML 內動態 vendor 標籤（含 brocade/ruckus 品牌切換）必須在 template literal
   // 外面先計算，不可用 ${(() => {...})()} 內嵌（既有慣例，見 CLAUDE.md exportHTML 規則）
-  const rptVendorLabel=({'comware':'HPE Comware','arista':'Arista EOS','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':p.sys?.brand==='ruckus'?'Ruckus ICX':'Brocade FastIron/ICX','dell-os10':'Dell EMC Networking'})[p.vendor]||p.vendor;
+  const rptVendorLabel=({'comware':'HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':p.sys?.brand==='ruckus'?'Ruckus ICX':'Brocade FastIron/ICX','dell-os10':'Dell EMC Networking'})[p.vendor]||p.vendor;
   const reportHtml=`<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -11617,6 +11813,33 @@ function parseVRRP(cfg, vendor){
           else if(/^priority-level\s/.test(rest))rec.priority=(rest.match(/priority-level\s+(\d+)/)||[])[1]||'100';
         }
         if(new RegExp('no\\s+vrrp\\s+'+vrid+'\\s+preempt').test(body))rec.preempt=false;
+        if(rec.vip)groups.push(rec);
+      }
+    }
+  } else if(vendor==='ruijie'){
+    // Ruijie RGOS：官方語法 "vrrp N ip VIP"（VLAN/interface 子模式下），非 HSRP，
+    // 不可誤用 cisco 分支解析。priority/preempt 沿用 comware/aruba 已查證過的常見寫法
+    // "vrrp N priority P"／"vrrp N preempt"，尚無真實範例逐字驗證，信心度較低
+    const raw=cfg.split('\ninterface ');
+    const merged={};
+    for(const blk of raw.slice(1)){
+      const name=blk.split('\n')[0].trim();
+      const body=blk.slice(name.length);
+      merged[name]=(merged[name]||'')+body;
+    }
+    for(const [iface,body] of Object.entries(merged)){
+      if(!/vrrp\s+\d+\s+ip\s+\d/.test(body))continue;
+      const vridSet=new Set([...body.matchAll(/vrrp\s+(\d+)\s+ip\s+\d/g)].map(x=>x[1]));
+      for(const vrid of vridSet){
+        const re=new RegExp('vrrp\\s+'+vrid+'\\s+([^\\n]+)','g');
+        const rec={vrid,interface:iface,vip:'',priority:'100',preempt:false,authMode:'',trackIf:'',trackReduced:'',version:'2'};
+        let line;
+        while((line=re.exec(body))!==null){
+          const rest=line[1].trim();
+          if(/^ip\s+\d/.test(rest))rec.vip=(rest.match(/ip\s+(\S+)/)||[])[1]||'';
+          else if(/^priority\s/.test(rest))rec.priority=(rest.match(/priority\s+(\d+)/)||[])[1]||'100';
+          else if(/^preempt/.test(rest))rec.preempt=true;
+        }
         if(rec.vip)groups.push(rec);
       }
     }
