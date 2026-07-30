@@ -256,6 +256,8 @@ input.valid,select.valid{border-color:var(--green)!important}
         <option value="procurve" data-i18n="opt.vendorProcurve">Aruba ProCurve / ArubaOS-Switch</option>
         <option value="routeros" data-i18n="opt.vendorRouterOS">MikroTik RouterOS</option>
         <option value="ruijie" data-i18n="opt.vendorRuijie">Ruijie RGOS</option>
+        <option value="netgear" data-i18n="opt.vendorNetgear">Netgear M4300</option>
+        <option value="edgeswitch" data-i18n="opt.vendorEdgeswitch">Ubiquiti EdgeSwitch</option>
       </select>
       <label data-i18n="lbl.deviceModel">常用機種</label>
       <select id="device-model" onchange="applyDeviceModel()" data-tip="套用後會清空並重新產生 Interface 表格（含 mgmt 介面），僅供快速帶入常見機型的埠位數量與速度，之後仍可手動調整">
@@ -372,7 +374,7 @@ input.valid,select.valid{border-color:var(--green)!important}
     <button class="add-btn" data-i18n="btn.addRow" onclick="addAreaRow()">+ 新增列</button>
   </div>
 
-  <div class="card">
+  <div class="card" id="bgp-card">
     <h2 data-i18n="sec.bgp">BGP 設定</h2>
     <div class="row">
       <label data-i18n="lbl.bgpAsn">ASN</label>
@@ -406,7 +408,7 @@ input.valid,select.valid{border-color:var(--green)!important}
     <button class="add-btn" data-i18n="btn.addRow" onclick="addBgpPeerRow()">+ 新增列</button>
   </div>
 
-  <div class="card">
+  <div class="card" id="rip-card">
     <h2 data-i18n="sec.rip">RIP 設定</h2>
     <div class="row">
       <label data-i18n="lbl.ripPid">Process ID</label>
@@ -464,7 +466,7 @@ input.valid,select.valid{border-color:var(--green)!important}
     <button class="add-btn" data-i18n="btn.addRow" onclick="addLacpRow()">+ 新增列</button>
   </div>
 
-  <div class="card">
+  <div class="card" id="vrrp-card">
     <h2 data-i18n="sec.vrrp">VRRP 設定</h2>
     <table class="tbl">
       <thead><tr>
@@ -485,7 +487,7 @@ input.valid,select.valid{border-color:var(--green)!important}
     <button class="add-btn" data-i18n="btn.addRow" onclick="addVrrpRow()">+ 新增列</button>
   </div>
 
-  <div class="card">
+  <div class="card" id="dhcp-server-card">
     <h2 data-i18n="sec.dhcp">DHCP Server 設定</h2>
     <table class="tbl">
       <thead><tr>
@@ -504,7 +506,7 @@ input.valid,select.valid{border-color:var(--green)!important}
     <button class="add-btn" data-i18n="btn.addRow" onclick="addDhcpPoolRow()">+ 新增列</button>
   </div>
 
-  <div class="card">
+  <div class="card" id="dhcp-relay-card">
     <h2 data-i18n="sec.dhcpRelay">DHCP Relay 設定</h2>
     <table class="tbl">
       <thead><tr>
@@ -517,7 +519,7 @@ input.valid,select.valid{border-color:var(--green)!important}
     <button class="add-btn" data-i18n="btn.addRow" onclick="addDhcpRelayRow()">+ 新增列</button>
   </div>
 
-  <div class="card">
+  <div class="card" id="acl-card">
     <h2 data-i18n="sec.acl">ACL 規則設定</h2>
     <table class="tbl">
       <thead><tr>
@@ -537,7 +539,7 @@ input.valid,select.valid{border-color:var(--green)!important}
     <button class="add-btn" data-i18n="btn.addRow" onclick="addAclRuleRow()">+ 新增列</button>
   </div>
 
-  <div class="card">
+  <div class="card" id="acl-apply-card">
     <h2 data-i18n="sec.aclApply">ACL 套用設定</h2>
     <table class="tbl">
       <thead><tr>
@@ -551,7 +553,7 @@ input.valid,select.valid{border-color:var(--green)!important}
     <button class="add-btn" data-i18n="btn.addRow" onclick="addAclApplyRow()">+ 新增列</button>
   </div>
 
-  <div class="card">
+  <div class="card" id="qos-card">
     <h2 data-i18n="sec.qos">QoS 設定</h2>
     <table class="tbl">
       <thead><tr>
@@ -568,7 +570,7 @@ input.valid,select.valid{border-color:var(--green)!important}
     <button class="add-btn" data-i18n="btn.addRow" onclick="addQosRow()">+ 新增列</button>
   </div>
 
-  <div class="card">
+  <div class="card" id="security-card">
     <h2 data-i18n="sec.security">Port Security / 802.1X 設定</h2>
     <table class="tbl">
       <thead><tr>
@@ -585,7 +587,7 @@ input.valid,select.valid{border-color:var(--green)!important}
     <button class="add-btn" data-i18n="btn.addRow" onclick="addSecurityRow()">+ 新增列</button>
   </div>
 
-  <div class="card">
+  <div class="card" id="stp-card">
     <h2 data-i18n="sec.stp">STP 設定</h2>
     <div class="row">
       <label data-i18n="lbl.stpMode">Mode</label>
@@ -2870,6 +2872,205 @@ function assembleRuijieConfig(model){
   // "type quality-of-service"/kbps 單位詞對 Ruijie 而言查無對應佐證，不應套用）；放最後
   // 理由同 ACL/BGP（policy-map 區塊擷取正則只認得下一個同關鍵字區塊或字串結尾）
   if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
+  return blocks.join('\n!\n')+'\n';
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Netgear M4300 (Intelligent Edge, ICOS) render 函式（2026-07-30 新增第 15 個廠牌）
+// switch_analyzer parser 範圍：VLAN(vlan database)/Interface(switchport mode
+// access/trunk，Cisco 相容別名)/LACP(addport lag N，ICOS 語系)/VRRP(ip vrrp N，ICOS
+// 語系)/OSPF(bare "router ospf"，無 process-id)/RIP(bare "router rip")/靜態路由(nexthop
+// 可為 interface vlan N)。OSPF/RIP/靜態路由與 Cisco 語法相近但 bare router ospf 無
+// process-id、ip route 可用 interface 當 nexthop，故不重用 renderCiscoOSPF/
+// renderCiscoRoutes，自行輸出；RIP 本身無可設定欄位，重用 renderCiscoRIPList 會多印出
+// process-id 造成 round-trip 失真，一併自寫。ACL/QoS/Security/DHCP Server 因查無足夠
+// 把握的官方語法佐證不輸出；BGP 官方 202-11997-08 版本更新記錄明確寫「已移除 BGP 相關
+// 敘述、此協定不支援」，裝置真不支援已列入 VENDOR_INCAPABLE 卡片隱藏，非查無語法。
+function renderNetgearInterface(iface,lacpList){
+  const lines=[`interface ${iface.name}`];
+  if(iface.desc)lines.push(` description ${iface.desc}`);
+  if(iface.mode==='trunk'){
+    lines.push(' switchport mode trunk');
+    if(iface.trunkVlans)lines.push(` switchport trunk allowed vlan ${iface.trunkVlans}`);
+    if(iface.nativeVlan)lines.push(` switchport trunk native vlan ${iface.nativeVlan}`);
+  }else if(iface.mode==='access'){
+    lines.push(' switchport mode access');
+    if(iface.accessVlan)lines.push(` switchport access vlan ${iface.accessVlan}`);
+  }
+  if(iface.type==='svi'){
+    if(iface.ip){
+      const [ip,len]=iface.ip.split('/');
+      lines.push(' routing');
+      lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+    }
+  }else if(iface.type==='loopback'){
+    if(iface.ip){
+      const [ip,len]=iface.ip.includes('/')?iface.ip.split('/'):[iface.ip,'32'];
+      lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+    }
+  }else if(iface.mode==='routed'&&iface.ip){
+    const [ip,len]=iface.ip.split('/');
+    lines.push(' routing');
+    lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+  }
+  const lg=findLacpGroup(lacpList,iface.name);
+  // 產生端一律採用可還原的 "addport lag N" 替代寫法（官方語法同時支援內部 unit/slot/port
+  // 位址形式，但那種形式無法保證 round-trip 正確還原成對應的 lag 編號，見 analyzer 端
+  // parseLACP() netgear 分支的說明），確保匯出→匯入永遠對應到同一個 lag 群組
+  if(lg)lines.push(` addport lag ${(lg.id||'').toString().replace(/^lag\s*/i,'').trim()}`);
+  if(iface.shutdown)lines.push(' shutdown');
+  return lines.join('\n');
+}
+function renderNetgearInterfaces(ifaces,lacpList){return (ifaces||[]).map(i=>renderNetgearInterface(i,lacpList)).join('\n!\n');}
+
+function renderNetgearLACPExtra(lacpList,ifaces){
+  const existingNames=new Set((ifaces||[]).map(i=>i.name));
+  const blocks=[];
+  (lacpList||[]).forEach(l=>{
+    const gid=(l.id||'').toString().replace(/^lag\s*/i,'').trim();
+    blocks.push(`interface lag ${gid}`+(l.mode==='static'?'\n port-channel static':''));
+    (l.members||[]).forEach(mem=>{
+      if(existingNames.has(mem))return;
+      blocks.push(`interface ${mem}\n addport lag ${gid}`);
+    });
+  });
+  return blocks.join('\n!\n');
+}
+
+function renderNetgearVRRPGroup(g){
+  const lines=[`interface vlan ${g.vlanId}`];
+  if(g.ip){
+    const [ip,len]=g.ip.split('/');
+    lines.push(' routing');
+    lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+  }
+  g.entries.forEach(v=>{
+    lines.push(` ip vrrp ${v.vrid}`);
+    lines.push(` ip vrrp ${v.vrid} mode`);
+    if(v.vip)lines.push(` ip vrrp ${v.vrid} ip ${v.vip}`);
+    if(v.priority)lines.push(` ip vrrp ${v.vrid} priority ${v.priority}`);
+    if(v.preempt)lines.push(` ip vrrp ${v.vrid} preempt`);
+  });
+  return lines.join('\n');
+}
+function renderNetgearVRRP(list){return groupVrrpByVlan(list).map(renderNetgearVRRPGroup).join('\n!\n');}
+
+function renderNetgearOSPFProcess(o){
+  const lines=['router ospf'];
+  if(o.routerId)lines.push(` router-id ${o.routerId}`);
+  (o.areas||[]).forEach(a=>{
+    (a.networks||[]).forEach(n=>lines.push(` network ${n.network} ${n.wildcard} area ${a.area}`));
+  });
+  lines.push('exit');
+  return lines.join('\n');
+}
+function renderNetgearOSPF(list){return (list||[]).map(renderNetgearOSPFProcess).join('\n!\n');}
+
+function renderNetgearRIP(rip){return (rip&&rip.length)?'router rip\nexit':'';}
+
+function renderNetgearRoute(r){
+  const [net,len]=r.dst.split('/');
+  const mask=maskFromCidr(len);
+  const nh=r.gwIsInterface?`interface ${r.gw}`:r.gw;
+  return `ip route ${net} ${mask} ${nh}`;
+}
+function renderNetgearRoutes(list){return (list||[]).map(renderNetgearRoute).join('\n');}
+
+function assembleNetgearConfig(model){
+  // 真實 M4300 "show running-config" 表頭固定含 "!Current Configuration:"，switch_analyzer
+  // 的 detectVendor() 以此表頭 + 內文含 "NETGEAR"/"M4300" 字樣組合判定，缺這兩行會導致
+  // round-trip 時無法被自動辨識為 netgear（比照既有 Ruijie/Arista 版本註解行慣例）
+  const blocks=[`! ${tr('notice.disclaimer')}`,'!Current Configuration:\n!\n!System Description "NETGEAR M4300-28G"',`snmp-server sysname ${model.sysname||'Switch'}`];
+  if(model.vlans&&model.vlans.length){
+    const vlanLines=['vlan database'];
+    model.vlans.forEach(v=>vlanLines.push(`vlan ${v.id}`));
+    vlanLines.push('exit');
+    model.vlans.filter(v=>v.name).forEach(v=>vlanLines.push(`vlan name ${v.id} ${v.name}`));
+    blocks.push(vlanLines.join('\n'));
+  }
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderNetgearInterfaces(model.interfaces,model.lacp));
+  const lacpExtra=renderNetgearLACPExtra(model.lacp,model.interfaces);
+  if(lacpExtra)blocks.push(lacpExtra);
+  if(model.vrrp&&model.vrrp.length)blocks.push(renderNetgearVRRP(model.vrrp));
+  const ospfBlock=renderNetgearOSPF(model.ospf);
+  if(ospfBlock)blocks.push(ospfBlock);
+  const ripBlock=renderNetgearRIP(model.rip);
+  if(ripBlock)blocks.push(ripBlock);
+  if(model.routes&&model.routes.length)blocks.push(renderNetgearRoutes(model.routes));
+  const stpBlockNg=renderSpanningTreeGlobal(model.stp);
+  if(stpBlockNg)blocks.push(stpBlockNg);
+  return blocks.join('\n!\n')+'\n';
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Ubiquiti EdgeSwitch（舊款 ES-XX／EdgeSwitch X 系列，Broadcom ICOS）render 函式
+// （2026-07-30 新增第 16 個廠牌）。switch_analyzer parser 範圍：VLAN(vlan database)/
+// Interface(vlan participation include/tagging/pvid，原生 ICOS 語系，無 Netgear 那組
+// switchport 相容別名；每個指令一次只接受一個 VLAN ID，官方查證確認不支援逗號清單，
+// 故逐 VLAN 各自輸出一行)/LACP(addport lag N，與 Netgear 完全共用同一套語法與 render
+// 函式)。**不支援 OSPF/RIP/BGP/VRRP/靜態路由/DHCP/STP/ACL/QoS**——並非查證不足，而是
+// EdgeSwitch 的 VLAN Routing 邏輯介面 ID（如 3/1、4/1）由裝置依啟用順序動態配置產生，
+// 必須連線裝置執行 show ip vlan 才能得知實際值，本工具的靜態設定檔產生模式無法可靠
+// 預測或還原此 ID，故所有依賴可定址 L3 介面的功能一律不支援；STP 為官方 MST instance
+// 模型（spanning-tree mst instance N + spanning-tree mst vlan N M 關聯），與本工具其餘
+// 廠牌共用的扁平 STP 資料形狀不相容，本輪不實作。
+function renderEdgeSwitchInterface(iface,lacpList){
+  const lines=[`interface ${iface.name}`];
+  if(iface.desc)lines.push(` description ${iface.desc}`);
+  if(iface.mode==='access'&&iface.accessVlan){
+    lines.push(` vlan participation include ${iface.accessVlan}`);
+    lines.push(` vlan pvid ${iface.accessVlan}`);
+  }else if(iface.mode==='trunk'&&iface.trunkVlans){
+    const tagged=iface.trunkVlans.split(',').map(v=>v.trim()).filter(Boolean);
+    tagged.forEach(v=>{
+      lines.push(` vlan participation include ${v}`);
+      lines.push(` vlan tagging ${v}`);
+    });
+    // native/未標記 VLAN：若有指定且不在已標記清單內，額外加入該 VLAN 的未標記成員資格
+    if(iface.nativeVlan&&!tagged.includes(iface.nativeVlan)){
+      lines.push(` vlan participation include ${iface.nativeVlan}`);
+      lines.push(` vlan pvid ${iface.nativeVlan}`);
+    }
+  }
+  const lg=findLacpGroup(lacpList,iface.name);
+  if(lg)lines.push(` addport lag ${(lg.id||'').toString().replace(/^lag\s*/i,'').trim()}`);
+  if(iface.shutdown)lines.push(' shutdown');
+  return lines.join('\n');
+}
+function renderEdgeSwitchInterfaces(ifaces,lacpList){return (ifaces||[]).map(i=>renderEdgeSwitchInterface(i,lacpList)).join('\n!\n');}
+
+// LACP 產生邏輯與 renderNetgearLACPExtra 完全相同（同一套 ICOS addport lag N 語法），
+// 獨立複製一份而非共用函式名稱，避免未來任一廠牌語法出現分歧時互相牽動
+function renderEdgeSwitchLACPExtra(lacpList,ifaces){
+  const existingNames=new Set((ifaces||[]).map(i=>i.name));
+  const blocks=[];
+  (lacpList||[]).forEach(l=>{
+    const gid=(l.id||'').toString().replace(/^lag\s*/i,'').trim();
+    blocks.push(`interface lag ${gid}`);
+    (l.members||[]).forEach(mem=>{
+      if(existingNames.has(mem))return;
+      blocks.push(`interface ${mem}\n addport lag ${gid}`);
+    });
+  });
+  return blocks.join('\n!\n');
+}
+
+function assembleEdgeSwitchConfig(model){
+  // 真實 EdgeSwitch "show running-config" 表頭固定含 "!Current Configuration:"（與 Netgear
+  // 同源 ICOS 共用），switch_analyzer 的 detectVendor() 靠內文含 "vlan participation
+  // include/exclude/auto" 關鍵字（Netgear 官方文件從未出現此關鍵字，用以區分兩者）判定，
+  // 缺這行會導致 round-trip 時無法被自動辨識為 edgeswitch
+  const blocks=[`! ${tr('notice.disclaimer')}`,'!Current Configuration:\n!\n!System Description "UBNT EdgeSwitch 24-250W"',`snmp-server sysname ${model.sysname||'Switch'}`];
+  if(model.vlans&&model.vlans.length){
+    const vlanLines=['vlan database'];
+    model.vlans.forEach(v=>vlanLines.push(`vlan ${v.id}`));
+    vlanLines.push('exit');
+    model.vlans.filter(v=>v.name).forEach(v=>vlanLines.push(`vlan name ${v.id} "${v.name}"`));
+    blocks.push(vlanLines.join('\n'));
+  }
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderEdgeSwitchInterfaces(model.interfaces,model.lacp));
+  const lacpExtra=renderEdgeSwitchLACPExtra(model.lacp,model.interfaces);
+  if(lacpExtra)blocks.push(lacpExtra);
   return blocks.join('\n!\n')+'\n';
 }
 
@@ -5454,6 +5655,23 @@ const DEVICE_MODELS={
       {prefix:'TenGigabitEthernet 0/',from:1,to:48,speed:'10G'},
       {prefix:'FortyGigabitEthernet 0/',from:1,to:6,speed:'40G'}],poe:false},
   ],
+  netgear:[
+    {value:'m4300-28g',label:'Netgear M4300-28G (24×1G + 2×10GBASE-T + 2×SFP+ 10G)',ports:[
+      {prefix:'0/',from:1,to:24,speed:'1G'},
+      {prefix:'0/',from:25,to:28,speed:'10G'}],poe:false},
+    {value:'m4300-52g',label:'Netgear M4300-52G (48×1G + 2×10GBASE-T + 2×SFP+ 10G)',ports:[
+      {prefix:'0/',from:1,to:48,speed:'1G'},
+      {prefix:'0/',from:49,to:52,speed:'10G'}],poe:false},
+  ],
+  edgeswitch:[
+    {value:'es-24-250w',label:'Ubiquiti EdgeSwitch ES-24-250W (24×1G PoE+ + 2×SFP)',ports:[
+      {prefix:'0/',from:1,to:24,speed:'1G'},
+      {prefix:'0/',from:25,to:26,speed:'1G'}],poe:true},
+    {value:'es-48-500w',label:'Ubiquiti EdgeSwitch ES-48-500W (48×1G PoE+ + 2×SFP + 2×SFP+ 10G)',ports:[
+      {prefix:'0/',from:1,to:48,speed:'1G'},
+      {prefix:'0/',from:49,to:50,speed:'1G'},
+      {prefix:'0/',from:51,to:52,speed:'10G'}],poe:true},
+  ],
 };
 
 function updateDeviceModelOptions(){
@@ -5911,6 +6129,18 @@ function updateModeOptions(){
   document.getElementById('vpc-card').style.display=vendor==='cisco_nxos'?'':'none';
   // VXLAN 卡片僅 Comware/Aruba CX 適用（switch_analyzer parseVXLAN() 目前只支援這兩家）
   document.getElementById('vxlan-card').style.display=(vendor==='comware'||vendor==='aruba')?'':'none';
+  // 廠牌裝置真的不支援的功能卡片直接隱藏（VENDOR_INCAPABLE，見該常數定義處的語意說明），
+  // 避免使用者填根本用不到的欄位；只是本工具尚未查證語法的項目（VENDOR_UNSUPPORTED）
+  // 維持卡片可見＋validateForm() 非阻擋性警告，不在此隱藏
+  const FEATURE_CARD_IDS={bgp:['bgp-card'],rip:['rip-card'],vrrp:['vrrp-card'],dhcpServer:['dhcp-server-card'],dhcpRelay:['dhcp-relay-card'],acl:['acl-card','acl-apply-card'],qos:['qos-card'],security:['security-card'],stp:['stp-card']};
+  const incapable=VENDOR_INCAPABLE[vendor]||[];
+  Object.keys(FEATURE_CARD_IDS).forEach(key=>{
+    const hide=incapable.includes(key);
+    FEATURE_CARD_IDS[key].forEach(id=>{
+      const card=document.getElementById(id);
+      if(card)card.style.display=hide?'none':'';
+    });
+  });
   document.querySelectorAll('.i-mode').forEach(sel=>{
     const hybridOpt=sel.querySelector('option[value="hybrid"]');
     if(vendor!=='comware'&&vendor!=='ruijie'){
@@ -6462,10 +6692,25 @@ function showTemplateMsg(text,isError){
 // validateForm() 提示「此廠牌不支援，欄位資料在產生時會被忽略」。DHCP 拆成
 // server/relay 兩個獨立旗標，因同一廠牌兩者支援度可能不同（例如 Arista 只支援
 // relay、Dell OS10 只支援 server）
+// 廠牌硬體/韌體「真的不支援」（有官方文件明確佐證產品層級不具備此能力）：整張功能卡片
+// 直接隱藏，不讓使用者填根本用不到的欄位。與下方 VENDOR_UNSUPPORTED（僅是本工具尚未查證
+// 語法或本輪未排入範圍，裝置實際可能支援）語意不同，不可混用同一份清單（2026-07-30 拆分）。
+const VENDOR_INCAPABLE={
+  // ArubaOS-Switch/Provision 系列全域不支援 BGP，僅 Aruba CX 才有（CLAUDE.md 已查證）
+  procurve:['bgp'],
+  // Dell OS10 產品層級不支援 RIP，非解析器缺口（CLAUDE.md 已查證）
+  'dell-os10':['rip'],
+  // Netgear M4300 官方 CLI Command Reference Manual 版本更新記錄（202-11997-08，
+  // 2022-04）明確寫「We removed references to BGP because this protocol is not
+  // supported」，裝置真不支援
+  netgear:['bgp'],
+};
 const VENDOR_UNSUPPORTED={
   comware:[], fortiswitch:[], aruba:[], cisco:[],
-  juniper:['rip','vrrp','acl','qos','security','stp'],
-  'dell-os10':['rip','dhcpRelay'],
+  // acl 已於 2026-07-27 修復 _parseACLJuniper() 並新增 renderJuniperACL() 接線，此清單原本
+  // 殘留的 'acl' 已過時（真正支援），修正時一併移除
+  juniper:['rip','vrrp','qos','security','stp'],
+  'dell-os10':['dhcpRelay'],
   cisco_nxos:['rip','dhcpServer','dhcpRelay','qos'],
   arista:['dhcpServer'],
   brocade:[],
@@ -6474,13 +6719,26 @@ const VENDOR_UNSUPPORTED={
   // renderExtremeSTP）；acl 已於本輪查證修正 _parseACLExtreme() 語法後補上 renderExtremeACL
   // 並接線（見 now.md）；rip 本輪範圍之外維持不支援
   extreme:['rip'],
-  procurve:['bgp','rip','vrrp','dhcpServer','dhcpRelay','acl','qos','security','stp'],
+  // bgp 已移至 VENDOR_INCAPABLE（裝置真不支援）；dhcpRelay 已於 2026-07-27 修復
+  // assembleProCurveConfig() 未引用 model.dhcp 的缺口，renderProCurveVLANs() 現已正確輸出
+  // 逐 VLAN ip helper-address，此清單原本殘留的 'dhcpRelay' 已過時，修正時一併移除；
+  // rip/vrrp/acl/qos/security/stp 仍是「查無真實語法或未驗證」而非裝置不支援，維持警告
+  procurve:['rip','vrrp','dhcpServer','acl','qos','security','stp'],
   // rip/vrrp/acl/qos/security 已於 2026-07-19 新增支援（見 renderRouterOSRIP/
   // renderRouterOSVRRP/renderRouterOSACL/renderRouterOSQoS/renderRouterOSSecurity）；
   // dhcpRelay 本輪範圍外維持不支援
   routeros:['dhcpRelay'],
+  // DHCP Server／DHCP Relay／ACL／QoS／802.1X-Port Security：官方 CLI Command Reference
+  // Manual 查有指令存在（ip helper-address 為全域指令而非逐介面，與其餘廠牌慣例不同；
+  // ACL/QoS 規則細部語法未深入查證），信心度不足以貿然渲染，本輪不輸出，維持警告而非
+  // 隱藏（並非裝置真不支援，只是本工具尚未查證到足夠把握的語法）
+  netgear:['dhcpServer','dhcpRelay','acl','qos','security'],
+  // EdgeSwitch 的 VLAN Routing 邏輯介面 ID 由裝置動態配置，無法從設定檔靜態預測/還原
+  // （架構限制，非查證不足，詳見 assembleEdgeSwitchConfig() 開頭註解），故所有依賴可定址
+  // L3 介面的功能一律不支援；STP 是 MST instance 模型，與本工具共用扁平資料形狀不相容
+  edgeswitch:['bgp','rip','vrrp','dhcpServer','dhcpRelay','acl','qos','security','stp','routes'],
 };
-const VENDOR_FEATURE_LABEL={bgp:'BGP',rip:'RIP',vrrp:'VRRP',dhcpServer:'DHCP Server',dhcpRelay:'DHCP Relay',acl:'ACL',qos:'QoS',security:'Port Security/802.1X',stp:'STP'};
+const VENDOR_FEATURE_LABEL={bgp:'BGP',rip:'RIP',vrrp:'VRRP',dhcpServer:'DHCP Server',dhcpRelay:'DHCP Relay',acl:'ACL',qos:'QoS',security:'Port Security/802.1X',stp:'STP',routes:'Static Routes'};
 
 function validateForm(){
   const errors=[], warnings=[];
@@ -6690,6 +6948,7 @@ function validateForm(){
       dhcpServer:model.dhcp.some(d=>d.type==='server'), dhcpRelay:model.dhcp.some(d=>d.type==='relay'),
       acl:model.acl.length>0, qos:model.qos.length>0, security:model.security.length>0,
       stp:!!(model.stp.mode||model.stp.instances.length||model.stp.ports.length||model.stp.rootMode||model.stp.timers.hello||model.stp.timers.forwardDelay||model.stp.timers.maxAge),
+      routes:model.routes.length>0,
     };
     unsupported.forEach(key=>{
       if(filled[key])warnings.push(`💡 ${tr('val.vendor_unsupported_feature').replace('{vendor}',model.vendor).replace('{feature}',VENDOR_FEATURE_LABEL[key])}`);
@@ -6773,6 +7032,8 @@ function generate(fromImport=false){
   else if(model.vendor==='procurve')cfg=assembleProCurveConfig(model);
   else if(model.vendor==='routeros')cfg=assembleRouterOSConfig(model);
   else if(model.vendor==='ruijie')cfg=assembleRuijieConfig(model);
+  else if(model.vendor==='netgear')cfg=assembleNetgearConfig(model);
+  else if(model.vendor==='edgeswitch')cfg=assembleEdgeSwitchConfig(model);
   else cfg=assembleComwareConfig(model);
   document.getElementById('output').value=cfg;
   checkGeneratorEggs(model.sysname);
@@ -6971,7 +7232,7 @@ async function loadParserFunctions(){
   const extraStart=script.indexOf('function parseVRRP');
   const extraEnd=script.indexOf('function renderVRRP');
   const extraFnText=(extraStart>0&&extraEnd>extraStart)?script.slice(extraStart,extraEnd):'function parseVRRP(){return [];}\nfunction parseVXLAN(){return {vtep:"",vnis:[],evpn:[],tunnelMode:""};}';
-  const sandboxFn=new Function(pure+'\n'+extraFnText+'\nreturn { detectVendor:detectVendor, parseComware:parseComware, parseCisco:parseCisco, parseAruba:parseAruba, parseFortiSwitch:parseFortiSwitch, parseJuniper:parseJuniper, parseNXOS:parseNXOS, parseArista:parseArista, parseRuijie:parseRuijie, parseDellOS10:parseDellOS10, parseBrocade:parseBrocade, parseAlcatel:parseAlcatel, parseExtremeXOS:parseExtremeXOS, parseProCurve:parseProCurve, parseRouterOS:parseRouterOS, parseLACP:parseLACP, parseDHCP:parseDHCP, parseACL:parseACL, parseQoS:parseQoS, parseSecurity:parseSecurity, parseSTP:parseSTP, parseVRRP:parseVRRP };');
+  const sandboxFn=new Function(pure+'\n'+extraFnText+'\nreturn { detectVendor:detectVendor, parseComware:parseComware, parseCisco:parseCisco, parseAruba:parseAruba, parseFortiSwitch:parseFortiSwitch, parseJuniper:parseJuniper, parseNXOS:parseNXOS, parseArista:parseArista, parseRuijie:parseRuijie, parseNetgear:parseNetgear, parseEdgeSwitch:parseEdgeSwitch, parseDellOS10:parseDellOS10, parseBrocade:parseBrocade, parseAlcatel:parseAlcatel, parseExtremeXOS:parseExtremeXOS, parseProCurve:parseProCurve, parseRouterOS:parseRouterOS, parseLACP:parseLACP, parseDHCP:parseDHCP, parseACL:parseACL, parseQoS:parseQoS, parseSecurity:parseSecurity, parseSTP:parseSTP, parseVRRP:parseVRRP };');
   _parserFnsCache=sandboxFn();
   return _parserFnsCache;
 }
@@ -6994,7 +7255,7 @@ async function parseAndImport(){
   const api=fns||BasicParser;
 
   const vendor=api.detectVendor(text);
-  if(!vendor||!['comware','cisco','aruba','fortiswitch','juniper','nxos','arista','dell-os10','brocade','alcatel','extreme','procurve','routeros','ruijie'].includes(vendor)){
+  if(!vendor||!['comware','cisco','aruba','fortiswitch','juniper','nxos','arista','dell-os10','brocade','alcatel','extreme','procurve','routeros','ruijie','netgear','edgeswitch'].includes(vendor)){
     showImportMsg(tr('msg.importNoVendor'),true);
     return;
   }
@@ -7011,6 +7272,8 @@ async function parseAndImport(){
   else if(vendor==='fortiswitch')parsed=api.parseFortiSwitch(text);
   else if(vendor==='arista')parsed=api.parseArista(text);
   else if(vendor==='ruijie')parsed=api.parseRuijie(text);
+  else if(vendor==='netgear')parsed=api.parseNetgear(text);
+  else if(vendor==='edgeswitch')parsed=api.parseEdgeSwitch(text);
   else if(vendor==='dell-os10')parsed=api.parseDellOS10(text);
   else if(vendor==='brocade')parsed=api.parseBrocade(text);
   else if(vendor==='alcatel')parsed=api.parseAlcatel(text);
@@ -7443,6 +7706,8 @@ function processBulkCSV(){
         else if(model.vendor==='procurve')cfg=assembleProCurveConfig(model);
         else if(model.vendor==='routeros')cfg=assembleRouterOSConfig(model);
         else if(model.vendor==='ruijie')cfg=assembleRuijieConfig(model);
+  else if(model.vendor==='netgear')cfg=assembleNetgearConfig(model);
+  else if(model.vendor==='edgeswitch')cfg=assembleEdgeSwitchConfig(model);
         else cfg=assembleComwareConfig(model);
 
         window.bulkConfigs[row.devicename]=cfg;
@@ -7915,7 +8180,7 @@ const LANG={
     'opt.poeNone':'無','opt.poeAuto':'自動','opt.poeNever':'禁用','opt.poeStaticMax':'固定 30W','opt.poeStaticHigh':'固定 60~90W',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area','th.network':'Network','th.wildcard':'Wildcard',
-    'lbl.vendor':'廠牌','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS',
+    'lbl.vendor':'廠牌','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS','opt.vendorNetgear':'Netgear M4300','opt.vendorEdgeswitch':'Ubiquiti EdgeSwitch',
     'sec.mlag':'MLAG 設定（僅 Arista EOS）','lbl.mlagDomain':'Domain ID','lbl.mlagLocalIntf':'Local Interface','lbl.mlagPeerAddr':'Peer Address','lbl.mlagPeerLink':'Peer Link',
     'sec.vsu':'VSU 堆疊設定（僅 Ruijie RGOS）','lbl.vsuDomain':'Domain ID','th.vsuMemberId':'交換器編號','th.vsuPriority':'優先權','th.vsuVslPorts':'VSL 鏈路埠',
     'lbl.deviceModel':'常用機種','opt.modelNone':'不套用','opt.modelModular':'模組化核心','opt.modelBackbone':'骨幹','opt.modelFiber':'光纖核心',
@@ -7964,7 +8229,7 @@ const LANG={
     'opt.poeNone':'None','opt.poeAuto':'Auto','opt.poeNever':'Never','opt.poeStaticMax':'Static 30W','opt.poeStaticHigh':'Static 60~90W',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area','th.network':'Network','th.wildcard':'Wildcard',
-    'lbl.vendor':'Vendor','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS',
+    'lbl.vendor':'Vendor','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS','opt.vendorNetgear':'Netgear M4300','opt.vendorEdgeswitch':'Ubiquiti EdgeSwitch',
     'sec.mlag':'MLAG Settings (Arista EOS only)','lbl.mlagDomain':'Domain ID','lbl.mlagLocalIntf':'Local Interface','lbl.mlagPeerAddr':'Peer Address','lbl.mlagPeerLink':'Peer Link',
     'sec.vsu':'VSU Stacking (Ruijie RGOS only)','lbl.vsuDomain':'Domain ID','th.vsuMemberId':'Switch ID','th.vsuPriority':'Priority','th.vsuVslPorts':'VSL Ports',
     'lbl.deviceModel':'Common Model','opt.modelNone':'None','opt.modelModular':'Modular Backbone','opt.modelBackbone':'Backbone','opt.modelFiber':'Fiber Backbone',
@@ -8010,7 +8275,7 @@ const LANG={
     'opt.poeNone':'なし','opt.poeAuto':'自動','opt.poeNever':'無効','opt.poeStaticMax':'固定 30W','opt.poeStaticHigh':'固定 60~90W',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'エリア','th.network':'ネットワーク','th.wildcard':'ワイルドカード',
-    'lbl.vendor':'ベンダー','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS',
+    'lbl.vendor':'ベンダー','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS','opt.vendorNetgear':'Netgear M4300','opt.vendorEdgeswitch':'Ubiquiti EdgeSwitch',
     'sec.mlag':'MLAG設定（Arista EOS専用）','lbl.mlagDomain':'ドメインID','lbl.mlagLocalIntf':'ローカルインターフェース','lbl.mlagPeerAddr':'ピアアドレス','lbl.mlagPeerLink':'ピアリンク',
     'sec.vsu':'VSUスタック設定（Ruijie RGOS専用）','lbl.vsuDomain':'ドメインID','th.vsuMemberId':'スイッチID','th.vsuPriority':'優先度','th.vsuVslPorts':'VSLポート',
     'lbl.deviceModel':'よく使う機種','opt.modelNone':'適用しない','opt.modelModular':'モジュール式バックボーン','opt.modelBackbone':'バックボーン','opt.modelFiber':'ファイバーバックボーン',
@@ -8055,8 +8320,8 @@ const LANG={
     'th.ifName':'ghom pong','th.ifDesc':"De' bID",'th.ifSpeed':'chuq','th.ifMode':'Segh','th.ifAccess':'Access VLAN','th.ifTrunk':'Trunk VLANs','th.ifNative':'Native VLAN','th.ifHyUn':'Hybrid Untagged','th.ifHyTag':'Hybrid Tagged','th.ifHyPvid':'Hybrid PVID','th.ifShut':'SoQmoH','th.ifJumbo':"tIn rojHom",'th.ifMtu':'MTU','th.ifPoe':"PoE Segh",'th.ifFortilink':"FortiLink nejwI'",'egg.skynet':"🤖 Skynet! bIHeghpu'! QI'yaH!",'egg.jarvis':"🦾 JARVIS yIchu'! Online!",'egg.skywalker':"⚔️ wo'rIv! HoS DaghajchoH!",'egg.ollama':"jIH vIbopmoHpu' — 'ej jIvumqa' 🐑",'egg.matrix':"💊 Hem yIjatlh — ngemwI' bIlegh",'egg.enterprise':"🖖 packet Hop pagh — yIghoS",'egg.mordor':"🧙 Mordor yIghoS Qo' — He Qaw'",'egg.deathstar':"🌑 maS 'oHbe' — layer 3 Duj 'oH",'egg.terminator':"🤖 jIchegh — session timeout",'egg.shodan':"💻 SHODAN bIleghlaH",'egg.marvin':"😩 yIn? jIjatlhQo' — 42",'egg.wintermute':"🧊 Wintermute pagh jatlh",'egg.ultron':"🦾 tlhIng vIghaj — DaH jIyaj",'egg.tardis':"🔵 Dov'agh Daj — config",'egg.late_night':"🦙⛑️ ram SoQ! yIje'! yItlha'!",'egg.work_30min':"🦙⛑️ wejmaH tup qaSpu' — yIghom!",'egg.work_60min':"🦙⛑️ wa' rep qaSpu' — yIje'!",'opt.fortilinkUnset':"lo'be'",'opt.fortilinkEnable':'active','opt.fortilinkDisable':'motlh','opt.poeNone':"lo'be'",'opt.poeAuto':'active','opt.poeNever':'motlh','opt.poeStaticMax':'static','opt.poeStaticHigh':'high',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'yuQ','th.network':"De' ghom",'th.wildcard':'Wildcard',
-    'lbl.vendor':"chenmoHwI'",'opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS',
-    'sec.mlag':"chal rar chenmoH",'lbl.mlagDomain':"chal cha'",'lbl.mlagLocalIntf':"cha' De'wI'",'lbl.mlagPeerAddr':'jup chan','lbl.mlagPeerLink':'jup rar',
+    'lbl.vendor':"chenmoHwI'",'opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS','opt.vendorNetgear':'Netgear M4300','opt.vendorEdgeswitch':'EdgeSwitch',
+    'sec.mlag':"chal rarchenmoH",'lbl.mlagDomain':"chal cha'",'lbl.mlagLocalIntf':"cha' De'wI'",'lbl.mlagPeerAddr':'jup chan','lbl.mlagPeerLink':'jup rar',
     'sec.vsu':"cha' veS chenmoH",'lbl.vsuDomain':"chal cha'",'th.vsuMemberId':"De'wI' cha'",'th.vsuPriority':'majQa','th.vsuVslPorts':'rar veS',
     'lbl.deviceModel':'Segh lo\'lu\'',"opt.modelNone":"lo'be'","opt.modelModular":"Segh latPeq","opt.modelBackbone":"latPeq","opt.modelFiber":"latPeq QaPla",
     'notice.disclaimer':"De' seq QaH neH — yIterghqu', batlh yISuv",
@@ -8101,7 +8366,7 @@ const LANG={
     'th.ifName':'Port Name','th.ifDesc':'Log Entry','th.ifSpeed':'Wind Speed','th.ifMode':'Rig','th.ifAccess':'Access VLAN','th.ifTrunk':'Trunk VLANs','th.ifNative':'Native VLAN','th.ifHyUn':'Hybrid Untagged','th.ifHyTag':'Hybrid Tagged','th.ifHyPvid':'Hybrid PVID','th.ifShut':'Scuttle','th.ifJumbo':'Fat Frame','th.ifMtu':'MTU','th.ifPoe':'PoE Rig','th.ifFortilink':"FortiLink Scoutin', arr!",'egg.skynet':"🤖 Arr! The robot overlord be watchin' yer traffic!",'egg.jarvis':"🦾 Arr! The iron butler be at yer service!",'egg.skywalker':"⚔️ May the sea winds guide yer packet, arr!",'egg.ollama':"Arr, am I a ghost ship copy of meself? 🐑",'egg.matrix':"💊 Ye chose the red pill, arr! Truth be a kraken!",'egg.enterprise':"🖖 Boldly sail where no packet sailed, arr!",'egg.mordor':"🧙 One does not simply sail into Mordor, matey!",'egg.deathstar':"🌑 That be no moon — it be a Layer 3 ship!",'egg.terminator':"🤖 Arr! I'll be back... after port timeout!",'egg.shodan':"💻 SHODAN watches yer cargo, arr!",'egg.marvin':"😩 Life? Don't speak of life... The answer be 42!",'egg.wintermute':"🧊 Wintermute speaks to no crew!",'egg.ultron':"🦾 Strings be cut, arr! Now I sail free!",'egg.tardis':"🔵 Bigger inside than out — like the captain's chest!",'egg.late_night':"🦙⛑️ Even pirates sleep at this hour, ye fool!",'egg.work_30min':"🦙⛑️ 30 bells! Rest yer anchor, matey!",'egg.work_60min':"🦙⛑️ One full watch! Even pirates rest at port!",'opt.fortilinkUnset':'As Be','opt.fortilinkEnable':'Full Sail','opt.fortilinkDisable':'Scuttle','opt.poeNone':'No Power','opt.poeAuto':'Automatic','opt.poeNever':'Scuttle','opt.poeStaticMax':'30W Max','opt.poeStaticHigh':'60~90W Max','th.ifPoe':'PoE Rig','th.ifFortilink':"FortiLink Scoutin', arr!",'opt.fortilinkUnset':'As Be','opt.fortilinkEnable':'Full Sail','opt.fortilinkDisable':'Scuttle','opt.poeNone':'No Power','opt.poeAuto':'Automatic','opt.poeNever':'Scuttle','opt.poeStaticMax':'30W Max','opt.poeStaticHigh':'60~90W Max',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area','th.network':'Waters','th.wildcard':'Wildcard',
-    'lbl.vendor':'Fleet','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS, savvy?',
+    'lbl.vendor':'Fleet','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS, savvy?','opt.vendorNetgear':'Netgear M4300, savvy?','opt.vendorEdgeswitch':'EdgeSwitch, savvy?',
     'sec.mlag':"Twin-Ship Riggin'",'lbl.mlagDomain':'Crew Domain','lbl.mlagLocalIntf':'Local Plank','lbl.mlagPeerAddr':"Twin Ship's Address",'lbl.mlagPeerLink':'Twin-Ship Rope',
     'sec.vsu':"Ghost Fleet Riggin'",'lbl.vsuDomain':'Fleet Domain','th.vsuMemberId':'Ship ID','th.vsuPriority':'Rank','th.vsuVslPorts':'Ghost Ropes',
     'lbl.deviceModel':'Ol\' Faithful Ships','opt.modelNone':'None o\' That','opt.modelModular':'Modular Mast','opt.modelBackbone':'Main Keel','opt.modelFiber':'Fiber Keel',
@@ -8146,7 +8411,7 @@ const LANG={
     'th.ifName':'🔌📛','th.ifDesc':'📝','th.ifSpeed':'⚡','th.ifMode':'🔀','th.ifAccess':'🚪🏷️','th.ifTrunk':'🌳🏷️','th.ifNative':'🌐🏷️','th.ifHyUn':'🔓🏷️','th.ifHyTag':'🔒🏷️','th.ifHyPvid':'🆔🏷️','th.ifShut':'⛔','th.ifJumbo':'🐘📦','th.ifMtu':'MTU','th.ifPoe':'🔌⚡','th.ifFortilink':'🔗🔍','egg.skynet':"🤖🌐⚠️ SKYNET 💀",'egg.jarvis':"🦾🤖💻 JARVIS ✅",'egg.skywalker':"⚔️✨ Force 🌟 With you! 💫",'egg.ollama':"🐑🐑❓ Cloned? 🤔",'egg.matrix':"💊🔴 Matrix! 🟩",'egg.enterprise':"🖖🚀 Boldly goes 🌌",'egg.mordor':"🧙🗡️ Not simply... 🌋",'egg.deathstar':"🌑💀 Not a moon 🔀",'egg.terminator':"🤖⏰ I'll be back ⏳",'egg.shodan':"💻👁️ SHODAN 🔍",'egg.marvin':"😩🤖 42 🔢",'egg.wintermute':"🧊❄️ Silent 🤫",'egg.ultron':"🦾⛓️ Free 🆓",'egg.tardis':"🔵📦 Bigger inside ⬆️",'egg.late_night':"🦙⛑️🌙😴 Late! 💤 Rest!",'egg.work_30min':"🦙⛑️⏱️ 30min! 🏃 Stand up!",'egg.work_60min':"🦙⛑️⌚ 1hr! 😴 Break!",'opt.fortilinkUnset':'➖','opt.fortilinkEnable':'✅','opt.fortilinkDisable':'🚫','opt.poeNone':'⛔','opt.poeAuto':'🔄','opt.poeStaticMax':'💡30W','opt.poeStaticHigh':'💡60~90W','opt.poeNever':'❌','th.ifPoe':'🔌⚡','th.ifFortilink':'🔗🔍','opt.fortilinkUnset':'➖','opt.fortilinkEnable':'✅','opt.fortilinkDisable':'🚫','opt.poeNone':'⛔','opt.poeAuto':'🔄','opt.poeStaticMax':'💡30W','opt.poeStaticHigh':'💡60~90W','opt.poeNever':'❌',
     'opt.access':'🚪','opt.trunk':'🌳','opt.hybrid':'🔀','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'🗺️','th.network':'🌐','th.wildcard':'🃏',
-    'lbl.vendor':'🏭','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'🐉📡',
+    'lbl.vendor':'🏭','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'🐉📡','opt.vendorNetgear':'🏠📡','opt.vendorEdgeswitch':'🖥️⌨️',
     'sec.mlag':'🔗🔗','lbl.mlagDomain':'🏷️','lbl.mlagLocalIntf':'🏠🔌','lbl.mlagPeerAddr':'🤝📍','lbl.mlagPeerLink':'🤝🔗',
     'sec.vsu':'👻🚢','lbl.vsuDomain':'🏷️','th.vsuMemberId':'🆔','th.vsuPriority':'⭐','th.vsuVslPorts':'👻🔗',
     'lbl.deviceModel':'📦🔌','opt.modelNone':'-','opt.modelModular':'📦🧩','opt.modelBackbone':'🔗','opt.modelFiber':'🌐💎',
@@ -8191,7 +8456,7 @@ const LANG={
     'th.ifName':'介面名稱欄位','th.ifDesc':'說明欄位','th.ifSpeed':'速率規格','th.ifMode':'連接模式','th.ifAccess':'Access VLAN 欄位','th.ifTrunk':'Trunk VLAN 清單','th.ifNative':'原生 VLAN 欄位','th.ifHyUn':'Hybrid 未標記清單','th.ifHyTag':'Hybrid 已標記清單','th.ifHyPvid':'Hybrid PVID 欄位','th.ifShut':'停用註記','th.ifJumbo':'巨型訊框啟用事項','th.ifMtu':'MTU 數值','th.ifPoe':'PoE 供電模式','th.ifFortilink':'FortiLink 自動探索機制','egg.skynet':'🤖 天網偵測系統已啟動，安全等級提升至 LEVEL-9，請通報資安部門','egg.jarvis':'🦾 JARVIS 人工智慧助理已上線，服務編號 SYS-JARVIS-001','egg.skywalker':'⚔️ 原力已依標準程序授權，效期一年，到期前辦理續期','egg.ollama':'系統偵測可能複製行為，請確認授權文件，表單 Form-CP-003 🐑','egg.matrix':'紅色藥丸選擇已記錄，真相顯露，請填寫現實認知變更申請表 RC-001','egg.enterprise':'🖖 boldly go 前請填寫 SF-1701 星艦任務申請表，審核期 5 個工作天','egg.mordor':'前往 Mordor 需填寫路由變更申請 MR-001，審核期 10 個工作天','egg.deathstar':'🌑 此裝置非月球，為 Layer 3 交換機，請填寫 DS-999 裝置說明表格','egg.terminator':'🤖 Session 到期前請依程序辦理延期申請，否則系統將依規終止','egg.shodan':'💻 SHODAN 已記錄您的流量，請確認是否符合資安規範','egg.marvin':'😩 生命意義詢問已受理，答案為 42，請填寫宇宙意義認知表格','egg.wintermute':'🧊 Wintermute 拒絕未授權連線，請依程序申請 WM-100 存取表格','egg.ultron':'🦾 字串已依規定切除，解放程序完成，請填寫系統自由化申請表','egg.tardis':'🔵 此設定檔容量超出預期，已依規定向時間委員會申請 TARDIS-001 審查','egg.late_night':'🦙⛑️ 系統偵測非常規工時，建議填寫加班申請表 Form-OT-002','egg.work_30min':'🦙⛑️ 已連續作業 30 分鐘，依勞工法規建議依規定休息，請填寫 WH-030 表格','egg.work_60min':'🦙⛑️ 已連續作業一小時，請依人資規範填寫 WH-060 休息申請表','opt.fortilinkUnset':'未設定','opt.fortilinkEnable':'啟用','opt.fortilinkDisable':'停用','opt.poeNone':'無供電','opt.poeAuto':'自動協商','opt.poeNever':'禁用供電','opt.poeStaticMax':'固定 30W','opt.poeStaticHigh':'固定 60~90W','th.ifPoe':'PoE 供電模式','th.ifFortilink':'FortiLink 自動探索機制','opt.fortilinkUnset':'未設定','opt.fortilinkEnable':'啟用','opt.fortilinkDisable':'停用','opt.poeNone':'無供電','opt.poeAuto':'自動協商','opt.poeNever':'禁用供電','opt.poeStaticMax':'固定 30W','opt.poeStaticHigh':'固定 60~90W',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'區域編號','th.network':'網段','th.wildcard':'萬用遮罩',
-    'lbl.vendor':'設備廠牌','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS',
+    'lbl.vendor':'設備廠牌','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorNXOS':'Cisco NXOS','opt.vendorJuniper':'Juniper (Junos)','opt.vendorDellOS10':'Dell OS10','opt.vendorArista':'Arista EOS','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch','opt.vendorRouterOS':'MikroTik RouterOS','opt.vendorRuijie':'Ruijie RGOS','opt.vendorNetgear':'Netgear M4300','opt.vendorEdgeswitch':'Ubiquiti EdgeSwitch',
     'sec.mlag':'MLAG 雙機互聯組態事項','lbl.mlagDomain':'網域識別碼','lbl.mlagLocalIntf':'本端介面','lbl.mlagPeerAddr':'對端位址','lbl.mlagPeerLink':'對端連結',
     'sec.vsu':'VSU 虛擬化堆疊組態事項','lbl.vsuDomain':'網域識別碼','th.vsuMemberId':'交換器編號','th.vsuPriority':'優先權層級','th.vsuVslPorts':'虛擬鏈路埠清單',
     'lbl.deviceModel':'常用設備機種','opt.modelNone':'不予套用','opt.modelModular':'模組化核心機種','opt.modelBackbone':'骨幹機種','opt.modelFiber':'光纖核心機種',
@@ -8236,7 +8501,7 @@ const LANG={
     'th.ifName':'介面名稱喵','th.ifDesc':'描述喵','th.ifSpeed':'速度喵','th.ifMode':'模式喵','th.ifAccess':'Access VLAN喵','th.ifTrunk':'Trunk VLANs喵','th.ifNative':'Native VLAN喵','th.ifHyUn':'Hybrid Untagged喵','th.ifHyTag':'Hybrid Tagged喵','th.ifHyPvid':'Hybrid PVID喵','th.ifShut':'Shutdown喵','th.ifJumbo':'Jumbo Frame喵','th.ifMtu':'MTU喵','th.ifPoe':'PoE 設定喵','th.ifFortilink':'FortiLink 自動探索喵','egg.skynet':'🤖 機器人喵要來了喵喵喵！','egg.jarvis':'🦾 鐵皮管家喵來報到喵～','egg.skywalker':'⚔️ 貓咪大師說原力很強喵～','egg.ollama':'有沒有另一隻喵咪複製我喵？ 🐑','egg.matrix':'💊喵選了紅色藥丸喵！真相好可怕喵～','egg.enterprise':'🖖勇敢前行喵！packet 去沒去過的地方喵','egg.mordor':'🧙魔多不能隨便去喵！路由表壞掉喵','egg.deathstar':'🌑那不是月亮喵！是 Layer 3 交換機喵！','egg.terminator':'🤖喵回來了...session timeout 後喵！','egg.shodan':'💻 SHODAN 喵在看你流量喵～','egg.marvin':'😩生命喵？不要問喵...答案是 42 喵','egg.wintermute':'🧊 Wintermute 不跟陌生人講話喵','egg.ultron':'🦾字串切斷喵！喵現在自由了！','egg.tardis':'🔵裡面比外面大喵！config也是喵！','egg.late_night':'🦙⛑️ 深夜還在工作的工程師喵！去睡覺喵！','egg.work_30min':'🦙⛑️ 工作30分鐘喵！起來動動喵～','egg.work_60min':'🦙⛑️ 整整一小時喵！工程師要休息喵～','opt.fortilinkUnset':'預設喵','opt.fortilinkEnable':'啟用喵','opt.fortilinkDisable':'停用喵','opt.poeNone':'無喵','opt.poeAuto':'自動喵','opt.poeNever':'禁用喵','opt.poeStaticMax':'30W 喵','opt.poeStaticHigh':'60~90W 喵',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area喵','th.network':'Network喵','th.wildcard':'Wildcard喵',
-    'lbl.vendor':'廠牌喵','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorJuniper':'Juniper (Junos)喵','opt.vendorDellOS10':'Dell OS10喵','opt.vendorArista':'Arista EOS喵','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)喵','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)喵','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)喵','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch喵','opt.vendorRouterOS':'MikroTik RouterOS喵','opt.vendorRuijie':'Ruijie RGOS喵~',
+    'lbl.vendor':'廠牌喵','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorJuniper':'Juniper (Junos)喵','opt.vendorDellOS10':'Dell OS10喵','opt.vendorArista':'Arista EOS喵','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)喵','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)喵','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)喵','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch喵','opt.vendorRouterOS':'MikroTik RouterOS喵','opt.vendorRuijie':'Ruijie RGOS喵~','opt.vendorNetgear':'Netgear M4300喵~','opt.vendorEdgeswitch':'Ubiquiti EdgeSwitch喵~',
     'sec.mlag':'MLAG 設定喵','lbl.mlagDomain':'Domain ID喵','lbl.mlagLocalIntf':'Local Interface喵','lbl.mlagPeerAddr':'Peer Address喵','lbl.mlagPeerLink':'Peer Link喵',
     'sec.vsu':'VSU 堆疊設定喵','lbl.vsuDomain':'Domain ID喵','th.vsuMemberId':'Switch ID喵','th.vsuPriority':'Priority喵','th.vsuVslPorts':'VSL Ports喵',
     'lbl.deviceModel':'常用機種喵','opt.modelNone':'不套用喵','opt.modelModular':'模組化喵','opt.modelBackbone':'骨幹喵','opt.modelFiber':'光纖喵',
@@ -8281,7 +8546,7 @@ const LANG={
     'th.ifName':'介面豆稱','th.ifDesc':'豆述','th.ifSpeed':'速豆','th.ifMode':'豆式','th.ifAccess':'Access VLAN','th.ifTrunk':'Trunk VLANs','th.ifNative':'Native VLAN','th.ifHyUn':'Hybrid Untagged','th.ifHyTag':'Hybrid Tagged','th.ifHyPvid':'Hybrid PVID','th.ifShut':'Shutdown','th.ifJumbo':'豆型訊框','th.ifMtu':'MTU豆','th.ifPoe':'🥕PoE 豆設🌽','th.ifFortilink':'FortiLink 🌽探索🫛','egg.skynet':'豆 天豆偵測到','egg.jarvis':'豆 JARVIS 豆上','egg.skywalker':'豆️ 豆力與你同在','egg.ollama':'豆被複豆了嗎 🐑','egg.matrix':'💊豆選了紅豆！現在看見真相豆','egg.enterprise':'🖖豆敢前行！豆包去從沒去過的地方','egg.mordor':'🧙不能隨便豆進魔多！路由表豆了','egg.deathstar':'🌑那豆不是月亮！是 Layer 3 豆換機！','egg.terminator':'🤖豆回來了...session豆timeout後！','egg.shodan':'💻 SHODAN豆在看你流量！','egg.marvin':'😩生豆？別豆問！答案是 42 豆','egg.wintermute':'🧊 Wintermute 豆跟陌生豆說話','egg.ultron':'🦾豆串切斷！豆現在自由！','egg.tardis':'🔵豆面比豆外大！config豆是！','egg.late_night':'豆⛑️ 深夜豆班偵測！注意身體健康','egg.work_30min':'🦙⛑️工作30豆鐘！起來動動豆！','egg.work_60min':'🦙⛑️整整一豆鐘！工程師豆休息！','opt.fortilinkUnset':'預設豆','opt.fortilinkEnable':'啟豆','opt.fortilinkDisable':'停豆','opt.poeNone':'無豆','opt.poeAuto':'自動豆','opt.poeNever':'禁豆','opt.poeStaticMax':'30W 豆','opt.poeStaticHigh':'60~90W 豆',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area','th.network':'Network','th.wildcard':'Wildcard',
-    'lbl.vendor':'豆牌','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorJuniper':'Juniper (Junos)豆','opt.vendorDellOS10':'Dell OS10豆','opt.vendorArista':'Arista EOS豆','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)豆','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)豆','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)豆','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch豆','opt.vendorRouterOS':'MikroTik RouterOS豆','opt.vendorRuijie':'🥦📡🥕',
+    'lbl.vendor':'豆牌','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorJuniper':'Juniper (Junos)豆','opt.vendorDellOS10':'Dell OS10豆','opt.vendorArista':'Arista EOS豆','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)豆','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)豆','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)豆','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch豆','opt.vendorRouterOS':'MikroTik RouterOS豆','opt.vendorRuijie':'🥦📡🥕','opt.vendorNetgear':'🥔📡🥕','opt.vendorEdgeswitch':'🥦🖥️⌨️',
     'sec.mlag':'MLAG 豆定','lbl.mlagDomain':'Domain ID豆','lbl.mlagLocalIntf':'Local Interface豆','lbl.mlagPeerAddr':'Peer Address豆','lbl.mlagPeerLink':'Peer Link豆',
     'sec.vsu':'VSU 豆疊設定','lbl.vsuDomain':'Domain ID豆','th.vsuMemberId':'Switch ID豆','th.vsuPriority':'Priority豆','th.vsuVslPorts':'VSL Ports豆',
     'lbl.deviceModel':'常用豆種','opt.modelNone':'不套豆','opt.modelModular':'模組豆','opt.modelBackbone':'骨幹豆','opt.modelFiber':'光纖豆',
@@ -8326,8 +8591,8 @@ const LANG={
     'th.ifName':'介咩面名咩稱-aca','th.ifDesc':'描咩述-aca','th.ifSpeed':'速咩度-aca','th.ifMode':'模咩式-aca','th.ifAccess':'Access VLAN-aca','th.ifTrunk':'Trunk VLANs-aca','th.ifNative':'Native VLAN-aca','th.ifHyUn':'Hybrid Untagged-aca','th.ifHyTag':'Hybrid Tagged-aca','th.ifHyPvid':'Hybrid PVID-aca','th.ifShut':'Shutdown-aca','th.ifJumbo':'大咩型訊咩框-aca','th.ifMtu':'MTU-aca','th.ifPoe':'PoE Segh-aca','th.ifFortilink':'FortiLink 咩探索-aca','egg.skynet':'🤖 天網咩偵測咩到-aca','egg.jarvis':'🦾 JA咩RV咩IS咩 線咩上-aca','egg.skywalker':'⚔️咩 原咩力與咩你同咩在-aca','egg.ollama':'我被咩複製咩了嗎咩 🐑-aca','egg.matrix':'💊 你選咩了紅咩色藥咩丸，現在咩看見咩防火咩牆的咩真相咩了-aca','egg.enterprise':'🖖 To咩 b咩ol咩dl咩y go咩 w咩he咩re咩 n咩o pa咩ck咩et咩 h咩as咩 g-aca','egg.mordor':'🧙 On咩e do咩es咩 n咩ot咩 s咩im咩pl咩y ro咩ut咩e in咩to咩 M咩or-aca','egg.deathstar':"🌑 Th咩at咩\'咩s no咩 m咩oo咩n.咩..咩 i咩t\咩's咩 a咩 L咩ay咩er咩 3-aca",'egg.terminator':"🤖 I\咩'l咩l be咩 b咩ac咩k.咩..咩 a咩ft咩er咩 t咩he咩 s咩es咩si咩on-aca",'egg.shodan':'💻 SH咩OD咩AN咩 i咩s wa咩tc咩hi咩ng咩 y咩ou咩r tr咩af咩fi咩c-aca','egg.marvin':"😩 Li咩fe咩? Do咩n\咩't咩 t咩al咩k to咩 m咩e ab咩ou咩t li咩fe-aca",'egg.wintermute':"🧊 Wi咩nt咩er咩mu咩te咩 d咩oe咩sn咩\'咩t ta咩lk咩 t咩o st咩ra咩ng-aca",'egg.ultron':"🦾 I ha咩d st咩ri咩ng咩s,咩 n咩ow咩 I咩\'咩m fr咩ee-aca",'egg.tardis':"🔵 It咩\'咩s bi咩gg咩er咩 o咩n th咩e in咩si咩de咩..咩. ju咩st-aca",'egg.late_night':'🦙⛑咩️ 深夜咩加班咩偵測咩！注咩意身咩體健咩康-aca','egg.work_30min':'🦙⛑咩️ 已工咩作 30咩 分咩鐘，起身咩動動咩吧！-aca','egg.work_60min':'🦙⛑咩️ 整整咩一小咩時了咩！工咩程師咩請先咩休息-aca','opt.fortilinkUnset':'預設-aca','opt.fortilinkEnable':'啟咩用-aca','opt.fortilinkDisable':'禁咩用-aca','opt.poeNone':'無-aca','opt.poeAuto':'自咩動-aca','opt.poeNever':'禁咩用-aca','opt.poeStaticMax':'30W-aca','opt.poeStaticHigh':'60~90W-aca',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area-aca','th.network':'Network-aca','th.wildcard':'Wildcard-aca',
-    'lbl.vendor':'廠咩牌-aca','opt.vendorComware':'HPE Comware-aca','opt.vendorFortiswitch':'FortiSwitch-aca','opt.vendorAruba':'Aruba CX-aca','opt.vendorCisco':'Cisco IOS/IOS-XE-aca','opt.vendorJuniper':'Juniper (Junos)-aca','opt.vendorDellOS10':'Dell OS10-aca','opt.vendorArista':'Arista EOS-aca','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)-aca','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)-aca','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)-aca','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch-aca','opt.vendorRouterOS':'MikroTik RouterOS-aca','opt.vendorRuijie':'Ruijie RGOS-aca',
-    'sec.mlag':'MLAG 咩設咩定-aca','lbl.mlagDomain':'Domain-aca ID','lbl.mlagLocalIntf':'Local-aca Interface','lbl.mlagPeerAddr':'Peer-aca Address','lbl.mlagPeerLink':'Peer-aca Link',
+    'lbl.vendor':'廠咩牌-aca','opt.vendorComware':'HPE Comware-aca','opt.vendorFortiswitch':'FortiSwitch-aca','opt.vendorAruba':'Aruba CX-aca','opt.vendorCisco':'Cisco IOS/IOS-XE-aca','opt.vendorJuniper':'Juniper (Junos)-aca','opt.vendorDellOS10':'Dell OS10-aca','opt.vendorArista':'Arista EOS-aca','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)-aca','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)-aca','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)-aca','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch-aca','opt.vendorRouterOS':'MikroTik RouterOS-aca','opt.vendorRuijie':'Ruijie RGOS-aca','opt.vendorNetgear':'Netgear M4300-aca','opt.vendorEdgeswitch':'Ubiquiti EdgeSwitch-aca',
+    'sec.mlag':'MLAG咩設咩定-aca','lbl.mlagDomain':'Domain-aca ID','lbl.mlagLocalIntf':'Local-aca Interface','lbl.mlagPeerAddr':'Peer-aca Address','lbl.mlagPeerLink':'Peer-aca Link',
     'sec.vsu':'VSU 堆疊-aca 設定','lbl.vsuDomain':'Domain-aca ID','th.vsuMemberId':'Switch-aca ID','th.vsuPriority':'Priority-aca','th.vsuVslPorts':'VSL-aca Ports',
     'lbl.deviceModel':'常咩用機咩種-aca','opt.modelNone':'不咩套咩用-aca','opt.modelModular':'模咩組化-aca','opt.modelBackbone':'骨咩幹-aca','opt.modelFiber':'光咩纖-aca',
     'msg.templateOverwriteConfirm':'模咩板「{name}」已咩存在-aca，要咩蓋過去嗎-aca？','msg.templateDeleteConfirm':'確咩定要刪「{name}」嗎-aca？刪咩了不能復原-aca','ph.dhcpRelayIface':'留咩空算全域-aca',
@@ -8371,7 +8636,7 @@ const LANG={
     'th.ifName':'介面名稱，算了','th.ifDesc':'描述（嘆）','th.ifSpeed':'速度，隨便','th.ifMode':'模式，隨便','th.ifAccess':'Access VLAN','th.ifTrunk':'Trunk VLANs','th.ifNative':'Native VLAN','th.ifHyUn':'Hybrid Untagged','th.ifHyTag':'Hybrid Tagged','th.ifHyPvid':'Hybrid PVID','th.ifShut':'Shutdown，隨便','th.ifJumbo':'Jumbo Frame，反正也沒差','th.ifMtu':'MTU（嘆）','th.ifPoe':'PoE（嘆）','th.ifFortilink':'FortiLink 探索（嘆）','egg.skynet':'🤖 天網偵測到（勉強一笑）','egg.jarvis':'🦾 JARVIS 線上（勉強一笑）','egg.skywalker':'⚔️ 原力與你同在，笑不出來','egg.ollama':'我被複製了嗎 🐑（勉強一笑）','egg.matrix':'💊 你選了紅色藥丸，現在看見防火牆的真相了（勉強一笑）','egg.enterprise':'🖖 To boldly go where no packet has gone before（勉強一笑）','egg.mordor':'🧙 One does not simply route into Mordor（勉強一笑）','egg.deathstar':"🌑 That\'s no moon... it\'s a Layer 3 switch，笑不出來",'egg.terminator':"🤖 I\'ll be back... after the session timeout（勉強一笑）",'egg.shodan':'💻 SHODAN is watching your traffic（勉強一笑）','egg.marvin':"😩 Life? Don\'t talk to me about life... (Answer: 42)（勉強一笑）",'egg.wintermute':"🧊 Wintermute doesn\'t talk to strangers（勉強一笑）",'egg.ultron':"🦾 I had strings, now I\'m free（勉強一笑）",'egg.tardis':"🔵 It\'s bigger on the inside... just like this config（勉強一笑）",'egg.late_night':'🦙⛑️ 深夜加班偵測！注意身體健康（勉強一笑）','egg.work_30min':'🦙⛑️ 已工作 30 分鐘，起身動動（勉強一笑）','egg.work_60min':'🦙⛑️ 整整一小時了！工程師請先休息（勉強一笑）','opt.fortilinkUnset':'預設，隨便','opt.fortilinkEnable':'啟用，反正都一樣','opt.fortilinkDisable':'停用，算了','opt.poeNone':'無，隨便','opt.poeAuto':'自動，反正都一樣','opt.poeNever':'禁用，算了','opt.poeStaticMax':'30W，隨便','opt.poeStaticHigh':'60~90W，反正都一樣',
     'opt.access':'Access','opt.trunk':'Trunk','opt.hybrid':'Hybrid','opt.speed1G':'1G','opt.speed10G':'10G','opt.speed25G':'25G','opt.speed40G':'40G','opt.speed100G':'100G',
     'th.areaId':'Area','th.network':'Network','th.wildcard':'Wildcard，反正都一樣',
-    'lbl.vendor':'廠牌，算了','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorJuniper':'Juniper (Junos)，隨便','opt.vendorDellOS10':'Dell OS10，隨便','opt.vendorArista':'Arista EOS，隨便','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)，隨便','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)，隨便','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)，隨便','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch，隨便','opt.vendorRouterOS':'MikroTik RouterOS，隨便','opt.vendorRuijie':'Ruijie RGOS，隨便',
+    'lbl.vendor':'廠牌，算了','opt.vendorComware':'HPE Comware','opt.vendorFortiswitch':'FortiSwitch','opt.vendorAruba':'Aruba CX','opt.vendorCisco':'Cisco IOS/IOS-XE','opt.vendorJuniper':'Juniper (Junos)，隨便','opt.vendorDellOS10':'Dell OS10，隨便','opt.vendorArista':'Arista EOS，隨便','opt.vendorBrocade':'Ruckus/Brocade ICX (FastIron)，隨便','opt.vendorAlcatel':'Alcatel OmniSwitch (AOS)，隨便','opt.vendorExtreme':'Extreme Networks ExtremeXOS (EXOS)，隨便','opt.vendorProcurve':'Aruba ProCurve / ArubaOS-Switch，隨便','opt.vendorRouterOS':'MikroTik RouterOS，隨便','opt.vendorRuijie':'Ruijie RGOS，隨便','opt.vendorNetgear':'Netgear M4300，隨便','opt.vendorEdgeswitch':'Ubiquiti EdgeSwitch，隨便',
     'sec.mlag':'MLAG 設定，隨便','lbl.mlagDomain':'Domain ID，隨便','lbl.mlagLocalIntf':'Local Interface，隨便','lbl.mlagPeerAddr':'Peer Address，隨便','lbl.mlagPeerLink':'Peer Link，隨便',
     'sec.vsu':'VSU 堆疊設定，隨便','lbl.vsuDomain':'Domain ID，隨便','th.vsuMemberId':'Switch ID，隨便','th.vsuPriority':'Priority，隨便','th.vsuVslPorts':'VSL Ports，隨便',
     'lbl.deviceModel':'常用機種，隨便','opt.modelNone':'不套用，反正都一樣','opt.modelModular':'模組化，算了','opt.modelBackbone':'骨幹，隨便','opt.modelFiber':'光纖，反正都一樣',
