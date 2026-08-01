@@ -577,6 +577,34 @@ input[type=file]{display:none}
           Dell EMC Networking
           <div class="vc-tip">OS10：ethernet N/N/N<br>OS9(FTOS)：TenGigabitEthernet<br>VLT 虛擬鏈路干線<br>stack-unit 堆疊<br>Trunk / Access / Routed<br>OSPF · BGP · 靜態路由<br>VRRP · LACP · VRF<br>DHCP Server</div>
         </div>
+        <div class="vc" style="color:#0369a1;border-color:rgba(3,105,161,.25);background:color-mix(in srgb,#0369a1 8%,var(--surface))" tabindex="0" onclick="this.classList.toggle('open')" onblur="this.classList.remove('open')">
+          Cisco NX-OS
+          <div class="vc-tip">VPC 虛擬埠通道<br>Trunk / Access / Routed<br>OSPF<br>BGP（address-family 巢狀）<br>VRRP（HSRP，巢狀 interface vlan）<br>靜態路由</div>
+        </div>
+        <div class="vc" style="color:#0d9488;border-color:rgba(13,148,136,.25);background:color-mix(in srgb,#0d9488 8%,var(--surface))" tabindex="0" onclick="this.classList.toggle('open')" onblur="this.classList.remove('open')">
+          Arista EOS
+          <div class="vc-tip">MLAG 堆疊<br>Trunk / Access<br>OSPF · BGP · RIP<br>VRRP（preempt 預設啟用）<br>LACP<br>ACL / QoS<br>Breakout</div>
+        </div>
+        <div class="vc" style="color:#65a30d;border-color:rgba(101,163,13,.25);background:color-mix(in srgb,#65a30d 8%,var(--surface))" tabindex="0" onclick="this.classList.toggle('open')" onblur="this.classList.remove('open')">
+          Aruba ProCurve
+          <div class="vc-tip">Trunk / Access<br>OSPF（逐 VLAN 指派 area）<br>靜態路由（含 metric）<br>LACP<br>DHCP Relay<br>Users</div>
+        </div>
+        <div class="vc" style="color:#b45309;border-color:rgba(180,83,9,.25);background:color-mix(in srgb,#b45309 8%,var(--surface))" tabindex="0" onclick="this.classList.toggle('open')" onblur="this.classList.remove('open')">
+          MikroTik RouterOS
+          <div class="vc-tip">Bridge VLAN Filtering<br>Bonding（LACP）<br>OSPF · BGP · RIP v7<br>VRRP<br>三件式 DHCP（pool/server/network）<br>ACL · QoS<br>802.1X</div>
+        </div>
+        <div class="vc" style="color:#be123c;border-color:rgba(190,18,60,.25);background:color-mix(in srgb,#be123c 8%,var(--surface))" tabindex="0" onclick="this.classList.toggle('open')" onblur="this.classList.remove('open')">
+          Ruijie RGOS
+          <div class="vc-tip">Trunk / Access / Hybrid<br>AggregatePort（LACP）<br>VRRP（非 HSRP）<br>OSPF · BGP · RIP<br>靜態路由<br>VSU 堆疊</div>
+        </div>
+        <div class="vc" style="color:#4338ca;border-color:rgba(67,56,202,.25);background:color-mix(in srgb,#4338ca 8%,var(--surface))" tabindex="0" onclick="this.classList.toggle('open')" onblur="this.classList.remove('open')">
+          Netgear M4300
+          <div class="vc-tip">Broadcom ICOS 架構<br>Trunk / Access<br>LACP · VRRP<br>OSPF / RIP（bare，無 process-id）<br>靜態路由<br>STP<br>（BGP 裝置真不支援）</div>
+        </div>
+        <div class="vc" style="color:#155e75;border-color:rgba(21,94,117,.25);background:color-mix(in srgb,#155e75 8%,var(--surface))" tabindex="0" onclick="this.classList.toggle('open')" onblur="this.classList.remove('open')">
+          Ubiquiti EdgeSwitch
+          <div class="vc-tip">Broadcom ICOS 架構<br>Trunk / Access<br>LACP<br>（VLAN Routing 邏輯介面由裝置動態配置，L3 功能本工具不支援）</div>
+        </div>
       </div>
 
       <!-- Drop zone -->
