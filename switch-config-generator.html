@@ -2949,7 +2949,11 @@ function renderNetgearVRRPGroup(g){
     lines.push(` ip vrrp ${v.vrid} mode`);
     if(v.vip)lines.push(` ip vrrp ${v.vrid} ip ${v.vip}`);
     if(v.priority)lines.push(` ip vrrp ${v.vrid} priority ${v.priority}`);
-    if(v.preempt)lines.push(` ip vrrp ${v.vrid} preempt`);
+    // preempt 官方預設值為 enabled（比照既有 Arista/Extreme「預設開啟」分支慣例），
+    // 顯式關閉需輸出 "no ip vrrp N preempt"，否則貼到真機上仍會維持預設的搶占行為
+    // （2026-08-01 對外查證後修正，先前版本 preempt=false 時完全不輸出任何指令）
+    if(v.preempt===false)lines.push(` no ip vrrp ${v.vrid} preempt`);
+    else if(v.preempt)lines.push(` ip vrrp ${v.vrid} preempt`);
   });
   return lines.join('\n');
 }
@@ -2991,7 +2995,12 @@ function assembleNetgearConfig(model){
   if(model.interfaces&&model.interfaces.length)blocks.push(renderNetgearInterfaces(model.interfaces,model.lacp));
   const lacpExtra=renderNetgearLACPExtra(model.lacp,model.interfaces);
   if(lacpExtra)blocks.push(lacpExtra);
-  if(model.vrrp&&model.vrrp.length)blocks.push(renderNetgearVRRP(model.vrrp));
+  if(model.vrrp&&model.vrrp.length){
+    // "ip vrrp"（無參數，Global Config）為 VRRP 全域啟用開關，官方手冊明確要求需開啟
+    // 才會生效，先前版本從未輸出這行（2026-08-01 對外查證後修正）
+    blocks.push('ip vrrp');
+    blocks.push(renderNetgearVRRP(model.vrrp));
+  }
   const ospfBlock=renderNetgearOSPF(model.ospf);
   if(ospfBlock)blocks.push(ospfBlock);
   const ripBlock=renderNetgearRIP(model.rip);
@@ -3046,7 +3055,10 @@ function renderEdgeSwitchLACPExtra(lacpList,ifaces){
   const blocks=[];
   (lacpList||[]).forEach(l=>{
     const gid=(l.id||'').toString().replace(/^lag\s*/i,'').trim();
-    blocks.push(`interface lag ${gid}`);
+    // port-channel static 語法與 Netgear 完全共用（同源 ICOS），先前版本漏接此行，使用者
+    // 在表單把 LAG 模式設為 Static 時輸出設定檔完全不反映（2026-08-01 對外查證後修正，
+    // 比照 renderNetgearLACPExtra 既有寫法）
+    blocks.push(`interface lag ${gid}`+(l.mode==='static'?'\n port-channel static':''));
     (l.members||[]).forEach(mem=>{
       if(existingNames.has(mem))return;
       blocks.push(`interface ${mem}\n addport lag ${gid}`);
