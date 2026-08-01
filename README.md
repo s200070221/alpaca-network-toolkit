@@ -10,7 +10,7 @@
 
 | 工具 | 檔案 | 說明 |
 |---|---|---|
-| 🛡️ 防火牆設定分析器 | `firewall-analyzer-fixed.html` | 解析 FortiGate／Sophos XG／Check Point／Palo Alto／Juniper／pfSense／SonicWall／MikroTik／Cisco ASA／Zyxel USG-ATP 等設定檔，視覺化規則、路由、VPN、位址物件；支援設定檔格式互轉與稽核 |
+| 🛡️ 防火牆設定分析器 | `firewall-analyzer-fixed.html` | 解析 FortiGate／Sophos XG／Check Point／Palo Alto／Juniper／pfSense／SonicWall／MikroTik／Cisco ASA/FTD／Zyxel USG-ATP／EdgeRouter (EdgeOS)／OpenWrt (UCI) 等 13 家廠牌設定檔，視覺化規則、路由、VPN、位址物件；支援設定檔格式互轉與稽核 |
 | 🔀 交換器設定解析器 | `switch-config-parser.html` | 解析 HPE Comware／Cisco IOS-XE／NX-OS／Aruba CX／ProCurve／FortiSwitch／Juniper／Extreme／Alcatel／Brocade-ICX／Dell OS10／Arista／MikroTik RouterOS／Ruijie RGOS／Netgear M4300／Ubiquiti EdgeSwitch 等 16 家廠牌，視覺化 Port/VLAN/路由/堆疊拓撲 |
 | 🛠️ 交換器設定產生器 | `switch-config-generator.html` | 表單輸入產生上述廠牌的交換器設定指令，並支援反向匯入既有設定檔自動帶入表單 |
 | 🔒 設定檔去識別化工具 | `config-anonymizer.html` | 掃描並一致性替換設定檔中的 IP／主機名稱／密碼等敏感資訊，供分享/求助使用，支援 AES-256 加密還原對照表 |
@@ -24,7 +24,7 @@
 
 - **零伺服器、零安裝**：純 JS + HTML，下載即用，或直接透過 GitHub Pages 線上開啟
 - **多語系**：繁體中文／English／日本語（另有多組隱藏彩蛋語言）
-- **廣泛廠牌支援**：合計涵蓋 20 家網通設備廠牌的設定檔語法
+- **廣泛廠牌支援**：合計涵蓋 23 家網通設備廠牌的設定檔語法
 
 ## 授權與使用限制
 
