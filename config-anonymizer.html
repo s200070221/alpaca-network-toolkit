@@ -395,6 +395,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="ciscoasa">Cisco ASA / FTD</option>
                 <option value="zyxel">Zyxel USG/ATP (ZLD)</option>
                 <option value="edgerouter">EdgeRouter (EdgeOS)</option>
+                <option value="openwrt">OpenWrt (UCI)</option>
               </optgroup>
               <optgroup id="optgrp-sw" label="交換器">
                 <option value="comware">HPE Comware</option>
@@ -1077,13 +1078,16 @@ const VENDOR_SIGS = {
   // 務必與 firewall_analyzer 的 FW_VENDOR_SIGS.edgerouter 保持一致（2026-08-01 新增）。
   // EdgeOS config.boot 頂層區塊名稱（system{}/interfaces{}/firewall{}）與 Junos 大括號格式
   // 重疊，簽章刻意避開這些通用區塊名稱，只採 EdgeOS 特有關鍵字，min:2 避免與 juniper 混淆
-  edgerouter:  { p:[/ethernet\s+eth\d+\s*\{/m, /default-action\s+(drop|accept)/m, /outbound-interface\s+\S+/m, /address-group\s+\S+\s*\{/m, /UBNT|EdgeRouter|EdgeOS|EdgeMax/i], min:2 }
+  edgerouter:  { p:[/ethernet\s+eth\d+\s*\{/m, /default-action\s+(drop|accept)/m, /outbound-interface\s+\S+/m, /address-group\s+\S+\s*\{/m, /UBNT|EdgeRouter|EdgeOS|EdgeMax/i], min:2 },
+  // 務必與 firewall_analyzer 的 FW_VENDOR_SIGS.openwrt 保持一致（2026-08-01 新增）。UCI
+  // stanza 格式與其餘 22 家皆不同語法家族，本身辨識度已高，仍用 min:2 避免巧合誤判
+  openwrt:     { p:[/^config\s+interface(\s|$)/m, /^\s*option\s+proto\s/m, /^config\s+(zone|rule|redirect|forwarding)(\s|$)/m, /^package\s+(network|firewall|dhcp)/m], min:2 }
 };
 // sophos／aruba_cx 兩家的簽章相對寬鬆（各自僅需命中 2 個訊號，且其中一個訊號是單純字面
 // "Sophos"/"Aruba" 文字比對），故刻意排在最後——讓其他更具結構特徵的廠牌訊號優先判定，
 // 只有在都沒命中時才輪到這兩家，降低誤判機率
 const VENDOR_ORDER = [
-  'cisco_nxos','fortiswitch','fortigate','comware','paloalto','edgerouter','juniper',
+  'cisco_nxos','fortiswitch','fortigate','comware','paloalto','edgerouter','openwrt','juniper',
   'checkpoint','pfsense','sonicwall','mikrotik','arista',
   'extreme','alcatel','brocade','procurve','dell_os10','ciscoasa','cisco_ios',
   'zyxel','sophos','aruba_cx'
@@ -1096,7 +1100,7 @@ const VENDOR_LABELS = {
   arista:'Arista EOS',aruba_cx:'Aruba CX',procurve:'Aruba ProCurve',
   dell_os10:'Dell OS10',extreme:'Extreme XOS',alcatel:'Alcatel OmniSwitch',
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
-  edgerouter:'EdgeRouter (EdgeOS)',unknown:''
+  edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',unknown:''
 };
 
 function detectVendor(text) {
@@ -1825,6 +1829,24 @@ function anonEdgeRouter(text, opts) {
   return out.join('\n');
 }
 
+// ---- OpenWrt (UCI) ----
+// 2026-08-01 新增。UCI 是 package/config/option/list 的 stanza 格式，`option ipaddr
+// '1.2.3.4'` 為帶引號裸值（非 key=value），比照 anonZyxel()/anonEdgeRouter() 逐行處理
+// 慣例，交由下方通用 replaceIPsInLine()/replaceMACsInLine() 掃描即可正確涵蓋，不需要
+// 額外的欄位級正則。hostname：parser 端（firewall_analyzer OpenWrtParser）本輪未查證
+// 完整語法佐證維持空值，比照專案既有原則「parser 沒解析的欄位不猜測遮蔽」，此函式亦
+// 不新增對應規則。
+function anonOpenWrt(text, opts) {
+  const lines = text.split('\n');
+  const out = [];
+  for (let line of lines) {
+    if (opts.ip) line = replaceIPsInLine(line, opts);
+    if (opts.mac) line = replaceMACsInLine(line, opts);
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
 // ---- HPE Comware ----
 function anonComware(text, opts) {
   const lines = text.split('\n');
@@ -2395,7 +2417,7 @@ const VENDOR_FNS = {
   procurve: anonProCurve,
   dell_os10: anonDellOS10, extreme: anonExtreme, alcatel: anonAlcatel,
   brocade: anonBrocade, ciscoasa: anonCiscoASA, zyxel: anonZyxel,
-  edgerouter: anonEdgeRouter, unknown: anonGeneric
+  edgerouter: anonEdgeRouter, openwrt: anonOpenWrt, unknown: anonGeneric
 };
 
 function anonymize(text, vendor, opts) {
