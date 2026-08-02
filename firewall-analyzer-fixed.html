@@ -10478,7 +10478,7 @@ const OpenWrtParser = (() => {
       if (isSnat) {
         out.push({
           type: 'ippool', name: comment, vipType: 'overload', poolType: 'source',
-          extIp: val(s, 'src_ip', '-'), mapIp: val(s, 'snat_ip', '-'),
+          extIp: val(s, 'src_ip', '-'), mapIp: val(s, 'src_dip', '-'),
           extIntf: val(s, 'src', '-'), srcIntf: val(s, 'src', '-'),
           startIp: '-', endIp: '-', portFwd: 'disable', extPort: '-', mapPort: '-',
           proto, status: 'enable', comment,
@@ -12716,7 +12716,7 @@ const Converter = (() => {
         L.push(`\toption target 'SNAT'`);
         if(n.extIntf&&n.extIntf!=='-')L.push(`\toption src '${n.extIntf}'`);
         if(n.extIp&&n.extIp!=='-')L.push(`\toption src_ip '${n.extIp}'`);
-        if(n.mapIp&&n.mapIp!=='-'&&n.mapIp!=='masquerade')L.push(`\toption snat_ip '${n.mapIp}'`);
+        if(n.mapIp&&n.mapIp!=='-'&&n.mapIp!=='masquerade')L.push(`\toption src_dip '${n.mapIp}'`);
       }
       if(n.proto&&n.proto!=='-')L.push(`\toption proto '${n.proto}'`);
       L.push('');
