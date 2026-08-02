@@ -802,6 +802,21 @@ input.valid,select.valid{border-color:var(--green)!important}
     <button class="add-btn" onclick="addRouterOSQueueTreeRow()" data-i18n="btn.addRow">+ 新增列</button>
   </div>
 
+  <div class="card" id="users-card" style="display:none">
+    <h2 data-i18n="sec.users">本機帳號（Aruba ProCurve）</h2>
+    <div class="row" style="font-size:12px;color:var(--text-mid);margin-bottom:8px" data-i18n="hint.users">密碼欄位為 SHA1 雜湊值，請自行產生後貼上，本工具不進行任何加密運算</div>
+    <table id="users-table">
+      <thead><tr>
+        <th data-i18n="col.userName">Name</th>
+        <th data-i18n="col.userRole">Role/Group</th>
+        <th data-i18n="col.userPassword">Password (SHA1 Hash)</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="users-body"></tbody>
+    </table>
+    <button class="add-btn" onclick="addUsersRow()" data-i18n="btn.addRow">+ 新增列</button>
+  </div>
+
   <div class="card" id="generate-card">
     <button class="gen-btn" data-i18n="btn.generate" onclick="generate()">產生設定</button>
   </div>
@@ -4098,6 +4113,15 @@ function renderProCurveOSPFGlobal(list){
   return lines.join('\n');
 }
 
+// 本機帳號：switch_analyzer 的 parseUsers()（ProCurve 分支）支援兩種真實並存語法，
+// 產生器一律輸出新式 AAA 語法（group 欄位可接受任意名稱，彈性優於舊式語法僅能是
+// operator/manager 字面值，且仍可被 parseUsers() 的 reAAA 正則完整往返解析）。
+// 密碼固定是 SHA1 雜湊值，本工具不做任何加密運算，使用者需自行貼上已產生的雜湊字串
+function renderProCurveUsers(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  return list.map(u=>`aaa authentication local-user "${u.name}" group "${u.role||'operator'}" password sha1 "${u.password}"`).join('\n');
+}
 function assembleProCurveConfig(model){
   const blocks=[`; ${tr('notice.disclaimer')}`,`hostname "${model.sysname||'Switch'}"`];
   const vlanBlock=renderProCurveVLANs(model.vlans,model.interfaces,model.ospf,model.dhcp);
@@ -4110,6 +4134,8 @@ function assembleProCurveConfig(model){
   if(ospfBlockPC)blocks.push(ospfBlockPC);
   const dhcpOpt82BlockPC=renderProCurveDHCPOption82(model.dhcp);
   if(dhcpOpt82BlockPC)blocks.push(dhcpOpt82BlockPC);
+  const usersBlock=renderProCurveUsers(model.users);
+  if(usersBlock)blocks.push(usersBlock);
   return blocks.join('\n')+'\n';
 }
 
@@ -5937,6 +5963,15 @@ function addRouterOSQueueTreeRow(name='',parent='global',maxLimit=''){
   document.getElementById('routeros-queue-tree-body').appendChild(tr);
 }
 
+function addUsersRow(name='',role='',password=''){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="user-name" value="${escAttr(name)}"></td>
+    <td><input class="user-role" value="${escAttr(role)}" placeholder="operator"></td>
+    <td><input class="user-password" value="${escAttr(password)}" placeholder="SHA1 hash"></td>
+    ${RM_BTN_TD}`;
+  document.getElementById('users-body').appendChild(tr);
+}
+
 function addBgpPeerRow(ip='',as='',desc=''){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input class="p-ip" value="${escAttr(ip)}"></td><td><input class="p-as" value="${escAttr(as)}"></td><td><input class="p-desc" value="${escAttr(desc)}"></td>${RM_BTN_TD}`;
@@ -6135,6 +6170,9 @@ function updateModeOptions(){
   if(rosAclCard)rosAclCard.style.display=vendor==='routeros'?'':'none';
   const rosQosCard=document.getElementById('routeros-qos-card');
   if(rosQosCard)rosQosCard.style.display=vendor==='routeros'?'':'none';
+  // 本機帳號卡片僅 Aruba ProCurve 適用（switch_analyzer parseUsers() 目前只支援這家）
+  const usersCard=document.getElementById('users-card');
+  if(usersCard)usersCard.style.display=vendor==='procurve'?'':'none';
   // MLAG 卡片僅 Arista EOS 適用（其他廠牌無此概念，collectModel() 靠 #mlag-domain 是否存在於 DOM 判斷是否讀取）
   document.getElementById('mlag-card').style.display=vendor==='arista'?'':'none';
   // VPC 卡片僅 Cisco NX-OS 適用，比照 MLAG 慣例
@@ -6253,6 +6291,11 @@ function collectModel(){
       name: val(tr,'ros-qtree-name'), parent: val(tr,'ros-qtree-parent'), maxLimit: val(tr,'ros-qtree-max'),
     })).filter(q=>q.name),
   };
+
+  // 本機帳號（Aruba ProCurve）：密碼欄位為使用者直接貼上的 SHA1 雜湊值，不做任何轉換
+  const users=rowsOf('#users-body tr').map(tr=>({
+    name: val(tr,'user-name'), role: val(tr,'user-role'), password: val(tr,'user-password'),
+  })).filter(u=>u.name);
 
   const areaRows=rowsOf('#area-body tr').map(tr=>({
     area:val(tr,'a-area'), network:val(tr,'a-network'), wildcard:val(tr,'a-wildcard'), type:val(tr,'a-type'),
@@ -6435,7 +6478,7 @@ function collectModel(){
   return {
     vendor:document.getElementById('vendor').value,
     sysname:document.getElementById('hostname').value.trim()||'Switch',
-    vlans, interfaces, ospf, bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos, stack,
+    vlans, interfaces, ospf, bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos, stack, users,
   };
 }
 
@@ -6445,7 +6488,7 @@ function collectModel(){
 // 逐項呼叫 addXxxRow() 重建列。儲存的 model 就是 collectModel() 的完整輸出，故欄位
 // 名稱與此函式讀取的完全對稱，不需另外映射。
 function applyModelToForm(model){
-  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body'].forEach(id=>{
+  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body'].forEach(id=>{
     document.getElementById(id).innerHTML='';
   });
 
@@ -6493,6 +6536,7 @@ function applyModelToForm(model){
   (model.routerosAcl||[]).forEach(r=>addRouterOSAclRow(r.chain,r.action,r.protocol,r.srcAddress,r.dstAddress,r.dstPort,r.inInterface,r.comment));
   (model.routerosQos&&model.routerosQos.simpleQueues||[]).forEach(q=>addRouterOSSimpleQueueRow(q.name,q.target,q.maxLimitUp,q.maxLimitDown,q.limitAtUp,q.limitAtDown));
   (model.routerosQos&&model.routerosQos.queueTree||[]).forEach(q=>addRouterOSQueueTreeRow(q.name,q.parent,q.maxLimit));
+  (model.users||[]).forEach(u=>addUsersRow(u.name,u.role,u.password));
 
   const o=(model.ospf||[])[0];
   document.getElementById('ospf-pid').value=o?.pid||'';
@@ -7301,7 +7345,7 @@ async function parseAndImport(){
 
   // 清空既有列（含 vrrp-body：匯入功能雖不映射 VRRP 資料，但仍須清掉畫面殘留的舊資料，
   // 避免使用者誤以為初始化 demo 列是這次匯入結果的一部分）
-  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body'].forEach(id=>{
+  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body'].forEach(id=>{
     document.getElementById(id).innerHTML='';
   });
 
@@ -7456,6 +7500,12 @@ async function parseAndImport(){
   // 故另外用同一個 aclList 變數做專屬映射
   if(vendor==='routeros'){
     (aclList||[]).forEach(r=>addRouterOSAclRow(r.chain,r.action,r.protocol,r.srcAddress,r.dstAddress,r.dstPort,r.inInterface,r.comment));
+  }
+
+  // 本機帳號（Aruba ProCurve）：parsed.users 已是 parseProCurve() 既有回傳物件的一部分，
+  // 不需額外抽取；密碼欄位因雜湊值無法從 hasPwd/pwdType 還原，匯入後留空待使用者自行補上
+  if(vendor==='procurve'){
+    (parsed.users||[]).forEach(u=>addUsersRow(u.name,u.role,''));
   }
 
   // QoS：BasicParser 未涵蓋此欄位，只有完整版（fns）才映射；Comware 沒有 action/rate/burst
@@ -8230,7 +8280,7 @@ const LANG={
     'sec.vpc':'VPC 設定（僅 Cisco NX-OS）','lbl.vpcDomain':'Domain ID','lbl.vpcPeerKeepalive':'Peer Keepalive Destination','lbl.vpcPeerLink':'Peer Link（既有 port-channel 介面名稱）','lbl.vpcPeerGateway':'Peer Gateway',
     'sec.vxlan':'VXLAN 設定（Comware / Aruba CX）','lbl.vxlanVtep':'VTEP / Source Interface','col.vni':'VNI','col.vlan':'VLAN','col.vxlanName':'名稱','col.vxlanPeers':'Peers（空白分隔，留空=BGP-EVPN）','col.vxlanRd':'RD','col.vxlanRtImport':'RT Import','col.vxlanRtExport':'RT Export','col.vxlanGw':'Gateway','btn.addVni':'+ 新增 VNI','sec.brocadeQos':'QoS DSCP 對應表（Brocade / Ruckus ICX）','hint.brocadeQos':'逐 port 的預設優先權／Trust DSCP 請至上方 Interface 表格設定；此處僅設定全域 DSCP 值對應內部優先權佇列的規則','col.qosDscpValues':'DSCP 值（可空白分隔多個，如 46 或 0 1 2）','col.qosPriority':'優先權 (0-7)','th.ifQosPriority':'QoS 優先權','th.ifTrustDscp':'Trust DSCP',
 'sec.extremeQos':'QoS Profile 設定（Extreme ExtremeXOS）','hint.extremeQos':'QP1／QP8 為預設已存在的 egress QoS profile，僅 QP2-QP7 需要在此建立並設定頻寬；DSCP 對應表與逐 port 指定可套用全部 8 個 profile','col.exQosProfile':'Profile','col.exQosMinbw':'Min BW %','col.exQosMaxbw':'Max BW %','col.exQosCodePoint':'DSCP Code Point','col.exQosDscpProfile':'Profile','col.exQosPort':'Port','col.exQosPortProfile':'Profile','col.exQosDiffserv':'啟用 Diffserv 分類',
-'sec.rosAcl':'Firewall Filter（MikroTik RouterOS）','hint.rosAcl':'RouterOS 防火牆規則以 chain 為主體的扁平清單（非具名 ACL 物件），依序比對，第一筆符合的規則生效','col.rosAclChain':'Chain','col.rosAclAction':'Action','col.rosAclProtocol':'Protocol','col.rosAclSrc':'Src Address','col.rosAclDst':'Dst Address','col.rosAclDstPort':'Dst Port','col.rosAclInIf':'In Interface','col.rosAclComment':'Comment','sec.rosQos':'QoS（MikroTik RouterOS）','hint.rosQos':'Simple Queue：單一目標的頻寬限制；Queue Tree：階層式 parent/child 優先權架構（簡化版，僅支援 parent+max-limit，不自動產生 firewall mangle 規則）','col.rosQosName':'Name','col.rosQosTarget':'Target','col.rosQosMaxUp':'Max Limit 上傳','col.rosQosMaxDown':'Max Limit 下載','col.rosQosAtUp':'Limit At 上傳','col.rosQosAtDown':'Limit At 下載','col.rosQosTreeName':'Name','col.rosQosParent':'Parent','col.rosQosTreeMax':'Max Limit',
+'sec.rosAcl':'Firewall Filter（MikroTik RouterOS）','hint.rosAcl':'RouterOS 防火牆規則以 chain 為主體的扁平清單（非具名 ACL 物件），依序比對，第一筆符合的規則生效','col.rosAclChain':'Chain','col.rosAclAction':'Action','col.rosAclProtocol':'Protocol','col.rosAclSrc':'Src Address','col.rosAclDst':'Dst Address','col.rosAclDstPort':'Dst Port','col.rosAclInIf':'In Interface','col.rosAclComment':'Comment','sec.rosQos':'QoS（MikroTik RouterOS）','hint.rosQos':'Simple Queue：單一目標的頻寬限制；Queue Tree：階層式 parent/child 優先權架構（簡化版，僅支援 parent+max-limit，不自動產生 firewall mangle 規則）','col.rosQosName':'Name','col.rosQosTarget':'Target','col.rosQosMaxUp':'Max Limit 上傳','col.rosQosMaxDown':'Max Limit 下載','col.rosQosAtUp':'Limit At 上傳','col.rosQosAtDown':'Limit At 下載','col.rosQosTreeName':'Name','col.rosQosParent':'Parent','col.rosQosTreeMax':'Max Limit','col.userName':'Name','col.userRole':'Role/Group','col.userPassword':'Password (SHA1 Hash)','sec.users':'本機帳號（Aruba ProCurve）','hint.users':'密碼欄位為 SHA1 雜湊值，請自行產生後貼上，本工具不進行任何加密運算',
   },
   en:{
     'title':'Switch Config Generator','sub':'Pure JS · No Server · Single File',
@@ -8276,7 +8326,7 @@ const LANG={
     'sec.vpc':'VPC Settings (Cisco NX-OS only)','lbl.vpcDomain':'Domain ID','lbl.vpcPeerKeepalive':'Peer Keepalive Destination','lbl.vpcPeerLink':'Peer Link (existing port-channel name)','lbl.vpcPeerGateway':'Peer Gateway',
     'sec.vxlan':'VXLAN Settings (Comware / Aruba CX)','lbl.vxlanVtep':'VTEP / Source Interface','col.vni':'VNI','col.vlan':'VLAN','col.vxlanName':'Name','col.vxlanPeers':'Peers (space-separated, empty=BGP-EVPN)','col.vxlanRd':'RD','col.vxlanRtImport':'RT Import','col.vxlanRtExport':'RT Export','col.vxlanGw':'Gateway','btn.addVni':'+ Add VNI','sec.brocadeQos':'QoS DSCP Mapping (Brocade / Ruckus ICX)','hint.brocadeQos':'Set per-port default priority / Trust DSCP in the Interface table above; this section only configures the global DSCP-to-priority queue mapping','col.qosDscpValues':'DSCP Value(s) (space-separated, e.g. 46 or 0 1 2)','col.qosPriority':'Priority (0-7)','th.ifQosPriority':'QoS Priority','th.ifTrustDscp':'Trust DSCP',
 'sec.extremeQos':'QoS Profile (Extreme ExtremeXOS)','hint.extremeQos':'QP1/QP8 are preconfigured egress QoS profiles; only QP2-QP7 need to be created here with bandwidth settings. The DSCP map and per-port assignment can use any of the 8 profiles','col.exQosProfile':'Profile','col.exQosMinbw':'Min BW %','col.exQosMaxbw':'Max BW %','col.exQosCodePoint':'DSCP Code Point','col.exQosDscpProfile':'Profile','col.exQosPort':'Port','col.exQosPortProfile':'Profile','col.exQosDiffserv':'Diffserv Examination',
-'sec.rosAcl':'Firewall Filter (MikroTik RouterOS)','hint.rosAcl':'RouterOS firewall rules are a flat chain-based list (not named ACL objects), evaluated in order; the first matching rule applies','col.rosAclChain':'Chain','col.rosAclAction':'Action','col.rosAclProtocol':'Protocol','col.rosAclSrc':'Src Address','col.rosAclDst':'Dst Address','col.rosAclDstPort':'Dst Port','col.rosAclInIf':'In Interface','col.rosAclComment':'Comment','sec.rosQos':'QoS (MikroTik RouterOS)','hint.rosQos':'Simple Queue: single-target bandwidth limiting; Queue Tree: hierarchical parent/child priority (simplified, only parent+max-limit, no automatic firewall mangle rules)','col.rosQosName':'Name','col.rosQosTarget':'Target','col.rosQosMaxUp':'Max Limit Upload','col.rosQosMaxDown':'Max Limit Download','col.rosQosAtUp':'Limit At Upload','col.rosQosAtDown':'Limit At Download','col.rosQosTreeName':'Name','col.rosQosParent':'Parent','col.rosQosTreeMax':'Max Limit',
+'sec.rosAcl':'Firewall Filter (MikroTik RouterOS)','hint.rosAcl':'RouterOS firewall rules are a flat chain-based list (not named ACL objects), evaluated in order; the first matching rule applies','col.rosAclChain':'Chain','col.rosAclAction':'Action','col.rosAclProtocol':'Protocol','col.rosAclSrc':'Src Address','col.rosAclDst':'Dst Address','col.rosAclDstPort':'Dst Port','col.rosAclInIf':'In Interface','col.rosAclComment':'Comment','sec.rosQos':'QoS (MikroTik RouterOS)','hint.rosQos':'Simple Queue: single-target bandwidth limiting; Queue Tree: hierarchical parent/child priority (simplified, only parent+max-limit, no automatic firewall mangle rules)','col.rosQosName':'Name','col.rosQosTarget':'Target','col.rosQosMaxUp':'Max Limit Upload','col.rosQosMaxDown':'Max Limit Download','col.rosQosAtUp':'Limit At Upload','col.rosQosAtDown':'Limit At Download','col.rosQosTreeName':'Name','col.rosQosParent':'Parent','col.rosQosTreeMax':'Max Limit','col.userName':'Name','col.userRole':'Role/Group','col.userPassword':'Password (SHA1 Hash)','sec.users':'Local Users (Aruba ProCurve)','hint.users':'Password field is a SHA1 hash — paste an already-generated hash, this tool performs no encryption',
   },
   ja:{
     'title':'スイッチ設定ジェネレーター','sub':'Pure JS · サーバー不要 · 単一ファイル',
@@ -8322,7 +8372,7 @@ const LANG={
     'sec.vpc':'VPC 設定（Cisco NX-OS 専用）','lbl.vpcDomain':'Domain ID','lbl.vpcPeerKeepalive':'Peer Keepalive 宛先','lbl.vpcPeerLink':'Peer Link（既存の port-channel 名）','lbl.vpcPeerGateway':'Peer Gateway',
     'sec.vxlan':'VXLAN 設定（Comware / Aruba CX）','lbl.vxlanVtep':'VTEP / ソースインターフェース','col.vni':'VNI','col.vlan':'VLAN','col.vxlanName':'名前','col.vxlanPeers':'Peers（空白区切り、空欄=BGP-EVPN）','col.vxlanRd':'RD','col.vxlanRtImport':'RT Import','col.vxlanRtExport':'RT Export','col.vxlanGw':'Gateway','btn.addVni':'+ VNI 追加','sec.brocadeQos':'QoS DSCPマッピング（Brocade / Ruckus ICX）','hint.brocadeQos':'ポートごとのデフォルト優先度／Trust DSCPは上記のInterfaceテーブルで設定してください。ここではDSCP値と優先度キューの全体マッピングのみ設定します','col.qosDscpValues':'DSCP値（空白区切りで複数指定可、例: 46 または 0 1 2）','col.qosPriority':'優先度 (0-7)','th.ifQosPriority':'QoS優先度','th.ifTrustDscp':'Trust DSCP',
 'sec.extremeQos':'QoSプロファイル設定（Extreme ExtremeXOS）','hint.extremeQos':'QP1／QP8はデフォルトで存在するegress QoSプロファイル。QP2-QP7のみここで作成し帯域幅を設定。DSCPマッピングとポート単位の指定は8つ全てのプロファイルに適用可能','col.exQosProfile':'プロファイル','col.exQosMinbw':'最小帯域 %','col.exQosMaxbw':'最大帯域 %','col.exQosCodePoint':'DSCP コードポイント','col.exQosDscpProfile':'プロファイル','col.exQosPort':'ポート','col.exQosPortProfile':'プロファイル','col.exQosDiffserv':'Diffserv 検査',
-'sec.rosAcl':'ファイアウォールフィルター（MikroTik RouterOS）','hint.rosAcl':'RouterOSのファイアウォールルールはchainベースのフラットなリスト（名前付きACLオブジェクトではない）で、順番に評価され最初にマッチしたルールが適用されます','col.rosAclChain':'Chain','col.rosAclAction':'Action','col.rosAclProtocol':'Protocol','col.rosAclSrc':'送信元アドレス','col.rosAclDst':'宛先アドレス','col.rosAclDstPort':'宛先ポート','col.rosAclInIf':'入力インターフェース','col.rosAclComment':'コメント','sec.rosQos':'QoS（MikroTik RouterOS）','hint.rosQos':'Simple Queue：単一ターゲットの帯域制限；Queue Tree：階層的なparent/child優先度構造（簡略版、parent+max-limitのみ対応、firewall mangleルールは自動生成されません）','col.rosQosName':'名前','col.rosQosTarget':'ターゲット','col.rosQosMaxUp':'Max Limit アップロード','col.rosQosMaxDown':'Max Limit ダウンロード','col.rosQosAtUp':'Limit At アップロード','col.rosQosAtDown':'Limit At ダウンロード','col.rosQosTreeName':'名前','col.rosQosParent':'Parent','col.rosQosTreeMax':'Max Limit',
+'sec.rosAcl':'ファイアウォールフィルター（MikroTik RouterOS）','hint.rosAcl':'RouterOSのファイアウォールルールはchainベースのフラットなリスト（名前付きACLオブジェクトではない）で、順番に評価され最初にマッチしたルールが適用されます','col.rosAclChain':'Chain','col.rosAclAction':'Action','col.rosAclProtocol':'Protocol','col.rosAclSrc':'送信元アドレス','col.rosAclDst':'宛先アドレス','col.rosAclDstPort':'宛先ポート','col.rosAclInIf':'入力インターフェース','col.rosAclComment':'コメント','sec.rosQos':'QoS（MikroTik RouterOS）','hint.rosQos':'Simple Queue：単一ターゲットの帯域制限；Queue Tree：階層的なparent/child優先度構造（簡略版、parent+max-limitのみ対応、firewall mangleルールは自動生成されません）','col.rosQosName':'名前','col.rosQosTarget':'ターゲット','col.rosQosMaxUp':'Max Limit アップロード','col.rosQosMaxDown':'Max Limit ダウンロード','col.rosQosAtUp':'Limit At アップロード','col.rosQosAtDown':'Limit At ダウンロード','col.rosQosTreeName':'名前','col.rosQosParent':'Parent','col.rosQosTreeMax':'Max Limit','col.userName':'Name','col.userRole':'Role/Group','col.userPassword':'Password (SHA1 Hash)','sec.users':'ローカルアカウント（Aruba ProCurve）','hint.users':'パスワード欄は SHA1 ハッシュ値、生成済みのハッシュを貼り付けてください。本ツールは暗号化処理を行いません',
   },
   tlh:{
     'title':"nISjan De' chenmoHwI'",'sub':"Pure JS · toy'wI' Qo' · wa' ghItlh",
@@ -8368,7 +8418,7 @@ const LANG={
     'sec.vpc':"VPC chenmoH (NX-OS neH)",'lbl.vpcDomain':'Domain ID','lbl.vpcPeerKeepalive':"jup yIn De'",'lbl.vpcPeerLink':"jup rar (port-channel pong)",'lbl.vpcPeerGateway':'Peer Gateway',
     'sec.vxlan':"VXLAN chenmoH (Comware/Aruba CX)",'lbl.vxlanVtep':"VTEP rar",'col.vni':'VNI','col.vlan':'VLAN','col.vxlanName':"pong",'col.vxlanPeers':"jup (chIm=BGP-EVPN)",'col.vxlanRd':'RD','col.vxlanRtImport':'RT Import','col.vxlanRtExport':'RT Export','col.vxlanGw':'Gateway','btn.addVni':"+ VNI chel",'sec.brocadeQos':"QoS DSCP Segh (Brocade/Ruckus ICX)",'hint.brocadeQos':"Hub SepDaq QoS mIw yIchenmoH; naDev De' Segh neH",'col.qosDscpValues':"DSCP mI'",'col.qosPriority':"mIw batlh (0-7)",'th.ifQosPriority':"QoS batlh",'th.ifTrustDscp':"Trust DSCP",
 "sec.extremeQos":"QoS chov (Extreme ExtremeXOS)","hint.extremeQos":"QP1/QP8 chaH already ghaj; QP2-QP7 neH DIchmoH latlh bandwidth","col.exQosProfile":"chov","col.exQosMinbw":"mach bandwidth %","col.exQosMaxbw":"tIn bandwidth %","col.exQosCodePoint":"DSCP mI'","col.exQosDscpProfile":"chov","col.exQosPort":"lojmIt","col.exQosPortProfile":"chov","col.exQosDiffserv":"Diffserv chojmoH",
-"sec.rosAcl":"veS beQ (MikroTik RouterOS)","hint.rosAcl":"RouterOS veS beQ pImDaq; wa'DIch matching Segh chegh","col.rosAclChain":"chain","col.rosAclAction":"wanI'","col.rosAclProtocol":"protocol","col.rosAclSrc":"tuq chenmoH","col.rosAclDst":"reH chenmoH","col.rosAclDstPort":"reH lojmIt","col.rosAclInIf":"HevmoH lojmIt","col.rosAclComment":"jatlh","sec.rosQos":'QoS chenmoH (MikroTik RouterOS)',"hint.rosQos":"Simple Queue: wa' target bandwidth; Queue Tree: parent/child batlh","col.rosQosName":"pong","col.rosQosTarget":"'ar","col.rosQosMaxUp":"tIn Dop Dung","col.rosQosMaxDown":"tIn Dop bIng","col.rosQosAtUp":"mach Dop Dung","col.rosQosAtDown":"mach Dop bIng","col.rosQosTreeName":"pong","col.rosQosParent":"parent","col.rosQosTreeMax":"tIn Dop",
+"sec.rosAcl":"veS beQ (MikroTik RouterOS)","hint.rosAcl":"RouterOS veS beQ pImDaq; wa'DIch matching Segh chegh","col.rosAclChain":"chain","col.rosAclAction":"wanI'","col.rosAclProtocol":"protocol","col.rosAclSrc":"tuq chenmoH","col.rosAclDst":"reH chenmoH","col.rosAclDstPort":"reH lojmIt","col.rosAclInIf":"HevmoH lojmIt","col.rosAclComment":"jatlh","sec.rosQos":'QoS chenmoH (MikroTik RouterOS)',"hint.rosQos":"Simple Queue: wa' target bandwidth; Queue Tree: parent/child batlh","col.rosQosName":"pong","col.rosQosTarget":"'ar","col.rosQosMaxUp":"tIn Dop Dung","col.rosQosMaxDown":"tIn Dop bIng","col.rosQosAtUp":"mach Dop Dung","col.rosQosAtDown":"mach Dop bIng","col.rosQosTreeName":"pong","col.rosQosParent":"parent","col.rosQosTreeMax":"tIn Dop",'sec.users':'loD chenmoH (Aruba ProCurve)','hint.users':'SHA1 De\' poQ; lo\'wI\' chel, pagh \'ampara','col.userName':'Name','col.userRole':'Role/Group','col.userPassword':'Password (SHA1 Hash)',
 
   },
   pirate:{
@@ -8414,7 +8464,7 @@ const LANG={
     'sec.vpc':'Twin-Ship Riggin (NX-OS only)','lbl.vpcDomain':'Domain ID','lbl.vpcPeerKeepalive':"Twin Ship's Heartbeat",'lbl.vpcPeerLink':'Twin-Ship Rope (port-channel name)','lbl.vpcPeerGateway':'Peer Gateway',
     'sec.vxlan':'VXLAN Riggin (Comware / Aruba CX)','lbl.vxlanVtep':'VTEP / Source Plank','col.vni':'VNI','col.vlan':'VLAN','col.vxlanName':'Name','col.vxlanPeers':'Shipmates (blank=BGP-EVPN)','col.vxlanRd':'RD','col.vxlanRtImport':'RT Import','col.vxlanRtExport':'RT Export','col.vxlanGw':'Gateway','btn.addVni':'+ Hoist a VNI','sec.brocadeQos':'QoS DSCP Charts (Brocade / Ruckus ICX)','hint.brocadeQos':'Set the priority fer each porthole up in the Interface charts above, arr! This here be just fer the global DSCP mappin','col.qosDscpValues':'DSCP Values (space apart, arr)','col.qosPriority':'Priority (0-7)','th.ifQosPriority':'QoS Priority','th.ifTrustDscp':'Trust DSCP',
 'sec.extremeQos':'QoS Treasure Map (Extreme ExtremeXOS)','hint.extremeQos':"QP1 and QP8 be pre-loaded in the hold, ye only need t' forge QP2-QP7 with yer own bandwidth. The DSCP chart and port list can call upon any o' the 8 profiles",'col.exQosProfile':'Profile','col.exQosMinbw':'Min Booty %','col.exQosMaxbw':'Max Booty %','col.exQosCodePoint':'DSCP Mark','col.exQosDscpProfile':'Profile','col.exQosPort':'Port Hole','col.exQosPortProfile':'Profile','col.exQosDiffserv':'Diffserv Lookout',
-'sec.rosAcl':'Firewall Filter (MikroTik RouterOS)','hint.rosAcl':"RouterOS firewall rules be a flat chain-based list, not named ACL objects, arr! Checked in order, first match be the law",'col.rosAclChain':'Chain','col.rosAclAction':'Action','col.rosAclProtocol':'Protocol','col.rosAclSrc':'Src Address','col.rosAclDst':'Dst Address','col.rosAclDstPort':'Dst Port','col.rosAclInIf':'In Interface','col.rosAclComment':'Comment','sec.rosQos':'QoS (MikroTik RouterOS)','hint.rosQos':"Simple Queue: limit one target's bandwidth; Queue Tree: parent/child priority riggin (simplified, parent+max-limit only, no mangle rules be conjured)",'col.rosQosName':'Name','col.rosQosTarget':'Target','col.rosQosMaxUp':'Max Limit Up','col.rosQosMaxDown':'Max Limit Down','col.rosQosAtUp':'Limit At Up','col.rosQosAtDown':'Limit At Down','col.rosQosTreeName':'Name','col.rosQosParent':'Parent','col.rosQosTreeMax':'Max Limit',
+'sec.rosAcl':'Firewall Filter (MikroTik RouterOS)','hint.rosAcl':"RouterOS firewall rules be a flat chain-based list, not named ACL objects, arr! Checked in order, first match be the law",'col.rosAclChain':'Chain','col.rosAclAction':'Action','col.rosAclProtocol':'Protocol','col.rosAclSrc':'Src Address','col.rosAclDst':'Dst Address','col.rosAclDstPort':'Dst Port','col.rosAclInIf':'In Interface','col.rosAclComment':'Comment','sec.rosQos':'QoS (MikroTik RouterOS)','hint.rosQos':"Simple Queue: limit one target's bandwidth; Queue Tree: parent/child priority riggin (simplified, parent+max-limit only, no mangle rules be conjured)",'col.rosQosName':'Name','col.rosQosTarget':'Target','col.rosQosMaxUp':'Max Limit Up','col.rosQosMaxDown':'Max Limit Down','col.rosQosAtUp':'Limit At Up','col.rosQosAtDown':'Limit At Down','col.rosQosTreeName':'Name','col.rosQosParent':'Parent','col.rosQosTreeMax':'Max Limit','col.userName':'Name','col.userRole':'Role/Group','col.userPassword':'Password (SHA1 Hash)','sec.users':'Local Crew Roster (Aruba ProCurve)','hint.users':'Password be a SHA1 hash, already brewed — paste it in, this ship don\'t do any encryptin\', arr',
   },
   emoji:{
     'title':'🔀⚙️🏭','sub':'JS · 🚫🖥️ · 📄',
@@ -8459,7 +8509,7 @@ const LANG={
     'sec.vpc':'🔗🔗(NX-OS)','lbl.vpcDomain':'🏷️','lbl.vpcPeerKeepalive':'🤝💓','lbl.vpcPeerLink':'🤝🔗','lbl.vpcPeerGateway':'🚪🤝',
     'sec.vxlan':'🌐🚇(Comware/ArubaCX)','lbl.vxlanVtep':'📍🔌','col.vni':'🔢','col.vlan':'🏷️','col.vxlanName':'📛','col.vxlanPeers':'🤝(空=BGP-EVPN)','col.vxlanRd':'RD','col.vxlanRtImport':'⬇️RT','col.vxlanRtExport':'⬆️RT','col.vxlanGw':'🚪','btn.addVni':'+🔢','sec.brocadeQos':'📊🔀(Brocade/RuckusICX)','hint.brocadeQos':'🔌優先權/Trust請至⬆️Interface表；這裡只設🌐DSCP對應','col.qosDscpValues':'DSCP值','col.qosPriority':'優先權(0-7)','th.ifQosPriority':'📊優先權','th.ifTrustDscp':'✅DSCP',
 'sec.extremeQos':'📶⚙️(Extreme)','hint.extremeQos':'QP1/QP8✅已存在，QP2-QP7需➕；DSCP🗺️和🔌都能用全部8個📶','col.exQosProfile':'📶','col.exQosMinbw':'⬇️%','col.exQosMaxbw':'⬆️%','col.exQosCodePoint':'🔢DSCP','col.exQosDscpProfile':'📶','col.exQosPort':'🔌','col.exQosPortProfile':'📶','col.exQosDiffserv':'🔍Diffserv',
-'sec.rosAcl':'🧱(RouterOS)','hint.rosAcl':'扁平chain清單，非具名ACL；由上而下比對第一筆符合','col.rosAclChain':'Chain','col.rosAclAction':'Action','col.rosAclProtocol':'Protocol','col.rosAclSrc':'來源','col.rosAclDst':'目的','col.rosAclDstPort':'目的埠','col.rosAclInIf':'進埠','col.rosAclComment':'💬','sec.rosQos':'📶(RouterOS)','hint.rosQos':'Simple Queue單目標限速；Queue Tree階層式，簡化版不含mangle','col.rosQosName':'📛','col.rosQosTarget':'🎯','col.rosQosMaxUp':'⬆️上限','col.rosQosMaxDown':'⬇️上限','col.rosQosAtUp':'⬆️保證','col.rosQosAtDown':'⬇️保證','col.rosQosTreeName':'📛','col.rosQosParent':'👪','col.rosQosTreeMax':'⬆️⬇️上限',
+'sec.rosAcl':'🧱(RouterOS)','hint.rosAcl':'扁平chain清單，非具名ACL；由上而下比對第一筆符合','col.rosAclChain':'Chain','col.rosAclAction':'Action','col.rosAclProtocol':'Protocol','col.rosAclSrc':'來源','col.rosAclDst':'目的','col.rosAclDstPort':'目的埠','col.rosAclInIf':'進埠','col.rosAclComment':'💬','sec.rosQos':'📶(RouterOS)','hint.rosQos':'Simple Queue單目標限速；Queue Tree階層式，簡化版不含mangle','col.rosQosName':'📛','col.rosQosTarget':'🎯','col.rosQosMaxUp':'⬆️上限','col.rosQosMaxDown':'⬇️上限','col.rosQosAtUp':'⬆️保證','col.rosQosAtDown':'⬇️保證','col.rosQosTreeName':'📛','col.rosQosParent':'👪','col.rosQosTreeMax':'⬆️⬇️上限','col.userName':'Name','col.userRole':'Role/Group','col.userPassword':'Password (SHA1 Hash)','sec.users':'👤 帳號 (ProCurve)','hint.users':'🔐SHA1 雜湊 📋貼上 🚫加密',
   },
   bureau:{
     'title':'交換器設定產生作業系統','sub':'Pure JS · 零伺服器架構 · 單檔執行作業',
@@ -8504,7 +8554,7 @@ const LANG={
     'sec.vpc':'VPC 組態設定事項（限 Cisco NX-OS 適用）','lbl.vpcDomain':'網域識別碼','lbl.vpcPeerKeepalive':'對端存活偵測目標位址','lbl.vpcPeerLink':'對端連結（既有 port-channel 介面名稱欄位）','lbl.vpcPeerGateway':'對端閘道功能',
     'sec.vxlan':'VXLAN 組態設定事項（限 Comware／Aruba CX 適用）','lbl.vxlanVtep':'VTEP／來源介面欄位','col.vni':'VNI 識別碼','col.vlan':'VLAN 識別碼','col.vxlanName':'名稱事項','col.vxlanPeers':'對端清單（空白分隔，留空表示採行 BGP-EVPN）','col.vxlanRd':'路由識別碼（RD）','col.vxlanRtImport':'路由目標匯入事項','col.vxlanRtExport':'路由目標匯出事項','col.vxlanGw':'閘道欄位','btn.addVni':'+ 新增 VNI 項目','sec.brocadeQos':'QoS 差異化服務代碼點對應事項（限 Brocade／Ruckus ICX 適用）','hint.brocadeQos':'逐埠預設優先權／信任差異化服務代碼點欄位請至上方介面表格事項設定；此處僅設定全域對應規則事項','col.qosDscpValues':'差異化服務代碼點數值事項（空白分隔多筆）','col.qosPriority':'優先權事項 (0-7)','th.ifQosPriority':'QoS 優先權事項','th.ifTrustDscp':'信任差異化服務代碼點事項',
 'sec.extremeQos':'QoS 服務品質分級事項（Extreme ExtremeXOS）','hint.extremeQos':'QP1、QP8 為預設既存之出口服務品質分級，僅 QP2 至 QP7 須於此建立並設定頻寬事宜；DSCP 對應表及逐埠指定事項均可套用全部 8 項分級','col.exQosProfile':'分級事項','col.exQosMinbw':'最小頻寬百分比','col.exQosMaxbw':'最大頻寬百分比','col.exQosCodePoint':'DSCP 代碼點事項','col.exQosDscpProfile':'分級事項','col.exQosPort':'埠口','col.exQosPortProfile':'分級事項','col.exQosDiffserv':'差異化服務檢驗事項',
-'sec.rosAcl':'防火牆過濾規則事項（MikroTik RouterOS）','hint.rosAcl':'RouterOS 防火牆規則以 chain 為主體之扁平清單事項（非具名 ACL 物件），依序逐筆比對，首筆符合之規則即生效','col.rosAclChain':'Chain 欄位','col.rosAclAction':'處置事項','col.rosAclProtocol':'通訊協定事項','col.rosAclSrc':'來源位址事項','col.rosAclDst':'目的位址事項','col.rosAclDstPort':'目的埠事項','col.rosAclInIf':'入埠介面事項','col.rosAclComment':'備註事項','sec.rosQos':'服務品質事項（MikroTik RouterOS）','hint.rosQos':'Simple Queue：單一目標之頻寬限制事項；Queue Tree：階層式親子優先權架構事項（簡化版，僅支援 parent 及 max-limit，不自動產生 firewall mangle 規則）','col.rosQosName':'名稱事項','col.rosQosTarget':'目標事項','col.rosQosMaxUp':'上傳頻寬上限事項','col.rosQosMaxDown':'下載頻寬上限事項','col.rosQosAtUp':'上傳保證頻寬事項','col.rosQosAtDown':'下載保證頻寬事項','col.rosQosTreeName':'名稱事項','col.rosQosParent':'親層事項','col.rosQosTreeMax':'頻寬上限事項',
+'sec.rosAcl':'防火牆過濾規則事項（MikroTik RouterOS）','hint.rosAcl':'RouterOS 防火牆規則以 chain 為主體之扁平清單事項（非具名 ACL 物件），依序逐筆比對，首筆符合之規則即生效','col.rosAclChain':'Chain 欄位','col.rosAclAction':'處置事項','col.rosAclProtocol':'通訊協定事項','col.rosAclSrc':'來源位址事項','col.rosAclDst':'目的位址事項','col.rosAclDstPort':'目的埠事項','col.rosAclInIf':'入埠介面事項','col.rosAclComment':'備註事項','sec.rosQos':'服務品質事項（MikroTik RouterOS）','hint.rosQos':'Simple Queue：單一目標之頻寬限制事項；Queue Tree：階層式親子優先權架構事項（簡化版，僅支援 parent 及 max-limit，不自動產生 firewall mangle 規則）','col.rosQosName':'名稱事項','col.rosQosTarget':'目標事項','col.rosQosMaxUp':'上傳頻寬上限事項','col.rosQosMaxDown':'下載頻寬上限事項','col.rosQosAtUp':'上傳保證頻寬事項','col.rosQosAtDown':'下載保證頻寬事項','col.rosQosTreeName':'名稱事項','col.rosQosParent':'親層事項','col.rosQosTreeMax':'頻寬上限事項','col.userName':'Name','col.userRole':'Role/Group','col.userPassword':'Password (SHA1 Hash)','sec.users':'本機使用者帳號設定（Aruba ProCurve）','hint.users':'密碼欄位須為 SHA1 雜湊值，請預先產生後貼上，本系統不提供加密運算功能',
   },
   cat:{
     'title':'交換器設定產生喵','sub':'Pure JS 喵~ 零伺服器喵',
@@ -8549,7 +8599,7 @@ const LANG={
     'sec.vpc':'VPC 設定喵（只有 NX-OS 喵）','lbl.vpcDomain':'Domain ID喵','lbl.vpcPeerKeepalive':'對端心跳喵','lbl.vpcPeerLink':'對端連結喵','lbl.vpcPeerGateway':'對端閘道喵',
     'sec.vxlan':'VXLAN 設定喵','lbl.vxlanVtep':'VTEP喵','col.vni':'VNI喵','col.vlan':'VLAN喵','col.vxlanName':'名字喵','col.vxlanPeers':'夥伴喵（空的話=BGP-EVPN喵）','col.vxlanRd':'RD喵','col.vxlanRtImport':'RT Import喵','col.vxlanRtExport':'RT Export喵','col.vxlanGw':'Gateway喵','btn.addVni':'+ 加VNI喵','sec.brocadeQos':'QoS DSCP 對應表喵','hint.brocadeQos':'逐埠優先權喵請去上面Interface表設定喵','col.qosDscpValues':'DSCP值喵','col.qosPriority':'優先權喵(0-7)','th.ifQosPriority':'QoS優先權喵','th.ifTrustDscp':'Trust DSCP喵',
 'sec.extremeQos':'QoS分級設定喵（Extreme）','hint.extremeQos':'QP1／QP8本來就有喵，只有QP2-QP7要自己建立設定頻寬喵；DSCP對應和逐port都能用全部8個分級喵','col.exQosProfile':'分級喵','col.exQosMinbw':'最小頻寬喵%','col.exQosMaxbw':'最大頻寬喵%','col.exQosCodePoint':'DSCP代碼喵','col.exQosDscpProfile':'分級喵','col.exQosPort':'Port喵','col.exQosPortProfile':'分級喵','col.exQosDiffserv':'Diffserv檢查喵',
-'sec.rosAcl':'防火牆過濾喵','hint.rosAcl':'扁平chain清單喵，依序比對喵','col.rosAclChain':'Chain喵','col.rosAclAction':'Action喵','col.rosAclProtocol':'Protocol喵','col.rosAclSrc':'來源喵','col.rosAclDst':'目的喵','col.rosAclDstPort':'目的埠喵','col.rosAclInIf':'進埠喵','col.rosAclComment':'備註喵','sec.rosQos':'QoS喵（RouterOS）','hint.rosQos':'Simple Queue限速喵，Queue Tree階層喵','col.rosQosName':'名字喵','col.rosQosTarget':'目標喵','col.rosQosMaxUp':'上傳上限喵','col.rosQosMaxDown':'下載上限喵','col.rosQosAtUp':'上傳保證喵','col.rosQosAtDown':'下載保證喵','col.rosQosTreeName':'名字喵','col.rosQosParent':'Parent喵','col.rosQosTreeMax':'上限喵',
+'sec.rosAcl':'防火牆過濾喵','hint.rosAcl':'扁平chain清單喵，依序比對喵','col.rosAclChain':'Chain喵','col.rosAclAction':'Action喵','col.rosAclProtocol':'Protocol喵','col.rosAclSrc':'來源喵','col.rosAclDst':'目的喵','col.rosAclDstPort':'目的埠喵','col.rosAclInIf':'進埠喵','col.rosAclComment':'備註喵','sec.rosQos':'QoS喵（RouterOS）','hint.rosQos':'Simple Queue限速喵，Queue Tree階層喵','col.rosQosName':'名字喵','col.rosQosTarget':'目標喵','col.rosQosMaxUp':'上傳上限喵','col.rosQosMaxDown':'下載上限喵','col.rosQosAtUp':'上傳保證喵','col.rosQosAtDown':'下載保證喵','col.rosQosTreeName':'名字喵','col.rosQosParent':'Parent喵','col.rosQosTreeMax':'上限喵','col.userName':'Name','col.userRole':'Role/Group','col.userPassword':'Password (SHA1 Hash)','sec.users':'本機帳號喵（ProCurve）','hint.users':'密碼要 SHA1 雜湊值喵，自己產生貼上喵，不會幫你加密喵',
   },
   bean:{
     'title':'🥕🫛 豆換器豆定產生豆 🌽','sub':'Pure JS 豆 零伺豆器',
@@ -8594,7 +8644,7 @@ const LANG={
     'sec.vpc':'VPC 豆設定（限 NX-OS）','lbl.vpcDomain':'豆域 ID','lbl.vpcPeerKeepalive':'對豆心跳','lbl.vpcPeerLink':'對豆連結','lbl.vpcPeerGateway':'對豆閘道',
     'sec.vxlan':'VXLAN 豆設定','lbl.vxlanVtep':'VTEP豆','col.vni':'VNI豆','col.vlan':'VLAN豆','col.vxlanName':'豆名','col.vxlanPeers':'豆伴（空=BGP-EVPN）','col.vxlanRd':'RD豆','col.vxlanRtImport':'RT Import豆','col.vxlanRtExport':'RT Export豆','col.vxlanGw':'豆道','btn.addVni':'+ 加豆VNI','sec.brocadeQos':'QoS DSCP豆對應表','hint.brocadeQos':'逐埠豆優先權請去上面Interface豆表設定','col.qosDscpValues':'DSCP豆值','col.qosPriority':'優豆先權(0-7)','th.ifQosPriority':'QoS豆優先權','th.ifTrustDscp':'Trust豆DSCP',
 'sec.extremeQos':'QoS豆分級設定（Extreme）','hint.extremeQos':'QP1／QP8豆本來就有，QP2-QP7豆才要自己建立；DSCP豆對應和逐port豆都能用全部8個分級','col.exQosProfile':'分級豆','col.exQosMinbw':'最小豆頻寬%','col.exQosMaxbw':'最大豆頻寬%','col.exQosCodePoint':'DSCP豆代碼','col.exQosDscpProfile':'分級豆','col.exQosPort':'Port豆','col.exQosPortProfile':'分級豆','col.exQosDiffserv':'Diffserv豆檢查',
-'sec.rosAcl':'防火牆豆過濾','hint.rosAcl':'豆扁平chain清單，依序豆比對','col.rosAclChain':'Chain豆','col.rosAclAction':'Action豆','col.rosAclProtocol':'Protocol豆','col.rosAclSrc':'來源豆','col.rosAclDst':'目的豆','col.rosAclDstPort':'目的豆埠','col.rosAclInIf':'進豆埠','col.rosAclComment':'備豆註','sec.rosQos':'QoS豆（RouterOS）','hint.rosQos':'Simple Queue豆限速，Queue Tree豆階層','col.rosQosName':'豆名','col.rosQosTarget':'豆目標','col.rosQosMaxUp':'上傳豆上限','col.rosQosMaxDown':'下載豆上限','col.rosQosAtUp':'上傳豆保證','col.rosQosAtDown':'下載豆保證','col.rosQosTreeName':'豆名','col.rosQosParent':'Parent豆','col.rosQosTreeMax':'豆上限',
+'sec.rosAcl':'防火牆豆過濾','hint.rosAcl':'豆扁平chain清單，依序豆比對','col.rosAclChain':'Chain豆','col.rosAclAction':'Action豆','col.rosAclProtocol':'Protocol豆','col.rosAclSrc':'來源豆','col.rosAclDst':'目的豆','col.rosAclDstPort':'目的豆埠','col.rosAclInIf':'進豆埠','col.rosAclComment':'備豆註','sec.rosQos':'QoS豆（RouterOS）','hint.rosQos':'Simple Queue豆限速，Queue Tree豆階層','col.rosQosName':'豆名','col.rosQosTarget':'豆目標','col.rosQosMaxUp':'上傳豆上限','col.rosQosMaxDown':'下載豆上限','col.rosQosAtUp':'上傳豆保證','col.rosQosAtDown':'下載豆保證','col.rosQosTreeName':'豆名','col.rosQosParent':'Parent豆','col.rosQosTreeMax':'豆上限','col.userName':'Name','col.userRole':'Role/Group','col.userPassword':'Password (SHA1 Hash)','sec.users':'本豆機帳號（ProCurve）','hint.users':'密碼豆是SHA1雜湊值，自己豆產生貼上，不豆加密',
   },
   alpaca:{
     'title':'交換咩器設咩定產咩生器-aca','sub':'Pu咩re咩 J咩S 咩零伺咩服器-aca',
@@ -8639,7 +8689,7 @@ const LANG={
     'sec.vpc':'VPC咩設咩定-aca','lbl.vpcDomain':'網咩域咩碼-aca','lbl.vpcPeerKeepalive':'對咩端心咩跳-aca','lbl.vpcPeerLink':'對咩端連咩結-aca','lbl.vpcPeerGateway':'對咩端閘咩道-aca',
     'sec.vxlan':'VXLAN咩設咩定-aca','lbl.vxlanVtep':'VTEP咩-aca','col.vni':'VNI咩-aca','col.vlan':'VLAN咩-aca','col.vxlanName':'名咩稱-aca','col.vxlanPeers':'夥咩伴-aca（空=BGP-EVPN）','col.vxlanRd':'RD咩-aca','col.vxlanRtImport':'RT Import咩-aca','col.vxlanRtExport':'RT Export咩-aca','col.vxlanGw':'閘咩道-aca','btn.addVni':'+ 加咩VNI-aca','sec.brocadeQos':'QoS咩 DSCP對應咩表-aca','hint.brocadeQos':'逐埠咩優先權-aca請去咩上面設定-aca','col.qosDscpValues':'DSCP咩值-aca','col.qosPriority':'優咩先權-aca(0-7)','th.ifQosPriority':'QoS咩優先權-aca','th.ifTrustDscp':'Trust咩DSCP-aca',
 'sec.extremeQos':'QoS咩分咩級咩設咩定-aca（Extreme）','hint.extremeQos':'QP1／QP8咩本來就有-aca，QP2-QP7咩才要自己建立-aca；DSCP咩對應和逐port咩都能用全部8個分級-aca','col.exQosProfile':'分咩級-aca','col.exQosMinbw':'最咩小頻咩寬%-aca','col.exQosMaxbw':'最咩大頻咩寬%-aca','col.exQosCodePoint':'DSCP咩代咩碼-aca','col.exQosDscpProfile':'分咩級-aca','col.exQosPort':'Port-aca','col.exQosPortProfile':'分咩級-aca','col.exQosDiffserv':'Diffserv咩檢咩查-aca',
-'sec.rosAcl':'防咩火咩牆咩過咩濾-aca','hint.rosAcl':'扁咩平chain咩清咩單-aca，依咩序咩比咩對-aca','col.rosAclChain':'Chain咩-aca','col.rosAclAction':'Action咩-aca','col.rosAclProtocol':'Protocol咩-aca','col.rosAclSrc':'來咩源-aca','col.rosAclDst':'目咩的-aca','col.rosAclDstPort':'目咩的咩埠-aca','col.rosAclInIf':'進咩埠-aca','col.rosAclComment':'備咩註-aca','sec.rosQos':'QoS咩（RouterOS）-aca','hint.rosQos':'Simple Queue咩限咩速-aca，Queue Tree咩階咩層-aca','col.rosQosName':'名咩字-aca','col.rosQosTarget':'目咩標-aca','col.rosQosMaxUp':'上咩傳咩上咩限-aca','col.rosQosMaxDown':'下咩載咩上咩限-aca','col.rosQosAtUp':'上咩傳咩保咩證-aca','col.rosQosAtDown':'下咩載咩保咩證-aca','col.rosQosTreeName':'名咩字-aca','col.rosQosParent':'Parent-aca','col.rosQosTreeMax':'上咩限-aca',
+'sec.rosAcl':'防咩火咩牆咩過咩濾-aca','hint.rosAcl':'扁咩平chain咩清咩單-aca，依咩序咩比咩對-aca','col.rosAclChain':'Chain咩-aca','col.rosAclAction':'Action咩-aca','col.rosAclProtocol':'Protocol咩-aca','col.rosAclSrc':'來咩源-aca','col.rosAclDst':'目咩的-aca','col.rosAclDstPort':'目咩的咩埠-aca','col.rosAclInIf':'進咩埠-aca','col.rosAclComment':'備咩註-aca','sec.rosQos':'QoS咩（RouterOS）-aca','hint.rosQos':'Simple Queue咩限咩速-aca，Queue Tree咩階咩層-aca','col.rosQosName':'名咩字-aca','col.rosQosTarget':'目咩標-aca','col.rosQosMaxUp':'上咩傳咩上咩限-aca','col.rosQosMaxDown':'下咩載咩上咩限-aca','col.rosQosAtUp':'上咩傳咩保咩證-aca','col.rosQosAtDown':'下咩載咩保咩證-aca','col.rosQosTreeName':'名咩字-aca','col.rosQosParent':'Parent-aca','col.rosQosTreeMax':'上咩限-aca','col.userName':'Name','col.userRole':'Role/Group','col.userPassword':'Password (SHA1 Hash)','sec.users':'本機咩帳號咩（ProCurve）-aca','hint.users':'密碼咩要咩SHA1咩雜湊值咩，自己咩產生咩貼上-aca',
   },
   yanse:{
     'title':'交換器設定產生器，算了','sub':'Pure JS · 零伺服器 · 單檔執行（嘆）',
@@ -8684,7 +8734,7 @@ const LANG={
     'sec.vpc':'VPC 設定，反正也沒差','lbl.vpcDomain':'Domain ID，隨便','lbl.vpcPeerKeepalive':'對端心跳，算了','lbl.vpcPeerLink':'對端連結，反正都一樣','lbl.vpcPeerGateway':'對端閘道，隨便',
     'sec.vxlan':'VXLAN 設定，隨便','lbl.vxlanVtep':'VTEP，反正都一樣','col.vni':'VNI，隨便','col.vlan':'VLAN，隨便','col.vxlanName':'名稱，算了','col.vxlanPeers':'夥伴，反正也沒差（空=BGP-EVPN）','col.vxlanRd':'RD，隨便','col.vxlanRtImport':'RT Import，算了','col.vxlanRtExport':'RT Export，算了','col.vxlanGw':'Gateway，反正都一樣','btn.addVni':'+ 加VNI，隨便','sec.brocadeQos':'QoS DSCP 對應表，隨便啦','hint.brocadeQos':'逐埠優先權，反正去上面設定就好，算了','col.qosDscpValues':'DSCP 值，隨便','col.qosPriority':'優先權，算了(0-7)','th.ifQosPriority':'QoS 優先權，隨便啦','th.ifTrustDscp':'Trust DSCP，算了',
 'sec.extremeQos':'QoS分級設定，隨便（Extreme）','hint.extremeQos':'QP1／QP8本來就有，隨便；QP2-QP7才要建，算了；DSCP和port都能用全部8個，反正都一樣','col.exQosProfile':'分級，算了','col.exQosMinbw':'最小頻寬%，隨便','col.exQosMaxbw':'最大頻寬%，隨便','col.exQosCodePoint':'DSCP代碼，算了','col.exQosDscpProfile':'分級，算了','col.exQosPort':'Port，隨便','col.exQosPortProfile':'分級，算了','col.exQosDiffserv':'Diffserv檢查，算了',
-'sec.rosAcl':'防火牆過濾，隨便','hint.rosAcl':'扁平chain清單，反正依序比對就好，算了','col.rosAclChain':'Chain，隨便','col.rosAclAction':'Action，算了','col.rosAclProtocol':'Protocol，隨便','col.rosAclSrc':'來源，算了','col.rosAclDst':'目的，隨便','col.rosAclDstPort':'目的埠，算了','col.rosAclInIf':'進埠，隨便','col.rosAclComment':'備註，算了','sec.rosQos':'QoS，隨便（RouterOS）','hint.rosQos':'Simple Queue限速，Queue Tree階層，反正都一樣','col.rosQosName':'名字，算了','col.rosQosTarget':'目標，隨便','col.rosQosMaxUp':'上傳上限，算了','col.rosQosMaxDown':'下載上限，隨便','col.rosQosAtUp':'上傳保證，算了','col.rosQosAtDown':'下載保證，隨便','col.rosQosTreeName':'名字，算了','col.rosQosParent':'Parent，隨便','col.rosQosTreeMax':'上限，算了',
+'sec.rosAcl':'防火牆過濾，隨便','hint.rosAcl':'扁平chain清單，反正依序比對就好，算了','col.rosAclChain':'Chain，隨便','col.rosAclAction':'Action，算了','col.rosAclProtocol':'Protocol，隨便','col.rosAclSrc':'來源，算了','col.rosAclDst':'目的，隨便','col.rosAclDstPort':'目的埠，算了','col.rosAclInIf':'進埠，隨便','col.rosAclComment':'備註，算了','sec.rosQos':'QoS，隨便（RouterOS）','hint.rosQos':'Simple Queue限速，Queue Tree階層，反正都一樣','col.rosQosName':'名字，算了','col.rosQosTarget':'目標，隨便','col.rosQosMaxUp':'上傳上限，算了','col.rosQosMaxDown':'下載上限，隨便','col.rosQosAtUp':'上傳保證，算了','col.rosQosAtDown':'下載保證，隨便','col.rosQosTreeName':'名字，算了','col.rosQosParent':'Parent，隨便','col.rosQosTreeMax':'上限，算了','col.userName':'Name','col.userRole':'Role/Group','col.userPassword':'Password (SHA1 Hash)','sec.users':'本機帳號，算了（ProCurve）','hint.users':'密碼要SHA1雜湊值，自己貼，反正沒差',
   },
 };
 
