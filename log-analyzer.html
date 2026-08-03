@@ -79,6 +79,7 @@ th{color:var(--text-muted);font-weight:600;text-transform:uppercase;font-size:9p
 .conf-tag{font-size:9px;padding:1px 6px;border-radius:4px}
 .conf-tag.confirmed{background:rgba(16,185,129,.15);color:var(--green)}
 .conf-tag.heuristic{background:rgba(167,139,250,.15);color:var(--purple)}
+.note-badge{display:inline-block;font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(251,146,60,.15);color:var(--orange);margin-right:3px;white-space:nowrap}
 .summary-row{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
 .summary-chip{padding:4px 10px;border-radius:8px;background:var(--surface2);font-size:11px;display:flex;gap:6px;align-items:center}
 .empty{color:var(--text-muted);font-size:11px;padding:14px 0;text-align:center}
@@ -426,6 +427,7 @@ function detectFrequencyIssues(events, opts) {
           lastSeen: windowEvents[windowEvents.length - 1].timestamp || null,
           sampleRaw: windowEvents[windowEvents.length - 1].raw,
           relatedHosts: [host],
+          relatedEvents: windowEvents,
           confidence: 'confirmed'
         });
       }
@@ -440,17 +442,19 @@ function detectScanHeuristicCEF(events, opts) {
   const bySrc = new Map();
   events.filter(e => e.format === 'cef' && e.fields && e.fields.src && (e.fields.dst || e.fields.dpt))
     .forEach(e => {
-      if (!bySrc.has(e.fields.src)) bySrc.set(e.fields.src, new Set());
-      bySrc.get(e.fields.src).add(`${e.fields.dst || ''}:${e.fields.dpt || ''}`);
+      if (!bySrc.has(e.fields.src)) bySrc.set(e.fields.src, { targets: new Set(), events: [] });
+      const g = bySrc.get(e.fields.src);
+      g.targets.add(`${e.fields.dst || ''}:${e.fields.dpt || ''}`);
+      g.events.push(e);
     });
   const issues = [];
-  for (const [src, targets] of bySrc) {
-    if (targets.size >= threshold) {
+  for (const [src, g] of bySrc) {
+    if (g.targets.size >= threshold) {
       issues.push({
-        category: 'possibleScan', severityNorm: 'High', count: targets.size,
+        category: 'possibleScan', severityNorm: 'High', count: g.targets.size,
         firstSeen: null, lastSeen: null,
-        sampleRaw: `src=${src} -> ${targets.size} 個不同 dst/dpt 組合`,
-        relatedHosts: [src], confidence: 'heuristic'
+        sampleRaw: `src=${src} -> ${g.targets.size} 個不同 dst/dpt 組合`,
+        relatedHosts: [src], relatedEvents: g.events, confidence: 'heuristic'
       });
     }
   }
@@ -469,17 +473,19 @@ function detectScanHeuristicSyslog(events, opts) {
   events.filter(e => e.format !== 'cef').forEach(e => {
     const ips = extractIPsFromText(e.msg);
     if (!ips.length) return;
-    if (!byHost.has(e.host)) byHost.set(e.host, new Set());
-    ips.forEach(ip => byHost.get(e.host).add(ip));
+    if (!byHost.has(e.host)) byHost.set(e.host, { ips: new Set(), events: [] });
+    const g = byHost.get(e.host);
+    ips.forEach(ip => g.ips.add(ip));
+    g.events.push(e);
   });
   const issues = [];
-  for (const [host, ips] of byHost) {
-    if (ips.size >= threshold) {
+  for (const [host, g] of byHost) {
+    if (g.ips.size >= threshold) {
       issues.push({
-        category: 'possibleScan', severityNorm: 'Medium', count: ips.size,
+        category: 'possibleScan', severityNorm: 'Medium', count: g.ips.size,
         firstSeen: null, lastSeen: null,
-        sampleRaw: `host=${host} 訊息內容出現 ${ips.size} 個不同 IP（文字擷取，非結構化欄位）`,
-        relatedHosts: [host], confidence: 'heuristic'
+        sampleRaw: `host=${host} 訊息內容出現 ${g.ips.size} 個不同 IP（文字擷取，非結構化欄位）`,
+        relatedHosts: [host], relatedEvents: g.events, confidence: 'heuristic'
       });
     }
   }
@@ -598,7 +604,7 @@ function matchThreatIntel(events, intelIndexes) {
           issues.push({
             category: 'knownIOC', severityNorm: 'Critical', count: 1,
             firstSeen: evt.timestamp, lastSeen: evt.timestamp,
-            sampleRaw: evt.raw, relatedHosts: [ip], confidence: 'confirmed',
+            sampleRaw: evt.raw, relatedHosts: [ip], relatedEvents: [evt], confidence: 'confirmed',
             intelSource: index.name, intelMeta: hit.meta
           });
         }
@@ -606,6 +612,18 @@ function matchThreatIntel(events, intelIndexes) {
     });
   });
   return issues;
+}
+
+// 把彙整後的問題（頻率異常／掃描 heuristic／情資命中）反向標記回各自觸發問題的原始事件，
+// 讓「事件清單」逐筆也能看到「疑似猜密碼」「疑似 port scan」這類註記，不必只看彙整後的
+// 「問題清單」才知道某筆事件為何被判定有問題；同一事件可能同時觸發多種問題（notes 為陣列）
+function annotateEventsWithIssues(events, issues) {
+  events.forEach(e => { e.notes = []; });
+  issues.forEach(issue => {
+    (issue.relatedEvents || []).forEach(e => {
+      if (!e.notes.includes(issue.category)) e.notes.push(issue.category);
+    });
+  });
 }
 
 function buildIssueList(events, intelIndexes) {
@@ -616,6 +634,7 @@ function buildIssueList(events, intelIndexes) {
   const scanSys = detectScanHeuristicSyslog(analyzed, {});
   const all = [...intel, ...freq, ...scanCef, ...scanSys];
   all.sort((a, b) => SEV_RANK[a.severityNorm] - SEV_RANK[b.severityNorm] || b.count - a.count);
+  annotateEventsWithIssues(analyzed, all);
   return all;
 }
 
@@ -758,11 +777,11 @@ const LANG = {
     'app.title':'Log 分析與去識別化工具','app.subtitle':'匯入交換器/防火牆 Log（CEF／標準 Syslog），依嚴重程度排序並找出可能問題；本機比對已知情資清單；可對敏感欄位去識別化。全程僅在瀏覽器本機執行，不會連網。',
     'notice.disclaimer':'此功能之分析結果僅供參考，實際處置請自行判斷並謹慎使用',
     'import.title':'① 匯入 Log','import.hint':'支援 CEF (Common Event Format) 與標準 Syslog（RFC3164/RFC5424）逐行格式，可貼上文字或上傳檔案。','import.paste_placeholder':'在此貼上 log 內容，或使用下方上傳按鈕…','import.upload_btn':'上傳檔案','import.analyze_btn':'解析並分析','import.clear_btn':'清空','import.file_loaded':'已載入檔案：',
-    'results.title':'② 事件清單（依嚴重程度排序）','results.empty':'尚無資料，請先匯入並分析 log','results.col_severity':'嚴重程度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_msg':'內容','results.summary_label':'統計：',
+    'results.title':'② 事件清單（依嚴重程度排序）','results.empty':'尚無資料，請先匯入並分析 log','results.col_severity':'嚴重程度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題','results.col_msg':'內容','results.summary_label':'統計：',
     'sev.critical':'嚴重','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'資訊',
     'issues.title':'③ 問題清單（基本資安分析）','issues.empty':'未發現符合規則的問題','issues.col_category':'類別','issues.col_severity':'嚴重程度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_sample':'範例',
     'conf.confirmed':'已確認','conf.heuristic':'推測',
-    'cat.authFail':'認證失敗','cat.denyBlock':'連線遭拒/阻擋','cat.attack':'攻擊/惡意軟體relevant','cat.scanFlood':'掃描/洪水攻擊','cat.exceedThreshold':'超過門檻','cat.other':'其他','cat.freqLabel':'頻率異常：','cat.possibleScan':'疑似掃描行為','cat.knownIOC':'已知情資命中',
+    'cat.authFail':'認證失敗','cat.denyBlock':'連線遭拒/阻擋','cat.attack':'攻擊/惡意軟體relevant','cat.scanFlood':'掃描/洪水攻擊','cat.exceedThreshold':'超過門檻','cat.other':'其他','cat.freqLabel':'頻率異常：','cat.possibleScan':'疑似掃描行為','cat.knownIOC':'已知情資命中','note.bruteForce':'疑似猜密碼/暴力破解','note.scanOrMisconfig':'疑似掃描或誤設定','note.freqAnomaly':'頻率異常','note.possibleScan':'疑似 Port/主機掃描','note.knownIOC':'已知情資命中',
     'intel.title':'④ 威脅情資本機比對清單','intel.hint':'匯入公開或內部的 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON，如 Spamhaus DROP 匯出格式），僅在本機比對，工具不會主動連網查詢。命中會標記為「已確認」的高風險問題。','intel.add_btn':'上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自填）','intel.count_label':'筆','intel.remove_btn':'移除','intel.empty':'尚未匯入任何情資清單',
     'guide.title':'⑤ 如何取得外部情資','guide.body':'本工具僅做本機比對，不會主動連網抓取或回傳任何資料。\n常見公開情資來源（用途說明，正式下載網址請自行查詢官方頁面）：\n• Spamhaus DROP/EDROP — 已知惡意網段（CIDR）清單\n• Emerging Threats / Proofpoint compromised-ips — 已知遭入侵主機 IP 清單\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — 惡意軟體 C2 相關 IOC\n多數公開清單各自有使用條款（部分僅供非商業/個人使用），下載與使用前請自行確認條款；建議至少每月更新一次，過舊清單參考價值降低。',
     'deid.title':'⑥ 去識別化','deid.hint':'將事件中的 IP／主機名稱／使用者名稱替換為一致映射的假值（IP 採 RFC5737 文件用網段）。請先完成③④的問題分析與情資比對，去識別化後的假 IP 將無法再命中真實情資清單。','deid.run_btn':'執行去識別化','deid.download_btn':'下載去識別化結果',
@@ -773,11 +792,11 @@ const LANG = {
     'app.title':'Log Analyzer & De-identifier','app.subtitle':'Import switch/firewall logs (CEF / standard Syslog), rank by severity and surface likely issues; match against local threat-intel lists; de-identify sensitive fields. Runs entirely in your browser, no network calls.',
     'notice.disclaimer':'Analysis results are for reference only — use your own judgement before acting on them',
     'import.title':'① Import Log','import.hint':'Supports line-based CEF (Common Event Format) and standard Syslog (RFC3164/RFC5424). Paste text or upload a file.','import.paste_placeholder':'Paste log content here, or use the upload button below…','import.upload_btn':'Upload File','import.analyze_btn':'Parse & Analyze','import.clear_btn':'Clear','import.file_loaded':'Loaded file: ',
-    'results.title':'② Event List (sorted by severity)','results.empty':'No data yet — import and analyze a log first','results.col_severity':'Severity','results.col_time':'Time','results.col_host':'Host','results.col_format':'Format','results.col_category':'Category','results.col_msg':'Message','results.summary_label':'Summary: ',
+    'results.title':'② Event List (sorted by severity)','results.empty':'No data yet — import and analyze a log first','results.col_severity':'Severity','results.col_time':'Time','results.col_host':'Host','results.col_format':'Format','results.col_category':'Category','results.col_notes':'Suspected Issue','results.col_msg':'Message','results.summary_label':'Summary: ',
     'sev.critical':'Critical','sev.high':'High','sev.medium':'Medium','sev.low':'Low','sev.info':'Info',
     'issues.title':'③ Issue List (basic security analysis)','issues.empty':'No rule-based issues found','issues.col_category':'Category','issues.col_severity':'Severity','issues.col_count':'Count','issues.col_confidence':'Confidence','issues.col_sample':'Sample',
     'conf.confirmed':'Confirmed','conf.heuristic':'Heuristic',
-    'cat.authFail':'Auth Failure','cat.denyBlock':'Connection Denied/Blocked','cat.attack':'Attack/Malware','cat.scanFlood':'Scan/Flood','cat.exceedThreshold':'Threshold Exceeded','cat.other':'Other','cat.freqLabel':'Frequency anomaly: ','cat.possibleScan':'Possible Scan Activity','cat.knownIOC':'Known Threat-Intel Hit',
+    'cat.authFail':'Auth Failure','cat.denyBlock':'Connection Denied/Blocked','cat.attack':'Attack/Malware','cat.scanFlood':'Scan/Flood','cat.exceedThreshold':'Threshold Exceeded','cat.other':'Other','cat.freqLabel':'Frequency anomaly: ','cat.possibleScan':'Possible Scan Activity','cat.knownIOC':'Known Threat-Intel Hit','note.bruteForce':'Suspected Brute-Force/Password Guessing','note.scanOrMisconfig':'Suspected Scan or Misconfiguration','note.freqAnomaly':'Frequency Anomaly','note.possibleScan':'Suspected Port/Host Scan','note.knownIOC':'Known Threat-Intel Hit',
     'intel.title':'④ Local Threat-Intel Matching List','intel.hint':'Import public or internal IP/CIDR blocklists (plain text, CSV, or JSON/NDJSON — e.g. Spamhaus DROP export format). Matching happens locally only — no outbound network calls. Hits are flagged as "Confirmed" high-severity issues.','intel.add_btn':'Upload List','intel.name_placeholder':'List name','intel.date_placeholder':'Intel date (manual)','intel.count_label':'entries','intel.remove_btn':'Remove','intel.empty':'No intel list imported yet',
     'guide.title':'⑤ How to Get External Threat Intel','guide.body':'This tool only matches locally — it never fetches or sends data over the network.\nCommon public sources (purpose only — verify current official URLs yourself):\n• Spamhaus DROP/EDROP — known malicious netblocks (CIDR)\n• Emerging Threats / Proofpoint compromised-ips — known compromised host IPs\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — malware C2 related IOCs\nMost public lists carry their own usage terms (some are non-commercial/personal use only) — check before downloading. Recommended refresh: at least monthly, stale lists lose value.',
     'deid.title':'⑥ De-identification','deid.hint':'Replaces IP/hostname/username with consistently-mapped fake values (IPs use RFC5737 documentation ranges). Run this after steps ③④ — anonymized fake IPs can no longer match a real intel list.','deid.run_btn':'Run De-identification','deid.download_btn':'Download De-identified Result',
@@ -788,11 +807,11 @@ const LANG = {
     'app.title':'ログ分析・匿名化ツール','app.subtitle':'スイッチ/ファイアウォールのログ（CEF／標準 Syslog）を取り込み、重要度順に並べ替えて問題点を洗い出します。ローカルの脅威インテリジェンスリストと照合し、機密項目を匿名化できます。すべてブラウザ内で完結し、通信は行いません。',
     'notice.disclaimer':'本機能の分析結果は参考情報です。実際の対応はご自身の判断で慎重に行ってください',
     'import.title':'① ログ取り込み','import.hint':'行単位の CEF (Common Event Format) と標準 Syslog（RFC3164/RFC5424）に対応。テキスト貼り付けまたはファイルアップロード。','import.paste_placeholder':'ここにログを貼り付けるか、下のアップロードボタンを使用…','import.upload_btn':'ファイルをアップロード','import.analyze_btn':'解析・分析','import.clear_btn':'クリア','import.file_loaded':'読み込み済みファイル：',
-    'results.title':'② イベント一覧（重要度順）','results.empty':'データがありません。まずログを取り込んで分析してください','results.col_severity':'重要度','results.col_time':'時刻','results.col_host':'ホスト','results.col_format':'形式','results.col_category':'分類','results.col_msg':'内容','results.summary_label':'集計：',
+    'results.title':'② イベント一覧（重要度順）','results.empty':'データがありません。まずログを取り込んで分析してください','results.col_severity':'重要度','results.col_time':'時刻','results.col_host':'ホスト','results.col_format':'形式','results.col_category':'分類','results.col_notes':'疑わしい問題','results.col_msg':'内容','results.summary_label':'集計：',
     'sev.critical':'重大','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'情報',
     'issues.title':'③ 問題リスト（基本セキュリティ分析）','issues.empty':'該当する問題は見つかりませんでした','issues.col_category':'分類','issues.col_severity':'重要度','issues.col_count':'件数','issues.col_confidence':'信頼度','issues.col_sample':'サンプル',
     'conf.confirmed':'確認済み','conf.heuristic':'推定',
-    'cat.authFail':'認証失敗','cat.denyBlock':'接続拒否/ブロック','cat.attack':'攻撃/マルウェア','cat.scanFlood':'スキャン/フラッド','cat.exceedThreshold':'しきい値超過','cat.other':'その他','cat.freqLabel':'頻度異常：','cat.possibleScan':'スキャンの疑い','cat.knownIOC':'既知の脅威情報に一致',
+    'cat.authFail':'認証失敗','cat.denyBlock':'接続拒否/ブロック','cat.attack':'攻撃/マルウェア','cat.scanFlood':'スキャン/フラッド','cat.exceedThreshold':'しきい値超過','cat.other':'その他','cat.freqLabel':'頻度異常：','cat.possibleScan':'スキャンの疑い','cat.knownIOC':'既知の脅威情報に一致','note.bruteForce':'ブルートフォース/パスワード推測の疑い','note.scanOrMisconfig':'スキャンまたは設定ミスの疑い','note.freqAnomaly':'頻度異常','note.possibleScan':'ポート/ホストスキャンの疑い','note.knownIOC':'既知の脅威情報に一致',
     'intel.title':'④ ローカル脅威インテリジェンス照合リスト','intel.hint':'公開または社内の IP/CIDR ブロックリストを取り込みます（テキスト、CSV、または JSON／NDJSON——Spamhaus DROP 形式など）。照合はローカルのみで行い、外部通信は一切行いません。一致した場合は「確認済み」の高リスク問題として表示されます。','intel.add_btn':'リストをアップロード','intel.name_placeholder':'リスト名','intel.date_placeholder':'インテリジェンス日付（手動入力）','intel.count_label':'件','intel.remove_btn':'削除','intel.empty':'まだインテリジェンスリストが取り込まれていません',
     'guide.title':'⑤ 外部脅威インテリジェンスの入手方法','guide.body':'本ツールはローカル照合のみを行い、データを外部に取得・送信することはありません。\n代表的な公開情報源（用途のみ記載、正式なダウンロード URL は公式ページでご確認ください）：\n• Spamhaus DROP/EDROP — 既知の悪意あるネットブロック（CIDR）\n• Emerging Threats / Proofpoint compromised-ips — 既知の侵害済みホスト IP\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — マルウェア C2 関連 IOC\n多くの公開リストには独自の利用規約があります（非商用/個人利用限定の場合あり）。ダウンロード前にご確認ください。月 1 回以上の更新を推奨します。',
     'deid.title':'⑥ 匿名化','deid.hint':'IP／ホスト名／ユーザー名を一貫したマッピングの仮値に置き換えます（IP は RFC5737 の文書用アドレス帯を使用）。③④の分析・照合を先に行ってください。匿名化後の仮 IP は実際のインテリジェンスリストと一致しなくなります。','deid.run_btn':'匿名化を実行','deid.download_btn':'匿名化結果をダウンロード',
@@ -803,11 +822,11 @@ const LANG = {
     'app.title':'Log analyzer, De-identifier je','app.subtitle':'CEF/Syslog logmey yIlan, severity yIchov, issue yItu\'. Local intel list yIrar. Sensitive field yIde-identify. Browser neH Daq taH, network Qapbe\'.',
     'notice.disclaimer':'analysis result neH reference, cha\' vIt yISovmoH pagh yIruch',
     'import.title':'① Log yIlan','import.hint':'CEF, Syslog (RFC3164/RFC5424) chaw\'. Text yIlan pagh file yIlan.','import.paste_placeholder':'log Daq yIlan…','import.upload_btn':'File yIlan','import.analyze_btn':'yIchov','import.clear_btn':'yIchIm','import.file_loaded':'File lanpu\':',
-    'results.title':'② Event tetlh (severity chov)','results.empty':'Data available, first log yIlan','results.col_severity':'severity','results.col_time':'poH','results.col_host':'host','results.col_format':'format','results.col_category':'segh','results.col_msg':'mu\'meyvam','results.summary_label':'chov:',
+    'results.title':'② Event tetlh (severity chov)','results.empty':'Data available, first log yIlan','results.col_severity':'severity','results.col_time':'poH','results.col_host':'host','results.col_format':'format','results.col_category':'segh','results.col_notes':'pIH mIgh','results.col_msg':'mu\'meyvam','results.summary_label':'chov:',
     'sev.critical':'!QIH','sev.high':'chIm','sev.medium':'motlh','sev.low':'mach','sev.info':'De\'',
     'issues.title':'③ Issue tetlh (security chov)','issues.empty':'Issue tu\'lu\'be\'','issues.col_category':'segh','issues.col_severity':'severity','issues.col_count':'\'ar','issues.col_confidence':'HIvqa\'','issues.col_sample':'nughDoq',
     'conf.confirmed':'chovtaH','conf.heuristic':'poQlu\'',
-    'cat.authFail':'authentication luj','cat.denyBlock':'connection lujqa\'','cat.attack':'HIv/malware','cat.scanFlood':'scan/flood','cat.exceedThreshold':'threshold Sub','cat.other':'latlh','cat.freqLabel':'frequency mIgh:','cat.possibleScan':'scan pIH','cat.knownIOC':'intel Sovbogh',
+    'cat.authFail':'authentication luj','cat.denyBlock':'connection lujqa\'','cat.attack':'HIv/malware','cat.scanFlood':'scan/flood','cat.exceedThreshold':'threshold Sub','cat.other':'latlh','cat.freqLabel':'frequency mIgh:','cat.possibleScan':'scan pIH','cat.knownIOC':'intel Sovbogh','note.bruteForce':"password nagh mIgh",'note.scanOrMisconfig':"scan pagh chenmoHHa'",'note.freqAnomaly':'frequency mIgh','note.possibleScan':'scan pIH','note.knownIOC':'intel Sovbogh',
     'intel.title':'④ Local threat-intel tetlh','intel.hint':'IP/CIDR blocklist yIlan (text, CSV, JSON). local neH chov, network Qapbe\'. hIt \'ej chovtaH severity chIm.','intel.add_btn':'tetlh yIlan','intel.name_placeholder':'tetlh pong','intel.date_placeholder':'intel poH (lo\' ghaH)','intel.count_label':'\'ar','intel.remove_btn':'yIteq','intel.empty':'intel tetlh lanpu\'be\'',
     'guide.title':'⑤ Chay\' intel yIghoS','guide.body':'toy\'vam local neH chov, network Qapbe\'.\nSource motlh (lo\'taHghach neH, URL Datu\'meH official page yI\'ol):\n• Spamhaus DROP/EDROP — netblock mIgh Sovbogh\n• Emerging Threats/Proofpoint compromised-ips — host mIgh Sovbogh\n• abuse.ch Feodo Tracker/URLhaus/ThreatFox — malware C2 IOC\nlist law\' terms nga\'chuq (commercial Qap\'be\' latlh). jar Hoch tetlh chu\' yIchu\'.',
     'deid.title':'⑥ De-identification','deid.hint':'IP/host/user pong yIchoH (RFC5737 lo\'). ③④ vaj ruch, De-identify vaj fake IP intel tetlh hItqa\'be\'.','deid.run_btn':'De-identify yIchav','deid.download_btn':'De-identify baghlu\'pu\' yIchoH',
@@ -818,11 +837,11 @@ const LANG = {
     'app.title':'Log-Readin\' & Face-Hidin\' Tool, Arrr','app.subtitle':'Haul in yer switch/firewall logs (CEF or plain Syslog), rank \'em by how much trouble they be, and sniff out the scallywags. Match against yer own blacklist o\' known villains. Hide the crew\'s true names too. All done right here on yer own ship, no signal sent to shore.',
     'notice.disclaimer':'These findin\'s be just a chart, not the treasure itself — use yer own head afore ye act, matey',
     'import.title':'① Haul In the Log','import.hint':'Reads CEF and plain Syslog (RFC3164/RFC5424), line by line. Paste the scroll or hoist a file aboard.','import.paste_placeholder':'Paste yer log scroll here, or hoist a file below…','import.upload_btn':'Hoist File','import.analyze_btn':'Chart & Scan','import.clear_btn':'Swab the Deck','import.file_loaded':'File aboard: ',
-    'results.title':'② The Event Manifest (worst trouble first)','results.empty':'Nothin\' in the hold yet — haul in a log first','results.col_severity':'Trouble','results.col_time':'Bell','results.col_host':'Ship','results.col_format':'Rig','results.col_category':'Kind','results.col_msg':'Word','results.summary_label':'Tally: ',
+    'results.title':'② The Event Manifest (worst trouble first)','results.empty':'Nothin\' in the hold yet — haul in a log first','results.col_severity':'Trouble','results.col_time':'Bell','results.col_host':'Ship','results.col_format':'Rig','results.col_category':'Kind','results.col_notes':'Suspected Trouble','results.col_msg':'Word','results.summary_label':'Tally: ',
     'sev.critical':'Mutiny!','sev.high':'Rough Seas','sev.medium':'Choppy','sev.low':'Calm','sev.info':'Just Gossip',
     'issues.title':'③ Trouble Manifest (basic scoutin\')','issues.empty':'No trouble spotted on the horizon','issues.col_category':'Kind','issues.col_severity':'Trouble','issues.col_count':'Tally','issues.col_confidence':'How Sure','issues.col_sample':'Sample',
     'conf.confirmed':'Confirmed, arrr','conf.heuristic':'Just a Hunch',
-    'cat.authFail':'Wrong Password, Ye Scurvy Dog','cat.denyBlock':'Turned Away at the Gate','cat.attack':'Boardin\' Party / Foul Plague','cat.scanFlood':'Scoutin\' the Coast / Flood o\' Cannons','cat.exceedThreshold':'Overloaded the Hold','cat.other':'Other Business','cat.freqLabel':'Too Much Ruckus: ','cat.possibleScan':'Scoutin\' Suspected','cat.knownIOC':'Known Villain Spotted',
+    'cat.authFail':'Wrong Password, Ye Scurvy Dog','cat.denyBlock':'Turned Away at the Gate','cat.attack':'Boardin\' Party / Foul Plague','cat.scanFlood':'Scoutin\' the Coast / Flood o\' Cannons','cat.exceedThreshold':'Overloaded the Hold','cat.other':'Other Business','cat.freqLabel':'Too Much Ruckus: ','cat.possibleScan':'Scoutin\' Suspected','cat.knownIOC':'Known Villain Spotted','note.bruteForce':"Suspected Password Guessin', Arr",'note.scanOrMisconfig':"Suspected Scoutin' or Bad Chartin'",'note.freqAnomaly':'Too Much Ruckus','note.possibleScan':"Suspected Port/Ship Scoutin'",'note.knownIOC':'Known Villain Spotted',
     'intel.title':'④ Local Blacklist o\' Known Villains','intel.hint':'Hoist aboard a public or yer own IP/CIDR blacklist (plain text, CSV, or JSON charts like Spamhaus DROP). All matchin\' done right on this ship, no word sent to shore. A hit be marked "Confirmed" and dangerous.','intel.add_btn':'Hoist List','intel.name_placeholder':'List Name','intel.date_placeholder':'Chart Date (write it yerself)','intel.count_label':'entries','intel.remove_btn':'Toss Overboard','intel.empty':'No blacklist hoisted aboard yet',
     'guide.title':'⑤ Where to Find Word o\' Known Villains','guide.body':'This tool only matches on yer own ship — never sends nor fetches word from shore.\nCommon public charts (just the purpose, matey — find the true URL on the official dock yerself):\n• Spamhaus DROP/EDROP — known villain netblocks (CIDR)\n• Emerging Threats / Proofpoint compromised-ips — known boarded ships\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — plague-ship signals\nMost public charts have their own rules (some for personal use only) — check afore ye hoist \'em. Refresh the chart at least once a moon, or it goes stale.',
     'deid.title':'⑥ Hide the Crew\'s True Names','deid.hint':'Swaps IP/hostname/username fer consistent fake names (IPs use the RFC5737 map-room range). Do this after ③④ — once hidden, the fake IPs won\'t match the real blacklist no more.','deid.run_btn':'Hide Their Names','deid.download_btn':'Download the Disguised Log',
@@ -833,11 +852,11 @@ const LANG = {
     'app.title':'📜🔍 + 🕵️‍♂️➡️❓ 工具','app.subtitle':'📥 switch/firewall 📜（CEF/Syslog）➡️ 📊嚴重度排序 ➡️ ❗找問題。🔒本機比對已知🎯清單。🙈把敏感欄位變成❓。全程🖥️本機執行，🚫🌐不連網。',
     'notice.disclaimer':'⚠️ 分析結果僅供參考，實際處置請👤自行判斷',
     'import.title':'①📥 匯入 Log','import.hint':'支援 CEF 與標準 Syslog（RFC3164/5424）📄逐行格式，可✍️貼上或📎上傳。','import.paste_placeholder':'✍️在此貼上 log…','import.upload_btn':'📎上傳檔案','import.analyze_btn':'🔍解析分析','import.clear_btn':'🗑️清空','import.file_loaded':'✅已載入：',
-    'results.title':'②📋 事件清單（依🔥嚴重度）','results.empty':'📭尚無資料','results.col_severity':'🔥嚴重度','results.col_time':'⏰時間','results.col_host':'🖥️主機','results.col_format':'📄格式','results.col_category':'🏷️分類','results.col_msg':'💬內容','results.summary_label':'📊統計：',
+    'results.title':'②📋 事件清單（依🔥嚴重度）','results.empty':'📭尚無資料','results.col_severity':'🔥嚴重度','results.col_time':'⏰時間','results.col_host':'🖥️主機','results.col_format':'📄格式','results.col_category':'🏷️分類','results.col_notes':'❓疑似問題','results.col_msg':'💬內容','results.summary_label':'📊統計：',
     'sev.critical':'🔴嚴重','sev.high':'🟠高','sev.medium':'🟡中','sev.low':'🔵低','sev.info':'⚪資訊',
     'issues.title':'③❗ 問題清單','issues.empty':'✅未發現問題','issues.col_category':'🏷️類別','issues.col_severity':'🔥嚴重度','issues.col_count':'🔢次數','issues.col_confidence':'🎯可信度','issues.col_sample':'📌範例',
     'conf.confirmed':'✅已確認','conf.heuristic':'🤔推測',
-    'cat.authFail':'🔑❌認證失敗','cat.denyBlock':'🚫連線遭拒','cat.attack':'☠️攻擊/惡意軟體','cat.scanFlood':'🔦掃描/🌊洪水','cat.exceedThreshold':'📈超過門檻','cat.other':'📎其他','cat.freqLabel':'📈頻率異常：','cat.possibleScan':'🔦疑似掃描','cat.knownIOC':'🎯已知情資命中',
+    'cat.authFail':'🔑❌認證失敗','cat.denyBlock':'🚫連線遭拒','cat.attack':'☠️攻擊/惡意軟體','cat.scanFlood':'🔦掃描/🌊洪水','cat.exceedThreshold':'📈超過門檻','cat.other':'📎其他','cat.freqLabel':'📈頻率異常：','cat.possibleScan':'🔦疑似掃描','cat.knownIOC':'🎯已知情資命中','note.bruteForce':'🔑❓猜密碼','note.scanOrMisconfig':'🔦❓掃描/設定錯','note.freqAnomaly':'📈異常','note.possibleScan':'🔦❓Port掃描','note.knownIOC':'🎯命中',
     'intel.title':'④🎯 情資本機比對清單','intel.hint':'📥匯入 IP/CIDR 黑名單（文字/CSV/JSON），🔒僅本機比對，🚫不連網。命中✅標記高風險。','intel.add_btn':'📎上傳清單','intel.name_placeholder':'📛清單名稱','intel.date_placeholder':'📅情資日期','intel.count_label':'筆','intel.remove_btn':'🗑️移除','intel.empty':'📭尚無清單',
     'guide.title':'⑤❓ 如何取得外部情資','guide.body':'🔒本工具僅🖥️本機比對，🚫不連網抓取或回傳。\n常見公開來源（用途說明，📎正式網址請自行查證）：\n• Spamhaus DROP/EDROP — 🌐惡意網段\n• Emerging Threats/Proofpoint — 🖥️已知被入侵主機\n• abuse.ch Feodo/URLhaus/ThreatFox — 🦠惡意軟體 C2\n⚠️多數清單有📜使用條款，下載前請自行確認；建議📅每月更新一次。',
     'deid.title':'⑥🙈 去識別化','deid.hint':'將 IP/主機名/使用者名➡️一致假值（IP 用 RFC5737）。請先完成③④，去識別化後假 IP 🚫無法再命中真實清單。','deid.run_btn':'▶️執行去識別化','deid.download_btn':'⬇️下載結果',
@@ -848,11 +867,11 @@ const LANG = {
     'app.title':'日誌分析暨資料去識別化作業系統','app.subtitle':'依規定匯入交換器／防火牆日誌資料（CEF 或標準 Syslog 格式），依嚴重程度分級排序，並依既定規則辨識潛在事項，供權責單位參考。得於本機比對已核備之情資清單，並得對機敏欄位執行去識別化作業。前述作業全程於使用者端瀏覽器執行，不涉及對外傳輸行為。',
     'notice.disclaimer':'本項分析結果僅供參考之用，實際處置事宜請權責人員本於專業判斷審慎為之，本工具不負相關法律責任',
     'import.title':'第一項：日誌資料匯入作業','import.hint':'本作業支援 CEF (Common Event Format) 格式及標準 Syslog (RFC3164/RFC5424) 格式之逐行解析，得以文字貼上或檔案上傳方式辦理。','import.paste_placeholder':'請於此欄位貼上日誌內容，或依下方按鈕辦理檔案上傳作業…','import.upload_btn':'辦理檔案上傳','import.analyze_btn':'執行解析暨分析作業','import.clear_btn':'清空本欄位資料','import.file_loaded':'業已載入之檔案：',
-    'results.title':'第二項：事件清冊（依嚴重程度分級排序）','results.empty':'目前尚無資料，請依第一項規定辦理匯入及分析作業','results.col_severity':'嚴重程度等級','results.col_time':'發生時間','results.col_host':'主機識別資料','results.col_format':'資料格式','results.col_category':'事件分類','results.col_msg':'事件內容','results.summary_label':'統計摘要：',
+    'results.title':'第二項：事件清冊（依嚴重程度分級排序）','results.empty':'目前尚無資料，請依第一項規定辦理匯入及分析作業','results.col_severity':'嚴重程度等級','results.col_time':'發生時間','results.col_host':'主機識別資料','results.col_format':'資料格式','results.col_category':'事件分類','results.col_notes':'疑似問題事項','results.col_msg':'事件內容','results.summary_label':'統計摘要：',
     'sev.critical':'甲級（嚴重）','sev.high':'乙級（高）','sev.medium':'丙級（中）','sev.low':'丁級（低）','sev.info':'參考資訊',
     'issues.title':'第三項：問題清冊（基本資安分析作業）','issues.empty':'依現行規則，未查得相符之問題事項','issues.col_category':'問題類別','issues.col_severity':'嚴重程度等級','issues.col_count':'發生次數','issues.col_confidence':'可信程度','issues.col_sample':'代表性樣本',
     'conf.confirmed':'業經確認','conf.heuristic':'推定研判',
-    'cat.authFail':'認證程序失敗事項','cat.denyBlock':'連線遭拒絕或阻擋事項','cat.attack':'攻擊行為或惡意軟體事項','cat.scanFlood':'掃描或洪水攻擊事項','cat.exceedThreshold':'超過既定門檻事項','cat.other':'其他未分類事項','cat.freqLabel':'頻率異常事項：','cat.possibleScan':'疑似掃描行為（待進一步查證）','cat.knownIOC':'業經核對之已知情資命中事項',
+    'cat.authFail':'認證程序失敗事項','cat.denyBlock':'連線遭拒絕或阻擋事項','cat.attack':'攻擊行為或惡意軟體事項','cat.scanFlood':'掃描或洪水攻擊事項','cat.exceedThreshold':'超過既定門檻事項','cat.other':'其他未分類事項','cat.freqLabel':'頻率異常事項：','cat.possibleScan':'疑似掃描行為（待進一步查證）','cat.knownIOC':'業經核對之已知情資命中事項','note.bruteForce':'疑似密碼猜測攻擊事項','note.scanOrMisconfig':'疑似掃描行為或組態設定錯誤事項','note.freqAnomaly':'頻率異常事項','note.possibleScan':'疑似埠口/主機掃描事項','note.knownIOC':'業經核對之已知情資命中事項',
     'intel.title':'第四項：威脅情資本機比對清冊管理作業','intel.hint':'得匯入公開或機關內部所編製之 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON 格式，如 Spamhaus DROP 匯出檔），前述比對作業僅於本機辦理，本工具不主動對外發送任何連線請求。命中案件依規定標註為「業經確認」之高風險事項。','intel.add_btn':'辦理清冊上傳','intel.name_placeholder':'清冊名稱','intel.date_placeholder':'情資日期（請自行填註）','intel.count_label':'筆','intel.remove_btn':'移除本清冊','intel.empty':'目前尚未匯入任何情資清冊',
     'guide.title':'第五項：外部威脅情資取得方式說明','guide.body':'本工具僅辦理本機比對作業，不主動對外擷取或回傳任何資料，合先敘明。\n常見公開情資來源（僅供用途參考，正式下載網址請逕行查詢各該官方網頁）：\n• Spamhaus DROP/EDROP — 已知惡意網段（CIDR）清冊\n• Emerging Threats／Proofpoint compromised-ips — 已知遭入侵主機 IP 清冊\n• abuse.ch Feodo Tracker／URLhaus／ThreatFox — 惡意軟體 C2 相關情資\n上開公開清冊多訂有各自之使用條款（部分僅限非商業或個人使用），下載及使用前請自行確認相關條款；建議至少每月辦理一次更新，逾期未更新之清冊參考價值遞減。',
     'deid.title':'第六項：資料去識別化作業','deid.hint':'將事件中之 IP、主機名稱、使用者名稱等資料，替換為具一致性對應關係之虛擬值（IP 部分採用 RFC5737 文件用網段）。請依序完成第三、四項分析及比對作業後，再辦理本項作業；本項作業完成後所產出之虛擬 IP，將無法再與真實情資清冊相符。','deid.run_btn':'執行去識別化作業','deid.download_btn':'下載去識別化作業結果',
@@ -863,11 +882,11 @@ const LANG = {
     'app.title':'Log 分析去識別化工具喵','app.subtitle':'把交換器/防火牆的 log 叼進來喵，CEF 跟 Syslog 都吃，依嚴重度排排站，找出可疑的老鼠喵。可以在自己地盤比對情資清單，也能把機敏欄位藏起來喵。全程窩在瀏覽器裡不出門喵。',
     'notice.disclaimer':'分析結果只是聞一聞喵，真的要怎麼辦還是主人自己決定喵',
     'import.title':'①叼log進來喵','import.hint':'CEF 跟標準 Syslog（RFC3164/5424）都吃喵，貼上文字或叼檔案進來都可以喵。','import.paste_placeholder':'log 貼在這裡喵…','import.upload_btn':'叼檔案進來喵','import.analyze_btn':'聞一聞分析喵','import.clear_btn':'抓沙清空喵','import.file_loaded':'已經叼進來的檔案喵：',
-    'results.title':'②事件清單（照嚴重度排排站喵）','results.empty':'還沒東西可以聞喵，先匯入 log 喵','results.col_severity':'嚴重度喵','results.col_time':'時間喵','results.col_host':'主機喵','results.col_format':'格式喵','results.col_category':'分類喵','results.col_msg':'內容喵','results.summary_label':'統計喵：',
+    'results.title':'②事件清單（照嚴重度排排站喵）','results.empty':'還沒東西可以聞喵，先匯入 log 喵','results.col_severity':'嚴重度喵','results.col_time':'時間喵','results.col_host':'主機喵','results.col_format':'格式喵','results.col_category':'分類喵','results.col_notes':'疑似問題喵','results.col_msg':'內容喵','results.summary_label':'統計喵：',
     'sev.critical':'超嚴重喵!!','sev.high':'很在意喵','sev.medium':'普通喵','sev.low':'不太在意喵','sev.info':'路過看看喵',
     'issues.title':'③問題清單（聞出來的可疑喵）','issues.empty':'沒聞到什麼可疑的喵','issues.col_category':'類別喵','issues.col_severity':'嚴重度喵','issues.col_count':'次數喵','issues.col_confidence':'有多確定喵','issues.col_sample':'範例喵',
     'conf.confirmed':'確定喵！','conf.heuristic':'感覺啦喵',
-    'cat.authFail':'密碼打錯了喵','cat.denyBlock':'被擋在門外喵','cat.attack':'有壞東西喵','cat.scanFlood':'鬼鬼祟祟在探路喵','cat.exceedThreshold':'超過忍耐極限喵','cat.other':'其他喵喵喵','cat.freqLabel':'太吵了喵：','cat.possibleScan':'感覺有人在探頭探腦喵','cat.knownIOC':'抓到熟面孔壞蛋喵',
+    'cat.authFail':'密碼打錯了喵','cat.denyBlock':'被擋在門外喵','cat.attack':'有壞東西喵','cat.scanFlood':'鬼鬼祟祟在探路喵','cat.exceedThreshold':'超過忍耐極限喵','cat.other':'其他喵喵喵','cat.freqLabel':'太吵了喵：','cat.possibleScan':'感覺有人在探頭探腦喵','cat.knownIOC':'抓到熟面孔壞蛋喵','note.bruteForce':'感覺在猜密碼喵','note.scanOrMisconfig':'感覺在探路喵','note.freqAnomaly':'太吵了喵','note.possibleScan':'感覺在掃描喵','note.knownIOC':'抓到熟面孔壞蛋喵',
     'intel.title':'④情資清單（自己地盤比對喵）','intel.hint':'把公開或自家的 IP/CIDR 黑名單叼進來喵（文字、CSV 或 JSON 都吃），只在自己地盤比對，不會偷跑出去連網喵。抓到就標「確定」高風險喵。','intel.add_btn':'叼清單進來喵','intel.name_placeholder':'清單叫什麼名字喵','intel.date_placeholder':'情資日期（自己填喵）','intel.count_label':'隻','intel.remove_btn':'丟掉喵','intel.empty':'還沒有情資清單喵',
     'guide.title':'⑤去哪裡找情資喵','guide.body':'這隻工具只在自己地盤比對喵，不會偷跑出去抓資料或送資料喵。\n常見公開來源（只說用途喵，正式網址請自己找官方頁面喵）：\n• Spamhaus DROP/EDROP — 壞網段名單喵\n• Emerging Threats/Proofpoint — 已經淪陷的主機喵\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞軟體的窩喵\n大部分清單都有自己的規矩喵（有些只能自己用不能拿去賣錢喵），下載前自己看清楚喵；建議每個月至少換一次新的喵，太舊就不準了喵。',
     'deid.title':'⑥藏起來喵','deid.hint':'把 IP／主機名稱／使用者名稱換成固定的假名字喵（IP 用 RFC5737 那個假地址喵）。要先做完③④再做這個喵，藏起來以後假 IP 就聞不出跟真的情資清單一樣了喵。','deid.run_btn':'開始藏喵','deid.download_btn':'把藏好的叼回家喵',
@@ -878,11 +897,11 @@ const LANG = {
     'app.title':'🫘 Log 分析去識別化工具','app.subtitle':'把 switch/firewall 的 🫘log（CEF/Syslog）倒進來，依🌶️辣度排序找出問題🥕。可在本機比對🍅情資清單，把機敏欄位變成🥔。全程在自家🥬廚房完成，不出門連網。',
     'notice.disclaimer':'分析結果只是一盤🥗參考菜，真正怎麼處理請自己掂量',
     'import.title':'①倒入🫘Log','import.hint':'CEF 與標準 Syslog（RFC3164/5424）都能煮，貼上文字或上傳🥔檔案皆可。','import.paste_placeholder':'把 log 倒在這裡…','import.upload_btn':'🥔上傳檔案','import.analyze_btn':'🔥開火分析','import.clear_btn':'🧹清鍋','import.file_loaded':'已下鍋的檔案：',
-    'results.title':'②事件清單（依🌶️辣度排序）','results.empty':'鍋子還是空的，先倒入 log 吧','results.col_severity':'🌶️辣度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_msg':'內容','results.summary_label':'總計：',
+    'results.title':'②事件清單（依🌶️辣度排序）','results.empty':'鍋子還是空的，先倒入 log 吧','results.col_severity':'🌶️辣度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題🌶️','results.col_msg':'內容','results.summary_label':'總計：',
     'sev.critical':'🌶️🌶️🌶️超辣','sev.high':'🌶️🌶️辣','sev.medium':'🌶️微辣','sev.low':'🥒清淡','sev.info':'🥬爽口',
     'issues.title':'③問題清單（基本廚房安全檢查）','issues.empty':'廚房目前一切正常','issues.col_category':'類別','issues.col_severity':'🌶️辣度','issues.col_count':'份數','issues.col_confidence':'火候','issues.col_sample':'試吃樣本',
     'conf.confirmed':'✅確定好了','conf.heuristic':'🤔大概是這樣',
-    'cat.authFail':'🔑鑰匙打不開','cat.denyBlock':'🚪被拒於門外','cat.attack':'🦠壞菌入侵','cat.scanFlood':'👀被偷看/🌊太多人湧入','cat.exceedThreshold':'份量超標','cat.other':'其他配菜','cat.freqLabel':'太常出現了：','cat.possibleScan':'疑似有人在探頭探腦','cat.knownIOC':'認出熟面孔壞蛋🍅',
+    'cat.authFail':'🔑鑰匙打不開','cat.denyBlock':'🚪被拒於門外','cat.attack':'🦠壞菌入侵','cat.scanFlood':'👀被偷看/🌊太多人湧入','cat.exceedThreshold':'份量超標','cat.other':'其他配菜','cat.freqLabel':'太常出現了：','cat.possibleScan':'疑似有人在探頭探腦','cat.knownIOC':'認出熟面孔壞蛋🍅','note.bruteForce':'感覺在猜密碼🥕','note.scanOrMisconfig':'感覺在探路🌶️','note.freqAnomaly':'太常出現了','note.possibleScan':'感覺在掃描🔦','note.knownIOC':'認出熟面孔壞蛋🍅',
     'intel.title':'④🍅情資清單（自家比對）','intel.hint':'把公開或自製的 IP/CIDR 黑名單倒進來（文字、CSV 或 JSON 這道菜都收），只在自家廚房比對，不會偷跑出去買菜連網。對到就標記高風險。','intel.add_btn':'🥔上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自己填）','intel.count_label':'份','intel.remove_btn':'🗑️丟掉','intel.empty':'廚房還沒有情資清單',
     'guide.title':'⑤去哪裡採買情資','guide.body':'本工具只在自家廚房比對，不會偷跑出去買菜或送菜出門。\n常見的市場攤位（僅說明用途，正式網址請自行到官方頁面查詢）：\n• Spamhaus DROP/EDROP — 已知的壞菜園（CIDR）\n• Emerging Threats/Proofpoint — 已被蟲蛀的主機清單\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞菌 C2 相關情資\n大部分攤位都有自己的規矩（有些只能自己吃不能拿去賣），採買前請看清楚；建議至少每個月補一次貨，太舊的菜就不新鮮了。',
     'deid.title':'⑥去識別化（去皮去籽）','deid.hint':'把 IP／主機名稱／使用者名稱換成固定的代號（IP 用 RFC5737 那盤示範菜）。請先完成③④再做這步，去皮後的假 IP 就配不上真正的情資清單了。','deid.run_btn':'開始去皮','deid.download_btn':'打包帶走',
@@ -893,11 +912,11 @@ const LANG = {
     'app.title':'Log分析咩去識別化-aca工具','app.subtitle':'把switch/firewall咩log（CEF/Syslog）牽進來-aca，依嚴重度排隊咩，找出怪怪的問題-aca。可以在自家草原比對情資名單咩，也能把機敏欄位藏起來-aca。全程在瀏覽器裡吃草，不出門連網咩。',
     'notice.disclaimer':'分析結果只是聞一聞咩，真的怎麼辦要主人自己想-aca',
     'import.title':'①牽log咩進來-aca','import.hint':'CEF跟標準Syslog（RFC3164/5424）咩都吃-aca，貼文字或牽檔案進來都可以咩。','import.paste_placeholder':'log貼在這裡咩…','import.upload_btn':'牽檔案進來-aca','import.analyze_btn':'咩一下分析-aca','import.clear_btn':'清空草原咩','import.file_loaded':'已經牽進來咩檔案-aca：',
-    'results.title':'②事件清單（排隊咩排隊-aca）','results.empty':'草原還空空咩，先牽log進來-aca','results.col_severity':'嚴重度咩','results.col_time':'時間-aca','results.col_host':'主機咩','results.col_format':'格式-aca','results.col_category':'分類咩','results.col_msg':'內容-aca','results.summary_label':'統計咩：',
+    'results.title':'②事件清單（排隊咩排隊-aca）','results.empty':'草原還空空咩，先牽log進來-aca','results.col_severity':'嚴重度咩','results.col_time':'時間-aca','results.col_host':'主機咩','results.col_format':'格式-aca','results.col_category':'分類咩','results.col_notes':'疑似問題-aca','results.col_msg':'內容-aca','results.summary_label':'統計咩：',
     'sev.critical':'超嚴重咩!!!','sev.high':'很緊張-aca','sev.medium':'普通咩','sev.low':'放輕鬆-aca','sev.info':'路過看看咩',
     'issues.title':'③問題清單（咩出來的怪怪咩）','issues.empty':'沒咩到什麼怪怪的-aca','issues.col_category':'類別咩','issues.col_severity':'嚴重度-aca','issues.col_count':'次數咩','issues.col_confidence':'有多確定-aca','issues.col_sample':'範例咩',
     'conf.confirmed':'確定咩！','conf.heuristic':'感覺啦-aca',
-    'cat.authFail':'密碼咩打錯了-aca','cat.denyBlock':'被擋在柵欄外咩','cat.attack':'有壞東西咩-aca','cat.scanFlood':'鬼鬼祟祟探路咩','cat.exceedThreshold':'超過忍耐極限-aca','cat.other':'其他咩咩咩','cat.freqLabel':'太吵咩：','cat.possibleScan':'感覺有人探頭探腦咩','cat.knownIOC':'認出熟面孔壞蛋咩',
+    'cat.authFail':'密碼咩打錯了-aca','cat.denyBlock':'被擋在柵欄外咩','cat.attack':'有壞東西咩-aca','cat.scanFlood':'鬼鬼祟祟探路咩','cat.exceedThreshold':'超過忍耐極限-aca','cat.other':'其他咩咩咩','cat.freqLabel':'太吵咩：','cat.possibleScan':'感覺有人探頭探腦咩','cat.knownIOC':'認出熟面孔壞蛋咩','note.bruteForce':'感覺在猜密碼咩','note.scanOrMisconfig':'感覺在探路-aca','note.freqAnomaly':'太吵咩','note.possibleScan':'感覺在掃描咩','note.knownIOC':'認出熟面孔壞蛋咩',
     'intel.title':'④情資清單（自家草原比對-aca）','intel.hint':'把公開或自家咩IP/CIDR黑名單牽進來-aca（文字、CSV或JSON咩都吃），只在自家草原比對，不會偷跑出去連網咩。牽到就標「確定」高風險-aca。','intel.add_btn':'牽清單進來咩','intel.name_placeholder':'清單叫什麼名字-aca','intel.date_placeholder':'情資日期（自己填咩）','intel.count_label':'隻','intel.remove_btn':'放走咩','intel.empty':'草原還沒有情資清單-aca',
     'guide.title':'⑤去哪裡找情資咩','guide.body':'這隻alpaca只在自家草原比對咩，不會偷跑出去抓資料或送資料-aca。\n常見公開來源（只說用途咩，正式網址請自己找官方頁面-aca）：\n• Spamhaus DROP/EDROP — 壞牧場名單咩\n• Emerging Threats/Proofpoint — 已經淪陷咩主機-aca\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞菌的窩咩\n大部分清單都有自己的規矩-aca（有些只能自己用不能拿去賣咩），下載前自己看清楚-aca；建議每個月至少換一次新的咩，太舊就不準了-aca。',
     'deid.title':'⑥藏起來-aca','deid.hint':'把IP／主機名稱／使用者名稱換成固定咩假名字-aca（IP用RFC5737那個假地址咩）。要先做完③④再做這個-aca，藏起來以後假IP就配不上真正咩情資清單了-aca。','deid.run_btn':'開始藏咩','deid.download_btn':'把藏好咩牽回家-aca',
@@ -908,11 +927,11 @@ const LANG = {
     'app.title':'Log 分析去識別化工具（唉，又一個工具）','app.subtitle':'把 switch/firewall 的 log 倒進來，CEF 跟 Syslog 都收，依嚴重度排一排，找出問題……看了也不一定會處理啦。可以在本機比對情資清單，把機敏欄位藏起來，反正做不做都差不多，至少不連網。',
     'notice.disclaimer':'分析結果就參考參考吧，反正最後還是要自己判斷，工具也救不了什麼',
     'import.title':'①匯入 Log（好，開始了）','import.hint':'CEF 跟標準 Syslog（RFC3164/5424）都吃，貼上文字或上傳檔案，隨便啦。','import.paste_placeholder':'log 貼這裡吧……','import.upload_btn':'上傳檔案','import.analyze_btn':'解析分析（好啦）','import.clear_btn':'清空（算了）','import.file_loaded':'已載入檔案，然後呢：',
-    'results.title':'②事件清單（依嚴重度排序，反正都要看）','results.empty':'沒資料，匯入再說吧','results.col_severity':'嚴重度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_msg':'內容','results.summary_label':'統計，看看就好：',
+    'results.title':'②事件清單（依嚴重度排序，反正都要看）','results.empty':'沒資料，匯入再說吧','results.col_severity':'嚴重度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題（隨便看看）','results.col_msg':'內容','results.summary_label':'統計，看看就好：',
     'sev.critical':'嚴重（唉）','sev.high':'高（麻煩）','sev.medium':'中（還好）','sev.low':'低（無所謂）','sev.info':'資訊（隨便）',
     'issues.title':'③問題清單（找到了，然後呢）','issues.empty':'沒發現問題，也許只是還沒發現','issues.col_category':'類別','issues.col_severity':'嚴重度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_sample':'範例，隨便看看',
     'conf.confirmed':'確認過了（然後呢）','conf.heuristic':'推測，別太當真',
-    'cat.authFail':'認證失敗，又來了','cat.denyBlock':'連線被擋，習慣了','cat.attack':'攻擊/惡意軟體，日常','cat.scanFlood':'掃描/洪水，見怪不怪','cat.exceedThreshold':'超過門檻，隨便啦','cat.other':'其他（懶得分類）','cat.freqLabel':'頻率異常，反正常有：','cat.possibleScan':'疑似掃描（大概吧）','cat.knownIOC':'已知情資命中（唉，果然）',
+    'cat.authFail':'認證失敗，又來了','cat.denyBlock':'連線被擋，習慣了','cat.attack':'攻擊/惡意軟體，日常','cat.scanFlood':'掃描/洪水，見怪不怪','cat.exceedThreshold':'超過門檻，隨便啦','cat.other':'其他（懶得分類）','cat.freqLabel':'頻率異常，反正常有：','cat.possibleScan':'疑似掃描（大概吧）','cat.knownIOC':'已知情資命中（唉，果然）','note.bruteForce':'疑似猜密碼（又來了）','note.scanOrMisconfig':'疑似掃描或誤設定，反正沒差','note.freqAnomaly':'頻率異常，習慣了','note.possibleScan':'疑似 Port 掃描（大概吧）','note.knownIOC':'已知情資命中，唉',
     'intel.title':'④威脅情資本機比對清單（做心安的）','intel.hint':'匯入 IP/CIDR 黑名單（文字、CSV、JSON 都收，反正格式都差不多），本機比對，不連網，至少這點還算誠實。命中標記高風險，但看了也不一定會動作。','intel.add_btn':'上傳清單（好）','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（記得填，不然更沒意義）','intel.count_label':'筆','intel.remove_btn':'移除（反正也沒差）','intel.empty':'還沒清單，之後再說吧',
     'guide.title':'⑤如何取得外部情資（算是個方向）','guide.body':'本工具只做本機比對，不連網，這點沒騙你。\n常見公開來源（用途說明而已，網址自己去查，反正會變）：\n• Spamhaus DROP/EDROP — 惡意網段名單\n• Emerging Threats/Proofpoint — 已知被入侵主機\n• abuse.ch Feodo/URLhaus/ThreatFox — 惡意軟體 C2\n大部分清單都有使用條款，看一下吧；建議每月更新，反正舊了也沒人會發現。',
     'deid.title':'⑥去識別化（藏起來也不會比較好過）','deid.hint':'把 IP/主機名稱/使用者名稱換成假值（RFC5737），先做完③④再做這步，做完假 IP 就配不上真情資了，就這樣。','deid.run_btn':'執行吧','deid.download_btn':'下載結果（然後呢）',
@@ -953,6 +972,14 @@ function esc(s) {
 function fmtTime(d) { return d ? new Date(d).toLocaleString() : '-'; }
 
 const CAT_KEY_MAP = { authFail:'cat.authFail', denyBlock:'cat.denyBlock', attack:'cat.attack', scanFlood:'cat.scanFlood', exceedThreshold:'cat.exceedThreshold', other:'cat.other', possibleScan:'cat.possibleScan', knownIOC:'cat.knownIOC' };
+// 事件清單「疑似問題」欄位用的簡短判定標籤，與問題清單既有的 cat.* 分類標籤分開維護，
+// 用詞更直接（如「疑似猜密碼」而非「頻率異常：認證失敗」），方便逐筆事件快速辨識
+const NOTE_KEY_MAP = { 'freq:authFail':'note.bruteForce', 'freq:denyBlock':'note.scanOrMisconfig', possibleScan:'note.possibleScan', knownIOC:'note.knownIOC' };
+function noteKeyForCategory(cat) {
+  if (NOTE_KEY_MAP[cat]) return NOTE_KEY_MAP[cat];
+  if (cat.startsWith('freq:')) return 'note.freqAnomaly';
+  return null;
+}
 const SEV_KEY_MAP = { Critical:'sev.critical', High:'sev.high', Medium:'sev.medium', Low:'sev.low', Info:'sev.info' };
 
 function renderLangBar() {
@@ -1052,15 +1079,21 @@ function renderStatic() {
 function renderResults() {
   const thead = document.querySelector('#results-table thead');
   const tbody = document.querySelector('#results-table tbody');
-  thead.innerHTML = `<tr><th>${tr('results.col_severity')}</th><th>${tr('results.col_time')}</th><th>${tr('results.col_host')}</th><th>${tr('results.col_format')}</th><th>${tr('results.col_category')}</th><th>${tr('results.col_msg')}</th></tr>`;
+  thead.innerHTML = `<tr><th>${tr('results.col_severity')}</th><th>${tr('results.col_time')}</th><th>${tr('results.col_host')}</th><th>${tr('results.col_format')}</th><th>${tr('results.col_category')}</th><th>${tr('results.col_notes')}</th><th>${tr('results.col_msg')}</th></tr>`;
   const sorted = sortEventsBySeverity(EVENTS);
   if (!sorted.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">${tr('results.empty')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">${tr('results.empty')}</td></tr>`;
   } else {
-    tbody.innerHTML = sorted.map(e => `<tr>
+    tbody.innerHTML = sorted.map(e => {
+      const notes = (e.notes || []).map(noteKeyForCategory).filter(Boolean);
+      const notesHtml = notes.length
+        ? notes.map(k => `<span class="note-badge">${esc(tr(k))}</span>`).join(' ')
+        : '';
+      return `<tr>
       <td><span class="badge ${e.severityNorm}">${tr(SEV_KEY_MAP[e.severityNorm])}</span></td>
       <td>${esc(fmtTime(e.timestamp))}</td><td>${esc(e.host)}</td><td>${esc(e.format)}</td>
-      <td>${esc(tr(CAT_KEY_MAP[e.category] || 'cat.other'))}</td><td>${esc(e.msg)}</td></tr>`).join('');
+      <td>${esc(tr(CAT_KEY_MAP[e.category] || 'cat.other'))}</td><td>${notesHtml}</td><td>${esc(e.msg)}</td></tr>`;
+    }).join('');
   }
   const sum = summarizeBySeverity(EVENTS);
   const box = document.getElementById('results-summary');
