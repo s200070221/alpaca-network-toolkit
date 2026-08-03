@@ -9290,13 +9290,15 @@ const FORCE_VENDOR_LIST=[
   ['netgear','Netgear M4300'],['edgeswitch','Ubiquiti EdgeSwitch'],
 ];
 (function(){
-  // typeof document.createElement 防護：本區塊是頂層立即執行敘述，會被
-  // switch_config_generator/test_config/gen_test.mjs 的 vrrpSandboxFn（切到
-  // "renderVRRP" 標記為止，涵蓋範圍含本區塊）用只有 getElementById/querySelectorAll
-  // 的最小 DOM mock 一併載入執行；該 mock 沒有 createElement，若不加防護會讓與本功能
-  // 完全無關的 VRRP round-trip 測試直接拋錯中斷
+  // 防護：本區塊是頂層立即執行敘述，會被不同測試腳本的最小 DOM mock 一併載入執行，
+  // 兩種 mock 缺的東西不一樣，需各自防護：
+  // (1) switch_config_generator/test_config/gen_test.mjs 的 vrrpSandboxFn（切到
+  //     "renderVRRP" 標記為止，涵蓋範圍含本區塊）mock 完全沒有 document.createElement；
+  // (2) switch_analyzer/test_config/test_export.mjs 的 mock 有 document.createElement
+  //     （匯出功能需要它產生下載用的 <a> 元素），但 getElementById() 回傳的物件沒有
+  //     appendChild，若不加防護會讓與本功能完全無關的測試直接拋錯中斷
   const sel=document.getElementById('force-vendor-select');
-  if(!sel||typeof document.createElement!=='function')return;
+  if(!sel||typeof document.createElement!=='function'||typeof sel.appendChild!=='function')return;
   FORCE_VENDOR_LIST.forEach(([v,label])=>{
     const opt=document.createElement('option');
     opt.value=v;opt.textContent=label;
