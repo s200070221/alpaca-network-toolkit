@@ -27,12 +27,34 @@ body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans TC',syste
 #topbar{display:flex;align-items:center;gap:12px;padding:14px 20px;background:var(--surface);border-bottom:1px solid var(--border);flex-wrap:wrap}
 #topbar h1{font-size:16px;font-weight:700;flex:1}
 #topbar .sub{font-size:11px;color:var(--text-dim);width:100%;order:99}
-.lang-bar{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
-.lang-btn{padding:3px 9px;border-radius:6px;border:1px solid var(--border2);background:transparent;color:var(--text-dim);font-size:11px;cursor:pointer}
-.lang-btn.active{background:var(--accent);border-color:var(--accent);color:#04121c;font-weight:600}
+.lang-bar{display:flex;gap:3px;align-items:center;flex-wrap:wrap}
+.lang-btn{padding:3px 7px;border-radius:4px;border:1px solid var(--border2);background:transparent;color:var(--text-dim);font-size:10px;font-family:inherit;cursor:pointer;transition:all .15s}
+.lang-btn.active{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
 .lang-btn.hidden{display:none}
-.lang-egg{width:8px;height:8px;border-radius:50%;background:var(--border2);cursor:pointer;opacity:.5}
-.lang-egg:hover{opacity:1}
+#lang-tlh{border-color:#c0392b;color:#e74c3c}
+#lang-tlh:hover,#lang-tlh.active{border-color:#e74c3c;color:#ff6b6b;box-shadow:0 0 8px rgba(231,76,60,.4)}
+#lang-pirate{border-color:#b45309;color:#f59e0b}
+#lang-pirate:hover,#lang-pirate.active{border-color:#f59e0b;color:#fcd34d;box-shadow:0 0 8px rgba(245,158,11,.4)}
+#lang-leet{border-color:#047857;color:#10b981}
+#lang-leet:hover,#lang-leet.active{border-color:#10b981;color:#6ee7b7;box-shadow:0 0 8px rgba(16,185,129,.4)}
+#lang-emoji{border-color:#7c3aed;color:#a78bfa}
+#lang-emoji:hover,#lang-emoji.active{border-color:#a78bfa;color:#c4b5fd;box-shadow:0 0 8px rgba(167,139,250,.4)}
+#lang-uwu{border-color:#be185d;color:#f472b6}
+#lang-uwu:hover,#lang-uwu.active{border-color:#f472b6;color:#fbcfe8;box-shadow:0 0 8px rgba(244,114,182,.4)}
+#lang-bureau{border-color:#475569;color:#94a3b8}
+#lang-bureau:hover,#lang-bureau.active{border-color:#94a3b8;color:#cbd5e1;box-shadow:0 0 8px rgba(148,163,184,.4)}
+#lang-cat{border-color:#c2410c;color:#fb923c}
+#lang-cat:hover,#lang-cat.active{border-color:#fb923c;color:#fdba74;box-shadow:0 0 8px rgba(251,146,60,.4)}
+#lang-bean{border-color:#b45309;color:#4ade80}
+#lang-bean:hover,#lang-bean.active{border-color:#fbbf24;color:#bbf7d0;box-shadow:0 0 8px rgba(74,222,128,.4)}
+#lang-alpaca{border-color:#92400e;color:#fcd34d}
+#lang-alpaca:hover,#lang-alpaca.active{border-color:#fcd34d;color:#fef3c7;box-shadow:0 0 8px rgba(252,211,77,.4)}
+#lang-yanse{border-color:#64748b;color:#94a3b8}
+#lang-yanse:hover,#lang-yanse.active{border-color:#94a3b8;color:#cbd5e1;box-shadow:0 0 8px rgba(148,163,184,.3)}
+.lang-egg{opacity:.25;cursor:pointer;font-size:14px;padding:2px 3px;user-select:none;transition:opacity .2s}
+.lang-egg:hover{opacity:.7}
+.egg-toast{position:fixed;top:-60px;left:50%;transform:translateX(-50%);z-index:99999;background:var(--surface2);border:1px solid var(--accent);border-radius:10px;padding:12px 22px;font-size:14px;font-weight:600;color:var(--text);box-shadow:0 4px 24px rgba(0,200,240,.3);pointer-events:none;white-space:nowrap;transition:top .4s cubic-bezier(.34,1.56,.64,1),opacity .4s}
+.egg-toast.show{top:70px}
 #disclaimer{background:rgba(245,158,11,.12);border-bottom:1px solid var(--border);color:var(--yellow);font-size:11px;padding:6px 20px}
 #content{max-width:1100px;margin:0 auto;padding:20px;display:flex;flex-direction:column;gap:16px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px}
@@ -64,21 +86,23 @@ th{color:var(--text-muted);font-weight:600;text-transform:uppercase;font-size:9p
 .intel-row .n{flex:1}
 input.txt{background:var(--surface2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-size:11px;padding:5px 8px;font-family:inherit}
 .guide-body{font-size:11px;color:var(--text-dim);line-height:1.8;white-space:pre-line}
-.mini-alpaca{position:fixed;right:6px;bottom:6px;font-size:14px;opacity:.35;cursor:pointer;user-select:none}
-.mini-alpaca:hover{opacity:.9}
+.mini-alpaca{position:fixed;bottom:20px;right:20px;z-index:9999;font-size:32px;cursor:pointer;user-select:none;transition:transform .3s ease,filter .3s ease;filter:drop-shadow(0 2px 8px rgba(0,0,0,.5))}
+.mini-alpaca:hover{transform:scale(1.2) rotate(10deg);filter:drop-shadow(0 4px 12px var(--accent)) drop-shadow(0 0 4px var(--accent))}
 </style>
 </head>
 <body data-theme="dark">
 <header id="topbar">
   <h1 id="app-title">Log 分析與去識別化工具</h1>
   <div class="lang-bar" id="lang-bar"></div>
-  <span class="lang-egg" onclick="_eggClick(0)" title="?"></span>
-  <span class="lang-egg" onclick="_eggClick(1)" title="?"></span>
-  <span class="lang-egg" onclick="_eggClick(2)" title="?"></span>
-  <span class="lang-egg" onclick="_eggClick(3)" title="?"></span>
-  <span class="lang-egg" onclick="_eggClick(4)" title="?"></span>
-  <span class="lang-egg" onclick="_eggClick(5)" title="?"></span>
-  <span class="lang-egg" onclick="_eggClick(6)" title="?"></span>
+  <span class="lang-egg" id="egg-pirate">⚓</span>
+  <span class="lang-egg" id="egg-leet">💾</span>
+  <span class="lang-egg" id="egg-emoji">🌈</span>
+  <span class="lang-egg" id="egg-uwu">🐾</span>
+  <span class="lang-egg" id="egg-bureau">📋</span>
+  <span class="lang-egg" id="egg-cat">🐱</span>
+  <span class="lang-egg" id="egg-bean">🫛</span>
+  <span class="lang-egg" id="egg-alpaca">🦙</span>
+  <span class="lang-egg" id="egg-yanse">😮‍💨</span>
   <div class="sub" id="app-sub"></div>
 </header>
 <div id="disclaimer"></div>
@@ -114,7 +138,7 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
     <div class="btn-row">
       <input class="txt" id="intel-name-input" style="flex:1;min-width:140px">
       <input class="txt" id="intel-date-input" style="width:130px">
-      <input type="file" id="intel-file-input" style="display:none" accept=".txt,.csv">
+      <input type="file" id="intel-file-input" style="display:none" accept=".txt,.csv,.json">
       <button class="btn primary" id="btn-intel-add"></button>
     </div>
     <div id="intel-list" style="margin-top:10px"></div>
@@ -137,7 +161,7 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
 
   <div style="text-align:center;font-size:10px;color:var(--text-muted);padding:10px 0" id="footer-note"></div>
 </div>
-<span class="mini-alpaca" onclick="_alpacaClick()" title="?">🦙</span>
+<div class="mini-alpaca" id="mini-alpaca" title="🦙×3">🦙</div>
 
 <script>
 // ============================================================
@@ -465,14 +489,65 @@ function detectScanHeuristicSyslog(events, opts) {
 // ============================================================
 // [5] 威脅情資本機比對（僅本機靜態清單，不連網）
 // ============================================================
+// IP/CIDR 欄位名稱判斷準則，CSV 表頭與 JSON key 共用同一套規則；Spamhaus DROP 系列 JSON 匯出
+// 用的欄位名稱是 "cidr" 非 "ip"/"addr"，故需涵蓋 cidr/network 而不只 ip/addr
+const IP_FIELD_RE = /ip|addr|cidr|network/i;
+
+function extractIPFieldFromObj(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  const key = Object.keys(obj).find(k => IP_FIELD_RE.test(k));
+  if (!key) return null;
+  const v = obj[key];
+  return (typeof v === 'string' || typeof v === 'number') ? String(v) : null;
+}
+
+// 嘗試把文字內容解析成情資陣列。涵蓋兩種真實情資匯出常見形態：
+// (1) NDJSON/JSON Lines——逐行各自是獨立合法 JSON 物件（Spamhaus DROP JSON 匯出即此格式，
+//     整份檔案本身不是單一合法 JSON 文件，不能直接對整段文字做 JSON.parse）
+// (2) 標準 JSON——單一陣列，或物件包一層陣列欄位（如 {"data":[...]}），或單一物件（視為僅 1 筆）
+// 解析失敗（純文字/CSV 等非 JSON 格式）回傳 null，讓呼叫端 fallback 到既有邏輯
+function parseIntelListJSON(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const lines = trimmed.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length > 1) {
+    const objs = [];
+    let allValid = true;
+    for (const l of lines) {
+      try { objs.push(JSON.parse(l)); } catch (e) { allValid = false; break; }
+    }
+    if (allValid && objs.length) return objs;
+  }
+  try {
+    const data = JSON.parse(trimmed);
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === 'object') {
+      const arrKey = Object.keys(data).find(k => Array.isArray(data[k]));
+      if (arrKey) return data[arrKey];
+      if (extractIPFieldFromObj(data)) return [data];
+    }
+  } catch (e) { /* 非 JSON，交給 CSV/純文字邏輯處理 */ }
+  return null;
+}
+
 function parseIntelList(text, name) {
   const norm = text.replace(/\r\n/g, '\n');
+  const jsonArr = parseIntelListJSON(norm);
+  if (jsonArr) {
+    const entries = [];
+    jsonArr.forEach(item => {
+      if (typeof item === 'string') { entries.push({ value: item, meta: {} }); return; }
+      const val = extractIPFieldFromObj(item);
+      if (val) entries.push({ value: val, meta: item });
+    });
+    return { name: name || '未命名清單', entries };
+  }
   const lines = norm.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#') && !l.startsWith(';'));
   const entries = [];
   const isCSV = lines.length > 0 && lines[0].includes(',');
   if (isCSV) {
     const header = lines[0].split(',').map(h => h.trim().toLowerCase());
-    const ipCol = header.findIndex(h => /ip|addr/.test(h));
+    const ipCol = header.findIndex(h => IP_FIELD_RE.test(h));
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split(',');
       const ip = (ipCol >= 0 ? cols[ipCol] : cols[0] || '').trim();
@@ -688,7 +763,7 @@ const LANG = {
     'issues.title':'③ 問題清單（基本資安分析）','issues.empty':'未發現符合規則的問題','issues.col_category':'類別','issues.col_severity':'嚴重程度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_sample':'範例',
     'conf.confirmed':'已確認','conf.heuristic':'推測',
     'cat.authFail':'認證失敗','cat.denyBlock':'連線遭拒/阻擋','cat.attack':'攻擊/惡意軟體relevant','cat.scanFlood':'掃描/洪水攻擊','cat.exceedThreshold':'超過門檻','cat.other':'其他','cat.freqLabel':'頻率異常：','cat.possibleScan':'疑似掃描行為','cat.knownIOC':'已知情資命中',
-    'intel.title':'④ 威脅情資本機比對清單','intel.hint':'匯入公開或內部的 IP/CIDR 黑名單（純文字或 CSV），僅在本機比對，工具不會主動連網查詢。命中會標記為「已確認」的高風險問題。','intel.add_btn':'上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自填）','intel.count_label':'筆','intel.remove_btn':'移除','intel.empty':'尚未匯入任何情資清單',
+    'intel.title':'④ 威脅情資本機比對清單','intel.hint':'匯入公開或內部的 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON，如 Spamhaus DROP 匯出格式），僅在本機比對，工具不會主動連網查詢。命中會標記為「已確認」的高風險問題。','intel.add_btn':'上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自填）','intel.count_label':'筆','intel.remove_btn':'移除','intel.empty':'尚未匯入任何情資清單',
     'guide.title':'⑤ 如何取得外部情資','guide.body':'本工具僅做本機比對，不會主動連網抓取或回傳任何資料。\n常見公開情資來源（用途說明，正式下載網址請自行查詢官方頁面）：\n• Spamhaus DROP/EDROP — 已知惡意網段（CIDR）清單\n• Emerging Threats / Proofpoint compromised-ips — 已知遭入侵主機 IP 清單\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — 惡意軟體 C2 相關 IOC\n多數公開清單各自有使用條款（部分僅供非商業/個人使用），下載與使用前請自行確認條款；建議至少每月更新一次，過舊清單參考價值降低。',
     'deid.title':'⑥ 去識別化','deid.hint':'將事件中的 IP／主機名稱／使用者名稱替換為一致映射的假值（IP 採 RFC5737 文件用網段）。請先完成③④的問題分析與情資比對，去識別化後的假 IP 將無法再命中真實情資清單。','deid.run_btn':'執行去識別化','deid.download_btn':'下載去識別化結果',
     'export.csv_btn':'匯出問題清單 CSV',
@@ -703,7 +778,7 @@ const LANG = {
     'issues.title':'③ Issue List (basic security analysis)','issues.empty':'No rule-based issues found','issues.col_category':'Category','issues.col_severity':'Severity','issues.col_count':'Count','issues.col_confidence':'Confidence','issues.col_sample':'Sample',
     'conf.confirmed':'Confirmed','conf.heuristic':'Heuristic',
     'cat.authFail':'Auth Failure','cat.denyBlock':'Connection Denied/Blocked','cat.attack':'Attack/Malware','cat.scanFlood':'Scan/Flood','cat.exceedThreshold':'Threshold Exceeded','cat.other':'Other','cat.freqLabel':'Frequency anomaly: ','cat.possibleScan':'Possible Scan Activity','cat.knownIOC':'Known Threat-Intel Hit',
-    'intel.title':'④ Local Threat-Intel Matching List','intel.hint':'Import public or internal IP/CIDR blocklists (plain text or CSV). Matching happens locally only — no outbound network calls. Hits are flagged as "Confirmed" high-severity issues.','intel.add_btn':'Upload List','intel.name_placeholder':'List name','intel.date_placeholder':'Intel date (manual)','intel.count_label':'entries','intel.remove_btn':'Remove','intel.empty':'No intel list imported yet',
+    'intel.title':'④ Local Threat-Intel Matching List','intel.hint':'Import public or internal IP/CIDR blocklists (plain text, CSV, or JSON/NDJSON — e.g. Spamhaus DROP export format). Matching happens locally only — no outbound network calls. Hits are flagged as "Confirmed" high-severity issues.','intel.add_btn':'Upload List','intel.name_placeholder':'List name','intel.date_placeholder':'Intel date (manual)','intel.count_label':'entries','intel.remove_btn':'Remove','intel.empty':'No intel list imported yet',
     'guide.title':'⑤ How to Get External Threat Intel','guide.body':'This tool only matches locally — it never fetches or sends data over the network.\nCommon public sources (purpose only — verify current official URLs yourself):\n• Spamhaus DROP/EDROP — known malicious netblocks (CIDR)\n• Emerging Threats / Proofpoint compromised-ips — known compromised host IPs\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — malware C2 related IOCs\nMost public lists carry their own usage terms (some are non-commercial/personal use only) — check before downloading. Recommended refresh: at least monthly, stale lists lose value.',
     'deid.title':'⑥ De-identification','deid.hint':'Replaces IP/hostname/username with consistently-mapped fake values (IPs use RFC5737 documentation ranges). Run this after steps ③④ — anonymized fake IPs can no longer match a real intel list.','deid.run_btn':'Run De-identification','deid.download_btn':'Download De-identified Result',
     'export.csv_btn':'Export Issue List CSV',
@@ -718,7 +793,7 @@ const LANG = {
     'issues.title':'③ 問題リスト（基本セキュリティ分析）','issues.empty':'該当する問題は見つかりませんでした','issues.col_category':'分類','issues.col_severity':'重要度','issues.col_count':'件数','issues.col_confidence':'信頼度','issues.col_sample':'サンプル',
     'conf.confirmed':'確認済み','conf.heuristic':'推定',
     'cat.authFail':'認証失敗','cat.denyBlock':'接続拒否/ブロック','cat.attack':'攻撃/マルウェア','cat.scanFlood':'スキャン/フラッド','cat.exceedThreshold':'しきい値超過','cat.other':'その他','cat.freqLabel':'頻度異常：','cat.possibleScan':'スキャンの疑い','cat.knownIOC':'既知の脅威情報に一致',
-    'intel.title':'④ ローカル脅威インテリジェンス照合リスト','intel.hint':'公開または社内の IP/CIDR ブロックリストを取り込みます（テキストまたは CSV）。照合はローカルのみで行い、外部通信は一切行いません。一致した場合は「確認済み」の高リスク問題として表示されます。','intel.add_btn':'リストをアップロード','intel.name_placeholder':'リスト名','intel.date_placeholder':'インテリジェンス日付（手動入力）','intel.count_label':'件','intel.remove_btn':'削除','intel.empty':'まだインテリジェンスリストが取り込まれていません',
+    'intel.title':'④ ローカル脅威インテリジェンス照合リスト','intel.hint':'公開または社内の IP/CIDR ブロックリストを取り込みます（テキスト、CSV、または JSON／NDJSON——Spamhaus DROP 形式など）。照合はローカルのみで行い、外部通信は一切行いません。一致した場合は「確認済み」の高リスク問題として表示されます。','intel.add_btn':'リストをアップロード','intel.name_placeholder':'リスト名','intel.date_placeholder':'インテリジェンス日付（手動入力）','intel.count_label':'件','intel.remove_btn':'削除','intel.empty':'まだインテリジェンスリストが取り込まれていません',
     'guide.title':'⑤ 外部脅威インテリジェンスの入手方法','guide.body':'本ツールはローカル照合のみを行い、データを外部に取得・送信することはありません。\n代表的な公開情報源（用途のみ記載、正式なダウンロード URL は公式ページでご確認ください）：\n• Spamhaus DROP/EDROP — 既知の悪意あるネットブロック（CIDR）\n• Emerging Threats / Proofpoint compromised-ips — 既知の侵害済みホスト IP\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — マルウェア C2 関連 IOC\n多くの公開リストには独自の利用規約があります（非商用/個人利用限定の場合あり）。ダウンロード前にご確認ください。月 1 回以上の更新を推奨します。',
     'deid.title':'⑥ 匿名化','deid.hint':'IP／ホスト名／ユーザー名を一貫したマッピングの仮値に置き換えます（IP は RFC5737 の文書用アドレス帯を使用）。③④の分析・照合を先に行ってください。匿名化後の仮 IP は実際のインテリジェンスリストと一致しなくなります。','deid.run_btn':'匿名化を実行','deid.download_btn':'匿名化結果をダウンロード',
     'export.csv_btn':'問題リストを CSV 出力',
@@ -733,7 +808,7 @@ const LANG = {
     'issues.title':'③ Issue tetlh (security chov)','issues.empty':'Issue tu\'lu\'be\'','issues.col_category':'segh','issues.col_severity':'severity','issues.col_count':'\'ar','issues.col_confidence':'HIvqa\'','issues.col_sample':'nughDoq',
     'conf.confirmed':'chovtaH','conf.heuristic':'poQlu\'',
     'cat.authFail':'authentication luj','cat.denyBlock':'connection lujqa\'','cat.attack':'HIv/malware','cat.scanFlood':'scan/flood','cat.exceedThreshold':'threshold Sub','cat.other':'latlh','cat.freqLabel':'frequency mIgh:','cat.possibleScan':'scan pIH','cat.knownIOC':'intel Sovbogh',
-    'intel.title':'④ Local threat-intel tetlh','intel.hint':'IP/CIDR blocklist yIlan. local neH chov, network Qapbe\'. hIt \'ej chovtaH severity chIm.','intel.add_btn':'tetlh yIlan','intel.name_placeholder':'tetlh pong','intel.date_placeholder':'intel poH (lo\' ghaH)','intel.count_label':'\'ar','intel.remove_btn':'yIteq','intel.empty':'intel tetlh lanpu\'be\'',
+    'intel.title':'④ Local threat-intel tetlh','intel.hint':'IP/CIDR blocklist yIlan (text, CSV, JSON). local neH chov, network Qapbe\'. hIt \'ej chovtaH severity chIm.','intel.add_btn':'tetlh yIlan','intel.name_placeholder':'tetlh pong','intel.date_placeholder':'intel poH (lo\' ghaH)','intel.count_label':'\'ar','intel.remove_btn':'yIteq','intel.empty':'intel tetlh lanpu\'be\'',
     'guide.title':'⑤ Chay\' intel yIghoS','guide.body':'toy\'vam local neH chov, network Qapbe\'.\nSource motlh (lo\'taHghach neH, URL Datu\'meH official page yI\'ol):\n• Spamhaus DROP/EDROP — netblock mIgh Sovbogh\n• Emerging Threats/Proofpoint compromised-ips — host mIgh Sovbogh\n• abuse.ch Feodo Tracker/URLhaus/ThreatFox — malware C2 IOC\nlist law\' terms nga\'chuq (commercial Qap\'be\' latlh). jar Hoch tetlh chu\' yIchu\'.',
     'deid.title':'⑥ De-identification','deid.hint':'IP/host/user pong yIchoH (RFC5737 lo\'). ③④ vaj ruch, De-identify vaj fake IP intel tetlh hItqa\'be\'.','deid.run_btn':'De-identify yIchav','deid.download_btn':'De-identify baghlu\'pu\' yIchoH',
     'export.csv_btn':'Issue tetlh CSV yIchoH',
@@ -748,7 +823,7 @@ const LANG = {
     'issues.title':'③ Trouble Manifest (basic scoutin\')','issues.empty':'No trouble spotted on the horizon','issues.col_category':'Kind','issues.col_severity':'Trouble','issues.col_count':'Tally','issues.col_confidence':'How Sure','issues.col_sample':'Sample',
     'conf.confirmed':'Confirmed, arrr','conf.heuristic':'Just a Hunch',
     'cat.authFail':'Wrong Password, Ye Scurvy Dog','cat.denyBlock':'Turned Away at the Gate','cat.attack':'Boardin\' Party / Foul Plague','cat.scanFlood':'Scoutin\' the Coast / Flood o\' Cannons','cat.exceedThreshold':'Overloaded the Hold','cat.other':'Other Business','cat.freqLabel':'Too Much Ruckus: ','cat.possibleScan':'Scoutin\' Suspected','cat.knownIOC':'Known Villain Spotted',
-    'intel.title':'④ Local Blacklist o\' Known Villains','intel.hint':'Hoist aboard a public or yer own IP/CIDR blacklist (plain text or CSV). All matchin\' done right on this ship, no word sent to shore. A hit be marked "Confirmed" and dangerous.','intel.add_btn':'Hoist List','intel.name_placeholder':'List Name','intel.date_placeholder':'Chart Date (write it yerself)','intel.count_label':'entries','intel.remove_btn':'Toss Overboard','intel.empty':'No blacklist hoisted aboard yet',
+    'intel.title':'④ Local Blacklist o\' Known Villains','intel.hint':'Hoist aboard a public or yer own IP/CIDR blacklist (plain text, CSV, or JSON charts like Spamhaus DROP). All matchin\' done right on this ship, no word sent to shore. A hit be marked "Confirmed" and dangerous.','intel.add_btn':'Hoist List','intel.name_placeholder':'List Name','intel.date_placeholder':'Chart Date (write it yerself)','intel.count_label':'entries','intel.remove_btn':'Toss Overboard','intel.empty':'No blacklist hoisted aboard yet',
     'guide.title':'⑤ Where to Find Word o\' Known Villains','guide.body':'This tool only matches on yer own ship — never sends nor fetches word from shore.\nCommon public charts (just the purpose, matey — find the true URL on the official dock yerself):\n• Spamhaus DROP/EDROP — known villain netblocks (CIDR)\n• Emerging Threats / Proofpoint compromised-ips — known boarded ships\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — plague-ship signals\nMost public charts have their own rules (some for personal use only) — check afore ye hoist \'em. Refresh the chart at least once a moon, or it goes stale.',
     'deid.title':'⑥ Hide the Crew\'s True Names','deid.hint':'Swaps IP/hostname/username fer consistent fake names (IPs use the RFC5737 map-room range). Do this after ③④ — once hidden, the fake IPs won\'t match the real blacklist no more.','deid.run_btn':'Hide Their Names','deid.download_btn':'Download the Disguised Log',
     'export.csv_btn':'Export Trouble Manifest CSV',
@@ -763,7 +838,7 @@ const LANG = {
     'issues.title':'③❗ 問題清單','issues.empty':'✅未發現問題','issues.col_category':'🏷️類別','issues.col_severity':'🔥嚴重度','issues.col_count':'🔢次數','issues.col_confidence':'🎯可信度','issues.col_sample':'📌範例',
     'conf.confirmed':'✅已確認','conf.heuristic':'🤔推測',
     'cat.authFail':'🔑❌認證失敗','cat.denyBlock':'🚫連線遭拒','cat.attack':'☠️攻擊/惡意軟體','cat.scanFlood':'🔦掃描/🌊洪水','cat.exceedThreshold':'📈超過門檻','cat.other':'📎其他','cat.freqLabel':'📈頻率異常：','cat.possibleScan':'🔦疑似掃描','cat.knownIOC':'🎯已知情資命中',
-    'intel.title':'④🎯 情資本機比對清單','intel.hint':'📥匯入 IP/CIDR 黑名單（文字/CSV），🔒僅本機比對，🚫不連網。命中✅標記高風險。','intel.add_btn':'📎上傳清單','intel.name_placeholder':'📛清單名稱','intel.date_placeholder':'📅情資日期','intel.count_label':'筆','intel.remove_btn':'🗑️移除','intel.empty':'📭尚無清單',
+    'intel.title':'④🎯 情資本機比對清單','intel.hint':'📥匯入 IP/CIDR 黑名單（文字/CSV/JSON），🔒僅本機比對，🚫不連網。命中✅標記高風險。','intel.add_btn':'📎上傳清單','intel.name_placeholder':'📛清單名稱','intel.date_placeholder':'📅情資日期','intel.count_label':'筆','intel.remove_btn':'🗑️移除','intel.empty':'📭尚無清單',
     'guide.title':'⑤❓ 如何取得外部情資','guide.body':'🔒本工具僅🖥️本機比對，🚫不連網抓取或回傳。\n常見公開來源（用途說明，📎正式網址請自行查證）：\n• Spamhaus DROP/EDROP — 🌐惡意網段\n• Emerging Threats/Proofpoint — 🖥️已知被入侵主機\n• abuse.ch Feodo/URLhaus/ThreatFox — 🦠惡意軟體 C2\n⚠️多數清單有📜使用條款，下載前請自行確認；建議📅每月更新一次。',
     'deid.title':'⑥🙈 去識別化','deid.hint':'將 IP/主機名/使用者名➡️一致假值（IP 用 RFC5737）。請先完成③④，去識別化後假 IP 🚫無法再命中真實清單。','deid.run_btn':'▶️執行去識別化','deid.download_btn':'⬇️下載結果',
     'export.csv_btn':'⬇️匯出問題清單 CSV',
@@ -778,7 +853,7 @@ const LANG = {
     'issues.title':'第三項：問題清冊（基本資安分析作業）','issues.empty':'依現行規則，未查得相符之問題事項','issues.col_category':'問題類別','issues.col_severity':'嚴重程度等級','issues.col_count':'發生次數','issues.col_confidence':'可信程度','issues.col_sample':'代表性樣本',
     'conf.confirmed':'業經確認','conf.heuristic':'推定研判',
     'cat.authFail':'認證程序失敗事項','cat.denyBlock':'連線遭拒絕或阻擋事項','cat.attack':'攻擊行為或惡意軟體事項','cat.scanFlood':'掃描或洪水攻擊事項','cat.exceedThreshold':'超過既定門檻事項','cat.other':'其他未分類事項','cat.freqLabel':'頻率異常事項：','cat.possibleScan':'疑似掃描行為（待進一步查證）','cat.knownIOC':'業經核對之已知情資命中事項',
-    'intel.title':'第四項：威脅情資本機比對清冊管理作業','intel.hint':'得匯入公開或機關內部所編製之 IP/CIDR 黑名單（純文字或 CSV 格式），前述比對作業僅於本機辦理，本工具不主動對外發送任何連線請求。命中案件依規定標註為「業經確認」之高風險事項。','intel.add_btn':'辦理清冊上傳','intel.name_placeholder':'清冊名稱','intel.date_placeholder':'情資日期（請自行填註）','intel.count_label':'筆','intel.remove_btn':'移除本清冊','intel.empty':'目前尚未匯入任何情資清冊',
+    'intel.title':'第四項：威脅情資本機比對清冊管理作業','intel.hint':'得匯入公開或機關內部所編製之 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON 格式，如 Spamhaus DROP 匯出檔），前述比對作業僅於本機辦理，本工具不主動對外發送任何連線請求。命中案件依規定標註為「業經確認」之高風險事項。','intel.add_btn':'辦理清冊上傳','intel.name_placeholder':'清冊名稱','intel.date_placeholder':'情資日期（請自行填註）','intel.count_label':'筆','intel.remove_btn':'移除本清冊','intel.empty':'目前尚未匯入任何情資清冊',
     'guide.title':'第五項：外部威脅情資取得方式說明','guide.body':'本工具僅辦理本機比對作業，不主動對外擷取或回傳任何資料，合先敘明。\n常見公開情資來源（僅供用途參考，正式下載網址請逕行查詢各該官方網頁）：\n• Spamhaus DROP/EDROP — 已知惡意網段（CIDR）清冊\n• Emerging Threats／Proofpoint compromised-ips — 已知遭入侵主機 IP 清冊\n• abuse.ch Feodo Tracker／URLhaus／ThreatFox — 惡意軟體 C2 相關情資\n上開公開清冊多訂有各自之使用條款（部分僅限非商業或個人使用），下載及使用前請自行確認相關條款；建議至少每月辦理一次更新，逾期未更新之清冊參考價值遞減。',
     'deid.title':'第六項：資料去識別化作業','deid.hint':'將事件中之 IP、主機名稱、使用者名稱等資料，替換為具一致性對應關係之虛擬值（IP 部分採用 RFC5737 文件用網段）。請依序完成第三、四項分析及比對作業後，再辦理本項作業；本項作業完成後所產出之虛擬 IP，將無法再與真實情資清冊相符。','deid.run_btn':'執行去識別化作業','deid.download_btn':'下載去識別化作業結果',
     'export.csv_btn':'匯出問題清冊（CSV 格式）',
@@ -793,7 +868,7 @@ const LANG = {
     'issues.title':'③問題清單（聞出來的可疑喵）','issues.empty':'沒聞到什麼可疑的喵','issues.col_category':'類別喵','issues.col_severity':'嚴重度喵','issues.col_count':'次數喵','issues.col_confidence':'有多確定喵','issues.col_sample':'範例喵',
     'conf.confirmed':'確定喵！','conf.heuristic':'感覺啦喵',
     'cat.authFail':'密碼打錯了喵','cat.denyBlock':'被擋在門外喵','cat.attack':'有壞東西喵','cat.scanFlood':'鬼鬼祟祟在探路喵','cat.exceedThreshold':'超過忍耐極限喵','cat.other':'其他喵喵喵','cat.freqLabel':'太吵了喵：','cat.possibleScan':'感覺有人在探頭探腦喵','cat.knownIOC':'抓到熟面孔壞蛋喵',
-    'intel.title':'④情資清單（自己地盤比對喵）','intel.hint':'把公開或自家的 IP/CIDR 黑名單叼進來喵（文字或 CSV），只在自己地盤比對，不會偷跑出去連網喵。抓到就標「確定」高風險喵。','intel.add_btn':'叼清單進來喵','intel.name_placeholder':'清單叫什麼名字喵','intel.date_placeholder':'情資日期（自己填喵）','intel.count_label':'隻','intel.remove_btn':'丟掉喵','intel.empty':'還沒有情資清單喵',
+    'intel.title':'④情資清單（自己地盤比對喵）','intel.hint':'把公開或自家的 IP/CIDR 黑名單叼進來喵（文字、CSV 或 JSON 都吃），只在自己地盤比對，不會偷跑出去連網喵。抓到就標「確定」高風險喵。','intel.add_btn':'叼清單進來喵','intel.name_placeholder':'清單叫什麼名字喵','intel.date_placeholder':'情資日期（自己填喵）','intel.count_label':'隻','intel.remove_btn':'丟掉喵','intel.empty':'還沒有情資清單喵',
     'guide.title':'⑤去哪裡找情資喵','guide.body':'這隻工具只在自己地盤比對喵，不會偷跑出去抓資料或送資料喵。\n常見公開來源（只說用途喵，正式網址請自己找官方頁面喵）：\n• Spamhaus DROP/EDROP — 壞網段名單喵\n• Emerging Threats/Proofpoint — 已經淪陷的主機喵\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞軟體的窩喵\n大部分清單都有自己的規矩喵（有些只能自己用不能拿去賣錢喵），下載前自己看清楚喵；建議每個月至少換一次新的喵，太舊就不準了喵。',
     'deid.title':'⑥藏起來喵','deid.hint':'把 IP／主機名稱／使用者名稱換成固定的假名字喵（IP 用 RFC5737 那個假地址喵）。要先做完③④再做這個喵，藏起來以後假 IP 就聞不出跟真的情資清單一樣了喵。','deid.run_btn':'開始藏喵','deid.download_btn':'把藏好的叼回家喵',
     'export.csv_btn':'把問題清單叼出去（CSV）喵',
@@ -808,7 +883,7 @@ const LANG = {
     'issues.title':'③問題清單（基本廚房安全檢查）','issues.empty':'廚房目前一切正常','issues.col_category':'類別','issues.col_severity':'🌶️辣度','issues.col_count':'份數','issues.col_confidence':'火候','issues.col_sample':'試吃樣本',
     'conf.confirmed':'✅確定好了','conf.heuristic':'🤔大概是這樣',
     'cat.authFail':'🔑鑰匙打不開','cat.denyBlock':'🚪被拒於門外','cat.attack':'🦠壞菌入侵','cat.scanFlood':'👀被偷看/🌊太多人湧入','cat.exceedThreshold':'份量超標','cat.other':'其他配菜','cat.freqLabel':'太常出現了：','cat.possibleScan':'疑似有人在探頭探腦','cat.knownIOC':'認出熟面孔壞蛋🍅',
-    'intel.title':'④🍅情資清單（自家比對）','intel.hint':'把公開或自製的 IP/CIDR 黑名單倒進來（文字或 CSV），只在自家廚房比對，不會偷跑出去買菜連網。對到就標記高風險。','intel.add_btn':'🥔上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自己填）','intel.count_label':'份','intel.remove_btn':'🗑️丟掉','intel.empty':'廚房還沒有情資清單',
+    'intel.title':'④🍅情資清單（自家比對）','intel.hint':'把公開或自製的 IP/CIDR 黑名單倒進來（文字、CSV 或 JSON 這道菜都收），只在自家廚房比對，不會偷跑出去買菜連網。對到就標記高風險。','intel.add_btn':'🥔上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自己填）','intel.count_label':'份','intel.remove_btn':'🗑️丟掉','intel.empty':'廚房還沒有情資清單',
     'guide.title':'⑤去哪裡採買情資','guide.body':'本工具只在自家廚房比對，不會偷跑出去買菜或送菜出門。\n常見的市場攤位（僅說明用途，正式網址請自行到官方頁面查詢）：\n• Spamhaus DROP/EDROP — 已知的壞菜園（CIDR）\n• Emerging Threats/Proofpoint — 已被蟲蛀的主機清單\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞菌 C2 相關情資\n大部分攤位都有自己的規矩（有些只能自己吃不能拿去賣），採買前請看清楚；建議至少每個月補一次貨，太舊的菜就不新鮮了。',
     'deid.title':'⑥去識別化（去皮去籽）','deid.hint':'把 IP／主機名稱／使用者名稱換成固定的代號（IP 用 RFC5737 那盤示範菜）。請先完成③④再做這步，去皮後的假 IP 就配不上真正的情資清單了。','deid.run_btn':'開始去皮','deid.download_btn':'打包帶走',
     'export.csv_btn':'把問題清單裝盒（CSV）',
@@ -823,7 +898,7 @@ const LANG = {
     'issues.title':'③問題清單（咩出來的怪怪咩）','issues.empty':'沒咩到什麼怪怪的-aca','issues.col_category':'類別咩','issues.col_severity':'嚴重度-aca','issues.col_count':'次數咩','issues.col_confidence':'有多確定-aca','issues.col_sample':'範例咩',
     'conf.confirmed':'確定咩！','conf.heuristic':'感覺啦-aca',
     'cat.authFail':'密碼咩打錯了-aca','cat.denyBlock':'被擋在柵欄外咩','cat.attack':'有壞東西咩-aca','cat.scanFlood':'鬼鬼祟祟探路咩','cat.exceedThreshold':'超過忍耐極限-aca','cat.other':'其他咩咩咩','cat.freqLabel':'太吵咩：','cat.possibleScan':'感覺有人探頭探腦咩','cat.knownIOC':'認出熟面孔壞蛋咩',
-    'intel.title':'④情資清單（自家草原比對-aca）','intel.hint':'把公開或自家咩IP/CIDR黑名單牽進來-aca（文字或CSV），只在自家草原比對，不會偷跑出去連網咩。牽到就標「確定」高風險-aca。','intel.add_btn':'牽清單進來咩','intel.name_placeholder':'清單叫什麼名字-aca','intel.date_placeholder':'情資日期（自己填咩）','intel.count_label':'隻','intel.remove_btn':'放走咩','intel.empty':'草原還沒有情資清單-aca',
+    'intel.title':'④情資清單（自家草原比對-aca）','intel.hint':'把公開或自家咩IP/CIDR黑名單牽進來-aca（文字、CSV或JSON咩都吃），只在自家草原比對，不會偷跑出去連網咩。牽到就標「確定」高風險-aca。','intel.add_btn':'牽清單進來咩','intel.name_placeholder':'清單叫什麼名字-aca','intel.date_placeholder':'情資日期（自己填咩）','intel.count_label':'隻','intel.remove_btn':'放走咩','intel.empty':'草原還沒有情資清單-aca',
     'guide.title':'⑤去哪裡找情資咩','guide.body':'這隻alpaca只在自家草原比對咩，不會偷跑出去抓資料或送資料-aca。\n常見公開來源（只說用途咩，正式網址請自己找官方頁面-aca）：\n• Spamhaus DROP/EDROP — 壞牧場名單咩\n• Emerging Threats/Proofpoint — 已經淪陷咩主機-aca\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞菌的窩咩\n大部分清單都有自己的規矩-aca（有些只能自己用不能拿去賣咩），下載前自己看清楚-aca；建議每個月至少換一次新的咩，太舊就不準了-aca。',
     'deid.title':'⑥藏起來-aca','deid.hint':'把IP／主機名稱／使用者名稱換成固定咩假名字-aca（IP用RFC5737那個假地址咩）。要先做完③④再做這個-aca，藏起來以後假IP就配不上真正咩情資清單了-aca。','deid.run_btn':'開始藏咩','deid.download_btn':'把藏好咩牽回家-aca',
     'export.csv_btn':'把問題清單牽出去（CSV）咩',
@@ -838,18 +913,17 @@ const LANG = {
     'issues.title':'③問題清單（找到了，然後呢）','issues.empty':'沒發現問題，也許只是還沒發現','issues.col_category':'類別','issues.col_severity':'嚴重度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_sample':'範例，隨便看看',
     'conf.confirmed':'確認過了（然後呢）','conf.heuristic':'推測，別太當真',
     'cat.authFail':'認證失敗，又來了','cat.denyBlock':'連線被擋，習慣了','cat.attack':'攻擊/惡意軟體，日常','cat.scanFlood':'掃描/洪水，見怪不怪','cat.exceedThreshold':'超過門檻，隨便啦','cat.other':'其他（懶得分類）','cat.freqLabel':'頻率異常，反正常有：','cat.possibleScan':'疑似掃描（大概吧）','cat.knownIOC':'已知情資命中（唉，果然）',
-    'intel.title':'④威脅情資本機比對清單（做心安的）','intel.hint':'匯入 IP/CIDR 黑名單，本機比對，不連網，至少這點還算誠實。命中標記高風險，但看了也不一定會動作。','intel.add_btn':'上傳清單（好）','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（記得填，不然更沒意義）','intel.count_label':'筆','intel.remove_btn':'移除（反正也沒差）','intel.empty':'還沒清單，之後再說吧',
+    'intel.title':'④威脅情資本機比對清單（做心安的）','intel.hint':'匯入 IP/CIDR 黑名單（文字、CSV、JSON 都收，反正格式都差不多），本機比對，不連網，至少這點還算誠實。命中標記高風險，但看了也不一定會動作。','intel.add_btn':'上傳清單（好）','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（記得填，不然更沒意義）','intel.count_label':'筆','intel.remove_btn':'移除（反正也沒差）','intel.empty':'還沒清單，之後再說吧',
     'guide.title':'⑤如何取得外部情資（算是個方向）','guide.body':'本工具只做本機比對，不連網，這點沒騙你。\n常見公開來源（用途說明而已，網址自己去查，反正會變）：\n• Spamhaus DROP/EDROP — 惡意網段名單\n• Emerging Threats/Proofpoint — 已知被入侵主機\n• abuse.ch Feodo/URLhaus/ThreatFox — 惡意軟體 C2\n大部分清單都有使用條款，看一下吧；建議每月更新，反正舊了也沒人會發現。',
     'deid.title':'⑥去識別化（藏起來也不會比較好過）','deid.hint':'把 IP/主機名稱/使用者名稱換成假值（RFC5737），先做完③④再做這步，做完假 IP 就配不上真情資了，就這樣。','deid.run_btn':'執行吧','deid.download_btn':'下載結果（然後呢）',
     'export.csv_btn':'匯出問題清單 CSV（留個紀錄）',
     'footer.note':'log_analyzer v1 — 純前端 JavaScript，離線可用，不上傳資料，至少這點不用擔心'
   }
 };
-const EGG_LANGS = ['tlh','pirate','emoji','bureau','cat','bean','alpaca','yanse'];
-let unlockedEggs = { tlh:false, pirate:false, emoji:false, bureau:false, cat:false, bean:false, alpaca:false, yanse:false };
+const EGG_LANGS = ['tlh','pirate','leet','emoji','uwu','bureau','cat','bean','alpaca','yanse'];
+let unlockedEggs = { tlh:false, pirate:false, leet:false, emoji:false, uwu:false, bureau:false, cat:false, bean:false, alpaca:false, yanse:false };
 let currentLang = 'zhTW';
-let _eggClicks = [0,0,0,0,0,0,0];
-let _alpacaClicks = 0;
+const LANG_BTN_LABEL = { zhTW:'繁中', en:'EN', ja:'日本語', tlh:"Qo'noS", pirate:'☠ Arr', leet:'1337', emoji:'🌈', uwu:'UwU', bureau:'公文', cat:'nyaa', bean:'🥕🫛🌽', alpaca:'🦙咩', yanse:'😮‍💨 算了' };
 
 function leetify(s) { return s.replace(/[aeiostl]/gi, c => ({a:'4',e:'3',i:'1',o:'0',s:'5',t:'7',l:'|'}[c.toLowerCase()] || c)); }
 function uwuify(s) { return s.replace(/th/gi,'d').replace(/[rl]/gi,'w').replace(/n([aeiou])/gi,'ny$1'); }
@@ -883,29 +957,70 @@ const SEV_KEY_MAP = { Critical:'sev.critical', High:'sev.high', Medium:'sev.medi
 
 function renderLangBar() {
   const bar = document.getElementById('lang-bar');
-  const visible = ['zhTW','en','ja'];
-  const all = ['zhTW','en','ja', ...EGG_LANGS, 'leet','uwu'];
+  const all = ['zhTW','en','ja', ...EGG_LANGS];
   bar.innerHTML = all.map(l => {
     const isEgg = EGG_LANGS.includes(l);
     const shown = !isEgg || unlockedEggs[l];
-    return `<button class="lang-btn ${l===currentLang?'active':''} ${shown?'':'hidden'}" data-lang="${l}">${l}</button>`;
+    return `<button id="lang-${l}" class="lang-btn ${l===currentLang?'active':''} ${shown?'':'hidden'}" data-lang="${l}">${LANG_BTN_LABEL[l]}</button>`;
   }).join('');
   bar.querySelectorAll('.lang-btn').forEach(b => b.onclick = () => { currentLang = b.dataset.lang; renderAll(); });
 }
-function _eggClick(i) {
-  _eggClicks[i]++;
-  if (_eggClicks[i] >= 3) {
-    const idx = i % (EGG_LANGS.length - 1); // 排除 tlh（由 alpaca 圖示另外解鎖），7 個圖示對應其餘 7 種
-    const remaining = EGG_LANGS.filter(l => l !== 'tlh');
-    unlockedEggs[remaining[idx]] = true;
-    _eggClicks[i] = 0;
-    renderLangBar();
-  }
+
+function showEggToast(msg, duration) {
+  const t = document.createElement('div');
+  t.className = 'egg-toast';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.classList.add('show'), 20);
+  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 400); }, duration || 3500);
 }
-function _alpacaClick() {
-  _alpacaClicks++;
-  if (_alpacaClicks >= 3) { unlockedEggs.tlh = true; _alpacaClicks = 0; renderLangBar(); }
-}
+
+// 彩蛋：每個 .lang-egg 圖示各自對應一種語言，三連擊解鎖並立即切換＋顯示 toast
+const _EGG = {
+  'egg-pirate': { lang:'pirate', toast:"☠️ Ahoy! Ye be speakin' pirate now, matey! Arr!" },
+  'egg-leet':   { lang:'leet',   toast:'1337 5P34K 4C71V473D.' },
+  'egg-emoji':  { lang:'emoji',  toast:'🌈✨🎉 3moji mod3 4ctiv4t3d! 🦄💫🌟' },
+  'egg-uwu':    { lang:'uwu',    toast:'🐾 Hewwo fwend~ UwU wanguage activeated! OwO' },
+  'egg-bureau': { lang:'bureau', toast:'📋 本系統正式進入公文模式，請依規定格式呈現。' },
+  'egg-cat':    { lang:'cat',    toast:'🐱 Nyaa~！喵語模式啟動了喵！' },
+  'egg-bean':   { lang:'bean',   toast:'🥕🫛🌽 豆語模式啟動！蔬菜智慧已降臨！🌽🫛🥕' },
+  'egg-alpaca': { lang:'alpaca', toast:'🦙 咩咩咩！羊咩碼啟動-aca！' },
+  'egg-yanse':  { lang:'yanse',  toast:'😮‍💨 厭世模式啟動，反正早晚都要加班。' }
+};
+const _eggN = {};
+document.querySelectorAll('.lang-egg').forEach(el => {
+  _eggN[el.id] = 0;
+  let t;
+  el.addEventListener('click', () => {
+    clearTimeout(t);
+    _eggN[el.id]++;
+    t = setTimeout(() => { _eggN[el.id] = 0; }, 1500);
+    if (_eggN[el.id] >= 3) {
+      _eggN[el.id] = 0;
+      const c = _EGG[el.id];
+      unlockedEggs[c.lang] = true;
+      currentLang = c.lang;
+      renderAll();
+      showEggToast(c.toast);
+    }
+  });
+});
+// 彩蛋：右下角迷你羊駝三連擊解鎖 tlh（Klingon），與其餘 7 種一般彩蛋語言分開處理，比照既有工具慣例
+(function(){
+  let n = 0, t;
+  document.getElementById('mini-alpaca').addEventListener('click', () => {
+    clearTimeout(t);
+    n++;
+    t = setTimeout(() => { n = 0; }, 2000);
+    if (n >= 3) {
+      n = 0;
+      unlockedEggs.tlh = true;
+      currentLang = 'tlh';
+      renderAll();
+      showEggToast("🖖 Qapla'! tlhIngan Hol yIlo'!");
+    }
+  });
+})();
 
 function renderStatic() {
   document.getElementById('app-title').textContent = tr('app.title');
