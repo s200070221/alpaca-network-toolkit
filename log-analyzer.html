@@ -380,13 +380,25 @@ function summarizeBySeverity(events) {
 // ============================================================
 const KEYWORD_CATEGORIES = [
   { id: 'authFail', re: /\b(fail(?:ed|ure)?|invalid|incorrect|denied)\b[\s\S]{0,30}\b(login|logon|auth(?:entication)?|password|credential)\b|\b(login|logon|auth(?:entication)?)\b[\s\S]{0,30}\bfail/i },
-  { id: 'denyBlock', re: /\b(deny|denied|drop|dropped|block|blocked|reject|rejected)\b/i },
+  // reset-client/reset-server 併入 denyBlock：真實廠牌 CEF 常把「連線遭安全設備主動中斷」
+  // 表示為 reset 系列動作（如 PAN-OS/ASA act=reset-server），語意上等同封鎖/拒絕連線；
+  // 刻意要求 reset 後面接 client/server/connection/session 才算數，避免「password reset」
+  // 這類與資安阻擋無關的一般文字被誤判
+  { id: 'denyBlock', re: /\b(deny|denied|drop|dropped|block|blocked|reject|rejected)\b|\breset[-\s]?(?:client|server|connection|session)\b/i },
   { id: 'attack', re: /\b(attack|intrusion|malware|virus|exploit|trojan|worm)\b/i },
   { id: 'scanFlood', re: /\b(scan(?:ning)?|flood(?:ing)?|dos|ddos)\b/i },
   { id: 'exceedThreshold', re: /\b(exceed(?:ed)?|threshold|limit\s+reached|rate\s*limit)\b/i }
 ];
+// CEF 的人類可讀 Name 欄位在真實匯出常是泛用字串（如 "Traffic Event"，多家廠牌一致），
+// 實際判定結果落在 act/outcome/reason 等 extension 欄位（如 act=drop/deny/block、
+// reason="Malicious IP Match"），只看 Name/deviceProduct 會讓大多數事件誤判為 other；
+// Syslog 無此 extension 概念，僅 CEF 格式才額外檢查這些欄位
 function classifyByKeyword(evt) {
-  const text = `${evt.msg || ''} ${evt.appName || ''}`;
+  const parts = [evt.msg || '', evt.appName || ''];
+  if (evt.format === 'cef' && evt.fields) {
+    parts.push(evt.fields.act || '', evt.fields.outcome || '', evt.fields.reason || '', evt.fields.deviceAction || '');
+  }
+  const text = parts.join(' ');
   for (const c of KEYWORD_CATEGORIES) { if (c.re.test(text)) return c.id; }
   return 'other';
 }
