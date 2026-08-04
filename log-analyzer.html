@@ -233,7 +233,9 @@ function detectLineFormat(line) {
   if (/^<\d{1,3}>1\s/.test(line)) return 'rfc5424';
   if (/^(?:<\d{1,3}>\s*)?CEF:\d+\|/.test(line)) return 'cef';
   if (/^(?:<\d{1,3}>\s*)?LEEF:\d+(?:\.\d+)?\|/i.test(line)) return 'leef';
-  if (/^<\d{1,3}>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s/.test(line)) return 'rfc3164';
+  // PRI 選填：本機檔案/裝置匯出常見 rsyslog 樣板已剝除 PRI（如 UniFi kernel netfilter
+  // 流量記錄，經查證真實範例確認），並非每種 rfc3164 來源都保留 <PRI> 前綴
+  if (/^(?:<\d{1,3}>)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s/.test(line)) return 'rfc3164';
   return 'unknown';
 }
 
@@ -408,12 +410,16 @@ function parseRFC5424Line(line, lineNo) {
   };
 }
 function parseRFC3164Line(line, lineNo) {
-  const m = line.match(/^<(\d{1,3})>([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+([\s\S]*)$/);
+  const m = line.match(/^(?:<(\d{1,3})>)?([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+([\s\S]*)$/);
   if (!m) return null;
   const [, pri, ts, host, rest] = m;
-  const priNum = Number(pri);
-  const facility = Math.floor(priNum / 8);
-  const severityRaw = priNum % 8;
+  // 缺 PRI 時無從得知 facility/severity，設為 null／固定 'Info'（查無依據時寧可漏報不誤報，
+  // 比照 normGenericSeverity 對無法辨識嚴重度的既有慣例），不可用 Number(undefined)=NaN
+  // 或預設 0 反推，那會誤植出不存在的 facility/severity 語意
+  const hasPri = pri !== undefined;
+  const priNum = hasPri ? Number(pri) : null;
+  const facility = hasPri ? Math.floor(priNum / 8) : null;
+  const severityRaw = hasPri ? priNum % 8 : null;
   const tagMatch = rest.match(/^([\w./-]+(?:\[\d+\])?):\s*([\s\S]*)$/);
   const appName = tagMatch ? tagMatch[1].replace(/\[\d+\]$/, '') : '';
   const msg = tagMatch ? tagMatch[2] : rest;
@@ -421,8 +427,8 @@ function parseRFC3164Line(line, lineNo) {
     format: 'rfc3164', raw: line, lineNo,
     timestamp: parseSyslogTimestamp(ts, 'bsd'), timestampRaw: ts,
     host, appName, procid: '', msgid: '',
-    severityRaw, severityNorm: normSyslogSeverity(severityRaw),
-    facility, facilityAuth: (facility === 4 || facility === 10),
+    severityRaw, severityNorm: hasPri ? normSyslogSeverity(severityRaw) : 'Info',
+    facility, facilityAuth: hasPri && (facility === 4 || facility === 10),
     msg, fields: {}
   };
 }
@@ -638,7 +644,9 @@ function extractKeyValueFields(text) {
   if (!text) return fields;
   const re = /([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|(\S+))/g;
   let m;
-  while ((m = re.exec(text))) fields[m[1]] = m[2] !== undefined ? m[2] : m[3];
+  // key 一律轉小寫存入：部分廠牌（如 UniFi kernel netfilter 記錄，SRC=/DST=/PROTO=/SPT=/DPT=）
+  // 全大寫，轉小寫後即可直接命中既有別名表（SRC_IP_KEYS 等皆收小寫），值本身大小寫不動
+  while ((m = re.exec(text))) fields[m[1].toLowerCase()] = m[2] !== undefined ? m[2] : m[3];
   return fields;
 }
 const SRC_IP_KEYS = ['srcip', 'src_ip', 'source_ip', 'src'];
@@ -1020,6 +1028,11 @@ function rebuildStructuredData(fields) {
   return `[sdid ${params}]`;
 }
 function rebuildSyslogRaw(evt) {
+  // 原本就沒有 PRI 的 rfc3164 事件（facility===null 是解析階段留下的判斷依據，見
+  // parseRFC3164Line）重建時同樣不帶 PRI，避免無中生有塞入假造的 <0>
+  if (evt.format === 'rfc3164' && evt.facility === null) {
+    return `${evt.timestampRaw || ''} ${evt.host || ''} ${evt.appName ? evt.appName + ': ' : ''}${evt.msg || ''}`;
+  }
   const priBase = (evt.facility || 0) * 8 + Number(evt.severityRaw || 0);
   if (evt.format === 'rfc5424') return `<${priBase}>1 ${evt.timestampRaw || '-'} ${evt.host || '-'} ${evt.appName || '-'} ${evt.procid || '-'} ${evt.msgid || '-'} ${rebuildStructuredData(evt.fields)} ${evt.msg || ''}`;
   return `<${priBase}>${evt.timestampRaw || ''} ${evt.host || ''} ${evt.appName ? evt.appName + ': ' : ''}${evt.msg || ''}`;
