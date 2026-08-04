@@ -682,6 +682,24 @@ function getEventNetTuple(e) {
       proto: proto || '-'
     };
   }
+  // RFC5424 Structured Data 無固定 SD-PARAM 命名規格，僅在剛好命中常見別名（src/srcip 等）
+  // 時才視為結構化欄位；命中任一欄位才採用，否則落回下面的 msg 文字 key=value 擷取
+  // （SD 內容已被 splitSDandMSG() 從 msg 切走，兩者不會重複比對到同一段文字）
+  if (e.format === 'rfc5424' && e.fields && Object.keys(e.fields).length) {
+    const src = pickField(e.fields, SRC_IP_KEYS);
+    const dst = pickField(e.fields, DST_IP_KEYS);
+    const spt = pickField(e.fields, SRC_PORT_KEYS);
+    const dpt = pickField(e.fields, DST_PORT_KEYS);
+    const proto = pickField(e.fields, PROTO_KEYS);
+    if (src || dst || spt || dpt || proto) {
+      return {
+        src: src || '-',
+        dst: dst || '-',
+        port: (spt || dpt) ? `${spt || '-'}→${dpt || '-'}` : '-',
+        proto: proto || '-'
+      };
+    }
+  }
   const kv = extractKeyValueFields(e.msg);
   const src = pickField(kv, SRC_IP_KEYS);
   const dst = pickField(kv, DST_IP_KEYS);
@@ -827,6 +845,18 @@ function intelLookup(index, ip) {
 }
 function extractCandidateIPs(evt) {
   if (evt.format === 'cef') return [evt.fields.src, evt.fields.dst, evt.fields.shost, evt.fields.dhost].filter(Boolean);
+  // json/leef 皆有固定欄位別名可查（比照 getEventNetTuple()），結構化命中的 IP 與 msg 文字
+  // 掃描結果併入（不取代），因為 msg 文字裡仍可能有額外 IP
+  if ((evt.format === 'json' || evt.format === 'leef') && evt.fields) {
+    const structured = [pickField(evt.fields, SRC_IP_KEYS), pickField(evt.fields, DST_IP_KEYS)].filter(Boolean);
+    return Array.from(new Set([...structured, ...extractIPsFromText(evt.msg)]));
+  }
+  // RFC5424 Structured Data 無固定 SD-PARAM 命名規格，無法比照 json/leef 用別名精準指認
+  // src/dst，改為對所有欄位值做通用 IP 掃描（情資比對只需要「是否出現過」，不需分辨 src/dst）
+  if (evt.format === 'rfc5424' && evt.fields && Object.keys(evt.fields).length) {
+    const sdText = Object.values(evt.fields).join(' ');
+    return Array.from(new Set([...extractIPsFromText(sdText), ...extractIPsFromText(evt.msg)]));
+  }
   return extractIPsFromText(evt.msg);
 }
 // 情資比對必須在去識別化「之前」的原始事件上執行，否則比對到的是假 IP（見規劃文件第 6 節）
@@ -959,10 +989,16 @@ function replaceIPsInLine(line) {
 function replaceMACsInLine(line) {
   return line.replace(MAC_COLON_RE, m => anonMAC(m)).replace(MAC_HYPHEN_RE, m => anonMAC(m)).replace(MAC_DOT_RE, m => anonMAC(m));
 }
-const CEF_SENSITIVE_KEYS = ['src', 'dst', 'shost', 'dhost', 'suser', 'duser', 'sourceUserName', 'destinationUserName'];
+const CEF_SENSITIVE_KEYS = ['src', 'dst', 'shost', 'dhost', 'dvchost', 'suser', 'duser', 'sourceUserName', 'destinationUserName'];
+// parseCEFLine() 用 unescapeCEF() 把 header 欄位裡跳脫過的 \| \\ 還原成原始字元存進物件，
+// 重建行時需要反向操作，否則 header 值裡若含未跳脫的 | 會讓後面欄位全部錯位
+function escapeCEFHeader(v) {
+  return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
+}
 function rebuildCEFLine(evt) {
   const ext = Object.entries(evt.fields).map(([k, v]) => `${k}=${String(v).replace(/\\/g, '\\\\').replace(/=/g, '\\=')}`).join(' ');
-  return `CEF:${evt.version || '0'}|${evt.deviceVendor || ''}|${evt.deviceProduct || ''}|${evt.deviceVersion || ''}|${evt.sigId || ''}|${evt.msg || ''}|${evt.severityRaw || ''}|${ext}`;
+  const h = escapeCEFHeader;
+  return `CEF:${h(evt.version || '0')}|${h(evt.deviceVendor || '')}|${h(evt.deviceProduct || '')}|${h(evt.deviceVersion || '')}|${h(evt.sigId || '')}|${h(evt.msg || '')}|${h(evt.severityRaw || '')}|${ext}`;
 }
 // LEEF 官方預先定義的欄位裡，src/dst/srcPreNAT/dstPreNAT/srcPostNAT/dstPostNAT 皆為 IP 位址型別，
 // usrName 為使用者名稱型別，去識別化邏輯依型別分流（非逐一硬寫死判斷式）
@@ -974,10 +1010,36 @@ function rebuildLEEFLine(evt) {
   if (/^2/.test(evt.version || '')) header.push(evt.delimiterRaw || '');
   return header.join('|') + '|' + ext;
 }
+// SD-PARAM 的原始 SD-ID 名稱（如 "origin"、"exampleSDID@32473"）在 parseStructuredData()
+// 階段已被攤平捨棄、只留參數 key=value，故重建時無法還原原始 SD-ID，改用固定佔位 "sdid"；
+// 重建的重點是不讓已去識別化的參數值整段消失，非逐字還原原始 SD 語法
+function rebuildStructuredData(fields) {
+  const keys = Object.keys(fields || {});
+  if (!keys.length) return '-';
+  const params = keys.map(k => `${k}="${String(fields[k]).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`).join(' ');
+  return `[sdid ${params}]`;
+}
 function rebuildSyslogRaw(evt) {
   const priBase = (evt.facility || 0) * 8 + Number(evt.severityRaw || 0);
-  if (evt.format === 'rfc5424') return `<${priBase}>1 ${evt.timestampRaw || '-'} ${evt.host || '-'} ${evt.appName || '-'} ${evt.procid || '-'} ${evt.msgid || '-'} - ${evt.msg || ''}`;
+  if (evt.format === 'rfc5424') return `<${priBase}>1 ${evt.timestampRaw || '-'} ${evt.host || '-'} ${evt.appName || '-'} ${evt.procid || '-'} ${evt.msgid || '-'} ${rebuildStructuredData(evt.fields)} ${evt.msg || ''}`;
   return `<${priBase}>${evt.timestampRaw || ''} ${evt.host || ''} ${evt.appName ? evt.appName + ': ' : ''}${evt.msg || ''}`;
+}
+// JSON log 沒有 CEF 的固定 extension key 名單，借用 [2] JSON 匯入用的別名表（SRC_IP_KEYS/
+// DST_IP_KEYS/HOST_KEYS/MSG_KEYS）逐一比對 clone.fields 實際存在的 key 做去識別化；
+// JSON_USER_KEYS 為此模組專屬（其餘別名表無使用者欄位概念，故未定義於別名表附近）
+const JSON_USER_KEYS = ['user', 'username', 'user_name', 'userName', 'account', 'accountName'];
+function anonymizeJSONFields(fields) {
+  Object.keys(fields).forEach(k => {
+    const v = fields[k];
+    if (v === undefined || v === null) return;
+    // key 本身已被歸類為 IP 型別欄位（如 srcip）但值不是合法 IPv4（如 IPv6）時，不可原樣放行，
+    // 一律 REDACTED（比照 CEF 分支既有的 fallback 邏輯），避免看似已去識別化實際仍外洩
+    if (SRC_IP_KEYS.includes(k) || DST_IP_KEYS.includes(k)) fields[k] = isValidIPv4(String(v)) ? anonIP(String(v)) : 'REDACTED';
+    else if (HOST_KEYS.includes(k)) fields[k] = anonHostname(v);
+    else if (JSON_USER_KEYS.includes(k)) fields[k] = anonUser(v);
+    else if (MSG_KEYS.includes(k)) fields[k] = replaceMACsInLine(replaceIPsInLine(String(v)));
+  });
+  return fields;
 }
 function anonymizeEvent(evt) {
   const clone = { ...evt, fields: { ...evt.fields } };
@@ -998,8 +1060,24 @@ function anonymizeEvent(evt) {
       if (!v) return;
       if (k === 'usrName') clone.fields[k] = anonUser(v);
       else if (isValidIPv4(v)) clone.fields[k] = anonIP(v);
+      // IP 型別欄位但值非合法 IPv4（如 IPv6）時不可原樣放行，比照 CEF/JSON 一律 REDACTED
+      else clone.fields[k] = 'REDACTED';
     });
     clone.raw = rebuildLEEFLine(clone);
+  } else if (evt.format === 'json') {
+    anonymizeJSONFields(clone.fields);
+    if (clone.host) clone.host = anonHostname(clone.host);
+    clone.msg = replaceMACsInLine(replaceIPsInLine(clone.msg || ''));
+    clone.raw = JSON.stringify(clone.fields);
+  } else if (evt.format === 'rfc5424') {
+    // Structured Data 的 SD-PARAM 無固定命名規格，無法像 CEF/JSON 依欄位語意分流處理，
+    // 一律用通用 IP/MAC 正則替換（與 msg 文字的既有處理方式一致），避免整段欄位被捨棄
+    if (clone.host) clone.host = anonHostname(clone.host);
+    const anonFields = {};
+    Object.keys(clone.fields || {}).forEach(k => { anonFields[k] = replaceMACsInLine(replaceIPsInLine(String(clone.fields[k]))); });
+    clone.fields = anonFields;
+    clone.msg = replaceMACsInLine(replaceIPsInLine(clone.msg || ''));
+    clone.raw = rebuildSyslogRaw(clone);
   } else {
     if (clone.host) clone.host = anonHostname(clone.host);
     clone.msg = replaceMACsInLine(replaceIPsInLine(clone.msg || ''));
