@@ -490,6 +490,52 @@ function extractIPsFromText(text) {
   if (!text) return [];
   return Array.from(new Set((text.match(IP_RE_G) || []).filter(isPlausibleIPv4)));
 }
+// 通用 key=value / key="value" 擷取：FortiGate 等廠牌原生 syslog log body 常見用這種語法
+// （非 CEF，但語法相近，非結構化格式的 RFC3164/5424 MSG 欄位裡常見），僅供「可選顯示欄位」
+// 這類輔助資訊 best-effort 擷取用，不用於格式判定或嚴重度依據
+function extractKeyValueFields(text) {
+  const fields = {};
+  if (!text) return fields;
+  const re = /([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|(\S+))/g;
+  let m;
+  while ((m = re.exec(text))) fields[m[1]] = m[2] !== undefined ? m[2] : m[3];
+  return fields;
+}
+const SRC_IP_KEYS = ['srcip', 'src_ip', 'source_ip', 'src'];
+const DST_IP_KEYS = ['dstip', 'dst_ip', 'destination_ip', 'dst'];
+const SRC_PORT_KEYS = ['srcport', 'src_port', 'sport', 'spt'];
+const DST_PORT_KEYS = ['dstport', 'dst_port', 'dport', 'dpt'];
+const PROTO_KEYS = ['proto', 'protocol'];
+function pickField(fields, keys) {
+  for (const k of keys) { if (fields[k] !== undefined) return fields[k]; }
+  return null;
+}
+// 可選顯示欄位（來源/目的 IP、Port、通訊協定）的統一資料來源：CEF 走結構化 extension 欄位；
+// Syslog 無正式 extension 概念，改用上面的 key=value best-effort 擷取，抓不到時維持 '-'，
+// 不強行用正則臆測不存在的資訊
+function getEventNetTuple(e) {
+  if (e.format === 'cef' && e.fields) {
+    const spt = e.fields.spt, dpt = e.fields.dpt;
+    return {
+      src: e.fields.src || '-',
+      dst: e.fields.dst || '-',
+      port: (spt || dpt) ? `${spt || '-'}→${dpt || '-'}` : '-',
+      proto: e.fields.proto || '-'
+    };
+  }
+  const kv = extractKeyValueFields(e.msg);
+  const src = pickField(kv, SRC_IP_KEYS);
+  const dst = pickField(kv, DST_IP_KEYS);
+  const spt = pickField(kv, SRC_PORT_KEYS);
+  const dpt = pickField(kv, DST_PORT_KEYS);
+  const proto = pickField(kv, PROTO_KEYS);
+  return {
+    src: src || '-',
+    dst: dst || '-',
+    port: (spt || dpt) ? `${spt || '-'}→${dpt || '-'}` : '-',
+    proto: proto || '-'
+  };
+}
 // Syslog 自由文字 best-effort 掃描 heuristic：可信度低於 CEF 結構化版本（固定 Medium 而非 High）
 function detectScanHeuristicSyslog(events, opts) {
   const threshold = (opts && opts.threshold) || 5;
@@ -1113,18 +1159,6 @@ function renderStatic() {
 
 // 可選顯示欄位（來源/目的 IP、Port、通訊協定）僅 CEF 有結構化欄位可用；Syslog 無此概念，
 // 一律顯示 "-"（自由文字內容仍可從「內容」欄位自行判讀，不強行用正則臆測）
-function getEventNetTuple(e) {
-  if (e.format === 'cef' && e.fields) {
-    const spt = e.fields.spt, dpt = e.fields.dpt;
-    return {
-      src: e.fields.src || '-',
-      dst: e.fields.dst || '-',
-      port: (spt || dpt) ? `${spt || '-'}→${dpt || '-'}` : '-',
-      proto: e.fields.proto || '-'
-    };
-  }
-  return { src: '-', dst: '-', port: '-', proto: '-' };
-}
 function renderResults() {
   const thead = document.querySelector('#results-table thead');
   const tbody = document.querySelector('#results-table tbody');
