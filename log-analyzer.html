@@ -69,6 +69,8 @@ textarea.paste{width:100%;min-height:110px;background:var(--surface2);border:1px
 table{width:100%;border-collapse:collapse;font-size:11px}
 th,td{padding:5px 8px;text-align:left;border-bottom:1px solid var(--border);vertical-align:top}
 th{color:var(--text-muted);font-weight:600;text-transform:uppercase;font-size:9px;letter-spacing:.5px}
+th.sortable-col{cursor:pointer;user-select:none}
+th.sortable-col:hover{color:var(--accent)}
 .tbl-wrap{max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:8px}
 .badge{display:inline-block;padding:1px 7px;border-radius:20px;font-size:9px;font-weight:700}
 .badge.Critical{background:rgba(239,68,68,.18);color:var(--red)}
@@ -136,6 +138,7 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
       <label><input type="checkbox" id="col-dst"> <span id="lbl-col-dst"></span></label>
       <label><input type="checkbox" id="col-port"> <span id="lbl-col-port"></span></label>
       <label><input type="checkbox" id="col-proto"> <span id="lbl-col-proto"></span></label>
+      <input type="text" id="results-search" class="txt" style="margin-left:auto;width:180px">
     </div>
     <div class="tbl-wrap"><table id="results-table"><thead></thead><tbody></tbody></table></div>
   </section>
@@ -199,6 +202,24 @@ function normSyslogSeverity(sevRaw) {
   if (n === 3) return 'High';
   if (n === 4) return 'Medium';
   if (n <= 6) return 'Low';
+  return 'Info';
+}
+// JSON log 沒有統一嚴重度規格，各家詞彙差異很大；數字一律沿用 syslog 0-7 慣例（RFC5424/ECS
+// log.syslog.severity.code 皆用此範圍，比 CEF 0-10 更常見於通用工具），文字則用常見詞彙比對，
+// 兩者都比對不到時給最低關注度 Info（避免無依據臆測成高風險，寧可漏報不誤報）
+const SEV_WORD_MAP = [
+  { re: /emerg|critical|fatal/i, level: 'Critical' },
+  { re: /alert|error|err\b|high/i, level: 'High' },
+  { re: /warn|medium/i, level: 'Medium' },
+  { re: /notice|info|low/i, level: 'Low' },
+  { re: /debug|trace/i, level: 'Info' }
+];
+function normGenericSeverity(sevRaw) {
+  if (sevRaw === undefined || sevRaw === null || sevRaw === '') return 'Info';
+  const n = Number(sevRaw);
+  if (!Number.isNaN(n)) return normSyslogSeverity(n);
+  const s = String(sevRaw);
+  for (const w of SEV_WORD_MAP) { if (w.re.test(s)) return w.level; }
   return 'Info';
 }
 
@@ -362,8 +383,46 @@ function parseLogLine(line, lineNo) {
   if (fmt === 'rfc3164') return parseRFC3164Line(line, lineNo);
   return null;
 }
+// JSON log 沒有統一欄位規格，依常見別名（TS_KEYS/SEV_KEYS/HOST_KEYS/MSG_KEYS/APP_KEYS，定義於
+// 下方情資/可選欄位模組附近，供全檔共用）best-effort 對應到既有事件 schema；分類判定沿用既有
+// classifyByKeyword()（只看 msg/appName 文字），不額外針對 JSON 欄位擴充比對來源，維持單一判定
+// 邏輯來源，且大多數 JSON log 的語意本就會落在 message 欄位而非另一組動作欄位
+function looksLikeLogRecord(obj) {
+  return !!(pickField(obj, TS_KEYS) || pickField(obj, SEV_KEYS) || pickField(obj, MSG_KEYS) || pickField(obj, HOST_KEYS));
+}
+function eventFromJSONObject(obj, lineNo) {
+  const tsRaw = pickField(obj, TS_KEYS);
+  const ts = tsRaw ? new Date(tsRaw) : null;
+  const timestamp = ts && !isNaN(ts.getTime()) ? ts : null;
+  const sevRaw = pickField(obj, SEV_KEYS);
+  return {
+    format: 'json', raw: JSON.stringify(obj), lineNo,
+    timestamp, timestampRaw: tsRaw || '',
+    host: pickField(obj, HOST_KEYS) || '',
+    appName: pickField(obj, APP_KEYS) || '', procid: '', msgid: '',
+    severityRaw: sevRaw, severityNorm: normGenericSeverity(sevRaw),
+    facility: null, facilityAuth: false,
+    msg: pickField(obj, MSG_KEYS) || '', fields: obj
+  };
+}
+// 主要 log 匯入若整段文字可解析成 JSON/NDJSON，優先走這條路徑（格式判定在文字層級，非逐行）；
+// 解析不到任何看起來像 log 事件的物件則回傳 null，交給既有逐行 CEF/Syslog dispatcher 處理，
+// 兩者互不干擾——CEF/Syslog 每行都不是合法 JSON，JSON.parse 必定失敗，不會誤判
+function parseJSONLogEvents(text) {
+  const { arr, singleObj } = parseJSONOrNDJSON(text);
+  let list = arr;
+  if (!list && singleObj && looksLikeLogRecord(singleObj)) list = [singleObj];
+  if (!list) return null;
+  const events = [];
+  list.forEach((item, idx) => {
+    if (item && typeof item === 'object') events.push(eventFromJSONObject(item, idx + 1));
+  });
+  return events.length ? events : null;
+}
 function parseLogText(text) {
   const norm = text.replace(/\r\n/g, '\n');
+  const jsonEvents = parseJSONLogEvents(norm);
+  if (jsonEvents) return { events: jsonEvents, unparsed: [] };
   const lines = norm.split('\n');
   const events = [], unparsed = [];
   lines.forEach((line, idx) => {
@@ -385,6 +444,31 @@ function summarizeBySeverity(events) {
   const summary = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };
   events.forEach(e => { summary[e.severityNorm] = (summary[e.severityNorm] || 0) + 1; });
   return summary;
+}
+// 事件清單可點欄位標題排序；預設 col='severity' dir='asc' 時排序結果與既有 sortEventsBySeverity()
+// 完全相同（SEV_RANK 本身就是嚴重度由高到低遞增編號），不影響既有預設呈現行為
+function sortEventsByColumn(events, col, dir) {
+  const mul = dir === 'desc' ? -1 : 1;
+  const getVal = e => {
+    if (col === 'time') return effectiveTime(e);
+    if (col === 'host') return (e.host || '').toLowerCase();
+    if (col === 'format') return e.format || '';
+    if (col === 'category') return e.category || '';
+    return SEV_RANK[e.severityNorm];
+  };
+  return [...events].sort((a, b) => {
+    const va = getVal(a), vb = getVal(b);
+    if (va < vb) return -1 * mul;
+    if (va > vb) return 1 * mul;
+    return a.lineNo - b.lineNo;
+  });
+}
+// 事件清單搜尋框：對主機/內容/原始行文字做不分大小寫子字串比對，僅影響表格顯示，不重新計算
+// 問題清單或統計摘要（那些是分析當下對「全部資料」算出的結果，篩選只是換一種檢視角度）
+function filterEvents(events, query) {
+  if (!query) return events;
+  const q = query.toLowerCase();
+  return events.filter(e => (e.host || '').toLowerCase().includes(q) || (e.msg || '').toLowerCase().includes(q) || (e.raw || '').toLowerCase().includes(q));
 }
 
 // ============================================================
@@ -506,6 +590,12 @@ const DST_IP_KEYS = ['dstip', 'dst_ip', 'destination_ip', 'dst'];
 const SRC_PORT_KEYS = ['srcport', 'src_port', 'sport', 'spt'];
 const DST_PORT_KEYS = ['dstport', 'dst_port', 'dport', 'dpt'];
 const PROTO_KEYS = ['proto', 'protocol'];
+// 主要 log 匯入 JSON 事件用的欄位別名（無統一規格，依常見命名慣例 best-effort 對應）
+const TS_KEYS = ['timestamp', 'time', 'date', '@timestamp', 'eventTime', 'event_time'];
+const SEV_KEYS = ['severity', 'level', 'priority', 'severityLevel', 'log.level'];
+const HOST_KEYS = ['host', 'hostname', 'device', 'source', 'computer', 'dvc'];
+const MSG_KEYS = ['message', 'msg', 'description', 'text', 'log'];
+const APP_KEYS = ['appName', 'application', 'process', 'program', 'service'];
 function pickField(fields, keys) {
   for (const k of keys) { if (fields[k] !== undefined) return fields[k]; }
   return null;
@@ -521,6 +611,19 @@ function getEventNetTuple(e) {
       dst: e.fields.dst || '-',
       port: (spt || dpt) ? `${spt || '-'}→${dpt || '-'}` : '-',
       proto: e.fields.proto || '-'
+    };
+  }
+  if (e.format === 'json' && e.fields) {
+    const src = pickField(e.fields, SRC_IP_KEYS);
+    const dst = pickField(e.fields, DST_IP_KEYS);
+    const spt = pickField(e.fields, SRC_PORT_KEYS);
+    const dpt = pickField(e.fields, DST_PORT_KEYS);
+    const proto = pickField(e.fields, PROTO_KEYS);
+    return {
+      src: src || '-',
+      dst: dst || '-',
+      port: (spt || dpt) ? `${spt || '-'}→${dpt || '-'}` : '-',
+      proto: proto || '-'
     };
   }
   const kv = extractKeyValueFields(e.msg);
@@ -577,14 +680,16 @@ function extractIPFieldFromObj(obj) {
   return (typeof v === 'string' || typeof v === 'number') ? String(v) : null;
 }
 
-// 嘗試把文字內容解析成情資陣列。涵蓋兩種真實情資匯出常見形態：
+// 通用 JSON/NDJSON 解析，情資清單與主要 log 匯入共用。涵蓋兩種常見形態：
 // (1) NDJSON/JSON Lines——逐行各自是獨立合法 JSON 物件（Spamhaus DROP JSON 匯出即此格式，
 //     整份檔案本身不是單一合法 JSON 文件，不能直接對整段文字做 JSON.parse）
-// (2) 標準 JSON——單一陣列，或物件包一層陣列欄位（如 {"data":[...]}），或單一物件（視為僅 1 筆）
-// 解析失敗（純文字/CSV 等非 JSON 格式）回傳 null，讓呼叫端 fallback 到既有邏輯
-function parseIntelListJSON(text) {
+// (2) 標準 JSON——單一陣列，或物件包一層陣列欄位（如 {"data":[...]}）
+// 「整段文字剛好是單一 JSON 物件」的情況回傳於 singleObj，是否要當作 1 筆資料處理交給呼叫端
+// 各自判斷（情資清單看有沒有 IP 欄位，log 匯入看像不像一筆事件），避免把判斷邏輯耦合在共用函式裡。
+// 解析失敗（純文字/CSV 等非 JSON 格式）兩者皆回傳 null，讓呼叫端 fallback 到既有邏輯
+function parseJSONOrNDJSON(text) {
   const trimmed = text.trim();
-  if (!trimmed) return null;
+  if (!trimmed) return { arr: null, singleObj: null };
   const lines = trimmed.split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length > 1) {
     const objs = [];
@@ -592,17 +697,23 @@ function parseIntelListJSON(text) {
     for (const l of lines) {
       try { objs.push(JSON.parse(l)); } catch (e) { allValid = false; break; }
     }
-    if (allValid && objs.length) return objs;
+    if (allValid && objs.length) return { arr: objs, singleObj: null };
   }
   try {
     const data = JSON.parse(trimmed);
-    if (Array.isArray(data)) return data;
+    if (Array.isArray(data)) return { arr: data, singleObj: null };
     if (data && typeof data === 'object') {
       const arrKey = Object.keys(data).find(k => Array.isArray(data[k]));
-      if (arrKey) return data[arrKey];
-      if (extractIPFieldFromObj(data)) return [data];
+      if (arrKey) return { arr: data[arrKey], singleObj: null };
+      return { arr: null, singleObj: data };
     }
-  } catch (e) { /* 非 JSON，交給 CSV/純文字邏輯處理 */ }
+  } catch (e) { /* 非 JSON，交給呼叫端 fallback 邏輯處理 */ }
+  return { arr: null, singleObj: null };
+}
+function parseIntelListJSON(text) {
+  const { arr, singleObj } = parseJSONOrNDJSON(text);
+  if (arr) return arr;
+  if (singleObj && extractIPFieldFromObj(singleObj)) return [singleObj];
   return null;
 }
 
@@ -850,7 +961,7 @@ const LANG = {
     'app.title':'Log 分析與去識別化工具','app.subtitle':'匯入交換器/防火牆 Log（CEF／標準 Syslog），依嚴重程度排序並找出可能問題；本機比對已知情資清單；可對敏感欄位去識別化。全程僅在瀏覽器本機執行，不會連網。',
     'notice.disclaimer':'此功能之分析結果僅供參考，實際處置請自行判斷並謹慎使用',
     'import.title':'① 匯入 Log','import.hint':'支援 CEF (Common Event Format) 與標準 Syslog（RFC3164/RFC5424）逐行格式，可貼上文字或上傳檔案。','import.paste_placeholder':'在此貼上 log 內容，或使用下方上傳按鈕…','import.upload_btn':'上傳檔案','import.analyze_btn':'解析並分析','import.clear_btn':'清空','import.file_loaded':'已載入檔案：','opt.freqWindow':'頻率視窗(秒)：','opt.freqThreshold':'頻率門檻(次)：','opt.scanThreshold':'掃描門檻(數)：',
-    'results.title':'② 事件清單（依嚴重程度排序）','results.empty':'尚無資料，請先匯入並分析 log','results.col_severity':'嚴重程度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題','results.optional_cols':'顯示欄位：','results.col_src':'來源IP','results.col_dst':'目的IP','results.col_port':'Port','results.col_proto':'通訊協定','results.col_msg':'內容','results.summary_label':'統計：',
+    'results.title':'② 事件清單（依嚴重程度排序）','results.empty':'尚無資料，請先匯入並分析 log','results.col_severity':'嚴重程度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題','results.optional_cols':'顯示欄位：','results.col_src':'來源IP','results.col_dst':'目的IP','results.col_port':'Port','results.col_proto':'通訊協定','results.search_placeholder':'搜尋主機/內容…','results.col_msg':'內容','results.summary_label':'統計：',
     'sev.critical':'嚴重','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'資訊',
     'issues.title':'③ 問題清單（基本資安分析）','issues.empty':'未發現符合規則的問題','issues.col_category':'類別','issues.col_severity':'嚴重程度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_sample':'範例',
     'conf.confirmed':'已確認','conf.heuristic':'推測',
@@ -865,7 +976,7 @@ const LANG = {
     'app.title':'Log Analyzer & De-identifier','app.subtitle':'Import switch/firewall logs (CEF / standard Syslog), rank by severity and surface likely issues; match against local threat-intel lists; de-identify sensitive fields. Runs entirely in your browser, no network calls.',
     'notice.disclaimer':'Analysis results are for reference only — use your own judgement before acting on them',
     'import.title':'① Import Log','import.hint':'Supports line-based CEF (Common Event Format) and standard Syslog (RFC3164/RFC5424). Paste text or upload a file.','import.paste_placeholder':'Paste log content here, or use the upload button below…','import.upload_btn':'Upload File','import.analyze_btn':'Parse & Analyze','import.clear_btn':'Clear','import.file_loaded':'Loaded file: ','opt.freqWindow':'Freq window (s):','opt.freqThreshold':'Freq threshold:','opt.scanThreshold':'Scan threshold:',
-    'results.title':'② Event List (sorted by severity)','results.empty':'No data yet — import and analyze a log first','results.col_severity':'Severity','results.col_time':'Time','results.col_host':'Host','results.col_format':'Format','results.col_category':'Category','results.col_notes':'Suspected Issue','results.optional_cols':'Show columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.col_msg':'Message','results.summary_label':'Summary: ',
+    'results.title':'② Event List (sorted by severity)','results.empty':'No data yet — import and analyze a log first','results.col_severity':'Severity','results.col_time':'Time','results.col_host':'Host','results.col_format':'Format','results.col_category':'Category','results.col_notes':'Suspected Issue','results.optional_cols':'Show columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.search_placeholder':'Search host/content…','results.col_msg':'Message','results.summary_label':'Summary: ',
     'sev.critical':'Critical','sev.high':'High','sev.medium':'Medium','sev.low':'Low','sev.info':'Info',
     'issues.title':'③ Issue List (basic security analysis)','issues.empty':'No rule-based issues found','issues.col_category':'Category','issues.col_severity':'Severity','issues.col_count':'Count','issues.col_confidence':'Confidence','issues.col_sample':'Sample',
     'conf.confirmed':'Confirmed','conf.heuristic':'Heuristic',
@@ -880,7 +991,7 @@ const LANG = {
     'app.title':'ログ分析・匿名化ツール','app.subtitle':'スイッチ/ファイアウォールのログ（CEF／標準 Syslog）を取り込み、重要度順に並べ替えて問題点を洗い出します。ローカルの脅威インテリジェンスリストと照合し、機密項目を匿名化できます。すべてブラウザ内で完結し、通信は行いません。',
     'notice.disclaimer':'本機能の分析結果は参考情報です。実際の対応はご自身の判断で慎重に行ってください',
     'import.title':'① ログ取り込み','import.hint':'行単位の CEF (Common Event Format) と標準 Syslog（RFC3164/RFC5424）に対応。テキスト貼り付けまたはファイルアップロード。','import.paste_placeholder':'ここにログを貼り付けるか、下のアップロードボタンを使用…','import.upload_btn':'ファイルをアップロード','import.analyze_btn':'解析・分析','import.clear_btn':'クリア','import.file_loaded':'読み込み済みファイル：','opt.freqWindow':'頻度ウィンドウ(秒)：','opt.freqThreshold':'頻度しきい値：','opt.scanThreshold':'スキャンしきい値：',
-    'results.title':'② イベント一覧（重要度順）','results.empty':'データがありません。まずログを取り込んで分析してください','results.col_severity':'重要度','results.col_time':'時刻','results.col_host':'ホスト','results.col_format':'形式','results.col_category':'分類','results.col_notes':'疑わしい問題','results.optional_cols':'表示項目：','results.col_src':'送信元IP','results.col_dst':'宛先IP','results.col_port':'ポート','results.col_proto':'プロトコル','results.col_msg':'内容','results.summary_label':'集計：',
+    'results.title':'② イベント一覧（重要度順）','results.empty':'データがありません。まずログを取り込んで分析してください','results.col_severity':'重要度','results.col_time':'時刻','results.col_host':'ホスト','results.col_format':'形式','results.col_category':'分類','results.col_notes':'疑わしい問題','results.optional_cols':'表示項目：','results.col_src':'送信元IP','results.col_dst':'宛先IP','results.col_port':'ポート','results.col_proto':'プロトコル','results.search_placeholder':'ホスト/内容を検索…','results.col_msg':'内容','results.summary_label':'集計：',
     'sev.critical':'重大','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'情報',
     'issues.title':'③ 問題リスト（基本セキュリティ分析）','issues.empty':'該当する問題は見つかりませんでした','issues.col_category':'分類','issues.col_severity':'重要度','issues.col_count':'件数','issues.col_confidence':'信頼度','issues.col_sample':'サンプル',
     'conf.confirmed':'確認済み','conf.heuristic':'推定',
@@ -895,7 +1006,7 @@ const LANG = {
     'app.title':'Log analyzer, De-identifier je','app.subtitle':'CEF/Syslog logmey yIlan, severity yIchov, issue yItu\'. Local intel list yIrar. Sensitive field yIde-identify. Browser neH Daq taH, network Qapbe\'.',
     'notice.disclaimer':'analysis result neH reference, cha\' vIt yISovmoH pagh yIruch',
     'import.title':'① Log yIlan','import.hint':'CEF, Syslog (RFC3164/RFC5424) chaw\'. Text yIlan pagh file yIlan.','import.paste_placeholder':'log Daq yIlan…','import.upload_btn':'File yIlan','import.analyze_btn':'yIchov','import.clear_btn':'yIchIm','import.file_loaded':'File lanpu\':','opt.freqWindow':'poH (lup):','opt.freqThreshold':"mIgh QIt:",'opt.scanThreshold':'scan QIt:',
-    'results.title':'② Event tetlh (severity chov)','results.empty':'Data available, first log yIlan','results.col_severity':'severity','results.col_time':'poH','results.col_host':'host','results.col_format':'format','results.col_category':'segh','results.col_notes':'pIH mIgh','results.optional_cols':"cha' ghom:",'results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.col_msg':'mu\'meyvam','results.summary_label':'chov:',
+    'results.title':'② Event tetlh (severity chov)','results.empty':'Data available, first log yIlan','results.col_severity':'severity','results.col_time':'poH','results.col_host':'host','results.col_format':'format','results.col_category':'segh','results.col_notes':'pIH mIgh','results.optional_cols':"cha' ghom:",'results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.search_placeholder':'nej host/mu\'meyvam…','results.col_msg':'mu\'meyvam','results.summary_label':'chov:',
     'sev.critical':'!QIH','sev.high':'chIm','sev.medium':'motlh','sev.low':'mach','sev.info':'De\'',
     'issues.title':'③ Issue tetlh (security chov)','issues.empty':'Issue tu\'lu\'be\'','issues.col_category':'segh','issues.col_severity':'severity','issues.col_count':'\'ar','issues.col_confidence':'HIvqa\'','issues.col_sample':'nughDoq',
     'conf.confirmed':'chovtaH','conf.heuristic':'poQlu\'',
@@ -910,7 +1021,7 @@ const LANG = {
     'app.title':'Log-Readin\' & Face-Hidin\' Tool, Arrr','app.subtitle':'Haul in yer switch/firewall logs (CEF or plain Syslog), rank \'em by how much trouble they be, and sniff out the scallywags. Match against yer own blacklist o\' known villains. Hide the crew\'s true names too. All done right here on yer own ship, no signal sent to shore.',
     'notice.disclaimer':'These findin\'s be just a chart, not the treasure itself — use yer own head afore ye act, matey',
     'import.title':'① Haul In the Log','import.hint':'Reads CEF and plain Syslog (RFC3164/RFC5424), line by line. Paste the scroll or hoist a file aboard.','import.paste_placeholder':'Paste yer log scroll here, or hoist a file below…','import.upload_btn':'Hoist File','import.analyze_btn':'Chart & Scan','import.clear_btn':'Swab the Deck','import.file_loaded':'File aboard: ','opt.freqWindow':'Bells in a Watch:','opt.freqThreshold':'Ruckus Count:','opt.scanThreshold':"Scoutin' Count:",
-    'results.title':'② The Event Manifest (worst trouble first)','results.empty':'Nothin\' in the hold yet — haul in a log first','results.col_severity':'Trouble','results.col_time':'Bell','results.col_host':'Ship','results.col_format':'Rig','results.col_category':'Kind','results.col_notes':'Suspected Trouble','results.optional_cols':'Show Columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.col_msg':'Word','results.summary_label':'Tally: ',
+    'results.title':'② The Event Manifest (worst trouble first)','results.empty':'Nothin\' in the hold yet — haul in a log first','results.col_severity':'Trouble','results.col_time':'Bell','results.col_host':'Ship','results.col_format':'Rig','results.col_category':'Kind','results.col_notes':'Suspected Trouble','results.optional_cols':'Show Columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.search_placeholder':'Search the logbook…','results.col_msg':'Word','results.summary_label':'Tally: ',
     'sev.critical':'Mutiny!','sev.high':'Rough Seas','sev.medium':'Choppy','sev.low':'Calm','sev.info':'Just Gossip',
     'issues.title':'③ Trouble Manifest (basic scoutin\')','issues.empty':'No trouble spotted on the horizon','issues.col_category':'Kind','issues.col_severity':'Trouble','issues.col_count':'Tally','issues.col_confidence':'How Sure','issues.col_sample':'Sample',
     'conf.confirmed':'Confirmed, arrr','conf.heuristic':'Just a Hunch',
@@ -925,7 +1036,7 @@ const LANG = {
     'app.title':'📜🔍 + 🕵️‍♂️➡️❓ 工具','app.subtitle':'📥 switch/firewall 📜（CEF/Syslog）➡️ 📊嚴重度排序 ➡️ ❗找問題。🔒本機比對已知🎯清單。🙈把敏感欄位變成❓。全程🖥️本機執行，🚫🌐不連網。',
     'notice.disclaimer':'⚠️ 分析結果僅供參考，實際處置請👤自行判斷',
     'import.title':'①📥 匯入 Log','import.hint':'支援 CEF 與標準 Syslog（RFC3164/5424）📄逐行格式，可✍️貼上或📎上傳。','import.paste_placeholder':'✍️在此貼上 log…','import.upload_btn':'📎上傳檔案','import.analyze_btn':'🔍解析分析','import.clear_btn':'🗑️清空','import.file_loaded':'✅已載入：','opt.freqWindow':'⏱️視窗(秒)：','opt.freqThreshold':'📈門檻(次)：','opt.scanThreshold':'🔦門檻(數)：',
-    'results.title':'②📋 事件清單（依🔥嚴重度）','results.empty':'📭尚無資料','results.col_severity':'🔥嚴重度','results.col_time':'⏰時間','results.col_host':'🖥️主機','results.col_format':'📄格式','results.col_category':'🏷️分類','results.col_notes':'❓疑似問題','results.optional_cols':'👁️欄位：','results.col_src':'📤來源IP','results.col_dst':'📥目的IP','results.col_port':'🔌Port','results.col_proto':'📡協定','results.col_msg':'💬內容','results.summary_label':'📊統計：',
+    'results.title':'②📋 事件清單（依🔥嚴重度）','results.empty':'📭尚無資料','results.col_severity':'🔥嚴重度','results.col_time':'⏰時間','results.col_host':'🖥️主機','results.col_format':'📄格式','results.col_category':'🏷️分類','results.col_notes':'❓疑似問題','results.optional_cols':'👁️欄位：','results.col_src':'📤來源IP','results.col_dst':'📥目的IP','results.col_port':'🔌Port','results.col_proto':'📡協定','results.search_placeholder':'🔍搜尋主機/內容…','results.col_msg':'💬內容','results.summary_label':'📊統計：',
     'sev.critical':'🔴嚴重','sev.high':'🟠高','sev.medium':'🟡中','sev.low':'🔵低','sev.info':'⚪資訊',
     'issues.title':'③❗ 問題清單','issues.empty':'✅未發現問題','issues.col_category':'🏷️類別','issues.col_severity':'🔥嚴重度','issues.col_count':'🔢次數','issues.col_confidence':'🎯可信度','issues.col_sample':'📌範例',
     'conf.confirmed':'✅已確認','conf.heuristic':'🤔推測',
@@ -940,7 +1051,7 @@ const LANG = {
     'app.title':'日誌分析暨資料去識別化作業系統','app.subtitle':'依規定匯入交換器／防火牆日誌資料（CEF 或標準 Syslog 格式），依嚴重程度分級排序，並依既定規則辨識潛在事項，供權責單位參考。得於本機比對已核備之情資清單，並得對機敏欄位執行去識別化作業。前述作業全程於使用者端瀏覽器執行，不涉及對外傳輸行為。',
     'notice.disclaimer':'本項分析結果僅供參考之用，實際處置事宜請權責人員本於專業判斷審慎為之，本工具不負相關法律責任',
     'import.title':'第一項：日誌資料匯入作業','import.hint':'本作業支援 CEF (Common Event Format) 格式及標準 Syslog (RFC3164/RFC5424) 格式之逐行解析，得以文字貼上或檔案上傳方式辦理。','import.paste_placeholder':'請於此欄位貼上日誌內容，或依下方按鈕辦理檔案上傳作業…','import.upload_btn':'辦理檔案上傳','import.analyze_btn':'執行解析暨分析作業','import.clear_btn':'清空本欄位資料','import.file_loaded':'業已載入之檔案：','opt.freqWindow':'頻率視窗（秒）：','opt.freqThreshold':'頻率門檻（次數）：','opt.scanThreshold':'掃描門檻（數量）：',
-    'results.title':'第二項：事件清冊（依嚴重程度分級排序）','results.empty':'目前尚無資料，請依第一項規定辦理匯入及分析作業','results.col_severity':'嚴重程度等級','results.col_time':'發生時間','results.col_host':'主機識別資料','results.col_format':'資料格式','results.col_category':'事件分類','results.col_notes':'疑似問題事項','results.optional_cols':'顯示欄位：','results.col_src':'來源位址','results.col_dst':'目的位址','results.col_port':'埠口','results.col_proto':'通訊協定','results.col_msg':'事件內容','results.summary_label':'統計摘要：',
+    'results.title':'第二項：事件清冊（依嚴重程度分級排序）','results.empty':'目前尚無資料，請依第一項規定辦理匯入及分析作業','results.col_severity':'嚴重程度等級','results.col_time':'發生時間','results.col_host':'主機識別資料','results.col_format':'資料格式','results.col_category':'事件分類','results.col_notes':'疑似問題事項','results.optional_cols':'顯示欄位：','results.col_src':'來源位址','results.col_dst':'目的位址','results.col_port':'埠口','results.col_proto':'通訊協定','results.search_placeholder':'請輸入主機/內容關鍵字以辦理搜尋…','results.col_msg':'事件內容','results.summary_label':'統計摘要：',
     'sev.critical':'甲級（嚴重）','sev.high':'乙級（高）','sev.medium':'丙級（中）','sev.low':'丁級（低）','sev.info':'參考資訊',
     'issues.title':'第三項：問題清冊（基本資安分析作業）','issues.empty':'依現行規則，未查得相符之問題事項','issues.col_category':'問題類別','issues.col_severity':'嚴重程度等級','issues.col_count':'發生次數','issues.col_confidence':'可信程度','issues.col_sample':'代表性樣本',
     'conf.confirmed':'業經確認','conf.heuristic':'推定研判',
@@ -955,7 +1066,7 @@ const LANG = {
     'app.title':'Log 分析去識別化工具喵','app.subtitle':'把交換器/防火牆的 log 叼進來喵，CEF 跟 Syslog 都吃，依嚴重度排排站，找出可疑的老鼠喵。可以在自己地盤比對情資清單，也能把機敏欄位藏起來喵。全程窩在瀏覽器裡不出門喵。',
     'notice.disclaimer':'分析結果只是聞一聞喵，真的要怎麼辦還是主人自己決定喵',
     'import.title':'①叼log進來喵','import.hint':'CEF 跟標準 Syslog（RFC3164/5424）都吃喵，貼上文字或叼檔案進來都可以喵。','import.paste_placeholder':'log 貼在這裡喵…','import.upload_btn':'叼檔案進來喵','import.analyze_btn':'聞一聞分析喵','import.clear_btn':'抓沙清空喵','import.file_loaded':'已經叼進來的檔案喵：','opt.freqWindow':'時間窗(秒)喵：','opt.freqThreshold':'門檻(次)喵：','opt.scanThreshold':'掃描門檻喵：',
-    'results.title':'②事件清單（照嚴重度排排站喵）','results.empty':'還沒東西可以聞喵，先匯入 log 喵','results.col_severity':'嚴重度喵','results.col_time':'時間喵','results.col_host':'主機喵','results.col_format':'格式喵','results.col_category':'分類喵','results.col_notes':'疑似問題喵','results.optional_cols':'顯示欄位喵：','results.col_src':'來源IP喵','results.col_dst':'目的IP喵','results.col_port':'Port喵','results.col_proto':'協定喵','results.col_msg':'內容喵','results.summary_label':'統計喵：',
+    'results.title':'②事件清單（照嚴重度排排站喵）','results.empty':'還沒東西可以聞喵，先匯入 log 喵','results.col_severity':'嚴重度喵','results.col_time':'時間喵','results.col_host':'主機喵','results.col_format':'格式喵','results.col_category':'分類喵','results.col_notes':'疑似問題喵','results.optional_cols':'顯示欄位喵：','results.col_src':'來源IP喵','results.col_dst':'目的IP喵','results.col_port':'Port喵','results.col_proto':'協定喵','results.search_placeholder':'搜尋主機/內容喵…','results.col_msg':'內容喵','results.summary_label':'統計喵：',
     'sev.critical':'超嚴重喵!!','sev.high':'很在意喵','sev.medium':'普通喵','sev.low':'不太在意喵','sev.info':'路過看看喵',
     'issues.title':'③問題清單（聞出來的可疑喵）','issues.empty':'沒聞到什麼可疑的喵','issues.col_category':'類別喵','issues.col_severity':'嚴重度喵','issues.col_count':'次數喵','issues.col_confidence':'有多確定喵','issues.col_sample':'範例喵',
     'conf.confirmed':'確定喵！','conf.heuristic':'感覺啦喵',
@@ -970,7 +1081,7 @@ const LANG = {
     'app.title':'🫘 Log 分析去識別化工具','app.subtitle':'把 switch/firewall 的 🫘log（CEF/Syslog）倒進來，依🌶️辣度排序找出問題🥕。可在本機比對🍅情資清單，把機敏欄位變成🥔。全程在自家🥬廚房完成，不出門連網。',
     'notice.disclaimer':'分析結果只是一盤🥗參考菜，真正怎麼處理請自己掂量',
     'import.title':'①倒入🫘Log','import.hint':'CEF 與標準 Syslog（RFC3164/5424）都能煮，貼上文字或上傳🥔檔案皆可。','import.paste_placeholder':'把 log 倒在這裡…','import.upload_btn':'🥔上傳檔案','import.analyze_btn':'🔥開火分析','import.clear_btn':'🧹清鍋','import.file_loaded':'已下鍋的檔案：','opt.freqWindow':'⏱️時間窗(秒)：','opt.freqThreshold':'🌶️門檻(次)：','opt.scanThreshold':'🔦掃描門檻：',
-    'results.title':'②事件清單（依🌶️辣度排序）','results.empty':'鍋子還是空的，先倒入 log 吧','results.col_severity':'🌶️辣度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題🌶️','results.optional_cols':'顯示欄位🌶️：','results.col_src':'來源IP🥕','results.col_dst':'目的IP🍆','results.col_port':'Port🌽','results.col_proto':'協定🫘','results.col_msg':'內容','results.summary_label':'總計：',
+    'results.title':'②事件清單（依🌶️辣度排序）','results.empty':'鍋子還是空的，先倒入 log 吧','results.col_severity':'🌶️辣度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題🌶️','results.optional_cols':'顯示欄位🌶️：','results.col_src':'來源IP🥕','results.col_dst':'目的IP🍆','results.col_port':'Port🌽','results.col_proto':'協定🫘','results.search_placeholder':'🔍搜尋主機/內容…','results.col_msg':'內容','results.summary_label':'總計：',
     'sev.critical':'🌶️🌶️🌶️超辣','sev.high':'🌶️🌶️辣','sev.medium':'🌶️微辣','sev.low':'🥒清淡','sev.info':'🥬爽口',
     'issues.title':'③問題清單（基本廚房安全檢查）','issues.empty':'廚房目前一切正常','issues.col_category':'類別','issues.col_severity':'🌶️辣度','issues.col_count':'份數','issues.col_confidence':'火候','issues.col_sample':'試吃樣本',
     'conf.confirmed':'✅確定好了','conf.heuristic':'🤔大概是這樣',
@@ -985,7 +1096,7 @@ const LANG = {
     'app.title':'Log分析咩去識別化-aca工具','app.subtitle':'把switch/firewall咩log（CEF/Syslog）牽進來-aca，依嚴重度排隊咩，找出怪怪的問題-aca。可以在自家草原比對情資名單咩，也能把機敏欄位藏起來-aca。全程在瀏覽器裡吃草，不出門連網咩。',
     'notice.disclaimer':'分析結果只是聞一聞咩，真的怎麼辦要主人自己想-aca',
     'import.title':'①牽log咩進來-aca','import.hint':'CEF跟標準Syslog（RFC3164/5424）咩都吃-aca，貼文字或牽檔案進來都可以咩。','import.paste_placeholder':'log貼在這裡咩…','import.upload_btn':'牽檔案進來-aca','import.analyze_btn':'咩一下分析-aca','import.clear_btn':'清空草原咩','import.file_loaded':'已經牽進來咩檔案-aca：','opt.freqWindow':'時間窗(秒)咩：','opt.freqThreshold':'門檻(次)-aca：','opt.scanThreshold':'掃描門檻咩：',
-    'results.title':'②事件清單（排隊咩排隊-aca）','results.empty':'草原還空空咩，先牽log進來-aca','results.col_severity':'嚴重度咩','results.col_time':'時間-aca','results.col_host':'主機咩','results.col_format':'格式-aca','results.col_category':'分類咩','results.col_notes':'疑似問題-aca','results.optional_cols':'顯示欄位咩：','results.col_src':'來源IP咩','results.col_dst':'目的IP-aca','results.col_port':'Port咩','results.col_proto':'協定-aca','results.col_msg':'內容-aca','results.summary_label':'統計咩：',
+    'results.title':'②事件清單（排隊咩排隊-aca）','results.empty':'草原還空空咩，先牽log進來-aca','results.col_severity':'嚴重度咩','results.col_time':'時間-aca','results.col_host':'主機咩','results.col_format':'格式-aca','results.col_category':'分類咩','results.col_notes':'疑似問題-aca','results.optional_cols':'顯示欄位咩：','results.col_src':'來源IP咩','results.col_dst':'目的IP-aca','results.col_port':'Port咩','results.col_proto':'協定-aca','results.search_placeholder':'搜尋主機/內容咩…','results.col_msg':'內容-aca','results.summary_label':'統計咩：',
     'sev.critical':'超嚴重咩!!!','sev.high':'很緊張-aca','sev.medium':'普通咩','sev.low':'放輕鬆-aca','sev.info':'路過看看咩',
     'issues.title':'③問題清單（咩出來的怪怪咩）','issues.empty':'沒咩到什麼怪怪的-aca','issues.col_category':'類別咩','issues.col_severity':'嚴重度-aca','issues.col_count':'次數咩','issues.col_confidence':'有多確定-aca','issues.col_sample':'範例咩',
     'conf.confirmed':'確定咩！','conf.heuristic':'感覺啦-aca',
@@ -1000,7 +1111,7 @@ const LANG = {
     'app.title':'Log 分析去識別化工具（唉，又一個工具）','app.subtitle':'把 switch/firewall 的 log 倒進來，CEF 跟 Syslog 都收，依嚴重度排一排，找出問題……看了也不一定會處理啦。可以在本機比對情資清單，把機敏欄位藏起來，反正做不做都差不多，至少不連網。',
     'notice.disclaimer':'分析結果就參考參考吧，反正最後還是要自己判斷，工具也救不了什麼',
     'import.title':'①匯入 Log（好，開始了）','import.hint':'CEF 跟標準 Syslog（RFC3164/5424）都吃，貼上文字或上傳檔案，隨便啦。','import.paste_placeholder':'log 貼這裡吧……','import.upload_btn':'上傳檔案','import.analyze_btn':'解析分析（好啦）','import.clear_btn':'清空（算了）','import.file_loaded':'已載入檔案，然後呢：','opt.freqWindow':'頻率視窗(秒)，隨便：','opt.freqThreshold':'頻率門檻，反正：','opt.scanThreshold':'掃描門檻，看看就好：',
-    'results.title':'②事件清單（依嚴重度排序，反正都要看）','results.empty':'沒資料，匯入再說吧','results.col_severity':'嚴重度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題（隨便看看）','results.optional_cols':'顯示欄位，隨便：','results.col_src':'來源IP，反正','results.col_dst':'目的IP，沒差','results.col_port':'Port，看看就好','results.col_proto':'協定，算了','results.col_msg':'內容','results.summary_label':'統計，看看就好：',
+    'results.title':'②事件清單（依嚴重度排序，反正都要看）','results.empty':'沒資料，匯入再說吧','results.col_severity':'嚴重度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題（隨便看看）','results.optional_cols':'顯示欄位，隨便：','results.col_src':'來源IP，反正','results.col_dst':'目的IP，沒差','results.col_port':'Port，看看就好','results.col_proto':'協定，算了','results.search_placeholder':'搜尋，隨便打打…','results.col_msg':'內容','results.summary_label':'統計，看看就好：',
     'sev.critical':'嚴重（唉）','sev.high':'高（麻煩）','sev.medium':'中（還好）','sev.low':'低（無所謂）','sev.info':'資訊（隨便）',
     'issues.title':'③問題清單（找到了，然後呢）','issues.empty':'沒發現問題，也許只是還沒發現','issues.col_category':'類別','issues.col_severity':'嚴重度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_sample':'範例，隨便看看',
     'conf.confirmed':'確認過了（然後呢）','conf.heuristic':'推測，別太當真',
@@ -1140,6 +1251,7 @@ function renderStatic() {
   document.getElementById('lbl-col-dst').textContent = tr('results.col_dst');
   document.getElementById('lbl-col-port').textContent = tr('results.col_port');
   document.getElementById('lbl-col-proto').textContent = tr('results.col_proto');
+  document.getElementById('results-search').placeholder = tr('results.search_placeholder');
   document.getElementById('t-results-title').textContent = tr('results.title');
   document.getElementById('t-issues-title').textContent = tr('issues.title');
   document.getElementById('t-intel-title').textContent = tr('intel.title');
@@ -1157,8 +1269,10 @@ function renderStatic() {
   document.getElementById('footer-note').textContent = tr('footer.note');
 }
 
-// 可選顯示欄位（來源/目的 IP、Port、通訊協定）僅 CEF 有結構化欄位可用；Syslog 無此概念，
-// 一律顯示 "-"（自由文字內容仍可從「內容」欄位自行判讀，不強行用正則臆測）
+// 可選顯示欄位（來源/目的 IP、Port、通訊協定）僅 CEF/JSON 有結構化欄位可用；Syslog 走 key=value
+// best-effort 擷取，抓不到一律顯示 "-"（自由文字內容仍可從「內容」欄位自行判讀，不強行臆測）
+const SORTABLE_COLS = ['severity', 'time', 'host', 'format', 'category'];
+let SORT_COL = 'severity', SORT_DIR = 'asc';
 function renderResults() {
   const thead = document.querySelector('#results-table thead');
   const tbody = document.querySelector('#results-table tbody');
@@ -1171,8 +1285,18 @@ function renderResults() {
     + (showDst ? `<th>${tr('results.col_dst')}</th>` : '')
     + (showPort ? `<th>${tr('results.col_port')}</th>` : '')
     + (showProto ? `<th>${tr('results.col_proto')}</th>` : '');
-  thead.innerHTML = `<tr><th>${tr('results.col_severity')}</th><th>${tr('results.col_time')}</th><th>${tr('results.col_host')}</th><th>${tr('results.col_format')}</th><th>${tr('results.col_category')}</th><th>${tr('results.col_notes')}</th>${headExtra}<th>${tr('results.col_msg')}</th></tr>`;
-  const sorted = sortEventsBySeverity(EVENTS);
+  const sortLabel = k => {
+    const arrow = SORT_COL === k ? (SORT_DIR === 'asc' ? ' ▲' : ' ▼') : '';
+    return `<th class="sortable-col" data-col="${k}">${tr('results.col_' + k)}${arrow}</th>`;
+  };
+  thead.innerHTML = `<tr>${sortLabel('severity')}${sortLabel('time')}${sortLabel('host')}${sortLabel('format')}${sortLabel('category')}<th>${tr('results.col_notes')}</th>${headExtra}<th>${tr('results.col_msg')}</th></tr>`;
+  thead.querySelectorAll('.sortable-col').forEach(th => th.onclick = () => {
+    const col = th.dataset.col;
+    if (SORT_COL === col) { SORT_DIR = SORT_DIR === 'asc' ? 'desc' : 'asc'; } else { SORT_COL = col; SORT_DIR = 'asc'; }
+    renderResults();
+  });
+  const filtered = filterEvents(EVENTS, document.getElementById('results-search').value.trim());
+  const sorted = sortEventsByColumn(filtered, SORT_COL, SORT_DIR);
   if (!sorted.length) {
     tbody.innerHTML = `<tr><td colspan="${7 + extraCount}" class="empty">${tr('results.empty')}</td></tr>`;
   } else {
@@ -1317,6 +1441,36 @@ document.getElementById('intel-file-input').onchange = e => {
 document.getElementById('btn-deid-run').onclick = doRunDeid;
 document.getElementById('btn-deid-download').onclick = doDownloadDeid;
 document.getElementById('btn-export-csv').onclick = doExportCSV;
+document.getElementById('results-search').oninput = renderResults;
+
+// 拖放檔案匯入：直接放到貼上區域上，重用既有的檔案上傳邏輯，不需要另外解析拖放事件內容
+const pasteArea = document.getElementById('paste-area');
+pasteArea.addEventListener('dragover', e => e.preventDefault());
+pasteArea.addEventListener('drop', e => {
+  e.preventDefault();
+  const file = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (file) doUploadFile(file);
+});
+
+// 記住上次的門檻／可選欄位設定（僅此工具本機儲存，不涉及任何伺服器傳輸）
+const LS_SETTINGS_KEY = 'log_analyzer_settings_v1';
+const SETTINGS_TEXT_IDS = ['opt-freq-window', 'opt-freq-threshold', 'opt-scan-threshold'];
+const SETTINGS_CHECK_IDS = ['col-src', 'col-dst', 'col-port', 'col-proto'];
+function saveSettings() {
+  const s = {};
+  SETTINGS_TEXT_IDS.forEach(id => { s[id] = document.getElementById(id).value; });
+  SETTINGS_CHECK_IDS.forEach(id => { s[id] = document.getElementById(id).checked; });
+  try { localStorage.setItem(LS_SETTINGS_KEY, JSON.stringify(s)); } catch (e) { /* 私密瀏覽模式等情況下 localStorage 可能不可用，靜默略過即可，非核心功能 */ }
+}
+function loadSettings() {
+  let s;
+  try { s = JSON.parse(localStorage.getItem(LS_SETTINGS_KEY) || 'null'); } catch (e) { s = null; }
+  if (!s) return;
+  SETTINGS_TEXT_IDS.forEach(id => { if (s[id] !== undefined) document.getElementById(id).value = s[id]; });
+  SETTINGS_CHECK_IDS.forEach(id => { document.getElementById(id).checked = !!s[id]; });
+}
+[...SETTINGS_TEXT_IDS, ...SETTINGS_CHECK_IDS].forEach(id => document.getElementById(id).addEventListener('change', saveSettings));
+loadSettings();
 
 renderAll();
 </script>
