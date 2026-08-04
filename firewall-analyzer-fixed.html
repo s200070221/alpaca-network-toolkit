@@ -10498,17 +10498,41 @@ const OpenWrtParser = (() => {
     return out;
   }
 
-  // dhcp package 的 start/limit 是相對網段的 offset（非絕對 IP，dnsmasq 語意），本工具
-  // 原樣呈現 offset 數值，不臆測絕對 IP 範圍（需要交叉比對介面網段才能換算，未查證此
-  // 換算規則的官方逐字佐證）
+  // dhcp package 的 start/limit 是相對網段的 offset（dnsmasq 語意）；透過 option interface／
+  // stanza name 對應到 config interface 的 ipaddr+netmask 可還原絕對 IP，查無對應介面或缺
+  // ipaddr/netmask 時退回僅顯示 offset 數值，不臆測
+  function ipv4ToInt(ip) {
+    const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip || '');
+    if (!m) return null;
+    return (((+m[1]) << 24) | ((+m[2]) << 16) | ((+m[3]) << 8) | (+m[4])) >>> 0;
+  }
+  function intToIPv4(n) {
+    return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+  }
   function parseDHCP(pkgs) {
+    const ifaceMap = {};
+    (pkgs.network || []).filter(s => s.type === 'interface').forEach(s => {
+      if (s.name) ifaceMap[s.name] = { ipaddr: val(s, 'ipaddr', ''), netmask: val(s, 'netmask', '') };
+    });
     const servers = [];
     (pkgs.dhcp || []).filter(s => s.type === 'dhcp').forEach(s => {
       const iface = s.name || val(s, 'interface', '-');
       const start = val(s, 'start', '-');
       const limit = val(s, 'limit', '');
-      const end = (start !== '-' && limit) ? String(parseInt(start, 10) + parseInt(limit, 10) - 1) : '-';
-      servers.push({ name: iface, mask: '-', iface, startIp: start, endIp: end, gateway: '-', dns: '-', lease: val(s, 'leasetime', '-') });
+      let startIp = start, endIp = (start !== '-' && limit) ? String(parseInt(start, 10) + parseInt(limit, 10) - 1) : '-';
+      let mask = '-';
+      const ifName = val(s, 'interface', '') || s.name || '';
+      const ifInfo = ifaceMap[ifName];
+      if (ifInfo && start !== '-' && limit && ifInfo.ipaddr && ifInfo.netmask) {
+        const base = ipv4ToInt(ifInfo.ipaddr), maskInt = ipv4ToInt(ifInfo.netmask);
+        if (base !== null && maskInt !== null) {
+          const netBase = (base & maskInt) >>> 0;
+          startIp = intToIPv4((netBase + parseInt(start, 10)) >>> 0);
+          endIp = intToIPv4((netBase + parseInt(start, 10) + parseInt(limit, 10) - 1) >>> 0);
+          mask = ifInfo.netmask;
+        }
+      }
+      servers.push({ name: iface, mask, iface, startIp, endIp, gateway: '-', dns: '-', lease: val(s, 'leasetime', '-') });
     });
     return servers.length ? { servers, relays: [] } : null;
   }
