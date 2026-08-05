@@ -6,6 +6,24 @@
 #   .\log_analyzer\fetch_threat_intel.ps1 -OutFile my_intel.ndjson -TimeoutSec 20
 #   .\log_analyzer\fetch_threat_intel.ps1 -Exclude dshield,cins_army
 #
+# 若直接雙擊或執行時出現「因為這個系統上已停用指令碼執行，所以無法載入 xxx.ps1」，這是
+# Windows 預設執行原則（多數 Windows 用戶端預設 Restricted，會擋下所有 .ps1，與本腳本內容
+# 無關）造成的，非腳本本身的錯誤，二擇一即可解決：
+#   (1) 單次執行、不更動全域設定（建議）：
+#       powershell -ExecutionPolicy Bypass -File .\fetch_threat_intel.ps1
+#   (2) 或放寬目前使用者帳號的執行原則（僅影響自己的帳號，不需系統管理員權限，之後可直接
+#       用 .\fetch_threat_intel.ps1 執行）：
+#       Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+# 若此檔案是從瀏覽器下載（如從 GitHub），Windows 有時會額外標記為「來自網際網路」多一層
+# 封鎖，看到「未知發行者」或簽章相關警告時可先執行 Unblock-File .\fetch_threat_intel.ps1
+# 解除標記再重試。
+#
+# 【重要】不要用「以系統管理員身分執行」開的視窗跑這支腳本——本腳本純粹下載公開清單與寫
+# 一個文字檔，完全不需要系統管理員權限；上面 (1)(2) 兩種解法在一般使用者權限視窗即可運作。
+# 實測發現部分企業防毒/EDR 對「提權後 PowerShell 寫出的檔案」會有額外稽核或事後清除機制，
+# 導致腳本本身印出「已輸出至 xxx」成功訊息、.NET 呼叫也沒有丟例外，但檔案事後被悄悄清掉、
+# Test-Path 查回 False；改用一般（非管理員）PowerShell 視窗執行即可正常保留檔案。
+#
 # log_analyzer 本身刻意不連網（機敏 log 去識別化工具的核心保證，見 guide.body／footer 文案），
 # 本腳本獨立於瀏覽器之外執行，下載合併完成後需手動匯入，工具本身不會被此腳本改動任何連網行為。
 #
