@@ -33,12 +33,16 @@
 # intelMeta，命中時會顯示在「問題清單」的「比對依據」欄。
 #
 # 各來源已於 2026-08-05 對外查證實際檔案格式（非照抄來源網站描述），見 now.md 對應段落：
-# - spamhaus_drop/edrop、firehol_level1、emergingthreats_block、abusech_feodo、cins_army、
+# - spamhaus_drop/edrop、firehol_level1~4、emergingthreats_block、abusech_feodo、cins_army、
 #   blocklist_de：皆為純文字、每行一個 IP 或 CIDR，可直接抓取。
 # - dshield：實際為 tab 分隔多欄位表格（起始IP/結束IP/子網路遮罩位數/...），並非單欄 CIDR 清單；
 #   若直接取每行第一欄只會拿到網段起始 IP、涵蓋率大幅降低，本腳本改用第 1+3 欄正確組成 CIDR。
 # - abuse.ch SSL Blacklist 已於 2025-01-03 起標記 deprecated，未列入。AbuseIPDB 需註冊/API 金鑰，
 #   非單純網址即可下載的清單，亦未列入。
+# - FireHOL Level 1~4 為官方自訂風險分級（數字越大涵蓋越廣但誤判率也越高，Level 4 官方文件
+#   明載「may include a large number of false positives」）：Level1 已存在多年、高信心度；
+#   Level2 近 48 小時攻擊；Level3 近 30 日攻擊/間諜軟體/病毒；Level4 誤判率最高，資料量也
+#   最大（實測約 11.7 萬筆），用於一般 log 分析情境時建議優先參考 Level1~3 的命中結果。
 
 param(
     [string]$OutFile = "threat_intel_merged.ndjson",
@@ -55,6 +59,9 @@ $ErrorActionPreference = 'Stop'
 $Sources = @(
     @{ Name = 'spamhaus_drop';         Url = 'https://www.spamhaus.org/drop/drop.txt';                          Parser = 'SpamhausStyle' }
     @{ Name = 'firehol_level1';        Url = 'https://iplists.firehol.org/files/firehol_level1.netset';         Parser = 'PlainList' }
+    @{ Name = 'firehol_level2';        Url = 'https://iplists.firehol.org/files/firehol_level2.netset';         Parser = 'PlainList' }
+    @{ Name = 'firehol_level3';        Url = 'https://iplists.firehol.org/files/firehol_level3.netset';         Parser = 'PlainList' }
+    @{ Name = 'firehol_level4';        Url = 'https://iplists.firehol.org/files/firehol_level4.netset';         Parser = 'PlainList' }
     @{ Name = 'emergingthreats_block'; Url = 'https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt'; Parser = 'PlainList' }
     @{ Name = 'abusech_feodo';         Url = 'https://feodotracker.abuse.ch/downloads/ipblocklist.txt';        Parser = 'PlainList' }
     @{ Name = 'cins_army';             Url = 'https://cinsscore.com/list/ci-badguys.txt';                       Parser = 'PlainList' }
@@ -108,6 +115,39 @@ function Test-ValidCidr {
     return $false
 }
 
+# 私有/保留位址網段一律過濾掉，不寫進輸出檔案：這些網段本身不會是真正的「外部攻擊者來源」，
+# 卻常被公開清單（尤其 FireHOL Level 1）當成 bogon／偽造來源防護用途一併收錄——已實測驗證
+# firehol_level1.netset 真的包含 10.0.0.0/8、172.16.0.0/12、192.168.0.0/16 整段三筆。對
+# 「拿情資清單比對自己內部 log 找可疑活動」這個用途，這是純粹雜訊：會把每一筆內網對內網
+# 流量都誤標成「已知情資命中」，完全淹沒真正有意義的結果
+function ConvertTo-IPInt {
+    param([string]$Ip)
+    $p = $Ip.Split('.')
+    return ([long]$p[0] * 16777216) + ([long]$p[1] * 65536) + ([long]$p[2] * 256) + [long]$p[3]
+}
+function Get-CidrMaskLong {
+    param([int]$Bits)
+    if ($Bits -eq 0) { return [long]0 }
+    return [long][math]::Pow(2, 32) - [long][math]::Pow(2, 32 - $Bits)
+}
+$PrivateReservedRanges = @(
+    '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16',
+    '172.16.0.0/12', '192.0.0.0/24', '192.0.2.0/24', '192.168.0.0/16',
+    '198.18.0.0/15', '198.51.100.0/24', '203.0.113.0/24', '224.0.0.0/4', '240.0.0.0/4'
+) | ForEach-Object {
+    $parts = $_ -split '/'
+    $mask = Get-CidrMaskLong ([int]$parts[1])
+    [pscustomobject]@{ Base = (ConvertTo-IPInt $parts[0]) -band $mask; Mask = $mask }
+}
+function Test-IsPrivateOrReserved {
+    param([string]$Value)
+    $ipInt = ConvertTo-IPInt (($Value -split '/')[0])
+    foreach ($r in $PrivateReservedRanges) {
+        if (($ipInt -band $r.Mask) -eq $r.Base) { return $true }
+    }
+    return $false
+}
+
 $merged = @{}
 $summary = @()
 
@@ -133,14 +173,16 @@ foreach ($src in $Sources) {
     }
 
     $count = 0
+    $skippedPrivate = 0
     foreach ($v in $values) {
         if (-not (Test-ValidCidr $v)) { continue }
+        if (Test-IsPrivateOrReserved $v) { $skippedPrivate++; continue }
         if (-not $merged.ContainsKey($v)) { $merged[$v] = [System.Collections.Generic.HashSet[string]]::new() }
         [void]$merged[$v].Add($src.Name)
         $count++
     }
-    Write-Host "  取得 $count 筆合法網段" -ForegroundColor Green
-    $summary += [pscustomobject]@{ Source = $src.Name; Count = $count; Status = 'OK' }
+    Write-Host "  取得 $count 筆合法網段（另過濾 $skippedPrivate 筆私有/保留位址）" -ForegroundColor Green
+    $summary += [pscustomobject]@{ Source = $src.Name; Count = $count; SkippedPrivate = $skippedPrivate; Status = 'OK' }
 }
 
 $ndjsonLines = foreach ($key in $merged.Keys) {
