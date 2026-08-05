@@ -204,6 +204,14 @@ function normSyslogSeverity(sevRaw) {
   if (n <= 6) return 'Low';
   return 'Info';
 }
+// FortiOS level= 為官方固定 8 級文字列舉（emergency/alert/critical/error/warning/notice/
+// information/debug），語意與 RFC5424 數字 0-7 嚴重度一一對應，換算成數字後直接重用
+// normSyslogSeverity() 既有分桶邏輯，不另訂一套門檻
+const FORTIGATE_LEVEL_NUM = { emergency: 0, alert: 1, critical: 2, error: 3, warning: 4, notice: 5, information: 6, debug: 7 };
+function normFortiGateSeverity(sevRaw) {
+  const n = FORTIGATE_LEVEL_NUM[String(sevRaw || '').toLowerCase()];
+  return normSyslogSeverity(n === undefined ? NaN : n);
+}
 // JSON log 沒有統一嚴重度規格，各家詞彙差異很大；數字一律沿用 syslog 0-7 慣例（RFC5424/ECS
 // log.syslog.severity.code 皆用此範圍，比 CEF 0-10 更常見於通用工具），文字則用常見詞彙比對，
 // 兩者都比對不到時給最低關注度 Info（避免無依據臆測成高風險，寧可漏報不誤報）
@@ -236,6 +244,9 @@ function detectLineFormat(line) {
   // PRI 選填：本機檔案/裝置匯出常見 rsyslog 樣板已剝除 PRI（如 UniFi kernel netfilter
   // 流量記錄，經查證真實範例確認），並非每種 rfc3164 來源都保留 <PRI> 前綴
   if (/^(?:<\d{1,3}>)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s/.test(line)) return 'rfc3164';
+  // FortiOS 原生 log（execute log filter／GUI 下載／memory 緩衝區匯出）沒有 syslog 外殼，
+  // 直接以固定順序的 date=/time=/logid= 開頭，與上面幾種格式互斥，可高信心判定
+  if (/^date=\d{4}-\d{2}-\d{2}\s+time=\d{2}:\d{2}:\d{2}\b/.test(line) && /\blogid=/.test(line)) return 'fortigate';
   return 'unknown';
 }
 
@@ -432,12 +443,41 @@ function parseRFC3164Line(line, lineNo) {
     msg, fields: {}
   };
 }
+// FortiOS 原生 key=value 逐欄擷取：與 extractKeyValueFields()（供既有格式的可選欄位 best-effort
+// 擷取用）分開實作，因為這裡需要保留「原始欄位順序」與「原始是否加雙引號」供去識別化後原樣重建，
+// 那個既有函式只回傳攤平的 key→value，兩者用途不同不可合併
+function parseFortiGateKV(line) {
+  const fields = {}, order = [], quoted = new Set();
+  const re = /([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|(\S*))/g;
+  let m;
+  while ((m = re.exec(line))) {
+    const key = m[1], val = m[2] !== undefined ? m[2] : (m[3] || '');
+    fields[key] = val;
+    order.push(key);
+    if (m[2] !== undefined) quoted.add(key);
+  }
+  return { fields, order, quoted };
+}
+function parseFortiGateLine(line, lineNo) {
+  const { fields, order, quoted } = parseFortiGateKV(line);
+  const timestampRaw = fields.date && fields.time ? `${fields.date} ${fields.time}` : (fields.date || '');
+  const ts = timestampRaw ? new Date(timestampRaw.replace(' ', 'T')) : null;
+  return {
+    format: 'fortigate', raw: line, lineNo,
+    timestamp: ts && !isNaN(ts.getTime()) ? ts : null, timestampRaw,
+    host: fields.devname || '', appName: fields.subtype || '', procid: '', msgid: '',
+    severityRaw: fields.level, severityNorm: normFortiGateSeverity(fields.level),
+    facility: null, facilityAuth: false,
+    msg: fields.msg || '', fields, fieldOrder: order, fieldsQuoted: quoted
+  };
+}
 function parseLogLine(line, lineNo) {
   const fmt = detectLineFormat(line);
   if (fmt === 'rfc5424') return parseRFC5424Line(line, lineNo);
   if (fmt === 'cef') return parseCEFLine(line, lineNo);
   if (fmt === 'leef') return parseLEEFLine(line, lineNo);
   if (fmt === 'rfc3164') return parseRFC3164Line(line, lineNo);
+  if (fmt === 'fortigate') return parseFortiGateLine(line, lineNo);
   return null;
 }
 // JSON log 沒有統一欄位規格，依常見別名（TS_KEYS/SEV_KEYS/HOST_KEYS/MSG_KEYS/APP_KEYS，定義於
@@ -556,6 +596,11 @@ function classifyByKeyword(evt) {
     // （官方範例：cat=Failed／cat=Success），比照 CEF 額外檢查
     parts.push(evt.fields.cat || '');
   }
+  if (evt.format === 'fortigate' && evt.fields) {
+    // FortiOS traffic log 幾乎不帶 msg，語意落在 action（accept/deny/...）；event/system log
+    // 則常在 logdesc 帶人類可讀描述（msg 欄位有時為空），比照 CEF 額外檢查
+    parts.push(evt.fields.action || '', evt.fields.logdesc || '');
+  }
   const text = parts.join(' ');
   for (const c of KEYWORD_CATEGORIES) { if (c.re.test(text)) return c.id; }
   return 'other';
@@ -598,7 +643,8 @@ function detectFrequencyIssues(events, opts) {
           sampleRaw: windowEvents[windowEvents.length - 1].raw,
           relatedHosts: [host],
           relatedEvents: windowEvents,
-          confidence: 'confirmed'
+          confidence: 'confirmed',
+          windowMs, threshold
         });
       }
     }
@@ -677,7 +723,7 @@ function getEventNetTuple(e) {
       proto: e.fields.proto || '-'
     };
   }
-  if ((e.format === 'json' || e.format === 'leef') && e.fields) {
+  if ((e.format === 'json' || e.format === 'leef' || e.format === 'fortigate') && e.fields) {
     const src = pickField(e.fields, SRC_IP_KEYS);
     const dst = pickField(e.fields, DST_IP_KEYS);
     const spt = pickField(e.fields, SRC_PORT_KEYS);
@@ -855,7 +901,9 @@ function extractCandidateIPs(evt) {
   if (evt.format === 'cef') return [evt.fields.src, evt.fields.dst, evt.fields.shost, evt.fields.dhost].filter(Boolean);
   // json/leef 皆有固定欄位別名可查（比照 getEventNetTuple()），結構化命中的 IP 與 msg 文字
   // 掃描結果併入（不取代），因為 msg 文字裡仍可能有額外 IP
-  if ((evt.format === 'json' || evt.format === 'leef') && evt.fields) {
+  if ((evt.format === 'json' || evt.format === 'leef' || evt.format === 'fortigate') && evt.fields) {
+    // FortiOS traffic log 的 srcip/dstip 在結構化 fields，msg 常是空字串；event/system log
+    // 則相反（msg 有內容但通常不含 IP），兩者都掃，邏輯與既有 json/leef 分支一致
     const structured = [pickField(evt.fields, SRC_IP_KEYS), pickField(evt.fields, DST_IP_KEYS)].filter(Boolean);
     return Array.from(new Set([...structured, ...extractIPsFromText(evt.msg)]));
   }
@@ -901,6 +949,24 @@ function annotateEventsWithIssues(events, issues) {
   });
 }
 
+// 問題清單「比對依據」欄：說明該筆問題具體為何被判定成立，不是重複「範例」欄的原始 log 行。
+// knownIOC／freq 兩類先前完全沒有這個資訊（範例欄只印原始行，看不出是哪個 IP／對到清單哪條
+// 規則／為何達門檻）；possibleScan 兩種 heuristic 的 sampleRaw 本身已是合成說明文字，這裡
+// 回傳 '-' 避免重複。內容全是 IP/CIDR/ID/數字這類語言無關資料，不需要 i18n 翻譯
+function formatIssueBasis(is) {
+  if (is.category === 'knownIOC') {
+    const ip = (is.relatedHosts && is.relatedHosts[0]) || '';
+    const meta = is.intelMeta || {};
+    const metaParts = Object.keys(meta)
+      .filter(k => meta[k] !== undefined && meta[k] !== null && String(meta[k]).trim() !== '' && String(meta[k]) !== ip)
+      .map(k => `${k}=${meta[k]}`);
+    return [ip, ...metaParts].filter(Boolean).join(' | ') || '-';
+  }
+  if (is.category.startsWith('freq:') && is.windowMs !== undefined) {
+    return `${is.count}/${is.threshold} @ ${Math.round(is.windowMs / 1000)}s`;
+  }
+  return '-';
+}
 // opts 可覆寫偵測門檻（皆為選填，未提供則沿用各函式自身預設值）：
 // windowMs/freqThreshold 對應頻率異常，scanThreshold 對應 CEF/Syslog 兩種掃描 heuristic 共用門檻
 function buildIssueList(events, intelIndexes, opts) {
@@ -1018,6 +1084,24 @@ function rebuildLEEFLine(evt) {
   if (/^2/.test(evt.version || '')) header.push(evt.delimiterRaw || '');
   return header.join('|') + '|' + ext;
 }
+// FortiOS 欄位型別分類：只涵蓋直接識別使用者/裝置身分的 IP／主機名稱／MAC 三類，範圍刻意排除
+// policyname/vd/srcssid/policyid 等策略與組態中繼資料，比照既有 CEF_SENSITIVE_KEYS 只處理
+// IP/host/user 的既定窄範圍，不擴大成 config_anonymizer 那種連物件名稱都去識別化的做法
+const FORTIGATE_IP_KEYS = ['srcip', 'dstip', 'ip', 'transip'];
+const FORTIGATE_HOST_KEYS = ['srcname', 'hostname'];
+const FORTIGATE_MAC_KEYS = ['mac', 'srcmac', 'mastersrcmac'];
+// 依 parseFortiGateKV() 記錄的原始欄位順序與引號樣式原樣重建，維持 FortiOS 原生 log 語法
+// （數字欄位通常裸寫、字串欄位通常加雙引號），去識別化後的檔案才能繼續被其他工具當一般
+// FortiOS log 讀取；fieldOrder/fieldsQuoted 缺失時（理論上不會，僅防禦）退回既有 key 順序
+function rebuildFortiGateLine(evt) {
+  const order = evt.fieldOrder || Object.keys(evt.fields || {});
+  const quoted = evt.fieldsQuoted || new Set();
+  return order.map(k => {
+    const v = evt.fields[k] === undefined ? '' : String(evt.fields[k]);
+    if (quoted.has(k) || /[\s"]/.test(v)) return `${k}="${v.replace(/"/g, '\\"')}"`;
+    return `${k}=${v}`;
+  }).join(' ');
+}
 // SD-PARAM 的原始 SD-ID 名稱（如 "origin"、"exampleSDID@32473"）在 parseStructuredData()
 // 階段已被攤平捨棄、只留參數 key=value，故重建時無法還原原始 SD-ID，改用固定佔位 "sdid"；
 // 重建的重點是不讓已去識別化的參數值整段消失，非逐字還原原始 SD 語法
@@ -1077,6 +1161,19 @@ function anonymizeEvent(evt) {
       else clone.fields[k] = 'REDACTED';
     });
     clone.raw = rebuildLEEFLine(clone);
+  } else if (evt.format === 'fortigate') {
+    FORTIGATE_IP_KEYS.forEach(k => {
+      const v = clone.fields[k];
+      if (!v) return;
+      clone.fields[k] = isValidIPv4(v) ? anonIP(v) : 'REDACTED';
+    });
+    FORTIGATE_HOST_KEYS.forEach(k => { if (clone.fields[k]) clone.fields[k] = anonHostname(clone.fields[k]); });
+    FORTIGATE_MAC_KEYS.forEach(k => { if (clone.fields[k]) clone.fields[k] = anonMAC(clone.fields[k]); });
+    if (clone.fields.msg) clone.fields.msg = replaceMACsInLine(replaceIPsInLine(clone.fields.msg));
+    if (clone.fields.logdesc) clone.fields.logdesc = replaceMACsInLine(replaceIPsInLine(clone.fields.logdesc));
+    if (clone.host) clone.host = anonHostname(clone.host);
+    clone.msg = replaceMACsInLine(replaceIPsInLine(clone.msg || ''));
+    clone.raw = rebuildFortiGateLine(clone);
   } else if (evt.format === 'json') {
     anonymizeJSONFields(clone.fields);
     if (clone.host) clone.host = anonHostname(clone.host);
@@ -1125,14 +1222,14 @@ const LANG = {
   zhTW: {
     'app.title':'Log 分析與去識別化工具','app.subtitle':'匯入交換器/防火牆 Log（CEF／標準 Syslog），依嚴重程度排序並找出可能問題；本機比對已知情資清單；可對敏感欄位去識別化。全程僅在瀏覽器本機執行，不會連網。',
     'notice.disclaimer':'此功能之分析結果僅供參考，實際處置請自行判斷並謹慎使用',
-    'import.title':'① 匯入 Log','import.hint':'支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式，以及 JSON/NDJSON，可貼上文字或上傳檔案，亦可直接拖放檔案至此。','import.paste_placeholder':'在此貼上 log 內容，或使用下方上傳按鈕…','import.upload_btn':'上傳檔案','import.analyze_btn':'解析並分析','import.clear_btn':'清空','import.file_loaded':'已載入檔案：','opt.freqWindow':'頻率視窗(秒)：','opt.freqThreshold':'頻率門檻(次)：','opt.scanThreshold':'掃描門檻(數)：',
+    'import.title':'① 匯入 Log','import.hint':'支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式、FortiGate 原生 key=value log（不需 syslog 外殼），以及 JSON/NDJSON，可貼上文字或上傳檔案，亦可直接拖放檔案至此。','import.paste_placeholder':'在此貼上 log 內容，或使用下方上傳按鈕…','import.upload_btn':'上傳檔案','import.analyze_btn':'解析並分析','import.clear_btn':'清空','import.file_loaded':'已載入檔案：','opt.freqWindow':'頻率視窗(秒)：','opt.freqThreshold':'頻率門檻(次)：','opt.scanThreshold':'掃描門檻(數)：',
     'results.title':'② 事件清單（依嚴重程度排序）','results.empty':'尚無資料，請先匯入並分析 log','results.col_severity':'嚴重程度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題','results.optional_cols':'顯示欄位：','results.col_src':'來源IP','results.col_dst':'目的IP','results.col_port':'Port','results.col_proto':'通訊協定','results.search_placeholder':'搜尋主機/內容…','results.col_msg':'內容','results.summary_label':'統計：',
     'sev.critical':'嚴重','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'資訊',
-    'issues.title':'③ 問題清單（基本資安分析）','issues.empty':'未發現符合規則的問題','issues.col_category':'類別','issues.col_severity':'嚴重程度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_sample':'範例',
+    'issues.title':'③ 問題清單（基本資安分析）','issues.empty':'未發現符合規則的問題','issues.col_category':'類別','issues.col_severity':'嚴重程度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_basis':'比對依據','issues.col_sample':'範例',
     'conf.confirmed':'已確認','conf.heuristic':'推測',
     'cat.authFail':'認證失敗','cat.denyBlock':'連線遭拒/阻擋','cat.attack':'攻擊/惡意軟體relevant','cat.scanFlood':'掃描/洪水攻擊','cat.exceedThreshold':'超過門檻','cat.other':'其他','cat.freqLabel':'頻率異常：','cat.possibleScan':'疑似掃描行為','cat.knownIOC':'已知情資命中','note.bruteForce':'疑似猜密碼/暴力破解','note.scanOrMisconfig':'疑似掃描或誤設定','note.freqAnomaly':'頻率異常','note.possibleScan':'疑似 Port/主機掃描','note.knownIOC':'已知情資命中',
     'intel.title':'④ 威脅情資本機比對清單','intel.hint':'匯入公開或內部的 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON，如 Spamhaus DROP 匯出格式），僅在本機比對，工具不會主動連網查詢。命中會標記為「已確認」的高風險問題。','intel.add_btn':'上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自填）','intel.count_label':'筆','intel.remove_btn':'移除','intel.empty':'尚未匯入任何情資清單',
-    'guide.title':'⑤ 如何取得外部情資','guide.body':'本工具僅做本機比對，不會主動連網抓取或回傳任何資料。\n常見公開情資來源（用途說明，正式下載網址請自行查詢官方頁面）：\n• Spamhaus DROP/EDROP — 已知惡意網段（CIDR）清單\n• Emerging Threats / Proofpoint compromised-ips — 已知遭入侵主機 IP 清單\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — 惡意軟體 C2 相關 IOC\n多數公開清單各自有使用條款（部分僅供非商業/個人使用），下載與使用前請自行確認條款；建議至少每月更新一次，過舊清單參考價值降低。',
+    'guide.title':'⑤ 如何取得外部情資','guide.body':'本工具僅做本機比對，不會主動連網抓取或回傳任何資料。\n常見公開情資來源（用途說明，正式下載網址請自行查詢官方頁面）：\n• Spamhaus DROP/EDROP — 已知惡意網段（CIDR）清單\n• Emerging Threats / Proofpoint compromised-ips — 已知遭入侵主機 IP 清單\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — 惡意軟體 C2 相關 IOC\n• FireHOL Level 1 — 聚合 Spamhaus/DShield/Abuse.ch 等多來源網段清單：https://iplists.firehol.org/files/firehol_level1.netset（純文字、# 開頭註解，可直接貼上本頁匯入）\n• EmergingThreats Block List — IDS/IPS 常用攻擊者 IP 清單：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字，可直接貼上匯入）\n• CINS Army List — 高信譽度攻擊來源 IP：https://cinsscore.com/list/ci-badguys.txt（純文字、每行一個 IP，可直接貼上匯入）\n• Blocklist.de — 蜜罐/入侵偵測回報彙整攻擊來源 IP：https://www.blocklist.de/downloads/export-ips_all.txt（純文字、每行一個 IP，可直接貼上匯入）\n• DShield/SANS ISC Block List — 近 3 天最活躍攻擊網段：https://www.dshield.org/block.txt（⚠️ tab 分隔多欄位表格，非單欄 CIDR，直接貼上只會取到每列第一欄的網段起始 IP 做單一 IP 精確比對、不會展開成 /24，比對涵蓋率大幅降低，建議先自行處理組成 CIDR 再匯入）\n上述皆為公開純文字檔案，可直接下載後貼上或另存檔案再用本頁「上傳清單」匯入；AbuseIPDB 等需註冊/API 金鑰才能取得的服務未列入。\n多數公開清單各自有使用條款（部分僅供非商業/個人使用），下載與使用前請自行確認條款；建議至少每月更新一次，過舊清單參考價值降低。',
     'deid.title':'⑥ 去識別化','deid.hint':'將事件中的 IP／主機名稱／使用者名稱替換為一致映射的假值（IP 採 RFC5737 文件用網段）。請先完成③④的問題分析與情資比對，去識別化後的假 IP 將無法再命中真實情資清單。','deid.run_btn':'執行去識別化','deid.download_btn':'下載去識別化結果',
     'export.csv_btn':'匯出問題清單 CSV',
     'footer.note':'log_analyzer v1 — 純前端 JavaScript，離線可用，不上傳任何資料'
@@ -1140,14 +1237,14 @@ const LANG = {
   en: {
     'app.title':'Log Analyzer & De-identifier','app.subtitle':'Import switch/firewall logs (CEF / standard Syslog), rank by severity and surface likely issues; match against local threat-intel lists; de-identify sensitive fields. Runs entirely in your browser, no network calls.',
     'notice.disclaimer':'Analysis results are for reference only — use your own judgement before acting on them',
-    'import.title':'① Import Log','import.hint':'Supports line-based CEF (Common Event Format), LEEF (Log Event Extended Format), standard Syslog (RFC3164/RFC5424), and JSON/NDJSON. Paste text, upload, or drag & drop a file.','import.paste_placeholder':'Paste log content here, or use the upload button below…','import.upload_btn':'Upload File','import.analyze_btn':'Parse & Analyze','import.clear_btn':'Clear','import.file_loaded':'Loaded file: ','opt.freqWindow':'Freq window (s):','opt.freqThreshold':'Freq threshold:','opt.scanThreshold':'Scan threshold:',
+    'import.title':'① Import Log','import.hint':'Supports line-based CEF (Common Event Format), LEEF (Log Event Extended Format), standard Syslog (RFC3164/RFC5424), FortiGate native key=value logs (no syslog envelope needed), and JSON/NDJSON. Paste text, upload, or drag & drop a file.','import.paste_placeholder':'Paste log content here, or use the upload button below…','import.upload_btn':'Upload File','import.analyze_btn':'Parse & Analyze','import.clear_btn':'Clear','import.file_loaded':'Loaded file: ','opt.freqWindow':'Freq window (s):','opt.freqThreshold':'Freq threshold:','opt.scanThreshold':'Scan threshold:',
     'results.title':'② Event List (sorted by severity)','results.empty':'No data yet — import and analyze a log first','results.col_severity':'Severity','results.col_time':'Time','results.col_host':'Host','results.col_format':'Format','results.col_category':'Category','results.col_notes':'Suspected Issue','results.optional_cols':'Show columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.search_placeholder':'Search host/content…','results.col_msg':'Message','results.summary_label':'Summary: ',
     'sev.critical':'Critical','sev.high':'High','sev.medium':'Medium','sev.low':'Low','sev.info':'Info',
-    'issues.title':'③ Issue List (basic security analysis)','issues.empty':'No rule-based issues found','issues.col_category':'Category','issues.col_severity':'Severity','issues.col_count':'Count','issues.col_confidence':'Confidence','issues.col_sample':'Sample',
+    'issues.title':'③ Issue List (basic security analysis)','issues.empty':'No rule-based issues found','issues.col_category':'Category','issues.col_severity':'Severity','issues.col_count':'Count','issues.col_confidence':'Confidence','issues.col_basis':'Match Basis','issues.col_sample':'Sample',
     'conf.confirmed':'Confirmed','conf.heuristic':'Heuristic',
     'cat.authFail':'Auth Failure','cat.denyBlock':'Connection Denied/Blocked','cat.attack':'Attack/Malware','cat.scanFlood':'Scan/Flood','cat.exceedThreshold':'Threshold Exceeded','cat.other':'Other','cat.freqLabel':'Frequency anomaly: ','cat.possibleScan':'Possible Scan Activity','cat.knownIOC':'Known Threat-Intel Hit','note.bruteForce':'Suspected Brute-Force/Password Guessing','note.scanOrMisconfig':'Suspected Scan or Misconfiguration','note.freqAnomaly':'Frequency Anomaly','note.possibleScan':'Suspected Port/Host Scan','note.knownIOC':'Known Threat-Intel Hit',
     'intel.title':'④ Local Threat-Intel Matching List','intel.hint':'Import public or internal IP/CIDR blocklists (plain text, CSV, or JSON/NDJSON — e.g. Spamhaus DROP export format). Matching happens locally only — no outbound network calls. Hits are flagged as "Confirmed" high-severity issues.','intel.add_btn':'Upload List','intel.name_placeholder':'List name','intel.date_placeholder':'Intel date (manual)','intel.count_label':'entries','intel.remove_btn':'Remove','intel.empty':'No intel list imported yet',
-    'guide.title':'⑤ How to Get External Threat Intel','guide.body':'This tool only matches locally — it never fetches or sends data over the network.\nCommon public sources (purpose only — verify current official URLs yourself):\n• Spamhaus DROP/EDROP — known malicious netblocks (CIDR)\n• Emerging Threats / Proofpoint compromised-ips — known compromised host IPs\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — malware C2 related IOCs\nMost public lists carry their own usage terms (some are non-commercial/personal use only) — check before downloading. Recommended refresh: at least monthly, stale lists lose value.',
+    'guide.title':'⑤ How to Get External Threat Intel','guide.body':'This tool only matches locally — it never fetches or sends data over the network.\nCommon public sources (purpose only — verify current official URLs yourself):\n• Spamhaus DROP/EDROP — known malicious netblocks (CIDR)\n• Emerging Threats / Proofpoint compromised-ips — known compromised host IPs\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — malware C2 related IOCs\n• FireHOL Level 1 — aggregates Spamhaus/DShield/Abuse.ch and more: https://iplists.firehol.org/files/firehol_level1.netset (plain text, # comments, paste directly into this page)\n• EmergingThreats Block List — attacker IPs commonly used for IDS/IPS: https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt (plain text, paste directly)\n• CINS Army List — high-reputation attacker IPs: https://cinsscore.com/list/ci-badguys.txt (plain text, one IP per line, paste directly)\n• Blocklist.de — attacker IPs aggregated from honeypot/IDS reports: https://www.blocklist.de/downloads/export-ips_all.txt (plain text, one IP per line, paste directly)\n• DShield/SANS ISC Block List — most active attacking netblocks over the last 3 days: https://www.dshield.org/block.txt (⚠️ tab-delimited table, not a plain CIDR list — pasting it as-is only captures each row\'s first column, the block\'s start IP, as a single exact-match IP; it will NOT expand to the full /24, so coverage drops sharply. Pre-process it into CIDR notation before importing.)\nAll of the above are public plain-text files — download and paste, or save the file and use "Upload List" on this page. Services requiring registration/an API key (e.g. AbuseIPDB) are not included.\nMost public lists carry their own usage terms (some are non-commercial/personal use only) — check before downloading. Recommended refresh: at least monthly, stale lists lose value.',
     'deid.title':'⑥ De-identification','deid.hint':'Replaces IP/hostname/username with consistently-mapped fake values (IPs use RFC5737 documentation ranges). Run this after steps ③④ — anonymized fake IPs can no longer match a real intel list.','deid.run_btn':'Run De-identification','deid.download_btn':'Download De-identified Result',
     'export.csv_btn':'Export Issue List CSV',
     'footer.note':'log_analyzer v1 — pure front-end JavaScript, works offline, uploads nothing'
@@ -1155,14 +1252,14 @@ const LANG = {
   ja: {
     'app.title':'ログ分析・匿名化ツール','app.subtitle':'スイッチ/ファイアウォールのログ（CEF／標準 Syslog）を取り込み、重要度順に並べ替えて問題点を洗い出します。ローカルの脅威インテリジェンスリストと照合し、機密項目を匿名化できます。すべてブラウザ内で完結し、通信は行いません。',
     'notice.disclaimer':'本機能の分析結果は参考情報です。実際の対応はご自身の判断で慎重に行ってください',
-    'import.title':'① ログ取り込み','import.hint':'行単位の CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）、および JSON/NDJSON に対応。テキスト貼り付け、アップロード、ドラッグ＆ドロップに対応。','import.paste_placeholder':'ここにログを貼り付けるか、下のアップロードボタンを使用…','import.upload_btn':'ファイルをアップロード','import.analyze_btn':'解析・分析','import.clear_btn':'クリア','import.file_loaded':'読み込み済みファイル：','opt.freqWindow':'頻度ウィンドウ(秒)：','opt.freqThreshold':'頻度しきい値：','opt.scanThreshold':'スキャンしきい値：',
+    'import.title':'① ログ取り込み','import.hint':'行単位の CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）、FortiGate 純正 key=value ログ（syslog エンベロープ不要）、および JSON/NDJSON に対応。テキスト貼り付け、アップロード、ドラッグ＆ドロップに対応。','import.paste_placeholder':'ここにログを貼り付けるか、下のアップロードボタンを使用…','import.upload_btn':'ファイルをアップロード','import.analyze_btn':'解析・分析','import.clear_btn':'クリア','import.file_loaded':'読み込み済みファイル：','opt.freqWindow':'頻度ウィンドウ(秒)：','opt.freqThreshold':'頻度しきい値：','opt.scanThreshold':'スキャンしきい値：',
     'results.title':'② イベント一覧（重要度順）','results.empty':'データがありません。まずログを取り込んで分析してください','results.col_severity':'重要度','results.col_time':'時刻','results.col_host':'ホスト','results.col_format':'形式','results.col_category':'分類','results.col_notes':'疑わしい問題','results.optional_cols':'表示項目：','results.col_src':'送信元IP','results.col_dst':'宛先IP','results.col_port':'ポート','results.col_proto':'プロトコル','results.search_placeholder':'ホスト/内容を検索…','results.col_msg':'内容','results.summary_label':'集計：',
     'sev.critical':'重大','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'情報',
-    'issues.title':'③ 問題リスト（基本セキュリティ分析）','issues.empty':'該当する問題は見つかりませんでした','issues.col_category':'分類','issues.col_severity':'重要度','issues.col_count':'件数','issues.col_confidence':'信頼度','issues.col_sample':'サンプル',
+    'issues.title':'③ 問題リスト（基本セキュリティ分析）','issues.empty':'該当する問題は見つかりませんでした','issues.col_category':'分類','issues.col_severity':'重要度','issues.col_count':'件数','issues.col_confidence':'信頼度','issues.col_basis':'照合根拠','issues.col_sample':'サンプル',
     'conf.confirmed':'確認済み','conf.heuristic':'推定',
     'cat.authFail':'認証失敗','cat.denyBlock':'接続拒否/ブロック','cat.attack':'攻撃/マルウェア','cat.scanFlood':'スキャン/フラッド','cat.exceedThreshold':'しきい値超過','cat.other':'その他','cat.freqLabel':'頻度異常：','cat.possibleScan':'スキャンの疑い','cat.knownIOC':'既知の脅威情報に一致','note.bruteForce':'ブルートフォース/パスワード推測の疑い','note.scanOrMisconfig':'スキャンまたは設定ミスの疑い','note.freqAnomaly':'頻度異常','note.possibleScan':'ポート/ホストスキャンの疑い','note.knownIOC':'既知の脅威情報に一致',
     'intel.title':'④ ローカル脅威インテリジェンス照合リスト','intel.hint':'公開または社内の IP/CIDR ブロックリストを取り込みます（テキスト、CSV、または JSON／NDJSON——Spamhaus DROP 形式など）。照合はローカルのみで行い、外部通信は一切行いません。一致した場合は「確認済み」の高リスク問題として表示されます。','intel.add_btn':'リストをアップロード','intel.name_placeholder':'リスト名','intel.date_placeholder':'インテリジェンス日付（手動入力）','intel.count_label':'件','intel.remove_btn':'削除','intel.empty':'まだインテリジェンスリストが取り込まれていません',
-    'guide.title':'⑤ 外部脅威インテリジェンスの入手方法','guide.body':'本ツールはローカル照合のみを行い、データを外部に取得・送信することはありません。\n代表的な公開情報源（用途のみ記載、正式なダウンロード URL は公式ページでご確認ください）：\n• Spamhaus DROP/EDROP — 既知の悪意あるネットブロック（CIDR）\n• Emerging Threats / Proofpoint compromised-ips — 既知の侵害済みホスト IP\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — マルウェア C2 関連 IOC\n多くの公開リストには独自の利用規約があります（非商用/個人利用限定の場合あり）。ダウンロード前にご確認ください。月 1 回以上の更新を推奨します。',
+    'guide.title':'⑤ 外部脅威インテリジェンスの入手方法','guide.body':'本ツールはローカル照合のみを行い、データを外部に取得・送信することはありません。\n代表的な公開情報源（用途のみ記載、正式なダウンロード URL は公式ページでご確認ください）：\n• Spamhaus DROP/EDROP — 既知の悪意あるネットブロック（CIDR）\n• Emerging Threats / Proofpoint compromised-ips — 既知の侵害済みホスト IP\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — マルウェア C2 関連 IOC\n• FireHOL Level 1 — Spamhaus/DShield/Abuse.ch 等を統合：https://iplists.firehol.org/files/firehol_level1.netset （プレーンテキスト、# コメント、このページに直接貼り付け可）\n• EmergingThreats Block List — IDS/IPS 向け攻撃者 IP リスト：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt （プレーンテキスト、直接貼り付け可）\n• CINS Army List — 高信頼度の攻撃元 IP：https://cinsscore.com/list/ci-badguys.txt （プレーンテキスト、1 行 1 IP、直接貼り付け可）\n• Blocklist.de — ハニーポット/IDS 報告を集約した攻撃元 IP：https://www.blocklist.de/downloads/export-ips_all.txt （プレーンテキスト、1 行 1 IP、直接貼り付け可）\n• DShield/SANS ISC Block List — 直近 3 日間の攻撃元ネットブロック：https://www.dshield.org/block.txt （⚠️ タブ区切りの表形式で単純な CIDR リストではありません。そのまま貼り付けると各行の先頭列（ブロック開始 IP）のみが単一 IP として厳密一致比較の対象になり、/24 全体には展開されないため命中率が大幅に低下します。事前に CIDR 形式へ加工してから取り込んでください）\n上記はすべて公開のプレーンテキストファイルです。ダウンロードして貼り付けるか、ファイルを保存して本ページの「リストをアップロード」から取り込めます。登録や API キーが必要なサービス（AbuseIPDB 等）は含まれていません。\n多くの公開リストには独自の利用規約があります（非商用/個人利用限定の場合あり）。ダウンロード前にご確認ください。月 1 回以上の更新を推奨します。',
     'deid.title':'⑥ 匿名化','deid.hint':'IP／ホスト名／ユーザー名を一貫したマッピングの仮値に置き換えます（IP は RFC5737 の文書用アドレス帯を使用）。③④の分析・照合を先に行ってください。匿名化後の仮 IP は実際のインテリジェンスリストと一致しなくなります。','deid.run_btn':'匿名化を実行','deid.download_btn':'匿名化結果をダウンロード',
     'export.csv_btn':'問題リストを CSV 出力',
     'footer.note':'log_analyzer v1 — 純粋なフロントエンド JavaScript、オフライン動作、データ送信なし'
@@ -1170,14 +1267,14 @@ const LANG = {
   tlh:{
     'app.title':'Log analyzer, De-identifier je','app.subtitle':'CEF/Syslog logmey yIlan, severity yIchov, issue yItu\'. Local intel list yIrar. Sensitive field yIde-identify. Browser neH Daq taH, network Qapbe\'.',
     'notice.disclaimer':'analysis result neH reference, cha\' vIt yISovmoH pagh yIruch',
-    'import.title':'① Log yIlan','import.hint':'CEF, LEEF, Syslog (RFC3164/RFC5424), JSON chaw\'. Text yIlan, file yIlan, pagh drag\'DIch.','import.paste_placeholder':'log Daq yIlan…','import.upload_btn':'File yIlan','import.analyze_btn':'yIchov','import.clear_btn':'yIchIm','import.file_loaded':'File lanpu\':','opt.freqWindow':'poH (lup):','opt.freqThreshold':"mIgh QIt:",'opt.scanThreshold':'scan QIt:',
+    'import.title':'① Log yIlan','import.hint':'CEF, LEEF, Syslog (RFC3164/RFC5424), FortiGate key=value (syslog Qapbe\'), JSON chaw\'. Text yIlan, file yIlan, pagh drag\'DIch.','import.paste_placeholder':'log Daq yIlan…','import.upload_btn':'File yIlan','import.analyze_btn':'yIchov','import.clear_btn':'yIchIm','import.file_loaded':'File lanpu\':','opt.freqWindow':'poH (lup):','opt.freqThreshold':"mIgh QIt:",'opt.scanThreshold':'scan QIt:',
     'results.title':'② Event tetlh (severity chov)','results.empty':'Data available, first log yIlan','results.col_severity':'severity','results.col_time':'poH','results.col_host':'host','results.col_format':'format','results.col_category':'segh','results.col_notes':'pIH mIgh','results.optional_cols':"cha' ghom:",'results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.search_placeholder':'nej host/mu\'meyvam…','results.col_msg':'mu\'meyvam','results.summary_label':'chov:',
     'sev.critical':'!QIH','sev.high':'chIm','sev.medium':'motlh','sev.low':'mach','sev.info':'De\'',
-    'issues.title':'③ Issue tetlh (security chov)','issues.empty':'Issue tu\'lu\'be\'','issues.col_category':'segh','issues.col_severity':'severity','issues.col_count':'\'ar','issues.col_confidence':'HIvqa\'','issues.col_sample':'nughDoq',
+    'issues.title':'③ Issue tetlh (security chov)','issues.empty':'Issue tu\'lu\'be\'','issues.col_category':'segh','issues.col_severity':'severity','issues.col_count':'\'ar','issues.col_confidence':'HIvqa\'','issues.col_basis':'meq','issues.col_sample':'nughDoq',
     'conf.confirmed':'chovtaH','conf.heuristic':'poQlu\'',
     'cat.authFail':'authentication luj','cat.denyBlock':'connection lujqa\'','cat.attack':'HIv/malware','cat.scanFlood':'scan/flood','cat.exceedThreshold':'threshold Sub','cat.other':'latlh','cat.freqLabel':'frequency mIgh:','cat.possibleScan':'scan pIH','cat.knownIOC':'intel Sovbogh','note.bruteForce':"password nagh mIgh",'note.scanOrMisconfig':"scan pagh chenmoHHa'",'note.freqAnomaly':'frequency mIgh','note.possibleScan':'scan pIH','note.knownIOC':'intel Sovbogh',
     'intel.title':'④ Local threat-intel tetlh','intel.hint':'IP/CIDR blocklist yIlan (text, CSV, JSON). local neH chov, network Qapbe\'. hIt \'ej chovtaH severity chIm.','intel.add_btn':'tetlh yIlan','intel.name_placeholder':'tetlh pong','intel.date_placeholder':'intel poH (lo\' ghaH)','intel.count_label':'\'ar','intel.remove_btn':'yIteq','intel.empty':'intel tetlh lanpu\'be\'',
-    'guide.title':'⑤ Chay\' intel yIghoS','guide.body':'toy\'vam local neH chov, network Qapbe\'.\nSource motlh (lo\'taHghach neH, URL Datu\'meH official page yI\'ol):\n• Spamhaus DROP/EDROP — netblock mIgh Sovbogh\n• Emerging Threats/Proofpoint compromised-ips — host mIgh Sovbogh\n• abuse.ch Feodo Tracker/URLhaus/ThreatFox — malware C2 IOC\nlist law\' terms nga\'chuq (commercial Qap\'be\' latlh). jar Hoch tetlh chu\' yIchu\'.',
+    'guide.title':'⑤ Chay\' intel yIghoS','guide.body':'toy\'vam local neH chov, network Qapbe\'.\nSource motlh (lo\'taHghach neH, URL Datu\'meH official page yI\'ol):\n• Spamhaus DROP/EDROP — netblock mIgh Sovbogh\n• Emerging Threats/Proofpoint compromised-ips — host mIgh Sovbogh\n• abuse.ch Feodo Tracker/URLhaus/ThreatFox — malware C2 IOC\n• FireHOL Level 1: https://iplists.firehol.org/files/firehol_level1.netset (text neH, yIlan yIchu\')\n• EmergingThreats Block: https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt (text neH)\n• CINS Army: https://cinsscore.com/list/ci-badguys.txt (IP mob neH)\n• Blocklist.de: https://www.blocklist.de/downloads/export-ips_all.txt (IP mob neH)\n• DShield: https://www.dshield.org/block.txt (⚠️ table Doch, CIDR ghobe\', yIlan pa\'DIch yIchu\')\nlist law\' terms nga\'chuq (commercial Qap\'be\' latlh). jar Hoch tetlh chu\' yIchu\'.',
     'deid.title':'⑥ De-identification','deid.hint':'IP/host/user pong yIchoH (RFC5737 lo\'). ③④ vaj ruch, De-identify vaj fake IP intel tetlh hItqa\'be\'.','deid.run_btn':'De-identify yIchav','deid.download_btn':'De-identify baghlu\'pu\' yIchoH',
     'export.csv_btn':'Issue tetlh CSV yIchoH',
     'footer.note':'log_analyzer v1 — front-end JavaScript neH, offline Qap, data Qapbe\''
@@ -1185,14 +1282,14 @@ const LANG = {
   pirate:{
     'app.title':'Log-Readin\' & Face-Hidin\' Tool, Arrr','app.subtitle':'Haul in yer switch/firewall logs (CEF or plain Syslog), rank \'em by how much trouble they be, and sniff out the scallywags. Match against yer own blacklist o\' known villains. Hide the crew\'s true names too. All done right here on yer own ship, no signal sent to shore.',
     'notice.disclaimer':'These findin\'s be just a chart, not the treasure itself — use yer own head afore ye act, matey',
-    'import.title':'① Haul In the Log','import.hint':'Reads CEF, LEEF, and plain Syslog (RFC3164/RFC5424), line by line, plus JSON/NDJSON charts. Paste the scroll, hoist a file aboard, or drag one right onto the deck.','import.paste_placeholder':'Paste yer log scroll here, or hoist a file below…','import.upload_btn':'Hoist File','import.analyze_btn':'Chart & Scan','import.clear_btn':'Swab the Deck','import.file_loaded':'File aboard: ','opt.freqWindow':'Bells in a Watch:','opt.freqThreshold':'Ruckus Count:','opt.scanThreshold':"Scoutin' Count:",
+    'import.title':'① Haul In the Log','import.hint':'Reads CEF, LEEF, plain Syslog (RFC3164/RFC5424), and FortiGate\'s own key=value charts (no syslog riggin\' needed), line by line, plus JSON/NDJSON charts. Paste the scroll, hoist a file aboard, or drag one right onto the deck.','import.paste_placeholder':'Paste yer log scroll here, or hoist a file below…','import.upload_btn':'Hoist File','import.analyze_btn':'Chart & Scan','import.clear_btn':'Swab the Deck','import.file_loaded':'File aboard: ','opt.freqWindow':'Bells in a Watch:','opt.freqThreshold':'Ruckus Count:','opt.scanThreshold':"Scoutin' Count:",
     'results.title':'② The Event Manifest (worst trouble first)','results.empty':'Nothin\' in the hold yet — haul in a log first','results.col_severity':'Trouble','results.col_time':'Bell','results.col_host':'Ship','results.col_format':'Rig','results.col_category':'Kind','results.col_notes':'Suspected Trouble','results.optional_cols':'Show Columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.search_placeholder':'Search the logbook…','results.col_msg':'Word','results.summary_label':'Tally: ',
     'sev.critical':'Mutiny!','sev.high':'Rough Seas','sev.medium':'Choppy','sev.low':'Calm','sev.info':'Just Gossip',
-    'issues.title':'③ Trouble Manifest (basic scoutin\')','issues.empty':'No trouble spotted on the horizon','issues.col_category':'Kind','issues.col_severity':'Trouble','issues.col_count':'Tally','issues.col_confidence':'How Sure','issues.col_sample':'Sample',
+    'issues.title':'③ Trouble Manifest (basic scoutin\')','issues.empty':'No trouble spotted on the horizon','issues.col_category':'Kind','issues.col_severity':'Trouble','issues.col_count':'Tally','issues.col_confidence':'How Sure','issues.col_basis':'The Reason Why','issues.col_sample':'Sample',
     'conf.confirmed':'Confirmed, arrr','conf.heuristic':'Just a Hunch',
     'cat.authFail':'Wrong Password, Ye Scurvy Dog','cat.denyBlock':'Turned Away at the Gate','cat.attack':'Boardin\' Party / Foul Plague','cat.scanFlood':'Scoutin\' the Coast / Flood o\' Cannons','cat.exceedThreshold':'Overloaded the Hold','cat.other':'Other Business','cat.freqLabel':'Too Much Ruckus: ','cat.possibleScan':'Scoutin\' Suspected','cat.knownIOC':'Known Villain Spotted','note.bruteForce':"Suspected Password Guessin', Arr",'note.scanOrMisconfig':"Suspected Scoutin' or Bad Chartin'",'note.freqAnomaly':'Too Much Ruckus','note.possibleScan':"Suspected Port/Ship Scoutin'",'note.knownIOC':'Known Villain Spotted',
     'intel.title':'④ Local Blacklist o\' Known Villains','intel.hint':'Hoist aboard a public or yer own IP/CIDR blacklist (plain text, CSV, or JSON charts like Spamhaus DROP). All matchin\' done right on this ship, no word sent to shore. A hit be marked "Confirmed" and dangerous.','intel.add_btn':'Hoist List','intel.name_placeholder':'List Name','intel.date_placeholder':'Chart Date (write it yerself)','intel.count_label':'entries','intel.remove_btn':'Toss Overboard','intel.empty':'No blacklist hoisted aboard yet',
-    'guide.title':'⑤ Where to Find Word o\' Known Villains','guide.body':'This tool only matches on yer own ship — never sends nor fetches word from shore.\nCommon public charts (just the purpose, matey — find the true URL on the official dock yerself):\n• Spamhaus DROP/EDROP — known villain netblocks (CIDR)\n• Emerging Threats / Proofpoint compromised-ips — known boarded ships\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — plague-ship signals\nMost public charts have their own rules (some for personal use only) — check afore ye hoist \'em. Refresh the chart at least once a moon, or it goes stale.',
+    'guide.title':'⑤ Where to Find Word o\' Known Villains','guide.body':'This tool only matches on yer own ship — never sends nor fetches word from shore.\nCommon public charts (just the purpose, matey — find the true URL on the official dock yerself):\n• Spamhaus DROP/EDROP — known villain netblocks (CIDR)\n• Emerging Threats / Proofpoint compromised-ips — known boarded ships\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — plague-ship signals\n• FireHOL Level 1 — a chart o\' charts, all rolled into one: https://iplists.firehol.org/files/firehol_level1.netset (plain text, hoist it straight aboard)\n• EmergingThreats Block List: https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt (plain text)\n• CINS Army List: https://cinsscore.com/list/ci-badguys.txt (one ship per line)\n• Blocklist.de: https://www.blocklist.de/downloads/export-ips_all.txt (one ship per line)\n• DShield Block List: https://www.dshield.org/block.txt (⚠️ a proper ledger with many columns, not a plain chart — hoisted as-is ye only catch the first column, the harbor\'s start, one ship not the whole fleet. Chart it into proper CIDR afore ye hoist it aboard)\nMost public charts have their own rules (some for personal use only) — check afore ye hoist \'em. Refresh the chart at least once a moon, or it goes stale.',
     'deid.title':'⑥ Hide the Crew\'s True Names','deid.hint':'Swaps IP/hostname/username fer consistent fake names (IPs use the RFC5737 map-room range). Do this after ③④ — once hidden, the fake IPs won\'t match the real blacklist no more.','deid.run_btn':'Hide Their Names','deid.download_btn':'Download the Disguised Log',
     'export.csv_btn':'Export Trouble Manifest CSV',
     'footer.note':'log_analyzer v1 — plain front-end JavaScript, sails offline, sends nothin\' to shore'
@@ -1200,14 +1297,14 @@ const LANG = {
   emoji:{
     'app.title':'📜🔍 + 🕵️‍♂️➡️❓ 工具','app.subtitle':'📥 switch/firewall 📜（CEF/Syslog）➡️ 📊嚴重度排序 ➡️ ❗找問題。🔒本機比對已知🎯清單。🙈把敏感欄位變成❓。全程🖥️本機執行，🚫🌐不連網。',
     'notice.disclaimer':'⚠️ 分析結果僅供參考，實際處置請👤自行判斷',
-    'import.title':'①📥 匯入 Log','import.hint':'支援 CEF/LEEF 與標準 Syslog（RFC3164/5424）📄逐行格式＋JSON/NDJSON，可✍️貼上/📎上傳/🖱️拖放。','import.paste_placeholder':'✍️在此貼上 log…','import.upload_btn':'📎上傳檔案','import.analyze_btn':'🔍解析分析','import.clear_btn':'🗑️清空','import.file_loaded':'✅已載入：','opt.freqWindow':'⏱️視窗(秒)：','opt.freqThreshold':'📈門檻(次)：','opt.scanThreshold':'🔦門檻(數)：',
+    'import.title':'①📥 匯入 Log','import.hint':'支援 CEF/LEEF、標準 Syslog（RFC3164/5424）📄逐行格式、FortiGate🔥原生 key=value（免外殼）＋JSON/NDJSON，可✍️貼上/📎上傳/🖱️拖放。','import.paste_placeholder':'✍️在此貼上 log…','import.upload_btn':'📎上傳檔案','import.analyze_btn':'🔍解析分析','import.clear_btn':'🗑️清空','import.file_loaded':'✅已載入：','opt.freqWindow':'⏱️視窗(秒)：','opt.freqThreshold':'📈門檻(次)：','opt.scanThreshold':'🔦門檻(數)：',
     'results.title':'②📋 事件清單（依🔥嚴重度）','results.empty':'📭尚無資料','results.col_severity':'🔥嚴重度','results.col_time':'⏰時間','results.col_host':'🖥️主機','results.col_format':'📄格式','results.col_category':'🏷️分類','results.col_notes':'❓疑似問題','results.optional_cols':'👁️欄位：','results.col_src':'📤來源IP','results.col_dst':'📥目的IP','results.col_port':'🔌Port','results.col_proto':'📡協定','results.search_placeholder':'🔍搜尋主機/內容…','results.col_msg':'💬內容','results.summary_label':'📊統計：',
     'sev.critical':'🔴嚴重','sev.high':'🟠高','sev.medium':'🟡中','sev.low':'🔵低','sev.info':'⚪資訊',
-    'issues.title':'③❗ 問題清單','issues.empty':'✅未發現問題','issues.col_category':'🏷️類別','issues.col_severity':'🔥嚴重度','issues.col_count':'🔢次數','issues.col_confidence':'🎯可信度','issues.col_sample':'📌範例',
+    'issues.title':'③❗ 問題清單','issues.empty':'✅未發現問題','issues.col_category':'🏷️類別','issues.col_severity':'🔥嚴重度','issues.col_count':'🔢次數','issues.col_confidence':'🎯可信度','issues.col_basis':'🧩比對依據','issues.col_sample':'📌範例',
     'conf.confirmed':'✅已確認','conf.heuristic':'🤔推測',
     'cat.authFail':'🔑❌認證失敗','cat.denyBlock':'🚫連線遭拒','cat.attack':'☠️攻擊/惡意軟體','cat.scanFlood':'🔦掃描/🌊洪水','cat.exceedThreshold':'📈超過門檻','cat.other':'📎其他','cat.freqLabel':'📈頻率異常：','cat.possibleScan':'🔦疑似掃描','cat.knownIOC':'🎯已知情資命中','note.bruteForce':'🔑❓猜密碼','note.scanOrMisconfig':'🔦❓掃描/設定錯','note.freqAnomaly':'📈異常','note.possibleScan':'🔦❓Port掃描','note.knownIOC':'🎯命中',
     'intel.title':'④🎯 情資本機比對清單','intel.hint':'📥匯入 IP/CIDR 黑名單（文字/CSV/JSON），🔒僅本機比對，🚫不連網。命中✅標記高風險。','intel.add_btn':'📎上傳清單','intel.name_placeholder':'📛清單名稱','intel.date_placeholder':'📅情資日期','intel.count_label':'筆','intel.remove_btn':'🗑️移除','intel.empty':'📭尚無清單',
-    'guide.title':'⑤❓ 如何取得外部情資','guide.body':'🔒本工具僅🖥️本機比對，🚫不連網抓取或回傳。\n常見公開來源（用途說明，📎正式網址請自行查證）：\n• Spamhaus DROP/EDROP — 🌐惡意網段\n• Emerging Threats/Proofpoint — 🖥️已知被入侵主機\n• abuse.ch Feodo/URLhaus/ThreatFox — 🦠惡意軟體 C2\n⚠️多數清單有📜使用條款，下載前請自行確認；建議📅每月更新一次。',
+    'guide.title':'⑤❓ 如何取得外部情資','guide.body':'🔒本工具僅🖥️本機比對，🚫不連網抓取或回傳。\n常見公開來源（用途說明，📎正式網址請自行查證）：\n• Spamhaus DROP/EDROP — 🌐惡意網段\n• Emerging Threats/Proofpoint — 🖥️已知被入侵主機\n• abuse.ch Feodo/URLhaus/ThreatFox — 🦠惡意軟體 C2\n• FireHOL Level1🧩多來源聚合：https://iplists.firehol.org/files/firehol_level1.netset（📄純文字直接貼）\n• EmergingThreats Block：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（📄純文字）\n• CINS Army：https://cinsscore.com/list/ci-badguys.txt（📄每行一個IP）\n• Blocklist.de：https://www.blocklist.de/downloads/export-ips_all.txt（📄每行一個IP）\n• DShield：https://www.dshield.org/block.txt（⚠️表格式非單欄CIDR，直接貼只抓得到第一欄起始IP，涵蓋率大減，請先自行轉成CIDR）\n⚠️多數清單有📜使用條款，下載前請自行確認；建議📅每月更新一次。',
     'deid.title':'⑥🙈 去識別化','deid.hint':'將 IP/主機名/使用者名➡️一致假值（IP 用 RFC5737）。請先完成③④，去識別化後假 IP 🚫無法再命中真實清單。','deid.run_btn':'▶️執行去識別化','deid.download_btn':'⬇️下載結果',
     'export.csv_btn':'⬇️匯出問題清單 CSV',
     'footer.note':'log_analyzer v1 — 純前端 JS，📴離線可用，🚫不上傳任何資料'
@@ -1215,14 +1312,14 @@ const LANG = {
   bureau:{
     'app.title':'日誌分析暨資料去識別化作業系統','app.subtitle':'依規定匯入交換器／防火牆日誌資料（CEF 或標準 Syslog 格式），依嚴重程度分級排序，並依既定規則辨識潛在事項，供權責單位參考。得於本機比對已核備之情資清單，並得對機敏欄位執行去識別化作業。前述作業全程於使用者端瀏覽器執行，不涉及對外傳輸行為。',
     'notice.disclaimer':'本項分析結果僅供參考之用，實際處置事宜請權責人員本於專業判斷審慎為之，本工具不負相關法律責任',
-    'import.title':'第一項：日誌資料匯入作業','import.hint':'本作業支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog (RFC3164/RFC5424) 格式之逐行解析，暨 JSON/NDJSON 格式，得以文字貼上、檔案上傳，或拖放檔案方式辦理。','import.paste_placeholder':'請於此欄位貼上日誌內容，或依下方按鈕辦理檔案上傳作業…','import.upload_btn':'辦理檔案上傳','import.analyze_btn':'執行解析暨分析作業','import.clear_btn':'清空本欄位資料','import.file_loaded':'業已載入之檔案：','opt.freqWindow':'頻率視窗（秒）：','opt.freqThreshold':'頻率門檻（次數）：','opt.scanThreshold':'掃描門檻（數量）：',
+    'import.title':'第一項：日誌資料匯入作業','import.hint':'本作業支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog (RFC3164/RFC5424) 格式之逐行解析，暨 FortiGate 原生 key=value 格式（無須 syslog 封裝）及 JSON/NDJSON 格式，得以文字貼上、檔案上傳，或拖放檔案方式辦理。','import.paste_placeholder':'請於此欄位貼上日誌內容，或依下方按鈕辦理檔案上傳作業…','import.upload_btn':'辦理檔案上傳','import.analyze_btn':'執行解析暨分析作業','import.clear_btn':'清空本欄位資料','import.file_loaded':'業已載入之檔案：','opt.freqWindow':'頻率視窗（秒）：','opt.freqThreshold':'頻率門檻（次數）：','opt.scanThreshold':'掃描門檻（數量）：',
     'results.title':'第二項：事件清冊（依嚴重程度分級排序）','results.empty':'目前尚無資料，請依第一項規定辦理匯入及分析作業','results.col_severity':'嚴重程度等級','results.col_time':'發生時間','results.col_host':'主機識別資料','results.col_format':'資料格式','results.col_category':'事件分類','results.col_notes':'疑似問題事項','results.optional_cols':'顯示欄位：','results.col_src':'來源位址','results.col_dst':'目的位址','results.col_port':'埠口','results.col_proto':'通訊協定','results.search_placeholder':'請輸入主機/內容關鍵字以辦理搜尋…','results.col_msg':'事件內容','results.summary_label':'統計摘要：',
     'sev.critical':'甲級（嚴重）','sev.high':'乙級（高）','sev.medium':'丙級（中）','sev.low':'丁級（低）','sev.info':'參考資訊',
-    'issues.title':'第三項：問題清冊（基本資安分析作業）','issues.empty':'依現行規則，未查得相符之問題事項','issues.col_category':'問題類別','issues.col_severity':'嚴重程度等級','issues.col_count':'發生次數','issues.col_confidence':'可信程度','issues.col_sample':'代表性樣本',
+    'issues.title':'第三項：問題清冊（基本資安分析作業）','issues.empty':'依現行規則，未查得相符之問題事項','issues.col_category':'問題類別','issues.col_severity':'嚴重程度等級','issues.col_count':'發生次數','issues.col_confidence':'可信程度','issues.col_basis':'比對依據說明','issues.col_sample':'代表性樣本',
     'conf.confirmed':'業經確認','conf.heuristic':'推定研判',
     'cat.authFail':'認證程序失敗事項','cat.denyBlock':'連線遭拒絕或阻擋事項','cat.attack':'攻擊行為或惡意軟體事項','cat.scanFlood':'掃描或洪水攻擊事項','cat.exceedThreshold':'超過既定門檻事項','cat.other':'其他未分類事項','cat.freqLabel':'頻率異常事項：','cat.possibleScan':'疑似掃描行為（待進一步查證）','cat.knownIOC':'業經核對之已知情資命中事項','note.bruteForce':'疑似密碼猜測攻擊事項','note.scanOrMisconfig':'疑似掃描行為或組態設定錯誤事項','note.freqAnomaly':'頻率異常事項','note.possibleScan':'疑似埠口/主機掃描事項','note.knownIOC':'業經核對之已知情資命中事項',
     'intel.title':'第四項：威脅情資本機比對清冊管理作業','intel.hint':'得匯入公開或機關內部所編製之 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON 格式，如 Spamhaus DROP 匯出檔），前述比對作業僅於本機辦理，本工具不主動對外發送任何連線請求。命中案件依規定標註為「業經確認」之高風險事項。','intel.add_btn':'辦理清冊上傳','intel.name_placeholder':'清冊名稱','intel.date_placeholder':'情資日期（請自行填註）','intel.count_label':'筆','intel.remove_btn':'移除本清冊','intel.empty':'目前尚未匯入任何情資清冊',
-    'guide.title':'第五項：外部威脅情資取得方式說明','guide.body':'本工具僅辦理本機比對作業，不主動對外擷取或回傳任何資料，合先敘明。\n常見公開情資來源（僅供用途參考，正式下載網址請逕行查詢各該官方網頁）：\n• Spamhaus DROP/EDROP — 已知惡意網段（CIDR）清冊\n• Emerging Threats／Proofpoint compromised-ips — 已知遭入侵主機 IP 清冊\n• abuse.ch Feodo Tracker／URLhaus／ThreatFox — 惡意軟體 C2 相關情資\n上開公開清冊多訂有各自之使用條款（部分僅限非商業或個人使用），下載及使用前請自行確認相關條款；建議至少每月辦理一次更新，逾期未更新之清冊參考價值遞減。',
+    'guide.title':'第五項：外部威脅情資取得方式說明','guide.body':'本工具僅辦理本機比對作業，不主動對外擷取或回傳任何資料，合先敘明。\n常見公開情資來源（僅供用途參考，正式下載網址請逕行查詢各該官方網頁）：\n• Spamhaus DROP/EDROP — 已知惡意網段（CIDR）清冊\n• Emerging Threats／Proofpoint compromised-ips — 已知遭入侵主機 IP 清冊\n• abuse.ch Feodo Tracker／URLhaus／ThreatFox — 惡意軟體 C2 相關情資\n• FireHOL Level 1 清冊（彙整前述多項來源）：https://iplists.firehol.org/files/firehol_level1.netset（純文字格式，得逕行貼於本頁辦理匯入）\n• EmergingThreats Block List：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字格式）\n• CINS Army List：https://cinsscore.com/list/ci-badguys.txt（每列單一 IP）\n• Blocklist.de：https://www.blocklist.de/downloads/export-ips_all.txt（每列單一 IP）\n• DShield／SANS ISC Block List：https://www.dshield.org/block.txt（⚠️ 本清冊為 tab 分隔多欄位表格，非單欄 CIDR 格式，逕行貼上僅能擷取每列首欄之網段起始 IP 辦理單一 IP 精確比對，尚無法展開為完整 /24 網段，比對涵蓋率將大幅降低，建請先行處理轉換為 CIDR 格式後再辦理匯入）\n上開公開清冊多訂有各自之使用條款（部分僅限非商業或個人使用），下載及使用前請自行確認相關條款；建議至少每月辦理一次更新，逾期未更新之清冊參考價值遞減。',
     'deid.title':'第六項：資料去識別化作業','deid.hint':'將事件中之 IP、主機名稱、使用者名稱等資料，替換為具一致性對應關係之虛擬值（IP 部分採用 RFC5737 文件用網段）。請依序完成第三、四項分析及比對作業後，再辦理本項作業；本項作業完成後所產出之虛擬 IP，將無法再與真實情資清冊相符。','deid.run_btn':'執行去識別化作業','deid.download_btn':'下載去識別化作業結果',
     'export.csv_btn':'匯出問題清冊（CSV 格式）',
     'footer.note':'log_analyzer 第一版 — 純前端 JavaScript 程式，得離線執行，不進行任何資料上傳作業'
@@ -1230,14 +1327,14 @@ const LANG = {
   cat:{
     'app.title':'Log 分析去識別化工具喵','app.subtitle':'把交換器/防火牆的 log 叼進來喵，CEF 跟 Syslog 都吃，依嚴重度排排站，找出可疑的老鼠喵。可以在自己地盤比對情資清單，也能把機敏欄位藏起來喵。全程窩在瀏覽器裡不出門喵。',
     'notice.disclaimer':'分析結果只是聞一聞喵，真的要怎麼辦還是主人自己決定喵',
-    'import.title':'①叼log進來喵','import.hint':'CEF、LEEF 跟標準 Syslog（RFC3164/5424）都吃喵，JSON/NDJSON 也吃喵，貼上文字、叼檔案、或直接拖進來都可以喵。','import.paste_placeholder':'log 貼在這裡喵…','import.upload_btn':'叼檔案進來喵','import.analyze_btn':'聞一聞分析喵','import.clear_btn':'抓沙清空喵','import.file_loaded':'已經叼進來的檔案喵：','opt.freqWindow':'時間窗(秒)喵：','opt.freqThreshold':'門檻(次)喵：','opt.scanThreshold':'掃描門檻喵：',
+    'import.title':'①叼log進來喵','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424）跟 FortiGate 原生 key=value（不用外殼喵）都吃喵，JSON/NDJSON 也吃喵，貼上文字、叼檔案、或直接拖進來都可以喵。','import.paste_placeholder':'log 貼在這裡喵…','import.upload_btn':'叼檔案進來喵','import.analyze_btn':'聞一聞分析喵','import.clear_btn':'抓沙清空喵','import.file_loaded':'已經叼進來的檔案喵：','opt.freqWindow':'時間窗(秒)喵：','opt.freqThreshold':'門檻(次)喵：','opt.scanThreshold':'掃描門檻喵：',
     'results.title':'②事件清單（照嚴重度排排站喵）','results.empty':'還沒東西可以聞喵，先匯入 log 喵','results.col_severity':'嚴重度喵','results.col_time':'時間喵','results.col_host':'主機喵','results.col_format':'格式喵','results.col_category':'分類喵','results.col_notes':'疑似問題喵','results.optional_cols':'顯示欄位喵：','results.col_src':'來源IP喵','results.col_dst':'目的IP喵','results.col_port':'Port喵','results.col_proto':'協定喵','results.search_placeholder':'搜尋主機/內容喵…','results.col_msg':'內容喵','results.summary_label':'統計喵：',
     'sev.critical':'超嚴重喵!!','sev.high':'很在意喵','sev.medium':'普通喵','sev.low':'不太在意喵','sev.info':'路過看看喵',
-    'issues.title':'③問題清單（聞出來的可疑喵）','issues.empty':'沒聞到什麼可疑的喵','issues.col_category':'類別喵','issues.col_severity':'嚴重度喵','issues.col_count':'次數喵','issues.col_confidence':'有多確定喵','issues.col_sample':'範例喵',
+    'issues.title':'③問題清單（聞出來的可疑喵）','issues.empty':'沒聞到什麼可疑的喵','issues.col_category':'類別喵','issues.col_severity':'嚴重度喵','issues.col_count':'次數喵','issues.col_confidence':'有多確定喵','issues.col_basis':'為什麼喵','issues.col_sample':'範例喵',
     'conf.confirmed':'確定喵！','conf.heuristic':'感覺啦喵',
     'cat.authFail':'密碼打錯了喵','cat.denyBlock':'被擋在門外喵','cat.attack':'有壞東西喵','cat.scanFlood':'鬼鬼祟祟在探路喵','cat.exceedThreshold':'超過忍耐極限喵','cat.other':'其他喵喵喵','cat.freqLabel':'太吵了喵：','cat.possibleScan':'感覺有人在探頭探腦喵','cat.knownIOC':'抓到熟面孔壞蛋喵','note.bruteForce':'感覺在猜密碼喵','note.scanOrMisconfig':'感覺在探路喵','note.freqAnomaly':'太吵了喵','note.possibleScan':'感覺在掃描喵','note.knownIOC':'抓到熟面孔壞蛋喵',
     'intel.title':'④情資清單（自己地盤比對喵）','intel.hint':'把公開或自家的 IP/CIDR 黑名單叼進來喵（文字、CSV 或 JSON 都吃），只在自己地盤比對，不會偷跑出去連網喵。抓到就標「確定」高風險喵。','intel.add_btn':'叼清單進來喵','intel.name_placeholder':'清單叫什麼名字喵','intel.date_placeholder':'情資日期（自己填喵）','intel.count_label':'隻','intel.remove_btn':'丟掉喵','intel.empty':'還沒有情資清單喵',
-    'guide.title':'⑤去哪裡找情資喵','guide.body':'這隻工具只在自己地盤比對喵，不會偷跑出去抓資料或送資料喵。\n常見公開來源（只說用途喵，正式網址請自己找官方頁面喵）：\n• Spamhaus DROP/EDROP — 壞網段名單喵\n• Emerging Threats/Proofpoint — 已經淪陷的主機喵\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞軟體的窩喵\n大部分清單都有自己的規矩喵（有些只能自己用不能拿去賣錢喵），下載前自己看清楚喵；建議每個月至少換一次新的喵，太舊就不準了喵。',
+    'guide.title':'⑤去哪裡找情資喵','guide.body':'這隻工具只在自己地盤比對喵，不會偷跑出去抓資料或送資料喵。\n常見公開來源（只說用途喵，正式網址請自己找官方頁面喵）：\n• Spamhaus DROP/EDROP — 壞網段名單喵\n• Emerging Threats/Proofpoint — 已經淪陷的主機喵\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞軟體的窩喵\n• FireHOL Level1（把好幾窩壞蛋一起叼回來喵）：https://iplists.firehol.org/files/firehol_level1.netset（純文字，直接貼喵）\n• EmergingThreats Block：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字喵）\n• CINS Army：https://cinsscore.com/list/ci-badguys.txt（一行一隻喵）\n• Blocklist.de：https://www.blocklist.de/downloads/export-ips_all.txt（一行一隻喵）\n• DShield：https://www.dshield.org/block.txt（⚠️這個是表格不是名單喵，直接貼只抓得到第一欄，範圍會漏很多喵，要自己先處理過再貼喵）\n大部分清單都有自己的規矩喵（有些只能自己用不能拿去賣錢喵），下載前自己看清楚喵；建議每個月至少換一次新的喵，太舊就不準了喵。',
     'deid.title':'⑥藏起來喵','deid.hint':'把 IP／主機名稱／使用者名稱換成固定的假名字喵（IP 用 RFC5737 那個假地址喵）。要先做完③④再做這個喵，藏起來以後假 IP 就聞不出跟真的情資清單一樣了喵。','deid.run_btn':'開始藏喵','deid.download_btn':'把藏好的叼回家喵',
     'export.csv_btn':'把問題清單叼出去（CSV）喵',
     'footer.note':'log_analyzer v1 喵 — 純前端 JavaScript，離線也能玩喵，什麼都不會上傳喵'
@@ -1245,14 +1342,14 @@ const LANG = {
   bean:{
     'app.title':'🫘 Log 分析去識別化工具','app.subtitle':'把 switch/firewall 的 🫘log（CEF/Syslog）倒進來，依🌶️辣度排序找出問題🥕。可在本機比對🍅情資清單，把機敏欄位變成🥔。全程在自家🥬廚房完成，不出門連網。',
     'notice.disclaimer':'分析結果只是一盤🥗參考菜，真正怎麼處理請自己掂量',
-    'import.title':'①倒入🫘Log','import.hint':'CEF、LEEF 與標準 Syslog（RFC3164/5424）都能煮，JSON/NDJSON 也能下鍋，貼上文字、上傳🥔檔案、或直接拖進鍋裡皆可。','import.paste_placeholder':'把 log 倒在這裡…','import.upload_btn':'🥔上傳檔案','import.analyze_btn':'🔥開火分析','import.clear_btn':'🧹清鍋','import.file_loaded':'已下鍋的檔案：','opt.freqWindow':'⏱️時間窗(秒)：','opt.freqThreshold':'🌶️門檻(次)：','opt.scanThreshold':'🔦掃描門檻：',
+    'import.title':'①倒入🫘Log','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424）與 FortiGate🍅原生 key=value（免外殼）都能煮，JSON/NDJSON 也能下鍋，貼上文字、上傳🥔檔案、或直接拖進鍋裡皆可。','import.paste_placeholder':'把 log 倒在這裡…','import.upload_btn':'🥔上傳檔案','import.analyze_btn':'🔥開火分析','import.clear_btn':'🧹清鍋','import.file_loaded':'已下鍋的檔案：','opt.freqWindow':'⏱️時間窗(秒)：','opt.freqThreshold':'🌶️門檻(次)：','opt.scanThreshold':'🔦掃描門檻：',
     'results.title':'②事件清單（依🌶️辣度排序）','results.empty':'鍋子還是空的，先倒入 log 吧','results.col_severity':'🌶️辣度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題🌶️','results.optional_cols':'顯示欄位🌶️：','results.col_src':'來源IP🥕','results.col_dst':'目的IP🍆','results.col_port':'Port🌽','results.col_proto':'協定🫘','results.search_placeholder':'🔍搜尋主機/內容…','results.col_msg':'內容','results.summary_label':'總計：',
     'sev.critical':'🌶️🌶️🌶️超辣','sev.high':'🌶️🌶️辣','sev.medium':'🌶️微辣','sev.low':'🥒清淡','sev.info':'🥬爽口',
-    'issues.title':'③問題清單（基本廚房安全檢查）','issues.empty':'廚房目前一切正常','issues.col_category':'類別','issues.col_severity':'🌶️辣度','issues.col_count':'份數','issues.col_confidence':'火候','issues.col_sample':'試吃樣本',
+    'issues.title':'③問題清單（基本廚房安全檢查）','issues.empty':'廚房目前一切正常','issues.col_category':'類別','issues.col_severity':'🌶️辣度','issues.col_count':'份數','issues.col_confidence':'火候','issues.col_basis':'配方依據🥕','issues.col_sample':'試吃樣本',
     'conf.confirmed':'✅確定好了','conf.heuristic':'🤔大概是這樣',
     'cat.authFail':'🔑鑰匙打不開','cat.denyBlock':'🚪被拒於門外','cat.attack':'🦠壞菌入侵','cat.scanFlood':'👀被偷看/🌊太多人湧入','cat.exceedThreshold':'份量超標','cat.other':'其他配菜','cat.freqLabel':'太常出現了：','cat.possibleScan':'疑似有人在探頭探腦','cat.knownIOC':'認出熟面孔壞蛋🍅','note.bruteForce':'感覺在猜密碼🥕','note.scanOrMisconfig':'感覺在探路🌶️','note.freqAnomaly':'太常出現了','note.possibleScan':'感覺在掃描🔦','note.knownIOC':'認出熟面孔壞蛋🍅',
     'intel.title':'④🍅情資清單（自家比對）','intel.hint':'把公開或自製的 IP/CIDR 黑名單倒進來（文字、CSV 或 JSON 這道菜都收），只在自家廚房比對，不會偷跑出去買菜連網。對到就標記高風險。','intel.add_btn':'🥔上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自己填）','intel.count_label':'份','intel.remove_btn':'🗑️丟掉','intel.empty':'廚房還沒有情資清單',
-    'guide.title':'⑤去哪裡採買情資','guide.body':'本工具只在自家廚房比對，不會偷跑出去買菜或送菜出門。\n常見的市場攤位（僅說明用途，正式網址請自行到官方頁面查詢）：\n• Spamhaus DROP/EDROP — 已知的壞菜園（CIDR）\n• Emerging Threats/Proofpoint — 已被蟲蛀的主機清單\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞菌 C2 相關情資\n大部分攤位都有自己的規矩（有些只能自己吃不能拿去賣），採買前請看清楚；建議至少每個月補一次貨，太舊的菜就不新鮮了。',
+    'guide.title':'⑤去哪裡採買情資','guide.body':'本工具只在自家廚房比對，不會偷跑出去買菜或送菜出門。\n常見的市場攤位（僅說明用途，正式網址請自行到官方頁面查詢）：\n• Spamhaus DROP/EDROP — 已知的壞菜園（CIDR）\n• Emerging Threats/Proofpoint — 已被蟲蛀的主機清單\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞菌 C2 相關情資\n• FireHOL Level1🥬（好幾攤一起併成一車）：https://iplists.firehol.org/files/firehol_level1.netset（純文字，直接倒進鍋）\n• EmergingThreats Block：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字）\n• CINS Army：https://cinsscore.com/list/ci-badguys.txt（一行一顆）\n• Blocklist.de：https://www.blocklist.de/downloads/export-ips_all.txt（一行一顆）\n• DShield：https://www.dshield.org/block.txt（⚠️這攤是菜單不是菜，直接倒進鍋只會撈到第一欄，其他都漏掉，要先自己切好再下鍋）\n大部分攤位都有自己的規矩（有些只能自己吃不能拿去賣），採買前請看清楚；建議至少每個月補一次貨，太舊的菜就不新鮮了。',
     'deid.title':'⑥去識別化（去皮去籽）','deid.hint':'把 IP／主機名稱／使用者名稱換成固定的代號（IP 用 RFC5737 那盤示範菜）。請先完成③④再做這步，去皮後的假 IP 就配不上真正的情資清單了。','deid.run_btn':'開始去皮','deid.download_btn':'打包帶走',
     'export.csv_btn':'把問題清單裝盒（CSV）',
     'footer.note':'log_analyzer v1 — 純🫘前端 JavaScript，離線也能開伙，不會外送任何食材資料'
@@ -1260,14 +1357,14 @@ const LANG = {
   alpaca:{
     'app.title':'Log分析咩去識別化-aca工具','app.subtitle':'把switch/firewall咩log（CEF/Syslog）牽進來-aca，依嚴重度排隊咩，找出怪怪的問題-aca。可以在自家草原比對情資名單咩，也能把機敏欄位藏起來-aca。全程在瀏覽器裡吃草，不出門連網咩。',
     'notice.disclaimer':'分析結果只是聞一聞咩，真的怎麼辦要主人自己想-aca',
-    'import.title':'①牽log咩進來-aca','import.hint':'CEF、LEEF跟標準Syslog（RFC3164/5424）咩都吃-aca，JSON/NDJSON也吃咩，貼文字、牽檔案、或拖進來都可以咩。','import.paste_placeholder':'log貼在這裡咩…','import.upload_btn':'牽檔案進來-aca','import.analyze_btn':'咩一下分析-aca','import.clear_btn':'清空草原咩','import.file_loaded':'已經牽進來咩檔案-aca：','opt.freqWindow':'時間窗(秒)咩：','opt.freqThreshold':'門檻(次)-aca：','opt.scanThreshold':'掃描門檻咩：',
+    'import.title':'①牽log咩進來-aca','import.hint':'CEF、LEEF、標準Syslog（RFC3164/5424）跟FortiGate原生key=value（不用外殼咩）咩都吃-aca，JSON/NDJSON也吃咩，貼文字、牽檔案、或拖進來都可以咩。','import.paste_placeholder':'log貼在這裡咩…','import.upload_btn':'牽檔案進來-aca','import.analyze_btn':'咩一下分析-aca','import.clear_btn':'清空草原咩','import.file_loaded':'已經牽進來咩檔案-aca：','opt.freqWindow':'時間窗(秒)咩：','opt.freqThreshold':'門檻(次)-aca：','opt.scanThreshold':'掃描門檻咩：',
     'results.title':'②事件清單（排隊咩排隊-aca）','results.empty':'草原還空空咩，先牽log進來-aca','results.col_severity':'嚴重度咩','results.col_time':'時間-aca','results.col_host':'主機咩','results.col_format':'格式-aca','results.col_category':'分類咩','results.col_notes':'疑似問題-aca','results.optional_cols':'顯示欄位咩：','results.col_src':'來源IP咩','results.col_dst':'目的IP-aca','results.col_port':'Port咩','results.col_proto':'協定-aca','results.search_placeholder':'搜尋主機/內容咩…','results.col_msg':'內容-aca','results.summary_label':'統計咩：',
     'sev.critical':'超嚴重咩!!!','sev.high':'很緊張-aca','sev.medium':'普通咩','sev.low':'放輕鬆-aca','sev.info':'路過看看咩',
-    'issues.title':'③問題清單（咩出來的怪怪咩）','issues.empty':'沒咩到什麼怪怪的-aca','issues.col_category':'類別咩','issues.col_severity':'嚴重度-aca','issues.col_count':'次數咩','issues.col_confidence':'有多確定-aca','issues.col_sample':'範例咩',
+    'issues.title':'③問題清單（咩出來的怪怪咩）','issues.empty':'沒咩到什麼怪怪的-aca','issues.col_category':'類別咩','issues.col_severity':'嚴重度-aca','issues.col_count':'次數咩','issues.col_confidence':'有多確定-aca','issues.col_basis':'依據咩','issues.col_sample':'範例咩',
     'conf.confirmed':'確定咩！','conf.heuristic':'感覺啦-aca',
     'cat.authFail':'密碼咩打錯了-aca','cat.denyBlock':'被擋在柵欄外咩','cat.attack':'有壞東西咩-aca','cat.scanFlood':'鬼鬼祟祟探路咩','cat.exceedThreshold':'超過忍耐極限-aca','cat.other':'其他咩咩咩','cat.freqLabel':'太吵咩：','cat.possibleScan':'感覺有人探頭探腦咩','cat.knownIOC':'認出熟面孔壞蛋咩','note.bruteForce':'感覺在猜密碼咩','note.scanOrMisconfig':'感覺在探路-aca','note.freqAnomaly':'太吵咩','note.possibleScan':'感覺在掃描咩','note.knownIOC':'認出熟面孔壞蛋咩',
     'intel.title':'④情資清單（自家草原比對-aca）','intel.hint':'把公開或自家咩IP/CIDR黑名單牽進來-aca（文字、CSV或JSON咩都吃），只在自家草原比對，不會偷跑出去連網咩。牽到就標「確定」高風險-aca。','intel.add_btn':'牽清單進來咩','intel.name_placeholder':'清單叫什麼名字-aca','intel.date_placeholder':'情資日期（自己填咩）','intel.count_label':'隻','intel.remove_btn':'放走咩','intel.empty':'草原還沒有情資清單-aca',
-    'guide.title':'⑤去哪裡找情資咩','guide.body':'這隻alpaca只在自家草原比對咩，不會偷跑出去抓資料或送資料-aca。\n常見公開來源（只說用途咩，正式網址請自己找官方頁面-aca）：\n• Spamhaus DROP/EDROP — 壞牧場名單咩\n• Emerging Threats/Proofpoint — 已經淪陷咩主機-aca\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞菌的窩咩\n大部分清單都有自己的規矩-aca（有些只能自己用不能拿去賣咩），下載前自己看清楚-aca；建議每個月至少換一次新的咩，太舊就不準了-aca。',
+    'guide.title':'⑤去哪裡找情資咩','guide.body':'這隻alpaca只在自家草原比對咩，不會偷跑出去抓資料或送資料-aca。\n常見公開來源（只說用途咩，正式網址請自己找官方頁面-aca）：\n• Spamhaus DROP/EDROP — 壞牧場名單咩\n• Emerging Threats/Proofpoint — 已經淪陷咩主機-aca\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞菌的窩咩\n• FireHOL Level1（把好幾片壞草原併起來咩）：https://iplists.firehol.org/files/firehol_level1.netset（純文字，直接貼咩）\n• EmergingThreats Block：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字-aca）\n• CINS Army：https://cinsscore.com/list/ci-badguys.txt（一行一隻咩）\n• Blocklist.de：https://www.blocklist.de/downloads/export-ips_all.txt（一行一隻-aca）\n• DShield：https://www.dshield.org/block.txt（⚠️這片是表格不是草原咩，直接貼只吃得到第一欄，其他都漏掉-aca，要自己先處理過再貼咩）\n大部分清單都有自己的規矩-aca（有些只能自己用不能拿去賣咩），下載前自己看清楚-aca；建議每個月至少換一次新的咩，太舊就不準了-aca。',
     'deid.title':'⑥藏起來-aca','deid.hint':'把IP／主機名稱／使用者名稱換成固定咩假名字-aca（IP用RFC5737那個假地址咩）。要先做完③④再做這個-aca，藏起來以後假IP就配不上真正咩情資清單了-aca。','deid.run_btn':'開始藏咩','deid.download_btn':'把藏好咩牽回家-aca',
     'export.csv_btn':'把問題清單牽出去（CSV）咩',
     'footer.note':'log_analyzer v1咩 — 純前端JavaScript-aca，離線也能吃草咩，什麼都不會上傳-aca'
@@ -1275,14 +1372,14 @@ const LANG = {
   yanse:{
     'app.title':'Log 分析去識別化工具（唉，又一個工具）','app.subtitle':'把 switch/firewall 的 log 倒進來，CEF 跟 Syslog 都收，依嚴重度排一排，找出問題……看了也不一定會處理啦。可以在本機比對情資清單，把機敏欄位藏起來，反正做不做都差不多，至少不連網。',
     'notice.disclaimer':'分析結果就參考參考吧，反正最後還是要自己判斷，工具也救不了什麼',
-    'import.title':'①匯入 Log（好，開始了）','import.hint':'CEF、LEEF 跟標準 Syslog（RFC3164/5424）都吃，JSON/NDJSON 也行，貼上文字、上傳、拖放都可以，隨便啦。','import.paste_placeholder':'log 貼這裡吧……','import.upload_btn':'上傳檔案','import.analyze_btn':'解析分析（好啦）','import.clear_btn':'清空（算了）','import.file_loaded':'已載入檔案，然後呢：','opt.freqWindow':'頻率視窗(秒)，隨便：','opt.freqThreshold':'頻率門檻，反正：','opt.scanThreshold':'掃描門檻，看看就好：',
+    'import.title':'①匯入 Log（好，開始了）','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424），連 FortiGate 原生 key=value 格式也吃（不用 syslog 外殼，隨便啦），JSON/NDJSON 也行，貼上文字、上傳、拖放都可以，隨便啦。','import.paste_placeholder':'log 貼這裡吧……','import.upload_btn':'上傳檔案','import.analyze_btn':'解析分析（好啦）','import.clear_btn':'清空（算了）','import.file_loaded':'已載入檔案，然後呢：','opt.freqWindow':'頻率視窗(秒)，隨便：','opt.freqThreshold':'頻率門檻，反正：','opt.scanThreshold':'掃描門檻，看看就好：',
     'results.title':'②事件清單（依嚴重度排序，反正都要看）','results.empty':'沒資料，匯入再說吧','results.col_severity':'嚴重度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題（隨便看看）','results.optional_cols':'顯示欄位，隨便：','results.col_src':'來源IP，反正','results.col_dst':'目的IP，沒差','results.col_port':'Port，看看就好','results.col_proto':'協定，算了','results.search_placeholder':'搜尋，隨便打打…','results.col_msg':'內容','results.summary_label':'統計，看看就好：',
     'sev.critical':'嚴重（唉）','sev.high':'高（麻煩）','sev.medium':'中（還好）','sev.low':'低（無所謂）','sev.info':'資訊（隨便）',
-    'issues.title':'③問題清單（找到了，然後呢）','issues.empty':'沒發現問題，也許只是還沒發現','issues.col_category':'類別','issues.col_severity':'嚴重度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_sample':'範例，隨便看看',
+    'issues.title':'③問題清單（找到了，然後呢）','issues.empty':'沒發現問題，也許只是還沒發現','issues.col_category':'類別','issues.col_severity':'嚴重度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_basis':'依據，其實也沒差','issues.col_sample':'範例，隨便看看',
     'conf.confirmed':'確認過了（然後呢）','conf.heuristic':'推測，別太當真',
     'cat.authFail':'認證失敗，又來了','cat.denyBlock':'連線被擋，習慣了','cat.attack':'攻擊/惡意軟體，日常','cat.scanFlood':'掃描/洪水，見怪不怪','cat.exceedThreshold':'超過門檻，隨便啦','cat.other':'其他（懶得分類）','cat.freqLabel':'頻率異常，反正常有：','cat.possibleScan':'疑似掃描（大概吧）','cat.knownIOC':'已知情資命中（唉，果然）','note.bruteForce':'疑似猜密碼（又來了）','note.scanOrMisconfig':'疑似掃描或誤設定，反正沒差','note.freqAnomaly':'頻率異常，習慣了','note.possibleScan':'疑似 Port 掃描（大概吧）','note.knownIOC':'已知情資命中，唉',
     'intel.title':'④威脅情資本機比對清單（做心安的）','intel.hint':'匯入 IP/CIDR 黑名單（文字、CSV、JSON 都收，反正格式都差不多），本機比對，不連網，至少這點還算誠實。命中標記高風險，但看了也不一定會動作。','intel.add_btn':'上傳清單（好）','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（記得填，不然更沒意義）','intel.count_label':'筆','intel.remove_btn':'移除（反正也沒差）','intel.empty':'還沒清單，之後再說吧',
-    'guide.title':'⑤如何取得外部情資（算是個方向）','guide.body':'本工具只做本機比對，不連網，這點沒騙你。\n常見公開來源（用途說明而已，網址自己去查，反正會變）：\n• Spamhaus DROP/EDROP — 惡意網段名單\n• Emerging Threats/Proofpoint — 已知被入侵主機\n• abuse.ch Feodo/URLhaus/ThreatFox — 惡意軟體 C2\n大部分清單都有使用條款，看一下吧；建議每月更新，反正舊了也沒人會發現。',
+    'guide.title':'⑤如何取得外部情資（算是個方向）','guide.body':'本工具只做本機比對，不連網，這點沒騙你。\n常見公開來源（用途說明而已，網址自己去查，反正會變）：\n• Spamhaus DROP/EDROP — 惡意網段名單\n• Emerging Threats/Proofpoint — 已知被入侵主機\n• abuse.ch Feodo/URLhaus/ThreatFox — 惡意軟體 C2\n• FireHOL Level1（幫你把上面幾家併好了）：https://iplists.firehol.org/files/firehol_level1.netset（純文字，貼上就好，反正也沒多難）\n• EmergingThreats Block：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt\n• CINS Army：https://cinsscore.com/list/ci-badguys.txt\n• Blocklist.de：https://www.blocklist.de/downloads/export-ips_all.txt\n• DShield：https://www.dshield.org/block.txt（這個是表格啦，直接貼只會吃到第一欄，反正大部分人也不會發現漏很多，想準一點就自己先轉成 CIDR）\n大部分清單都有使用條款，看一下吧；建議每月更新，反正舊了也沒人會發現。',
     'deid.title':'⑥去識別化（藏起來也不會比較好過）','deid.hint':'把 IP/主機名稱/使用者名稱換成假值（RFC5737），先做完③④再做這步，做完假 IP 就配不上真情資了，就這樣。','deid.run_btn':'執行吧','deid.download_btn':'下載結果（然後呢）',
     'export.csv_btn':'匯出問題清單 CSV（留個紀錄）',
     'footer.note':'log_analyzer v1 — 純前端 JavaScript，離線可用，不上傳資料，至少這點不用擔心'
@@ -1489,9 +1586,9 @@ function renderResults() {
 function renderIssues() {
   const thead = document.querySelector('#issues-table thead');
   const tbody = document.querySelector('#issues-table tbody');
-  thead.innerHTML = `<tr><th>${tr('issues.col_category')}</th><th>${tr('issues.col_severity')}</th><th>${tr('issues.col_count')}</th><th>${tr('issues.col_confidence')}</th><th>${tr('issues.col_sample')}</th></tr>`;
+  thead.innerHTML = `<tr><th>${tr('issues.col_category')}</th><th>${tr('issues.col_severity')}</th><th>${tr('issues.col_count')}</th><th>${tr('issues.col_confidence')}</th><th>${tr('issues.col_basis')}</th><th>${tr('issues.col_sample')}</th></tr>`;
   if (!ISSUES.length) {
-    tbody.innerHTML = `<tr><td colspan="5" class="empty">${tr('issues.empty')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">${tr('issues.empty')}</td></tr>`;
     return;
   }
   tbody.innerHTML = ISSUES.map(is => {
@@ -1508,6 +1605,7 @@ function renderIssues() {
       <td><span class="badge ${is.severityNorm}">${tr(SEV_KEY_MAP[is.severityNorm])}</span></td>
       <td>${is.count}</td>
       <td><span class="conf-tag ${is.confidence}">${tr('conf.' + is.confidence)}</span></td>
+      <td>${esc(formatIssueBasis(is))}</td>
       <td>${esc(is.sampleRaw)}</td></tr>`;
   }).join('');
 }
@@ -1583,8 +1681,8 @@ function doDownloadDeid() {
   a.href = URL.createObjectURL(blob); a.download = 'log_deidentified.txt'; a.click();
 }
 function doExportCSV() {
-  const rows = [['category','severity','count','confidence','firstSeen','lastSeen','sample']];
-  ISSUES.forEach(is => rows.push([is.category, is.severityNorm, is.count, is.confidence, fmtTime(is.firstSeen), fmtTime(is.lastSeen), (is.sampleRaw || '').replace(/[\r\n]+/g, ' ')]));
+  const rows = [['category','severity','count','confidence','basis','firstSeen','lastSeen','sample']];
+  ISSUES.forEach(is => rows.push([is.category, is.severityNorm, is.count, is.confidence, formatIssueBasis(is), fmtTime(is.firstSeen), fmtTime(is.lastSeen), (is.sampleRaw || '').replace(/[\r\n]+/g, ' ')]));
   const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
