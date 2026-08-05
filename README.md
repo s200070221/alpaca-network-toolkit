@@ -14,12 +14,12 @@
 | 🔀 交換器設定解析器 | `switch-config-parser.html` | 解析 HPE Comware／Cisco IOS-XE／NX-OS／Aruba CX／ProCurve／FortiSwitch／Juniper／Extreme／Alcatel／Brocade-ICX／Dell OS10／Arista／MikroTik RouterOS／Ruijie RGOS／Netgear M4300／Ubiquiti EdgeSwitch 等 16 家廠牌，視覺化 Port/VLAN/路由/堆疊拓撲 |
 | 🛠️ 交換器設定產生器 | `switch-config-generator.html` | 表單輸入產生上述廠牌的交換器設定指令，並支援反向匯入既有設定檔自動帶入表單 |
 | 🔒 設定檔去識別化工具 | `config-anonymizer.html` | 掃描並一致性替換設定檔中的 IP／主機名稱／密碼等敏感資訊，供分享/求助使用，支援 AES-256 加密還原對照表 |
-| 📜 Log 分析與去識別化工具 🧪實驗中 | `log-analyzer.html` | 匯入交換器/防火牆 log（CEF、標準 Syslog RFC3164/RFC5424），依嚴重程度排序並找出可能問題（頻率異常、掃描 heuristic），支援本機威脅情資清單比對（僅本機、不連網）與敏感欄位去識別化 |
+| 📜 Log 分析與去識別化工具 🧪實驗中 | `log-analyzer.html` | 匯入交換器/防火牆 log（CEF、LEEF、標準 Syslog RFC3164/RFC5424、FortiGate 原生 key=value），依嚴重程度排序並找出可能問題（頻率異常、掃描 heuristic），支援本機威脅情資清單比對（僅本機、不連網）與敏感欄位去識別化；`fetch_threat_intel.ps1` 為選用的獨立輔助腳本，在瀏覽器外下載並合併公開黑名單為單一檔案供匯入，工具本身仍維持不連網 |
 | 🌐 六工具入口頁 | `network-analyzer.html` | 自動偵測拖入設定檔的廠牌並導向對應工具 |
 
 ## 使用說明文件
 
-`docs/` 資料夾內提供各工具的詳細使用說明（.docx）：[防火牆設定分析器](docs/firewall-analyzer-guide.docx)／[交換器設定解析器](docs/switch-config-parser-guide.docx)／[交換器設定產生器](docs/switch-config-generator-guide.docx)／[設定檔去識別化工具](docs/config-anonymizer-guide.docx)／[六工具入口頁](docs/network-analyzer-guide.docx)。Log 分析與去識別化工具目前為實驗性功能，尚無對應使用說明文件。
+`docs/` 資料夾內提供各工具的詳細使用說明（.docx）：[防火牆設定分析器](docs/firewall-analyzer-guide.docx)／[交換器設定解析器](docs/switch-config-parser-guide.docx)／[交換器設定產生器](docs/switch-config-generator-guide.docx)／[設定檔去識別化工具](docs/config-anonymizer-guide.docx)／[六工具入口頁](docs/network-analyzer-guide.docx)／[Log 分析與去識別化工具](docs/log-analyzer-guide.docx)。
 
 ## 特色
 
