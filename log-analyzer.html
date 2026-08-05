@@ -122,7 +122,7 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
     <div id="large-file-notice" class="large-file-notice" style="display:none"></div>
     <textarea class="paste" id="paste-area"></textarea>
     <div class="btn-row">
-      <input type="file" id="file-input" style="display:none" accept=".log,.txt,.csv">
+      <input type="file" id="file-input" style="display:none" accept=".log,.txt,.csv,.json,.ndjson,.jsonl" multiple>
       <button class="btn" id="btn-upload"></button>
       <button class="btn primary" id="btn-analyze"></button>
       <button class="btn" id="btn-clear"></button>
@@ -165,7 +165,7 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
     <div class="btn-row">
       <input class="txt" id="intel-name-input" style="flex:1;min-width:140px">
       <input class="txt" id="intel-date-input" style="width:130px">
-      <input type="file" id="intel-file-input" style="display:none" accept=".txt,.csv,.json">
+      <input type="file" id="intel-file-input" style="display:none" accept=".txt,.csv,.json,.ndjson,.jsonl">
       <button class="btn primary" id="btn-intel-add"></button>
     </div>
     <div id="intel-list" style="margin-top:10px"></div>
@@ -1743,26 +1743,35 @@ function doClear() {
   RAW_TEXT = ''; EVENTS = []; ISSUES = []; ANON_EVENTS = null;
   renderResults(); renderIssues();
 }
-function doUploadFile(file) {
-  const reader = new FileReader();
-  reader.onload = () => {
-    const text = reader.result;
+// 支援一次選取/拖放多個檔案：依原始順序平行讀取後 join 成單一文字餵給既有分析流程，
+// 大檔案門檻判斷改用合併後的總行數/總位元組數；file 參數同時相容單一 File（Array.isArray
+// 防呆），呼叫端一律傳陣列
+function doUploadFile(files) {
+  const fileList = Array.isArray(files) ? files : [files];
+  Promise.all(fileList.map(f => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(f);
+  }))).then(contents => {
+    const text = contents.map(c => c.replace(/\s+$/, '')).join('\n');
+    const totalSize = fileList.reduce((sum, f) => sum + f.size, 0);
     const lineCount = (text.match(/\n/g) || []).length + 1;
+    const names = fileList.map(f => f.name).join(', ');
     const notice = document.getElementById('large-file-notice');
     const textarea = document.getElementById('paste-area');
-    if (lineCount > LARGE_FILE_LINE_THRESHOLD || file.size > LARGE_FILE_BYTE_THRESHOLD) {
+    if (lineCount > LARGE_FILE_LINE_THRESHOLD || totalSize > LARGE_FILE_BYTE_THRESHOLD) {
       PENDING_LARGE_TEXT = text;
       textarea.value = '';
-      notice.textContent = tr('import.large_file_notice').replace('{name}', file.name).replace('{lines}', lineCount.toLocaleString());
+      notice.textContent = tr('import.large_file_notice').replace('{name}', names).replace('{lines}', lineCount.toLocaleString());
       notice.style.display = 'block';
     } else {
       PENDING_LARGE_TEXT = null;
       textarea.value = text;
       notice.style.display = 'none';
     }
-    document.getElementById('file-loaded-label').textContent = tr('import.file_loaded') + file.name;
-  };
-  reader.readAsText(file);
+    document.getElementById('file-loaded-label').textContent = tr('import.file_loaded') + names;
+  });
 }
 function doIntelUpload(file, name, date) {
   const reader = new FileReader();
@@ -1795,7 +1804,7 @@ function doExportCSV() {
 }
 
 document.getElementById('btn-upload').onclick = () => document.getElementById('file-input').click();
-document.getElementById('file-input').onchange = e => { if (e.target.files[0]) doUploadFile(e.target.files[0]); };
+document.getElementById('file-input').onchange = e => { if (e.target.files.length) doUploadFile(Array.from(e.target.files)); };
 document.getElementById('btn-analyze').onclick = doAnalyze;
 ['col-src', 'col-dst', 'col-port', 'col-proto'].forEach(id => document.getElementById(id).onchange = renderResults);
 document.getElementById('btn-clear').onclick = doClear;
@@ -1817,8 +1826,8 @@ const pasteArea = document.getElementById('paste-area');
 pasteArea.addEventListener('dragover', e => e.preventDefault());
 pasteArea.addEventListener('drop', e => {
   e.preventDefault();
-  const file = e.dataTransfer.files && e.dataTransfer.files[0];
-  if (file) doUploadFile(file);
+  const files = Array.from(e.dataTransfer.files || []);
+  if (files.length) doUploadFile(files);
 });
 // 大檔案上傳後 textarea 會刻意留空（見 doUploadFile）；使用者若之後手動輸入/貼上新內容，
 // 視為要改用 textarea 內容，PENDING_LARGE_TEXT 讓出優先權並收起提示，避免兩者衝突
