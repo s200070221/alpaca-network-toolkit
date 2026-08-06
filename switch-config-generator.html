@@ -904,6 +904,17 @@ function findLacpGroup(lacpList,ifaceName){
   return (lacpList||[]).find(l=>(l.members||[]).includes(ifaceName))||null;
 }
 
+// VRF 名稱收集：8 家廠牌（Comware/Aruba CX/Cisco/Dell OS10/Arista/Ruijie/Brocade/NX-OS）的
+// interface（含 SVI）都會輸出 `vrf attach`／`ip vrf forwarding` 之類的引用指令，但先前整份
+// 產生器從未輸出建立 VRF 本身的區塊——2026-08-06 對外查證多家官方文件確認，這幾家真實設備在
+// VRF 不存在時會拒絕介面上的 vrf 綁定指令（或如 NX-OS 是綁定成功但介面停留在 down 狀態直到
+// VRF 建立），故新增各廠牌專屬的 VRF 建立區塊 render 函式，統一從這裡收集名稱
+function collectVrfNames(interfaces){
+  const names=new Set();
+  (interfaces||[]).forEach(i=>{ if(i.vrf)names.add(i.vrf); });
+  return [...names].sort();
+}
+
 // DHCP relay 比照 LACP 同一個內嵌邏輯：Cisco/Aruba CX 的逐介面 relay（ip helper-address）
 // 要內嵌進該 port 自己的 interface 區塊，理由同上（Cisco parser 不合併同名 interface 區塊）。
 // 一個介面可以有多台 relay 目標，故回傳陣列。interface 欄位留空的列（僅 Comware 全域 relay
@@ -1426,6 +1437,12 @@ function assembleComwareConfig(model){
   // 即可生效；見 renderComwareInterface() 內對應說明
   if((model.security||[]).some(s=>s.dot1x==='auth'||s.dot1x==='supp'))blocks.push('dot1x','#');
   if(model.vlans&&model.vlans.length)blocks.push(renderComwareVLANs(model.vlans));
+  // VRF（Comware 稱 VPN instance）：官方文件確認 `ip binding vpn-instance NAME` 要求該
+  // vpn-instance 已用 `ip vpn-instance NAME` 建立，故排在所有會引用 vrf 的區塊（Interfaces/
+  // RIP/Routes）之前輸出，僅建立裸 vpn-instance（不含 route-distinguisher，本工具未收集
+  // 該欄位，MPLS L3VPN 情境才需要，本機 VRF 隔離不需要）
+  const comwareVrfNames=collectVrfNames(model.interfaces);
+  if(comwareVrfNames.length)blocks.push(comwareVrfNames.map(n=>`ip vpn-instance ${n}\n#`).join('\n'));
   if(model.acl&&model.acl.length)blocks.push(renderComwareACL(model.acl));
   // Bridge-Aggregation 必須排在 member port 之前輸出：member port 執行 port
   // link-aggregation group 那一刻，聚合介面若還沒設定 VLAN/link-type（停留在預設值），
@@ -2018,6 +2035,10 @@ function renderArubaACL(list){return (list||[]).map(renderArubaACLEntry).join('\
 function assembleArubaConfig(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`hostname ${model.sysname||'Switch'}`];
   if(model.vlans&&model.vlans.length)blocks.push(renderArubaVLANs(model.vlans,model.vxlan&&model.vxlan.vnis));
+  // VRF：官方文件確認 `vrf attach NAME` 要求該 VRF 已用裸 `vrf NAME` 建立，排在
+  // Interfaces 之前輸出
+  const arubaVrfNames=collectVrfNames(model.interfaces);
+  if(arubaVrfNames.length)blocks.push(arubaVrfNames.map(n=>`vrf ${n}`).join('\n!\n'));
   if(model.acl&&model.acl.length)blocks.push(renderArubaACL(model.acl));
   if(model.interfaces&&model.interfaces.length)blocks.push(renderArubaInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.breakouts,model.ospf));
   const arubaLacpExtra=renderArubaLACPExtra(model.lacp,model.interfaces);
@@ -2295,6 +2316,10 @@ function assembleCiscoConfig(model){
   const ciscoBreakoutBlock=renderCiscoBreakoutBlock(model.breakouts);
   if(ciscoBreakoutBlock)blocks.push(ciscoBreakoutBlock);
   if(model.vlans&&model.vlans.length)blocks.push(renderCiscoVLANs(model.vlans));
+  // VRF：官方文件確認舊式 `ip vrf forwarding NAME`（本工具介面上已使用的語法）要求該 VRF
+  // 已用 `ip vrf NAME` 建立，排在 Interfaces 之前輸出
+  const ciscoVrfNames=collectVrfNames(model.interfaces);
+  if(ciscoVrfNames.length)blocks.push(ciscoVrfNames.map(n=>`ip vrf ${n}`).join('\n!\n'));
   if(model.interfaces&&model.interfaces.length)blocks.push(renderCiscoInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp));
   const ciscoLacpExtra=renderCiscoLACPExtra(model.lacp,model.interfaces);
   if(ciscoLacpExtra)blocks.push(ciscoLacpExtra);
@@ -2514,6 +2539,10 @@ function assembleDellOS10Config(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`hostname ${model.sysname||'Switch'}`];
   const breakoutBlockDell=renderDellOS10BreakoutBlock(model.breakouts);
   if(breakoutBlockDell)blocks.push(breakoutBlockDell);
+  // VRF：官方文件確認 `ip vrf forwarding NAME` 要求該 VRF 已用 `ip vrf NAME` 建立；SVI 的
+  // vrf 欄位巢狀在 renderDellOS10VLANs() 輸出的 interface vlanN 區塊內，故排在該區塊之前
+  const dellVrfNames=collectVrfNames(model.interfaces);
+  if(dellVrfNames.length)blocks.push(dellVrfNames.map(n=>`ip vrf ${n}`).join('\n!\n'));
   const vlanBlock=renderDellOS10VLANs(model.vlans,model.vrrp,model.interfaces);
   if(vlanBlock)blocks.push(vlanBlock);
   // SVI（type:'svi'）已由 renderDellOS10VLANs() 合併輸出進 interface vlanN 區塊，
@@ -2731,6 +2760,12 @@ function assembleAristaConfig(model){
   // 缺這行會導致 round-trip 時無法被自動辨識為 arista
   const blocks=[`! ${tr('notice.disclaimer')}`,'! Software image version: EOS',`hostname ${model.sysname||'Switch'}`];
   if(model.vlans&&model.vlans.length)blocks.push(renderAristaVLANs(model.vlans));
+  // VRF：本工具介面上目前輸出的是沿用 Cisco 的 `ip vrf forwarding NAME`（parseCiscoInterfaces()
+  // 共用正則也是認這個關鍵字，round-trip 依賴此語法一致），故建立區塊同樣採 `ip vrf NAME`
+  // 與介面端保持一致；官方 EOS 文件實際指令是 `vrf instance NAME`（介面上是裸 `vrf NAME`），
+  // 但改動介面端語法需要一併修正共用 parser，超出本輪範圍，先維持內部一致、留待後續處理
+  const aristaVrfNames=collectVrfNames(model.interfaces);
+  if(aristaVrfNames.length)blocks.push(aristaVrfNames.map(n=>`ip vrf ${n}`).join('\n!\n'));
   if(model.interfaces&&model.interfaces.length)blocks.push(renderAristaInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.breakouts));
   // DHCP Relay Option82（2026-07-24 新增解析，一直未接線）：真實語法是不含任何後綴參數的
   // 裸全域指令 "ip dhcp relay information option"（非逐介面），parser 端也是用行首錨點比對
@@ -2944,6 +2979,11 @@ function assembleRuijieConfig(model){
   // 辨識為 ruijie（比照 Arista EOS 版本註解行的既有慣例）
   const blocks=[`! ${tr('notice.disclaimer')}`,'! version RGOS 11.4(1)B1',`hostname ${model.sysname||'Switch'}`];
   if(model.vlans&&model.vlans.length)blocks.push(renderCiscoVLANs(model.vlans));
+  // VRF：Ruijie 沿用 Cisco 語系的 `ip vrf forwarding NAME` 介面指令，比照建立 `ip vrf NAME`
+  // 保持內部一致；本廠牌本身信心度低於已用真實範例校正過的廠牌（無真實裝置匯出檔可比對），
+  // VRF 建立指令的真實語法未獨立查證
+  const ruijieVrfNames=collectVrfNames(model.interfaces);
+  if(ruijieVrfNames.length)blocks.push(ruijieVrfNames.map(n=>`ip vrf ${n}`).join('\n!\n'));
   const stackInfo=renderRuijieStack(model.stack);
   if(model.interfaces&&model.interfaces.length)blocks.push(renderRuijieInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,stackInfo.vslSet));
   // DHCP Relay Option82：與 Cisco 共用同一套 "ip dhcp snooping information option" 全域旗標
@@ -3550,16 +3590,21 @@ function assembleBrocadeConfig(model){
   if(ridLine)blocks.push(ridLine);
   const vlanBlock=renderBrocadeVLANs(model.vlans,model.interfaces);
   if(vlanBlock)blocks.push(vlanBlock);
+  // VRF：官方文件確認 `vrf forwarding NAME` 要求該 VRF 已用 `vrf NAME`＋`exit-vrf` 建立，
+  // 排在 VE 區塊（巢狀輸出 vrf forwarding）之前
+  const brocadeVrfNames=collectVrfNames(model.interfaces);
+  if(brocadeVrfNames.length)blocks.push(brocadeVrfNames.map(n=>`vrf ${n}\nexit-vrf`).join('\n!\n'));
   const ripPorts=brocadeRipEnabledPorts(model.rip);
   // OSPF area 依介面名稱分流成 ve／其他（實體埠/loopback）兩組，避免非 ve 介面被誤塞進
   // VE 區塊（見 groupBrocadeOspfAreas() 上方註解，P0 正確性 bug 修正）
   const {ve:ospfAreaVe,other:ospfAreaOther}=groupBrocadeOspfAreas(model.ospf);
-  const veBlock=renderBrocadeVEBlocks(model.interfaces,model.vrrp,ospfAreaVe,model.dhcp,ripPorts);
-  if(veBlock)blocks.push(veBlock);
   // VRRP-E 需要先在全域啟用，否則真實設備會拒絕底下的 ip vrrp-extended vrid 指令
   // （已查證官方文件），parseBrocadeVRRP 不要求此行也能正確解析，純粹為真實設備
-  // 正確性補上，不影響 round-trip
+  // 正確性補上，不影響 round-trip；2026-08-06 修正：先前這行寫在 veBlock 之後，
+  // 跟本段註解自己講的順序要求恰好相反，等於白寫
   if(model.vrrp&&model.vrrp.length)blocks.push('router vrrp-extended');
+  const veBlock=renderBrocadeVEBlocks(model.interfaces,model.vrrp,ospfAreaVe,model.dhcp,ripPorts);
+  if(veBlock)blocks.push(veBlock);
   // 實體埠：排除 svi/loopback 類型（已分別由 renderBrocadeVEBlocks()/renderBrocadeLoopbacks()
   // 處理），避免同一介面被 brocadePortName() 誤轉成 `interface ethernet veN`/`loopbackN`
   // 這種不存在的語法（P0 正確性 bug 修正，見 renderBrocadeVEBlocks() 上方註解）
@@ -4788,11 +4833,19 @@ function assembleNXOSConfig(model){
   const nxosBreakoutBlock=renderNXOSBreakoutBlock(model.breakouts);
   if(nxosBreakoutBlock)blocks.push(nxosBreakoutBlock);
   if(model.vlans&&model.vlans.length)blocks.push(renderNXOSVLANs(model.vlans));
+  // VRF：官方文件確認 `vrf member NAME` 要求該 VRF 已用 `vrf context NAME` 建立，否則介面
+  // 會停留在 down 狀態直到 VRF 建立為止，排在 Interfaces 之前輸出
+  const nxosVrfNames=collectVrfNames(model.interfaces);
+  if(nxosVrfNames.length)blocks.push(nxosVrfNames.map(n=>`vrf context ${n}`).join('\n!\n'));
+  // vpc domain 必須排在「把 port-channel 指派為 peer-link」之前輸出：真實 NX-OS 要求
+  // vpc domain 物件已存在，才能在 interface/port-channel 區塊內宣告 vpc peer-link，
+  // 否則會被拒絕（"Please configure the vpc domain first" 一類訊息，已對外查證官方
+  // Configuring vPCs 文件），結構與已修復的 Comware Bridge-Aggregation 問題相同
+  const nxosVpcBlock=renderNXOSVpc(model.vpc);
+  if(nxosVpcBlock)blocks.push(nxosVpcBlock);
   if(model.interfaces&&model.interfaces.length)blocks.push(renderNXOSInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.vpc));
   const nxosLacpExtra=renderNXOSLACPExtra(model.lacp,model.interfaces);
   if(nxosLacpExtra)blocks.push(nxosLacpExtra);
-  const nxosVpcBlock=renderNXOSVpc(model.vpc);
-  if(nxosVpcBlock)blocks.push(nxosVpcBlock);
   if(model.vrrp&&model.vrrp.length)blocks.push(renderNXOSVRRP(model.vrrp));
   // STP 全域：直接重用 Cisco/Dell OS10 共用的 renderSpanningTreeGlobal（parseSTP 對 nxos
   // 走同一套 Cisco-style generic 分支，語法沿用即可）
