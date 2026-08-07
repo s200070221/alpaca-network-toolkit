@@ -3702,10 +3702,17 @@ function renderAlcatelVRRP(vrrpList){
   }).join('\n!\n');
 }
 
+// 官方 OmniSwitch CLI Reference Guide 確認語法：群組本身用 `linkagg lacp agg <id> ...`
+// 三行各自宣告（size/admin-state/actor admin-key），成員埠透過 admin-key 數值相符達成聚合
+// （IEEE 802.3ad 標準機制），用 `linkagg lacp port <slot/port> actor admin-key <id>` 逐行加入
 function renderAlcatelLACPGroup(l){
-  const lines=(l.members||[]).map(m=>`interfaces ${m} linkagg ${l.id}`);
-  lines.push(`linkagg lacp ${l.id} admin-state enable`);
-  lines.push(`linkagg lacp ${l.id} actor admin-key ${l.id}`);
+  const members=l.members||[];
+  const lines=[
+    `linkagg lacp agg ${l.id} size ${members.length}`,
+    `linkagg lacp agg ${l.id} admin-state enable`,
+    `linkagg lacp agg ${l.id} actor admin-key ${l.id}`
+  ];
+  members.forEach(m=>lines.push(`linkagg lacp port ${m} actor admin-key ${l.id}`));
   return lines.join('\n');
 }
 function renderAlcatelLACP(list){return (list||[]).map(renderAlcatelLACPGroup).join('\n!\n');}
