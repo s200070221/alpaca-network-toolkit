@@ -4681,6 +4681,10 @@ function parseAlcatelLACP(cfg){
   // Style B: linkagg lacp N admin-state enable (no "agg" keyword) — both with and without ->
   const aggReB=/^(?:->\s*)?linkagg\s+lacp\s+(\d+)\s+(?:admin-state|size|actor)/gm;
   while((m=aggReB.exec(cfg))!==null) aggSet.add(m[1]);
+  // Style C: linkagg lacp agg N size/admin-state/actor（無 -> 前綴＋帶 agg 關鍵字，
+  // 官方 show running-config 匯出格式，經對外查證 CLI Reference Guide PDF 原文確認）
+  const aggReC=/^linkagg\s+lacp\s+agg\s+(\d+)\s+(?:size|admin-state|actor)/gm;
+  while((m=aggReC.exec(cfg))!==null) aggSet.add(m[1]);
 
   // Build key→agg map for arrow style
   const keyToAgg={};
@@ -4690,12 +4694,21 @@ function parseAlcatelLACP(cfg){
     // Style B actor admin-key
     const keyM2=cfg.match(new RegExp('^linkagg\\s+lacp\\s+'+agg+'\\s+actor\\s+admin-key\\s+(\\d+)','m'));
     if(keyM2) keyToAgg[keyM2[1]]=agg;
+    // Style C actor admin-key（無 ->，hyphenated，與 Style A 的 "admin key" 空格寫法不同）
+    const keyM3=cfg.match(new RegExp('^linkagg\\s+lacp\\s+agg\\s+'+agg+'\\s+actor\\s+admin-key\\s+(\\d+)','m'));
+    if(keyM3) keyToAgg[keyM3[1]]=agg;
   });
 
   const membersByAgg={};
   // Arrow style: -> linkagg lacp port P actor admin key K
   const portReA=/^->\s*linkagg\s+lacp\s+port\s+(\S+)\s+actor\s+admin\s+key\s+(\d+)/gm;
   while((m=portReA.exec(cfg))!==null){
+    const agg=keyToAgg[m[2]]||m[2];
+    membersByAgg[agg]=(membersByAgg[agg]||[]).concat(m[1]);
+  }
+  // Style C: linkagg lacp port P actor admin-key K（無 -> 前綴）
+  const portReC=/^linkagg\s+lacp\s+port\s+(\S+)\s+actor\s+admin-key\s+(\d+)/gm;
+  while((m=portReC.exec(cfg))!==null){
     const agg=keyToAgg[m[2]]||m[2];
     membersByAgg[agg]=(membersByAgg[agg]||[]).concat(m[1]);
   }

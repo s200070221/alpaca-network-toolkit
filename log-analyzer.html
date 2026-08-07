@@ -87,7 +87,9 @@ th.sortable-col:hover{color:var(--accent)}
 .empty{color:var(--text-muted);font-size:11px;padding:14px 0;text-align:center}
 .intel-row{display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--surface2);border-radius:6px;margin-bottom:6px;font-size:11px}
 .intel-row .n{flex:1}
-.geo-risk-checks{display:flex;flex-wrap:wrap;gap:2px 14px;max-height:110px;overflow-y:auto;padding:6px 8px;background:var(--surface2);border-radius:6px}
+.geo-risk-checks{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto;padding:6px 8px;background:var(--surface2);border-radius:6px}
+.geo-risk-group-title{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.03em;margin-bottom:2px}
+.geo-risk-group-items{display:flex;flex-wrap:wrap;gap:2px 14px}
 .geo-risk-item{white-space:nowrap;cursor:pointer}
 input.txt{background:var(--surface2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-size:11px;padding:5px 8px;font-family:inherit}
 .guide-body{font-size:11px;color:var(--text-dim);line-height:1.8;white-space:pre-line}
@@ -296,6 +298,13 @@ function detectLineFormat(line) {
   if (/^<\d{1,3}>1\s/.test(line)) return 'rfc5424';
   if (/^(?:<\d{1,3}>\s*)?CEF:\d+\|/.test(line)) return 'cef';
   if (/^(?:<\d{1,3}>\s*)?LEEF:\d+(?:\.\d+)?\|/i.test(line)) return 'leef';
+  // CEF 包在 RFC3164 風格 Syslog 信封裡（ArcSight 官方 CEF spec 範例格式：
+  // "Sep 19 08:26:10 host CEF:0|Vendor|..."）；必須排在下面的通用 rfc3164 判定之前，
+  // 否則會被 rfc3164 截胡，CEF body 整段被當成自由文字 msg
+  if (/^(?:<\d{1,3}>\s*)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+CEF:\d+\|/.test(line)) return 'cef-syslog';
+  // Cisco ASA %ASA-LEVEL-MSGID: 語法，時間戳含年份（與下面通用 rfc3164 無年份格式天生互斥，
+  // 不需要調整既有規則順序即可正確分流）
+  if (/^(?:<\d{1,3}>\s*)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}:\s*%ASA-\d-\d+:/.test(line)) return 'asa';
   // PRI 選填：本機檔案/裝置匯出常見 rsyslog 樣板已剝除 PRI（如 UniFi kernel netfilter
   // 流量記錄，經查證真實範例確認），並非每種 rfc3164 來源都保留 <PRI> 前綴
   if (/^(?:<\d{1,3}>)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s/.test(line)) return 'rfc3164';
@@ -369,6 +378,24 @@ function parseCEFLine(line, lineNo) {
     appName: deviceProduct, procid: '', msgid: '',
     msg: name, fields
   };
+}
+// CEF 包在 RFC3164 Syslog 信封裡（ArcSight 官方 spec 範例格式，見 detectLineFormat 註解）：
+// 拆出信封 pri/ts/host 後，body 本身就是合法的 "CEF:..." 字串，直接交給既有 parseCEFLine()
+// 重用其 header/extension 解析邏輯，事件 .format 維持 'cef' 不另開格式標籤，讓 classifyByKeyword／
+// extractCandidateIPs／anonymizeEvent 的既有 cef 分支自動適用；額外掛 syslogPrefix 供重建時還原信封
+function parseCEFInSyslogLine(line, lineNo) {
+  const m = line.match(/^(?:<(\d{1,3})>\s*)?([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(CEF:[\s\S]*)$/);
+  if (!m) return null;
+  const [, , ts, host, cefBody] = m;
+  const cefEvt = parseCEFLine(cefBody, lineNo);
+  if (!cefEvt) return null;
+  cefEvt.raw = line;
+  cefEvt.syslogPrefix = { ts, host };
+  // CEF extension 本身沒有 rt=/dvchost= 時，用信封資訊補上（parseCEFLine 既有判斷順位優先採 extension）
+  if (!cefEvt.timestamp) cefEvt.timestamp = parseSyslogTimestamp(ts, 'bsd');
+  if (!cefEvt.timestampRaw) cefEvt.timestampRaw = ts;
+  if (!cefEvt.host) cefEvt.host = host;
+  return cefEvt;
 }
 
 // LEEF（IBM QRadar Log Event Extended Format）：header 語法「LEEF:Version|Vendor|Product|
@@ -498,6 +525,24 @@ function parseRFC3164Line(line, lineNo) {
     msg, fields: {}
   };
 }
+// Cisco ASA %ASA-LEVEL-MSGID: 語法（官方 ASA 設定手冊確認），時間戳含年份與標準 RFC3164
+// 不同，不需比照 parseSyslogTimestamp('bsd') 補當前年份 hack，new Date() 可直接正確解析；
+// classifyByKeyword/extractCandidateIPs 不需另開分支——msg 是明碼文字（如 "Deny tcp src..."），
+// 既有通用關鍵字掃描與 IP 擷取 fallback 已涵蓋，此為重用既有機制、非遺漏
+function parseASALine(line, lineNo) {
+  const m = line.match(/^(?:<(\d{1,3})>\s*)?([A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}):\s*%ASA-(\d)-(\d+):\s*([\s\S]*)$/);
+  if (!m) return null;
+  const [, , ts, level, msgId, msg] = m;
+  const d = new Date(ts);
+  return {
+    format: 'asa', raw: line, lineNo,
+    timestamp: isNaN(d.getTime()) ? null : d, timestampRaw: ts,
+    host: '', appName: '', procid: '', msgid: msgId,
+    severityRaw: level, severityNorm: normSyslogSeverity(Number(level)),
+    facility: null, facilityAuth: false,
+    msg, fields: {}
+  };
+}
 // FortiOS 原生 key=value 逐欄擷取：與 extractKeyValueFields()（供既有格式的可選欄位 best-effort
 // 擷取用）分開實作，因為這裡需要保留「原始欄位順序」與「原始是否加雙引號」供去識別化後原樣重建，
 // 那個既有函式只回傳攤平的 key→value，兩者用途不同不可合併
@@ -530,6 +575,8 @@ function parseLogLine(line, lineNo) {
   const fmt = detectLineFormat(line);
   if (fmt === 'rfc5424') return parseRFC5424Line(line, lineNo);
   if (fmt === 'cef') return parseCEFLine(line, lineNo);
+  if (fmt === 'cef-syslog') return parseCEFInSyslogLine(line, lineNo);
+  if (fmt === 'asa') return parseASALine(line, lineNo);
   if (fmt === 'leef') return parseLEEFLine(line, lineNo);
   if (fmt === 'rfc3164') return parseRFC3164Line(line, lineNo);
   if (fmt === 'fortigate') return parseFortiGateLine(line, lineNo);
@@ -1452,7 +1499,15 @@ function anonymizeEvent(evt) {
       else clone.fields[k] = 'REDACTED';
     });
     if (clone.host) clone.host = anonHostname(clone.host);
-    clone.raw = rebuildCEFLine(clone);
+    // CEF 包在 Syslog 信封裡的事件（cef-syslog），重建時要連同信封 ts/host 一併輸出，
+    // host 用已去識別化後的 clone.host（避免信封裡的原始主機名外洩），保留原信封格式
+    if (clone.syslogPrefix) clone.raw = `${clone.syslogPrefix.ts} ${clone.host || clone.syslogPrefix.host} ${rebuildCEFLine(clone)}`;
+    else clone.raw = rebuildCEFLine(clone);
+  } else if (evt.format === 'asa') {
+    // ASA msg 是明碼文字（無結構化欄位），比照 rfc3164/rfc5424 既有處理模式，僅通用文字
+    // 正則替換（IP/MAC），範圍刻意不擴及使用者名稱，維持專案「寧可漏報不誤判」原則
+    clone.msg = replaceMACsInLine(replaceIPsInLine(clone.msg || ''));
+    clone.raw = `${clone.timestampRaw}: %ASA-${clone.severityRaw}-${clone.msgid}: ${clone.msg}`;
   } else if (evt.format === 'leef') {
     LEEF_SENSITIVE_KEYS.forEach(k => {
       const v = clone.fields[k];
@@ -1514,6 +1569,31 @@ function checkResidualLog(text) {
   });
   return warnings;
 }
+// ISO 3166-1 alpha-2 → 名稱＋洲別對照表：供 resolveCountryInfo() 把國家代碼/字串解析成可讀
+// 名稱＋分組依據。涵蓋 UN 會員國＋常見地區/屬地（約 240 筆，實測完整 v2fly geoip.dat 含 250
+// 個 distinct 代碼，未收錄的極少數代碼會由 resolveCountryInfo() 優雅降級為「其他/未分類」，
+// 不影響功能，只是少了分組資訊）。純參考資料，非比對邏輯依據——checkbox 的 value 仍是原始
+// 字串，這份表只用來決定「顯示什麼名稱」與「歸在哪一組」
+const COUNTRY_INFO = {
+  AF:{name:'Afghanistan',continent:'asia'},AM:{name:'Armenia',continent:'asia'},AZ:{name:'Azerbaijan',continent:'asia'},BH:{name:'Bahrain',continent:'asia'},BD:{name:'Bangladesh',continent:'asia'},BT:{name:'Bhutan',continent:'asia'},BN:{name:'Brunei',continent:'asia'},KH:{name:'Cambodia',continent:'asia'},CN:{name:'China',continent:'asia'},CY:{name:'Cyprus',continent:'asia'},GE:{name:'Georgia',continent:'asia'},HK:{name:'Hong Kong',continent:'asia'},IN:{name:'India',continent:'asia'},ID:{name:'Indonesia',continent:'asia'},IR:{name:'Iran',continent:'asia'},IQ:{name:'Iraq',continent:'asia'},IL:{name:'Israel',continent:'asia'},JP:{name:'Japan',continent:'asia'},JO:{name:'Jordan',continent:'asia'},KZ:{name:'Kazakhstan',continent:'asia'},KP:{name:'North Korea',continent:'asia'},KR:{name:'South Korea',continent:'asia'},KW:{name:'Kuwait',continent:'asia'},KG:{name:'Kyrgyzstan',continent:'asia'},LA:{name:'Laos',continent:'asia'},LB:{name:'Lebanon',continent:'asia'},MO:{name:'Macau',continent:'asia'},MY:{name:'Malaysia',continent:'asia'},MV:{name:'Maldives',continent:'asia'},MN:{name:'Mongolia',continent:'asia'},MM:{name:'Myanmar',continent:'asia'},NP:{name:'Nepal',continent:'asia'},OM:{name:'Oman',continent:'asia'},PK:{name:'Pakistan',continent:'asia'},PS:{name:'Palestine',continent:'asia'},PH:{name:'Philippines',continent:'asia'},QA:{name:'Qatar',continent:'asia'},SA:{name:'Saudi Arabia',continent:'asia'},SG:{name:'Singapore',continent:'asia'},LK:{name:'Sri Lanka',continent:'asia'},SY:{name:'Syria',continent:'asia'},TW:{name:'Taiwan',continent:'asia'},TJ:{name:'Tajikistan',continent:'asia'},TH:{name:'Thailand',continent:'asia'},TL:{name:'Timor-Leste',continent:'asia'},TR:{name:'Turkey',continent:'asia'},TM:{name:'Turkmenistan',continent:'asia'},AE:{name:'United Arab Emirates',continent:'asia'},UZ:{name:'Uzbekistan',continent:'asia'},VN:{name:'Vietnam',continent:'asia'},YE:{name:'Yemen',continent:'asia'},
+  AL:{name:'Albania',continent:'europe'},AD:{name:'Andorra',continent:'europe'},AT:{name:'Austria',continent:'europe'},BY:{name:'Belarus',continent:'europe'},BE:{name:'Belgium',continent:'europe'},BA:{name:'Bosnia and Herzegovina',continent:'europe'},BG:{name:'Bulgaria',continent:'europe'},HR:{name:'Croatia',continent:'europe'},CZ:{name:'Czechia',continent:'europe'},DK:{name:'Denmark',continent:'europe'},EE:{name:'Estonia',continent:'europe'},FO:{name:'Faroe Islands',continent:'europe'},FI:{name:'Finland',continent:'europe'},FR:{name:'France',continent:'europe'},DE:{name:'Germany',continent:'europe'},GI:{name:'Gibraltar',continent:'europe'},GR:{name:'Greece',continent:'europe'},GG:{name:'Guernsey',continent:'europe'},VA:{name:'Vatican City',continent:'europe'},HU:{name:'Hungary',continent:'europe'},IS:{name:'Iceland',continent:'europe'},IE:{name:'Ireland',continent:'europe'},IM:{name:'Isle of Man',continent:'europe'},IT:{name:'Italy',continent:'europe'},JE:{name:'Jersey',continent:'europe'},XK:{name:'Kosovo',continent:'europe'},LV:{name:'Latvia',continent:'europe'},LI:{name:'Liechtenstein',continent:'europe'},LT:{name:'Lithuania',continent:'europe'},LU:{name:'Luxembourg',continent:'europe'},MT:{name:'Malta',continent:'europe'},MD:{name:'Moldova',continent:'europe'},MC:{name:'Monaco',continent:'europe'},ME:{name:'Montenegro',continent:'europe'},NL:{name:'Netherlands',continent:'europe'},MK:{name:'North Macedonia',continent:'europe'},NO:{name:'Norway',continent:'europe'},PL:{name:'Poland',continent:'europe'},PT:{name:'Portugal',continent:'europe'},RO:{name:'Romania',continent:'europe'},RU:{name:'Russia',continent:'europe'},SM:{name:'San Marino',continent:'europe'},RS:{name:'Serbia',continent:'europe'},SK:{name:'Slovakia',continent:'europe'},SI:{name:'Slovenia',continent:'europe'},ES:{name:'Spain',continent:'europe'},SJ:{name:'Svalbard and Jan Mayen',continent:'europe'},SE:{name:'Sweden',continent:'europe'},CH:{name:'Switzerland',continent:'europe'},UA:{name:'Ukraine',continent:'europe'},GB:{name:'United Kingdom',continent:'europe'},AX:{name:'Aland Islands',continent:'europe'},
+  DZ:{name:'Algeria',continent:'africa'},AO:{name:'Angola',continent:'africa'},BJ:{name:'Benin',continent:'africa'},BW:{name:'Botswana',continent:'africa'},IO:{name:'British Indian Ocean Territory',continent:'africa'},BF:{name:'Burkina Faso',continent:'africa'},BI:{name:'Burundi',continent:'africa'},CV:{name:'Cabo Verde',continent:'africa'},CM:{name:'Cameroon',continent:'africa'},CF:{name:'Central African Republic',continent:'africa'},TD:{name:'Chad',continent:'africa'},KM:{name:'Comoros',continent:'africa'},CG:{name:'Congo',continent:'africa'},CD:{name:'DR Congo',continent:'africa'},CI:{name:"Cote d'Ivoire",continent:'africa'},DJ:{name:'Djibouti',continent:'africa'},EG:{name:'Egypt',continent:'africa'},GQ:{name:'Equatorial Guinea',continent:'africa'},ER:{name:'Eritrea',continent:'africa'},SZ:{name:'Eswatini',continent:'africa'},ET:{name:'Ethiopia',continent:'africa'},GA:{name:'Gabon',continent:'africa'},GM:{name:'Gambia',continent:'africa'},GH:{name:'Ghana',continent:'africa'},GN:{name:'Guinea',continent:'africa'},GW:{name:'Guinea-Bissau',continent:'africa'},KE:{name:'Kenya',continent:'africa'},LS:{name:'Lesotho',continent:'africa'},LR:{name:'Liberia',continent:'africa'},LY:{name:'Libya',continent:'africa'},MG:{name:'Madagascar',continent:'africa'},MW:{name:'Malawi',continent:'africa'},ML:{name:'Mali',continent:'africa'},MR:{name:'Mauritania',continent:'africa'},MU:{name:'Mauritius',continent:'africa'},YT:{name:'Mayotte',continent:'africa'},MA:{name:'Morocco',continent:'africa'},MZ:{name:'Mozambique',continent:'africa'},NA:{name:'Namibia',continent:'africa'},NE:{name:'Niger',continent:'africa'},NG:{name:'Nigeria',continent:'africa'},RE:{name:'Reunion',continent:'africa'},RW:{name:'Rwanda',continent:'africa'},SH:{name:'Saint Helena',continent:'africa'},ST:{name:'Sao Tome and Principe',continent:'africa'},SN:{name:'Senegal',continent:'africa'},SC:{name:'Seychelles',continent:'africa'},SL:{name:'Sierra Leone',continent:'africa'},SO:{name:'Somalia',continent:'africa'},ZA:{name:'South Africa',continent:'africa'},SS:{name:'South Sudan',continent:'africa'},SD:{name:'Sudan',continent:'africa'},TZ:{name:'Tanzania',continent:'africa'},TG:{name:'Togo',continent:'africa'},TN:{name:'Tunisia',continent:'africa'},UG:{name:'Uganda',continent:'africa'},EH:{name:'Western Sahara',continent:'africa'},ZM:{name:'Zambia',continent:'africa'},ZW:{name:'Zimbabwe',continent:'africa'},
+  AI:{name:'Anguilla',continent:'namerica'},AG:{name:'Antigua and Barbuda',continent:'namerica'},AW:{name:'Aruba',continent:'namerica'},BS:{name:'Bahamas',continent:'namerica'},BB:{name:'Barbados',continent:'namerica'},BZ:{name:'Belize',continent:'namerica'},BM:{name:'Bermuda',continent:'namerica'},VG:{name:'British Virgin Islands',continent:'namerica'},CA:{name:'Canada',continent:'namerica'},KY:{name:'Cayman Islands',continent:'namerica'},CR:{name:'Costa Rica',continent:'namerica'},CU:{name:'Cuba',continent:'namerica'},CW:{name:'Curacao',continent:'namerica'},DM:{name:'Dominica',continent:'namerica'},DO:{name:'Dominican Republic',continent:'namerica'},SV:{name:'El Salvador',continent:'namerica'},GL:{name:'Greenland',continent:'namerica'},GD:{name:'Grenada',continent:'namerica'},GP:{name:'Guadeloupe',continent:'namerica'},GT:{name:'Guatemala',continent:'namerica'},HT:{name:'Haiti',continent:'namerica'},HN:{name:'Honduras',continent:'namerica'},JM:{name:'Jamaica',continent:'namerica'},MQ:{name:'Martinique',continent:'namerica'},MX:{name:'Mexico',continent:'namerica'},MS:{name:'Montserrat',continent:'namerica'},NI:{name:'Nicaragua',continent:'namerica'},PA:{name:'Panama',continent:'namerica'},PR:{name:'Puerto Rico',continent:'namerica'},BL:{name:'Saint Barthelemy',continent:'namerica'},KN:{name:'Saint Kitts and Nevis',continent:'namerica'},LC:{name:'Saint Lucia',continent:'namerica'},MF:{name:'Saint Martin',continent:'namerica'},PM:{name:'Saint Pierre and Miquelon',continent:'namerica'},VC:{name:'Saint Vincent and the Grenadines',continent:'namerica'},SX:{name:'Sint Maarten',continent:'namerica'},TT:{name:'Trinidad and Tobago',continent:'namerica'},TC:{name:'Turks and Caicos Islands',continent:'namerica'},US:{name:'United States',continent:'namerica'},VI:{name:'U.S. Virgin Islands',continent:'namerica'},
+  AR:{name:'Argentina',continent:'samerica'},BO:{name:'Bolivia',continent:'samerica'},BR:{name:'Brazil',continent:'samerica'},CL:{name:'Chile',continent:'samerica'},CO:{name:'Colombia',continent:'samerica'},EC:{name:'Ecuador',continent:'samerica'},FK:{name:'Falkland Islands',continent:'samerica'},GF:{name:'French Guiana',continent:'samerica'},GY:{name:'Guyana',continent:'samerica'},PY:{name:'Paraguay',continent:'samerica'},PE:{name:'Peru',continent:'samerica'},SR:{name:'Suriname',continent:'samerica'},UY:{name:'Uruguay',continent:'samerica'},VE:{name:'Venezuela',continent:'samerica'},
+  AS:{name:'American Samoa',continent:'oceania'},AU:{name:'Australia',continent:'oceania'},CK:{name:'Cook Islands',continent:'oceania'},FJ:{name:'Fiji',continent:'oceania'},PF:{name:'French Polynesia',continent:'oceania'},GU:{name:'Guam',continent:'oceania'},KI:{name:'Kiribati',continent:'oceania'},MH:{name:'Marshall Islands',continent:'oceania'},FM:{name:'Micronesia',continent:'oceania'},NR:{name:'Nauru',continent:'oceania'},NC:{name:'New Caledonia',continent:'oceania'},NZ:{name:'New Zealand',continent:'oceania'},NU:{name:'Niue',continent:'oceania'},NF:{name:'Norfolk Island',continent:'oceania'},MP:{name:'Northern Mariana Islands',continent:'oceania'},PW:{name:'Palau',continent:'oceania'},PG:{name:'Papua New Guinea',continent:'oceania'},PN:{name:'Pitcairn Islands',continent:'oceania'},WS:{name:'Samoa',continent:'oceania'},SB:{name:'Solomon Islands',continent:'oceania'},TK:{name:'Tokelau',continent:'oceania'},TO:{name:'Tonga',continent:'oceania'},TV:{name:'Tuvalu',continent:'oceania'},VU:{name:'Vanuatu',continent:'oceania'},WF:{name:'Wallis and Futuna',continent:'oceania'},
+  AQ:{name:'Antarctica',continent:'other'},TF:{name:'French Southern Territories',continent:'other'},BV:{name:'Bouvet Island',continent:'other'},HM:{name:'Heard Island and McDonald Islands',continent:'other'},GS:{name:'South Georgia and South Sandwich Islands',continent:'other'},UM:{name:'U.S. Minor Outlying Islands',continent:'other'}
+};
+// 代碼查不到時（表格未收錄，或匯入資料庫本身用非 ISO 碼的其他寫法）優雅降級：continent 歸
+// 'other'，name 原樣顯示輸入字串，不會因表格不完整而整個功能壞掉。CSV 型資料庫可能直接用
+// 全名而非 ISO 碼（如既有 GEO_COUNTRY_GROUPS 的 aliases 本身就有全名），故查不到代碼時再嘗試
+// 用名稱反查一次
+function resolveCountryInfo(raw) {
+  const code = String(raw).trim().toUpperCase();
+  if (COUNTRY_INFO[code]) return { code, name: COUNTRY_INFO[code].name, continent: COUNTRY_INFO[code].continent };
+  const hit = Object.entries(COUNTRY_INFO).find(([, info]) => info.name.toLowerCase() === code.toLowerCase());
+  if (hit) return { code: hit[0], name: hit[1].name, continent: hit[1].continent };
+  return { code: null, name: String(raw), continent: 'other' };
+}
 // ==== STATE / UI（以下不供測試沙箱抽取，依賴 document） ====
 </script>
 <script>
@@ -1532,7 +1612,7 @@ const LANG = {
     'cat.authFail':'認證失敗','cat.denyBlock':'連線遭拒/阻擋','cat.attack':'攻擊/惡意軟體relevant','cat.scanFlood':'掃描/洪水攻擊','cat.exceedThreshold':'超過門檻','cat.other':'其他','cat.freqLabel':'頻率異常：','cat.possibleScan':'疑似掃描行為','cat.knownIOC':'已知情資命中','cat.volumeAnomaly':'異常流量','cat.geoRisk':'地理位置風險','cat.geoIPRisk':'地理位置風險（IP查表）','note.bruteForce':'疑似猜密碼/暴力破解','note.scanOrMisconfig':'疑似掃描或誤設定','note.freqAnomaly':'頻率異常','note.possibleScan':'疑似 Port/主機掃描','note.knownIOC':'已知情資命中',
     'intel.title':'④ 威脅情資本機比對清單','intel.hint':'匯入公開或內部的 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON，如 Spamhaus DROP 匯出格式），僅在本機比對，工具不會主動連網查詢。命中會標記為「已確認」的高風險問題。','intel.add_btn':'上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自填）','intel.count_label':'筆','intel.remove_btn':'移除','intel.empty':'尚未匯入任何情資清單',
     'safelist.title':'⑤ 已知安全清單（白名單）','safelist.hint':'匯入自行維護的已知安全 IP/CIDR 清單（純文字、CSV 或 JSON／NDJSON），命中時不會被標記為已知情資命中，用於排除公開清單常誤中的內網網段或已知合法服務。','safelist.name_placeholder':'清單名稱','safelist.add_btn':'上傳清單','safelist.template_btn':'下載範例CSV','safelist.empty':'尚未匯入任何安全清單',
-    'geo.title':'⑥ GeoIP 位置資料庫比對','geo.hint':'匯入 CIDR→國家對照表：可上傳純文字/CSV（表頭需含 cidr 與 country 欄位）或 v2fly/Xray 格式的 geoip.dat 二進位檔（僅解析 IPv4）。命中後若該國家落在上方「地理位置風險標記」勾選清單，會標記為地理位置風險（IP查表版）。資料庫需自行下載，本工具不內建。','geo.name_placeholder':'清單名稱（選填，未填則用檔名）','geo.add_btn':'上傳清單','geo.empty':'尚未匯入任何 GeoIP 資料庫',
+    'geo.title':'⑥ GeoIP 位置資料庫比對','geo.hint':'匯入 CIDR→國家對照表：可上傳純文字/CSV（表頭需含 cidr 與 country 欄位）或 v2fly/Xray 格式的 geoip.dat 二進位檔（僅解析 IPv4）。命中後若該國家落在上方「地理位置風險標記」勾選清單，會標記為地理位置風險（IP查表版）。資料庫需自行下載，本工具不內建。','geo.name_placeholder':'清單名稱（選填，未填則用檔名）','geo.add_btn':'上傳清單','geo.empty':'尚未匯入任何 GeoIP 資料庫','geo.riskGroupLabel':'高風險國家','geo.continent.asia':'亞洲','geo.continent.europe':'歐洲','geo.continent.africa':'非洲','geo.continent.namerica':'北美洲','geo.continent.samerica':'南美洲','geo.continent.oceania':'大洋洲','geo.continent.other':'其他/未分類',
     'guide.title':'⑦ 如何取得外部情資','guide.body':'本工具僅做本機比對，不會主動連網抓取或回傳任何資料。\n常見公開情資來源（用途說明，正式下載網址請自行查詢官方頁面）：\n• Spamhaus DROP/EDROP — 已知惡意網段（CIDR）清單\n• Emerging Threats / Proofpoint compromised-ips — 已知遭入侵主機 IP 清單\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — 惡意軟體 C2 相關 IOC\n• FireHOL Level 1 — 聚合 Spamhaus/DShield/Abuse.ch 等多來源網段清單：https://iplists.firehol.org/files/firehol_level1.netset（純文字、# 開頭註解，可直接貼上本頁匯入）\n• EmergingThreats Block List — IDS/IPS 常用攻擊者 IP 清單：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字，可直接貼上匯入）\n• CINS Army List — 高信譽度攻擊來源 IP：https://cinsscore.com/list/ci-badguys.txt（純文字、每行一個 IP，可直接貼上匯入）\n• Blocklist.de — 蜜罐/入侵偵測回報彙整攻擊來源 IP：https://www.blocklist.de/downloads/export-ips_all.txt（純文字、每行一個 IP，可直接貼上匯入）\n• DShield/SANS ISC Block List — 近 3 天最活躍攻擊網段：https://www.dshield.org/block.txt（⚠️ tab 分隔多欄位表格，非單欄 CIDR，直接貼上只會取到每列第一欄的網段起始 IP 做單一 IP 精確比對、不會展開成 /24，比對涵蓋率大幅降低，建議先自行處理組成 CIDR 再匯入）\n上述皆為公開純文字檔案，可直接下載後貼上或另存檔案再用本頁「上傳清單」匯入；AbuseIPDB 等需註冊/API 金鑰才能取得的服務未列入。\n多數公開清單各自有使用條款（部分僅供非商業/個人使用），下載與使用前請自行確認條款；建議至少每月更新一次，過舊清單參考價值降低。',
     'deid.title':'⑧ 去識別化','deid.hint':'將事件中的 IP／主機名稱／使用者名稱替換為一致映射的假值（IP 採 RFC5737 文件用網段）。請先完成③④的問題分析與情資比對，去識別化後的假 IP 將無法再命中真實情資清單。','deid.run_btn':'執行去識別化','deid.download_btn':'下載去識別化結果',
     'export.csv_btn':'匯出問題清單 CSV',
@@ -1550,7 +1630,7 @@ const LANG = {
     'cat.authFail':'Auth Failure','cat.denyBlock':'Connection Denied/Blocked','cat.attack':'Attack/Malware','cat.scanFlood':'Scan/Flood','cat.exceedThreshold':'Threshold Exceeded','cat.other':'Other','cat.freqLabel':'Frequency anomaly: ','cat.possibleScan':'Possible Scan Activity','cat.knownIOC':'Known Threat-Intel Hit','cat.volumeAnomaly':'Volume Anomaly','cat.geoRisk':'Geo-Location Risk','cat.geoIPRisk':'Geo Risk (IP Lookup)','note.bruteForce':'Suspected Brute-Force/Password Guessing','note.scanOrMisconfig':'Suspected Scan or Misconfiguration','note.freqAnomaly':'Frequency Anomaly','note.possibleScan':'Suspected Port/Host Scan','note.knownIOC':'Known Threat-Intel Hit',
     'intel.title':'④ Local Threat-Intel Matching List','intel.hint':'Import public or internal IP/CIDR blocklists (plain text, CSV, or JSON/NDJSON — e.g. Spamhaus DROP export format). Matching happens locally only — no outbound network calls. Hits are flagged as "Confirmed" high-severity issues.','intel.add_btn':'Upload List','intel.name_placeholder':'List name','intel.date_placeholder':'Intel date (manual)','intel.count_label':'entries','intel.remove_btn':'Remove','intel.empty':'No intel list imported yet',
     'safelist.title':'⑤ Known-Safe List (Whitelist)','safelist.hint':'Import your own known-safe IP/CIDR list (plain text, CSV, or JSON/NDJSON). Matches here are excluded from threat-intel hits — use it to exclude internal ranges or known-legitimate services that public lists sometimes misflag.','safelist.name_placeholder':'List name','safelist.add_btn':'Upload List','safelist.template_btn':'Download Sample CSV','safelist.empty':'No safe list imported yet',
-    'geo.title':'⑥ GeoIP Database Lookup','geo.hint':'Import a CIDR→country lookup table: plain text/CSV (header must include cidr and country columns) or a v2fly/Xray-format geoip.dat binary file (IPv4 only). Matches whose country falls in the "Geo-risk countries" selection above are flagged as geo risk (IP-lookup based). You must supply your own database — none is bundled.','geo.name_placeholder':'List name (optional, defaults to filename)','geo.add_btn':'Upload List','geo.empty':'No GeoIP database imported yet',
+    'geo.title':'⑥ GeoIP Database Lookup','geo.hint':'Import a CIDR→country lookup table: plain text/CSV (header must include cidr and country columns) or a v2fly/Xray-format geoip.dat binary file (IPv4 only). Matches whose country falls in the "Geo-risk countries" selection above are flagged as geo risk (IP-lookup based). You must supply your own database — none is bundled.','geo.name_placeholder':'List name (optional, defaults to filename)','geo.add_btn':'Upload List','geo.empty':'No GeoIP database imported yet','geo.riskGroupLabel':'High-Risk Countries','geo.continent.asia':'Asia','geo.continent.europe':'Europe','geo.continent.africa':'Africa','geo.continent.namerica':'North America','geo.continent.samerica':'South America','geo.continent.oceania':'Oceania','geo.continent.other':'Other/Unclassified',
     'guide.title':'⑦ How to Get External Threat Intel','guide.body':'This tool only matches locally — it never fetches or sends data over the network.\nCommon public sources (purpose only — verify current official URLs yourself):\n• Spamhaus DROP/EDROP — known malicious netblocks (CIDR)\n• Emerging Threats / Proofpoint compromised-ips — known compromised host IPs\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — malware C2 related IOCs\n• FireHOL Level 1 — aggregates Spamhaus/DShield/Abuse.ch and more: https://iplists.firehol.org/files/firehol_level1.netset (plain text, # comments, paste directly into this page)\n• EmergingThreats Block List — attacker IPs commonly used for IDS/IPS: https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt (plain text, paste directly)\n• CINS Army List — high-reputation attacker IPs: https://cinsscore.com/list/ci-badguys.txt (plain text, one IP per line, paste directly)\n• Blocklist.de — attacker IPs aggregated from honeypot/IDS reports: https://www.blocklist.de/downloads/export-ips_all.txt (plain text, one IP per line, paste directly)\n• DShield/SANS ISC Block List — most active attacking netblocks over the last 3 days: https://www.dshield.org/block.txt (⚠️ tab-delimited table, not a plain CIDR list — pasting it as-is only captures each row\'s first column, the block\'s start IP, as a single exact-match IP; it will NOT expand to the full /24, so coverage drops sharply. Pre-process it into CIDR notation before importing.)\nAll of the above are public plain-text files — download and paste, or save the file and use "Upload List" on this page. Services requiring registration/an API key (e.g. AbuseIPDB) are not included.\nMost public lists carry their own usage terms (some are non-commercial/personal use only) — check before downloading. Recommended refresh: at least monthly, stale lists lose value.',
     'deid.title':'⑧ De-identification','deid.hint':'Replaces IP/hostname/username with consistently-mapped fake values (IPs use RFC5737 documentation ranges). Run this after steps ③④ — anonymized fake IPs can no longer match a real intel list.','deid.run_btn':'Run De-identification','deid.download_btn':'Download De-identified Result',
     'export.csv_btn':'Export Issue List CSV',
@@ -1568,7 +1648,7 @@ const LANG = {
     'cat.authFail':'認証失敗','cat.denyBlock':'接続拒否/ブロック','cat.attack':'攻撃/マルウェア','cat.scanFlood':'スキャン/フラッド','cat.exceedThreshold':'しきい値超過','cat.other':'その他','cat.freqLabel':'頻度異常：','cat.possibleScan':'スキャンの疑い','cat.knownIOC':'既知の脅威情報に一致','cat.volumeAnomaly':'異常なトラフィック量','cat.geoRisk':'地理的リスク','cat.geoIPRisk':'地理的リスク（IP照合）','note.bruteForce':'ブルートフォース/パスワード推測の疑い','note.scanOrMisconfig':'スキャンまたは設定ミスの疑い','note.freqAnomaly':'頻度異常','note.possibleScan':'ポート/ホストスキャンの疑い','note.knownIOC':'既知の脅威情報に一致',
     'intel.title':'④ ローカル脅威インテリジェンス照合リスト','intel.hint':'公開または社内の IP/CIDR ブロックリストを取り込みます（テキスト、CSV、または JSON／NDJSON——Spamhaus DROP 形式など）。照合はローカルのみで行い、外部通信は一切行いません。一致した場合は「確認済み」の高リスク問題として表示されます。','intel.add_btn':'リストをアップロード','intel.name_placeholder':'リスト名','intel.date_placeholder':'インテリジェンス日付（手動入力）','intel.count_label':'件','intel.remove_btn':'削除','intel.empty':'まだインテリジェンスリストが取り込まれていません',
     'safelist.title':'⑤ 既知の安全リスト（ホワイトリスト）','safelist.hint':'自分で管理する既知の安全な IP/CIDR リストを取り込みます（テキスト、CSV、または JSON／NDJSON）。一致した場合は脅威インテリジェンスの命中対象から除外されます——内部ネットワークや既知の正規サービスが公開リストで誤検知されるのを防ぐ用途です。','safelist.name_placeholder':'リスト名','safelist.add_btn':'リストをアップロード','safelist.template_btn':'サンプルCSVをダウンロード','safelist.empty':'まだ安全リストが取り込まれていません',
-    'geo.title':'⑥ GeoIP データベース照合','geo.hint':'CIDR→国名対応表をインポートします：プレーンテキスト/CSV（ヘッダーに cidr と country 列が必要）、または v2fly/Xray 形式の geoip.dat バイナリファイル（IPv4のみ対応）。一致した国が上の「地理的リスク国」選択に含まれる場合、地理的リスク（IP照合版）として検出されます。データベースは自分で用意する必要があり、本ツールには同梱されていません。','geo.name_placeholder':'リスト名（省略可、未入力時はファイル名を使用）','geo.add_btn':'リストをアップロード','geo.empty':'GeoIP データベース未インポート',
+    'geo.title':'⑥ GeoIP データベース照合','geo.hint':'CIDR→国名対応表をインポートします：プレーンテキスト/CSV（ヘッダーに cidr と country 列が必要）、または v2fly/Xray 形式の geoip.dat バイナリファイル（IPv4のみ対応）。一致した国が上の「地理的リスク国」選択に含まれる場合、地理的リスク（IP照合版）として検出されます。データベースは自分で用意する必要があり、本ツールには同梱されていません。','geo.name_placeholder':'リスト名（省略可、未入力時はファイル名を使用）','geo.add_btn':'リストをアップロード','geo.empty':'GeoIP データベース未インポート','geo.riskGroupLabel':'高リスク国','geo.continent.asia':'アジア','geo.continent.europe':'ヨーロッパ','geo.continent.africa':'アフリカ','geo.continent.namerica':'北アメリカ','geo.continent.samerica':'南アメリカ','geo.continent.oceania':'オセアニア','geo.continent.other':'その他/未分類',
     'guide.title':'⑦ 外部脅威インテリジェンスの入手方法','guide.body':'本ツールはローカル照合のみを行い、データを外部に取得・送信することはありません。\n代表的な公開情報源（用途のみ記載、正式なダウンロード URL は公式ページでご確認ください）：\n• Spamhaus DROP/EDROP — 既知の悪意あるネットブロック（CIDR）\n• Emerging Threats / Proofpoint compromised-ips — 既知の侵害済みホスト IP\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — マルウェア C2 関連 IOC\n• FireHOL Level 1 — Spamhaus/DShield/Abuse.ch 等を統合：https://iplists.firehol.org/files/firehol_level1.netset （プレーンテキスト、# コメント、このページに直接貼り付け可）\n• EmergingThreats Block List — IDS/IPS 向け攻撃者 IP リスト：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt （プレーンテキスト、直接貼り付け可）\n• CINS Army List — 高信頼度の攻撃元 IP：https://cinsscore.com/list/ci-badguys.txt （プレーンテキスト、1 行 1 IP、直接貼り付け可）\n• Blocklist.de — ハニーポット/IDS 報告を集約した攻撃元 IP：https://www.blocklist.de/downloads/export-ips_all.txt （プレーンテキスト、1 行 1 IP、直接貼り付け可）\n• DShield/SANS ISC Block List — 直近 3 日間の攻撃元ネットブロック：https://www.dshield.org/block.txt （⚠️ タブ区切りの表形式で単純な CIDR リストではありません。そのまま貼り付けると各行の先頭列（ブロック開始 IP）のみが単一 IP として厳密一致比較の対象になり、/24 全体には展開されないため命中率が大幅に低下します。事前に CIDR 形式へ加工してから取り込んでください）\n上記はすべて公開のプレーンテキストファイルです。ダウンロードして貼り付けるか、ファイルを保存して本ページの「リストをアップロード」から取り込めます。登録や API キーが必要なサービス（AbuseIPDB 等）は含まれていません。\n多くの公開リストには独自の利用規約があります（非商用/個人利用限定の場合あり）。ダウンロード前にご確認ください。月 1 回以上の更新を推奨します。',
     'deid.title':'⑧ 匿名化','deid.hint':'IP／ホスト名／ユーザー名を一貫したマッピングの仮値に置き換えます（IP は RFC5737 の文書用アドレス帯を使用）。③④の分析・照合を先に行ってください。匿名化後の仮 IP は実際のインテリジェンスリストと一致しなくなります。','deid.run_btn':'匿名化を実行','deid.download_btn':'匿名化結果をダウンロード',
     'export.csv_btn':'問題リストを CSV 出力',
@@ -1586,7 +1666,7 @@ const LANG = {
     'cat.authFail':'authentication luj','cat.denyBlock':'connection lujqa\'','cat.attack':'HIv/malware','cat.scanFlood':'scan/flood','cat.exceedThreshold':'threshold Sub','cat.other':'latlh','cat.freqLabel':'frequency mIgh:','cat.possibleScan':'scan pIH','cat.knownIOC':'intel Sovbogh','cat.volumeAnomaly':'traffic mIgh','cat.geoRisk':'Sep pIH','cat.geoIPRisk':'Sep pIH (IP chov)','note.bruteForce':"password nagh mIgh",'note.scanOrMisconfig':"scan pagh chenmoHHa'",'note.freqAnomaly':'frequency mIgh','note.possibleScan':'scan pIH','note.knownIOC':'intel Sovbogh',
     'intel.title':'④ Local threat-intel tetlh','intel.hint':'IP/CIDR blocklist yIlan (text, CSV, JSON). local neH chov, network Qapbe\'. hIt \'ej chovtaH severity chIm.','intel.add_btn':'tetlh yIlan','intel.name_placeholder':'tetlh pong','intel.date_placeholder':'intel poH (lo\' ghaH)','intel.count_label':'\'ar','intel.remove_btn':'yIteq','intel.empty':'intel tetlh lanpu\'be\'',
     'safelist.title':'⑤ QaQ tetlh (Hoch chu\')','safelist.hint':'lIj QaQ IP/CIDR tetlh yIlan (text, CSV, JSON). hIt \'ej intel Sovbogh ghobe\'.','safelist.name_placeholder':'tetlh pong','safelist.add_btn':'tetlh yIlan','safelist.template_btn':'CSV nughDoq yIlan','safelist.empty':'QaQ tetlh lanpu\'be\'',
-    'geo.title':'⑥ GeoIP Database chovnatlh','geo.hint':'CIDR->Sep tetlh yIlan (cidr/country header lo\') pagh geoip.dat (.dat, IPv4 neH). Sep Dung list Daq chav vaj Sep pIH (IP chov) cha\'lu\'. Database lIj chenmoH, toy\'vam Qapbe\'.','geo.name_placeholder':'tetlh pong (lo\'be\'chugh, file pong lo\')','geo.add_btn':'tetlh yIlan','geo.empty':'GeoIP tetlh lanpu\'be\'',
+    'geo.title':'⑥ GeoIP Database chovnatlh','geo.hint':'CIDR->Sep tetlh yIlan (cidr/country header lo\') pagh geoip.dat (.dat, IPv4 neH). Sep Dung list Daq chav vaj Sep pIH (IP chov) cha\'lu\'. Database lIj chenmoH, toy\'vam Qapbe\'.','geo.name_placeholder':'tetlh pong (lo\'be\'chugh, file pong lo\')','geo.add_btn':'tetlh yIlan','geo.empty':'GeoIP tetlh lanpu\'be\'','geo.riskGroupLabel':'Sep Qatlh Tetlh','geo.continent.asia':'Asia','geo.continent.europe':'Europe','geo.continent.africa':'Africa','geo.continent.namerica':'North America','geo.continent.samerica':'South America','geo.continent.oceania':'Oceania','geo.continent.other':'latlh',
     'guide.title':'⑦ Chay\' intel yIghoS','guide.body':'toy\'vam local neH chov, network Qapbe\'.\nSource motlh (lo\'taHghach neH, URL Datu\'meH official page yI\'ol):\n• Spamhaus DROP/EDROP — netblock mIgh Sovbogh\n• Emerging Threats/Proofpoint compromised-ips — host mIgh Sovbogh\n• abuse.ch Feodo Tracker/URLhaus/ThreatFox — malware C2 IOC\n• FireHOL Level 1: https://iplists.firehol.org/files/firehol_level1.netset (text neH, yIlan yIchu\')\n• EmergingThreats Block: https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt (text neH)\n• CINS Army: https://cinsscore.com/list/ci-badguys.txt (IP mob neH)\n• Blocklist.de: https://www.blocklist.de/downloads/export-ips_all.txt (IP mob neH)\n• DShield: https://www.dshield.org/block.txt (⚠️ table Doch, CIDR ghobe\', yIlan pa\'DIch yIchu\')\nlist law\' terms nga\'chuq (commercial Qap\'be\' latlh). jar Hoch tetlh chu\' yIchu\'.',
     'deid.title':'⑧ De-identification','deid.hint':'IP/host/user pong yIchoH (RFC5737 lo\'). ③④ vaj ruch, De-identify vaj fake IP intel tetlh hItqa\'be\'.','deid.run_btn':'De-identify yIchav','deid.download_btn':'De-identify baghlu\'pu\' yIchoH',
     'export.csv_btn':'Issue tetlh CSV yIchoH',
@@ -1604,7 +1684,7 @@ const LANG = {
     'cat.authFail':'Wrong Password, Ye Scurvy Dog','cat.denyBlock':'Turned Away at the Gate','cat.attack':'Boardin\' Party / Foul Plague','cat.scanFlood':'Scoutin\' the Coast / Flood o\' Cannons','cat.exceedThreshold':'Overloaded the Hold','cat.other':'Other Business','cat.freqLabel':'Too Much Ruckus: ','cat.possibleScan':'Scoutin\' Suspected','cat.knownIOC':'Known Villain Spotted','cat.volumeAnomaly':'Suspicious Cargo Load','cat.geoRisk':'Foreign Waters Flagged','cat.geoIPRisk':'Foreign Waters, Charted by Number','note.bruteForce':"Suspected Password Guessin', Arr",'note.scanOrMisconfig':"Suspected Scoutin' or Bad Chartin'",'note.freqAnomaly':'Too Much Ruckus','note.possibleScan':"Suspected Port/Ship Scoutin'",'note.knownIOC':'Known Villain Spotted',
     'intel.title':'④ Local Blacklist o\' Known Villains','intel.hint':'Hoist aboard a public or yer own IP/CIDR blacklist (plain text, CSV, or JSON charts like Spamhaus DROP). All matchin\' done right on this ship, no word sent to shore. A hit be marked "Confirmed" and dangerous.','intel.add_btn':'Hoist List','intel.name_placeholder':'List Name','intel.date_placeholder':'Chart Date (write it yerself)','intel.count_label':'entries','intel.remove_btn':'Toss Overboard','intel.empty':'No blacklist hoisted aboard yet',
     'safelist.title':'⑤ The Friendly Fleet (Safe List)','safelist.hint':'Hoist aboard yer own list o\' known-friendly IPs/CIDRs (plain text, CSV, or JSON). Ships on this list never get marked as villains, even if some public chart mistakes \'em — handy for yer own home waters or trusted ports.','safelist.name_placeholder':'List Name','safelist.add_btn':'Hoist List','safelist.template_btn':'Download Blank Chart','safelist.empty':'No friendly fleet listed yet',
-    'geo.title':'⑥ The Map o\' Foreign Waters','geo.hint':'Hoist aboard a CIDR→homeland lookup chart: plain text/CSV (headers must have cidr and country columns), or a v2fly/Xray geoip.dat chart in the binary tongue (only reads IPv4 waters). Any ship whose homeland be marked on the "Enemy Waters" list above gets flagged, chart-lookup style. Ye must bring yer own chart aboard — none be stowed in this ship\'s hold.','geo.name_placeholder':'Chart Name (leave blank to use the file\'s own name)','geo.add_btn':'Hoist List','geo.empty':'No GeoIP chart hoisted aboard yet',
+    'geo.title':'⑥ The Map o\' Foreign Waters','geo.hint':'Hoist aboard a CIDR→homeland lookup chart: plain text/CSV (headers must have cidr and country columns), or a v2fly/Xray geoip.dat chart in the binary tongue (only reads IPv4 waters). Any ship whose homeland be marked on the "Enemy Waters" list above gets flagged, chart-lookup style. Ye must bring yer own chart aboard — none be stowed in this ship\'s hold.','geo.name_placeholder':'Chart Name (leave blank to use the file\'s own name)','geo.add_btn':'Hoist List','geo.empty':'No GeoIP chart hoisted aboard yet','geo.riskGroupLabel':'Hostile Waters','geo.continent.asia':'The Orient Seas','geo.continent.europe':'The Old World Waters','geo.continent.africa':'The Southern Coasts','geo.continent.namerica':'The Northern New World','geo.continent.samerica':'The Southern New World','geo.continent.oceania':'The Far Isles','geo.continent.other':'Uncharted Waters',
     'guide.title':'⑦ Where to Find Word o\' Known Villains','guide.body':'This tool only matches on yer own ship — never sends nor fetches word from shore.\nCommon public charts (just the purpose, matey — find the true URL on the official dock yerself):\n• Spamhaus DROP/EDROP — known villain netblocks (CIDR)\n• Emerging Threats / Proofpoint compromised-ips — known boarded ships\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — plague-ship signals\n• FireHOL Level 1 — a chart o\' charts, all rolled into one: https://iplists.firehol.org/files/firehol_level1.netset (plain text, hoist it straight aboard)\n• EmergingThreats Block List: https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt (plain text)\n• CINS Army List: https://cinsscore.com/list/ci-badguys.txt (one ship per line)\n• Blocklist.de: https://www.blocklist.de/downloads/export-ips_all.txt (one ship per line)\n• DShield Block List: https://www.dshield.org/block.txt (⚠️ a proper ledger with many columns, not a plain chart — hoisted as-is ye only catch the first column, the harbor\'s start, one ship not the whole fleet. Chart it into proper CIDR afore ye hoist it aboard)\nMost public charts have their own rules (some for personal use only) — check afore ye hoist \'em. Refresh the chart at least once a moon, or it goes stale.',
     'deid.title':'⑧ Hide the Crew\'s True Names','deid.hint':'Swaps IP/hostname/username fer consistent fake names (IPs use the RFC5737 map-room range). Do this after ③④ — once hidden, the fake IPs won\'t match the real blacklist no more.','deid.run_btn':'Hide Their Names','deid.download_btn':'Download the Disguised Log',
     'export.csv_btn':'Export Trouble Manifest CSV',
@@ -1622,7 +1702,7 @@ const LANG = {
     'cat.authFail':'🔑❌認證失敗','cat.denyBlock':'🚫連線遭拒','cat.attack':'☠️攻擊/惡意軟體','cat.scanFlood':'🔦掃描/🌊洪水','cat.exceedThreshold':'📈超過門檻','cat.other':'📎其他','cat.freqLabel':'📈頻率異常：','cat.possibleScan':'🔦疑似掃描','cat.knownIOC':'🎯已知情資命中','cat.volumeAnomaly':'📦🚨大量流量','cat.geoRisk':'🌍⚠️地理風險','cat.geoIPRisk':'🌍🔍地理風險(查表)','note.bruteForce':'🔑❓猜密碼','note.scanOrMisconfig':'🔦❓掃描/設定錯','note.freqAnomaly':'📈異常','note.possibleScan':'🔦❓Port掃描','note.knownIOC':'🎯命中',
     'intel.title':'④🎯 情資本機比對清單','intel.hint':'📥匯入 IP/CIDR 黑名單（文字/CSV/JSON），🔒僅本機比對，🚫不連網。命中✅標記高風險。','intel.add_btn':'📎上傳清單','intel.name_placeholder':'📛清單名稱','intel.date_placeholder':'📅情資日期','intel.count_label':'筆','intel.remove_btn':'🗑️移除','intel.empty':'📭尚無清單',
     'safelist.title':'⑤✅安全清單','safelist.hint':'📥匯入自己的安全 IP/CIDR 清單，命中🚫不算已知情資，用來排除內網或合法服務被誤判。','safelist.name_placeholder':'📛清單名稱','safelist.add_btn':'📎上傳清單','safelist.template_btn':'⬇️下載範例CSV','safelist.empty':'📭尚無安全清單',
-    'geo.title':'⑥🌍 GeoIP 資料庫比對','geo.hint':'📥匯入 CIDR→國家對照表：純文字/CSV（表頭需含 cidr、country）或 v2fly/Xray 的 geoip.dat 二進位檔（🔢僅解析 IPv4）。命中國家若在上方🌍風險清單，標記為地理風險（查表版）。📦資料庫需自備，本工具不內建。','geo.name_placeholder':'📛清單名稱（選填）','geo.add_btn':'📎上傳清單','geo.empty':'📭尚無 GeoIP 資料庫',
+    'geo.title':'⑥🌍 GeoIP 資料庫比對','geo.hint':'📥匯入 CIDR→國家對照表：純文字/CSV（表頭需含 cidr、country）或 v2fly/Xray 的 geoip.dat 二進位檔（🔢僅解析 IPv4）。命中國家若在上方🌍風險清單，標記為地理風險（查表版）。📦資料庫需自備，本工具不內建。','geo.name_placeholder':'📛清單名稱（選填）','geo.add_btn':'📎上傳清單','geo.empty':'📭尚無 GeoIP 資料庫','geo.riskGroupLabel':'🔴高風險國家','geo.continent.asia':'🌏亞洲','geo.continent.europe':'🌍歐洲','geo.continent.africa':'🌍非洲','geo.continent.namerica':'🌎北美洲','geo.continent.samerica':'🌎南美洲','geo.continent.oceania':'🌏大洋洲','geo.continent.other':'❓其他',
     'guide.title':'⑦❓ 如何取得外部情資','guide.body':'🔒本工具僅🖥️本機比對，🚫不連網抓取或回傳。\n常見公開來源（用途說明，📎正式網址請自行查證）：\n• Spamhaus DROP/EDROP — 🌐惡意網段\n• Emerging Threats/Proofpoint — 🖥️已知被入侵主機\n• abuse.ch Feodo/URLhaus/ThreatFox — 🦠惡意軟體 C2\n• FireHOL Level1🧩多來源聚合：https://iplists.firehol.org/files/firehol_level1.netset（📄純文字直接貼）\n• EmergingThreats Block：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（📄純文字）\n• CINS Army：https://cinsscore.com/list/ci-badguys.txt（📄每行一個IP）\n• Blocklist.de：https://www.blocklist.de/downloads/export-ips_all.txt（📄每行一個IP）\n• DShield：https://www.dshield.org/block.txt（⚠️表格式非單欄CIDR，直接貼只抓得到第一欄起始IP，涵蓋率大減，請先自行轉成CIDR）\n⚠️多數清單有📜使用條款，下載前請自行確認；建議📅每月更新一次。',
     'deid.title':'⑧🙈 去識別化','deid.hint':'將 IP/主機名/使用者名➡️一致假值（IP 用 RFC5737）。請先完成③④，去識別化後假 IP 🚫無法再命中真實清單。','deid.run_btn':'▶️執行去識別化','deid.download_btn':'⬇️下載結果',
     'export.csv_btn':'⬇️匯出問題清單 CSV',
@@ -1640,7 +1720,7 @@ const LANG = {
     'cat.authFail':'認證程序失敗事項','cat.denyBlock':'連線遭拒絕或阻擋事項','cat.attack':'攻擊行為或惡意軟體事項','cat.scanFlood':'掃描或洪水攻擊事項','cat.exceedThreshold':'超過既定門檻事項','cat.other':'其他未分類事項','cat.freqLabel':'頻率異常事項：','cat.possibleScan':'疑似掃描行為（待進一步查證）','cat.knownIOC':'業經核對之已知情資命中事項','cat.volumeAnomaly':'疑似異常大量資料傳輸案件','cat.geoRisk':'涉及高風險地理區域之事項','cat.geoIPRisk':'涉及高風險地理區域之事項（資料庫查表比對）','note.bruteForce':'疑似密碼猜測攻擊事項','note.scanOrMisconfig':'疑似掃描行為或組態設定錯誤事項','note.freqAnomaly':'頻率異常事項','note.possibleScan':'疑似埠口/主機掃描事項','note.knownIOC':'業經核對之已知情資命中事項',
     'intel.title':'第四項：威脅情資本機比對清冊管理作業','intel.hint':'得匯入公開或機關內部所編製之 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON 格式，如 Spamhaus DROP 匯出檔），前述比對作業僅於本機辦理，本工具不主動對外發送任何連線請求。命中案件依規定標註為「業經確認」之高風險事項。','intel.add_btn':'辦理清冊上傳','intel.name_placeholder':'清冊名稱','intel.date_placeholder':'情資日期（請自行填註）','intel.count_label':'筆','intel.remove_btn':'移除本清冊','intel.empty':'目前尚未匯入任何情資清冊',
     'safelist.title':'第五項：已知安全清冊（白名單）管理作業','safelist.hint':'得匯入機關自行維護之已知安全 IP/CIDR 清冊（純文字、CSV 或 JSON／NDJSON 格式），命中本清冊者不予標註為已知情資命中事項，用於排除公開清冊常見誤判之內部網段或已知合法服務。','safelist.name_placeholder':'清冊名稱','safelist.add_btn':'辦理清冊上傳','safelist.template_btn':'下載範例CSV表單','safelist.empty':'目前尚未匯入任何安全清冊',
-    'geo.title':'第六項：GeoIP 位置資料庫比對作業','geo.hint':'得匯入 CIDR 對應國家之查詢對照表：純文字/CSV 格式（表頭須含 cidr 及 country 欄位），或 v2fly/Xray 規格之 geoip.dat 二進位檔案（僅支援解析 IPv4）。命中案件所屬國家若列於上方「高風險地理區域標記清單」，即標註為地理位置風險事項（資料庫查表比對）。前述資料庫須由使用單位自行下載取得，本工具未內建任何資料庫。','geo.name_placeholder':'清冊名稱（得不填，未填則採檔案原名）','geo.add_btn':'辦理清冊上傳','geo.empty':'目前尚未匯入任何 GeoIP 資料庫',
+    'geo.title':'第六項：GeoIP 位置資料庫比對作業','geo.hint':'得匯入 CIDR 對應國家之查詢對照表：純文字/CSV 格式（表頭須含 cidr 及 country 欄位），或 v2fly/Xray 規格之 geoip.dat 二進位檔案（僅支援解析 IPv4）。命中案件所屬國家若列於上方「高風險地理區域標記清單」，即標註為地理位置風險事項（資料庫查表比對）。前述資料庫須由使用單位自行下載取得，本工具未內建任何資料庫。','geo.name_placeholder':'清冊名稱（得不填，未填則採檔案原名）','geo.add_btn':'辦理清冊上傳','geo.empty':'目前尚未匯入任何 GeoIP 資料庫','geo.riskGroupLabel':'高風險地區清冊','geo.continent.asia':'亞洲地區','geo.continent.europe':'歐洲地區','geo.continent.africa':'非洲地區','geo.continent.namerica':'北美洲地區','geo.continent.samerica':'南美洲地區','geo.continent.oceania':'大洋洲地區','geo.continent.other':'其他未分類地區',
     'guide.title':'第七項：外部威脅情資取得方式說明','guide.body':'本工具僅辦理本機比對作業，不主動對外擷取或回傳任何資料，合先敘明。\n常見公開情資來源（僅供用途參考，正式下載網址請逕行查詢各該官方網頁）：\n• Spamhaus DROP/EDROP — 已知惡意網段（CIDR）清冊\n• Emerging Threats／Proofpoint compromised-ips — 已知遭入侵主機 IP 清冊\n• abuse.ch Feodo Tracker／URLhaus／ThreatFox — 惡意軟體 C2 相關情資\n• FireHOL Level 1 清冊（彙整前述多項來源）：https://iplists.firehol.org/files/firehol_level1.netset（純文字格式，得逕行貼於本頁辦理匯入）\n• EmergingThreats Block List：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字格式）\n• CINS Army List：https://cinsscore.com/list/ci-badguys.txt（每列單一 IP）\n• Blocklist.de：https://www.blocklist.de/downloads/export-ips_all.txt（每列單一 IP）\n• DShield／SANS ISC Block List：https://www.dshield.org/block.txt（⚠️ 本清冊為 tab 分隔多欄位表格，非單欄 CIDR 格式，逕行貼上僅能擷取每列首欄之網段起始 IP 辦理單一 IP 精確比對，尚無法展開為完整 /24 網段，比對涵蓋率將大幅降低，建請先行處理轉換為 CIDR 格式後再辦理匯入）\n上開公開清冊多訂有各自之使用條款（部分僅限非商業或個人使用），下載及使用前請自行確認相關條款；建議至少每月辦理一次更新，逾期未更新之清冊參考價值遞減。',
     'deid.title':'第八項：資料去識別化作業','deid.hint':'將事件中之 IP、主機名稱、使用者名稱等資料，替換為具一致性對應關係之虛擬值（IP 部分採用 RFC5737 文件用網段）。請依序完成第三、四項分析及比對作業後，再辦理本項作業；本項作業完成後所產出之虛擬 IP，將無法再與真實情資清冊相符。','deid.run_btn':'執行去識別化作業','deid.download_btn':'下載去識別化作業結果',
     'export.csv_btn':'匯出問題清冊（CSV 格式）',
@@ -1658,7 +1738,7 @@ const LANG = {
     'cat.authFail':'密碼打錯了喵','cat.denyBlock':'被擋在門外喵','cat.attack':'有壞東西喵','cat.scanFlood':'鬼鬼祟祟在探路喵','cat.exceedThreshold':'超過忍耐極限喵','cat.other':'其他喵喵喵','cat.freqLabel':'太吵了喵：','cat.possibleScan':'感覺有人在探頭探腦喵','cat.knownIOC':'抓到熟面孔壞蛋喵','cat.volumeAnomaly':'流量爆炸喵','cat.geoRisk':'危險國家出沒喵','cat.geoIPRisk':'查表抓到危險國家喵','note.bruteForce':'感覺在猜密碼喵','note.scanOrMisconfig':'感覺在探路喵','note.freqAnomaly':'太吵了喵','note.possibleScan':'感覺在掃描喵','note.knownIOC':'抓到熟面孔壞蛋喵',
     'intel.title':'④情資清單（自己地盤比對喵）','intel.hint':'把公開或自家的 IP/CIDR 黑名單叼進來喵（文字、CSV 或 JSON 都吃），只在自己地盤比對，不會偷跑出去連網喵。抓到就標「確定」高風險喵。','intel.add_btn':'叼清單進來喵','intel.name_placeholder':'清單叫什麼名字喵','intel.date_placeholder':'情資日期（自己填喵）','intel.count_label':'隻','intel.remove_btn':'丟掉喵','intel.empty':'還沒有情資清單喵',
     'safelist.title':'⑤自己人清單喵','safelist.hint':'把自己認識的安全 IP/CIDR 叼進來喵，抓到的話就不算壞蛋喵，專門用來放過自家內網或熟面孔喵。','safelist.name_placeholder':'清單叫什麼名字喵','safelist.add_btn':'叼清單進來喵','safelist.template_btn':'下載範例CSV喵','safelist.empty':'還沒有自己人清單喵',
-    'geo.title':'⑥地圖對照表喵','geo.hint':'叼進來一份 CIDR→國家對照表喵：純文字/CSV（表頭要有 cidr 跟 country 喵）或 v2fly/Xray 的 geoip.dat 二進位檔（只聞得懂 IPv4 喵）。抓到的國家如果在上面的危險名單裡，就會標地理風險（查表版）喵。地圖要自己找喵，工具沒有內建喵。','geo.name_placeholder':'清單叫什麼名字喵（不填就用檔名喵）','geo.add_btn':'叼清單進來喵','geo.empty':'還沒有地圖喵',
+    'geo.title':'⑥地圖對照表喵','geo.hint':'叼進來一份 CIDR→國家對照表喵：純文字/CSV（表頭要有 cidr 跟 country 喵）或 v2fly/Xray 的 geoip.dat 二進位檔（只聞得懂 IPv4 喵）。抓到的國家如果在上面的危險名單裡，就會標地理風險（查表版）喵。地圖要自己找喵，工具沒有內建喵。','geo.name_placeholder':'清單叫什麼名字喵（不填就用檔名喵）','geo.add_btn':'叼清單進來喵','geo.empty':'還沒有地圖喵','geo.riskGroupLabel':'危險國家喵','geo.continent.asia':'亞洲喵','geo.continent.europe':'歐洲喵','geo.continent.africa':'非洲喵','geo.continent.namerica':'北美洲喵','geo.continent.samerica':'南美洲喵','geo.continent.oceania':'大洋洲喵','geo.continent.other':'不知道喵',
     'guide.title':'⑦去哪裡找情資喵','guide.body':'這隻工具只在自己地盤比對喵，不會偷跑出去抓資料或送資料喵。\n常見公開來源（只說用途喵，正式網址請自己找官方頁面喵）：\n• Spamhaus DROP/EDROP — 壞網段名單喵\n• Emerging Threats/Proofpoint — 已經淪陷的主機喵\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞軟體的窩喵\n• FireHOL Level1（把好幾窩壞蛋一起叼回來喵）：https://iplists.firehol.org/files/firehol_level1.netset（純文字，直接貼喵）\n• EmergingThreats Block：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字喵）\n• CINS Army：https://cinsscore.com/list/ci-badguys.txt（一行一隻喵）\n• Blocklist.de：https://www.blocklist.de/downloads/export-ips_all.txt（一行一隻喵）\n• DShield：https://www.dshield.org/block.txt（⚠️這個是表格不是名單喵，直接貼只抓得到第一欄，範圍會漏很多喵，要自己先處理過再貼喵）\n大部分清單都有自己的規矩喵（有些只能自己用不能拿去賣錢喵），下載前自己看清楚喵；建議每個月至少換一次新的喵，太舊就不準了喵。',
     'deid.title':'⑧藏起來喵','deid.hint':'把 IP／主機名稱／使用者名稱換成固定的假名字喵（IP 用 RFC5737 那個假地址喵）。要先做完③④再做這個喵，藏起來以後假 IP 就聞不出跟真的情資清單一樣了喵。','deid.run_btn':'開始藏喵','deid.download_btn':'把藏好的叼回家喵',
     'export.csv_btn':'把問題清單叼出去（CSV）喵',
@@ -1676,7 +1756,7 @@ const LANG = {
     'cat.authFail':'🔑鑰匙打不開','cat.denyBlock':'🚪被拒於門外','cat.attack':'🦠壞菌入侵','cat.scanFlood':'👀被偷看/🌊太多人湧入','cat.exceedThreshold':'份量超標','cat.other':'其他配菜','cat.freqLabel':'太常出現了：','cat.possibleScan':'疑似有人在探頭探腦','cat.knownIOC':'認出熟面孔壞蛋🍅','cat.volumeAnomaly':'流量爆量🥦','cat.geoRisk':'危險國家🌽','cat.geoIPRisk':'查表抓到危險國家🍆','note.bruteForce':'感覺在猜密碼🥕','note.scanOrMisconfig':'感覺在探路🌶️','note.freqAnomaly':'太常出現了','note.possibleScan':'感覺在掃描🔦','note.knownIOC':'認出熟面孔壞蛋🍅',
     'intel.title':'④🍅情資清單（自家比對）','intel.hint':'把公開或自製的 IP/CIDR 黑名單倒進來（文字、CSV 或 JSON 這道菜都收），只在自家廚房比對，不會偷跑出去買菜連網。對到就標記高風險。','intel.add_btn':'🥔上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自己填）','intel.count_label':'份','intel.remove_btn':'🗑️丟掉','intel.empty':'廚房還沒有情資清單',
     'safelist.title':'⑤自家菜園🥬','safelist.hint':'把自己種的安全 IP/CIDR 倒進來，這些不算壞菜，專門放過自家內網或合法食材。','safelist.name_placeholder':'清單名稱','safelist.add_btn':'🥔上傳清單','safelist.template_btn':'⬇️下載範例CSV','safelist.empty':'菜園還沒有安全清單',
-    'geo.title':'⑥產地對照表🌍','geo.hint':'倒進來一份 CIDR→產地對照表：純文字/CSV（表頭要有 cidr 跟 country）或 v2fly/Xray 的 geoip.dat 二進位檔（只認得 IPv4 這道菜）。對到的產地如果在上面的危險清單裡，就標記地理風險（對照表版）。對照表要自己去買，本工具沒有附贈。','geo.name_placeholder':'清單名稱（不填就用檔名）','geo.add_btn':'🥔上傳清單','geo.empty':'還沒有產地對照表',
+    'geo.title':'⑥產地對照表🌍','geo.hint':'倒進來一份 CIDR→產地對照表：純文字/CSV（表頭要有 cidr 跟 country）或 v2fly/Xray 的 geoip.dat 二進位檔（只認得 IPv4 這道菜）。對到的產地如果在上面的危險清單裡，就標記地理風險（對照表版）。對照表要自己去買，本工具沒有附贈。','geo.name_placeholder':'清單名稱（不填就用檔名）','geo.add_btn':'🥔上傳清單','geo.empty':'還沒有產地對照表','geo.riskGroupLabel':'🌶️危險國家','geo.continent.asia':'🍚亞洲','geo.continent.europe':'🧀歐洲','geo.continent.africa':'🥭非洲','geo.continent.namerica':'🌽北美洲','geo.continent.samerica':'🍫南美洲','geo.continent.oceania':'🥥大洋洲','geo.continent.other':'🥗其他',
     'guide.title':'⑦去哪裡採買情資','guide.body':'本工具只在自家廚房比對，不會偷跑出去買菜或送菜出門。\n常見的市場攤位（僅說明用途，正式網址請自行到官方頁面查詢）：\n• Spamhaus DROP/EDROP — 已知的壞菜園（CIDR）\n• Emerging Threats/Proofpoint — 已被蟲蛀的主機清單\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞菌 C2 相關情資\n• FireHOL Level1🥬（好幾攤一起併成一車）：https://iplists.firehol.org/files/firehol_level1.netset（純文字，直接倒進鍋）\n• EmergingThreats Block：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字）\n• CINS Army：https://cinsscore.com/list/ci-badguys.txt（一行一顆）\n• Blocklist.de：https://www.blocklist.de/downloads/export-ips_all.txt（一行一顆）\n• DShield：https://www.dshield.org/block.txt（⚠️這攤是菜單不是菜，直接倒進鍋只會撈到第一欄，其他都漏掉，要先自己切好再下鍋）\n大部分攤位都有自己的規矩（有些只能自己吃不能拿去賣），採買前請看清楚；建議至少每個月補一次貨，太舊的菜就不新鮮了。',
     'deid.title':'⑧去識別化（去皮去籽）','deid.hint':'把 IP／主機名稱／使用者名稱換成固定的代號（IP 用 RFC5737 那盤示範菜）。請先完成③④再做這步，去皮後的假 IP 就配不上真正的情資清單了。','deid.run_btn':'開始去皮','deid.download_btn':'打包帶走',
     'export.csv_btn':'把問題清單裝盒（CSV）',
@@ -1694,7 +1774,7 @@ const LANG = {
     'cat.authFail':'密碼咩打錯了-aca','cat.denyBlock':'被擋在柵欄外咩','cat.attack':'有壞東西咩-aca','cat.scanFlood':'鬼鬼祟祟探路咩','cat.exceedThreshold':'超過忍耐極限-aca','cat.other':'其他咩咩咩','cat.freqLabel':'太吵咩：','cat.possibleScan':'感覺有人探頭探腦咩','cat.knownIOC':'認出熟面孔壞蛋咩','cat.volumeAnomaly':'流量爆量咩','cat.geoRisk':'危險國家出沒咩','cat.geoIPRisk':'查表抓到危險國家-aca','note.bruteForce':'感覺在猜密碼咩','note.scanOrMisconfig':'感覺在探路-aca','note.freqAnomaly':'太吵咩','note.possibleScan':'感覺在掃描咩','note.knownIOC':'認出熟面孔壞蛋咩',
     'intel.title':'④情資清單（自家草原比對-aca）','intel.hint':'把公開或自家咩IP/CIDR黑名單牽進來-aca（文字、CSV或JSON咩都吃），只在自家草原比對，不會偷跑出去連網咩。牽到就標「確定」高風險-aca。','intel.add_btn':'牽清單進來咩','intel.name_placeholder':'清單叫什麼名字-aca','intel.date_placeholder':'情資日期（自己填咩）','intel.count_label':'隻','intel.remove_btn':'放走咩','intel.empty':'草原還沒有情資清單-aca',
     'safelist.title':'⑤自己人清單咩','safelist.hint':'把自己認識咩安全IP/CIDR牽進來-aca，牽到的話就不算壞蛋咩，專門放過自家草原-aca。','safelist.name_placeholder':'清單叫什麼名字咩','safelist.add_btn':'牽清單進來咩','safelist.template_btn':'下載範例CSV-aca','safelist.empty':'還沒有自己人清單-aca',
-    'geo.title':'⑥草原地圖對照表咩','geo.hint':'牽進來一份CIDR→產地對照表-aca（純文字/CSV，表頭要有cidr跟country咩，或v2fly/Xray咩geoip.dat二進位檔，只認得IPv4-aca）。牽到咩產地如果在上面咩危險名單裡，就標地理風險（對照表版）-aca。地圖要自己找咩，工具沒有內建-aca。','geo.name_placeholder':'清單叫什麼名字咩（不填就用檔名-aca）','geo.add_btn':'牽清單進來咩','geo.empty':'還沒有草原地圖-aca',
+    'geo.title':'⑥草原地圖對照表咩','geo.hint':'牽進來一份CIDR→產地對照表-aca（純文字/CSV，表頭要有cidr跟country咩，或v2fly/Xray咩geoip.dat二進位檔，只認得IPv4-aca）。牽到咩產地如果在上面咩危險名單裡，就標地理風險（對照表版）-aca。地圖要自己找咩，工具沒有內建-aca。','geo.name_placeholder':'清單叫什麼名字咩（不填就用檔名-aca）','geo.add_btn':'牽清單進來咩','geo.empty':'還沒有草原地圖-aca','geo.riskGroupLabel':'危險國家咩','geo.continent.asia':'亞洲咩','geo.continent.europe':'歐洲咩','geo.continent.africa':'非洲咩','geo.continent.namerica':'北美洲咩','geo.continent.samerica':'南美洲咩','geo.continent.oceania':'大洋洲咩','geo.continent.other':'不知道咩',
     'guide.title':'⑦去哪裡找情資咩','guide.body':'這隻alpaca只在自家草原比對咩，不會偷跑出去抓資料或送資料-aca。\n常見公開來源（只說用途咩，正式網址請自己找官方頁面-aca）：\n• Spamhaus DROP/EDROP — 壞牧場名單咩\n• Emerging Threats/Proofpoint — 已經淪陷咩主機-aca\n• abuse.ch Feodo/URLhaus/ThreatFox — 壞菌的窩咩\n• FireHOL Level1（把好幾片壞草原併起來咩）：https://iplists.firehol.org/files/firehol_level1.netset（純文字，直接貼咩）\n• EmergingThreats Block：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字-aca）\n• CINS Army：https://cinsscore.com/list/ci-badguys.txt（一行一隻咩）\n• Blocklist.de：https://www.blocklist.de/downloads/export-ips_all.txt（一行一隻-aca）\n• DShield：https://www.dshield.org/block.txt（⚠️這片是表格不是草原咩，直接貼只吃得到第一欄，其他都漏掉-aca，要自己先處理過再貼咩）\n大部分清單都有自己的規矩-aca（有些只能自己用不能拿去賣咩），下載前自己看清楚-aca；建議每個月至少換一次新的咩，太舊就不準了-aca。',
     'deid.title':'⑧藏起來-aca','deid.hint':'把IP／主機名稱／使用者名稱換成固定咩假名字-aca（IP用RFC5737那個假地址咩）。要先做完③④再做這個-aca，藏起來以後假IP就配不上真正咩情資清單了-aca。','deid.run_btn':'開始藏咩','deid.download_btn':'把藏好咩牽回家-aca',
     'export.csv_btn':'把問題清單牽出去（CSV）咩',
@@ -1712,7 +1792,7 @@ const LANG = {
     'cat.authFail':'認證失敗，又來了','cat.denyBlock':'連線被擋，習慣了','cat.attack':'攻擊/惡意軟體，日常','cat.scanFlood':'掃描/洪水，見怪不怪','cat.exceedThreshold':'超過門檻，隨便啦','cat.other':'其他（懶得分類）','cat.freqLabel':'頻率異常，反正常有：','cat.possibleScan':'疑似掃描（大概吧）','cat.knownIOC':'已知情資命中（唉，果然）','cat.volumeAnomaly':'流量異常（唉，又爆量了）','cat.geoRisk':'高風險地區（又來了）','cat.geoIPRisk':'高風險地區（查表查到的，一樣啦）','note.bruteForce':'疑似猜密碼（又來了）','note.scanOrMisconfig':'疑似掃描或誤設定，反正沒差','note.freqAnomaly':'頻率異常，習慣了','note.possibleScan':'疑似 Port 掃描（大概吧）','note.knownIOC':'已知情資命中，唉',
     'intel.title':'④威脅情資本機比對清單（做心安的）','intel.hint':'匯入 IP/CIDR 黑名單（文字、CSV、JSON 都收，反正格式都差不多），本機比對，不連網，至少這點還算誠實。命中標記高風險，但看了也不一定會動作。','intel.add_btn':'上傳清單（好）','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（記得填，不然更沒意義）','intel.count_label':'筆','intel.remove_btn':'移除（反正也沒差）','intel.empty':'還沒清單，之後再說吧',
     'safelist.title':'⑤安全清單（大概吧）','safelist.hint':'匯入自己的安全 IP/CIDR 清單，命中就不算已知情資，隨便啦，反正用來擋一下內網被誤判。','safelist.name_placeholder':'清單名稱','safelist.add_btn':'上傳清單（好）','safelist.template_btn':'下載範例CSV（隨便）','safelist.empty':'還沒清單，之後再說吧',
-    'geo.title':'⑥GeoIP 資料庫比對（做就做吧）','geo.hint':'匯入 CIDR→國家對照表，純文字/CSV（表頭要有 cidr 跟 country，隨便啦）或 v2fly/Xray 的 geoip.dat 二進位檔（只認 IPv4，反正夠用）。命中的國家如果在上面風險清單裡，就標地理風險，查表版而已，跟另一種其實差不多。資料庫自己找，這裡沒附。','geo.name_placeholder':'清單名稱（不填也行，用檔名）','geo.add_btn':'上傳清單（好）','geo.empty':'還沒資料庫，之後再說吧',
+    'geo.title':'⑥GeoIP 資料庫比對（做就做吧）','geo.hint':'匯入 CIDR→國家對照表，純文字/CSV（表頭要有 cidr 跟 country，隨便啦）或 v2fly/Xray 的 geoip.dat 二進位檔（只認 IPv4，反正夠用）。命中的國家如果在上面風險清單裡，就標地理風險，查表版而已，跟另一種其實差不多。資料庫自己找，這裡沒附。','geo.name_placeholder':'清單名稱（不填也行，用檔名）','geo.add_btn':'上傳清單（好）','geo.empty':'還沒資料庫，之後再說吧','geo.riskGroupLabel':'危險國家（反正就那幾個）','geo.continent.asia':'亞洲，隨便','geo.continent.europe':'歐洲，隨便','geo.continent.africa':'非洲，隨便','geo.continent.namerica':'北美洲，隨便','geo.continent.samerica':'南美洲，隨便','geo.continent.oceania':'大洋洲，隨便','geo.continent.other':'其他，管他的',
     'guide.title':'⑦如何取得外部情資（算是個方向）','guide.body':'本工具只做本機比對，不連網，這點沒騙你。\n常見公開來源（用途說明而已，網址自己去查，反正會變）：\n• Spamhaus DROP/EDROP — 惡意網段名單\n• Emerging Threats/Proofpoint — 已知被入侵主機\n• abuse.ch Feodo/URLhaus/ThreatFox — 惡意軟體 C2\n• FireHOL Level1（幫你把上面幾家併好了）：https://iplists.firehol.org/files/firehol_level1.netset（純文字，貼上就好，反正也沒多難）\n• EmergingThreats Block：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt\n• CINS Army：https://cinsscore.com/list/ci-badguys.txt\n• Blocklist.de：https://www.blocklist.de/downloads/export-ips_all.txt\n• DShield：https://www.dshield.org/block.txt（這個是表格啦，直接貼只會吃到第一欄，反正大部分人也不會發現漏很多，想準一點就自己先轉成 CIDR）\n大部分清單都有使用條款，看一下吧；建議每月更新，反正舊了也沒人會發現。',
     'deid.title':'⑦去識別化（藏起來也不會比較好過）','deid.hint':'把 IP/主機名稱/使用者名稱換成假值（RFC5737），先做完③④再做這步，做完假 IP 就配不上真情資了，就這樣。','deid.run_btn':'執行吧','deid.download_btn':'下載結果（然後呢）',
     'export.csv_btn':'匯出問題清單 CSV（留個紀錄）',
@@ -1910,38 +1990,37 @@ let SORT_COL = 'severity', SORT_DIR = 'asc';
 let ISSUES_SOURCE_FILTER = '';
 // 地理位置風險標記勾選清單：比對的是 log 原始 GeoIP 欄位字串本身（純英文，非 UI 顯示語意
 // 文字），不逐語言翻譯。這份是「未匯入 GeoIP 資料庫」時的預設清單，每個真實國家一筆、內含
-// aliases（同一國家的多種寫法+ISO 兩碼），render 端合併成一個 checkbox 避免使用者看到一長串
-// 近似重複的項目（原生 <select multiple> 版本＋30 筆各自獨立字串已證實會造成這個困惑，且
-// 誤觸單擊會清空其他已選項目，是先前 bug 的根因，見 now.md）。risk:true 為長期穩定的高風險/
-// 制裁國家分類（非隨時事變動的「戰爭中國家」判斷）；一般國家也補上 ISO 別名，避免「風險國家
-// 能查、一般國家不能查」的不一致
+// aliases（同一國家的多種寫法+ISO 兩碼）；顯示用的 label 不再寫死，改由 resolveCountryInfo()
+// 依 id 動態解析（見 renderGeoRiskChecks()），避免兩份資料各自維護走鐘。risk:true 為長期穩定
+// 的高風險/制裁國家分類（非隨時事變動的「戰爭中國家」判斷）；一般國家也補上 ISO 別名，避免
+// 「風險國家能查、一般國家不能查」的不一致
 const GEO_COUNTRY_GROUPS = [
-  { id: 'kp', label: 'North Korea (KP)', risk: true, aliases: ['North Korea', "Korea, Democratic People's Republic of", 'KP'] },
-  { id: 'ru', label: 'Russia (RU)', risk: true, aliases: ['Russia', 'Russian Federation', 'RU'] },
-  { id: 'ir', label: 'Iran (IR)', risk: true, aliases: ['Iran', 'Iran, Islamic Republic of', 'IR'] },
-  { id: 'sy', label: 'Syria (SY)', risk: true, aliases: ['Syria', 'Syrian Arab Republic', 'SY'] },
-  { id: 'by', label: 'Belarus (BY)', risk: false, aliases: ['Belarus', 'BY'] },
-  { id: 'cu', label: 'Cuba (CU)', risk: false, aliases: ['Cuba', 'CU'] },
-  { id: 've', label: 'Venezuela (VE)', risk: false, aliases: ['Venezuela', 'VE'] },
-  { id: 'mm', label: 'Myanmar (MM)', risk: false, aliases: ['Myanmar', 'MM'] },
-  { id: 'af', label: 'Afghanistan (AF)', risk: false, aliases: ['Afghanistan', 'AF'] },
-  { id: 'iq', label: 'Iraq (IQ)', risk: false, aliases: ['Iraq', 'IQ'] },
-  { id: 'ye', label: 'Yemen (YE)', risk: false, aliases: ['Yemen', 'YE'] },
-  { id: 'sd', label: 'Sudan (SD)', risk: false, aliases: ['Sudan', 'SD'] },
-  { id: 'cn', label: 'China (CN)', risk: false, aliases: ['China', 'CN'] },
-  { id: 'vn', label: 'Vietnam (VN)', risk: false, aliases: ['Vietnam', 'VN'] },
-  { id: 'pk', label: 'Pakistan (PK)', risk: false, aliases: ['Pakistan', 'PK'] },
-  { id: 'in', label: 'India (IN)', risk: false, aliases: ['India', 'IN'] },
-  { id: 'ng', label: 'Nigeria (NG)', risk: false, aliases: ['Nigeria', 'NG'] },
-  { id: 'br', label: 'Brazil (BR)', risk: false, aliases: ['Brazil', 'BR'] },
-  { id: 'us', label: 'United States (US)', risk: false, aliases: ['United States', 'US'] },
-  { id: 'gb', label: 'United Kingdom (GB)', risk: false, aliases: ['United Kingdom', 'GB'] },
-  { id: 'de', label: 'Germany (DE)', risk: false, aliases: ['Germany', 'DE'] },
-  { id: 'fr', label: 'France (FR)', risk: false, aliases: ['France', 'FR'] },
-  { id: 'jp', label: 'Japan (JP)', risk: false, aliases: ['Japan', 'JP'] },
-  { id: 'tw', label: 'Taiwan (TW)', risk: false, aliases: ['Taiwan', 'TW'] },
-  { id: 'sg', label: 'Singapore (SG)', risk: false, aliases: ['Singapore', 'SG'] },
-  { id: 'au', label: 'Australia (AU)', risk: false, aliases: ['Australia', 'AU'] }
+  { id: 'kp', risk: true, aliases: ['North Korea', "Korea, Democratic People's Republic of", 'KP'] },
+  { id: 'ru', risk: true, aliases: ['Russia', 'Russian Federation', 'RU'] },
+  { id: 'ir', risk: true, aliases: ['Iran', 'Iran, Islamic Republic of', 'IR'] },
+  { id: 'sy', risk: true, aliases: ['Syria', 'Syrian Arab Republic', 'SY'] },
+  { id: 'by', risk: false, aliases: ['Belarus', 'BY'] },
+  { id: 'cu', risk: false, aliases: ['Cuba', 'CU'] },
+  { id: 've', risk: false, aliases: ['Venezuela', 'VE'] },
+  { id: 'mm', risk: false, aliases: ['Myanmar', 'MM'] },
+  { id: 'af', risk: false, aliases: ['Afghanistan', 'AF'] },
+  { id: 'iq', risk: false, aliases: ['Iraq', 'IQ'] },
+  { id: 'ye', risk: false, aliases: ['Yemen', 'YE'] },
+  { id: 'sd', risk: false, aliases: ['Sudan', 'SD'] },
+  { id: 'cn', risk: false, aliases: ['China', 'CN'] },
+  { id: 'vn', risk: false, aliases: ['Vietnam', 'VN'] },
+  { id: 'pk', risk: false, aliases: ['Pakistan', 'PK'] },
+  { id: 'in', risk: false, aliases: ['India', 'IN'] },
+  { id: 'ng', risk: false, aliases: ['Nigeria', 'NG'] },
+  { id: 'br', risk: false, aliases: ['Brazil', 'BR'] },
+  { id: 'us', risk: false, aliases: ['United States', 'US'] },
+  { id: 'gb', risk: false, aliases: ['United Kingdom', 'GB'] },
+  { id: 'de', risk: false, aliases: ['Germany', 'DE'] },
+  { id: 'fr', risk: false, aliases: ['France', 'FR'] },
+  { id: 'jp', risk: false, aliases: ['Japan', 'JP'] },
+  { id: 'tw', risk: false, aliases: ['Taiwan', 'TW'] },
+  { id: 'sg', risk: false, aliases: ['Singapore', 'SG'] },
+  { id: 'au', risk: false, aliases: ['Australia', 'AU'] }
 ];
 // 已匯入 GeoIP 資料庫時，比對用的 riskCountries 應該直接是該資料庫實際出現過的字串（見
 // GEO_LISTS[].index.countries，buildIntelIndex() 附帶收集），而非猜測的別名——避免「CSV 用
@@ -1958,6 +2037,9 @@ function getImportedGeoCountries() {
 // 時展開 aliases）；已匯入時改用該資料庫實際涵蓋的國家字串（checkbox value 就是原始字串，
 // 不需展開）。重繪前先讀出目前已勾選的值，重繪後對新清單裡仍存在的值還原勾選，避免每次
 // 匯入/移除清單都把使用者已調整過的勾選整組重置
+// 分組順序固定：高風險獨立一組排最前，其餘依洲別（亞/歐/非/北美/南美/大洋洲/其他）；純
+// UI 排列依據，不影響 getRiskCountries() 的比對邏輯
+const GEO_CONTINENT_ORDER = ['asia', 'europe', 'africa', 'namerica', 'samerica', 'oceania', 'other'];
 function renderGeoRiskChecks() {
   const box = document.getElementById('geo-risk-checks');
   const prevMode = box.dataset.mode;
@@ -1966,25 +2048,45 @@ function renderGeoRiskChecks() {
   const newMode = usingImported ? 'imported' : 'default';
   // 「保留使用者已調整過的勾選」只在同一種模式下才有意義（value 命名空間相同：預設模式是
   // group id、匯入模式是原始國家字串）；模式切換當下（例如剛匯入、或移除到 0 筆）舊的勾選
-  // 值屬於另一套命名空間，不該拿來比對，一律改用該筆項目自己的 defaultChecked
+  // 值屬於另一套命名空間，不該拿來比對，一律改用該筆項目自己的 risk 旗標決定預設勾選
   const prevChecked = prevMode === newMode
     ? new Set(Array.from(box.querySelectorAll('input:checked')).map(el => el.value))
     : null;
+  // label 不再寫死，統一透過 resolveCountryInfo() 動態解析成「名稱 (代碼)」，未匯入/已匯入
+  // 兩種模式共用同一份對照表，確保呈現一致
   const items = usingImported
-    ? imported.map(c => ({ value: c, label: c, defaultChecked: isKnownRiskCountry(c) }))
-    : GEO_COUNTRY_GROUPS.map(g => ({ value: g.id, label: g.label, defaultChecked: g.risk }));
+    ? imported.map(c => {
+        const info = resolveCountryInfo(c);
+        return { value: c, label: `${info.name}${info.code ? ' (' + info.code + ')' : ''}`, risk: isKnownRiskCountry(c), continent: info.continent };
+      })
+    : GEO_COUNTRY_GROUPS.map(g => {
+        const info = resolveCountryInfo(g.id);
+        return { value: g.id, label: `${info.name} (${info.code || g.id.toUpperCase()})`, risk: g.risk, continent: info.continent };
+      });
   box.dataset.mode = newMode;
-  box.innerHTML = items.map(it => {
-    const checked = prevChecked ? prevChecked.has(it.value) : it.defaultChecked;
-    return `<label class="geo-risk-item"><input type="checkbox" class="geo-risk-check" value="${esc(it.value)}"${checked ? ' checked' : ''}> ${esc(it.label)}</label>`;
+  const groups = [{ key: 'risk', title: tr('geo.riskGroupLabel'), items: items.filter(it => it.risk) }];
+  GEO_CONTINENT_ORDER.forEach(c => groups.push({ key: c, title: tr('geo.continent.' + c), items: items.filter(it => !it.risk && it.continent === c) }));
+  box.innerHTML = groups.filter(g => g.items.length).map(g => {
+    const rows = g.items.map(it => {
+      const checked = prevChecked ? prevChecked.has(it.value) : it.risk;
+      return `<label class="geo-risk-item"><input type="checkbox" class="geo-risk-check" value="${esc(it.value)}"${checked ? ' checked' : ''}> ${esc(it.label)}</label>`;
+    }).join('');
+    return `<div class="geo-risk-group" data-group="${g.key}"><div class="geo-risk-group-title">${esc(g.title)}</div><div class="geo-risk-group-items">${rows}</div></div>`;
   }).join('');
   filterGeoRiskChecks(document.getElementById('geo-risk-filter').value);
 }
+// 篩選需連帶處理群組：某群組內所有項目都被篩掉時，該群組（含標題）也要一併隱藏，避免篩選
+// 結果出現一堆空標題
 function filterGeoRiskChecks(q) {
   const needle = String(q || '').trim().toLowerCase();
-  document.querySelectorAll('#geo-risk-checks .geo-risk-item').forEach(label => {
-    const hit = !needle || label.textContent.toLowerCase().includes(needle);
-    label.style.display = hit ? '' : 'none';
+  document.querySelectorAll('#geo-risk-checks .geo-risk-group').forEach(group => {
+    let anyVisible = false;
+    group.querySelectorAll('.geo-risk-item').forEach(label => {
+      const hit = !needle || label.textContent.toLowerCase().includes(needle);
+      label.style.display = hit ? '' : 'none';
+      if (hit) anyVisible = true;
+    });
+    group.style.display = anyVisible ? '' : 'none';
   });
 }
 // riskCountries 讀取：未匯入模式下 checkbox value 是 group id，需展開成該 group 的 aliases；
