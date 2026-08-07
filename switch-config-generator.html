@@ -2871,7 +2871,7 @@ function ruijieSwitchportLines(iface){
   }
   return lines;
 }
-function renderRuijieInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vslSet){
+function renderRuijieInterface(iface,lacpList,dhcpList,aclList,securityList,stp){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(` description ${iface.desc}`);
   const lg=findLacpGroup(lacpList,iface.name);
@@ -2914,13 +2914,10 @@ function renderRuijieInterface(iface,lacpList,dhcpList,aclList,securityList,stp,
     if(sp.cost)lines.push(` spanning-tree cost ${sp.cost}`);
     if(sp.priority)lines.push(` spanning-tree port-priority ${sp.priority}`);
   }
-  // VSU VSL 鏈路埠：巢狀於該介面自己的區塊內宣告（比照 analyzer 端 parseRuijieStack() 的
-  // 期待格式，也是 NX-OS VPC peer-link 巢狀查表寫法的同一種手法）
-  if(vslSet&&vslSet.has(iface.name))lines.push(` port-member interface ${iface.name}`);
   return lines.join('\n');
 }
-function renderRuijieInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,vslSet){
-  return (ifaces||[]).map(i=>renderRuijieInterface(i,lacpList,dhcpList,aclList,securityList,stp,vslSet)).join('\n!\n');
+function renderRuijieInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp){
+  return (ifaces||[]).map(i=>renderRuijieInterface(i,lacpList,dhcpList,aclList,securityList,stp)).join('\n!\n');
 }
 
 // LACP：Ruijie 稱聚合介面為 AggregatePort（AP），成員埠語法是 "port-group N mode
@@ -2959,19 +2956,28 @@ function renderRuijieVRRPGroup(g){
 }
 function renderRuijieVRRP(list){return groupVrrpByVlan(list).map(renderRuijieVRRPGroup).join('\n!\n');}
 
-// VSU 堆疊（Virtual Switch Unit）：查證來源官方 VSU 技術文檔
-// https://www.ruijie.com.cn/fw/wt/90872/ ——全域 "switch virtual domain <id>" + 逐成員
-// "switch <n> priority <p>"；VSL 鏈路埠回傳一個 Set 供 renderRuijieInterface() 巢狀插入
-// "port-member interface X"（比照 NX-OS VPC peer-link 巢狀查表模式），不在此處直接輸出
-// 介面區塊，避免跟 Interface 表格自己的輸出重複
+// VSU 堆疊（Virtual Switch Unit）：全域 "switch virtual domain <id>" + 逐成員
+// "switch <n> priority <p>"，查證來源官方 VSU 技術文檔 https://www.ruijie.com.cn/fw/wt/90872/ 。
+// 2026-08-07 對外查證 VSL 鏈路埠語法（Medium／CloudAja 兩份獨立教學文件交叉確認命令序列一致）
+// 修正：port-member interface 是獨立的 "vsl-port" 子模式（vsl-port/逐行 port-member interface/
+// exit），並非巢狀在各實體介面自己的 interface 區塊裡——舊版巢狀寫法已證實是結構性錯誤，
+// switch_analyzer 的 parseRuijieStack() 已同步修正解析來源。信心度note：教學文件展示的是兩台
+// 實體裝置合併前各自的初始設定指令，與 show running-config 是否逐字相同尚無法 100% 排除落差，
+// 仍是次於「已用真實裝置匯出檔校正過」的廠牌之信心度
 function renderRuijieStack(stack){
   const vslSet=new Set();
   if(!stack||!stack.domain||!(stack.members||[]).length)return{block:'',vslSet};
   const lines=[`switch virtual domain ${stack.domain}`];
+  const vslLines=[];
   (stack.members||[]).forEach(m=>{
     if(m.id&&m.priority)lines.push(`switch ${m.id} priority ${m.priority}`);
-    (m.vslPorts||[]).forEach(p=>{if(p)vslSet.add(p);});
+    (m.vslPorts||[]).forEach(p=>{if(p){vslSet.add(p);vslLines.push(`port-member interface ${p}`);}});
   });
+  if(vslLines.length){
+    lines.push('vsl-port');
+    lines.push(...vslLines);
+    lines.push('exit');
+  }
   return{block:lines.join('\n'),vslSet};
 }
 
@@ -2987,18 +2993,16 @@ function assembleRuijieConfig(model){
   const ruijieVrfNames=collectVrfNames(model.interfaces);
   if(ruijieVrfNames.length)blocks.push(ruijieVrfNames.map(n=>`ip vrf ${n}`).join('\n!\n'));
   const stackInfo=renderRuijieStack(model.stack);
-  if(model.interfaces&&model.interfaces.length)blocks.push(renderRuijieInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,stackInfo.vslSet));
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderRuijieInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp));
   // DHCP Relay Option82：與 Cisco 共用同一套 "ip dhcp snooping information option" 全域旗標
   // （parseDHCP 的 cisco/ruijie 共用分支已確認此關鍵字），比照 Arista 既有寫法
   if((model.dhcp||[]).some(d=>d.type==='relay'&&d.option82))blocks.push('ip dhcp snooping information option');
   const ruijieLacpExtra=renderRuijieLACPExtra(model.lacp,model.interfaces);
   if(ruijieLacpExtra)blocks.push(ruijieLacpExtra);
   if(model.vrrp&&model.vrrp.length)blocks.push(renderRuijieVRRP(model.vrrp));
+  // vsl-port 是獨立子模式，與 model.interfaces 表單完全無關，VSL 埠一律由 renderRuijieStack()
+  // 的 stackInfo.block 一併輸出，不需要像舊版那樣為「不在 Interface 表單內的埠」另外補區塊
   if(stackInfo.block)blocks.push(stackInfo.block);
-  // VSL 鏈路埠若不在 Interface 表單清單內，另外補產生最小區塊，避免遺漏
-  const existingIfaceNames=new Set((model.interfaces||[]).map(i=>i.name));
-  const extraVsl=[...stackInfo.vslSet].filter(n=>!existingIfaceNames.has(n)).map(n=>`interface ${n}\n port-member interface ${n}`);
-  if(extraVsl.length)blocks.push(extraVsl.join('\n!\n'));
   const stpBlockRj=renderSpanningTreeGlobal(model.stp);
   if(stpBlockRj)blocks.push(stpBlockRj);
   // OSPF/BGP/RIP/靜態路由/ACL：已查證與 Cisco IOS 語法相符，直接重用對應 renderCiscoXxx，

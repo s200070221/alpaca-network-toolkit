@@ -8739,14 +8739,21 @@ function parseRuijieStack(cfg){
   members.forEach(x=>{x.role=x.priority===maxPrio?'Active':'Standby';});
   members.sort((a,b)=>parseInt(a.id)-parseInt(b.id));
   const vslByMember={};
-  cfg.split(/^interface\s+/m).slice(1).forEach(blk=>{
-    const name=blk.split('\n')[0].trim();
-    if(!/port-member interface/.test(blk))return;
-    const midMatch=name.replace(/\s+/g,'').match(/^[A-Za-z]+(\d+)\//);
-    const mid=midMatch?midMatch[1]:members[0]?.id;
-    if(!mid)return;
-    (vslByMember[mid]=vslByMember[mid]||[]).push(name);
-  });
+  // VSL 鏈路埠獨立宣告於 "vsl-port" 子模式（2026-08-07 對外查證修正，非巢狀在各實體介面
+  // 自己的 interface 區塊內），逐行 port-member interface 依介面名稱的插槽編號前綴反推所屬
+  // 成員（沿用既有推斷邏輯，只是改抓取來源）
+  const vslBlockM=cfg.match(/^vsl-port\n([\s\S]*?)^exit/m);
+  if(vslBlockM){
+    const portRe=/^port-member interface\s+(\S.*)$/gm;
+    let pm;
+    while((pm=portRe.exec(vslBlockM[1]))!==null){
+      const name=pm[1].trim();
+      const midMatch=name.replace(/\s+/g,'').match(/^[A-Za-z]+(\d+)\//);
+      const mid=midMatch?midMatch[1]:members[0]?.id;
+      if(!mid)continue;
+      (vslByMember[mid]=vslByMember[mid]||[]).push(name);
+    }
+  }
   const vsl=Object.entries(vslByMember).map(([memberId,interfaces])=>({memberId,interfaces}));
   return{type:'VSU',domain,members,vsl};
 }
