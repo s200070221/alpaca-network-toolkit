@@ -87,6 +87,8 @@ th.sortable-col:hover{color:var(--accent)}
 .empty{color:var(--text-muted);font-size:11px;padding:14px 0;text-align:center}
 .intel-row{display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--surface2);border-radius:6px;margin-bottom:6px;font-size:11px}
 .intel-row .n{flex:1}
+.geo-risk-checks{display:flex;flex-wrap:wrap;gap:2px 14px;max-height:110px;overflow-y:auto;padding:6px 8px;background:var(--surface2);border-radius:6px}
+.geo-risk-item{white-space:nowrap;cursor:pointer}
 input.txt{background:var(--surface2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-size:11px;padding:5px 8px;font-family:inherit}
 .guide-body{font-size:11px;color:var(--text-dim);line-height:1.8;white-space:pre-line}
 .progress-indicator{display:none;align-items:center;gap:6px;font-size:11px;color:var(--accent)}
@@ -139,39 +141,18 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
       <span id="lbl-scan-threshold"></span> <input type="number" id="opt-scan-threshold" class="txt" style="width:48px" value="5" min="2">
       <span id="lbl-volume-threshold"></span> <input type="number" id="opt-volume-threshold" class="txt" style="width:56px" value="50" min="1">
     </div>
-    <div class="btn-row" style="font-size:11px;color:var(--text-dim)">
+    <div class="btn-row" style="font-size:11px;color:var(--text-dim);align-items:flex-start">
       <span id="lbl-geo-risk"></span>
-      <select id="geo-risk-select" class="txt" multiple size="4" style="min-width:220px"></select>
+      <div style="display:flex;flex-direction:column;gap:6px;flex:1;min-width:220px">
+        <input type="text" id="geo-risk-filter" class="txt" style="max-width:220px">
+        <div id="geo-risk-checks" class="geo-risk-checks"></div>
+      </div>
     </div>
   </section>
 
-  <section class="card" id="results-card">
-    <h2 id="t-results-title"></h2>
-    <div class="summary-row" id="results-summary"></div>
-    <div class="timeline-wrap" id="timeline-wrap">
-      <div class="timeline-label" id="lbl-timeline"></div>
-      <div id="timeline-chart"></div>
-    </div>
-    <div class="btn-row" style="font-size:11px;color:var(--text-dim)">
-      <span id="lbl-optional-cols"></span>
-      <label><input type="checkbox" id="col-src"> <span id="lbl-col-src"></span></label>
-      <label><input type="checkbox" id="col-dst"> <span id="lbl-col-dst"></span></label>
-      <label><input type="checkbox" id="col-port"> <span id="lbl-col-port"></span></label>
-      <label><input type="checkbox" id="col-proto"> <span id="lbl-col-proto"></span></label>
-      <input type="text" id="results-search" class="txt" style="margin-left:auto;width:180px">
-    </div>
-    <div class="tbl-wrap"><table id="results-table"><thead></thead><tbody></tbody></table></div>
-  </section>
-
-  <section class="card" id="issues-card">
-    <h2 id="t-issues-title"></h2>
-    <div class="btn-row" style="font-size:11px;color:var(--text-dim)">
-      <span id="lbl-issues-source-filter"></span>
-      <select id="issues-source-filter" class="txt"></select>
-    </div>
-    <div class="tbl-wrap"><table id="issues-table"><thead></thead><tbody></tbody></table></div>
-  </section>
-
+  <!-- 顯示順序調整：④⑤⑥（情資/安全/GeoIP 資料來源設定）搬到②③（結果）之前，因為這些
+       是分析所需的輸入資料，理應在跑分析前就備妥；純粹搬動 DOM 順序，卡片標題圈碼數字刻意
+       不跟著重編（使用者要求先只調整顯示順序，避免牽動 11 語言 i18n 圈碼與交叉引用文字） -->
   <section class="card" id="intel-card">
     <h2 id="t-intel-title"></h2>
     <div class="hint" id="t-intel-hint"></div>
@@ -205,6 +186,33 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
       <button class="btn primary" id="btn-geo-add"></button>
     </div>
     <div id="geo-list" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card" id="results-card">
+    <h2 id="t-results-title"></h2>
+    <div class="summary-row" id="results-summary"></div>
+    <div class="timeline-wrap" id="timeline-wrap">
+      <div class="timeline-label" id="lbl-timeline"></div>
+      <div id="timeline-chart"></div>
+    </div>
+    <div class="btn-row" style="font-size:11px;color:var(--text-dim)">
+      <span id="lbl-optional-cols"></span>
+      <label><input type="checkbox" id="col-src"> <span id="lbl-col-src"></span></label>
+      <label><input type="checkbox" id="col-dst"> <span id="lbl-col-dst"></span></label>
+      <label><input type="checkbox" id="col-port"> <span id="lbl-col-port"></span></label>
+      <label><input type="checkbox" id="col-proto"> <span id="lbl-col-proto"></span></label>
+      <input type="text" id="results-search" class="txt" style="margin-left:auto;width:180px">
+    </div>
+    <div class="tbl-wrap"><table id="results-table"><thead></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card" id="issues-card">
+    <h2 id="t-issues-title"></h2>
+    <div class="btn-row" style="font-size:11px;color:var(--text-dim)">
+      <span id="lbl-issues-source-filter"></span>
+      <select id="issues-source-filter" class="txt"></select>
+    </div>
+    <div class="tbl-wrap"><table id="issues-table"><thead></thead><tbody></tbody></table></div>
   </section>
 
   <section class="card" id="guide-card">
@@ -1089,10 +1097,15 @@ function cidrMatch(ip, cidr) {
 // Map.get()，取代逐筆走訪比對。大量 CIDR（數千筆）情資清單下是數百倍等級的加速——原本
 // intelLookup() 是 O(CIDR 筆數) 線性掃描，真實規模（如 fetch_threat_intel.ps1 合併出的
 // 數千筆 CIDR）疊加大量 log 事件時，會是造成瀏覽器「卡住」的根本原因，不是單純檔案讀取慢
+// countries：附帶收集 entry.meta.country 的 distinct 值（排序後陣列），供 GeoIP 資料庫比對
+// UI 動態產生「該資料庫實際涵蓋哪些國家」的勾選清單使用（見 getImportedGeoCountries()）。
+// 對 INTEL_LISTS／SAFE_LISTS 這類沒有 country 欄位的一般情資清單而言只是多一個空陣列，
+// 成本可忽略，不需要為 GeoIP 另開一份專用索引函式
 function buildIntelIndex(intelList) {
-  const exact = new Map(), cidrByPrefix = new Map();
+  const exact = new Map(), cidrByPrefix = new Map(), countrySet = new Set();
   let cidrCount = 0;
   intelList.entries.forEach(e => {
+    if (e.meta && e.meta.country) countrySet.add(e.meta.country);
     if (!e.value.includes('/')) { exact.set(e.value, e); return; }
     const [base, bitsRaw] = e.value.split('/');
     const bits = bitsRaw === undefined ? 32 : Number(bitsRaw);
@@ -1104,7 +1117,7 @@ function buildIntelIndex(intelList) {
     cidrByPrefix.get(bits).set(masked, e);
     cidrCount++;
   });
-  return { name: intelList.name, exact, cidrByPrefix, count: exact.size + cidrCount };
+  return { name: intelList.name, exact, cidrByPrefix, count: exact.size + cidrCount, countries: Array.from(countrySet).sort() };
 }
 function intelLookup(index, ip) {
   if (index.exact.has(ip)) return index.exact.get(ip);
@@ -1511,7 +1524,7 @@ const LANG = {
   zhTW: {
     'app.title':'Log 分析與去識別化工具','app.subtitle':'匯入交換器/防火牆 Log（CEF／標準 Syslog），依嚴重程度排序並找出可能問題；本機比對已知情資清單；可對敏感欄位去識別化。全程僅在瀏覽器本機執行，不會連網。',
     'notice.disclaimer':'此功能之分析結果僅供參考，實際處置請自行判斷並謹慎使用',
-    'import.title':'① 匯入 Log','import.hint':'支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式、FortiGate 原生 key=value log（不需 syslog 外殼），以及 JSON/NDJSON，可貼上文字或上傳檔案，亦可直接拖放檔案至此。','import.paste_placeholder':'在此貼上 log 內容，或使用下方上傳按鈕…','import.upload_btn':'上傳檔案','import.analyze_btn':'解析並分析','import.clear_btn':'清空','import.file_loaded':'已載入檔案：','import.progress_parsing':'解析中…','import.progress_analyzing':'情資比對與分類中…','import.progress_rendering':'渲染結果中…','import.large_file_notice':'檔案過大（{name}，共 {lines} 行），內容不於下方文字框顯示，仍會完整解析','opt.freqWindow':'頻率視窗(秒)：','opt.freqThreshold':'頻率門檻(次)：','opt.scanThreshold':'掃描門檻(數)：','opt.volumeThreshold':'流量門檻(MB)：','opt.geoRiskLabel':'地理位置風險標記：',
+    'import.title':'① 匯入 Log','import.hint':'支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式、FortiGate 原生 key=value log（不需 syslog 外殼），以及 JSON/NDJSON，可貼上文字或上傳檔案，亦可直接拖放檔案至此。','import.paste_placeholder':'在此貼上 log 內容，或使用下方上傳按鈕…','import.upload_btn':'上傳檔案','import.analyze_btn':'解析並分析','import.clear_btn':'清空','import.file_loaded':'已載入檔案：','import.progress_parsing':'解析中…','import.progress_analyzing':'情資比對與分類中…','import.progress_rendering':'渲染結果中…','import.large_file_notice':'檔案過大（{name}，共 {lines} 行），內容不於下方文字框顯示，仍會完整解析','opt.freqWindow':'頻率視窗(秒)：','opt.freqThreshold':'頻率門檻(次)：','opt.scanThreshold':'掃描門檻(數)：','opt.volumeThreshold':'流量門檻(MB)：','opt.geoRiskLabel':'地理位置風險標記：','opt.geoRiskFilter':'篩選國家…',
     'results.title':'② 事件清單（依嚴重程度排序）','results.empty':'尚無資料，請先匯入並分析 log','results.col_severity':'嚴重程度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題','results.optional_cols':'顯示欄位：','results.col_src':'來源IP','results.col_dst':'目的IP','results.col_port':'Port','results.col_proto':'通訊協定','results.search_placeholder':'搜尋主機/內容…','results.col_msg':'內容','results.summary_label':'統計：','results.timeline_label':'事件時間分布',
     'sev.critical':'嚴重','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'資訊',
     'issues.title':'③ 問題清單（基本資安分析）','issues.empty':'未發現符合規則的問題','issues.col_category':'類別','issues.col_severity':'嚴重程度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_source':'情資來源','issues.col_basis':'比對依據','issues.col_sample':'範例','issues.filter_all_sources':'全部來源','issues.source_filter_label':'篩選情資來源：',
@@ -1529,7 +1542,7 @@ const LANG = {
   en: {
     'app.title':'Log Analyzer & De-identifier','app.subtitle':'Import switch/firewall logs (CEF / standard Syslog), rank by severity and surface likely issues; match against local threat-intel lists; de-identify sensitive fields. Runs entirely in your browser, no network calls.',
     'notice.disclaimer':'Analysis results are for reference only — use your own judgement before acting on them',
-    'import.title':'① Import Log','import.hint':'Supports line-based CEF (Common Event Format), LEEF (Log Event Extended Format), standard Syslog (RFC3164/RFC5424), FortiGate native key=value logs (no syslog envelope needed), and JSON/NDJSON. Paste text, upload, or drag & drop a file.','import.paste_placeholder':'Paste log content here, or use the upload button below…','import.upload_btn':'Upload File','import.analyze_btn':'Parse & Analyze','import.clear_btn':'Clear','import.file_loaded':'Loaded file: ','import.progress_parsing':'Parsing…','import.progress_analyzing':'Matching threat intel & classifying…','import.progress_rendering':'Rendering results…','import.large_file_notice':'File too large ({name}, {lines} lines) — content not shown in the box below, still fully parsed','opt.freqWindow':'Freq window (s):','opt.freqThreshold':'Freq threshold:','opt.scanThreshold':'Scan threshold:','opt.volumeThreshold':'Volume threshold (MB):','opt.geoRiskLabel':'Geo-risk countries:',
+    'import.title':'① Import Log','import.hint':'Supports line-based CEF (Common Event Format), LEEF (Log Event Extended Format), standard Syslog (RFC3164/RFC5424), FortiGate native key=value logs (no syslog envelope needed), and JSON/NDJSON. Paste text, upload, or drag & drop a file.','import.paste_placeholder':'Paste log content here, or use the upload button below…','import.upload_btn':'Upload File','import.analyze_btn':'Parse & Analyze','import.clear_btn':'Clear','import.file_loaded':'Loaded file: ','import.progress_parsing':'Parsing…','import.progress_analyzing':'Matching threat intel & classifying…','import.progress_rendering':'Rendering results…','import.large_file_notice':'File too large ({name}, {lines} lines) — content not shown in the box below, still fully parsed','opt.freqWindow':'Freq window (s):','opt.freqThreshold':'Freq threshold:','opt.scanThreshold':'Scan threshold:','opt.volumeThreshold':'Volume threshold (MB):','opt.geoRiskLabel':'Geo-risk countries:','opt.geoRiskFilter':'Filter countries…',
     'results.title':'② Event List (sorted by severity)','results.empty':'No data yet — import and analyze a log first','results.col_severity':'Severity','results.col_time':'Time','results.col_host':'Host','results.col_format':'Format','results.col_category':'Category','results.col_notes':'Suspected Issue','results.optional_cols':'Show columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.search_placeholder':'Search host/content…','results.col_msg':'Message','results.summary_label':'Summary: ','results.timeline_label':'Event Timeline',
     'sev.critical':'Critical','sev.high':'High','sev.medium':'Medium','sev.low':'Low','sev.info':'Info',
     'issues.title':'③ Issue List (basic security analysis)','issues.empty':'No rule-based issues found','issues.col_category':'Category','issues.col_severity':'Severity','issues.col_count':'Count','issues.col_confidence':'Confidence','issues.col_source':'Intel Source','issues.col_basis':'Match Basis','issues.col_sample':'Sample','issues.filter_all_sources':'All Sources','issues.source_filter_label':'Filter by intel source:',
@@ -1547,7 +1560,7 @@ const LANG = {
   ja: {
     'app.title':'ログ分析・匿名化ツール','app.subtitle':'スイッチ/ファイアウォールのログ（CEF／標準 Syslog）を取り込み、重要度順に並べ替えて問題点を洗い出します。ローカルの脅威インテリジェンスリストと照合し、機密項目を匿名化できます。すべてブラウザ内で完結し、通信は行いません。',
     'notice.disclaimer':'本機能の分析結果は参考情報です。実際の対応はご自身の判断で慎重に行ってください',
-    'import.title':'① ログ取り込み','import.hint':'行単位の CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）、FortiGate 純正 key=value ログ（syslog エンベロープ不要）、および JSON/NDJSON に対応。テキスト貼り付け、アップロード、ドラッグ＆ドロップに対応。','import.paste_placeholder':'ここにログを貼り付けるか、下のアップロードボタンを使用…','import.upload_btn':'ファイルをアップロード','import.analyze_btn':'解析・分析','import.clear_btn':'クリア','import.file_loaded':'読み込み済みファイル：','import.progress_parsing':'解析中…','import.progress_analyzing':'脅威インテリジェンス照合・分類中…','import.progress_rendering':'結果を描画中…','import.large_file_notice':'ファイルが大きすぎます（{name}、{lines} 行）。下のテキストボックスには表示されませんが、解析は正常に行われます','opt.freqWindow':'頻度ウィンドウ(秒)：','opt.freqThreshold':'頻度しきい値：','opt.scanThreshold':'スキャンしきい値：','opt.volumeThreshold':'トラフィック量しきい値(MB)：','opt.geoRiskLabel':'地理的リスク国：',
+    'import.title':'① ログ取り込み','import.hint':'行単位の CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）、FortiGate 純正 key=value ログ（syslog エンベロープ不要）、および JSON/NDJSON に対応。テキスト貼り付け、アップロード、ドラッグ＆ドロップに対応。','import.paste_placeholder':'ここにログを貼り付けるか、下のアップロードボタンを使用…','import.upload_btn':'ファイルをアップロード','import.analyze_btn':'解析・分析','import.clear_btn':'クリア','import.file_loaded':'読み込み済みファイル：','import.progress_parsing':'解析中…','import.progress_analyzing':'脅威インテリジェンス照合・分類中…','import.progress_rendering':'結果を描画中…','import.large_file_notice':'ファイルが大きすぎます（{name}、{lines} 行）。下のテキストボックスには表示されませんが、解析は正常に行われます','opt.freqWindow':'頻度ウィンドウ(秒)：','opt.freqThreshold':'頻度しきい値：','opt.scanThreshold':'スキャンしきい値：','opt.volumeThreshold':'トラフィック量しきい値(MB)：','opt.geoRiskLabel':'地理的リスク国：','opt.geoRiskFilter':'国を絞り込み…',
     'results.title':'② イベント一覧（重要度順）','results.empty':'データがありません。まずログを取り込んで分析してください','results.col_severity':'重要度','results.col_time':'時刻','results.col_host':'ホスト','results.col_format':'形式','results.col_category':'分類','results.col_notes':'疑わしい問題','results.optional_cols':'表示項目：','results.col_src':'送信元IP','results.col_dst':'宛先IP','results.col_port':'ポート','results.col_proto':'プロトコル','results.search_placeholder':'ホスト/内容を検索…','results.col_msg':'内容','results.summary_label':'集計：','results.timeline_label':'イベントの時間分布',
     'sev.critical':'重大','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'情報',
     'issues.title':'③ 問題リスト（基本セキュリティ分析）','issues.empty':'該当する問題は見つかりませんでした','issues.col_category':'分類','issues.col_severity':'重要度','issues.col_count':'件数','issues.col_confidence':'信頼度','issues.col_source':'情報源','issues.col_basis':'照合根拠','issues.col_sample':'サンプル','issues.filter_all_sources':'すべての情報源','issues.source_filter_label':'情報源で絞り込み：',
@@ -1565,7 +1578,7 @@ const LANG = {
   tlh:{
     'app.title':'Log analyzer, De-identifier je','app.subtitle':'CEF/Syslog logmey yIlan, severity yIchov, issue yItu\'. Local intel list yIrar. Sensitive field yIde-identify. Browser neH Daq taH, network Qapbe\'.',
     'notice.disclaimer':'analysis result neH reference, cha\' vIt yISovmoH pagh yIruch',
-    'import.title':'① Log yIlan','import.hint':'CEF, LEEF, Syslog (RFC3164/RFC5424), FortiGate key=value (syslog Qapbe\'), JSON chaw\'. Text yIlan, file yIlan, pagh drag\'DIch.','import.paste_placeholder':'log Daq yIlan…','import.upload_btn':'File yIlan','import.analyze_btn':'yIchov','import.clear_btn':'yIchIm','import.file_loaded':'File lanpu\':','import.progress_parsing':'chov…','import.progress_analyzing':'intel chov, segh…','import.progress_rendering':'nov chenmoH…','import.large_file_notice':'file tIn Doch ({name}, mI\' {lines}); box bIng ghobe\' cha\'lu\', chov naDev','opt.freqWindow':'poH (lup):','opt.freqThreshold':"mIgh QIt:",'opt.scanThreshold':'scan QIt:','opt.volumeThreshold':'traffic QIt:','opt.geoRiskLabel':'Sep list:',
+    'import.title':'① Log yIlan','import.hint':'CEF, LEEF, Syslog (RFC3164/RFC5424), FortiGate key=value (syslog Qapbe\'), JSON chaw\'. Text yIlan, file yIlan, pagh drag\'DIch.','import.paste_placeholder':'log Daq yIlan…','import.upload_btn':'File yIlan','import.analyze_btn':'yIchov','import.clear_btn':'yIchIm','import.file_loaded':'File lanpu\':','import.progress_parsing':'chov…','import.progress_analyzing':'intel chov, segh…','import.progress_rendering':'nov chenmoH…','import.large_file_notice':'file tIn Doch ({name}, mI\' {lines}); box bIng ghobe\' cha\'lu\', chov naDev','opt.freqWindow':'poH (lup):','opt.freqThreshold':"mIgh QIt:",'opt.scanThreshold':'scan QIt:','opt.volumeThreshold':'traffic QIt:','opt.geoRiskLabel':'Sep list:','opt.geoRiskFilter':'Sep nej…',
     'results.title':'② Event tetlh (severity chov)','results.empty':'Data available, first log yIlan','results.col_severity':'severity','results.col_time':'poH','results.col_host':'host','results.col_format':'format','results.col_category':'segh','results.col_notes':'pIH mIgh','results.optional_cols':"cha' ghom:",'results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.search_placeholder':'nej host/mu\'meyvam…','results.col_msg':'mu\'meyvam','results.summary_label':'chov:','results.timeline_label':'poH tetlh',
     'sev.critical':'!QIH','sev.high':'chIm','sev.medium':'motlh','sev.low':'mach','sev.info':'De\'',
     'issues.title':'③ Issue tetlh (security chov)','issues.empty':'Issue tu\'lu\'be\'','issues.col_category':'segh','issues.col_severity':'severity','issues.col_count':'\'ar','issues.col_confidence':'HIvqa\'','issues.col_source':'source','issues.col_basis':'meq','issues.col_sample':'nughDoq','issues.filter_all_sources':'Hoch source','issues.source_filter_label':'source yIwIv:',
@@ -1583,7 +1596,7 @@ const LANG = {
   pirate:{
     'app.title':'Log-Readin\' & Face-Hidin\' Tool, Arrr','app.subtitle':'Haul in yer switch/firewall logs (CEF or plain Syslog), rank \'em by how much trouble they be, and sniff out the scallywags. Match against yer own blacklist o\' known villains. Hide the crew\'s true names too. All done right here on yer own ship, no signal sent to shore.',
     'notice.disclaimer':'These findin\'s be just a chart, not the treasure itself — use yer own head afore ye act, matey',
-    'import.title':'① Haul In the Log','import.hint':'Reads CEF, LEEF, plain Syslog (RFC3164/RFC5424), and FortiGate\'s own key=value charts (no syslog riggin\' needed), line by line, plus JSON/NDJSON charts. Paste the scroll, hoist a file aboard, or drag one right onto the deck.','import.paste_placeholder':'Paste yer log scroll here, or hoist a file below…','import.upload_btn':'Hoist File','import.analyze_btn':'Chart & Scan','import.clear_btn':'Swab the Deck','import.file_loaded':'File aboard: ','import.progress_parsing':'Readin\' the scroll…','import.progress_analyzing':'Checkin\' \'gainst the blacklist & sortin\'…','import.progress_rendering':'Drawin\' the chart…','import.large_file_notice':'Scroll too big ({name}, {lines} lines) — won\'t show below, but still be read proper','opt.freqWindow':'Bells in a Watch:','opt.freqThreshold':'Ruckus Count:','opt.scanThreshold':"Scoutin' Count:",'opt.volumeThreshold':"Cargo Threshold (MB):",'opt.geoRiskLabel':"Enemy Waters:",
+    'import.title':'① Haul In the Log','import.hint':'Reads CEF, LEEF, plain Syslog (RFC3164/RFC5424), and FortiGate\'s own key=value charts (no syslog riggin\' needed), line by line, plus JSON/NDJSON charts. Paste the scroll, hoist a file aboard, or drag one right onto the deck.','import.paste_placeholder':'Paste yer log scroll here, or hoist a file below…','import.upload_btn':'Hoist File','import.analyze_btn':'Chart & Scan','import.clear_btn':'Swab the Deck','import.file_loaded':'File aboard: ','import.progress_parsing':'Readin\' the scroll…','import.progress_analyzing':'Checkin\' \'gainst the blacklist & sortin\'…','import.progress_rendering':'Drawin\' the chart…','import.large_file_notice':'Scroll too big ({name}, {lines} lines) — won\'t show below, but still be read proper','opt.freqWindow':'Bells in a Watch:','opt.freqThreshold':'Ruckus Count:','opt.scanThreshold':"Scoutin' Count:",'opt.volumeThreshold':"Cargo Threshold (MB):",'opt.geoRiskLabel':"Enemy Waters:",'opt.geoRiskFilter':'Search fer a Land…',
     'results.title':'② The Event Manifest (worst trouble first)','results.empty':'Nothin\' in the hold yet — haul in a log first','results.col_severity':'Trouble','results.col_time':'Bell','results.col_host':'Ship','results.col_format':'Rig','results.col_category':'Kind','results.col_notes':'Suspected Trouble','results.optional_cols':'Show Columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.search_placeholder':'Search the logbook…','results.col_msg':'Word','results.summary_label':'Tally: ','results.timeline_label':'Timeline o\' Trouble',
     'sev.critical':'Mutiny!','sev.high':'Rough Seas','sev.medium':'Choppy','sev.low':'Calm','sev.info':'Just Gossip',
     'issues.title':'③ Trouble Manifest (basic scoutin\')','issues.empty':'No trouble spotted on the horizon','issues.col_category':'Kind','issues.col_severity':'Trouble','issues.col_count':'Tally','issues.col_confidence':'How Sure','issues.col_source':'Chart Source','issues.col_basis':'The Reason Why','issues.col_sample':'Sample','issues.filter_all_sources':'All Charts','issues.source_filter_label':'Filter by chart:',
@@ -1601,7 +1614,7 @@ const LANG = {
   emoji:{
     'app.title':'📜🔍 + 🕵️‍♂️➡️❓ 工具','app.subtitle':'📥 switch/firewall 📜（CEF/Syslog）➡️ 📊嚴重度排序 ➡️ ❗找問題。🔒本機比對已知🎯清單。🙈把敏感欄位變成❓。全程🖥️本機執行，🚫🌐不連網。',
     'notice.disclaimer':'⚠️ 分析結果僅供參考，實際處置請👤自行判斷',
-    'import.title':'①📥 匯入 Log','import.hint':'支援 CEF/LEEF、標準 Syslog（RFC3164/5424）📄逐行格式、FortiGate🔥原生 key=value（免外殼）＋JSON/NDJSON，可✍️貼上/📎上傳/🖱️拖放。','import.paste_placeholder':'✍️在此貼上 log…','import.upload_btn':'📎上傳檔案','import.analyze_btn':'🔍解析分析','import.clear_btn':'🗑️清空','import.file_loaded':'✅已載入：','import.progress_parsing':'🔍解析中…','import.progress_analyzing':'🎯比對＋🏷️分類中…','import.progress_rendering':'🖼️渲染中…','import.large_file_notice':'📦檔案過大（{name}，{lines} 行），下方框不顯示內容，仍✅完整解析','opt.freqWindow':'⏱️視窗(秒)：','opt.freqThreshold':'📈門檻(次)：','opt.scanThreshold':'🔦門檻(數)：','opt.volumeThreshold':'📦門檻(MB)：','opt.geoRiskLabel':'🌍風險國家：',
+    'import.title':'①📥 匯入 Log','import.hint':'支援 CEF/LEEF、標準 Syslog（RFC3164/5424）📄逐行格式、FortiGate🔥原生 key=value（免外殼）＋JSON/NDJSON，可✍️貼上/📎上傳/🖱️拖放。','import.paste_placeholder':'✍️在此貼上 log…','import.upload_btn':'📎上傳檔案','import.analyze_btn':'🔍解析分析','import.clear_btn':'🗑️清空','import.file_loaded':'✅已載入：','import.progress_parsing':'🔍解析中…','import.progress_analyzing':'🎯比對＋🏷️分類中…','import.progress_rendering':'🖼️渲染中…','import.large_file_notice':'📦檔案過大（{name}，{lines} 行），下方框不顯示內容，仍✅完整解析','opt.freqWindow':'⏱️視窗(秒)：','opt.freqThreshold':'📈門檻(次)：','opt.scanThreshold':'🔦門檻(數)：','opt.volumeThreshold':'📦門檻(MB)：','opt.geoRiskLabel':'🌍風險國家：','opt.geoRiskFilter':'🔍篩選國家…',
     'results.title':'②📋 事件清單（依🔥嚴重度）','results.empty':'📭尚無資料','results.col_severity':'🔥嚴重度','results.col_time':'⏰時間','results.col_host':'🖥️主機','results.col_format':'📄格式','results.col_category':'🏷️分類','results.col_notes':'❓疑似問題','results.optional_cols':'👁️欄位：','results.col_src':'📤來源IP','results.col_dst':'📥目的IP','results.col_port':'🔌Port','results.col_proto':'📡協定','results.search_placeholder':'🔍搜尋主機/內容…','results.col_msg':'💬內容','results.summary_label':'📊統計：','results.timeline_label':'⏱️時間分布',
     'sev.critical':'🔴嚴重','sev.high':'🟠高','sev.medium':'🟡中','sev.low':'🔵低','sev.info':'⚪資訊',
     'issues.title':'③❗ 問題清單','issues.empty':'✅未發現問題','issues.col_category':'🏷️類別','issues.col_severity':'🔥嚴重度','issues.col_count':'🔢次數','issues.col_confidence':'🎯可信度','issues.col_source':'🎯來源','issues.col_basis':'🧩比對依據','issues.col_sample':'📌範例','issues.filter_all_sources':'🌐全部','issues.source_filter_label':'🔎篩選來源：',
@@ -1619,7 +1632,7 @@ const LANG = {
   bureau:{
     'app.title':'日誌分析暨資料去識別化作業系統','app.subtitle':'依規定匯入交換器／防火牆日誌資料（CEF 或標準 Syslog 格式），依嚴重程度分級排序，並依既定規則辨識潛在事項，供權責單位參考。得於本機比對已核備之情資清單，並得對機敏欄位執行去識別化作業。前述作業全程於使用者端瀏覽器執行，不涉及對外傳輸行為。',
     'notice.disclaimer':'本項分析結果僅供參考之用，實際處置事宜請權責人員本於專業判斷審慎為之，本工具不負相關法律責任',
-    'import.title':'第一項：日誌資料匯入作業','import.hint':'本作業支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog (RFC3164/RFC5424) 格式之逐行解析，暨 FortiGate 原生 key=value 格式（無須 syslog 封裝）及 JSON/NDJSON 格式，得以文字貼上、檔案上傳，或拖放檔案方式辦理。','import.paste_placeholder':'請於此欄位貼上日誌內容，或依下方按鈕辦理檔案上傳作業…','import.upload_btn':'辦理檔案上傳','import.analyze_btn':'執行解析暨分析作業','import.clear_btn':'清空本欄位資料','import.file_loaded':'業已載入之檔案：','import.progress_parsing':'解析作業辦理中…','import.progress_analyzing':'情資比對暨分類作業辦理中…','import.progress_rendering':'結果繪製作業辦理中…','import.large_file_notice':'檔案容量過大（{name}，計 {lines} 行），其內容不於下方文字框內顯示，惟解析作業仍依規定完整辦理','opt.freqWindow':'頻率視窗（秒）：','opt.freqThreshold':'頻率門檻（次數）：','opt.scanThreshold':'掃描門檻（數量）：','opt.volumeThreshold':'流量門檻（單位：MB，得由使用者自行調整）：','opt.geoRiskLabel':'高風險地理區域標記清單：',
+    'import.title':'第一項：日誌資料匯入作業','import.hint':'本作業支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog (RFC3164/RFC5424) 格式之逐行解析，暨 FortiGate 原生 key=value 格式（無須 syslog 封裝）及 JSON/NDJSON 格式，得以文字貼上、檔案上傳，或拖放檔案方式辦理。','import.paste_placeholder':'請於此欄位貼上日誌內容，或依下方按鈕辦理檔案上傳作業…','import.upload_btn':'辦理檔案上傳','import.analyze_btn':'執行解析暨分析作業','import.clear_btn':'清空本欄位資料','import.file_loaded':'業已載入之檔案：','import.progress_parsing':'解析作業辦理中…','import.progress_analyzing':'情資比對暨分類作業辦理中…','import.progress_rendering':'結果繪製作業辦理中…','import.large_file_notice':'檔案容量過大（{name}，計 {lines} 行），其內容不於下方文字框內顯示，惟解析作業仍依規定完整辦理','opt.freqWindow':'頻率視窗（秒）：','opt.freqThreshold':'頻率門檻（次數）：','opt.scanThreshold':'掃描門檻（數量）：','opt.volumeThreshold':'流量門檻（單位：MB，得由使用者自行調整）：','opt.geoRiskLabel':'高風險地理區域標記清單：','opt.geoRiskFilter':'國家篩選查詢欄位：',
     'results.title':'第二項：事件清冊（依嚴重程度分級排序）','results.empty':'目前尚無資料，請依第一項規定辦理匯入及分析作業','results.col_severity':'嚴重程度等級','results.col_time':'發生時間','results.col_host':'主機識別資料','results.col_format':'資料格式','results.col_category':'事件分類','results.col_notes':'疑似問題事項','results.optional_cols':'顯示欄位：','results.col_src':'來源位址','results.col_dst':'目的位址','results.col_port':'埠口','results.col_proto':'通訊協定','results.search_placeholder':'請輸入主機/內容關鍵字以辦理搜尋…','results.col_msg':'事件內容','results.summary_label':'統計摘要：','results.timeline_label':'事件時間分布圖',
     'sev.critical':'甲級（嚴重）','sev.high':'乙級（高）','sev.medium':'丙級（中）','sev.low':'丁級（低）','sev.info':'參考資訊',
     'issues.title':'第三項：問題清冊（基本資安分析作業）','issues.empty':'依現行規則，未查得相符之問題事項','issues.col_category':'問題類別','issues.col_severity':'嚴重程度等級','issues.col_count':'發生次數','issues.col_confidence':'可信程度','issues.col_source':'情資來源','issues.col_basis':'比對依據說明','issues.col_sample':'代表性樣本','issues.filter_all_sources':'全部來源','issues.source_filter_label':'情資來源篩選：',
@@ -1637,7 +1650,7 @@ const LANG = {
   cat:{
     'app.title':'Log 分析去識別化工具喵','app.subtitle':'把交換器/防火牆的 log 叼進來喵，CEF 跟 Syslog 都吃，依嚴重度排排站，找出可疑的老鼠喵。可以在自己地盤比對情資清單，也能把機敏欄位藏起來喵。全程窩在瀏覽器裡不出門喵。',
     'notice.disclaimer':'分析結果只是聞一聞喵，真的要怎麼辦還是主人自己決定喵',
-    'import.title':'①叼log進來喵','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424）跟 FortiGate 原生 key=value（不用外殼喵）都吃喵，JSON/NDJSON 也吃喵，貼上文字、叼檔案、或直接拖進來都可以喵。','import.paste_placeholder':'log 貼在這裡喵…','import.upload_btn':'叼檔案進來喵','import.analyze_btn':'聞一聞分析喵','import.clear_btn':'抓沙清空喵','import.file_loaded':'已經叼進來的檔案喵：','import.progress_parsing':'聞一聞中喵…','import.progress_analyzing':'比對壞蛋分類中喵…','import.progress_rendering':'畫出來中喵…','import.large_file_notice':'檔案太大了喵（{name}，{lines} 行），下面框框不顯示喵，但還是會聞完喵','opt.freqWindow':'時間窗(秒)喵：','opt.freqThreshold':'門檻(次)喵：','opt.scanThreshold':'掃描門檻喵：','opt.volumeThreshold':'流量門檻喵(MB)：','opt.geoRiskLabel':'危險國家清單喵：',
+    'import.title':'①叼log進來喵','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424）跟 FortiGate 原生 key=value（不用外殼喵）都吃喵，JSON/NDJSON 也吃喵，貼上文字、叼檔案、或直接拖進來都可以喵。','import.paste_placeholder':'log 貼在這裡喵…','import.upload_btn':'叼檔案進來喵','import.analyze_btn':'聞一聞分析喵','import.clear_btn':'抓沙清空喵','import.file_loaded':'已經叼進來的檔案喵：','import.progress_parsing':'聞一聞中喵…','import.progress_analyzing':'比對壞蛋分類中喵…','import.progress_rendering':'畫出來中喵…','import.large_file_notice':'檔案太大了喵（{name}，{lines} 行），下面框框不顯示喵，但還是會聞完喵','opt.freqWindow':'時間窗(秒)喵：','opt.freqThreshold':'門檻(次)喵：','opt.scanThreshold':'掃描門檻喵：','opt.volumeThreshold':'流量門檻喵(MB)：','opt.geoRiskLabel':'危險國家清單喵：','opt.geoRiskFilter':'找國家喵…',
     'results.title':'②事件清單（照嚴重度排排站喵）','results.empty':'還沒東西可以聞喵，先匯入 log 喵','results.col_severity':'嚴重度喵','results.col_time':'時間喵','results.col_host':'主機喵','results.col_format':'格式喵','results.col_category':'分類喵','results.col_notes':'疑似問題喵','results.optional_cols':'顯示欄位喵：','results.col_src':'來源IP喵','results.col_dst':'目的IP喵','results.col_port':'Port喵','results.col_proto':'協定喵','results.search_placeholder':'搜尋主機/內容喵…','results.col_msg':'內容喵','results.summary_label':'統計喵：','results.timeline_label':'什麼時候喵',
     'sev.critical':'超嚴重喵!!','sev.high':'很在意喵','sev.medium':'普通喵','sev.low':'不太在意喵','sev.info':'路過看看喵',
     'issues.title':'③問題清單（聞出來的可疑喵）','issues.empty':'沒聞到什麼可疑的喵','issues.col_category':'類別喵','issues.col_severity':'嚴重度喵','issues.col_count':'次數喵','issues.col_confidence':'有多確定喵','issues.col_source':'哪來的喵','issues.col_basis':'為什麼喵','issues.col_sample':'範例喵','issues.filter_all_sources':'全部喵','issues.source_filter_label':'挑來源喵：',
@@ -1655,7 +1668,7 @@ const LANG = {
   bean:{
     'app.title':'🫘 Log 分析去識別化工具','app.subtitle':'把 switch/firewall 的 🫘log（CEF/Syslog）倒進來，依🌶️辣度排序找出問題🥕。可在本機比對🍅情資清單，把機敏欄位變成🥔。全程在自家🥬廚房完成，不出門連網。',
     'notice.disclaimer':'分析結果只是一盤🥗參考菜，真正怎麼處理請自己掂量',
-    'import.title':'①倒入🫘Log','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424）與 FortiGate🍅原生 key=value（免外殼）都能煮，JSON/NDJSON 也能下鍋，貼上文字、上傳🥔檔案、或直接拖進鍋裡皆可。','import.paste_placeholder':'把 log 倒在這裡…','import.upload_btn':'🥔上傳檔案','import.analyze_btn':'🔥開火分析','import.clear_btn':'🧹清鍋','import.file_loaded':'已下鍋的檔案：','import.progress_parsing':'🔥燉煮中…','import.progress_analyzing':'比對配料分類中…','import.progress_rendering':'擺盤中…','import.large_file_notice':'食材太多了（{name}，{lines} 行），下面菜籃不顯示，但還是會煮完','opt.freqWindow':'⏱️時間窗(秒)：','opt.freqThreshold':'🌶️門檻(次)：','opt.scanThreshold':'🔦掃描門檻：','opt.volumeThreshold':'流量門檻🥔(MB)：','opt.geoRiskLabel':'危險國家清單🍆：',
+    'import.title':'①倒入🫘Log','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424）與 FortiGate🍅原生 key=value（免外殼）都能煮，JSON/NDJSON 也能下鍋，貼上文字、上傳🥔檔案、或直接拖進鍋裡皆可。','import.paste_placeholder':'把 log 倒在這裡…','import.upload_btn':'🥔上傳檔案','import.analyze_btn':'🔥開火分析','import.clear_btn':'🧹清鍋','import.file_loaded':'已下鍋的檔案：','import.progress_parsing':'🔥燉煮中…','import.progress_analyzing':'比對配料分類中…','import.progress_rendering':'擺盤中…','import.large_file_notice':'食材太多了（{name}，{lines} 行），下面菜籃不顯示，但還是會煮完','opt.freqWindow':'⏱️時間窗(秒)：','opt.freqThreshold':'🌶️門檻(次)：','opt.scanThreshold':'🔦掃描門檻：','opt.volumeThreshold':'流量門檻🥔(MB)：','opt.geoRiskLabel':'危險國家清單🍆：','opt.geoRiskFilter':'🥕找國家…',
     'results.title':'②事件清單（依🌶️辣度排序）','results.empty':'鍋子還是空的，先倒入 log 吧','results.col_severity':'🌶️辣度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題🌶️','results.optional_cols':'顯示欄位🌶️：','results.col_src':'來源IP🥕','results.col_dst':'目的IP🍆','results.col_port':'Port🌽','results.col_proto':'協定🫘','results.search_placeholder':'🔍搜尋主機/內容…','results.col_msg':'內容','results.summary_label':'總計：','results.timeline_label':'🌶️時間軸',
     'sev.critical':'🌶️🌶️🌶️超辣','sev.high':'🌶️🌶️辣','sev.medium':'🌶️微辣','sev.low':'🥒清淡','sev.info':'🥬爽口',
     'issues.title':'③問題清單（基本廚房安全檢查）','issues.empty':'廚房目前一切正常','issues.col_category':'類別','issues.col_severity':'🌶️辣度','issues.col_count':'份數','issues.col_confidence':'火候','issues.col_source':'食材來源','issues.col_basis':'配方依據🥕','issues.col_sample':'試吃樣本','issues.filter_all_sources':'全部食材','issues.source_filter_label':'挑食材來源：',
@@ -1673,7 +1686,7 @@ const LANG = {
   alpaca:{
     'app.title':'Log分析咩去識別化-aca工具','app.subtitle':'把switch/firewall咩log（CEF/Syslog）牽進來-aca，依嚴重度排隊咩，找出怪怪的問題-aca。可以在自家草原比對情資名單咩，也能把機敏欄位藏起來-aca。全程在瀏覽器裡吃草，不出門連網咩。',
     'notice.disclaimer':'分析結果只是聞一聞咩，真的怎麼辦要主人自己想-aca',
-    'import.title':'①牽log咩進來-aca','import.hint':'CEF、LEEF、標準Syslog（RFC3164/5424）跟FortiGate原生key=value（不用外殼咩）咩都吃-aca，JSON/NDJSON也吃咩，貼文字、牽檔案、或拖進來都可以咩。','import.paste_placeholder':'log貼在這裡咩…','import.upload_btn':'牽檔案進來-aca','import.analyze_btn':'咩一下分析-aca','import.clear_btn':'清空草原咩','import.file_loaded':'已經牽進來咩檔案-aca：','import.progress_parsing':'咩一下中-aca…','import.progress_analyzing':'比對壞蛋分類中咩…','import.progress_rendering':'畫出來中-aca…','import.large_file_notice':'檔案太大咩（{name}，{lines} 行），下面框框不顯示-aca，但還是會咩完咩','opt.freqWindow':'時間窗(秒)咩：','opt.freqThreshold':'門檻(次)-aca：','opt.scanThreshold':'掃描門檻咩：','opt.volumeThreshold':'流量門檻咩(MB)：','opt.geoRiskLabel':'危險國家清單咩：',
+    'import.title':'①牽log咩進來-aca','import.hint':'CEF、LEEF、標準Syslog（RFC3164/5424）跟FortiGate原生key=value（不用外殼咩）咩都吃-aca，JSON/NDJSON也吃咩，貼文字、牽檔案、或拖進來都可以咩。','import.paste_placeholder':'log貼在這裡咩…','import.upload_btn':'牽檔案進來-aca','import.analyze_btn':'咩一下分析-aca','import.clear_btn':'清空草原咩','import.file_loaded':'已經牽進來咩檔案-aca：','import.progress_parsing':'咩一下中-aca…','import.progress_analyzing':'比對壞蛋分類中咩…','import.progress_rendering':'畫出來中-aca…','import.large_file_notice':'檔案太大咩（{name}，{lines} 行），下面框框不顯示-aca，但還是會咩完咩','opt.freqWindow':'時間窗(秒)咩：','opt.freqThreshold':'門檻(次)-aca：','opt.scanThreshold':'掃描門檻咩：','opt.volumeThreshold':'流量門檻咩(MB)：','opt.geoRiskLabel':'危險國家清單咩：','opt.geoRiskFilter':'找國家咩…',
     'results.title':'②事件清單（排隊咩排隊-aca）','results.empty':'草原還空空咩，先牽log進來-aca','results.col_severity':'嚴重度咩','results.col_time':'時間-aca','results.col_host':'主機咩','results.col_format':'格式-aca','results.col_category':'分類咩','results.col_notes':'疑似問題-aca','results.optional_cols':'顯示欄位咩：','results.col_src':'來源IP咩','results.col_dst':'目的IP-aca','results.col_port':'Port咩','results.col_proto':'協定-aca','results.search_placeholder':'搜尋主機/內容咩…','results.col_msg':'內容-aca','results.summary_label':'統計咩：','results.timeline_label':'什麼時候咩',
     'sev.critical':'超嚴重咩!!!','sev.high':'很緊張-aca','sev.medium':'普通咩','sev.low':'放輕鬆-aca','sev.info':'路過看看咩',
     'issues.title':'③問題清單（咩出來的怪怪咩）','issues.empty':'沒咩到什麼怪怪的-aca','issues.col_category':'類別咩','issues.col_severity':'嚴重度-aca','issues.col_count':'次數咩','issues.col_confidence':'有多確定-aca','issues.col_source':'哪來的-aca','issues.col_basis':'依據咩','issues.col_sample':'範例咩','issues.filter_all_sources':'全部咩','issues.source_filter_label':'挑來源-aca：',
@@ -1691,7 +1704,7 @@ const LANG = {
   yanse:{
     'app.title':'Log 分析去識別化工具（唉，又一個工具）','app.subtitle':'把 switch/firewall 的 log 倒進來，CEF 跟 Syslog 都收，依嚴重度排一排，找出問題……看了也不一定會處理啦。可以在本機比對情資清單，把機敏欄位藏起來，反正做不做都差不多，至少不連網。',
     'notice.disclaimer':'分析結果就參考參考吧，反正最後還是要自己判斷，工具也救不了什麼',
-    'import.title':'①匯入 Log（好，開始了）','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424），連 FortiGate 原生 key=value 格式也吃（不用 syslog 外殼，隨便啦），JSON/NDJSON 也行，貼上文字、上傳、拖放都可以，隨便啦。','import.paste_placeholder':'log 貼這裡吧……','import.upload_btn':'上傳檔案','import.analyze_btn':'解析分析（好啦）','import.clear_btn':'清空（算了）','import.file_loaded':'已載入檔案，然後呢：','import.progress_parsing':'解析中，等一下吧…','import.progress_analyzing':'比對分類中，反正很快…','import.progress_rendering':'畫結果中…','import.large_file_notice':'檔案太大了（{name}，{lines} 行），下面不顯示，反正你也不會看，但還是會解析完','opt.freqWindow':'頻率視窗(秒)，隨便：','opt.freqThreshold':'頻率門檻，反正：','opt.scanThreshold':'掃描門檻，看看就好：','opt.volumeThreshold':'流量門檻，隨便你調（MB）：','opt.geoRiskLabel':'風險國家，你自己選：',
+    'import.title':'①匯入 Log（好，開始了）','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424），連 FortiGate 原生 key=value 格式也吃（不用 syslog 外殼，隨便啦），JSON/NDJSON 也行，貼上文字、上傳、拖放都可以，隨便啦。','import.paste_placeholder':'log 貼這裡吧……','import.upload_btn':'上傳檔案','import.analyze_btn':'解析分析（好啦）','import.clear_btn':'清空（算了）','import.file_loaded':'已載入檔案，然後呢：','import.progress_parsing':'解析中，等一下吧…','import.progress_analyzing':'比對分類中，反正很快…','import.progress_rendering':'畫結果中…','import.large_file_notice':'檔案太大了（{name}，{lines} 行），下面不顯示，反正你也不會看，但還是會解析完','opt.freqWindow':'頻率視窗(秒)，隨便：','opt.freqThreshold':'頻率門檻，反正：','opt.scanThreshold':'掃描門檻，看看就好：','opt.volumeThreshold':'流量門檻，隨便你調（MB）：','opt.geoRiskLabel':'風險國家，你自己選：','opt.geoRiskFilter':'篩選，隨便打…',
     'results.title':'②事件清單（依嚴重度排序，反正都要看）','results.empty':'沒資料，匯入再說吧','results.col_severity':'嚴重度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題（隨便看看）','results.optional_cols':'顯示欄位，隨便：','results.col_src':'來源IP，反正','results.col_dst':'目的IP，沒差','results.col_port':'Port，看看就好','results.col_proto':'協定，算了','results.search_placeholder':'搜尋，隨便打打…','results.col_msg':'內容','results.summary_label':'統計，看看就好：','results.timeline_label':'時間分布，看看就好',
     'sev.critical':'嚴重（唉）','sev.high':'高（麻煩）','sev.medium':'中（還好）','sev.low':'低（無所謂）','sev.info':'資訊（隨便）',
     'issues.title':'③問題清單（找到了，然後呢）','issues.empty':'沒發現問題，也許只是還沒發現','issues.col_category':'類別','issues.col_severity':'嚴重度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_source':'來源','issues.col_basis':'依據，其實也沒差','issues.col_sample':'範例，隨便看看','issues.filter_all_sources':'全部','issues.source_filter_label':'篩來源，隨便：',
@@ -1857,6 +1870,7 @@ function renderStatic() {
   document.getElementById('lbl-scan-threshold').textContent = tr('opt.scanThreshold');
   document.getElementById('lbl-volume-threshold').textContent = tr('opt.volumeThreshold');
   document.getElementById('lbl-geo-risk').textContent = tr('opt.geoRiskLabel');
+  document.getElementById('geo-risk-filter').placeholder = tr('opt.geoRiskFilter');
   document.getElementById('lbl-optional-cols').textContent = tr('results.optional_cols');
   document.getElementById('lbl-col-src').textContent = tr('results.col_src');
   document.getElementById('lbl-col-dst').textContent = tr('results.col_dst');
@@ -1894,51 +1908,93 @@ function renderStatic() {
 const SORTABLE_COLS = ['severity', 'time', 'host', 'format', 'category'];
 let SORT_COL = 'severity', SORT_DIR = 'asc';
 let ISSUES_SOURCE_FILTER = '';
-// 地理位置風險標記選單：比對的是 log 原始 GeoIP 欄位字串本身（純英文，非 UI 顯示語意文字），
-// 不逐語言翻譯；預設風險清單（risk:true）為長期穩定的高風險/制裁國家分類（非隨時事變動的
-// 「戰爭中國家」判斷），並列常見別名提高比對成功率；其餘為常見國家供使用者自行增減。
-// 這份選單同時餵給 detectGeoRiskEvents()（讀 log 原生 srccountry/dstcountry 全名字串）與
-// detectGeoIPLookup()（查 GeoIP CIDR 資料庫，geoip.dat 的 country_code 是 ISO 兩碼），
-// 故額外列出 4 個 ISO 兩碼別名（KP/RU/IR/SY）當橋接，否則方案 B 匯入的資料完全比對不到
-const GEO_COUNTRY_OPTIONS = [
-  { value: 'North Korea', risk: true },
-  { value: "Korea, Democratic People's Republic of", risk: true },
-  { value: 'KP', risk: true },
-  { value: 'Russia', risk: true },
-  { value: 'Russian Federation', risk: true },
-  { value: 'RU', risk: true },
-  { value: 'Iran', risk: true },
-  { value: 'Iran, Islamic Republic of', risk: true },
-  { value: 'IR', risk: true },
-  { value: 'Syria', risk: true },
-  { value: 'Syrian Arab Republic', risk: true },
-  { value: 'SY', risk: true },
-  { value: 'Belarus', risk: false },
-  { value: 'Cuba', risk: false },
-  { value: 'Venezuela', risk: false },
-  { value: 'Myanmar', risk: false },
-  { value: 'Afghanistan', risk: false },
-  { value: 'Iraq', risk: false },
-  { value: 'Yemen', risk: false },
-  { value: 'Sudan', risk: false },
-  { value: 'China', risk: false },
-  { value: 'Vietnam', risk: false },
-  { value: 'Pakistan', risk: false },
-  { value: 'India', risk: false },
-  { value: 'Nigeria', risk: false },
-  { value: 'Brazil', risk: false },
-  { value: 'United States', risk: false },
-  { value: 'United Kingdom', risk: false },
-  { value: 'Germany', risk: false },
-  { value: 'France', risk: false },
-  { value: 'Japan', risk: false },
-  { value: 'Taiwan', risk: false },
-  { value: 'Singapore', risk: false },
-  { value: 'Australia', risk: false }
+// 地理位置風險標記勾選清單：比對的是 log 原始 GeoIP 欄位字串本身（純英文，非 UI 顯示語意
+// 文字），不逐語言翻譯。這份是「未匯入 GeoIP 資料庫」時的預設清單，每個真實國家一筆、內含
+// aliases（同一國家的多種寫法+ISO 兩碼），render 端合併成一個 checkbox 避免使用者看到一長串
+// 近似重複的項目（原生 <select multiple> 版本＋30 筆各自獨立字串已證實會造成這個困惑，且
+// 誤觸單擊會清空其他已選項目，是先前 bug 的根因，見 now.md）。risk:true 為長期穩定的高風險/
+// 制裁國家分類（非隨時事變動的「戰爭中國家」判斷）；一般國家也補上 ISO 別名，避免「風險國家
+// 能查、一般國家不能查」的不一致
+const GEO_COUNTRY_GROUPS = [
+  { id: 'kp', label: 'North Korea (KP)', risk: true, aliases: ['North Korea', "Korea, Democratic People's Republic of", 'KP'] },
+  { id: 'ru', label: 'Russia (RU)', risk: true, aliases: ['Russia', 'Russian Federation', 'RU'] },
+  { id: 'ir', label: 'Iran (IR)', risk: true, aliases: ['Iran', 'Iran, Islamic Republic of', 'IR'] },
+  { id: 'sy', label: 'Syria (SY)', risk: true, aliases: ['Syria', 'Syrian Arab Republic', 'SY'] },
+  { id: 'by', label: 'Belarus (BY)', risk: false, aliases: ['Belarus', 'BY'] },
+  { id: 'cu', label: 'Cuba (CU)', risk: false, aliases: ['Cuba', 'CU'] },
+  { id: 've', label: 'Venezuela (VE)', risk: false, aliases: ['Venezuela', 'VE'] },
+  { id: 'mm', label: 'Myanmar (MM)', risk: false, aliases: ['Myanmar', 'MM'] },
+  { id: 'af', label: 'Afghanistan (AF)', risk: false, aliases: ['Afghanistan', 'AF'] },
+  { id: 'iq', label: 'Iraq (IQ)', risk: false, aliases: ['Iraq', 'IQ'] },
+  { id: 'ye', label: 'Yemen (YE)', risk: false, aliases: ['Yemen', 'YE'] },
+  { id: 'sd', label: 'Sudan (SD)', risk: false, aliases: ['Sudan', 'SD'] },
+  { id: 'cn', label: 'China (CN)', risk: false, aliases: ['China', 'CN'] },
+  { id: 'vn', label: 'Vietnam (VN)', risk: false, aliases: ['Vietnam', 'VN'] },
+  { id: 'pk', label: 'Pakistan (PK)', risk: false, aliases: ['Pakistan', 'PK'] },
+  { id: 'in', label: 'India (IN)', risk: false, aliases: ['India', 'IN'] },
+  { id: 'ng', label: 'Nigeria (NG)', risk: false, aliases: ['Nigeria', 'NG'] },
+  { id: 'br', label: 'Brazil (BR)', risk: false, aliases: ['Brazil', 'BR'] },
+  { id: 'us', label: 'United States (US)', risk: false, aliases: ['United States', 'US'] },
+  { id: 'gb', label: 'United Kingdom (GB)', risk: false, aliases: ['United Kingdom', 'GB'] },
+  { id: 'de', label: 'Germany (DE)', risk: false, aliases: ['Germany', 'DE'] },
+  { id: 'fr', label: 'France (FR)', risk: false, aliases: ['France', 'FR'] },
+  { id: 'jp', label: 'Japan (JP)', risk: false, aliases: ['Japan', 'JP'] },
+  { id: 'tw', label: 'Taiwan (TW)', risk: false, aliases: ['Taiwan', 'TW'] },
+  { id: 'sg', label: 'Singapore (SG)', risk: false, aliases: ['Singapore', 'SG'] },
+  { id: 'au', label: 'Australia (AU)', risk: false, aliases: ['Australia', 'AU'] }
 ];
-function initGeoRiskSelect() {
-  const sel = document.getElementById('geo-risk-select');
-  sel.innerHTML = GEO_COUNTRY_OPTIONS.map(c => `<option value="${esc(c.value)}"${c.risk ? ' selected' : ''}>${esc(c.value)}</option>`).join('');
+// 已匯入 GeoIP 資料庫時，比對用的 riskCountries 應該直接是該資料庫實際出現過的字串（見
+// GEO_LISTS[].index.countries，buildIntelIndex() 附帶收集），而非猜測的別名——避免「CSV 用
+// 自己的寫法、跟預設別名對不上導致永遠比對不到」的問題。isKnownRiskCountry() 只用來決定
+// 這些實際字串裡哪些該預設打勾，大小寫不敏感比對 GEO_COUNTRY_GROUPS 的風險別名聯集
+const GEO_RISK_ALIAS_SET = new Set(GEO_COUNTRY_GROUPS.filter(g => g.risk).flatMap(g => g.aliases).map(s => s.toLowerCase()));
+function isKnownRiskCountry(str) { return GEO_RISK_ALIAS_SET.has(String(str).trim().toLowerCase()); }
+function getImportedGeoCountries() {
+  const set = new Set();
+  GEO_LISTS.forEach(l => (l.index.countries || []).forEach(c => { if (c) set.add(c); }));
+  return Array.from(set).sort();
+}
+// 雙模式渲染：未匯入 GeoIP 資料庫時用預設 26 國分組清單（checkbox value 為 group id，讀取
+// 時展開 aliases）；已匯入時改用該資料庫實際涵蓋的國家字串（checkbox value 就是原始字串，
+// 不需展開）。重繪前先讀出目前已勾選的值，重繪後對新清單裡仍存在的值還原勾選，避免每次
+// 匯入/移除清單都把使用者已調整過的勾選整組重置
+function renderGeoRiskChecks() {
+  const box = document.getElementById('geo-risk-checks');
+  const prevMode = box.dataset.mode;
+  const imported = getImportedGeoCountries();
+  const usingImported = imported.length > 0;
+  const newMode = usingImported ? 'imported' : 'default';
+  // 「保留使用者已調整過的勾選」只在同一種模式下才有意義（value 命名空間相同：預設模式是
+  // group id、匯入模式是原始國家字串）；模式切換當下（例如剛匯入、或移除到 0 筆）舊的勾選
+  // 值屬於另一套命名空間，不該拿來比對，一律改用該筆項目自己的 defaultChecked
+  const prevChecked = prevMode === newMode
+    ? new Set(Array.from(box.querySelectorAll('input:checked')).map(el => el.value))
+    : null;
+  const items = usingImported
+    ? imported.map(c => ({ value: c, label: c, defaultChecked: isKnownRiskCountry(c) }))
+    : GEO_COUNTRY_GROUPS.map(g => ({ value: g.id, label: g.label, defaultChecked: g.risk }));
+  box.dataset.mode = newMode;
+  box.innerHTML = items.map(it => {
+    const checked = prevChecked ? prevChecked.has(it.value) : it.defaultChecked;
+    return `<label class="geo-risk-item"><input type="checkbox" class="geo-risk-check" value="${esc(it.value)}"${checked ? ' checked' : ''}> ${esc(it.label)}</label>`;
+  }).join('');
+  filterGeoRiskChecks(document.getElementById('geo-risk-filter').value);
+}
+function filterGeoRiskChecks(q) {
+  const needle = String(q || '').trim().toLowerCase();
+  document.querySelectorAll('#geo-risk-checks .geo-risk-item').forEach(label => {
+    const hit = !needle || label.textContent.toLowerCase().includes(needle);
+    label.style.display = hit ? '' : 'none';
+  });
+}
+// riskCountries 讀取：未匯入模式下 checkbox value 是 group id，需展開成該 group 的 aliases；
+// 已匯入模式下 checkbox value 本身就是要比對的字串，直接回傳即可
+function getRiskCountries() {
+  const box = document.getElementById('geo-risk-checks');
+  const checkedValues = Array.from(box.querySelectorAll('input:checked')).map(el => el.value);
+  if (box.dataset.mode === 'imported') return checkedValues;
+  const idSet = new Set(checkedValues);
+  return GEO_COUNTRY_GROUPS.filter(g => idSet.has(g.id)).flatMap(g => g.aliases);
 }
 // 事件時間軸：純前端 SVG 堆疊長條圖，不引入圖表函式庫（比照全套工具零依賴、單一 HTML 檔的
 // 既有原則）。v1 固定反映全部 EVENTS，不隨搜尋框篩選連動，避免範圍擴大；資料運算由
@@ -2090,7 +2146,7 @@ function renderGeoList() {
     <span class="n">${esc(l.name)} — ${l.index.count} ${tr('intel.count_label')}</span>
     <button class="btn" data-idx="${i}" data-act="rm-geo">${tr('intel.remove_btn')}</button>
   </div>`).join('');
-  box.querySelectorAll('[data-act="rm-geo"]').forEach(b => b.onclick = () => { GEO_LISTS.splice(Number(b.dataset.idx), 1); renderGeoList(); });
+  box.querySelectorAll('[data-act="rm-geo"]').forEach(b => b.onclick = () => { GEO_LISTS.splice(Number(b.dataset.idx), 1); renderGeoList(); renderGeoRiskChecks(); });
 }
 
 function renderAll() {
@@ -2136,7 +2192,7 @@ async function doAnalyze() {
   const freqThreshold = Number(document.getElementById('opt-freq-threshold').value) || 5;
   const scanThreshold = Number(document.getElementById('opt-scan-threshold').value) || 5;
   const volumeThreshold = (Number(document.getElementById('opt-volume-threshold').value) || 50) * 1024 * 1024;
-  const riskCountries = Array.from(document.getElementById('geo-risk-select').selectedOptions).map(o => o.value);
+  const riskCountries = getRiskCountries();
   ISSUES = buildIssueList(EVENTS, indexes, { windowMs: windowSec * 1000, freqThreshold, scanThreshold, safeIndexes, volumeThreshold, riskCountries, geoIndexes });
   ANON_EVENTS = null;
   showProgress('import.progress_rendering');
@@ -2216,6 +2272,7 @@ function doGeoUpload(file, name) {
     const index = buildIntelIndex(list);
     GEO_LISTS.push({ name: list.name, index });
     renderGeoList();
+    renderGeoRiskChecks();
   };
   if (isDat) reader.readAsArrayBuffer(file); else reader.readAsText(file);
 }
@@ -2308,14 +2365,14 @@ pasteArea.addEventListener('input', () => {
 const LS_SETTINGS_KEY = 'log_analyzer_settings_v1';
 const SETTINGS_TEXT_IDS = ['opt-freq-window', 'opt-freq-threshold', 'opt-scan-threshold', 'opt-volume-threshold'];
 const SETTINGS_CHECK_IDS = ['col-src', 'col-dst', 'col-port', 'col-proto'];
-// <select multiple> 的值是 .selectedOptions 集合，非單一 .value/.checked，無法沿用上面兩組
-// 既有存讀邏輯，故獨立一組陣列＋存讀函式
-const SETTINGS_MULTI_IDS = ['geo-risk-select'];
+// 地理位置勾選清單持久化：僅有意義於「未匯入模式」（GEO_LISTS 跟 INTEL_LISTS/SAFE_LISTS 一樣
+// 不會存進 localStorage，重新整理頁面一定會回到未匯入狀態，已匯入模式的勾選本來就無法跨
+// 重整存活）；checkbox 由 renderGeoRiskChecks() 動態產生，用容器上的事件委派而非逐一綁定
 function saveSettings() {
   const s = {};
   SETTINGS_TEXT_IDS.forEach(id => { s[id] = document.getElementById(id).value; });
   SETTINGS_CHECK_IDS.forEach(id => { s[id] = document.getElementById(id).checked; });
-  SETTINGS_MULTI_IDS.forEach(id => { s[id] = Array.from(document.getElementById(id).selectedOptions).map(o => o.value); });
+  s['geo-risk-checked'] = Array.from(document.querySelectorAll('#geo-risk-checks input:checked')).map(el => el.value);
   try { localStorage.setItem(LS_SETTINGS_KEY, JSON.stringify(s)); } catch (e) { /* 私密瀏覽模式等情況下 localStorage 可能不可用，靜默略過即可，非核心功能 */ }
 }
 function loadSettings() {
@@ -2324,14 +2381,16 @@ function loadSettings() {
   if (!s) return;
   SETTINGS_TEXT_IDS.forEach(id => { if (s[id] !== undefined) document.getElementById(id).value = s[id]; });
   SETTINGS_CHECK_IDS.forEach(id => { document.getElementById(id).checked = !!s[id]; });
-  SETTINGS_MULTI_IDS.forEach(id => {
-    if (!Array.isArray(s[id])) return;
-    const set = new Set(s[id]);
-    Array.from(document.getElementById(id).options).forEach(o => { o.selected = set.has(o.value); });
-  });
+  const box = document.getElementById('geo-risk-checks');
+  if (Array.isArray(s['geo-risk-checked']) && box.dataset.mode !== 'imported') {
+    const set = new Set(s['geo-risk-checked']);
+    document.querySelectorAll('#geo-risk-checks input').forEach(el => { el.checked = set.has(el.value); });
+  }
 }
-initGeoRiskSelect();
-[...SETTINGS_TEXT_IDS, ...SETTINGS_CHECK_IDS, ...SETTINGS_MULTI_IDS].forEach(id => document.getElementById(id).addEventListener('change', saveSettings));
+renderGeoRiskChecks();
+[...SETTINGS_TEXT_IDS, ...SETTINGS_CHECK_IDS].forEach(id => document.getElementById(id).addEventListener('change', saveSettings));
+document.getElementById('geo-risk-checks').addEventListener('change', saveSettings);
+document.getElementById('geo-risk-filter').addEventListener('input', e => filterGeoRiskChecks(e.target.value));
 loadSettings();
 
 renderAll();
