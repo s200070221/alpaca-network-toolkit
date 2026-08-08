@@ -2564,12 +2564,16 @@ function parseInterfaces(cfg){
 function parseRoutes(cfg){
   const routes=[]; let m;
   // Fix 3: Support interface-name as next-hop (e.g. NULL0)
-  const re=/ip route-static\s+(\S+)\s+(\S+)\s+(\S+)(?:\s+vpn-instance\s+(\S+))?/g;
+  // vrf（2026-08-08 查證修正）：H3C 官方 Command Reference 確認 "ip route-static [ vpn-instance
+  // s-vpn-instance-name ] dest-address ..." 的 vpn-instance 子句緊接在關鍵字之後（該路由所屬
+  // VRF），原本誤植為結尾子句，兩者查無任何真實裝置匯出檔可用來偵測混用，直接改對位置
+  const re=/ip route-static(?:\s+vpn-instance\s+(\S+))?\s+(\S+)\s+(\S+)\s+(\S+)/g;
   while((m=re.exec(cfg))!==null){
-    let dst,gw=m[3],vrf=m[4]||'';
-    if(m[2].match(/^\d+\.\d+\.\d+\.\d+$/)){dst=m[1]+'/'+cidrFromMask(m[2]);}
-    else if(/^\d+$/.test(m[2])){dst=m[1]+'/'+m[2];}
-    else{dst=m[1]+'/0';gw=m[2]+' '+m[3];}
+    const vrf=m[1]||'';
+    let dst,gw=m[4];
+    if(m[3].match(/^\d+\.\d+\.\d+\.\d+$/)){dst=m[2]+'/'+cidrFromMask(m[3]);}
+    else if(/^\d+$/.test(m[3])){dst=m[2]+'/'+m[3];}
+    else{dst=m[2]+'/0';gw=m[3]+' '+m[4];}
     const gwIsInterface=gw&&!gw.match(/^\d+\.\d+\.\d+\.\d+/);
     routes.push({dst,gw,vrf,gwIsInterface});
   }
@@ -3064,7 +3068,11 @@ function parseCiscoVLANs(cfg){
 }
 
 // ── Interfaces ─────────────────────────────────────────────────
-function parseCiscoInterfaces(cfg){
+// vendor（2026-08-08 新增，預設 'cisco' 向下相容）：Arista EOS 4.23 train（2019-08 起）已廢棄
+// Cisco 式 "ip vrf forwarding NAME"，官方確認改用裸 "vrf NAME"；parseArista() 與 parseCisco()
+// 共用本函式解析 interface 區塊，故用 vendor 分流 VRF 偵測正則，其餘邏輯完全不變
+function parseCiscoInterfaces(cfg,vendor){
+  const vrfRe=vendor==='arista'?/^\s*vrf\s+(\S+)/m:/ip vrf forwarding\s+(\S+)/;
   const ifaces=[];
   const blocks=cfg.split(/^interface\s+/m).slice(1);
   for(const blk of blocks){
@@ -3088,7 +3096,7 @@ function parseCiscoInterfaces(cfg){
     if(/^Vlan/i.test(name)){
       const ipRaw=(body.match(/^\s*ip address\s+(\S+)\s+(\S+)/m)||[]);
       const ip=ipRaw[1]&&ipRaw[2]?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
-      const vrf=(body.match(/ip vrf forwarding\s+(\S+)/)||[])[1]||'';
+      const vrf=(body.match(vrfRe)||[])[1]||'';
       // HSRP as VRRP equivalent
       const vrrpList=[];let hm;
       const hr=/standby\s+(\d+)\s+ip\s+(\S+)/g;
@@ -3111,7 +3119,7 @@ function parseCiscoInterfaces(cfg){
     if(noRouting){
       // Routed port
       const ip=(body.match(/^\s*ip address\s+(\S+(?:\s+\S+)?)/m)||[])[1]||'';
-      vrf=(body.match(/ip vrf forwarding\s+(\S+)/)||[])[1]||'';
+      vrf=(body.match(vrfRe)||[])[1]||'';
       ifaces.push({name,type:'physical',desc,mode:'routed',vlans:'',nativeVlan:'',vrf,ip,shutdown,member,hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
       continue;
     }
@@ -4179,11 +4187,26 @@ function parseRouterOSInterfaces(cfg){
 }
 // VLAN membership 以 bridge VLAN filtering table 為主體宣告（`/interface bridge vlan`），
 // interface 區塊本身完全不含 VLAN 資訊，比照既有 Alcatel/Extreme XOS/ProCurve 慣例反查回填
-function applyRouterOSVlanMembership(vlans,ifaces){
+// lacpList（2026-08-08 新增第三參數）：官方文件確認 bonding slave 不可再直接掛 bridge port，
+// 故 tagged/untagged 名稱可能是 bond（LACP 聚合介面）而非實體埠名稱，`ifaces` 只含
+// `/interface ethernet` 的實體埠，需把命中 bond 的 tagging 結果套用到該 bond 底下的所有
+// 物理成員介面，維持既有「物理介面顯示 VLAN 資訊」的 UI 慣例（與 generator 端用聚合介面
+// 第一個成員的設定當代表值的邏輯對稱）
+function applyRouterOSVlanMembership(vlans,ifaces,lacpList){
   const untaggedOf={},taggedOf={};
   vlans.forEach(v=>{
     (v.untagged?v.untagged.split(','):[]).forEach(p=>{untaggedOf[p]=String(v.id);});
     (v.tagged?v.tagged.split(','):[]).forEach(p=>{(taggedOf[p]=taggedOf[p]||[]).push(String(v.id));});
+  });
+  (lacpList||[]).forEach(l=>{
+    const members=l.members||[];
+    if(!members.length)return;
+    if(taggedOf[l.name]){
+      members.forEach(m=>{taggedOf[m]=(taggedOf[m]||[]).concat(taggedOf[l.name]);});
+    }
+    if(untaggedOf[l.name]!==undefined){
+      members.forEach(m=>{if(untaggedOf[m]===undefined)untaggedOf[m]=untaggedOf[l.name];});
+    }
   });
   ifaces.forEach(i=>{
     if(taggedOf[i.name]){
@@ -4503,12 +4526,13 @@ function _parseVRRPRouterOS(cfg){
 function parseRouterOS(cfg){
   const sys=parseRouterOSSysInfo(cfg);
   const rosVlans=parseRouterOSVLANs(cfg), rosInterfaces=parseRouterOSInterfaces(cfg);
-  applyRouterOSVlanMembership(rosVlans,rosInterfaces);
+  const rosLacp=parseRouterOSLACP(cfg);
+  applyRouterOSVlanMembership(rosVlans,rosInterfaces,rosLacp);
   return{
     sys,irf:null,stack:null,
     vlans:rosVlans,
     interfaces:rosInterfaces,
-    lacp:parseRouterOSLACP(cfg),
+    lacp:rosLacp,
     routes:parseRouterOSRoutes(cfg),vrfs:[],
     users:parseRouterOSUsers(cfg),
     ospf:parseRouterOSOSPF(cfg),
@@ -7583,6 +7607,7 @@ function parseACL(cfg, vendor){
   if(vendor==='extreme') return _parseACLExtreme(cfg);
   if(vendor==='fortiswitch') return _parseACLFortiSwitch(cfg);
   if(vendor==='routeros') return _parseACLRouterOS(cfg);
+  if(vendor==='sonic') return _parseACLSONiC(cfg);
   if(vendor==='alcatel') return [];
   // NX-OS：2026-07-22 對外查證官方 Cisco NX-OS Security Configuration Guide 後新增獨立
   // 分支——先前沿用 _parseACLCisco()（IOS-XE 語法），但真實 NX-OS 語法完全不同：容器是
@@ -8125,6 +8150,11 @@ function parseQoS(cfg, vendor){
   return result;
 }
 function parseSTP(cfg, vendor){
+  // SONiC（2026-08-08 新增）：整份設定檔是 JSON，與下方逐行正則機制完全不相容，獨立分流；
+  // parseAny() 的 res.stp 也是呼叫這裡（透過 parseSONiC() 內部呼叫同一份 _parseSTPSONiC()），
+  // 但 switch_config_generator 的匯入既有設定檔流程是直接呼叫 fns.parseSTP(text,vendor)，
+  // 不經過 parseSONiC()，故此處必須也能獨立正確派送，不能只靠 parseAny() 的排除清單
+  if(vendor==='sonic')return _parseSTPSONiC(cfg);
   const stp={mode:null,instances:[],ports:[]};
 
   // 全域模式偵測
@@ -8623,7 +8653,7 @@ function parseArista(cfg){
   const sys=parseAristaSysInfo(cfg);
   const vlans=parseAristaVLANs(cfg);
   const mlag=parseAristaMlag(cfg);
-  const interfaces=parseCiscoInterfaces(cfg);
+  const interfaces=parseCiscoInterfaces(cfg,'arista');
   // Breakout 子埠命名 pattern 偵測（EthernetN/1~4），獨立於 parseCiscoInterfaces() 的
   // HundredGigE pattern B 判斷式之外
   interfaces.forEach(i=>{
@@ -9113,14 +9143,79 @@ function parseAny(cfg,forceVendor){
 // ═ SONiC Parser（config_db.json，第 17 個廠牌，MVP 範圍）═══════════
 // 涵蓋：hostname／VLAN／VLAN_MEMBER／INTERFACE＋VLAN_INTERFACE＋PORTCHANNEL_INTERFACE
 // （L3 IP）／PORTCHANNEL＋PORTCHANNEL_MEMBER（LACP）／BGP_NEIGHBOR＋
-// DEVICE_METADATA.bgp_asn／STATIC_ROUTE。明確排除：OSPF（官方 Unified FRR Management
-// Framework 設計文件列為未來擴充，查無 config_db.json 表格定義，不可臆測）／ACL／QoS／
-// STP／Security（本輪未查證欄位，信心度不足）。
+// DEVICE_METADATA.bgp_asn／STATIC_ROUTE／ACL_TABLE+ACL_RULE（2026-08-08 對外查證新增，
+// 見 _parseACLSONiC()）／STP+STP_VLAN+STP_INTF（2026-08-08 對外查證新增，見
+// _parseSTPSONiC()）。明確排除：OSPF（架構上不適用——官方 Unified FRR Management
+// Framework 設計文件列為未來擴充，查無 config_db.json 表格定義，SONiC 的 OSPF 實際透過
+// FRR 原生設定檔管理，非本工具「json↔表單」設計範圍）／QoS（PORT_QOS_MAP/QUEUE/
+// SCHEDULER 官方欄位已查到，但資料形狀與現有廠牌都不同，需另開一輪評估專屬 schema）／
+// Security（僅查到 Port Access Control HLD 文件存在，未確認 config_db.json 實際欄位
+// 名稱，信心度不足）。
 // 完全繞過逐行正則機制：整份設定檔本體就是合法 JSON，直接 JSON.parse()。
 function sonicEmptyResult(){
   return{sys:{hostname:'unknown',version:'',platform:''},irf:null,stack:null,vlans:[],
     interfaces:[],routes:[],lacp:[],vrfs:[],users:[],ospf:[],bgp:[],rip:[],vrrp:[],vxlan:null,
-    vendor:'sonic',breakouts:[]};
+    vendor:'sonic',breakouts:[],
+    stp:{mode:null,rootMode:null,timers:{hello:null,forwardDelay:null,maxAge:null},instances:[],ports:[]}};
+}
+// ACL_TABLE/ACL_RULE → 共用 ACL 形狀（2026-08-08 對外查證新增，原排除項目：官方文件＋
+// 真實範例確認欄位 PRIORITY/PACKET_ACTION/IP_PROTOCOL/SRC_IP/DST_IP/L4_DST_PORT/IP_TYPE，
+// 複合鍵 "{ACL表名}|{規則名}"）。IP_PROTOCOL 為數字（6=tcp/17=udp/1=icmp），無此欄位代表
+// 不限協定，統一回填 'ip'（比照 Cisco 慣例）。簽章比照其餘 _parseACLXxx(cfg) 慣例吃原始
+// 字串（被 parseACL() 統一 dispatcher 呼叫，非從 parseSONiC() 內部呼叫——ACL 資料流走
+// res.acls（parseACL 統一計算，見 parseAny()），與 parseSONiC() 自己回傳的 res 無關）
+const SONIC_IP_PROTO_REV={6:'tcp',17:'udp',1:'icmp'};
+function _parseACLSONiC(cfg){
+  let db;
+  try{ db=JSON.parse(cfg); }catch(e){ return []; }
+  if(!db||typeof db!=='object')return [];
+  const acls=[];
+  Object.entries(db.ACL_TABLE||{}).forEach(([name,t])=>{
+    acls.push({name,type:'extended',vendor:'sonic',rules:[],
+      appliedOn:((t&&t.ports)||[]).map(p=>({interface:p,direction:'in'}))});
+  });
+  Object.entries(db.ACL_RULE||{}).forEach(([key,val])=>{
+    const pipeIdx=key.indexOf('|');
+    if(pipeIdx===-1)return;
+    const acl=acls.find(a=>a.name===key.slice(0,pipeIdx));
+    if(!acl)return;
+    acl.rules.push({
+      seq:val&&val.PRIORITY!==undefined?String(val.PRIORITY):'',
+      action:val&&val.PACKET_ACTION==='DROP'?'deny':'permit',
+      protocol:SONIC_IP_PROTO_REV[val&&val.IP_PROTOCOL]||'ip',
+      src:(val&&val.SRC_IP)||'-',
+      dst:(val&&val.DST_IP)||'-',
+      dstPort:val&&val.L4_DST_PORT!==undefined?String(val.L4_DST_PORT):'',
+      remark:'',
+    });
+  });
+  return acls;
+}
+// STP/STP_VLAN/STP_INTF → 共用 STP 巢狀形狀（2026-08-08 對外查證新增，原排除項目：官方
+// PVST HLD 文件確認完整 schema）。PVST 逐 VLAN 一個 instance，天然對應 instances 陣列；
+// STP_VLAN_INTF（逐 VLAN 逐 port 覆寫）本輪不解析，比照 render 端「先做最小可行集」限制；
+// STP.GLOBAL.priority 是 render 端複製自第一個 instance 的裝飾性欄位（非權威來源），
+// 逐 VLAN priority 一律直接讀 STP_VLAN 自己的值，不需要跟 GLOBAL 對帳。簽章吃原始字串
+// （被 parseSTP() 的 sonic 分流呼叫，同時也是 parseSONiC() 自己內部呼叫的來源，兩處共用
+// 同一份實作，非各自維護）
+function _parseSTPSONiC(cfg){
+  let db;
+  try{ db=JSON.parse(cfg); }catch(e){ db=null; }
+  if(!db||typeof db!=='object')db={};
+  const g=(db.STP&&db.STP.GLOBAL)||{};
+  const instances=Object.entries(db.STP_VLAN||{}).map(([key,val])=>{
+    const id=(key.match(/^Vlan(\d+)$/i)||[])[1]||key.replace(/^Vlan/i,'');
+    return{id,vlan:key,priority:val&&val.priority!==undefined?String(val.priority):''};
+  });
+  const ports=Object.entries(db.STP_INTF||{}).map(([port,val])=>({
+    port,
+    portfast:!!(val&&(val.portfast==='1'||val.portfast===1)),
+    bpduguard:!!(val&&(val.bpdu_guard==='1'||val.bpdu_guard===1)),
+    guardRoot:!!(val&&(val.root_guard==='1'||val.root_guard===1)),
+    cost:val&&val.path_cost!==undefined?String(val.path_cost):'',
+    priority:val&&val.priority!==undefined?String(val.priority):'',
+  }));
+  return{mode:g.mode||null,rootMode:null,timers:{hello:null,forwardDelay:null,maxAge:null},instances,ports};
 }
 function parseSONiC(cfg){
   let db;
@@ -9229,9 +9324,11 @@ function parseSONiC(cfg){
     bgp.push({asn:String(bgpAsn),routerId:'',peers,networks:[]});
   }
 
+  const stp=_parseSTPSONiC(cfg);
+
   return{
     sys:{hostname,version:'',platform:''},irf:null,stack:null,vlans,interfaces,routes,lacp,
-    vrfs:[],users:[],ospf:[],bgp,rip:[],vrrp:[],vxlan:null,vendor:'sonic',breakouts:[]
+    vrfs:[],users:[],ospf:[],bgp,rip:[],vrrp:[],vxlan:null,vendor:'sonic',breakouts:[],stp
   };
 }
 
