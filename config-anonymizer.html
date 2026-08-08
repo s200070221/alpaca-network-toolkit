@@ -1633,8 +1633,30 @@ function anonPfSense(text, opts) {
   const lines = text.split('\n');
   const out = [];
   let inUser = false;
+  // shared_key／tls 跨行狀態（2026-08-08 查證修正）：對外查證 pfsensible/core GitHub
+  // issue #132 確認 pfSense OpenVPN 的 <shared_key>／<tls> 欄位儲存的是保留原始換行的
+  // PEM 格式文字（"-----BEGIN OpenVPN Static key V1-----" 區塊），不是像憑證管理員的
+  // <cert>/<prv> 那樣整段 base64 壓成單行；原本的單行正則要求開始/結束標籤同一行才會
+  // 比對到，跨行時完全比對不到、金鑰明碼原樣殘留在輸出（checkResidual() 的 PEM 區塊
+  // 偵測雖然抓得到殘留警告，但根本問題是 anonPfSense() 本身沒有真的把它遮蔽）；<tls>
+  // 標籤先前甚至完全沒有對應規則，不論單行多行都不會被處理。修法比照既有 inUser 的
+  // context flag 慣例：進入沒有收尾標籤的開始行時記住目前是哪個標籤，之後逐行捨棄金鑰
+  // 內容本體，直到遇到收尾標籤行才恢復輸出
+  let multilineKeyTag = null;
 
   for (let line of lines) {
+    // 目前處於跨行金鑰區塊中間：這一整行是金鑰內容本體，直接捨棄；只有含收尾標籤的那行
+    // 才恢復輸出（且只保留收尾標籤本身，之前殘留的金鑰內容一併捨棄）
+    if (multilineKeyTag) {
+      const closeRe = new RegExp(`<\\/${multilineKeyTag}>`);
+      const m = line.match(closeRe);
+      if (m) {
+        out.push(line.slice(m.index));
+        multilineKeyTag = null;
+      }
+      continue;
+    }
+
     // 先開啟 context flag，再做所有替換，最後才關閉 flag（避免單行含 <user>…</user> 時 flag 被同一行清除）
     if (/<user>/.test(line)) inUser = true;
 
@@ -1644,8 +1666,24 @@ function anonPfSense(text, opts) {
     // PSK：支援 <preshared_key> 與 <pre-shared-key>（連字號格式）
     const pskR = line.replace(/(<(?:preshared_key|pre-shared-key)>)([^<]*)(<\/[^>]+>)/, '$1REDACTED_PSK$3');
     if (pskR !== line) { stats.key++; line = pskR; }
-    const skR = line.replace(/(<shared_key>)([^<]*)(<\/shared_key>)/, '$1REDACTED_KEY$3');
-    if (skR !== line) { stats.key++; line = skR; }
+    // shared_key（OpenVPN Static Key 模式）／tls（tls-auth/tls-crypt 金鑰）：先嘗試同一行
+    // 內完整標籤（沿用既有簡單 case，涵蓋人工精簡過或單行匯出的情況），比對不到才檢查
+    // 「這行只有開始標籤、沒有收尾標籤」的跨行起點情形，後續行交給上面的 multilineKeyTag
+    // 分支逐行捨棄，直到遇到收尾標籤
+    for (const kt of ['shared_key', 'tls']) {
+      const sameLineRe = new RegExp(`(<${kt}>)([^<]*)(<\\/${kt}>)`);
+      const sameLineR = line.replace(sameLineRe, `$1REDACTED_KEY$3`);
+      if (sameLineR !== line) {
+        stats.key++;
+        line = sameLineR;
+        continue;
+      }
+      if (new RegExp(`<${kt}>`).test(line)) {
+        line = line.replace(new RegExp(`<${kt}>`), `<${kt}>REDACTED_KEY`);
+        stats.key++;
+        multilineKeyTag = kt;
+      }
+    }
     const comR = line.replace(/(<(?:rocommunity|rwcommunity|community)>)([^<]*)(<\/[^>]+>)/, '$1REDACTED_COMMUNITY$3');
     if (comR !== line) { stats.community++; line = comR; }
     const bpR = line.replace(/(<bindpw>)([^<]*)(<\/bindpw>)/, '$1REDACTED_PASSWORD$3');
