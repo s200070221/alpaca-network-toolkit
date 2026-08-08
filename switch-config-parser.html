@@ -7898,6 +7898,11 @@ function _parseACLExtreme(cfg){
 }
 
 function parseSecurity(cfg, vendor){
+  // SONiC（2026-08-08 新增）：整份設定檔是 JSON，與下方逐行正則機制完全不相容，獨立分流；
+  // 與 ACL 同一種「統一 dispatcher」模式，switch_config_generator 匯入既有設定檔直接呼叫
+  // fns.parseSecurity(text,vendor)，故必須在此處也能獨立正確派送（比照 parseSTP() 的 sonic
+  // 分流寫法），不能只靠 parseAny() 的排除清單
+  if(vendor==='sonic')return _parseSecuritySONiC(cfg);
   // FortiSwitch 原本完全沒有支援（generic ifRe 只認 "interface X" 區塊語法，FortiSwitch
   // 用 "config switch interface / edit X" 區塊，永遠比對不到）；本次新增獨立分支
   if(vendor==='fortiswitch') return _parseSecurityFortiSwitch(cfg);
@@ -9144,18 +9149,19 @@ function parseAny(cfg,forceVendor){
 // 涵蓋：hostname／VLAN／VLAN_MEMBER／INTERFACE＋VLAN_INTERFACE＋PORTCHANNEL_INTERFACE
 // （L3 IP）／PORTCHANNEL＋PORTCHANNEL_MEMBER（LACP）／BGP_NEIGHBOR＋
 // DEVICE_METADATA.bgp_asn／STATIC_ROUTE／ACL_TABLE+ACL_RULE（2026-08-08 對外查證新增，
-// 見 _parseACLSONiC()）／STP+STP_VLAN+STP_INTF（2026-08-08 對外查證新增，見
-// _parseSTPSONiC()）。明確排除：OSPF（架構上不適用——官方 Unified FRR Management
-// Framework 設計文件列為未來擴充，查無 config_db.json 表格定義，SONiC 的 OSPF 實際透過
-// FRR 原生設定檔管理，非本工具「json↔表單」設計範圍）／QoS（PORT_QOS_MAP/QUEUE/
-// SCHEDULER 官方欄位已查到，但資料形狀與現有廠牌都不同，需另開一輪評估專屬 schema）／
-// Security（僅查到 Port Access Control HLD 文件存在，未確認 config_db.json 實際欄位
-// 名稱，信心度不足）。
+// 見 _parseACLSONiC()）／STP+STP_VLAN+STP_INTF+STP_VLAN_INTF（2026-08-08 對外查證新增，
+// 見 _parseSTPSONiC()）／QoS：SCHEDULER+PORT_QOS_MAP+QUEUE（2026-08-08 對外查證新增，見
+// _parseQoSSONiC()，DSCP→TC 分類屬另一獨立功能本輪不納入）／Security 802.1X：
+// PAC_PORT_CONFIG+HOSTAPD_GLOBAL_CONFIG（2026-08-08 對外查證新增，見
+// _parseSecuritySONiC()，guest VLAN／MAC port-security 查無官方欄位不猜測）。明確排除：
+// OSPF（架構上不適用——官方 Unified FRR Management Framework 設計文件列為未來擴充，查無
+// config_db.json 表格定義，SONiC 的 OSPF 實際透過 FRR 原生設定檔管理，非本工具
+// 「json↔表單」設計範圍）。
 // 完全繞過逐行正則機制：整份設定檔本體就是合法 JSON，直接 JSON.parse()。
 function sonicEmptyResult(){
   return{sys:{hostname:'unknown',version:'',platform:''},irf:null,stack:null,vlans:[],
     interfaces:[],routes:[],lacp:[],vrfs:[],users:[],ospf:[],bgp:[],rip:[],vrrp:[],vxlan:null,
-    vendor:'sonic',breakouts:[],
+    vendor:'sonic',breakouts:[],qos:{schedulers:[],apply:[]},
     stp:{mode:null,rootMode:null,timers:{hello:null,forwardDelay:null,maxAge:null},instances:[],ports:[]}};
 }
 // ACL_TABLE/ACL_RULE → 共用 ACL 形狀（2026-08-08 對外查證新增，原排除項目：官方文件＋
@@ -9191,9 +9197,51 @@ function _parseACLSONiC(cfg){
   });
   return acls;
 }
-// STP/STP_VLAN/STP_INTF → 共用 STP 巢狀形狀（2026-08-08 對外查證新增，原排除項目：官方
-// PVST HLD 文件確認完整 schema）。PVST 逐 VLAN 一個 instance，天然對應 instances 陣列；
-// STP_VLAN_INTF（逐 VLAN 逐 port 覆寫）本輪不解析，比照 render 端「先做最小可行集」限制；
+// SCHEDULER/PORT_QOS_MAP/QUEUE → 專屬 sonicQos 形狀（2026-08-08 對外查證新增，原排除
+// 項目：官方 QoS Scheduler/Shaper HLD 文件＋硬體商真實範例交叉確認欄位）。與 ACL 不同，
+// QoS 資料流走「專屬 schema」模式——parseAny() 已把 sonic 排除在共用 parseQoS() dispatcher
+// 之外，本函式只從 parseSONiC() 內部呼叫、結果掛在 res.qos，不接進 parseQoS() dispatcher
+// （比照 RouterOS/Brocade/Extreme 專屬 QoS 形狀的既有慣例）；簽章仍吃已 parse 好的 db
+// 物件（非原始字串），因為呼叫端 parseSONiC() 已經 parse 過一次，不需要重複 parse
+function _parseQoSSONiC(db){
+  const schedulers=Object.entries(db.SCHEDULER||{}).map(([name,v])=>({
+    name, type:(v&&v.type)||'', weight:v&&v.weight!==undefined?String(v.weight):'',
+    meterType:(v&&v.meter_type)||'', cir:v&&v.cir!==undefined?String(v.cir):'',
+    cbs:v&&v.cbs!==undefined?String(v.cbs):'', pir:v&&v.pir!==undefined?String(v.pir):'',
+    pbs:v&&v.pbs!==undefined?String(v.pbs):'',
+  }));
+  const apply=[];
+  Object.entries(db.PORT_QOS_MAP||{}).forEach(([port,v])=>{
+    if(v&&v.scheduler)apply.push({target:port,queue:'',scheduler:v.scheduler});
+  });
+  Object.entries(db.QUEUE||{}).forEach(([key,v])=>{
+    const pipeIdx=key.indexOf('|');
+    if(pipeIdx===-1)return;
+    if(v&&v.scheduler)apply.push({target:key.slice(0,pipeIdx),queue:key.slice(pipeIdx+1),scheduler:v.scheduler});
+  });
+  return{schedulers,apply};
+}
+// PAC_PORT_CONFIG/HOSTAPD_GLOBAL_CONFIG → 共用 Security 形狀 {port,dot1x,portSec,maxMac,
+// violation,guestVlan}（2026-08-08 對外查證新增，原排除項目：官方 Port Access Control
+// HLD 文件確認 method_list/port_pae_role/port_control_mode/host_control_mode/
+// max_users_per_port 欄位）。查無 guest VLAN／MAC port-security 對應欄位，比照既有其他
+// 廠牌慣例明確不猜測，portSec 固定 false、violation/guestVlan 固定 '-'。與 ACL 同一種
+// 「統一 dispatcher」模式：接進 parseSecurity() 開頭的 vendor 分流，簽章吃原始字串
+function _parseSecuritySONiC(cfg){
+  let db;
+  try{ db=JSON.parse(cfg); }catch(e){ return []; }
+  if(!db||typeof db!=='object')return [];
+  return Object.entries(db.PAC_PORT_CONFIG||{}).map(([port,v])=>{
+    const isDot1x=!!(v&&(v.method_list||'').includes('dot1x')&&v.port_pae_role==='authenticator');
+    return{port,dot1x:isDot1x?'auth':'-',portSec:false,
+      maxMac:v&&v.max_users_per_port!==undefined?String(v.max_users_per_port):'-',
+      violation:'-',guestVlan:'-'};
+  });
+}
+// STP/STP_VLAN/STP_INTF/STP_VLAN_INTF → 共用 STP 巢狀形狀（2026-08-08 對外查證新增，原
+// 排除項目：官方 PVST HLD 文件確認完整 schema）。PVST 逐 VLAN 一個 instance，天然對應
+// instances 陣列；STP_VLAN_INTF（逐 VLAN 逐 port 覆寫，2026-08-08 補上）額外掛在回傳物件
+// 的 sonicStpVlanIntf 欄位（共用 STP 形狀無 VLAN 維度，其餘廠牌呼叫路徑不受影響）；
 // STP.GLOBAL.priority 是 render 端複製自第一個 instance 的裝飾性欄位（非權威來源），
 // 逐 VLAN priority 一律直接讀 STP_VLAN 自己的值，不需要跟 GLOBAL 對帳。簽章吃原始字串
 // （被 parseSTP() 的 sonic 分流呼叫，同時也是 parseSONiC() 自己內部呼叫的來源，兩處共用
@@ -9215,7 +9263,14 @@ function _parseSTPSONiC(cfg){
     cost:val&&val.path_cost!==undefined?String(val.path_cost):'',
     priority:val&&val.priority!==undefined?String(val.priority):'',
   }));
-  return{mode:g.mode||null,rootMode:null,timers:{hello:null,forwardDelay:null,maxAge:null},instances,ports};
+  const sonicStpVlanIntf=Object.entries(db.STP_VLAN_INTF||{}).map(([key,val])=>{
+    const parts=key.split('|');
+    const vlanKey=parts[0]||'', port=parts[1]||'';
+    const vlan=(vlanKey.match(/^Vlan(\d+)$/i)||[])[1]||vlanKey.replace(/^Vlan/i,'');
+    return{vlan,port,cost:val&&val.path_cost!==undefined?String(val.path_cost):'',
+      priority:val&&val.priority!==undefined?String(val.priority):''};
+  });
+  return{mode:g.mode||null,rootMode:null,timers:{hello:null,forwardDelay:null,maxAge:null},instances,ports,sonicStpVlanIntf};
 }
 function parseSONiC(cfg){
   let db;
@@ -9324,11 +9379,14 @@ function parseSONiC(cfg){
     bgp.push({asn:String(bgpAsn),routerId:'',peers,networks:[]});
   }
 
-  const stp=_parseSTPSONiC(cfg);
+  const stpFull=_parseSTPSONiC(cfg);
+  const {sonicStpVlanIntf,...stp}=stpFull;
+  const qos=_parseQoSSONiC(db);
 
   return{
     sys:{hostname,version:'',platform:''},irf:null,stack:null,vlans,interfaces,routes,lacp,
-    vrfs:[],users:[],ospf:[],bgp,rip:[],vrrp:[],vxlan:null,vendor:'sonic',breakouts:[],stp
+    vrfs:[],users:[],ospf:[],bgp,rip:[],vrrp:[],vxlan:null,vendor:'sonic',breakouts:[],stp,
+    qos,sonicStpVlanIntf
   };
 }
 
