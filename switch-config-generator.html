@@ -1337,9 +1337,9 @@ function renderComwareRIPList(list){return (list||[]).map(renderComwareRIP).join
 
 function renderComwareRoute(r){
   const [net,len]=r.dst.split('/');
-  // vrf（2026-07-27 補上）：parseRoutes() 正則要求 vpn-instance 接在 next-hop 之後，
-  // render 端從未輸出過
-  return `ip route-static ${net} ${len} ${r.gw}${r.vrf?' vpn-instance '+r.vrf:''}`;
+  // vrf（2026-08-08 查證修正）：H3C 官方 Command Reference 確認 vpn-instance 子句緊接在
+  // "ip route-static" 關鍵字之後（該路由所屬 VRF），並非結尾子句；parseRoutes() 已同步修正
+  return `ip route-static ${r.vrf?'vpn-instance '+r.vrf+' ':''}${net} ${len} ${r.gw}`;
 }
 function renderComwareRoutes(list){return (list||[]).map(renderComwareRoute).join('\n')+'\n#';}
 
@@ -2693,8 +2693,10 @@ function renderAristaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,
     lines.push(' no switchport');
     lines.push(` ip address ${iface.ip}`);
   }
-  // vrf：management 介面固定為 MGMT，是 parser 端寫死賦值非反查而來，不存在對應真實指令
-  if(iface.vrf&&!isMgmt)lines.push(` ip vrf forwarding ${iface.vrf}`);
+  // vrf（2026-08-08 查證修正）：官方 EOS 4.23+ 語法為裸 "vrf NAME"（"vrf forwarding" 已廢棄），
+  // parseCiscoInterfaces() 已同步改用 vendor 分流偵測；management 介面固定為 MGMT，是 parser
+  // 端寫死賦值非反查而來，不存在對應真實指令
+  if(iface.vrf&&!isMgmt)lines.push(` vrf ${iface.vrf}`);
   if(lg){
     const modeWord=lg.mode==='active'?'active':lg.mode==='passive'?'passive':'on';
     lines.push(` channel-group ${lg.id} mode ${modeWord}`);
@@ -2777,12 +2779,12 @@ function assembleAristaConfig(model){
   // 缺這行會導致 round-trip 時無法被自動辨識為 arista
   const blocks=[`! ${tr('notice.disclaimer')}`,'! Software image version: EOS',`hostname ${model.sysname||'Switch'}`];
   if(model.vlans&&model.vlans.length)blocks.push(renderAristaVLANs(model.vlans));
-  // VRF：本工具介面上目前輸出的是沿用 Cisco 的 `ip vrf forwarding NAME`（parseCiscoInterfaces()
-  // 共用正則也是認這個關鍵字，round-trip 依賴此語法一致），故建立區塊同樣採 `ip vrf NAME`
-  // 與介面端保持一致；官方 EOS 文件實際指令是 `vrf instance NAME`（介面上是裸 `vrf NAME`），
-  // 但改動介面端語法需要一併修正共用 parser，超出本輪範圍，先維持內部一致、留待後續處理
+  // VRF（2026-08-08 查證修正）：Arista 官方社群確認 EOS 4.23 train（2019-08 起）廢棄
+  // `vrf definition`／介面 `vrf forwarding NAME`，改用 `vrf instance NAME`（建立）＋介面裸
+  // `vrf NAME`（綁定，見 renderAristaInterface()）；parseCiscoInterfaces() 已同步改用
+  // vendor==='arista' 分流偵測裸 vrf 語法，round-trip 不再依賴 Cisco 式語法
   const aristaVrfNames=collectVrfNames(model.interfaces);
-  if(aristaVrfNames.length)blocks.push(aristaVrfNames.map(n=>`ip vrf ${n}`).join('\n!\n'));
+  if(aristaVrfNames.length)blocks.push(aristaVrfNames.map(n=>`vrf instance ${n}`).join('\n!\n'));
   if(model.interfaces&&model.interfaces.length)blocks.push(renderAristaInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.breakouts));
   // DHCP Relay Option82（2026-07-24 新增解析，一直未接線）：真實語法是不含任何後綴參數的
   // 裸全域指令 "ip dhcp relay information option"（非逐介面），parser 端也是用行首錨點比對
@@ -3939,7 +3941,63 @@ function assembleSONiCConfig(model){
     db.STATIC_ROUTE[`default|${r.dst}`]=entry;
   });
 
+  // ACL_TABLE / ACL_RULE（2026-08-08 對外查證新增，原排除項目：官方文件＋真實範例確認欄位
+  // PRIORITY/PACKET_ACTION/IP_PROTOCOL/SRC_IP/DST_IP/L4_DST_PORT/IP_TYPE，複合鍵
+  // "{ACL表名}|{規則名}"）；與共用 ACL 表單形狀 {name,type,rules:[],appliedOn:[]} 相容，
+  // type 固定輸出 'L3'（表單的 standard/extended 二分法對 SONiC 無對應概念，不臆測其他
+  // type 值）；remark 列（無 action）SONiC 無對應概念，略過不輸出
+  db.ACL_TABLE={};
+  db.ACL_RULE={};
+  (model.acl||[]).forEach(a=>{
+    if(!a.name)return;
+    db.ACL_TABLE[a.name]={policy_desc:a.name,type:'L3',ports:(a.appliedOn||[]).map(ap=>ap.interface).filter(Boolean)};
+    (a.rules||[]).forEach((r,idx)=>{
+      if(r.action!=='permit'&&r.action!=='deny')return;
+      const entry={PRIORITY:parseInt(r.seq,10)||(9999-idx),PACKET_ACTION:r.action==='deny'?'DROP':'FORWARD',IP_TYPE:'IP'};
+      const proto=SONIC_IP_PROTO[(r.protocol||'').toLowerCase()];
+      if(proto)entry.IP_PROTOCOL=proto;
+      const src=sonicAclAddr(r.src); if(src)entry.SRC_IP=src;
+      const dst=sonicAclAddr(r.dst); if(dst)entry.DST_IP=dst;
+      if(r.dstPort&&/^\d+$/.test(r.dstPort))entry.L4_DST_PORT=parseInt(r.dstPort,10);
+      db.ACL_RULE[`${a.name}|rule_${idx+1}`]=entry;
+    });
+  });
+
+  // STP / STP_VLAN / STP_INTF（2026-08-08 對外查證新增，原排除項目：官方 PVST HLD 文件確認
+  // 完整 schema）；PVST 逐 VLAN 一個 instance，天然對應共用 STP 形狀的 instances 陣列設計；
+  // STP_VLAN_INTF（逐 VLAN 逐 port 覆寫）本輪不做，僅 port 層級全域覆寫，比照 SONiC 其他
+  // 子功能「先做最小可行集」慣例，記錄為已知限制
+  if(hasGlobalStpData(model.stp)||(model.stp&&model.stp.ports&&model.stp.ports.length)){
+    db.STP={GLOBAL:{mode:'pvst'}};
+    const firstInst=(model.stp.instances||[])[0];
+    if(firstInst&&firstInst.priority)db.STP.GLOBAL.priority=parseInt(firstInst.priority,10);
+    db.STP_VLAN={};
+    (model.stp.instances||[]).forEach(inst=>{
+      if(!inst.id)return;
+      const ve={enabled:'true'};
+      if(inst.priority)ve.priority=parseInt(inst.priority,10);
+      db.STP_VLAN[`Vlan${inst.id}`]=ve;
+    });
+    db.STP_INTF={};
+    (model.stp.ports||[]).forEach(p=>{
+      if(!p.port)return;
+      const pe={enabled:'1'};
+      if(p.bpduguard)pe.bpdu_guard='1';
+      if(p.guardRoot)pe.root_guard='1';
+      if(p.cost)pe.path_cost=parseInt(p.cost,10);
+      if(p.priority)pe.priority=parseInt(p.priority,10);
+      if(p.portfast)pe.portfast='1';
+      db.STP_INTF[p.port]=pe;
+    });
+  }
+
   return JSON.stringify(db,null,2)+'\n';
+}
+const SONIC_IP_PROTO={tcp:6,udp:17,icmp:1};
+function sonicAclAddr(v){
+  if(!v||v==='any')return '';
+  const hostM=v.match(/^host\s+(\S+)/);
+  return hostM?hostM[1]+'/32':v;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -4430,10 +4488,20 @@ function assembleProCurveConfig(model){
 
 const ROUTEROS_BRIDGE='bridge1';
 
-function renderRouterOSVLANs(vlans,interfaces){
+// lacpList（2026-08-08 新增第二用途參數）：官方文件確認 bonding slave 不可再直接掛
+// bridge port／VLAN filtering table，該由 bond 介面本身承載 VLAN tagging；比照 Cisco
+// renderCiscoLACPExtra() 用聚合群組第一個成員的設定當代表值（refIface）的既有慣例，
+// LACP 成員埠改用 bond${id} 名稱參與 tagged/untagged 清單，成員埠本身不再逐一列出
+function renderRouterOSVLANs(vlans,interfaces,lacpList){
   const taggedMap={},untaggedMap={};
-  (interfaces||[]).forEach(iface=>{
-    if(!iface.name)return;
+  const memberNames=new Set();
+  (lacpList||[]).forEach(l=>(l.members||[]).forEach(m=>memberNames.add(m)));
+  const effective=(interfaces||[]).filter(iface=>iface.name&&!memberNames.has(iface.name));
+  (lacpList||[]).forEach(l=>{
+    const refIface=(l.members||[]).map(m=>(interfaces||[]).find(i=>i.name===m)).find(Boolean);
+    if(refIface)effective.push({...refIface,name:`bond${l.id}`});
+  });
+  effective.forEach(iface=>{
     if(iface.mode==='trunk'){
       (iface.trunkVlans||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(vid=>{
         (taggedMap[vid]=taggedMap[vid]||[]).push(iface.name);
@@ -4463,10 +4531,18 @@ function renderRouterOSInterfaceDeclarations(ifaces){
   return lines.join('\n');
 }
 
-function renderRouterOSBridgeMembers(ifaces){
-  if(!ifaces||!ifaces.length)return '';
+// lacpList（2026-08-08 新增，資料模型修正）：官方文件（Bonding／Bridging and Switching）
+// 確認實體介面若已是 bonding slave，不可再直接加入 bridge 當 port，否則 bond 介面在不同
+// port 上收到相同 MAC 會造成衝突；正確作法是只把 bond 介面本身加入 bridge，故此處排除
+// 屬於任一 LACP 群組成員的實體介面，改為每個 LACP 群組輸出一行 bond 介面本身的 member
+function renderRouterOSBridgeMembers(ifaces,lacpList){
+  const memberNames=new Set();
+  (lacpList||[]).forEach(l=>(l.members||[]).forEach(m=>memberNames.add(m)));
+  const names=(ifaces||[]).filter(i=>i.name&&!memberNames.has(i.name)).map(i=>i.name);
+  (lacpList||[]).forEach(l=>{ if((l.members||[]).length)names.push(`bond${l.id}`); });
+  if(!names.length)return '';
   const lines=['/interface bridge member'];
-  ifaces.forEach(i=>{ if(i.name)lines.push(`add bridge=${ROUTEROS_BRIDGE} interface=${i.name}`); });
+  names.forEach(n=>lines.push(`add bridge=${ROUTEROS_BRIDGE} interface=${n}`));
   return lines.join('\n');
 }
 
@@ -4688,13 +4764,15 @@ function assembleRouterOSConfig(model){
   const blocks=[`# ${tr('notice.disclaimer')}`,`/system identity\nset name=${model.sysname||'Switch'}`];
   const ifaceBlock=renderRouterOSInterfaceDeclarations(model.interfaces);
   if(ifaceBlock)blocks.push(ifaceBlock);
-  blocks.push(renderRouterOSBridge(model.stp));
-  const memberBlock=renderRouterOSBridgeMembers(model.interfaces);
-  if(memberBlock)blocks.push(memberBlock);
-  const vlanBlock=renderRouterOSVLANs(model.vlans,model.interfaces);
-  if(vlanBlock)blocks.push(vlanBlock);
+  // LACP 區塊移到 bridge member／VLAN 之前（2026-08-08）：bond 介面若要被當成 bridge port／
+  // VLAN tagging 對象，必須先建立才能被後面的區塊引用，符合 RouterOS 腳本逐行執行的特性
   const lacpBlock=renderRouterOSLACP(model.lacp);
   if(lacpBlock)blocks.push(lacpBlock);
+  blocks.push(renderRouterOSBridge(model.stp));
+  const memberBlock=renderRouterOSBridgeMembers(model.interfaces,model.lacp);
+  if(memberBlock)blocks.push(memberBlock);
+  const vlanBlock=renderRouterOSVLANs(model.vlans,model.interfaces,model.lacp);
+  if(vlanBlock)blocks.push(vlanBlock);
   const routeBlock=renderRouterOSRoutes(model.routes);
   if(routeBlock)blocks.push(routeBlock);
   const ospfBlock=renderRouterOSOSPF(model.ospf);
@@ -7142,12 +7220,16 @@ const VENDOR_UNSUPPORTED={
   // （架構限制，非查證不足，詳見 assembleEdgeSwitchConfig() 開頭註解），故所有依賴可定址
   // L3 介面的功能一律不支援；STP 是 MST instance 模型，與本工具共用扁平資料形狀不相容
   edgeswitch:['bgp','rip','vrrp','dhcpServer','dhcpRelay','acl','qos','security','stp','routes'],
-  // OSPF／ACL／QoS／STP／Security：本輪對外查證 config_db.json schema 時，OSPF 官方
-  // Unified FRR Management Framework 設計文件明確列為未來擴充、查無表格定義；其餘四項
-  // 本輪未查證欄位，信心度不足，不可臆測——維持警告而非隱藏（OSPF 卡片目前無對應 key，
-  // 既有機制缺口，見 now.md）。rip/vrrp/dhcpServer/dhcpRelay：SONiC 傳統模式僅單一 BGP
-  // instance、RIP v7 待查證，本輪範圍未涵蓋
-  sonic:['rip','vrrp','dhcpServer','dhcpRelay','acl','qos','security','stp'],
+  // OSPF：架構上不適用（非信心度不足）——SONiC 的 OSPF 是透過 FRR 原生設定檔管理，官方
+  // Unified FRR Management Framework 設計文件明確列為未來擴充、config_db.json 查無表格
+  // 定義，本工具「json ↔ 表單」的設計範圍天生不涵蓋（OSPF 卡片目前無對應 key，既有機制
+  // 缺口，見 now.md）。ACL／STP 已於 2026-08-08 對外查證官方 schema 後新增支援，見
+  // assembleSONiCConfig() 對應區塊。QoS：已查到 PORT_QOS_MAP/QUEUE/SCHEDULER 官方欄位，
+  // 但資料形狀與現有任何廠牌都不同，需要專屬 schema+UI，複雜度較高，另開一輪評估，本輪
+  // 未實作。Security(802.1X)：僅查到 Port Access Control HLD 文件存在，未確認
+  // config_db.json 實際欄位名稱，信心度不足，維持排除。rip/vrrp/dhcpServer/dhcpRelay：
+  // SONiC 傳統模式僅單一 BGP instance、RIP v7 待查證，本輪範圍未涵蓋
+  sonic:['rip','vrrp','dhcpServer','dhcpRelay','qos','security'],
 };
 const VENDOR_FEATURE_LABEL={bgp:'BGP',rip:'RIP',vrrp:'VRRP',dhcpServer:'DHCP Server',dhcpRelay:'DHCP Relay',acl:'ACL',qos:'QoS',security:'Port Security/802.1X',stp:'STP',routes:'Static Routes'};
 
@@ -7837,6 +7919,18 @@ async function parseAndImport(){
     }
     row.querySelector('.i-shutdown').checked=!!i.shutdown;
   });
+
+  // SONiC L3 介面 IP 回填（2026-08-08 新增，已知缺口修復）：parseSONiC() 早就把
+  // VLAN_INTERFACE／INTERFACE／PORTCHANNEL_INTERFACE 的 IP 資料併入 parsed.interfaces
+  // （type:'svi' 或 mode:'routed'），但上面那個迴圈只認 trunk/access/hybrid，這些條目
+  // 被直接跳過、sonic-l3-body 永遠空白；SONiC 沒有通用 Interface 表單可承接（無 routed
+  // 模式），改寫進專屬 sonicL3Interfaces 卡片
+  if(vendor==='sonic'){
+    (parsed.interfaces||[]).forEach(i=>{
+      if(!i.ip)return;
+      if(i.type==='svi'||i.mode==='routed')addSonicL3Row(i.name,i.ip);
+    });
+  }
 
   // VRRP：parseVRRP() 只回傳介面名稱字串，不是 VLAN ID，需要比對同一次匯入已解析出的
   // parsed.interfaces 找到同名 SVI 取得 vlans/ip；找不到就退回用介面名稱抓數字當 VLAN ID
