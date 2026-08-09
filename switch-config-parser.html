@@ -7126,35 +7126,34 @@ function parseLACP(cfg, vendor){
     });
     lacp.sort((a,b)=>parseInt(a.name.match(/\d+/)[0])-parseInt(b.name.match(/\d+/)[0]));
   }else if(vendor==='netgear'||vendor==='edgeswitch'){
-    // Netgear M4300／Ubiquiti EdgeSwitch 同源 Broadcom ICOS，LACP 語法完全一致（皆為
-    // "addport {slot/port|lag N}"／"interface lag N"，EdgeSwitch 官方 CLI Command
-    // Reference 確認格式與 Netgear 逐字相同，僅介面命名少一段 unit 前綴），共用同一分支。
-    // 聚合介面用 "interface lag N" 宣告；成員埠是從自己的
-    // "interface unit/slot/port" 區塊內用 "addport logical-unit/slot/port"（官方語法也支援
-    // "addport lag N" 替代寫法）加入，指令方向是「member 埠自己宣告要加入哪個 LAG」，與
-    // Cisco 反過來（LAG 底下看不到成員清單）。若真實匯出檔採用內部 unit/slot/port 位址形式
-    // 而非 "lag N" 替代寫法，此處會直接把該原始位址字串當成群組 key（無法還原成對應的
-    // "lag N" 編號），信心度較低，待真實範例校正。"port-channel static" 出現時視為 Static，
-    // 未出現時視為預設值 Active（官方 "port lacpmode" 預設即開啟 LACP 協商）
+    // Netgear M4300／Ubiquiti EdgeSwitch 同源 Broadcom ICOS，LACP 語法完全一致（EdgeSwitch
+    // 官方 CLI Command Reference 確認格式與 Netgear 逐字相同，僅介面命名少一段 unit 前綴），
+    // 共用同一分支。2026-08-09 對外查證官方 NETGEAR KB（kb.netgear.com/21635，逐字指令稿）
+    // 修正既有方向錯誤：`addport` 是在 **LAG 自己的介面區塊內**執行，用來加入實體成員埠，
+    // 非「member 埠自己宣告要加入哪個 LAG」——原先方向理解相反，導致官方範例的原始
+    // unit/slot/port 位址形式（LAG 本身用 unit/slot/port 定址，如 0/13/1，非 "lag N" 別名）
+    // 完全無法正確歸群，且與 Cisco 慣例（member 埠宣告 channel-group）的類比也不成立。
+    // 官方指令稿範例：`interface 0/2` → `addport 1/1` → `exit`（LAG 介面 0/2 加入實體埠 1/1）。
+    // 修正後：不論 LAG 自己是用 "lag N" 別名或 unit/slot/port 原始位址命名，只要該介面
+    // 區塊內含 `addport` 行就視為 LAG，直接讀出成員清單；額外保留「介面名稱本身符合
+    // "lag N"」的既有 fixture 相容性（即使目前尚無成員也照舊列出該 LAG，例如剛建立但尚未
+    // addport 的情境）。"port-channel static" 出現時視為 Static，未出現時視為預設值 Active
+    // （官方 "port lacpmode" 預設即開啟 LACP 協商）
     const ifaceMap={};
     cfg.split(/\ninterface /).slice(1).forEach(blk=>{
       const name=blk.split('\n')[0].trim();
       ifaceMap[name]=blk;
     });
-    const membersByGid={};
+    const membersByName={};
     Object.entries(ifaceMap).forEach(([name,blk])=>{
-      if(/^lag\s+\d+/i.test(name))return;
-      const am=blk.match(/^\s*addport\s+(?:lag\s+(\d+)|(\S+))\s*$/m);
-      if(am){
-        const gid=am[1]||am[2];
-        membersByGid[gid]=(membersByGid[gid]||[]).concat({name,lacpMode:null});
-      }
+      const addports=[...blk.matchAll(/^\s*addport\s+(\S+)\s*$/gm)].map(m=>({name:m[1],lacpMode:null}));
+      if(addports.length) membersByName[name]=addports;
     });
     Object.entries(ifaceMap).forEach(([name,blk])=>{
-      if(!/^lag\s+\d+/i.test(name))return;
-      const gid=name.match(/\d+/)[0];
+      const isNamedLag=/^lag\s+\d+/i.test(name);
+      if(!isNamedLag&&!membersByName[name])return;
       const mode=/^\s*port-channel static\s*$/m.test(blk)?'Static':'Active';
-      lacp.push({name,mode,members:membersByGid[gid]||[]});
+      lacp.push({name,mode,members:membersByName[name]||[]});
     });
     lacp.sort((a,b)=>parseInt(a.name.match(/\d+/)[0])-parseInt(b.name.match(/\d+/)[0]));
   }

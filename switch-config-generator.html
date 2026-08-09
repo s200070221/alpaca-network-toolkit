@@ -3134,10 +3134,10 @@ function renderNetgearInterface(iface,lacpList){
     lines.push(' routing');
     lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
   }
-  // 產生端一律採用可還原的 "addport lag N" 替代寫法（官方語法同時支援內部 unit/slot/port
-  // 位址形式，但那種形式無法保證 round-trip 正確還原成對應的 lag 編號，見 analyzer 端
-  // parseLACP() netgear 分支的說明），確保匯出→匯入永遠對應到同一個 lag 群組
-  if(lg)lines.push(` addport lag ${(lg.id||'').toString().replace(/^lag\s*/i,'').trim()}`);
+  // 2026-08-09 對外查證官方 NETGEAR KB（kb.netgear.com/21635，逐字指令稿）修正：addport
+  // 是在 LAG 自己的介面區塊內宣告要加入的實體成員埠，並非「member 埠自己宣告要加入哪個
+  // LAG」，故 member port 自己的介面區塊不應輸出 addport 行；已改在 renderNetgearLACPExtra()
+  // 的 LAG 區塊內輸出，見該函式說明
   if(iface.shutdown)lines.push(' shutdown');
   return lines.join('\n');
 }
@@ -3149,11 +3149,17 @@ function renderNetgearLACPExtra(lacpList,ifaces){
   (lacpList||[]).forEach(l=>{
     const gid=(l.id||'').toString().replace(/^lag\s*/i,'').trim();
     const refIface=(l.members||[]).map(m=>(ifaces||[]).find(i=>i.name===m)).find(Boolean);
-    const lines=[`interface lag ${gid}`+(l.mode==='static'?'\n port-channel static':''),...netgearSwitchportLines(refIface)];
+    // 2026-08-09 查證官方 KB 逐字指令稿（"interface 0/2" → "addport 1/1" → "exit"）修正：
+    // addport 一律輸出在 LAG 自己的區塊內、每個成員一行，而非先前誤植在各成員埠自己的
+    // 區塊內；member port 若尚未在 model.interfaces 有自己的顯式區塊，仍補一個空區塊
+    // 確保該埠存在，但不再輸出 addport
+    const lines=[`interface lag ${gid}`,...netgearSwitchportLines(refIface)];
+    (l.members||[]).forEach(mem=>lines.push(` addport ${mem}`));
+    if(l.mode==='static')lines.push(' port-channel static');
     blocks.push(lines.join('\n'));
     (l.members||[]).forEach(mem=>{
       if(existingNames.has(mem))return;
-      blocks.push(`interface ${mem}\n addport lag ${gid}`);
+      blocks.push(`interface ${mem}`);
     });
   });
   return blocks.join('\n!\n');
@@ -3274,13 +3280,16 @@ function renderEdgeSwitchInterface(iface,lacpList){
   if(iface.desc)lines.push(` description ${iface.desc}`);
   const lg=findLacpGroup(lacpList,iface.name);
   if(!lg)lines.push(...edgeSwitchVlanLines(iface));
-  if(lg)lines.push(` addport lag ${(lg.id||'').toString().replace(/^lag\s*/i,'').trim()}`);
+  // 2026-08-09 對外查證官方 NETGEAR KB（kb.netgear.com/21635，逐字指令稿，EdgeSwitch 與
+  // Netgear 同源 ICOS 共用同一套語法）修正：addport 是在 LAG 自己的介面區塊內宣告要加入
+  // 的實體成員埠，並非「member 埠自己宣告要加入哪個 LAG」，member port 自己的介面區塊
+  // 不應輸出 addport 行；已改在 renderEdgeSwitchLACPExtra() 的 LAG 區塊內輸出
   if(iface.shutdown)lines.push(' shutdown');
   return lines.join('\n');
 }
 function renderEdgeSwitchInterfaces(ifaces,lacpList){return (ifaces||[]).map(i=>renderEdgeSwitchInterface(i,lacpList)).join('\n!\n');}
 
-// LACP 產生邏輯與 renderNetgearLACPExtra 完全相同（同一套 ICOS addport lag N 語法），
+// LACP 產生邏輯與 renderNetgearLACPExtra 完全相同（同一套 ICOS addport 語法），
 // 獨立複製一份而非共用函式名稱，避免未來任一廠牌語法出現分歧時互相牽動
 function renderEdgeSwitchLACPExtra(lacpList,ifaces){
   const existingNames=new Set((ifaces||[]).map(i=>i.name));
@@ -3290,12 +3299,16 @@ function renderEdgeSwitchLACPExtra(lacpList,ifaces){
     // port-channel static 語法與 Netgear 完全共用（同源 ICOS），先前版本漏接此行，使用者
     // 在表單把 LAG 模式設為 Static 時輸出設定檔完全不反映（2026-08-01 對外查證後修正，
     // 比照 renderNetgearLACPExtra 既有寫法）
+    // 2026-08-09 查證官方 KB 逐字指令稿修正：addport 一律輸出在 LAG 自己的區塊內、
+    // 每個成員一行，而非先前誤植在各成員埠自己的區塊內
     const refIface=(l.members||[]).map(m=>(ifaces||[]).find(i=>i.name===m)).find(Boolean);
-    const lines=[`interface lag ${gid}`+(l.mode==='static'?'\n port-channel static':''),...edgeSwitchVlanLines(refIface)];
+    const lines=[`interface lag ${gid}`,...edgeSwitchVlanLines(refIface)];
+    (l.members||[]).forEach(mem=>lines.push(` addport ${mem}`));
+    if(l.mode==='static')lines.push(' port-channel static');
     blocks.push(lines.join('\n'));
     (l.members||[]).forEach(mem=>{
       if(existingNames.has(mem))return;
-      blocks.push(`interface ${mem}\n addport lag ${gid}`);
+      blocks.push(`interface ${mem}`);
     });
   });
   return blocks.join('\n!\n');
