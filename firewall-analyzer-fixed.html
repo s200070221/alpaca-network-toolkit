@@ -9834,7 +9834,10 @@ const ZyxelParser = (() => {
     let m;
     while ((m = re.exec(text)) !== null) {
       const name = m[1], val = m[2];
-      const type = val.includes('/') ? 'ipmask' : val.includes('-') ? 'iprange' : /[a-zA-Z]/.test(val) ? 'fqdn' : 'ipmask';
+      // 2026-08-09 稽核修復：原判斷順序 "/" → "-" → 字母，含連字號的 FQDN（如
+      // backup-server.corp.com，網域命名極常見）會被 "-" 判斷式先攔截誤判為 iprange，
+      // 再被 split('-') 切成無意義字串；改為字母判斷優先於連字號判斷
+      const type = val.includes('/') ? 'ipmask' : /[a-zA-Z]/.test(val) ? 'fqdn' : val.includes('-') ? 'iprange' : 'ipmask';
       const [startIp, endIp] = val.includes('-') && type === 'iprange' ? val.split('-') : ['-', '-'];
       out.push({
         category: 'address', name, type,
@@ -13846,7 +13849,11 @@ const App = (() => {
 
   const $=id=>document.getElementById(id);
   const sz=b=>b<1024?b+'B':b<1048576?(b/1024).toFixed(1)+'KB':(b/1048576).toFixed(1)+'MB';
-  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // 2026-08-09 稽核修復：原本未跳脫雙引號，但被用在 title="${esc(r.app)}"（PaloAlto
+  // application 欄位，來自上傳設定檔原始文字，未經字元白名單過濾）、<option value="${esc(v)}">
+  // （VDOM 名稱）等雙引號屬性內，惡意設定檔可構造含 " 的欄位值提前結束屬性、注入事件
+  // 處理器，構成儲存型 XSS；補上雙引號跳脫
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const ms=t=>new Promise(r=>setTimeout(r,t));
   const pill=(t,c)=>`<span class="pill ${c}">${esc(t)}</span>`;
   const nameMap={f:'fc-name',s:'sc-name',c:'cc-name',p:'pc-name',j:'jc-name',x:'xc-name',w:'wc-name',m:'mc-name',a:'ac-name',t:'tc-name',z:'zc-name',r:'rc-name',u:'uc-name'};
@@ -16727,7 +16734,9 @@ function onParsed(){
 
   function renderGlobalResults(results, q) {
     if (!results.length) return `<div class="nodata">${tr('search.no_results')}</div>`;
-    const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    // 2026-08-09 稽核修復：比照同專案其餘 esc() 定義補上雙引號跳脫，統一一致（此處目前用法
+    // 皆在文字內容而非屬性語境，非立即可利用，但避免未來新增用法時被誤用於屬性內）
+    const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const hl = s => { const r = esc(s); const qi = r.toLowerCase().indexOf(q.toLowerCase()); if(qi<0)return r; return r.slice(0,qi)+'<mark style="background:rgba(0,212,255,.25);border-radius:2px;padding:0 2px">'+r.slice(qi,qi+q.length)+'</mark>'+r.slice(qi+q.length); };
     return results.map(({sec, label, count, rows}) => {
       const keys = Object.keys(rows[0]||{}).filter(k=>!['phase2','comment','_shadow'].includes(k)).slice(0,6);

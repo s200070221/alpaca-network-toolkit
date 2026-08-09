@@ -326,10 +326,10 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
         <label for="opt-user" data-i18n="opt.user">帳號名稱替換</label>
         <label class="toggle"><input type="checkbox" id="opt-user" checked><span class="slider"></span></label>
       </div>
-      <div class="opt-row">
-        <label for="opt-objects" data-i18n="opt.objects">物件名稱替換</label>
-        <label class="toggle"><input type="checkbox" id="opt-objects"><span class="slider"></span></label>
-      </div>
+      <!-- 2026-08-09 稽核修復：「物件名稱替換」checkbox 已移除——原本綁定的 opts.objectNames
+           從未被任何 anonXXX() 函式讀取，使用者勾選後會誤以為 address-object/policy 等物件
+           名稱已被匿名化，實際上完全沒有生效；在 23 家廠牌上倉促補實作物件命名映射風險高、
+           易出錯，不符合專案「不猜測」原則，故先移除死選項而非半吊子實作 -->
       <div class="opt-row">
         <label for="opt-comments" data-i18n="opt.comments" data-i18n-title="opt.comments_hint" title="含 alias、description、remark">備註/描述/別名</label>
         <label class="toggle"><input type="checkbox" id="opt-comments"><span class="slider"></span></label>
@@ -608,7 +608,10 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
 </div>
 
 <script>
-const esc = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// 2026-08-09 稽核修復：原本未跳脫雙引號，但被用在 title="${esc(f.name)}" 這類雙引號屬性內
+// （f.name 來自使用者上傳的 File.name，檔案系統/拖放完全可控），惡意檔名可提前結束屬性、
+// 注入事件處理器（如 onmouseover=），構成儲存型 XSS；補上雙引號跳脫
+const esc = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 // ============================================================
 // [I18N] 多語言支援
 // ============================================================
@@ -1139,7 +1142,6 @@ function getOpts() {
     ip:             document.getElementById('opt-ip').checked,
     hostname:       document.getElementById('opt-hostname').checked,
     user:           document.getElementById('opt-user').checked,
-    objectNames:    document.getElementById('opt-objects').checked,
     comments:       document.getElementById('opt-comments').checked,
     vdom:           document.getElementById('opt-vdom').checked,
     mac:            document.getElementById('opt-mac').checked,
@@ -1568,6 +1570,19 @@ function anonSophosXML(text, opts) {
     text = text.replace(/(<Resource>)(<!\[CDATA\[)?([^\]<]+?)(\]\]>)?(<\/Resource>)/g, (m, o, cd, val, ce, c) =>
       o + (cd||'') + replaceIPCIDR(val, opts) + (ce||'') + c);
   }
+  // 2026-08-09 稽核修復：anonSophosXML() 先前完全沒有處理 MAC 位址，即使 opts.mac 已勾選；
+  // SophosParser.parseInterfaces() 已驗證真實欄位 <MACAddress> 存在（介面實體 MAC），比照
+  // replaceTagIP() 既有的 CDATA-aware 寫法新增 replaceTagMAC()
+  if (opts.mac) {
+    function replaceTagMAC(t, tag) {
+      return t.replace(new RegExp(`(<${tag}>)(<!\\[CDATA\\[)([^\\]]+)(\\]\\]>)(<\\/${tag}>)`, 'g'), (m, o, cd, val, ce, c) =>
+        o + cd + replaceMACsInLine(val.trim(), opts) + ce + c
+      ).replace(new RegExp(`(<${tag}>)([^<]+)(<\\/${tag}>)`, 'g'), (m, o, val, c) =>
+        o + replaceMACsInLine(val.trim(), opts) + c
+      );
+    }
+    text = replaceTagMAC(text, 'MACAddress');
+  }
   return text;
 }
 
@@ -1602,8 +1617,32 @@ function anonCheckPoint(text, opts) {
   }).join('\n');
 }
 
-// ---- Palo Alto PAN-OS (set format) ----
+// ---- Palo Alto PAN-OS (set format 與 XML 格式皆支援) ----
+// 2026-08-09 稽核修復：原本函式僅涵蓋 "set" 純文字格式，但 PaloAltoParser（firewall_analyzer）
+// 同時支援 XML 候選設定格式（isXml()/xv() 等 helper），XML 上傳檔先前完全沒有任何機敏欄位
+// 遮蔽（僅通用 IP 掃描仍生效）。已對照 PaloAltoParser 與真實 fixture
+// （firewall_analyzer/test_config/paloalto_test.xml）交叉確認的標籤：<hostname>（巢狀於
+// <system>）、<pre-shared-key><key>VALUE</key></pre-shared-key>；SNMP community 依 Parser
+// parseSnmp() 兩種既有格式（<snmp-community-string> 與 <snmp-community><entry name="X"/>>）
+// 一併涵蓋。**已知缺口**：本機使用者密碼在 XML 格式下的欄位名稱（set 格式對應的 phash）
+// 查無 PaloAltoParser 有解析、也查無真實 fixture 佐證，比照專案「parser 沒解析的欄位不
+// 猜測遮蔽」原則不實作。
+function anonPaloAltoXML(text, opts) {
+  if (opts.hostname) {
+    text = text.replace(/(<hostname>)([^<]+)(<\/hostname>)/i, (m, o, name, c) => o + anonHostname(name.trim(), 'fw', opts) + c);
+  }
+  // pre-shared-key 巢狀在 <authentication><pre-shared-key><key>VALUE</key></pre-shared-key>
+  text = text.replace(/(<pre-shared-key>\s*<key>)([^<]+)(<\/key>\s*<\/pre-shared-key>)/gi, (m, o, v, c) => { stats.key++; return o + 'REDACTED_PSK' + c; });
+  // SNMP community：Format A <snmp-community-string>X</snmp-community-string>；
+  // Format B <snmp-community><entry name="X"/></snmp-community>（community 值即 entry name）
+  text = text.replace(/(<snmp-community-string>)([^<]+)(<\/snmp-community-string>)/gi, (m, o, v, c) => { stats.community++; return o + 'REDACTED_COMMUNITY' + c; });
+  text = text.replace(/(<snmp-community>\s*<entry\s+name=")([^"]+)("\s*\/?>)/gi, (m, o, v, c) => { stats.community++; return o + 'REDACTED_COMMUNITY' + c; });
+  if (opts.ip) text = replaceIPsInLine(text, opts);
+  if (opts.mac) text = replaceMACsInLine(text, opts);
+  return text;
+}
 function anonPaloAlto(text, opts) {
+  if (text.trimStart().startsWith('<')) return anonPaloAltoXML(text, opts);
   return text.split('\n').map(line => {
     if (opts.hostname) {
       line = line.replace(/^(set\s+deviceconfig\s+system\s+hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'fw', opts));
