@@ -11726,53 +11726,24 @@ const Converter = (() => {
     L.push('');
     // Schedules
     parsed.schedules.forEach(s=>{ L.push(`set time "${s.name}" type ${s.type||'recurring'}`); if(s.start) L.push(`set time "${s.name}" start ${s.start}`); if(s.end) L.push(`set time "${s.name}" end ${s.end}`); });
-    // VPN
-    parsed.vpn.filter(v=>v.type==='ipsec-p1').forEach((v,i)=>{
-      const [e,h]=splitProp(v.proposal);
-      L.push('');
-      L.push(`set vpn site-to-site community "${v.name}" type star`);
-      if(v.remote&&v.remote!=='-') L.push(`set vpn site-to-site community "${v.name}" peer ${v.remote}`);
-      if(v.iface&&v.iface!=='-') L.push(`set vpn site-to-site community "${v.name}" interface ${v.iface}`);
-      L.push(`set vpn site-to-site community "${v.name}" ike-version ${v.ikeVer||'1'}`);
-      L.push(`set vpn site-to-site community "${v.name}" auth-method ${v.authMethod==='psk'?'psk':'certificate'}`);
-      L.push(`set vpn site-to-site community "${v.name}" ike-p1-encryption ${normEnc(e,'checkpoint')}`);
-      L.push(`set vpn site-to-site community "${v.name}" ike-p1-integrity ${normHash(h,'checkpoint')}`);
-      L.push(`set vpn site-to-site community "${v.name}" ike-p1-dh-group ${normDH(v.dhgrp,'checkpoint')}`);
-      L.push(`set vpn site-to-site community "${v.name}" ike-p1-lifetime ${v.lifetime||'86400'}`);
-      (v.phase2||[]).forEach(p2=>{
-        const [pe,ph]=splitProp(p2.proposal||v.proposal);
-        L.push(`set vpn site-to-site community "${v.name}" ike-p2-encryption ${normEnc(pe,'checkpoint')}`);
-        L.push(`set vpn site-to-site community "${v.name}" ike-p2-integrity ${normHash(ph,'checkpoint')}`);
-        L.push(`set vpn site-to-site community "${v.name}" ike-p2-dh-group ${normDH(p2.dhgrp||v.dhgrp,'checkpoint')}`);
-        if(p2.localSub&&p2.localSub!=='-') L.push(`set vpn site-to-site community "${v.name}" local-encryption-domain ${p2.localSub.replace(/\s+/,'/')}`);
-        if(p2.remoteSub&&p2.remoteSub!=='-') L.push(`set vpn site-to-site community "${v.name}" peer-encryption-domain ${p2.remoteSub.replace(/\s+/,'/')}`);
-      });
-    });
+    // 2026-08-09 查證：規則庫（access-policy）／NAT／VPN site-to-site community 在真實 Check
+    // Point Gaia clish 官方 `set` 指令清單（sc1.checkpoint.com Gaia Admin Guide）查無對應指令，
+    // 這幾類物件在真實裝置只能透過 SmartConsole 或 Management API 管理，clish 僅管
+    // OS 層級設定（hostname/interface/routing/DNS 等，已於上方輸出）。原本此處會輸出
+    // `set access-policy rule`／`set nat rule`／`set vpn site-to-site community` 三類自創
+    // 指令族群，`CheckpointParser.parsePolicies()` 又剛好解析同一套自創語法形成封閉迴圈，
+    // 貼到真實裝置會被拒絕，故本輪移除，比照既有 ClusterXL／Mobile Access split-tunnel 因
+    // 查無公開可信 schema 而排除的做法。VPN 僅保留 Mobile Access（SSL VPN）全域開關，因其
+    // `set mobile-access` 為 Gaia clish 已存在的合法指令，不在本次移除範圍。
     const sslvpn=parsed.vpn.find(v=>v.type==='ssl-vpn');
     if(sslvpn) { L.push(''); L.push('set mobile-access on'); L.push(`set mobile-access port ${sslvpn.port||443}`); if(sslvpn.iface) L.push(`set mobile-access interface ${sslvpn.iface}`); }
-    L.push('');
-    // NAT
-    parsed.nat.filter(n=>n.type==='vip').forEach((n,i)=>{ L.push(`set nat rule ${i+1} original-destination ${n.extIp||'-'}`); L.push(`set nat rule ${i+1} translated-destination ${n.mapIp||'-'}`); if(n.extPort&&n.extPort!=='-') { L.push(`set nat rule ${i+1} original-service ${n.extPort}`); L.push(`set nat rule ${i+1} translated-service ${n.mapPort||n.extPort}`); } if(n.extIntf&&n.extIntf!=='-') L.push(`set nat rule ${i+1} install-on ${n.extIntf}`); });
     L.push('');
     // Users
     parsed.users.filter(u=>u.type==='admin'||u.type==='local').forEach(u=>{ L.push(`set user "${u.name}" password-hash PLACEHOLDER`); if(u.email&&u.email!=='-') L.push(`set user "${u.name}" email "${u.email}"`); });
     parsed.users.filter(u=>u.type==='ldap-server').forEach(u=>{ L.push(`set ldap-account-unit "${u.name}" server ${u.server}`); L.push(`set ldap-account-unit "${u.name}" port ${u.port||389}`); if(u.dn&&u.dn!=='-') L.push(`set ldap-account-unit "${u.name}" base-dn "${u.dn}"`); });
     L.push('');
-    // Policies
-    parsed.policies.forEach((p,i)=>{
-      L.push(`set access-policy rule ${i+1} name "${p.name}"`);
-      L.push(`set access-policy rule ${i+1} from "${mapZone(p.srcIntf,'checkpoint')}"`);
-      L.push(`set access-policy rule ${i+1} to "${mapZone(p.dstIntf,'checkpoint')}"`);
-      const sa=sl(p.srcAddr); const da=sl(p.dstAddr); const sv=sl(p.service);
-      L.push(`set access-policy rule ${i+1} source "${sa.length?sa[0]:'any'}"`);
-      sa.slice(1).forEach(a=>L.push(`set access-policy rule ${i+1} source add "${a}"`));
-      L.push(`set access-policy rule ${i+1} destination "${da.length?da[0]:'any'}"`);
-      da.slice(1).forEach(a=>L.push(`set access-policy rule ${i+1} destination add "${a}"`));
-      L.push(`set access-policy rule ${i+1} service "${sv.length?sv[0]:'any'}"`);
-      L.push(`set access-policy rule ${i+1} action ${mapAction(p.action,'checkpoint')}`);
-      if(p.logtraffic&&p.logtraffic!=='disable') L.push(`set access-policy rule ${i+1} track Log`);
-      if(p.status==='disable') L.push(`set access-policy rule ${i+1} disabled true`);
-    });
+    L.push('# 規則庫（Access Policy）／NAT／VPN site-to-site community 需透過 SmartConsole 或');
+    L.push('# Management API 管理，非 Gaia clish 可設定範圍，本工具不產生對應指令。');
     return L.join('\n');
   }
 
@@ -12397,22 +12368,28 @@ const Converter = (() => {
     L.push(`<!-- ${hdr(parsed.vendor||'?','SonicOS <6.2',d.hostname)} -->`);
     L.push('<SonicWALLConfig>');
     L.push('  <DeviceInfo>');
-    L.push(`    <Name>${esc(d.hostname)}</Name>`);
+    // 2026-08-09 修復：原本用 <Name> 標籤，但 SonicWallParser.parseDeviceInfo() 只認
+    // DeviceName/HostName/Hostname 三種標籤，<Name> 打不中導致轉換後讀不回 hostname
+    // （round-trip 測試 CV42b 發現，用 Node 實測確認修復前必定回傳 "-"）
+    L.push(`    <DeviceName>${esc(d.hostname)}</DeviceName>`);
     L.push(`    <FirmwareVersion>${esc(d.firmware)}</FirmwareVersion>`);
     L.push(`    <Model>${esc(d.model||'TZ')}</Model>`);
     L.push('  </DeviceInfo>');
 
     if(parsed.interfaces.length) {
-      L.push('  <Interfaces>');
+      // 2026-08-09 修正：改用 SonicWallParser 註明「主要（已驗證）」的標籤
+      // <InterfaceSettings><InterfaceEntry>，原本用的 <Interfaces><Interface> 是該 parser
+      // 自己標註「未證實對應版本」的欄位命名容錯別名
+      L.push('  <InterfaceSettings>');
       parsed.interfaces.forEach(i=>{
-        L.push('    <Interface>');
+        L.push('    <InterfaceEntry>');
         L.push(`      <Name>${esc(i.name)}</Name>`);
         if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP') { L.push(`      <IPAddress>${esc(i.ip)}</IPAddress>`); L.push(`      <Netmask>${esc(i.mask&&i.mask!=='-'?i.mask:'255.255.255.0')}</Netmask>`); }
         L.push(`      <Zone>${esc(mapZone(i.role,'sonicwall'))}</Zone>`);
         if(i.desc&&i.desc!=='-') L.push(`      <Comment>${esc(i.desc)}</Comment>`);
-        L.push('    </Interface>');
+        L.push('    </InterfaceEntry>');
       });
-      L.push('  </Interfaces>');
+      L.push('  </InterfaceSettings>');
     }
 
     const sroutes=parsed.routes.filter(r=>r.type==='static'||r.type==='default');
@@ -12441,6 +12418,10 @@ const Converter = (() => {
     }
 
     if(parsed.nat.length) {
+      // 2026-08-09 查證：NAT 標籤與 Interface/AccessRule 不同，SonicWallParser 對 NAT 容器/
+      // 元素命名（NatEntry/NATEntry/NATRule/OneToOneNATEntry）並未標註任何一個是「主要
+      // （已驗證）」標籤，全部都是「未證實對應版本」的欄位命名容錯，故無可換用的已驗證
+      // 標籤，維持現狀，待未來取得真實 SonicOS <6.2 XML 範例才能確認
       L.push('  <NATPolicies>');
       parsed.nat.forEach(n=>{
         L.push('    <NatEntry>');
@@ -12453,9 +12434,11 @@ const Converter = (() => {
     }
 
     if(parsed.policies.length) {
+      // 2026-08-09 修正：改用 SonicWallParser 註明「主要（已驗證）」的標籤 <Rule>，原本用
+      // 的 <AccessRule> 是該 parser 自己標註「未證實對應版本」的欄位命名容錯別名
       L.push('  <AccessRules>');
       parsed.policies.forEach(p=>{
-        L.push('    <AccessRule>');
+        L.push('    <Rule>');
         L.push(`      <Name>${esc(p.name)}</Name>`);
         L.push(`      <SourceZone>${esc(mapZone(p.srcIntf,'sonicwall'))}</SourceZone>`);
         L.push(`      <DestinationZone>${esc(mapZone(p.dstIntf,'sonicwall'))}</DestinationZone>`);
@@ -12464,7 +12447,7 @@ const Converter = (() => {
         L.push(`      <Service>${esc(sl(p.service)[0]||'any')}</Service>`);
         L.push(`      <Action>${mapAction(p.action,'sonicwall')}</Action>`);
         L.push(`      <Enabled>${p.status==='disable'?'false':'true'}</Enabled>`);
-        L.push('    </AccessRule>');
+        L.push('    </Rule>');
       });
       L.push('  </AccessRules>');
     }
@@ -12776,6 +12759,17 @@ const Converter = (() => {
       L.push('');
     }
 
+    // 2026-08-09 修復：round-trip 測試（CV46b）發現既有 bug——上方 /ip address 對 VRRP
+    // 虛擬介面（如 vrrp1）只輸出位址綁定，卻從未輸出 /interface vrrp add name=vrrp1 ...
+    // 本體，貼到真實裝置會因該介面不存在而被拒絕；比照 MikrotikParser.parseMikrotikHa()
+    // 已查證的真實語法（/interface vrrp 底下 add 一行含 name/interface/vrid/priority）補回
+    const vrrpIf=parsed.interfaces.find(i=>i.type==='vrrp');
+    if(vrrpIf&&parsed.ha&&parsed.ha.enabled&&parsed.ha.mode==='VRRP'){
+      L.push('/interface vrrp');
+      L.push(`add name=${vrrpIf.name} interface=${parsed.ha.syncInterface&&parsed.ha.syncInterface!=='-'?parsed.ha.syncInterface:'ether1'} vrid=${parsed.ha.groupId&&parsed.ha.groupId!=='-'?parsed.ha.groupId:'1'} priority=${parsed.ha.priority&&parsed.ha.priority!=='-'?parsed.ha.priority:'100'}`);
+      L.push('');
+    }
+
     const sroutes=parsed.routes.filter(r=>r.type==='static'||r.type==='default');
     if(sroutes.length) {
       L.push('/ip route');
@@ -12889,6 +12883,7 @@ const Converter = (() => {
     if(targetVendor==='zyxel') notes.push('Zyxel ZLD 語法純依官方 CLI Reference Guide 組出，無真實裝置匯出檔比對校正，信心度低於已用真實範例驗證過的廠牌；VPN／NAT／DHCP 等欄位本轉換器不支援輸出，請人工於裝置上另行設定');
     if(targetVendor==='edgerouter') notes.push('EdgeRouter 規則來源設定檔通常已按介面方向分別建立具名規則集，本轉換器無法得知原始規則應歸屬哪個介面，統一併入單一規則集 CONVERTED_IN 且未綁定任何介面，請人工在裝置上用 firewall in/out/local name 指令綁定至正確介面方向後才會生效');
     if(targetVendor==='openwrt') notes.push('OpenWrt (UCI) 語法純依官方文件組出，無真實裝置匯出檔比對校正；來源規則的介面欄位未必是 UCI 慣用的 zone 名稱，本轉換器已自動合成對應 config zone 區塊讓輸出自我一致，但實際 zone／network 對應請人工依裝置真實拓樸核對');
+    if(targetVendor==='checkpoint') notes.push('查證官方 Gaia Admin Guide 確認規則庫（Access Policy）／NAT／VPN site-to-site community 並無對應的 clish "set" 指令，這幾類物件僅能透過 SmartConsole 或 Management API 管理，本轉換器不產生對應輸出，僅轉換 OS 層級設定（介面/路由/hostname 等）');
     return notes;
   }
 

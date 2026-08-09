@@ -3051,9 +3051,10 @@ function assembleRuijieConfig(model){
   // 辨識為 ruijie（比照 Arista EOS 版本註解行的既有慣例）
   const blocks=[`! ${tr('notice.disclaimer')}`,'! version RGOS 11.4(1)B1',`hostname ${model.sysname||'Switch'}`];
   if(model.vlans&&model.vlans.length)blocks.push(renderCiscoVLANs(model.vlans));
-  // VRF：Ruijie 沿用 Cisco 語系的 `ip vrf forwarding NAME` 介面指令，比照建立 `ip vrf NAME`
-  // 保持內部一致；本廠牌本身信心度低於已用真實範例校正過的廠牌（無真實裝置匯出檔可比對），
-  // VRF 建立指令的真實語法未獨立查證
+  // VRF：2026-08-09 查證官方 Ruijie RG-S6120 Series RGOS Command Reference（Release
+  // 12.1(2)B0102）第 7.4 節「ip vrf」確認 `ip vrf vrf-name` 為 Global configuration mode
+  // 建立 VRF 的指令（"Use this command to create a VRF"），與 Cisco classic IOS 語法相同，
+  // 非單純類推；介面綁定 `ip vrf forwarding NAME`（第 7.5 節）語法亦一併確認
   const ruijieVrfNames=collectVrfNames(model.interfaces);
   if(ruijieVrfNames.length)blocks.push(ruijieVrfNames.map(n=>`ip vrf ${n}`).join('\n!\n'));
   const stackInfo=renderRuijieStack(model.stack);
