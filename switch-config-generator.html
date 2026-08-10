@@ -1215,8 +1215,12 @@ function renderComwareInterface(iface,lacpList,aclList,securityList,stp,breakout
   // 關鍵字；vrf 綁定須在 ip address 之前宣告（真實語法要求，變更 VRF 會清空既有 IP）。
   // SVI 的 ip 欄位在解析時已轉成 CIDR 格式，實體埠/Loopback 則保留原始「IP MASK」字串。
   if(iface.vrf)lines.push(` ip binding vpn-instance ${iface.vrf}`);
+  // IPv6（試點 5 廠牌之一，已查證官方 H3C IPv6 basics commands 文件：`ipv6 address ADDR/PREFIXLEN`，
+  // 與 IPv4 CIDR 慣例一致的 slash 寫法；SVI/實體埠/Loopback 皆同一指令直出，不需遮罩換算）
   if(iface.ip){
-    if(iface.type==='svi'){
+    if(iface.ip.includes(':')){
+      lines.push(` ipv6 address ${iface.ip}`);
+    }else if(iface.type==='svi'){
       const [ip,len]=iface.ip.split('/');
       lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
     }else{
@@ -1930,13 +1934,15 @@ function renderArubaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,b
   // 正確解析 ip address/vrf attach，但 generator 從未寫回設定文字）。官方文件＋真實
   // AOS-CX 設定檔確認：SVI/Loopback 直接 `ip address`；實體埠需先 `routing`（L3 模式）
   // 或顯式 `no routing`（L2 模式，真機對非路由埠一律顯式宣告，非必要但合法冗餘）。
+  // IPv6（試點 5 廠牌之一，官方 AOS-CX IPv6 Quick Start Guide 確認 `ipv6 address ADDR/PREFIXLEN`，
+  // 本來就是直出無遮罩換算，僅需切換關鍵字）
   if(iface.type==='svi'||iface.type==='loopback'){
-    if(iface.ip)lines.push(`    ip address ${iface.ip}`);
+    if(iface.ip)lines.push(`    ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
   }else{
     // 實體埠（含未標示 type 的手動輸入資料，預設視為實體埠）
     if(iface.mode==='routed'&&iface.ip){
       lines.push('    routing');
-      lines.push(`    ip address ${iface.ip}`);
+      lines.push(`    ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
     }else if(iface.mode==='trunk'||iface.mode==='access'){
       lines.push('    no routing');
     }
@@ -2168,18 +2174,23 @@ function renderCiscoInterface(iface,lacpList,dhcpList,aclList,securityList,stp){
   // 格式，Loopback／routed 實體埠則保留原始「IP MASK」字串；vrf forwarding 須在
   // ip address 之前宣告（真實語法要求，變更 VRF 會清空既有 IP）。Management 介面的
   // vrf 欄位是解析器固定塞入的 'MGMT' 標記（非真實解析到的關鍵字），不在此處理範圍。
+  // IPv6（試點 5 廠牌之一，標準 Cisco IOS 語法 `ipv6 address ADDR/PREFIXLEN`，不需遮罩換算）
   if(iface.type==='svi'){
     if(iface.vrf)lines.push(` ip vrf forwarding ${iface.vrf}`);
     if(iface.ip){
-      const [ip,len]=iface.ip.split('/');
-      lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+      if(iface.ip.includes(':')){
+        lines.push(` ipv6 address ${iface.ip}`);
+      }else{
+        const [ip,len]=iface.ip.split('/');
+        lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+      }
     }
   }else if(iface.type==='loopback'){
-    if(iface.ip)lines.push(` ip address ${iface.ip}`);
+    if(iface.ip)lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
   }else if(iface.type==='physical'&&iface.mode==='routed'){
     lines.push(' no switchport');
     if(iface.vrf)lines.push(` ip vrf forwarding ${iface.vrf}`);
-    if(iface.ip)lines.push(` ip address ${iface.ip}`);
+    if(iface.ip)lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
   }
   const lg=findLacpGroup(lacpList,iface.name);
   if(!lg)lines.push(...ciscoSwitchportLines(iface));
@@ -2729,16 +2740,22 @@ function renderAristaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,
   // 直接原樣擷取的「IP 遮罩」字串（未轉 CIDR），直接輸出即可。Loopback 在整份 generator
   // 先前完全沒有輸出路徑，也是靠這裡補上（比照 Aruba CX renderArubaInterface() 的既有寫法）
   const isMgmt=/^Management/i.test(iface.name);
+  // IPv6（試點 5 廠牌之一，官方 EOS User Manual 確認 interface 模式下 `ipv6 address ADDR/PREFIXLEN`
+  // 與 Cisco 語法一致，不需遮罩換算）
   if(iface.type==='svi'){
     if(iface.ip){
-      const [ip,len]=iface.ip.split('/');
-      lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+      if(iface.ip.includes(':')){
+        lines.push(` ipv6 address ${iface.ip}`);
+      }else{
+        const [ip,len]=iface.ip.split('/');
+        lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+      }
     }
   }else if(iface.type==='loopback'||isMgmt){
-    if(iface.ip)lines.push(` ip address ${iface.ip}`);
+    if(iface.ip)lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
   }else if(iface.mode==='routed'&&iface.ip){
     lines.push(' no switchport');
-    lines.push(` ip address ${iface.ip}`);
+    lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
   }
   // vrf（2026-08-08 查證修正）：官方 EOS 4.23+ 語法為裸 "vrf NAME"（"vrf forwarding" 已廢棄），
   // parseCiscoInterfaces() 已同步改用 vendor 分流偵測；management 介面固定為 MGMT，是 parser
@@ -5272,8 +5289,10 @@ function renderJuniperInterface(iface,lacpList){
     // "address A.B.C.D/N;"（掃描整個介面 body，不限定巢狀層級），render 端從未輸出過。
     // vrf 不在此處輸出——真實 Junos VRF 綁定語法方向是反過來的
     // routing-instances{NAME{interface X;}}，見 renderJuniperRoutingInstances()
+    // IPv6（試點 5 廠牌之一，標準 Junos 語法 family inet6，與 family inet 平行）
+    const fam=iface.ip.includes(':')?'inet6':'inet';
     lines.push('        unit 0 {');
-    lines.push('            family inet {');
+    lines.push(`            family ${fam} {`);
     lines.push(`                address ${iface.ip};`);
     lines.push('            }');
     lines.push('        }');
@@ -5294,7 +5313,9 @@ function renderJuniperIRB(svis){
     lines.push(`        unit ${uid} {`);
     if(i.desc)lines.push(`            description "${i.desc}";`);
     if(i.ip){
-      lines.push('            family inet {');
+      // IPv6（試點 5 廠牌之一）：SVI 與 routed 實體埠共用同一組 family inet/inet6 判斷邏輯
+      const fam=i.ip.includes(':')?'inet6':'inet';
+      lines.push(`            family ${fam} {`);
       lines.push(`                address ${i.ip};`);
       lines.push('            }');
     }

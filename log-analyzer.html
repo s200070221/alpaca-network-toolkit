@@ -1192,35 +1192,44 @@ function cidrMatch(ip, cidr) {
 // UI 動態產生「該資料庫實際涵蓋哪些國家」的勾選清單使用（見 getImportedGeoCountries()）。
 // 對 INTEL_LISTS／SAFE_LISTS 這類沒有 country 欄位的一般情資清單而言只是多一個空陣列，
 // 成本可忽略，不需要為 GeoIP 另開一份專用索引函式
-function buildIntelIndex(intelList) {
+// 2026-08-10 稽核修復：原本用 forEach() 一次跑完整份清單，大型清單（真實 GeoIP 資料庫常見
+// 數十萬筆）會同步阻塞主執行緒近 1 秒甚至更久、期間畫面完全無回應，使用者會誤以為當掉。
+// 改為 async + 一般 for 迴圈，每處理 CHUNK 筆呼叫一次 yieldToUI() 讓出主執行緒，讓瀏覽器
+// 分頁在整個建索引過程中維持可重繪/可互動（三個呼叫端 doIntelUpload/doSafelistUpload/
+// doGeoUpload 皆已改為 async 並 await 本函式，見對應段落）
+const INTEL_INDEX_CHUNK = 5000;
+async function buildIntelIndex(intelList) {
   const exact = new Map(), cidrByPrefix = new Map(), cidr6ByPrefix = new Map(), countrySet = new Set();
   let cidrCount = 0, cidr6Count = 0, hasBroadCidr = false;
-  intelList.entries.forEach(e => {
+  const entries = intelList.entries;
+  for (let i = 0; i < entries.length; i++) {
+    if (i > 0 && i % INTEL_INDEX_CHUNK === 0) await yieldToUI();
+    const e = entries[i];
     if (e.meta && e.meta.country) countrySet.add(e.meta.country);
     if (!e.value.includes('/')) {
       // 單一位址（IPv4/IPv6 皆可）：intelLookup() 的 exact.has(ip) 是純字串比對，本來就不挑
       // v4/v6，直接存進同一個 Map 即可，不需要分開處理
-      exact.set(e.value, e); return;
+      exact.set(e.value, e); continue;
     }
     const [base, bitsRaw] = e.value.split('/');
     if (base.includes(':')) {
       const bits = bitsRaw === undefined ? 128 : Number(bitsRaw);
       const baseInt = ipv6ToBigInt(base);
-      if (baseInt === null || !Number.isInteger(bits) || bits < 0 || bits > 128) return; // 無效 CIDR 靜默略過，比照 IPv4 分支既有慣例
+      if (baseInt === null || !Number.isInteger(bits) || bits < 0 || bits > 128) continue; // 無效 CIDR 靜默略過，比照 IPv4 分支既有慣例
       const masked = baseInt & ipv6MaskForBits(bits);
       if (!cidr6ByPrefix.has(bits)) cidr6ByPrefix.set(bits, new Map());
       cidr6ByPrefix.get(bits).set(masked, e);
       cidr6Count++;
       // IPv6 版的過寬 CIDR 警告，比例比照 IPv4（bits<=8 佔 32-bit 的 25%）：128-bit 的 25% 是 32
       if (bits <= 32) hasBroadCidr = true;
-      return;
+      continue;
     }
     const bits = bitsRaw === undefined ? 32 : Number(bitsRaw);
     const baseInt = ipToInt(base);
     // 2026-08-09 稽核修復：原本只檢查 baseInt/bits 是否為 null/NaN，未驗證 bits 落在 0-32
     // 合法範圍；bits 為負數時（如格式錯誤的 "x.x.x.x/-1"）會落入下方位移運算，JS 位移運算子
     // 對 ≥32 的位移量取模 32，產生不可預期（非崩潰但邏輯錯誤）的遮罩值，而非被判定無效略過
-    if (baseInt === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return; // 無效 CIDR 靜默略過，比照既有 cidrMatch() 對無效輸入回傳 false 的寬容慣例
+    if (baseInt === null || !Number.isInteger(bits) || bits < 0 || bits > 32) continue; // 無效 CIDR 靜默略過，比照既有 cidrMatch() 對無效輸入回傳 false 的寬容慣例
     const mask = bits === 0 ? 0 : (bits >= 32 ? 0xFFFFFFFF : (~((1 << (32 - bits)) - 1)) >>> 0);
     const masked = (baseInt & mask) >>> 0;
     if (!cidrByPrefix.has(bits)) cidrByPrefix.set(bits, new Map());
@@ -1231,7 +1240,7 @@ function buildIntelIndex(intelList) {
     // 無任何警告；prefix ≤ 8 已是異常寬鬆（單一條目涵蓋逾 1600 萬個位址），標記供上傳流程
     // 提示使用者（console.warn 供除錯；UI 端見 renderSafeList() 對 hasBroadCidr 的 ⚠️ 標示）
     if (bits <= 8) hasBroadCidr = true;
-  });
+  }
   if (hasBroadCidr) console.warn(`[log_analyzer] 情資清單「${intelList.name}」含異常寬鬆的 CIDR（前綴 ≤ 8，IPv6 則 ≤ 32），若用於安全清單會讓比對全面失效`);
   return { name: intelList.name, exact, cidrByPrefix, cidr6ByPrefix, count: exact.size + cidrCount + cidr6Count, hasBroadCidr, countries: Array.from(countrySet).sort() };
 }
@@ -2468,23 +2477,39 @@ function doUploadFile(files) {
     document.getElementById('file-loaded-label').textContent = tr('import.file_loaded') + names;
   });
 }
+// 2026-08-10 稽核修復：三個上傳函式先前完全同步執行（含 buildIntelIndex() 建索引），大型
+// 清單會讓畫面凍結、看起來像當掉；改為 async + await buildIntelIndex()（本身已分段 yield），
+// 並在處理期間 disable 對應按鈕當作「處理中」的視覺回饋（比照 doAnalyze() 既有 disabled 寫法，
+// 不新增文字/UI 元素以避免觸發 11 語言 i18n 新增 key 的額外工作量）
 function doIntelUpload(file, name, date) {
   const reader = new FileReader();
-  reader.onload = () => {
-    const list = parseIntelList(reader.result, name || file.name);
-    const index = buildIntelIndex(list);
-    INTEL_LISTS.push({ name: list.name, date: date || '', index });
-    renderIntelList();
+  reader.onload = async () => {
+    const btn = document.getElementById('btn-intel-add');
+    if (btn) btn.disabled = true;
+    try {
+      const list = parseIntelList(reader.result, name || file.name);
+      const index = await buildIntelIndex(list);
+      INTEL_LISTS.push({ name: list.name, date: date || '', index });
+      renderIntelList();
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   };
   reader.readAsText(file);
 }
 function doSafelistUpload(file, name) {
   const reader = new FileReader();
-  reader.onload = () => {
-    const list = parseIntelList(reader.result, name || file.name);
-    const index = buildIntelIndex(list);
-    SAFE_LISTS.push({ name: list.name, index });
-    renderSafeList();
+  reader.onload = async () => {
+    const btn = document.getElementById('btn-safelist-add');
+    if (btn) btn.disabled = true;
+    try {
+      const list = parseIntelList(reader.result, name || file.name);
+      const index = await buildIntelIndex(list);
+      SAFE_LISTS.push({ name: list.name, index });
+      renderSafeList();
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   };
   reader.readAsText(file);
 }
@@ -2494,13 +2519,19 @@ function doSafelistUpload(file, name) {
 function doGeoUpload(file, name) {
   const isDat = /\.dat$/i.test(file.name);
   const reader = new FileReader();
-  reader.onload = () => {
-    const list = isDat ? parseGeoIPDat(reader.result) : parseIntelList(reader.result, name || file.name);
-    if (name) list.name = name;
-    const index = buildIntelIndex(list);
-    GEO_LISTS.push({ name: list.name, index });
-    renderGeoList();
-    renderGeoRiskChecks();
+  reader.onload = async () => {
+    const btn = document.getElementById('btn-geo-add');
+    if (btn) btn.disabled = true;
+    try {
+      const list = isDat ? parseGeoIPDat(reader.result) : parseIntelList(reader.result, name || file.name);
+      if (name) list.name = name;
+      const index = await buildIntelIndex(list);
+      GEO_LISTS.push({ name: list.name, index });
+      renderGeoList();
+      renderGeoRiskChecks();
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   };
   if (isDat) reader.readAsArrayBuffer(file); else reader.readAsText(file);
 }
