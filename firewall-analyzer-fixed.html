@@ -3297,7 +3297,7 @@ const SophosParser = (() => {
     return dedup(ifaces,'name');
   }
 
-  function parsePolicies(xml){
+  function parsePolicies(xml,addrTypeMap){
     const policies=[];const seen=new Set();
     // 只解析防火牆規則標籤，排除 Web Filter/App Control 的 <Rule>（避免分類被誤認為規則）
     ['FirewallRule','SecurityPolicy'].forEach(tag=>xblks(xml,tag).forEach((b,idx)=>{
@@ -3308,8 +3308,8 @@ const SophosParser = (() => {
       const svcs=plist(inner,'Services').concat(plist(inner,'Service')).concat(plist(inner,'ServiceList'));
       const srcAddrStr=srcNets.join(', ')||'Any';
       const dstAddrStr=dstNets.join(', ')||'Any';
-      const srcAddrSplit=_splitAddr(srcAddrStr);
-      const dstAddrSplit=_splitAddr(dstAddrStr);
+      const srcAddrSplit=_splitAddr(srcAddrStr,addrTypeMap);
+      const dstAddrSplit=_splitAddr(dstAddrStr,addrTypeMap);
       policies.push({id:xv(inner,'Id')||String(idx+1),name,srcIntf:xv(inner,'SourceZone')||xv(inner,'FromZone')||'-',dstIntf:xv(inner,'DestinationZone')||xv(inner,'ToZone')||'-',srcAddr:srcAddrStr,dstAddr:dstAddrStr,srcAddr4:srcAddrSplit.v4,srcAddr6:srcAddrSplit.v6,dstAddr4:dstAddrSplit.v4,dstAddr6:dstAddrSplit.v6,service:svcs.join(', ')||'Any',schedule:xv(inner,'Schedule')||'All the time',action:action.includes('accept')||action.includes('allow')||action.includes('permit')?'accept':'deny',nat:xv(inner,'OutboundNAT')||(xv(inner,'NATRule')?'enable':'disable'),ippool:'disable',poolname:xv(inner,'NATRule')||'-',logtraffic:xv(inner,'LogTraffic')||xv(inner,'Log')||'disable',logstart:'-',utm:{av:xv(inner,'AntiVirus')||xv(inner,'AVProfile')||'-',webfilter:xv(inner,'WebFilter')||xv(inner,'WebPolicy')||'-',ips:xv(inner,'IPS')||xv(inner,'IPSPolicy')||'-',ssl:xv(inner,'SSLInspection')||'-',appctrl:xv(inner,'ApplicationControl')||xv(inner,'AppPolicy')||'-'},status:xv(inner,'Status')||xv(inner,'Active')||'Enable',comments:xv(inner,'Description')||xv(inner,'Comments')||'-',users:plist(inner,'Users').join(', ')||'-',groups:plist(inner,'Groups').join(', ')||'-'});
     }));
     return policies;
@@ -3456,7 +3456,10 @@ const SophosParser = (() => {
   function stripXmlComments(xml){return xml.replace(/<!--[\s\S]*?-->/g,'');}
   function parse(text){
     const xml=stripXmlComments(text);
-    return{vendor:'Sophos',deviceInfo:parseDeviceInfo(xml),interfaces:parseInterfaces(xml),policies:parsePolicies(xml),routes:parseRoutes(xml),vpn:parseVPN(xml),addresses:parseAddressObjects(xml),services:parseServiceObjects(xml),schedules:parseSchedules(xml),nat:parseNAT(xml),users:parseUsers(xml),sdwan:parseSdwan(xml),dhcp:parseDhcp(xml),dns:parseDns(xml),snmp:parseSnmp(xml),logservers:parseLogServers(xml)};
+    // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 SourceNetworks/DestinationNetworks
+    // 名稱反查 v4/v6 型別（見 _splitAddr() 定義處註解）
+    const addresses=parseAddressObjects(xml);
+    return{vendor:'Sophos',deviceInfo:parseDeviceInfo(xml),interfaces:parseInterfaces(xml),policies:parsePolicies(xml,buildAddrTypeMap(addresses)),routes:parseRoutes(xml),vpn:parseVPN(xml),addresses,services:parseServiceObjects(xml),schedules:parseSchedules(xml),nat:parseNAT(xml),users:parseUsers(xml),sdwan:parseSdwan(xml),dhcp:parseDhcp(xml),dns:parseDns(xml),snmp:parseSnmp(xml),logservers:parseLogServers(xml)};
   }
 
   // ── Sophos SD-WAN / Link Balancing ────────────────────────────────────────
@@ -3805,7 +3808,7 @@ const CheckpointParser = (() => {
   }
 
   // ─── Policies (rulebases) ─────────────────────────────────────────────────
-  function parsePolicies(text) {
+  function parsePolicies(text, addrTypeMap) {
     const policies = [];
 
     // Gaia clish access-policy or "show access-policy" output
@@ -3819,8 +3822,8 @@ const CheckpointParser = (() => {
       const prefix = `access-policy rule ${n}`;
       const srcStr = clishVal(text, `${prefix} source`) || 'Any';
       const dstStr = clishVal(text, `${prefix} destination`) || 'Any';
-      const srcAddrSplit = _splitAddr(srcStr);
-      const dstAddrSplit = _splitAddr(dstStr);
+      const srcAddrSplit = _splitAddr(srcStr, addrTypeMap);
+      const dstAddrSplit = _splitAddr(dstStr, addrTypeMap);
       policies.push({
         id:       n,
         name:     clishVal(text, `${prefix} name`) || `Rule-${n}`,
@@ -3866,11 +3869,18 @@ const CheckpointParser = (() => {
       const act  = objVal(body, 'action') || 'drop';
       const trk  = objVal(body, 'track') || 'None';
       const dis  = objVal(body, 'disabled');
+      // 2026-08-10 稽核修復：此格式先前完全沒有計算 srcAddr4/srcAddr6/dstAddr4/dstAddr6，
+      // 這幾個欄位會是 undefined，UI 的 IPV4/IPV6 來源/目的欄位對這種規則格式一律顯示空白
+      const srcAddrSplit = _splitAddr(src, addrTypeMap);
+      const dstAddrSplit = _splitAddr(dst, addrTypeMap);
       policies.push({
         id: n, name: objVal(body, 'name') || `Rule-${n}`,
         srcIntf: objVal(body, 'from') || 'Any',
         dstIntf: objVal(body, 'to')   || 'Any',
-        srcAddr: src, dstAddr: dst, service: svcs,
+        srcAddr: src, dstAddr: dst,
+        srcAddr4: srcAddrSplit.v4, srcAddr6: srcAddrSplit.v6,
+        dstAddr4: dstAddrSplit.v4, dstAddr6: dstAddrSplit.v6,
+        service: svcs,
         schedule: objVal(body, 'time') || 'Any',
         action: mapCpAction(act), nat: 'disable',
         ippool: 'disable', poolname: '-',
@@ -4356,14 +4366,20 @@ const CheckpointParser = (() => {
 
   // ─── Main parse ───────────────────────────────────────────────────────────
   function parse(text) {
+    // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 source/destination 名稱反查
+    // v4/v6 型別（見 _splitAddr() 定義處註解）。注意：parseAddressObjects() 目前只認 IPv4
+    // 專屬 Gaia clish 關鍵字（ipaddr/mask-length/first-ip/last-ip），沒有 IPv6 位址物件會被
+    // 解析進來，故此反查表對 Check Point 目前仍只能正確分類 v4 物件（已知限制，非本次修法
+    // 範圍——查無官方文件佐證 IPv6 對應關鍵字寫法，不可臆測 schema）
+    const addresses = parseAddressObjects(text);
     return {
       vendor:     'CheckPoint',
       deviceInfo: parseDeviceInfo(text),
       interfaces: parseInterfaces(text),
-      policies:   parsePolicies(text),
+      policies:   parsePolicies(text, buildAddrTypeMap(addresses)),
       routes:     parseRoutes(text),
       vpn:        parseVPN(text),
-      addresses:  parseAddressObjects(text),
+      addresses,
       services:   parseServiceObjects(text),
       schedules:  parseSchedules(text),
       nat:        parseNAT(text),
@@ -7298,7 +7314,22 @@ const PfsenseParser = (() => {
   }
 
   // ── Firewall rules ────────────────────────────────────────────────────────
-  function parsePolicies(xml, ifMap) {
+  // "ip:port" 只有剛好一個冒號、左側本身不含冒號時才安全砍掉 port；IPv6 字面值含多個冒號，
+  // 原樣保留（不猜測，交給下面 _splitAddr 的冒號判斷處理）
+  function _pfsenseStripPort(addr) {
+    const m = addr.match(/^(.*):(\d+)$/);
+    if (!m) return addr;
+    return m[1].split(':').length === 1 ? m[1] : addr;
+  }
+  // pfSense srcaddr/dstaddr 可能帶 "!" 否定前綴（規則排除），查表前需剝除（addrTypeMap 的 key
+  // 是不含 "!" 的原始物件名稱），分類完再把前綴補回輸出值，維持與主欄位一致的顯示格式
+  function _splitAddrNeg(addr, addrTypeMap) {
+    const neg = addr.startsWith('!');
+    const r = _splitAddr(neg ? addr.slice(1) : addr, addrTypeMap);
+    if (neg) { if (r.v4 !== '-') r.v4 = '!' + r.v4; if (r.v6 !== '-') r.v6 = '!' + r.v6; }
+    return r;
+  }
+  function parsePolicies(xml, ifMap, addrTypeMap) {
     const policies = [];
     const filterXml = xv(xml,'filter');
     if (!filterXml) return policies;
@@ -7353,11 +7384,12 @@ const PfsenseParser = (() => {
       const log    = hasTag(inner,'log') ? 'enable' : 'disable';
       const nat    = xv(inner,'associated-rule-id') ? 'enable' : 'disable';
 
-      // IPv4/IPv6 separation (before port info added)
-      const srcAddrBase = srcAddr.split(':')[0]; // strip port if any
-      const dstAddrBase = dstAddr.split(':')[0]; // strip port if any
-      const srcAddrSplit = _splitAddr(srcAddrBase);
-      const dstAddrSplit = _splitAddr(dstAddrBase);
+      // IPv4/IPv6 separation：strip port 改用 _pfsenseStripPort（避免把 IPv6 字面值從第一個
+      // 冒號腰斬）；"!" 否定前綴用 _splitAddrNeg 處理
+      const srcAddrBase = _pfsenseStripPort(srcAddr);
+      const dstAddrBase = _pfsenseStripPort(dstAddr);
+      const srcAddrSplit = _splitAddrNeg(srcAddrBase, addrTypeMap);
+      const dstAddrSplit = _splitAddrNeg(dstAddrBase, addrTypeMap);
 
       policies.push({
         id:       String(idx+1),
@@ -7772,15 +7804,18 @@ const PfsenseParser = (() => {
     const xml = text.replace(/<!--[\s\S]*?-->/g, '');
     const ifXml = xv(xml,'interfaces');
     const ifMap = ifXml ? buildIfMap(ifXml) : {};
+    // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 source/destination 名稱反查
+    // v4/v6 型別（見 _splitAddr() 定義處註解）
+    const addresses = parseAddressObjectsOnly(xml);
 
     return {
       vendor:     'pfSense',
       deviceInfo: parseDeviceInfo(xml),
       interfaces: parseInterfaces(xml),
-      policies:   parsePolicies(xml, ifMap),
+      policies:   parsePolicies(xml, ifMap, buildAddrTypeMap(addresses)),
       routes:     parseRoutes(xml),
       vpn:        parseVPN(xml),
-      addresses:  parseAddressObjectsOnly(xml),
+      addresses,
       services:   parseServiceObjects(xml),
       schedules:  parseSchedules(xml),
       nat:        parseNAT(xml, ifMap),
@@ -10332,7 +10367,7 @@ const EdgeRouterParser = (() => {
     return { addr: val(node, 'address') || 'any', port: val(node, 'port') || '' };
   }
 
-  function parsePolicies(tree, bind) {
+  function parsePolicies(tree, bind, addrTypeMap) {
     const out = [];
     const rulesets = childrenPrefixed(child(tree, 'firewall'), 'name');
     let idx = 0;
@@ -10347,11 +10382,16 @@ const EdgeRouterParser = (() => {
         const actionRaw = (val(rNode, 'action') || 'drop').toLowerCase();
         const desc = val(rNode, 'description') || '';
         idx++;
+        // 2026-08-10 稽核修復：先前完全沒有呼叫 _splitAddr()，srcAddr6/dstAddr6 恆為 '-'，
+        // 不論規則引用的 group 實際是否含 IPv6 成員
+        const srcAddrSplit = _splitAddr(src.addr, addrTypeMap);
+        const dstAddrSplit = _splitAddr(dst.addr, addrTypeMap);
         out.push({
           id: idx, name: desc || `${rsName}-${ruleNum}`,
           srcIntf: (bind[rsName] || []).join(',') || '-', dstIntf: '-',
           srcAddr: src.addr, dstAddr: dst.addr,
-          srcAddr4: src.addr, srcAddr6: '-', dstAddr4: dst.addr, dstAddr6: '-',
+          srcAddr4: srcAddrSplit.v4, srcAddr6: srcAddrSplit.v6,
+          dstAddr4: dstAddrSplit.v4, dstAddr6: dstAddrSplit.v6,
           service: dst.port ? `${protocol}/${dst.port}` : protocol,
           schedule: 'always',
           action: actionRaw === 'accept' ? 'accept' : 'deny',
@@ -10385,6 +10425,24 @@ const EdgeRouterParser = (() => {
         wildcard: '-', iface: '-', color: '0', comment: val(node, 'description') || '', members: members.join(', ') || '-', _vdom: '' });
     });
     return out;
+  }
+
+  // EdgeRouter 的 group（address-group/network-group）本身就是最終位址清單——members 存的是
+  // 字面 IP/CIDR 值，不是其他物件的名稱引用，與共用 buildAddrTypeMap()「members 是名稱、需要
+  // 二次查表」的假設不同（那套適用於 FortiGate/PaloAlto/Juniper/SonicWall），故另寫直接對
+  // 字面值做冒號判斷的版本；直接沿用 parseAddressObjects() 已展開好的 members 字串，不重複
+  // 走一次 tree（比照既有 buildMikrotikAddrTypeMap() 的做法精神一致，但 MikroTik 是從原始
+  // section 直接建表，這裡因為 EdgeRouter 沒有「展開前/展開後名稱不同」的問題，可以直接讀
+  // parseAddressObjects() 的輸出）
+  function buildEdgeRouterAddrTypeMap(addressObjects) {
+    const map = new Map();
+    (addressObjects || []).forEach(o => {
+      if (o.category !== 'address-group') return;
+      const members = (o.members || '').split(/\s*,\s*/).filter(m => m && m !== '-');
+      const fams = new Set(members.map(m => m.includes(':') ? 'v6' : 'v4'));
+      map.set(o.name, fams.size > 1 ? 'mixed' : (fams.values().next().value || 'v4'));
+    });
+    return map;
   }
 
   function parseServiceObjects(tree) {
@@ -10468,14 +10526,17 @@ const EdgeRouterParser = (() => {
   function parse(text) {
     const tree = parseTree(text);
     const bind = buildRulesetBinding(tree);
+    // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 source/destination group 名稱
+    // 反查 v4/v6 型別（見 buildEdgeRouterAddrTypeMap() 定義處註解）
+    const addresses = parseAddressObjects(tree);
     return {
       vendor: 'EdgeRouter',
       deviceInfo: parseDeviceInfo(tree),
       interfaces: parseInterfaces(tree, bind),
-      policies: parsePolicies(tree, bind),
+      policies: parsePolicies(tree, bind, buildEdgeRouterAddrTypeMap(addresses)),
       routes: parseRoutes(tree),
       ha: null, nat: parseNAT(tree), vpn: [],
-      addresses: parseAddressObjects(tree),
+      addresses,
       services: parseServiceObjects(tree),
       users: [], schedules: [],
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
