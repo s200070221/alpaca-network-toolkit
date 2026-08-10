@@ -326,10 +326,10 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
         <label for="opt-user" data-i18n="opt.user">帳號名稱替換</label>
         <label class="toggle"><input type="checkbox" id="opt-user" checked><span class="slider"></span></label>
       </div>
-      <div class="opt-row">
-        <label for="opt-objects" data-i18n="opt.objects">物件名稱替換</label>
-        <label class="toggle"><input type="checkbox" id="opt-objects"><span class="slider"></span></label>
-      </div>
+      <!-- 2026-08-09 稽核修復：「物件名稱替換」checkbox 已移除——原本綁定的 opts.objectNames
+           從未被任何 anonXXX() 函式讀取，使用者勾選後會誤以為 address-object/policy 等物件
+           名稱已被匿名化，實際上完全沒有生效；在 23 家廠牌上倉促補實作物件命名映射風險高、
+           易出錯，不符合專案「不猜測」原則，故先移除死選項而非半吊子實作 -->
       <div class="opt-row">
         <label for="opt-comments" data-i18n="opt.comments" data-i18n-title="opt.comments_hint" title="含 alias、description、remark">備註/描述/別名</label>
         <label class="toggle"><input type="checkbox" id="opt-comments"><span class="slider"></span></label>
@@ -608,7 +608,10 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
 </div>
 
 <script>
-const esc = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// 2026-08-09 稽核修復：原本未跳脫雙引號，但被用在 title="${esc(f.name)}" 這類雙引號屬性內
+// （f.name 來自使用者上傳的 File.name，檔案系統/拖放完全可控），惡意檔名可提前結束屬性、
+// 注入事件處理器（如 onmouseover=），構成儲存型 XSS；補上雙引號跳脫
+const esc = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 // ============================================================
 // [I18N] 多語言支援
 // ============================================================
@@ -1139,7 +1142,6 @@ function getOpts() {
     ip:             document.getElementById('opt-ip').checked,
     hostname:       document.getElementById('opt-hostname').checked,
     user:           document.getElementById('opt-user').checked,
-    objectNames:    document.getElementById('opt-objects').checked,
     comments:       document.getElementById('opt-comments').checked,
     vdom:           document.getElementById('opt-vdom').checked,
     mac:            document.getElementById('opt-mac').checked,
@@ -1568,6 +1570,19 @@ function anonSophosXML(text, opts) {
     text = text.replace(/(<Resource>)(<!\[CDATA\[)?([^\]<]+?)(\]\]>)?(<\/Resource>)/g, (m, o, cd, val, ce, c) =>
       o + (cd||'') + replaceIPCIDR(val, opts) + (ce||'') + c);
   }
+  // 2026-08-09 稽核修復：anonSophosXML() 先前完全沒有處理 MAC 位址，即使 opts.mac 已勾選；
+  // SophosParser.parseInterfaces() 已驗證真實欄位 <MACAddress> 存在（介面實體 MAC），比照
+  // replaceTagIP() 既有的 CDATA-aware 寫法新增 replaceTagMAC()
+  if (opts.mac) {
+    function replaceTagMAC(t, tag) {
+      return t.replace(new RegExp(`(<${tag}>)(<!\\[CDATA\\[)([^\\]]+)(\\]\\]>)(<\\/${tag}>)`, 'g'), (m, o, cd, val, ce, c) =>
+        o + cd + replaceMACsInLine(val.trim(), opts) + ce + c
+      ).replace(new RegExp(`(<${tag}>)([^<]+)(<\\/${tag}>)`, 'g'), (m, o, val, c) =>
+        o + replaceMACsInLine(val.trim(), opts) + c
+      );
+    }
+    text = replaceTagMAC(text, 'MACAddress');
+  }
   return text;
 }
 
@@ -1602,8 +1617,32 @@ function anonCheckPoint(text, opts) {
   }).join('\n');
 }
 
-// ---- Palo Alto PAN-OS (set format) ----
+// ---- Palo Alto PAN-OS (set format 與 XML 格式皆支援) ----
+// 2026-08-09 稽核修復：原本函式僅涵蓋 "set" 純文字格式，但 PaloAltoParser（firewall_analyzer）
+// 同時支援 XML 候選設定格式（isXml()/xv() 等 helper），XML 上傳檔先前完全沒有任何機敏欄位
+// 遮蔽（僅通用 IP 掃描仍生效）。已對照 PaloAltoParser 與真實 fixture
+// （firewall_analyzer/test_config/paloalto_test.xml）交叉確認的標籤：<hostname>（巢狀於
+// <system>）、<pre-shared-key><key>VALUE</key></pre-shared-key>；SNMP community 依 Parser
+// parseSnmp() 兩種既有格式（<snmp-community-string> 與 <snmp-community><entry name="X"/>>）
+// 一併涵蓋。**已知缺口**：本機使用者密碼在 XML 格式下的欄位名稱（set 格式對應的 phash）
+// 查無 PaloAltoParser 有解析、也查無真實 fixture 佐證，比照專案「parser 沒解析的欄位不
+// 猜測遮蔽」原則不實作。
+function anonPaloAltoXML(text, opts) {
+  if (opts.hostname) {
+    text = text.replace(/(<hostname>)([^<]+)(<\/hostname>)/i, (m, o, name, c) => o + anonHostname(name.trim(), 'fw', opts) + c);
+  }
+  // pre-shared-key 巢狀在 <authentication><pre-shared-key><key>VALUE</key></pre-shared-key>
+  text = text.replace(/(<pre-shared-key>\s*<key>)([^<]+)(<\/key>\s*<\/pre-shared-key>)/gi, (m, o, v, c) => { stats.key++; return o + 'REDACTED_PSK' + c; });
+  // SNMP community：Format A <snmp-community-string>X</snmp-community-string>；
+  // Format B <snmp-community><entry name="X"/></snmp-community>（community 值即 entry name）
+  text = text.replace(/(<snmp-community-string>)([^<]+)(<\/snmp-community-string>)/gi, (m, o, v, c) => { stats.community++; return o + 'REDACTED_COMMUNITY' + c; });
+  text = text.replace(/(<snmp-community>\s*<entry\s+name=")([^"]+)("\s*\/?>)/gi, (m, o, v, c) => { stats.community++; return o + 'REDACTED_COMMUNITY' + c; });
+  if (opts.ip) text = replaceIPsInLine(text, opts);
+  if (opts.mac) text = replaceMACsInLine(text, opts);
+  return text;
+}
 function anonPaloAlto(text, opts) {
+  if (text.trimStart().startsWith('<')) return anonPaloAltoXML(text, opts);
   return text.split('\n').map(line => {
     if (opts.hostname) {
       line = line.replace(/^(set\s+deviceconfig\s+system\s+hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'fw', opts));
@@ -1633,8 +1672,30 @@ function anonPfSense(text, opts) {
   const lines = text.split('\n');
   const out = [];
   let inUser = false;
+  // shared_key／tls 跨行狀態（2026-08-08 查證修正）：對外查證 pfsensible/core GitHub
+  // issue #132 確認 pfSense OpenVPN 的 <shared_key>／<tls> 欄位儲存的是保留原始換行的
+  // PEM 格式文字（"-----BEGIN OpenVPN Static key V1-----" 區塊），不是像憑證管理員的
+  // <cert>/<prv> 那樣整段 base64 壓成單行；原本的單行正則要求開始/結束標籤同一行才會
+  // 比對到，跨行時完全比對不到、金鑰明碼原樣殘留在輸出（checkResidual() 的 PEM 區塊
+  // 偵測雖然抓得到殘留警告，但根本問題是 anonPfSense() 本身沒有真的把它遮蔽）；<tls>
+  // 標籤先前甚至完全沒有對應規則，不論單行多行都不會被處理。修法比照既有 inUser 的
+  // context flag 慣例：進入沒有收尾標籤的開始行時記住目前是哪個標籤，之後逐行捨棄金鑰
+  // 內容本體，直到遇到收尾標籤行才恢復輸出
+  let multilineKeyTag = null;
 
   for (let line of lines) {
+    // 目前處於跨行金鑰區塊中間：這一整行是金鑰內容本體，直接捨棄；只有含收尾標籤的那行
+    // 才恢復輸出（且只保留收尾標籤本身，之前殘留的金鑰內容一併捨棄）
+    if (multilineKeyTag) {
+      const closeRe = new RegExp(`<\\/${multilineKeyTag}>`);
+      const m = line.match(closeRe);
+      if (m) {
+        out.push(line.slice(m.index));
+        multilineKeyTag = null;
+      }
+      continue;
+    }
+
     // 先開啟 context flag，再做所有替換，最後才關閉 flag（避免單行含 <user>…</user> 時 flag 被同一行清除）
     if (/<user>/.test(line)) inUser = true;
 
@@ -1644,8 +1705,24 @@ function anonPfSense(text, opts) {
     // PSK：支援 <preshared_key> 與 <pre-shared-key>（連字號格式）
     const pskR = line.replace(/(<(?:preshared_key|pre-shared-key)>)([^<]*)(<\/[^>]+>)/, '$1REDACTED_PSK$3');
     if (pskR !== line) { stats.key++; line = pskR; }
-    const skR = line.replace(/(<shared_key>)([^<]*)(<\/shared_key>)/, '$1REDACTED_KEY$3');
-    if (skR !== line) { stats.key++; line = skR; }
+    // shared_key（OpenVPN Static Key 模式）／tls（tls-auth/tls-crypt 金鑰）：先嘗試同一行
+    // 內完整標籤（沿用既有簡單 case，涵蓋人工精簡過或單行匯出的情況），比對不到才檢查
+    // 「這行只有開始標籤、沒有收尾標籤」的跨行起點情形，後續行交給上面的 multilineKeyTag
+    // 分支逐行捨棄，直到遇到收尾標籤
+    for (const kt of ['shared_key', 'tls']) {
+      const sameLineRe = new RegExp(`(<${kt}>)([^<]*)(<\\/${kt}>)`);
+      const sameLineR = line.replace(sameLineRe, `$1REDACTED_KEY$3`);
+      if (sameLineR !== line) {
+        stats.key++;
+        line = sameLineR;
+        continue;
+      }
+      if (new RegExp(`<${kt}>`).test(line)) {
+        line = line.replace(new RegExp(`<${kt}>`), `<${kt}>REDACTED_KEY`);
+        stats.key++;
+        multilineKeyTag = kt;
+      }
+    }
     const comR = line.replace(/(<(?:rocommunity|rwcommunity|community)>)([^<]*)(<\/[^>]+>)/, '$1REDACTED_COMMUNITY$3');
     if (comR !== line) { stats.community++; line = comR; }
     const bpR = line.replace(/(<bindpw>)([^<]*)(<\/bindpw>)/, '$1REDACTED_PASSWORD$3');
@@ -1836,10 +1913,17 @@ function anonEdgeRouter(text, opts) {
 // 額外的欄位級正則。hostname：parser 端（firewall_analyzer OpenWrtParser）本輪未查證
 // 完整語法佐證維持空值，比照專案既有原則「parser 沒解析的欄位不猜測遮蔽」，此函式亦
 // 不新增對應規則。
+// 2026-08-09 補上機敏欄位規則（查證官方 openwrt.org 文件確認欄位命名）：`config
+// wifi-iface` 的 `option key 'X'`（WPA/WPA2 PSK，/etc/config/wireless）與 `config
+// interface` 的 `option password 'X'`（PPPoE/VPN 帳密，/etc/config/network）此前完全
+// 未處理、明碼原樣輸出；`key1`~`key4`（WEP）因欄位名稱不同不受此正則影響，維持不處理
+// （不猜測未查證欄位）。
 function anonOpenWrt(text, opts) {
   const lines = text.split('\n');
   const out = [];
   for (let line of lines) {
+    line = line.replace(/^(\s*option\s+key\s+)(['"]?)([^'"\n]*)(\2)\s*$/, (m, p, q, v, q2) => p + q + 'REDACTED_PSK' + q2);
+    line = line.replace(/^(\s*option\s+password\s+)(['"]?)([^'"\n]*)(\2)\s*$/, (m, p, q, v, q2) => p + q + 'REDACTED_PASSWORD' + q2);
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
     out.push(line);
@@ -2441,6 +2525,12 @@ function checkResidual(text) {
   const warnings = [];
   const lines = text.split('\n');
   const sensitiveKw = /\b(password|passwd|secret|psk|community|private.key|auth.key|shared.key|preshared)\b/i;
+  // 2026-08-09 補上：上面 sensitiveKw 的 \b 單字邊界對駝峰式 XML 標籤（如
+  // <AdminPassword>／<SharedSecret>／<CommunityString>，Sophos/SonicWall 等 XML 系廠牌
+  // 慣用命名風格）內部不成立（緊鄰字元同屬 \w，無邊界可比對），已用 Node 實測確認會漏檢。
+  // 另補一條規則：比對「標籤名稱含機敏關鍵字」且「內容非空、未遮蔽」的單行 <Tag>value</Tag>
+  // 配對，範圍限縮在 XML 標籤上下文，避免無限縮範圍導致誤報率過高。
+  const camelTagRe = /<([A-Za-z]*(?:password|passwd|secret|psk|community|sharedkey|presharedkey)[A-Za-z]*)>([^<]+)<\/\1>/gi;
   const hashLike = /[A-Za-z0-9+/=]{24,}/;
   const ipLike = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/;
   const macLike = /\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b|\b(?:[0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}\b|\b(?:[0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}\b/;
@@ -2455,6 +2545,12 @@ function checkResidual(text) {
     const lineNum = i + 1;
     if (sensitiveKw.test(t) && /\S+/.test(t.replace(/\s+/g, ' ').split(/password|passwd|secret|psk|community/i).pop().trim())) {
       if (!/REDACTED/.test(t)) warnings.push({ line: lineNum, text: t });
+    }
+    camelTagRe.lastIndex = 0;
+    let camelM;
+    while ((camelM = camelTagRe.exec(t)) !== null) {
+      const val = camelM[2].trim();
+      if (val && !/REDACTED/.test(val)) warnings.push({ line: lineNum, text: t });
     }
     if (hashLike.test(t) && !/[^\x20-\x7e]/.test(t) && !/REDACTED/.test(t)) {
       const match = t.match(hashLike);

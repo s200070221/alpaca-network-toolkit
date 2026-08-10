@@ -2374,7 +2374,13 @@ function _onLangChange() {
 
 'use strict';
 // ═ HPE Comware Parser ═
-const cidrFromMask=m=>{const t={'255.255.255.0':'24','255.255.255.128':'25','255.255.255.192':'26','255.255.255.224':'27','255.255.255.240':'28','255.255.255.248':'29','255.255.255.252':'30','255.255.0.0':'16','255.0.0.0':'8','0.0.0.0':'0','255.255.128.0':'17','255.255.192.0':'18','255.255.224.0':'19','255.255.240.0':'20','255.255.248.0':'21','255.255.252.0':'22','255.255.254.0':'23','255.255.255.255':'32'};return t[m]||m};
+// 2026-08-09 稽核修復：原本純查表法缺 /1-7、/9-15，尤其常見的點對點鏈路 /31
+// (255.255.255.254)，查不到時原樣回傳字串會讓下游 switch_config_generator 的
+// maskFromCidr() parseInt 失敗又被 isNaN 攔截，靜默 fallback 成語意不同的 /32。
+// 改為查表命中才走 fast path，未命中改用與 maskToCIDR() 一致的位元運算，消除兩套
+// 平行實作（maskToCIDR 定義於下方，因函式宣告會被提升至整個 script 作用域頂端，
+// 呼叫時序上不受此處引用在前的影響）
+const cidrFromMask=m=>{const t={'255.255.255.0':'24','255.255.255.128':'25','255.255.255.192':'26','255.255.255.224':'27','255.255.255.240':'28','255.255.255.248':'29','255.255.255.252':'30','255.255.0.0':'16','255.0.0.0':'8','0.0.0.0':'0','255.255.128.0':'17','255.255.192.0':'18','255.255.224.0':'19','255.255.240.0':'20','255.255.248.0':'21','255.255.252.0':'22','255.255.254.0':'23','255.255.255.255':'32'};return t[m]||maskToCIDR(m)};
 
 // Split cfg on "\n#\n" to get clean top-level sections
 function getSections(cfg){return cfg.split('\n#\n').map(s=>s.trim()).filter(Boolean);}
@@ -2564,12 +2570,16 @@ function parseInterfaces(cfg){
 function parseRoutes(cfg){
   const routes=[]; let m;
   // Fix 3: Support interface-name as next-hop (e.g. NULL0)
-  const re=/ip route-static\s+(\S+)\s+(\S+)\s+(\S+)(?:\s+vpn-instance\s+(\S+))?/g;
+  // vrf（2026-08-08 查證修正）：H3C 官方 Command Reference 確認 "ip route-static [ vpn-instance
+  // s-vpn-instance-name ] dest-address ..." 的 vpn-instance 子句緊接在關鍵字之後（該路由所屬
+  // VRF），原本誤植為結尾子句，兩者查無任何真實裝置匯出檔可用來偵測混用，直接改對位置
+  const re=/ip route-static(?:\s+vpn-instance\s+(\S+))?\s+(\S+)\s+(\S+)\s+(\S+)/g;
   while((m=re.exec(cfg))!==null){
-    let dst,gw=m[3],vrf=m[4]||'';
-    if(m[2].match(/^\d+\.\d+\.\d+\.\d+$/)){dst=m[1]+'/'+cidrFromMask(m[2]);}
-    else if(/^\d+$/.test(m[2])){dst=m[1]+'/'+m[2];}
-    else{dst=m[1]+'/0';gw=m[2]+' '+m[3];}
+    const vrf=m[1]||'';
+    let dst,gw=m[4];
+    if(m[3].match(/^\d+\.\d+\.\d+\.\d+$/)){dst=m[2]+'/'+cidrFromMask(m[3]);}
+    else if(/^\d+$/.test(m[3])){dst=m[2]+'/'+m[3];}
+    else{dst=m[2]+'/0';gw=m[3]+' '+m[4];}
     const gwIsInterface=gw&&!gw.match(/^\d+\.\d+\.\d+\.\d+/);
     routes.push({dst,gw,vrf,gwIsInterface});
   }
@@ -3064,7 +3074,11 @@ function parseCiscoVLANs(cfg){
 }
 
 // ── Interfaces ─────────────────────────────────────────────────
-function parseCiscoInterfaces(cfg){
+// vendor（2026-08-08 新增，預設 'cisco' 向下相容）：Arista EOS 4.23 train（2019-08 起）已廢棄
+// Cisco 式 "ip vrf forwarding NAME"，官方確認改用裸 "vrf NAME"；parseArista() 與 parseCisco()
+// 共用本函式解析 interface 區塊，故用 vendor 分流 VRF 偵測正則，其餘邏輯完全不變
+function parseCiscoInterfaces(cfg,vendor){
+  const vrfRe=vendor==='arista'?/^\s*vrf\s+(\S+)/m:/ip vrf forwarding\s+(\S+)/;
   const ifaces=[];
   const blocks=cfg.split(/^interface\s+/m).slice(1);
   for(const blk of blocks){
@@ -3088,7 +3102,7 @@ function parseCiscoInterfaces(cfg){
     if(/^Vlan/i.test(name)){
       const ipRaw=(body.match(/^\s*ip address\s+(\S+)\s+(\S+)/m)||[]);
       const ip=ipRaw[1]&&ipRaw[2]?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
-      const vrf=(body.match(/ip vrf forwarding\s+(\S+)/)||[])[1]||'';
+      const vrf=(body.match(vrfRe)||[])[1]||'';
       // HSRP as VRRP equivalent
       const vrrpList=[];let hm;
       const hr=/standby\s+(\d+)\s+ip\s+(\S+)/g;
@@ -3111,7 +3125,7 @@ function parseCiscoInterfaces(cfg){
     if(noRouting){
       // Routed port
       const ip=(body.match(/^\s*ip address\s+(\S+(?:\s+\S+)?)/m)||[])[1]||'';
-      vrf=(body.match(/ip vrf forwarding\s+(\S+)/)||[])[1]||'';
+      vrf=(body.match(vrfRe)||[])[1]||'';
       ifaces.push({name,type:'physical',desc,mode:'routed',vlans:'',nativeVlan:'',vrf,ip,shutdown,member,hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
       continue;
     }
@@ -3194,8 +3208,17 @@ function parseCiscoRoutes(cfg){
 }
 
 // ── VRFs ─────────────────────────────────────────────────────
-function parseCiscoVRFs(cfg){
+function parseCiscoVRFs(cfg,vendor){
   const vrfs=[];let m;
+  // 2026-08-09 稽核修復：Arista EOS 4.23+ 官方 VRF 建立語法是裸 "vrf instance NAME"
+  // （已廢棄 "ip vrf"/"vrf definition"），先前 parseArista() 直接沿用 Cisco 專屬正則，
+  // 導致 Arista 自己產生的設定（switch_config_generator assembleAristaConfig() 輸出的
+  // 就是這個語法）丟回來解析永遠讀不到 VRF，round-trip 缺陷
+  if(vendor==='arista'){
+    const are=/^vrf instance\s+(\S+)\s*$/gm;
+    while((m=are.exec(cfg))!==null)vrfs.push({name:m[1],rd:'',importRoute:''});
+    return vrfs;
+  }
   // "ip vrf NAME" or "vrf definition NAME"
   const re=/^(?:ip vrf|vrf definition)\s+(\S+)\s*\n([\s\S]*?)(?=^(?:ip vrf|vrf definition|interface|router|ip route|\!))/gm;
   while((m=re.exec(cfg))!==null){
@@ -4179,11 +4202,26 @@ function parseRouterOSInterfaces(cfg){
 }
 // VLAN membership 以 bridge VLAN filtering table 為主體宣告（`/interface bridge vlan`），
 // interface 區塊本身完全不含 VLAN 資訊，比照既有 Alcatel/Extreme XOS/ProCurve 慣例反查回填
-function applyRouterOSVlanMembership(vlans,ifaces){
+// lacpList（2026-08-08 新增第三參數）：官方文件確認 bonding slave 不可再直接掛 bridge port，
+// 故 tagged/untagged 名稱可能是 bond（LACP 聚合介面）而非實體埠名稱，`ifaces` 只含
+// `/interface ethernet` 的實體埠，需把命中 bond 的 tagging 結果套用到該 bond 底下的所有
+// 物理成員介面，維持既有「物理介面顯示 VLAN 資訊」的 UI 慣例（與 generator 端用聚合介面
+// 第一個成員的設定當代表值的邏輯對稱）
+function applyRouterOSVlanMembership(vlans,ifaces,lacpList){
   const untaggedOf={},taggedOf={};
   vlans.forEach(v=>{
     (v.untagged?v.untagged.split(','):[]).forEach(p=>{untaggedOf[p]=String(v.id);});
     (v.tagged?v.tagged.split(','):[]).forEach(p=>{(taggedOf[p]=taggedOf[p]||[]).push(String(v.id));});
+  });
+  (lacpList||[]).forEach(l=>{
+    const members=l.members||[];
+    if(!members.length)return;
+    if(taggedOf[l.name]){
+      members.forEach(m=>{taggedOf[m]=(taggedOf[m]||[]).concat(taggedOf[l.name]);});
+    }
+    if(untaggedOf[l.name]!==undefined){
+      members.forEach(m=>{if(untaggedOf[m]===undefined)untaggedOf[m]=untaggedOf[l.name];});
+    }
   });
   ifaces.forEach(i=>{
     if(taggedOf[i.name]){
@@ -4503,12 +4541,13 @@ function _parseVRRPRouterOS(cfg){
 function parseRouterOS(cfg){
   const sys=parseRouterOSSysInfo(cfg);
   const rosVlans=parseRouterOSVLANs(cfg), rosInterfaces=parseRouterOSInterfaces(cfg);
-  applyRouterOSVlanMembership(rosVlans,rosInterfaces);
+  const rosLacp=parseRouterOSLACP(cfg);
+  applyRouterOSVlanMembership(rosVlans,rosInterfaces,rosLacp);
   return{
     sys,irf:null,stack:null,
     vlans:rosVlans,
     interfaces:rosInterfaces,
-    lacp:parseRouterOSLACP(cfg),
+    lacp:rosLacp,
     routes:parseRouterOSRoutes(cfg),vrfs:[],
     users:parseRouterOSUsers(cfg),
     ospf:parseRouterOSOSPF(cfg),
@@ -7102,35 +7141,34 @@ function parseLACP(cfg, vendor){
     });
     lacp.sort((a,b)=>parseInt(a.name.match(/\d+/)[0])-parseInt(b.name.match(/\d+/)[0]));
   }else if(vendor==='netgear'||vendor==='edgeswitch'){
-    // Netgear M4300／Ubiquiti EdgeSwitch 同源 Broadcom ICOS，LACP 語法完全一致（皆為
-    // "addport {slot/port|lag N}"／"interface lag N"，EdgeSwitch 官方 CLI Command
-    // Reference 確認格式與 Netgear 逐字相同，僅介面命名少一段 unit 前綴），共用同一分支。
-    // 聚合介面用 "interface lag N" 宣告；成員埠是從自己的
-    // "interface unit/slot/port" 區塊內用 "addport logical-unit/slot/port"（官方語法也支援
-    // "addport lag N" 替代寫法）加入，指令方向是「member 埠自己宣告要加入哪個 LAG」，與
-    // Cisco 反過來（LAG 底下看不到成員清單）。若真實匯出檔採用內部 unit/slot/port 位址形式
-    // 而非 "lag N" 替代寫法，此處會直接把該原始位址字串當成群組 key（無法還原成對應的
-    // "lag N" 編號），信心度較低，待真實範例校正。"port-channel static" 出現時視為 Static，
-    // 未出現時視為預設值 Active（官方 "port lacpmode" 預設即開啟 LACP 協商）
+    // Netgear M4300／Ubiquiti EdgeSwitch 同源 Broadcom ICOS，LACP 語法完全一致（EdgeSwitch
+    // 官方 CLI Command Reference 確認格式與 Netgear 逐字相同，僅介面命名少一段 unit 前綴），
+    // 共用同一分支。2026-08-09 對外查證官方 NETGEAR KB（kb.netgear.com/21635，逐字指令稿）
+    // 修正既有方向錯誤：`addport` 是在 **LAG 自己的介面區塊內**執行，用來加入實體成員埠，
+    // 非「member 埠自己宣告要加入哪個 LAG」——原先方向理解相反，導致官方範例的原始
+    // unit/slot/port 位址形式（LAG 本身用 unit/slot/port 定址，如 0/13/1，非 "lag N" 別名）
+    // 完全無法正確歸群，且與 Cisco 慣例（member 埠宣告 channel-group）的類比也不成立。
+    // 官方指令稿範例：`interface 0/2` → `addport 1/1` → `exit`（LAG 介面 0/2 加入實體埠 1/1）。
+    // 修正後：不論 LAG 自己是用 "lag N" 別名或 unit/slot/port 原始位址命名，只要該介面
+    // 區塊內含 `addport` 行就視為 LAG，直接讀出成員清單；額外保留「介面名稱本身符合
+    // "lag N"」的既有 fixture 相容性（即使目前尚無成員也照舊列出該 LAG，例如剛建立但尚未
+    // addport 的情境）。"port-channel static" 出現時視為 Static，未出現時視為預設值 Active
+    // （官方 "port lacpmode" 預設即開啟 LACP 協商）
     const ifaceMap={};
     cfg.split(/\ninterface /).slice(1).forEach(blk=>{
       const name=blk.split('\n')[0].trim();
       ifaceMap[name]=blk;
     });
-    const membersByGid={};
+    const membersByName={};
     Object.entries(ifaceMap).forEach(([name,blk])=>{
-      if(/^lag\s+\d+/i.test(name))return;
-      const am=blk.match(/^\s*addport\s+(?:lag\s+(\d+)|(\S+))\s*$/m);
-      if(am){
-        const gid=am[1]||am[2];
-        membersByGid[gid]=(membersByGid[gid]||[]).concat({name,lacpMode:null});
-      }
+      const addports=[...blk.matchAll(/^\s*addport\s+(\S+)\s*$/gm)].map(m=>({name:m[1],lacpMode:null}));
+      if(addports.length) membersByName[name]=addports;
     });
     Object.entries(ifaceMap).forEach(([name,blk])=>{
-      if(!/^lag\s+\d+/i.test(name))return;
-      const gid=name.match(/\d+/)[0];
+      const isNamedLag=/^lag\s+\d+/i.test(name);
+      if(!isNamedLag&&!membersByName[name])return;
       const mode=/^\s*port-channel static\s*$/m.test(blk)?'Static':'Active';
-      lacp.push({name,mode,members:membersByGid[gid]||[]});
+      lacp.push({name,mode,members:membersByName[name]||[]});
     });
     lacp.sort((a,b)=>parseInt(a.name.match(/\d+/)[0])-parseInt(b.name.match(/\d+/)[0]));
   }
@@ -7583,6 +7621,7 @@ function parseACL(cfg, vendor){
   if(vendor==='extreme') return _parseACLExtreme(cfg);
   if(vendor==='fortiswitch') return _parseACLFortiSwitch(cfg);
   if(vendor==='routeros') return _parseACLRouterOS(cfg);
+  if(vendor==='sonic') return _parseACLSONiC(cfg);
   if(vendor==='alcatel') return [];
   // NX-OS：2026-07-22 對外查證官方 Cisco NX-OS Security Configuration Guide 後新增獨立
   // 分支——先前沿用 _parseACLCisco()（IOS-XE 語法），但真實 NX-OS 語法完全不同：容器是
@@ -7873,6 +7912,11 @@ function _parseACLExtreme(cfg){
 }
 
 function parseSecurity(cfg, vendor){
+  // SONiC（2026-08-08 新增）：整份設定檔是 JSON，與下方逐行正則機制完全不相容，獨立分流；
+  // 與 ACL 同一種「統一 dispatcher」模式，switch_config_generator 匯入既有設定檔直接呼叫
+  // fns.parseSecurity(text,vendor)，故必須在此處也能獨立正確派送（比照 parseSTP() 的 sonic
+  // 分流寫法），不能只靠 parseAny() 的排除清單
+  if(vendor==='sonic')return _parseSecuritySONiC(cfg);
   // FortiSwitch 原本完全沒有支援（generic ifRe 只認 "interface X" 區塊語法，FortiSwitch
   // 用 "config switch interface / edit X" 區塊，永遠比對不到）；本次新增獨立分支
   if(vendor==='fortiswitch') return _parseSecurityFortiSwitch(cfg);
@@ -8125,6 +8169,11 @@ function parseQoS(cfg, vendor){
   return result;
 }
 function parseSTP(cfg, vendor){
+  // SONiC（2026-08-08 新增）：整份設定檔是 JSON，與下方逐行正則機制完全不相容，獨立分流；
+  // parseAny() 的 res.stp 也是呼叫這裡（透過 parseSONiC() 內部呼叫同一份 _parseSTPSONiC()），
+  // 但 switch_config_generator 的匯入既有設定檔流程是直接呼叫 fns.parseSTP(text,vendor)，
+  // 不經過 parseSONiC()，故此處必須也能獨立正確派送，不能只靠 parseAny() 的排除清單
+  if(vendor==='sonic')return _parseSTPSONiC(cfg);
   const stp={mode:null,instances:[],ports:[]};
 
   // 全域模式偵測
@@ -8623,7 +8672,7 @@ function parseArista(cfg){
   const sys=parseAristaSysInfo(cfg);
   const vlans=parseAristaVLANs(cfg);
   const mlag=parseAristaMlag(cfg);
-  const interfaces=parseCiscoInterfaces(cfg);
+  const interfaces=parseCiscoInterfaces(cfg,'arista');
   // Breakout 子埠命名 pattern 偵測（EthernetN/1~4），獨立於 parseCiscoInterfaces() 的
   // HundredGigE pattern B 判斷式之外
   interfaces.forEach(i=>{
@@ -8636,7 +8685,7 @@ function parseArista(cfg){
     if(iface)iface.breakoutMode=b.mode;
   });
   const routes=parseCiscoRoutes(cfg);
-  const vrfs=parseCiscoVRFs(cfg);
+  const vrfs=parseCiscoVRFs(cfg,'arista');
   const users=parseCiscoUsers(cfg);
   const ospf=parseCiscoOSPF(cfg);
   const bgp=parseCiscoBGP(cfg);
@@ -9113,14 +9162,129 @@ function parseAny(cfg,forceVendor){
 // ═ SONiC Parser（config_db.json，第 17 個廠牌，MVP 範圍）═══════════
 // 涵蓋：hostname／VLAN／VLAN_MEMBER／INTERFACE＋VLAN_INTERFACE＋PORTCHANNEL_INTERFACE
 // （L3 IP）／PORTCHANNEL＋PORTCHANNEL_MEMBER（LACP）／BGP_NEIGHBOR＋
-// DEVICE_METADATA.bgp_asn／STATIC_ROUTE。明確排除：OSPF（官方 Unified FRR Management
-// Framework 設計文件列為未來擴充，查無 config_db.json 表格定義，不可臆測）／ACL／QoS／
-// STP／Security（本輪未查證欄位，信心度不足）。
+// DEVICE_METADATA.bgp_asn／STATIC_ROUTE／ACL_TABLE+ACL_RULE（2026-08-08 對外查證新增，
+// 見 _parseACLSONiC()）／STP+STP_VLAN+STP_INTF+STP_VLAN_INTF（2026-08-08 對外查證新增，
+// 見 _parseSTPSONiC()）／QoS：SCHEDULER+PORT_QOS_MAP+QUEUE（2026-08-08 對外查證新增，見
+// _parseQoSSONiC()，DSCP→TC 分類屬另一獨立功能本輪不納入）／Security 802.1X：
+// PAC_PORT_CONFIG+HOSTAPD_GLOBAL_CONFIG（2026-08-08 對外查證新增，見
+// _parseSecuritySONiC()，guest VLAN／MAC port-security 查無官方欄位不猜測）。明確排除：
+// OSPF（架構上不適用——官方 Unified FRR Management Framework 設計文件列為未來擴充，查無
+// config_db.json 表格定義，SONiC 的 OSPF 實際透過 FRR 原生設定檔管理，非本工具
+// 「json↔表單」設計範圍）。
 // 完全繞過逐行正則機制：整份設定檔本體就是合法 JSON，直接 JSON.parse()。
 function sonicEmptyResult(){
   return{sys:{hostname:'unknown',version:'',platform:''},irf:null,stack:null,vlans:[],
     interfaces:[],routes:[],lacp:[],vrfs:[],users:[],ospf:[],bgp:[],rip:[],vrrp:[],vxlan:null,
-    vendor:'sonic',breakouts:[]};
+    vendor:'sonic',breakouts:[],qos:{schedulers:[],apply:[]},
+    stp:{mode:null,rootMode:null,timers:{hello:null,forwardDelay:null,maxAge:null},instances:[],ports:[]}};
+}
+// ACL_TABLE/ACL_RULE → 共用 ACL 形狀（2026-08-08 對外查證新增，原排除項目：官方文件＋
+// 真實範例確認欄位 PRIORITY/PACKET_ACTION/IP_PROTOCOL/SRC_IP/DST_IP/L4_DST_PORT/IP_TYPE，
+// 複合鍵 "{ACL表名}|{規則名}"）。IP_PROTOCOL 為數字（6=tcp/17=udp/1=icmp），無此欄位代表
+// 不限協定，統一回填 'ip'（比照 Cisco 慣例）。簽章比照其餘 _parseACLXxx(cfg) 慣例吃原始
+// 字串（被 parseACL() 統一 dispatcher 呼叫，非從 parseSONiC() 內部呼叫——ACL 資料流走
+// res.acls（parseACL 統一計算，見 parseAny()），與 parseSONiC() 自己回傳的 res 無關）
+const SONIC_IP_PROTO_REV={6:'tcp',17:'udp',1:'icmp'};
+function _parseACLSONiC(cfg){
+  let db;
+  try{ db=JSON.parse(cfg); }catch(e){ return []; }
+  if(!db||typeof db!=='object')return [];
+  const acls=[];
+  Object.entries(db.ACL_TABLE||{}).forEach(([name,t])=>{
+    acls.push({name,type:'extended',vendor:'sonic',rules:[],
+      appliedOn:((t&&t.ports)||[]).map(p=>({interface:p,direction:'in'}))});
+  });
+  Object.entries(db.ACL_RULE||{}).forEach(([key,val])=>{
+    const pipeIdx=key.indexOf('|');
+    if(pipeIdx===-1)return;
+    const acl=acls.find(a=>a.name===key.slice(0,pipeIdx));
+    if(!acl)return;
+    acl.rules.push({
+      seq:val&&val.PRIORITY!==undefined?String(val.PRIORITY):'',
+      action:val&&val.PACKET_ACTION==='DROP'?'deny':'permit',
+      protocol:SONIC_IP_PROTO_REV[val&&val.IP_PROTOCOL]||'ip',
+      src:(val&&val.SRC_IP)||'-',
+      dst:(val&&val.DST_IP)||'-',
+      dstPort:val&&val.L4_DST_PORT!==undefined?String(val.L4_DST_PORT):'',
+      remark:'',
+    });
+  });
+  return acls;
+}
+// SCHEDULER/PORT_QOS_MAP/QUEUE → 專屬 sonicQos 形狀（2026-08-08 對外查證新增，原排除
+// 項目：官方 QoS Scheduler/Shaper HLD 文件＋硬體商真實範例交叉確認欄位）。與 ACL 不同，
+// QoS 資料流走「專屬 schema」模式——parseAny() 已把 sonic 排除在共用 parseQoS() dispatcher
+// 之外，本函式只從 parseSONiC() 內部呼叫、結果掛在 res.qos，不接進 parseQoS() dispatcher
+// （比照 RouterOS/Brocade/Extreme 專屬 QoS 形狀的既有慣例）；簽章仍吃已 parse 好的 db
+// 物件（非原始字串），因為呼叫端 parseSONiC() 已經 parse 過一次，不需要重複 parse
+function _parseQoSSONiC(db){
+  const schedulers=Object.entries(db.SCHEDULER||{}).map(([name,v])=>({
+    name, type:(v&&v.type)||'', weight:v&&v.weight!==undefined?String(v.weight):'',
+    meterType:(v&&v.meter_type)||'', cir:v&&v.cir!==undefined?String(v.cir):'',
+    cbs:v&&v.cbs!==undefined?String(v.cbs):'', pir:v&&v.pir!==undefined?String(v.pir):'',
+    pbs:v&&v.pbs!==undefined?String(v.pbs):'',
+  }));
+  const apply=[];
+  Object.entries(db.PORT_QOS_MAP||{}).forEach(([port,v])=>{
+    if(v&&v.scheduler)apply.push({target:port,queue:'',scheduler:v.scheduler});
+  });
+  Object.entries(db.QUEUE||{}).forEach(([key,v])=>{
+    const pipeIdx=key.indexOf('|');
+    if(pipeIdx===-1)return;
+    if(v&&v.scheduler)apply.push({target:key.slice(0,pipeIdx),queue:key.slice(pipeIdx+1),scheduler:v.scheduler});
+  });
+  return{schedulers,apply};
+}
+// PAC_PORT_CONFIG/HOSTAPD_GLOBAL_CONFIG → 共用 Security 形狀 {port,dot1x,portSec,maxMac,
+// violation,guestVlan}（2026-08-08 對外查證新增，原排除項目：官方 Port Access Control
+// HLD 文件確認 method_list/port_pae_role/port_control_mode/host_control_mode/
+// max_users_per_port 欄位）。查無 guest VLAN／MAC port-security 對應欄位，比照既有其他
+// 廠牌慣例明確不猜測，portSec 固定 false、violation/guestVlan 固定 '-'。與 ACL 同一種
+// 「統一 dispatcher」模式：接進 parseSecurity() 開頭的 vendor 分流，簽章吃原始字串
+function _parseSecuritySONiC(cfg){
+  let db;
+  try{ db=JSON.parse(cfg); }catch(e){ return []; }
+  if(!db||typeof db!=='object')return [];
+  return Object.entries(db.PAC_PORT_CONFIG||{}).map(([port,v])=>{
+    const isDot1x=!!(v&&(v.method_list||'').includes('dot1x')&&v.port_pae_role==='authenticator');
+    return{port,dot1x:isDot1x?'auth':'-',portSec:false,
+      maxMac:v&&v.max_users_per_port!==undefined?String(v.max_users_per_port):'-',
+      violation:'-',guestVlan:'-'};
+  });
+}
+// STP/STP_VLAN/STP_INTF/STP_VLAN_INTF → 共用 STP 巢狀形狀（2026-08-08 對外查證新增，原
+// 排除項目：官方 PVST HLD 文件確認完整 schema）。PVST 逐 VLAN 一個 instance，天然對應
+// instances 陣列；STP_VLAN_INTF（逐 VLAN 逐 port 覆寫，2026-08-08 補上）額外掛在回傳物件
+// 的 sonicStpVlanIntf 欄位（共用 STP 形狀無 VLAN 維度，其餘廠牌呼叫路徑不受影響）；
+// STP.GLOBAL.priority 是 render 端複製自第一個 instance 的裝飾性欄位（非權威來源），
+// 逐 VLAN priority 一律直接讀 STP_VLAN 自己的值，不需要跟 GLOBAL 對帳。簽章吃原始字串
+// （被 parseSTP() 的 sonic 分流呼叫，同時也是 parseSONiC() 自己內部呼叫的來源，兩處共用
+// 同一份實作，非各自維護）
+function _parseSTPSONiC(cfg){
+  let db;
+  try{ db=JSON.parse(cfg); }catch(e){ db=null; }
+  if(!db||typeof db!=='object')db={};
+  const g=(db.STP&&db.STP.GLOBAL)||{};
+  const instances=Object.entries(db.STP_VLAN||{}).map(([key,val])=>{
+    const id=(key.match(/^Vlan(\d+)$/i)||[])[1]||key.replace(/^Vlan/i,'');
+    return{id,vlan:key,priority:val&&val.priority!==undefined?String(val.priority):''};
+  });
+  const ports=Object.entries(db.STP_INTF||{}).map(([port,val])=>({
+    port,
+    portfast:!!(val&&(val.portfast==='1'||val.portfast===1)),
+    bpduguard:!!(val&&(val.bpdu_guard==='1'||val.bpdu_guard===1)),
+    guardRoot:!!(val&&(val.root_guard==='1'||val.root_guard===1)),
+    cost:val&&val.path_cost!==undefined?String(val.path_cost):'',
+    priority:val&&val.priority!==undefined?String(val.priority):'',
+  }));
+  const sonicStpVlanIntf=Object.entries(db.STP_VLAN_INTF||{}).map(([key,val])=>{
+    const parts=key.split('|');
+    const vlanKey=parts[0]||'', port=parts[1]||'';
+    const vlan=(vlanKey.match(/^Vlan(\d+)$/i)||[])[1]||vlanKey.replace(/^Vlan/i,'');
+    return{vlan,port,cost:val&&val.path_cost!==undefined?String(val.path_cost):'',
+      priority:val&&val.priority!==undefined?String(val.priority):''};
+  });
+  return{mode:g.mode||null,rootMode:null,timers:{hello:null,forwardDelay:null,maxAge:null},instances,ports,sonicStpVlanIntf};
 }
 function parseSONiC(cfg){
   let db;
@@ -9229,9 +9393,14 @@ function parseSONiC(cfg){
     bgp.push({asn:String(bgpAsn),routerId:'',peers,networks:[]});
   }
 
+  const stpFull=_parseSTPSONiC(cfg);
+  const {sonicStpVlanIntf,...stp}=stpFull;
+  const qos=_parseQoSSONiC(db);
+
   return{
     sys:{hostname,version:'',platform:''},irf:null,stack:null,vlans,interfaces,routes,lacp,
-    vrfs:[],users:[],ospf:[],bgp,rip:[],vrrp:[],vxlan:null,vendor:'sonic',breakouts:[]
+    vrfs:[],users:[],ospf:[],bgp,rip:[],vrrp:[],vxlan:null,vendor:'sonic',breakouts:[],stp,
+    qos,sonicStpVlanIntf
   };
 }
 
@@ -9378,7 +9547,11 @@ function startMatrixRain(){
 //  FILE / PASTE INPUT
 // ════════════════════════════════════
 
-const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// 2026-08-09 稽核修復：原本未跳脫雙引號，但多處用在 title="${esc(...)}" 這類雙引號屬性內
+// （VLAN name／介面名稱等解析正則未限制字元集合），惡意設定檔可構造含 " 的名稱提前結束
+// 屬性、注入事件處理器（如 onmouseover=），構成儲存型 XSS；比照 switch_config_generator
+// 既有的 escAttr() 補上雙引號跳脫
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const pill=(c,t)=>`<span class="pill p-${c}">${esc(t)}</span>`;
 let tableData=[],tableKeys=[];
 const hn=()=>parsed?.sys?.hostname||'comware';
@@ -11509,7 +11682,7 @@ b{font-weight:600}small{color:#888;font-size:11px}
 function exportHTMLReport(mode){
   if(!parsed)return;
   const p=parsed;
-  const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   // Render VLAN ip-subnet-vlan properly (ipSubnets is array of objects {cidr,network,mask})
   function fmtIpSubnets(arr){
     if(!arr||!arr.length)return'—';
