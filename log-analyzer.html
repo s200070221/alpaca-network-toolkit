@@ -1209,12 +1209,28 @@ function cidrMatch(ip, cidr) {
 // 分頁在整個建索引過程中維持可重繪/可互動（三個呼叫端 doIntelUpload/doSafelistUpload/
 // doGeoUpload 皆已改為 async 並 await 本函式，見對應段落）
 const INTEL_INDEX_CHUNK = 5000;
-async function buildIntelIndex(intelList) {
+// 讓出一次主執行緒（純函式、不依賴 document，故放在測試沙箱可抽取的範圍內，供 buildIntelIndex()
+// 這類大型清單分段處理使用）。改用 MessageChannel（業界標準的 setImmediate polyfill 手法）而非
+// setTimeout(fn,0)：瀏覽器對密集/巢狀零延遲計時器有最短延遲節流（HTML5 規範規定連續巢狀呼叫從
+// 第 5 層起最短 4ms，背景分頁節流更嚴重），大型 GeoIP 資料庫（buildIntelIndex 每 5000 筆 yield
+// 一次，340萬筆等於 680 次呼叫）實測光是 setTimeout 版 yieldToUI() 本身就吃掉 10 秒以上，是
+// 2026-08-10 稽核修復「上傳完全卡死」的主因之一；MessageChannel 不受此節流限制，同樣 680 次
+// 呼叫實測從 10 秒降到 50 毫秒
+function yieldToUI() {
+  return new Promise(resolve => {
+    const ch = new MessageChannel();
+    ch.port2.onmessage = () => resolve();
+    ch.port1.postMessage(null);
+  });
+}
+// onProgress(done, total) 選填：處理大型清單時每 CHUNK 筆回報一次進度，供上傳函式更新按鈕
+// 文字顯示百分比（見 doIntelUpload/doSafelistUpload/doGeoUpload）；省略時行為不變、向下相容
+async function buildIntelIndex(intelList, onProgress) {
   const exact = new Map(), cidrByPrefix = new Map(), cidr6ByPrefix = new Map(), countrySet = new Set();
   let cidrCount = 0, cidr6Count = 0, hasBroadCidr = false;
   const entries = intelList.entries;
   for (let i = 0; i < entries.length; i++) {
-    if (i > 0 && i % INTEL_INDEX_CHUNK === 0) await yieldToUI();
+    if (i > 0 && i % INTEL_INDEX_CHUNK === 0) { await yieldToUI(); if (onProgress) onProgress(i, entries.length); }
     const e = entries[i];
     if (e.meta && e.meta.country) countrySet.add(e.meta.country);
     if (!e.value.includes('/')) {
@@ -2390,22 +2406,9 @@ function renderAll() {
 // ============================================================
 // [9] 事件綁定
 // ============================================================
-// 讓出一次主執行緒給瀏覽器重繪（更新進度提示文字、避免長時間同步運算讓分頁看起來當掉）；
-// 各階段內部仍是單次同步呼叫（parseLogText／buildIssueList 等本身不拆成逐行 yield，維持
-// 既有純函式同步簽章與可測試性不變），這裡做的是「階段之間」讓瀏覽器有機會畫面更新
-// 2026-08-10 效能修復：原本用 setTimeout(fn,0)，但瀏覽器對「密集/巢狀零延遲計時器」有最短
-// 延遲節流（HTML5 規範規定連續巢狀呼叫從第 5 層起最短 4ms，背景分頁節流更嚴重），大型
-// GeoIP 資料庫（buildIntelIndex 每 5000 筆 yield 一次，340萬筆等於 680 次呼叫）實測光是
-// yieldToUI() 本身就吃掉 10 秒以上，才是「上傳完全卡死」的真正主因，IPv6 BigInt 運算本身
-// 反而只佔零點幾秒。改用 MessageChannel（業界標準的 setImmediate polyfill 手法，postMessage
-// 不受 setTimeout 的零延遲節流限制）取代，同樣 680 次呼叫實測從 10 秒降到 50 毫秒
-function yieldToUI() {
-  return new Promise(resolve => {
-    const ch = new MessageChannel();
-    ch.port2.onmessage = () => resolve();
-    ch.port1.postMessage(null);
-  });
-}
+// yieldToUI() 已搬到前面「[1] 中介格式與共用常數」區塊（靠近 buildIntelIndex()，且本身是
+// 不依賴 document 的純函式，屬於測試沙箱可抽取範圍，見該處註解）；doAnalyze() 沿用同一份
+// 定義讓「階段之間」有機會畫面更新，各階段內部仍是單次同步呼叫，行為不變
 function showProgress(labelKey) {
   const el = document.getElementById('progress-label');
   el.classList.add('active');
@@ -2509,18 +2512,22 @@ function doUploadFile(files) {
 // 清單會讓畫面凍結、看起來像當掉；改為 async + await buildIntelIndex()（本身已分段 yield），
 // 並在處理期間 disable 對應按鈕當作「處理中」的視覺回饋（比照 doAnalyze() 既有 disabled 寫法，
 // 不新增文字/UI 元素以避免觸發 11 語言 i18n 新增 key 的額外工作量）
+// 2026-08-10 稽核修復：真實規模 GeoIP/情資清單即使已分段 yield 仍需數秒到十餘秒處理時間，
+// 純 disabled 按鈕沒有任何「還在動」的視覺回饋，容易被誤以為卡死；改把百分比數字直接附加在
+// 按鈕自己的文字後面（如「上傳清單 47%」），完成後還原——數字語言中立，不需另外新增 i18n key
 function doIntelUpload(file, name, date) {
   const reader = new FileReader();
   reader.onload = async () => {
     const btn = document.getElementById('btn-intel-add');
+    const origLabel = btn ? btn.textContent : '';
     if (btn) btn.disabled = true;
     try {
       const list = parseIntelList(reader.result, name || file.name);
-      const index = await buildIntelIndex(list);
+      const index = await buildIntelIndex(list, (done, total) => { if (btn) btn.textContent = origLabel + ' ' + Math.floor(done / total * 100) + '%'; });
       INTEL_LISTS.push({ name: list.name, date: date || '', index });
       renderIntelList();
     } finally {
-      if (btn) btn.disabled = false;
+      if (btn) { btn.disabled = false; btn.textContent = origLabel; }
     }
   };
   reader.readAsText(file);
@@ -2529,14 +2536,15 @@ function doSafelistUpload(file, name) {
   const reader = new FileReader();
   reader.onload = async () => {
     const btn = document.getElementById('btn-safelist-add');
+    const origLabel = btn ? btn.textContent : '';
     if (btn) btn.disabled = true;
     try {
       const list = parseIntelList(reader.result, name || file.name);
-      const index = await buildIntelIndex(list);
+      const index = await buildIntelIndex(list, (done, total) => { if (btn) btn.textContent = origLabel + ' ' + Math.floor(done / total * 100) + '%'; });
       SAFE_LISTS.push({ name: list.name, index });
       renderSafeList();
     } finally {
-      if (btn) btn.disabled = false;
+      if (btn) { btn.disabled = false; btn.textContent = origLabel; }
     }
   };
   reader.readAsText(file);
@@ -2549,16 +2557,17 @@ function doGeoUpload(file, name) {
   const reader = new FileReader();
   reader.onload = async () => {
     const btn = document.getElementById('btn-geo-add');
+    const origLabel = btn ? btn.textContent : '';
     if (btn) btn.disabled = true;
     try {
       const list = isDat ? parseGeoIPDat(reader.result) : parseIntelList(reader.result, name || file.name);
       if (name) list.name = name;
-      const index = await buildIntelIndex(list);
+      const index = await buildIntelIndex(list, (done, total) => { if (btn) btn.textContent = origLabel + ' ' + Math.floor(done / total * 100) + '%'; });
       GEO_LISTS.push({ name: list.name, index });
       renderGeoList();
       renderGeoRiskChecks();
     } finally {
-      if (btn) btn.disabled = false;
+      if (btn) { btn.disabled = false; btn.textContent = origLabel; }
     }
   };
   if (isDat) reader.readAsArrayBuffer(file); else reader.readAsText(file);
