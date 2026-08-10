@@ -1901,11 +1901,43 @@ function _onLangChange() {
   if (si) si.placeholder = tr('search.placeholder');
 }
 
-function _splitAddr(addrStr) {
+// 位址物件名稱 → v4/v6 反查表：規則的 srcaddr/dstaddr 多數廠牌存的是物件名稱（不含冒號），
+// 純字串「有沒有冒號」的判斷法對這種寫法完全失效，需要反查該名稱對應物件實際的位址型別。
+// addressObjects 形狀沿用各廠牌 parseAddressObjects() 共用的 {category,name,subnet,startIp,
+// endIp,fqdn,members,...}；group（address-group/address-group6）只展開一層 members，不遞迴
+// 巢狀 group，與現有各廠牌 members 解析深度一致
+function buildAddrTypeMap(addressObjects) {
+  const map = new Map();
+  (addressObjects || []).forEach(o => {
+    if (o.category !== 'address' && o.category !== 'address6') return;
+    const val = [o.subnet, o.startIp, o.fqdn].find(v => v && v !== '-') || '';
+    map.set(o.name, val.includes(':') ? 'v6' : 'v4');
+  });
+  (addressObjects || []).forEach(o => {
+    if (o.category !== 'address-group' && o.category !== 'address-group6') return;
+    const memberTypes = new Set((o.members || '').split(/\s*,\s*/).filter(Boolean).map(m => map.get(m) || 'v4'));
+    map.set(o.name, memberTypes.size > 1 ? 'mixed' : (memberTypes.values().next().value || 'v4'));
+  });
+  return map;
+}
+// addrTypeMap 未提供時維持純字串判斷（既有行為，向下相容尚未接上反查表的廠牌呼叫點）；
+// 提供時，非字面 IP 的 token 依反查表分類，mixed（群組成員橫跨 v4/v6）同時歸進兩邊輸出
+function _splitAddr(addrStr, addrTypeMap) {
   const addrs = (addrStr||'').split(/\s*,\s*/).filter(a=>a.trim());
-  const v4 = addrs.filter(a => !a.includes(':')).join(', ') || '-';
-  const v6 = addrs.filter(a => a.includes(':')).join(', ') || '-';
-  return {v4, v6};
+  if (!addrTypeMap) {
+    const v4 = addrs.filter(a => !a.includes(':')).join(', ') || '-';
+    const v6 = addrs.filter(a => a.includes(':')).join(', ') || '-';
+    return {v4, v6};
+  }
+  const v4 = [], v6 = [];
+  addrs.forEach(a => {
+    if (a.includes(':')) { v6.push(a); return; }
+    const t = addrTypeMap.get(a);
+    if (t === 'v6') v6.push(a);
+    else if (t === 'mixed') { v4.push(a); v6.push(a); }
+    else v4.push(a);
+  });
+  return { v4: v4.join(', ') || '-', v6: v6.join(', ') || '-' };
 }
 
 // ═══ parser-fortigate.js ═══
@@ -2238,14 +2270,14 @@ const FortigateParser = (() => {
     });
   }
 
-  function parsePolicies(lines, vdomName) {
+  function parsePolicies(lines, vdomName, addrTypeMap) {
     const { sectionLines } = extractSection(lines, 'firewall policy');
     return parseEdits(sectionLines).map(e => {
       const t = e.text;
       const srcAddrStr = gvs(t, 'srcaddr') || 'all';
       const dstAddrStr = gvs(t, 'dstaddr') || 'all';
-      const srcAddrSplit = _splitAddr(srcAddrStr);
-      const dstAddrSplit = _splitAddr(dstAddrStr);
+      const srcAddrSplit = _splitAddr(srcAddrStr, addrTypeMap);
+      const dstAddrSplit = _splitAddr(dstAddrStr, addrTypeMap);
       return {
         id: e.name, name: gv(t, 'name') || `Policy-${e.name}`,
         srcIntf: gvs(t, 'srcintf') || '-', dstIntf: gvs(t, 'dstintf') || '-',
@@ -2271,16 +2303,54 @@ const FortigateParser = (() => {
     });
   }
 
+  // 官方 CLI Reference 確認 firewall policy6 欄位名稱與 IPv4 firewall policy 完全相同（無 6
+  // 後綴），故直接沿用同一套欄位擷取邏輯；因整張表天生只會引用 IPv6 位址物件，不透過
+  // _splitAddr() 反查（該函式是為了「同一份 srcaddr 可能混合引用 v4/v6 物件」的情境設計，
+  // policy6 沒有這個問題），固定 srcAddr4/dstAddr4 為 '-'。id 加 'v6/' 前綴避免與 IPv4
+  // policy 的編號 id 在合併後的同一份陣列中混淆
+  function parsePolicies6(lines, vdomName) {
+    const { sectionLines } = extractSection(lines, 'firewall policy6');
+    return parseEdits(sectionLines).map(e => {
+      const t = e.text;
+      const srcAddrStr = gvs(t, 'srcaddr') || 'all';
+      const dstAddrStr = gvs(t, 'dstaddr') || 'all';
+      return {
+        id: `v6/${e.name}`, name: gv(t, 'name') || `Policy6-${e.name}`,
+        srcIntf: gvs(t, 'srcintf') || '-', dstIntf: gvs(t, 'dstintf') || '-',
+        srcAddr: srcAddrStr, dstAddr: dstAddrStr,
+        srcAddr4: '-', srcAddr6: srcAddrStr,
+        dstAddr4: '-', dstAddr6: dstAddrStr,
+        service: gvs(t, 'service') || 'ALL', schedule: gv(t, 'schedule') || 'always',
+        action: gv(t, 'action') || 'deny',
+        nat: gv(t, 'nat') || 'disable', ippool: gv(t, 'ippool') || 'disable',
+        poolname: gvs(t, 'poolname') || '-',
+        logtraffic: gv(t, 'logtraffic') || 'disable',
+        logstart: gv(t, 'logtraffic-start') || 'disable',
+        utm: {
+          av: gv(t, 'av-profile') || '-', webfilter: gv(t, 'webfilter-profile') || '-',
+          ips: gv(t, 'ips-sensor') || '-', ssl: gv(t, 'ssl-ssh-profile') || '-',
+          appctrl: gv(t, 'application-list') || '-',
+        },
+        status: gv(t, 'status') === 'disable' ? 'disable' : 'enable',
+        comments: gv(t, 'comments') || '-',
+        users: gvs(t, 'users') || '-', groups: gvs(t, 'groups') || '-',
+        _vdom: vdomName,
+      };
+    });
+  }
+
   function parseAddressObjects(lines, vdomName) {
     const objs = [];
-    const add = (key, cat) => {
+    // subnetKey 可覆寫：FortiOS 官方 CLI Reference 確認 config firewall address6 的網段欄位是
+    // `ip6`（不是 IPv4 版沿用的 `subnet`），start-ip/end-ip 則兩版共用同一欄位名（無 6 後綴）
+    const add = (key, cat, subnetKey) => {
       const { sectionLines } = extractSection(lines, key);
       parseEdits(sectionLines).forEach(e => {
         const t = e.text;
         objs.push({
           category: cat, name: e.name,
-          type: gv(t, 'type') || (cat === 'address-group' ? 'group' : 'ipmask'),
-          subnet: gv(t, 'subnet') || '-', fqdn: gv(t, 'fqdn') || '-',
+          type: gv(t, 'type') || (cat.startsWith('address-group') ? 'group' : (cat === 'address6' ? 'ipprefix' : 'ipmask')),
+          subnet: gv(t, subnetKey || 'subnet') || '-', fqdn: gv(t, 'fqdn') || '-',
           startIp: gv(t, 'start-ip') || '-', endIp: gv(t, 'end-ip') || '-',
           wildcard: gv(t, 'wildcard') || '-', iface: gv(t, 'associated-interface') || '-',
           color: gv(t, 'color') || '0', comment: gv(t, 'comment') || '-',
@@ -2290,7 +2360,8 @@ const FortigateParser = (() => {
     };
     add('firewall address', 'address');
     add('firewall addrgrp', 'address-group');
-    add('firewall address6', 'address6');
+    add('firewall address6', 'address6', 'ip6');
+    add('firewall addrgrp6', 'address-group6');
     return objs;
   }
 
@@ -2324,6 +2395,17 @@ const FortigateParser = (() => {
         dst: gv(t, 'dst') || '0.0.0.0 0.0.0.0', gateway: gv(t, 'gateway') || '-',
         device: gv(t, 'device') || '-', distance: gv(t, 'distance') || '10',
         priority: gv(t, 'priority') || '0', weight: gv(t, 'weight') || '0',
+        comment: gv(t, 'comment') || '-', status: gv(t, 'status') === 'disable' ? 'disable' : 'enable',
+        blackhole: gv(t, 'blackhole') || 'disable', vrf: gv(t, 'vrf') || '0', _vdom: vdomName });
+    });
+    // 官方 CLI Reference 確認 router static6 欄位名稱與 IPv4 router static 完全相同（無 6 後綴）
+    const { sectionLines: sr6 } = extractSection(lines, 'router static6');
+    parseEdits(sr6).forEach(e => {
+      const t = e.text;
+      routes.push({ type: 'static6', id: e.name,
+        dst: gv(t, 'dst') || '::/0', gateway: gv(t, 'gateway') || '-',
+        device: gv(t, 'device') || '-', distance: gv(t, 'distance') || '10',
+        priority: gv(t, 'priority') || '0', weight: '0',
         comment: gv(t, 'comment') || '-', status: gv(t, 'status') === 'disable' ? 'disable' : 'enable',
         blackhole: gv(t, 'blackhole') || 'disable', vrf: gv(t, 'vrf') || '0', _vdom: vdomName });
     });
@@ -2455,6 +2537,32 @@ const FortigateParser = (() => {
       const t = e.text;
       nats.push({ type: 'vipgrp', name: e.name, members: gvs(t, 'member') || '-',
         extIntf: gv(t, 'interface') || '-', comment: gv(t, 'comments') || '-', _vdom: vdomName });
+    });
+    // IPv6 NAT66：官方 CLI Reference 確認 ippool6/vip6/vipgrp6 三段欄位名稱與 IPv4 版本幾乎
+    // 相同（vip6/vipgrp6 完全同名；ippool6 僅有 startip/endip/comments，無 type/arp-reply/
+    // source-startip 對應概念，故這三個欄位不填、維持 '-'，不臆測）
+    const { sectionLines: pl6 } = extractSection(lines, 'firewall ippool6');
+    parseEdits(pl6).forEach(e => {
+      const t = e.text;
+      nats.push({ type: 'ippool6', name: e.name, poolType: '-',
+        startIp: gv(t, 'startip') || '-', endIp: gv(t, 'endip') || '-',
+        srcIntf: '-', arpReply: '-',
+        comment: gv(t, 'comments') || '-', _vdom: vdomName });
+    });
+    const { sectionLines: vl6 } = extractSection(lines, 'firewall vip6');
+    parseEdits(vl6).forEach(e => {
+      const t = e.text;
+      nats.push({ type: 'vip6', name: e.name, vipType: gv(t, 'type') || 'static-nat',
+        extIp: gv(t, 'extip') || '-', extIntf: gv(t, 'extintf') || '-', mapIp: gv(t, 'mappedip') || '-',
+        portFwd: gv(t, 'portforward') || 'disable', extPort: gv(t, 'extport') || '-',
+        mapPort: gv(t, 'mappedport') || '-', proto: gv(t, 'protocol') || '-',
+        comment: gv(t, 'comment') || '-', status: gv(t, 'status') || 'enable', _vdom: vdomName });
+    });
+    const { sectionLines: vgl6 } = extractSection(lines, 'firewall vipgrp6');
+    parseEdits(vgl6).forEach(e => {
+      const t = e.text;
+      nats.push({ type: 'vipgrp6', name: e.name, members: gvs(t, 'member') || '-',
+        extIntf: '-', comment: gv(t, 'comments') || '-', _vdom: vdomName });
     });
     return nats;
   }
@@ -3006,13 +3114,18 @@ const FortigateParser = (() => {
     if (isMultiVdom && vdomBlocks.some(v => v.name === 'root')) vdomNames.unshift('root');
 
     // Parse per-vdom data
-    const perVdom = vdomBlocks.map(vb => ({
+    // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 srcaddr/dstaddr 名稱反查 v4/v6
+    // 型別（見 _splitAddr() 上方註解）
+    const perVdom = vdomBlocks.map(vb => {
+      const addresses = parseAddressObjects(vb.lines, vb.name);
+      const addrTypeMap = buildAddrTypeMap(addresses);
+      return {
       name: vb.name,
       interfaces: parseInterfaces(vb.lines, vb.name),
-      policies:   parsePolicies(vb.lines, vb.name),
+      policies:   [...parsePolicies(vb.lines, vb.name, addrTypeMap), ...parsePolicies6(vb.lines, vb.name)],
       routes:     parseRoutes(vb.lines, vb.name),
       vpn:        parseVPN(vb.lines, vb.name),
-      addresses:  parseAddressObjects(vb.lines, vb.name),
+      addresses,
       services:   parseServiceObjects(vb.lines, vb.name),
       nat:        parseNAT(vb.lines, vb.name),
       schedules:  parseSchedules(vb.lines, vb.name),
@@ -3025,7 +3138,8 @@ const FortigateParser = (() => {
       wwan:       parseWwan(vb.lines, vb.name),
       webfilterProfiles: parseWebfilterProfiles(vb.lines, vb.name),
       ipsSensors: parseIpsSensors(vb.lines, vb.name),
-    }));
+      };
+    });
 
     // Global data (interfaces normally live in "config global" for multi-vdom, but some
     // exports place "config system interface" inside each vdom block instead — merge both
@@ -4676,7 +4790,7 @@ const PaloAltoParser = (() => {
   }
 
   // ─── Security policies ────────────────────────────────────────────────────
-  function parsePolicies(text, vsysXml, vsysName) {
+  function parsePolicies(text, vsysXml, vsysName, addrTypeMap) {
     const policies = [];
 
     if (isXml(text)) {
@@ -4695,8 +4809,8 @@ const PaloAltoParser = (() => {
         const app   = xlist(inner,'application').join(', ') || 'any';
         const action= xv(inner,'action') || 'deny';
         const dis   = entry._outer.includes('disabled="yes"') || xv(inner,'disabled') === 'yes';
-        const srcAddrSplit = _splitAddr(src);
-        const dstAddrSplit = _splitAddr(dst);
+        const srcAddrSplit = _splitAddr(src, addrTypeMap);
+        const dstAddrSplit = _splitAddr(dst, addrTypeMap);
 
         policies.push({
           id:       String(idx+1),
@@ -4747,8 +4861,8 @@ const PaloAltoParser = (() => {
         const action = gv('action') || 'deny';
         const srcStr = gv('source') || 'any';
         const dstStr = gv('destination') || 'any';
-        const srcAddrSplit = _splitAddr(srcStr);
-        const dstAddrSplit = _splitAddr(dstStr);
+        const srcAddrSplit = _splitAddr(srcStr, addrTypeMap);
+        const dstAddrSplit = _splitAddr(dstStr, addrTypeMap);
         policies.push({
           id: String(idx++), name,
           srcIntf:  gv('from') || 'any',
@@ -5459,8 +5573,10 @@ const PaloAltoParser = (() => {
 
     if (vsysList.length === 0) {
       // No explicit vsys — single-vsys device or CLI export: parse from full text
-      policies  = parsePolicies(text, text, 'vsys1');
+      // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 source/destination 名稱反查
+      // v4/v6 型別（見 _splitAddr() 上方註解）
       addresses = parseAddressObjects(text, text, 'vsys1');
+      policies  = parsePolicies(text, text, 'vsys1', buildAddrTypeMap(addresses));
       services  = parseServiceObjects(text, text, 'vsys1');
       schedules = parseSchedules(text, text, 'vsys1');
       nat       = parseNAT(text, text, 'vsys1');
@@ -5468,8 +5584,8 @@ const PaloAltoParser = (() => {
       vsysList.forEach(vs => {
         const vsXml  = vs.inner;
         const vsName = vs.name;
-        const vsPolicies  = parsePolicies(text, vsXml, vsName);
         const vsAddresses = parseAddressObjects(text, vsXml, vsName);
+        const vsPolicies  = parsePolicies(text, vsXml, vsName, buildAddrTypeMap(vsAddresses));
         const vsServices  = parseServiceObjects(text, vsXml, vsName);
         const vsSchedules = parseSchedules(text, vsXml, vsName);
         const vsNat       = parseNAT(text, vsXml, vsName);
@@ -6076,7 +6192,7 @@ const JuniperParser = (() => {
   }
 
   // ── Security policies ─────────────────────────────────────────────────────
-  function parsePolicies(tree) {
+  function parsePolicies(tree, addrTypeMap) {
     const policies = [];
     const secNode = path(tree, ['security']);
     if (!secNode) return policies;
@@ -6113,8 +6229,8 @@ const JuniperParser = (() => {
         const srcAddr = extractMatchVal('source-address');
         const dstAddr = extractMatchVal('destination-address');
         const apps    = extractMatchVal('application');
-        const srcAddrSplit = _splitAddr(srcAddr);
-        const dstAddrSplit = _splitAddr(dstAddr);
+        const srcAddrSplit = _splitAddr(srcAddr, addrTypeMap);
+        const dstAddrSplit = _splitAddr(dstAddr, addrTypeMap);
 
         let action = 'deny';
         if (thenNode) {
@@ -6777,14 +6893,17 @@ const JuniperParser = (() => {
   // ── Main parse ────────────────────────────────────────────────────────────
   function parse(text) {
     const tree = parseJunosTree(text);
+    // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 source/destination-address
+    // 名稱反查 v4/v6 型別（見 _splitAddr() 上方註解）
+    const addresses = parseAddressObjects(tree);
     return {
       vendor:     'Juniper',
       deviceInfo: parseDeviceInfo(text, tree),
       interfaces: parseInterfaces(tree),
-      policies:   parsePolicies(tree),
+      policies:   parsePolicies(tree, buildAddrTypeMap(addresses)),
       routes:     parseRoutes(tree, text),
       vpn:        parseVPN(tree, text),
-      addresses:  parseAddressObjects(tree),
+      addresses,
       services:   parseServiceObjects(tree),
       schedules:  parseSchedules(tree),
       nat:        parseNAT(tree),
@@ -8489,7 +8608,7 @@ const SonicWallParser = (() => {
   }
 
   // ── Access Rules (Policies) ─────────────────────────────────────────────────
-  function parsePolicies(doc) {
+  function parsePolicies(doc, addrTypeMap) {
     const out = [];
     let seq = 1;
     // 主要標籤：<AccessRules><Rule>；另保留 <AccessRules><AccessRule> 作為未證實對應版本的欄位命名容錯（同上，7.x 無 XML 對照樣本）
@@ -8505,8 +8624,8 @@ const SonicWallParser = (() => {
       const dstZone = gv(el,'DestinationZone') || gv(el,'DstZone') || gv(el,'ToZone') || 'any';
       const srcAddr = gv(el,'Source') || gv(el,'SourceAddress') || gv(el,'SrcAddress') || 'any';
       const dstAddr = gv(el,'Destination') || gv(el,'DestinationAddress') || gv(el,'DstAddress') || 'any';
-      const srcAddrSplit = _splitAddr(srcAddr);
-      const dstAddrSplit = _splitAddr(dstAddr);
+      const srcAddrSplit = _splitAddr(srcAddr, addrTypeMap);
+      const dstAddrSplit = _splitAddr(dstAddr, addrTypeMap);
       const service = gv(el,'Service') || gv(el,'ServiceObject') || 'any';
       const schedule = gv(el,'Schedule') || gv(el,'ScheduleName') || '-';
       const comment  = gv(el,'Comment') || gv(el,'Note') || '';
@@ -8698,11 +8817,13 @@ const SonicWallParser = (() => {
 
     const deviceInfo  = parseDeviceInfo(doc);
     const interfaces  = parseInterfaces(doc);
-    const policies    = parsePolicies(doc);
+    // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 Source/Destination 名稱反查
+    // v4/v6 型別（見 _splitAddr() 上方註解）
+    const addresses   = parseAddressObjects(doc);
+    const policies    = parsePolicies(doc, buildAddrTypeMap(addresses));
     const routes      = parseRoutes(doc);
     const nat         = parseNAT(doc);
     const vpn         = parseVPN(doc);
-    const addresses   = parseAddressObjects(doc);
     const services    = parseServiceObjects(doc);
     const users       = parseUsers(doc);
     const schedules   = parseSchedules(doc);
@@ -9080,6 +9201,34 @@ const MikrotikParser = (() => {
     return out;
   }
 
+  // 規則的 src/dst-address-list 引用的是「原始清單名稱」，但上面 parseAddressObjects() 為了
+  // 讓 Address Objects 表格顯示每個成員，會把多筆成員的清單展開成 `${l.name}_${idx+1}` 這種
+  // 合成名稱——原始名稱反而不在展開後的物件清單裡，無法直接用 buildAddrTypeMap() 反查。故另
+  // 寫這支獨立小函式，直接依「未展開前」的原始清單名稱分類 v4/v6/mixed，只供 _splitAddr 用，
+  // 不影響 Address Objects 表格既有的展開顯示邏輯。同時這裡把 `/ipv6 firewall address-list`
+  // 一併讀入——parseAddressObjects() 目前只讀 `/ip firewall address-list`，IPv6 清單完全沒被
+  // 讀取，是比其他廠牌更深一層的既有缺口，但只在此處補上型別判斷用途，物件瀏覽表格本身沿用
+  // 現狀不擴大處理
+  function buildMikrotikAddrTypeMap(sections) {
+    const listTypes = {};
+    const scan = (sectionKey, fam) => {
+      (sections[sectionKey] || []).forEach(line => {
+        const p = parseLine(line);
+        const list = p['list'] || 'unnamed';
+        if (!p['address']) return;
+        if (!listTypes[list]) listTypes[list] = new Set();
+        listTypes[list].add(fam);
+      });
+    };
+    scan('/ip firewall address-list', 'v4');
+    scan('/ipv6 firewall address-list', 'v6');
+    const map = new Map();
+    Object.entries(listTypes).forEach(([name, fams]) => {
+      map.set(name, fams.size > 1 ? 'mixed' : fams.values().next().value);
+    });
+    return map;
+  }
+
   // ── Service objects ─────────────────────────────────────────────────────────
   function parseServiceObjects(sections) {
     // MikroTik doesn't have named service objects like FortiGate
@@ -9116,7 +9265,23 @@ const MikrotikParser = (() => {
   // ── Firewall filter rules → policies ────────────────────────────────────────
   // Chain mapping: input/output = firewall self; forward = transit traffic
   // We map to srcIntf/dstIntf using chain name as context
-  function parsePolicies(sections) {
+  // srcAddr/dstAddr 的清單引用是 `@listname` 前綴格式（與其他廠牌直接用物件名稱不同），故不
+  // 沿用共用 _splitAddr()，改用 addrTypeMap（buildMikrotikAddrTypeMap() 產出，key 是不含 @
+  // 的原始清單名稱）逐一 token 分類，`@` 前綴本身在輸出的 v4/v6 欄位中原樣保留
+  function _splitAddrMikrotik(addrStr, addrTypeMap) {
+    const addrs = (addrStr || '').split(/\s*,\s*/).filter(a => a.trim());
+    const v4 = [], v6 = [];
+    addrs.forEach(a => {
+      if (a.includes(':')) { v6.push(a); return; }
+      const key = a.startsWith('@') ? a.slice(1) : a;
+      const t = addrTypeMap && addrTypeMap.get(key);
+      if (t === 'v6') v6.push(a);
+      else if (t === 'mixed') { v4.push(a); v6.push(a); }
+      else v4.push(a);
+    });
+    return { v4: v4.join(', ') || '-', v6: v6.join(', ') || '-' };
+  }
+  function parsePolicies(sections, addrTypeMap) {
     const rules = [];
     let seq = 1;
 
@@ -9147,8 +9312,8 @@ const MikrotikParser = (() => {
       ].filter(Boolean).join(', ') || 'any';
 
       // IPv4/IPv6 separation
-      const srcAddrSplit = _splitAddr(srcAddr);
-      const dstAddrSplit = _splitAddr(dstAddr);
+      const srcAddrSplit = _splitAddrMikrotik(srcAddr, addrTypeMap);
+      const dstAddrSplit = _splitAddrMikrotik(dstAddr, addrTypeMap);
 
       // Interface fields
       const srcIntf = p['in-interface']  || p['in-interface-list']  || chain;
@@ -9621,7 +9786,7 @@ const MikrotikParser = (() => {
       vendor:     'MikroTik',
       deviceInfo: parseDeviceInfo(text),
       interfaces: parseInterfaces(sections),
-      policies:   parsePolicies(sections),
+      policies:   parsePolicies(sections, buildMikrotikAddrTypeMap(sections)),
       routes:     parseRoutes(sections),
       ha:         parseMikrotikHa(sections),
       nat:        parseNAT(sections),
@@ -9834,7 +9999,10 @@ const ZyxelParser = (() => {
     let m;
     while ((m = re.exec(text)) !== null) {
       const name = m[1], val = m[2];
-      const type = val.includes('/') ? 'ipmask' : val.includes('-') ? 'iprange' : /[a-zA-Z]/.test(val) ? 'fqdn' : 'ipmask';
+      // 2026-08-09 稽核修復：原判斷順序 "/" → "-" → 字母，含連字號的 FQDN（如
+      // backup-server.corp.com，網域命名極常見）會被 "-" 判斷式先攔截誤判為 iprange，
+      // 再被 split('-') 切成無意義字串；改為字母判斷優先於連字號判斷
+      const type = val.includes('/') ? 'ipmask' : /[a-zA-Z]/.test(val) ? 'fqdn' : val.includes('-') ? 'iprange' : 'ipmask';
       const [startIp, endIp] = val.includes('-') && type === 'iprange' ? val.split('-') : ['-', '-'];
       out.push({
         category: 'address', name, type,
@@ -11726,53 +11894,24 @@ const Converter = (() => {
     L.push('');
     // Schedules
     parsed.schedules.forEach(s=>{ L.push(`set time "${s.name}" type ${s.type||'recurring'}`); if(s.start) L.push(`set time "${s.name}" start ${s.start}`); if(s.end) L.push(`set time "${s.name}" end ${s.end}`); });
-    // VPN
-    parsed.vpn.filter(v=>v.type==='ipsec-p1').forEach((v,i)=>{
-      const [e,h]=splitProp(v.proposal);
-      L.push('');
-      L.push(`set vpn site-to-site community "${v.name}" type star`);
-      if(v.remote&&v.remote!=='-') L.push(`set vpn site-to-site community "${v.name}" peer ${v.remote}`);
-      if(v.iface&&v.iface!=='-') L.push(`set vpn site-to-site community "${v.name}" interface ${v.iface}`);
-      L.push(`set vpn site-to-site community "${v.name}" ike-version ${v.ikeVer||'1'}`);
-      L.push(`set vpn site-to-site community "${v.name}" auth-method ${v.authMethod==='psk'?'psk':'certificate'}`);
-      L.push(`set vpn site-to-site community "${v.name}" ike-p1-encryption ${normEnc(e,'checkpoint')}`);
-      L.push(`set vpn site-to-site community "${v.name}" ike-p1-integrity ${normHash(h,'checkpoint')}`);
-      L.push(`set vpn site-to-site community "${v.name}" ike-p1-dh-group ${normDH(v.dhgrp,'checkpoint')}`);
-      L.push(`set vpn site-to-site community "${v.name}" ike-p1-lifetime ${v.lifetime||'86400'}`);
-      (v.phase2||[]).forEach(p2=>{
-        const [pe,ph]=splitProp(p2.proposal||v.proposal);
-        L.push(`set vpn site-to-site community "${v.name}" ike-p2-encryption ${normEnc(pe,'checkpoint')}`);
-        L.push(`set vpn site-to-site community "${v.name}" ike-p2-integrity ${normHash(ph,'checkpoint')}`);
-        L.push(`set vpn site-to-site community "${v.name}" ike-p2-dh-group ${normDH(p2.dhgrp||v.dhgrp,'checkpoint')}`);
-        if(p2.localSub&&p2.localSub!=='-') L.push(`set vpn site-to-site community "${v.name}" local-encryption-domain ${p2.localSub.replace(/\s+/,'/')}`);
-        if(p2.remoteSub&&p2.remoteSub!=='-') L.push(`set vpn site-to-site community "${v.name}" peer-encryption-domain ${p2.remoteSub.replace(/\s+/,'/')}`);
-      });
-    });
+    // 2026-08-09 查證：規則庫（access-policy）／NAT／VPN site-to-site community 在真實 Check
+    // Point Gaia clish 官方 `set` 指令清單（sc1.checkpoint.com Gaia Admin Guide）查無對應指令，
+    // 這幾類物件在真實裝置只能透過 SmartConsole 或 Management API 管理，clish 僅管
+    // OS 層級設定（hostname/interface/routing/DNS 等，已於上方輸出）。原本此處會輸出
+    // `set access-policy rule`／`set nat rule`／`set vpn site-to-site community` 三類自創
+    // 指令族群，`CheckpointParser.parsePolicies()` 又剛好解析同一套自創語法形成封閉迴圈，
+    // 貼到真實裝置會被拒絕，故本輪移除，比照既有 ClusterXL／Mobile Access split-tunnel 因
+    // 查無公開可信 schema 而排除的做法。VPN 僅保留 Mobile Access（SSL VPN）全域開關，因其
+    // `set mobile-access` 為 Gaia clish 已存在的合法指令，不在本次移除範圍。
     const sslvpn=parsed.vpn.find(v=>v.type==='ssl-vpn');
     if(sslvpn) { L.push(''); L.push('set mobile-access on'); L.push(`set mobile-access port ${sslvpn.port||443}`); if(sslvpn.iface) L.push(`set mobile-access interface ${sslvpn.iface}`); }
-    L.push('');
-    // NAT
-    parsed.nat.filter(n=>n.type==='vip').forEach((n,i)=>{ L.push(`set nat rule ${i+1} original-destination ${n.extIp||'-'}`); L.push(`set nat rule ${i+1} translated-destination ${n.mapIp||'-'}`); if(n.extPort&&n.extPort!=='-') { L.push(`set nat rule ${i+1} original-service ${n.extPort}`); L.push(`set nat rule ${i+1} translated-service ${n.mapPort||n.extPort}`); } if(n.extIntf&&n.extIntf!=='-') L.push(`set nat rule ${i+1} install-on ${n.extIntf}`); });
     L.push('');
     // Users
     parsed.users.filter(u=>u.type==='admin'||u.type==='local').forEach(u=>{ L.push(`set user "${u.name}" password-hash PLACEHOLDER`); if(u.email&&u.email!=='-') L.push(`set user "${u.name}" email "${u.email}"`); });
     parsed.users.filter(u=>u.type==='ldap-server').forEach(u=>{ L.push(`set ldap-account-unit "${u.name}" server ${u.server}`); L.push(`set ldap-account-unit "${u.name}" port ${u.port||389}`); if(u.dn&&u.dn!=='-') L.push(`set ldap-account-unit "${u.name}" base-dn "${u.dn}"`); });
     L.push('');
-    // Policies
-    parsed.policies.forEach((p,i)=>{
-      L.push(`set access-policy rule ${i+1} name "${p.name}"`);
-      L.push(`set access-policy rule ${i+1} from "${mapZone(p.srcIntf,'checkpoint')}"`);
-      L.push(`set access-policy rule ${i+1} to "${mapZone(p.dstIntf,'checkpoint')}"`);
-      const sa=sl(p.srcAddr); const da=sl(p.dstAddr); const sv=sl(p.service);
-      L.push(`set access-policy rule ${i+1} source "${sa.length?sa[0]:'any'}"`);
-      sa.slice(1).forEach(a=>L.push(`set access-policy rule ${i+1} source add "${a}"`));
-      L.push(`set access-policy rule ${i+1} destination "${da.length?da[0]:'any'}"`);
-      da.slice(1).forEach(a=>L.push(`set access-policy rule ${i+1} destination add "${a}"`));
-      L.push(`set access-policy rule ${i+1} service "${sv.length?sv[0]:'any'}"`);
-      L.push(`set access-policy rule ${i+1} action ${mapAction(p.action,'checkpoint')}`);
-      if(p.logtraffic&&p.logtraffic!=='disable') L.push(`set access-policy rule ${i+1} track Log`);
-      if(p.status==='disable') L.push(`set access-policy rule ${i+1} disabled true`);
-    });
+    L.push('# 規則庫（Access Policy）／NAT／VPN site-to-site community 需透過 SmartConsole 或');
+    L.push('# Management API 管理，非 Gaia clish 可設定範圍，本工具不產生對應指令。');
     return L.join('\n');
   }
 
@@ -12397,22 +12536,28 @@ const Converter = (() => {
     L.push(`<!-- ${hdr(parsed.vendor||'?','SonicOS <6.2',d.hostname)} -->`);
     L.push('<SonicWALLConfig>');
     L.push('  <DeviceInfo>');
-    L.push(`    <Name>${esc(d.hostname)}</Name>`);
+    // 2026-08-09 修復：原本用 <Name> 標籤，但 SonicWallParser.parseDeviceInfo() 只認
+    // DeviceName/HostName/Hostname 三種標籤，<Name> 打不中導致轉換後讀不回 hostname
+    // （round-trip 測試 CV42b 發現，用 Node 實測確認修復前必定回傳 "-"）
+    L.push(`    <DeviceName>${esc(d.hostname)}</DeviceName>`);
     L.push(`    <FirmwareVersion>${esc(d.firmware)}</FirmwareVersion>`);
     L.push(`    <Model>${esc(d.model||'TZ')}</Model>`);
     L.push('  </DeviceInfo>');
 
     if(parsed.interfaces.length) {
-      L.push('  <Interfaces>');
+      // 2026-08-09 修正：改用 SonicWallParser 註明「主要（已驗證）」的標籤
+      // <InterfaceSettings><InterfaceEntry>，原本用的 <Interfaces><Interface> 是該 parser
+      // 自己標註「未證實對應版本」的欄位命名容錯別名
+      L.push('  <InterfaceSettings>');
       parsed.interfaces.forEach(i=>{
-        L.push('    <Interface>');
+        L.push('    <InterfaceEntry>');
         L.push(`      <Name>${esc(i.name)}</Name>`);
         if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP') { L.push(`      <IPAddress>${esc(i.ip)}</IPAddress>`); L.push(`      <Netmask>${esc(i.mask&&i.mask!=='-'?i.mask:'255.255.255.0')}</Netmask>`); }
         L.push(`      <Zone>${esc(mapZone(i.role,'sonicwall'))}</Zone>`);
         if(i.desc&&i.desc!=='-') L.push(`      <Comment>${esc(i.desc)}</Comment>`);
-        L.push('    </Interface>');
+        L.push('    </InterfaceEntry>');
       });
-      L.push('  </Interfaces>');
+      L.push('  </InterfaceSettings>');
     }
 
     const sroutes=parsed.routes.filter(r=>r.type==='static'||r.type==='default');
@@ -12441,6 +12586,10 @@ const Converter = (() => {
     }
 
     if(parsed.nat.length) {
+      // 2026-08-09 查證：NAT 標籤與 Interface/AccessRule 不同，SonicWallParser 對 NAT 容器/
+      // 元素命名（NatEntry/NATEntry/NATRule/OneToOneNATEntry）並未標註任何一個是「主要
+      // （已驗證）」標籤，全部都是「未證實對應版本」的欄位命名容錯，故無可換用的已驗證
+      // 標籤，維持現狀，待未來取得真實 SonicOS <6.2 XML 範例才能確認
       L.push('  <NATPolicies>');
       parsed.nat.forEach(n=>{
         L.push('    <NatEntry>');
@@ -12453,9 +12602,11 @@ const Converter = (() => {
     }
 
     if(parsed.policies.length) {
+      // 2026-08-09 修正：改用 SonicWallParser 註明「主要（已驗證）」的標籤 <Rule>，原本用
+      // 的 <AccessRule> 是該 parser 自己標註「未證實對應版本」的欄位命名容錯別名
       L.push('  <AccessRules>');
       parsed.policies.forEach(p=>{
-        L.push('    <AccessRule>');
+        L.push('    <Rule>');
         L.push(`      <Name>${esc(p.name)}</Name>`);
         L.push(`      <SourceZone>${esc(mapZone(p.srcIntf,'sonicwall'))}</SourceZone>`);
         L.push(`      <DestinationZone>${esc(mapZone(p.dstIntf,'sonicwall'))}</DestinationZone>`);
@@ -12464,7 +12615,7 @@ const Converter = (() => {
         L.push(`      <Service>${esc(sl(p.service)[0]||'any')}</Service>`);
         L.push(`      <Action>${mapAction(p.action,'sonicwall')}</Action>`);
         L.push(`      <Enabled>${p.status==='disable'?'false':'true'}</Enabled>`);
-        L.push('    </AccessRule>');
+        L.push('    </Rule>');
       });
       L.push('  </AccessRules>');
     }
@@ -12776,6 +12927,17 @@ const Converter = (() => {
       L.push('');
     }
 
+    // 2026-08-09 修復：round-trip 測試（CV46b）發現既有 bug——上方 /ip address 對 VRRP
+    // 虛擬介面（如 vrrp1）只輸出位址綁定，卻從未輸出 /interface vrrp add name=vrrp1 ...
+    // 本體，貼到真實裝置會因該介面不存在而被拒絕；比照 MikrotikParser.parseMikrotikHa()
+    // 已查證的真實語法（/interface vrrp 底下 add 一行含 name/interface/vrid/priority）補回
+    const vrrpIf=parsed.interfaces.find(i=>i.type==='vrrp');
+    if(vrrpIf&&parsed.ha&&parsed.ha.enabled&&parsed.ha.mode==='VRRP'){
+      L.push('/interface vrrp');
+      L.push(`add name=${vrrpIf.name} interface=${parsed.ha.syncInterface&&parsed.ha.syncInterface!=='-'?parsed.ha.syncInterface:'ether1'} vrid=${parsed.ha.groupId&&parsed.ha.groupId!=='-'?parsed.ha.groupId:'1'} priority=${parsed.ha.priority&&parsed.ha.priority!=='-'?parsed.ha.priority:'100'}`);
+      L.push('');
+    }
+
     const sroutes=parsed.routes.filter(r=>r.type==='static'||r.type==='default');
     if(sroutes.length) {
       L.push('/ip route');
@@ -12889,6 +13051,7 @@ const Converter = (() => {
     if(targetVendor==='zyxel') notes.push('Zyxel ZLD 語法純依官方 CLI Reference Guide 組出，無真實裝置匯出檔比對校正，信心度低於已用真實範例驗證過的廠牌；VPN／NAT／DHCP 等欄位本轉換器不支援輸出，請人工於裝置上另行設定');
     if(targetVendor==='edgerouter') notes.push('EdgeRouter 規則來源設定檔通常已按介面方向分別建立具名規則集，本轉換器無法得知原始規則應歸屬哪個介面，統一併入單一規則集 CONVERTED_IN 且未綁定任何介面，請人工在裝置上用 firewall in/out/local name 指令綁定至正確介面方向後才會生效');
     if(targetVendor==='openwrt') notes.push('OpenWrt (UCI) 語法純依官方文件組出，無真實裝置匯出檔比對校正；來源規則的介面欄位未必是 UCI 慣用的 zone 名稱，本轉換器已自動合成對應 config zone 區塊讓輸出自我一致，但實際 zone／network 對應請人工依裝置真實拓樸核對');
+    if(targetVendor==='checkpoint') notes.push('查證官方 Gaia Admin Guide 確認規則庫（Access Policy）／NAT／VPN site-to-site community 並無對應的 clish "set" 指令，這幾類物件僅能透過 SmartConsole 或 Management API 管理，本轉換器不產生對應輸出，僅轉換 OS 層級設定（介面/路由/hostname 等）');
     return notes;
   }
 
@@ -13851,7 +14014,11 @@ const App = (() => {
 
   const $=id=>document.getElementById(id);
   const sz=b=>b<1024?b+'B':b<1048576?(b/1024).toFixed(1)+'KB':(b/1048576).toFixed(1)+'MB';
-  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // 2026-08-09 稽核修復：原本未跳脫雙引號，但被用在 title="${esc(r.app)}"（PaloAlto
+  // application 欄位，來自上傳設定檔原始文字，未經字元白名單過濾）、<option value="${esc(v)}">
+  // （VDOM 名稱）等雙引號屬性內，惡意設定檔可構造含 " 的欄位值提前結束屬性、注入事件
+  // 處理器，構成儲存型 XSS；補上雙引號跳脫
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const ms=t=>new Promise(r=>setTimeout(r,t));
   const pill=(t,c)=>`<span class="pill ${c}">${esc(t)}</span>`;
   const nameMap={f:'fc-name',s:'sc-name',c:'cc-name',p:'pc-name',j:'jc-name',x:'xc-name',w:'wc-name',m:'mc-name',a:'ac-name',t:'tc-name',z:'zc-name',r:'rc-name',u:'uc-name'};
@@ -14524,7 +14691,7 @@ function onParsed(){
                 break;
       case 'routes':
         data=d.routes;
-        sumCards=sumC([{l:tr('sl.total'),v:data.length,c:'var(--accent)'},{l:tr('sl.static'),v:data.filter(x=>x.type==='static').length,c:'var(--green)'},{l:'Policy',v:data.filter(x=>x.type==='policy').length,c:'var(--yellow)'},{l:'OSPF',v:data.filter(x=>x.type==='ospf').length,c:'var(--purple)'},{l:'BGP',v:data.filter(x=>x.type==='bgp').length,c:'var(--orange)'},{l:'RIP',v:data.filter(x=>x.type==='rip').length,c:'var(--text-dim)'}]);
+        sumCards=sumC([{l:tr('sl.total'),v:data.length,c:'var(--accent)'},{l:tr('sl.static'),v:data.filter(x=>x.type==='static').length,c:'var(--green)'},{l:'STATIC6',v:data.filter(x=>x.type==='static6').length,c:'var(--info)'},{l:'Policy',v:data.filter(x=>x.type==='policy').length,c:'var(--yellow)'},{l:'OSPF',v:data.filter(x=>x.type==='ospf').length,c:'var(--purple)'},{l:'BGP',v:data.filter(x=>x.type==='bgp').length,c:'var(--orange)'},{l:'RIP',v:data.filter(x=>x.type==='rip').length,c:'var(--text-dim)'}]);
         thead=`<tr><th>${tr('col.type')}</th><th>ID</th><th>${tr('col.dst_net')}</th><th>${tr('col.gateway')}</th><th>${tr('col.if_name')}</th><th>${tr('col.admin_dist')}</th><th>${tr('col.priority')}</th><th>${tr('col.status')}</th><th>${tr('col.blackhole')}</th><th>${tr('col.proto_detail')}</th><th>${tr('col.desc')}</th></tr>`;
         rowFn=r=>`<tr><td>${pRouteType(r.type)}</td><td class="mono" style="color:var(--text-dim)">${esc(r.id)}</td><td class="mono">${esc(r.dst)}</td><td class="mono">${esc(r.gateway)}</td><td style="color:var(--text-dim)">${esc(r.device)}</td><td class="mono" style="color:var(--text-dim)">${esc(r.distance)}</td><td class="mono" style="color:var(--text-dim)">${esc(r.priority)}</td><td>${r.status==='disable'||r.status==='Disable'?pill(tr('wwan.pill_disable'),'p-deny'):pill(tr('wwan.pill_enable'),'p-allow')}</td><td style="color:var(--text-dim)">${esc(r.blackhole||'-')}</td><td style="color:var(--text-dim);font-size:11px">${esc(r.protocol_detail||'-')}</td><td style="color:var(--text-dim);font-size:11px">${esc(r.comment)}</td></tr>`;
         {const _bgpE=(d.routes||[]).find(r=>r.type==='bgp'&&r.neighbors&&r.neighbors.length>0);
@@ -14570,7 +14737,7 @@ function onParsed(){
         break;
       case 'nat':
         data=d.nat;
-        sumCards=sumC([{l:tip('tip.nat',tr('sl.total')),v:data.length,c:'var(--accent)'},{l:tip('tip.vip','VIP/DNAT'),v:data.filter(x=>x.type==='vip').length,c:'var(--yellow)'},{l:tip('tip.ippool','IP Pool'),v:data.filter(x=>x.type==='ippool').length,c:'var(--orange)'},{l:tip('tip.vipgrp','VIP Group'),v:data.filter(x=>x.type==='vipgrp').length,c:'var(--text-dim)'}]);
+        sumCards=sumC([{l:tip('tip.nat',tr('sl.total')),v:data.length,c:'var(--accent)'},{l:tip('tip.vip','VIP/DNAT'),v:data.filter(x=>x.type==='vip').length,c:'var(--yellow)'},{l:tip('tip.ippool','IP Pool'),v:data.filter(x=>x.type==='ippool').length,c:'var(--orange)'},{l:tip('tip.vipgrp','VIP Group'),v:data.filter(x=>x.type==='vipgrp').length,c:'var(--text-dim)'},{l:'NAT66',v:data.filter(x=>x.type==='vip6'||x.type==='ippool6'||x.type==='vipgrp6').length,c:'var(--info)'}]);
         thead=`<tr><th>${tip('tip.nat',tr('col.type'))}</th><th>${tr('col.name')}</th><th>${tr('col.subtype')}</th><th>${tip('tip.vip',tr('col.ext_ip'))}</th><th>${tr('col.ext_if')}</th><th>${tr('col.map_ip')}</th><th>${tr('col.port_fwd')}</th><th>${tr('col.ext_port')}</th><th>${tr('col.map_port')}</th><th>${tr('col.protocol')}</th><th>${tip('tip.status',tr('col.status'))}</th><th>${tr('col.desc')}</th></tr>`;
         rowFn=r=>`<tr><td>${pill(r.type,'p-warn')}</td><td class="mono" style="color:var(--accent)">${esc(r.name)}</td><td style="color:var(--text-dim)">${esc(r.vipType||r.poolType||'-')}</td><td class="mono">${esc(r.extIp||r.startIp||'-')}</td><td style="color:var(--text-dim)">${esc(r.extIntf||r.srcIntf||'-')}</td><td class="mono">${esc(r.mapIp||r.endIp||'-')}</td><td>${esc(r.portFwd||'-')}</td><td class="mono">${esc(r.extPort||'-')}</td><td class="mono">${esc(r.mapPort||'-')}</td><td style="color:var(--text-dim)">${esc(r.proto||'-')}</td><td>${r.status==='disable'?pill(tr('wwan.pill_disable'),'p-deny'):pill(tr('wwan.pill_enable'),'p-allow')}</td><td style="color:var(--text-dim);font-size:11px">${esc(r.comment)}</td></tr>`;
         {const _natWarns=analyzeNAT(d.nat);
@@ -15498,7 +15665,7 @@ function onParsed(){
   function pType(t){const tl=(t||'').toLowerCase();if(tl==='wwan'||tl==='lte')return pill('📱 WWAN','p-info');if(tl==='vlan')return pill('VLAN','p-warn');if(tl==='tunnel')return pill('TUNNEL','p-purple');if(tl==='loopback')return pill('LOOP','p-gray');if(tl==='aggregate'||tl==='bond'||tl==='lag')return pill('LAG','p-orange');return pill(t||'physical','p-gray');}
   function pRole(r){const u=(r||'').toUpperCase();if(u==='WAN')return pill('WAN','p-deny');if(u==='LAN')return pill('LAN','p-allow');if(u==='DMZ')return pill('DMZ','p-warn');if(u==='MGMT')return pill('MGMT','p-info');if(u==='HA')return pill('HA','p-purple');return pill(r||'-','p-gray');}
   function pProto(p){const u=(p||'').toUpperCase();if(u==='TCP')return pill('TCP','p-info');if(u==='UDP')return pill('UDP','p-orange');if(u==='TCP/UDP'||u==='TCPUDP')return pill('TCP/UDP','p-allow');if(u.includes('ICMP'))return pill('ICMP','p-warn');if(u==='GROUP')return pill('GROUP','p-purple');return pill(p||'-','p-gray');}
-  function pRouteType(t){const tl=(t||'').toLowerCase();if(tl==='static')return pill('STATIC','p-info');if(tl==='policy')return pill('PBR','p-warn');if(tl==='ospf')return pill('OSPF','p-purple');if(tl==='bgp')return pill('BGP','p-orange');if(tl==='rip')return pill('RIP','p-deny');return pill(t||'-','p-gray');}
+  function pRouteType(t){const tl=(t||'').toLowerCase();if(tl==='static')return pill('STATIC','p-info');if(tl==='static6')return pill('STATIC6','p-info');if(tl==='policy')return pill('PBR','p-warn');if(tl==='ospf')return pill('OSPF','p-purple');if(tl==='bgp')return pill('BGP','p-orange');if(tl==='rip')return pill('RIP','p-deny');return pill(t||'-','p-gray');}
   function pVpnType(t){if(t==='ipsec-p1')return pill('IPSec P1','p-purple');if(t==='ssl-vpn')return pill('SSL-VPN','p-allow');if(t==='ssl-portal')return pill('SSL Portal','p-allow');return pill(t||'-','p-gray');}
   function pUserType(t){if(t==='admin')return pill(tr('user.admin'),'p-deny');if(t==='local')return pill(tr('user.local'),'p-allow');if(t==='group')return pill(tr('sl.group'),'p-purple');if(t==='ldap-server')return pill('LDAP','p-warn');if(t==='radius-server')return pill('RADIUS','p-orange');if(t==='fsso')return pill('FSSO','p-info');return pill(t||'-','p-gray');}
   function pAccessLevel(al){if(al==='super-admin')return pill(tr('user.super_admin'),'p-deny');if(al==='admin')return pill(tr('user.admin'),'p-warn');if(al==='read-only')return pill(tr('user.read_only'),'p-info');if(al==='vpn-only')return pill(tr('user.vpn_only'),'p-purple');if(al==='log-viewer')return pill(tr('user.log_viewer'),'p-gray');if(al==='auth-server')return pill(tr('user.auth_server'),'p-orange');if(al==='group')return pill(tr('sl.group'),'p-purple');return pill(al||tr('user.user'),'p-gray');}
@@ -16732,7 +16899,9 @@ function onParsed(){
 
   function renderGlobalResults(results, q) {
     if (!results.length) return `<div class="nodata">${tr('search.no_results')}</div>`;
-    const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    // 2026-08-09 稽核修復：比照同專案其餘 esc() 定義補上雙引號跳脫，統一一致（此處目前用法
+    // 皆在文字內容而非屬性語境，非立即可利用，但避免未來新增用法時被誤用於屬性內）
+    const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const hl = s => { const r = esc(s); const qi = r.toLowerCase().indexOf(q.toLowerCase()); if(qi<0)return r; return r.slice(0,qi)+'<mark style="background:rgba(0,212,255,.25);border-radius:2px;padding:0 2px">'+r.slice(qi,qi+q.length)+'</mark>'+r.slice(qi+q.length); };
     return results.map(({sec, label, count, rows}) => {
       const keys = Object.keys(rows[0]||{}).filter(k=>!['phase2','comment','_shadow'].includes(k)).slice(0,6);
