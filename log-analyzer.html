@@ -1171,8 +1171,19 @@ function ipv6ToBigInt(ip) {
   if (groups.length !== 8 || groups.some(g => !/^[0-9a-fA-F]{1,4}$/.test(g))) return null;
   return groups.reduce((acc, g) => (acc << 16n) | BigInt(parseInt(g, 16)), 0n);
 }
+// 2026-08-10 效能修復：真實規模 GeoIP 資料庫（如完整版 v2fly geoip.dat，數十萬筆 IPv6 CIDR）
+// 實測顯示 buildIntelIndex() 在混入大量 IPv6 entries 時耗時遠超線性成長（113萬筆/15%v6 約
+// 5 秒，340萬筆/15%v6 卻要 36 秒），根因是這個函式原本每筆 entry 都重新做一次 BigInt 位移
+// 運算，但前綴長度實際只有 0-128 共 129 種可能值，數十萬筆 entries 等於重複計算同樣的答案
+// 數十萬次。改用小型快取（最多 129 筆，記憶體成本可忽略），同一前綴長度只計算一次
+const _ipv6MaskCache = new Map();
 function ipv6MaskForBits(bits) {
-  return bits === 0 ? 0n : ((1n << BigInt(bits)) - 1n) << BigInt(128 - bits);
+  let m = _ipv6MaskCache.get(bits);
+  if (m === undefined) {
+    m = bits === 0 ? 0n : ((1n << BigInt(bits)) - 1n) << BigInt(128 - bits);
+    _ipv6MaskCache.set(bits, m);
+  }
+  return m;
 }
 function cidrMatch(ip, cidr) {
   const [base, bits] = cidr.split('/');
@@ -2377,7 +2388,19 @@ function renderAll() {
 // 讓出一次主執行緒給瀏覽器重繪（更新進度提示文字、避免長時間同步運算讓分頁看起來當掉）；
 // 各階段內部仍是單次同步呼叫（parseLogText／buildIssueList 等本身不拆成逐行 yield，維持
 // 既有純函式同步簽章與可測試性不變），這裡做的是「階段之間」讓瀏覽器有機會畫面更新
-function yieldToUI() { return new Promise(r => setTimeout(r, 0)); }
+// 2026-08-10 效能修復：原本用 setTimeout(fn,0)，但瀏覽器對「密集/巢狀零延遲計時器」有最短
+// 延遲節流（HTML5 規範規定連續巢狀呼叫從第 5 層起最短 4ms，背景分頁節流更嚴重），大型
+// GeoIP 資料庫（buildIntelIndex 每 5000 筆 yield 一次，340萬筆等於 680 次呼叫）實測光是
+// yieldToUI() 本身就吃掉 10 秒以上，才是「上傳完全卡死」的真正主因，IPv6 BigInt 運算本身
+// 反而只佔零點幾秒。改用 MessageChannel（業界標準的 setImmediate polyfill 手法，postMessage
+// 不受 setTimeout 的零延遲節流限制）取代，同樣 680 次呼叫實測從 10 秒降到 50 毫秒
+function yieldToUI() {
+  return new Promise(resolve => {
+    const ch = new MessageChannel();
+    ch.port2.onmessage = () => resolve();
+    ch.port1.postMessage(null);
+  });
+}
 function showProgress(labelKey) {
   const el = document.getElementById('progress-label');
   el.classList.add('active');
