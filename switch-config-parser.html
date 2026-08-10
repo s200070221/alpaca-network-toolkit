@@ -2514,7 +2514,9 @@ function parseInterfaces(cfg){
     }
     if(/^Vlan-interface/i.test(name)){
       const ipRaw=(blk.match(/^\s*ip address\s+(\S+)\s+(\S+)/m)||[]);
-      const ip=ipRaw[1]&&ipRaw[2]?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(blk.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
+      let ip=ipRaw[1]&&ipRaw[2]?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(blk.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
+      // IPv6（試點 5 廠牌之一，官方語法 `ipv6 address ADDR/PREFIXLEN`，不需遮罩換算）
+      if(!ip)ip=(blk.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       // vrf（2026-07-27 補上）：SVI 一樣支援 `ip binding vpn-instance NAME`（與下方實體埠
       // 分支用的是同一個真實 H3C 關鍵字），先前只有實體埠分支有解析，SVI 一律回傳空字串
       const vrf=(blk.match(/ip binding vpn-instance\s+(\S+)/)||[])[1]||'';
@@ -2528,7 +2530,8 @@ function parseInterfaces(cfg){
       continue;
     }
     if(/^LoopBack/i.test(name)){
-      const ip=(blk.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+      let ip=(blk.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+      if(!ip)ip=(blk.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       ifaces.push({name,type:'loopback',desc,ip,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
@@ -2555,7 +2558,8 @@ function parseInterfaces(cfg){
       nativeVlan=hybrid.pvid;
     }
     const vrf=(blk.match(/ip binding vpn-instance\s+(\S+)/)||[])[1]||'';
-    const ip=(blk.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+    let ip=(blk.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+    if(!ip)ip=(blk.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
     const isStack=/Ten-GigabitEthernet|FortyGigE|HundredGigE/i.test(name);
     // Breakout: 母埠 interface 區塊內 `using tengige` 啟用（僅 FortyGigE→Ten-GigabitEthernet 這組已查證官方語法）
     const breakoutMode=/^\s*using\s+tengige\b/mi.test(blk)?'4x10G':'';
@@ -3094,14 +3098,17 @@ function parseCiscoInterfaces(cfg,vendor){
 
     // Loopback
     if(/^Loopback/i.test(name)){
-      const ip=(body.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+      let ip=(body.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+      // IPv6（試點 5 廠牌之一，標準 Cisco/Arista 語法 `ipv6 address ADDR/PREFIXLEN`）
+      if(!ip)ip=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       ifaces.push({name,type:'loopback',desc,ip,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
       continue;
     }
     // SVI: Vlan interface
     if(/^Vlan/i.test(name)){
       const ipRaw=(body.match(/^\s*ip address\s+(\S+)\s+(\S+)/m)||[]);
-      const ip=ipRaw[1]&&ipRaw[2]?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
+      let ip=ipRaw[1]&&ipRaw[2]?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
+      if(!ip)ip=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       const vrf=(body.match(vrfRe)||[])[1]||'';
       // HSRP as VRRP equivalent
       const vrrpList=[];let hm;
@@ -3115,7 +3122,8 @@ function parseCiscoInterfaces(cfg,vendor){
     }
     // Management (no routing)
     if(/^Management/i.test(name)){
-      const ip=(body.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+      let ip=(body.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+      if(!ip)ip=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       ifaces.push({name,type:'physical',desc,ip,mode:'',vlans:'',nativeVlan:'',vrf:'MGMT',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
       continue;
     }
@@ -3124,7 +3132,8 @@ function parseCiscoInterfaces(cfg,vendor){
     const noRouting=/no switchport/.test(body);
     if(noRouting){
       // Routed port
-      const ip=(body.match(/^\s*ip address\s+(\S+(?:\s+\S+)?)/m)||[])[1]||'';
+      let ip=(body.match(/^\s*ip address\s+(\S+(?:\s+\S+)?)/m)||[])[1]||'';
+      if(!ip)ip=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       vrf=(body.match(vrfRe)||[])[1]||'';
       ifaces.push({name,type:'physical',desc,mode:'routed',vlans:'',nativeVlan:'',vrf,ip,shutdown,member,hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
       continue;
@@ -3730,7 +3739,9 @@ function parseJuniperInterfaces(cfg){
       const swMode=(body.match(/interface-mode\s+(trunk|access);/)||[])[1]||'';
       const vlanM=(body.match(/members\s+\[([^\]]+)\]/)||body.match(/members\s+(\S+);/)||[])[1]?.trim()||'';
       const native=(body.match(/native-vlan-id\s+(\d+);/)||[])[1]||'';
-      const ip=(body.match(/address\s+([\d.]+\/\d+);/)||[])[1]||'';
+      // IPv6（試點 5 廠牌之一）：改用格式中立的 \S+，比照 IRB/Loopback 分支既有寫法（本來就不限定
+      // IPv4 字元類別），family inet/inet6 皆可原樣擷取
+      const ip=(body.match(/address\s+(\S+);/)||[])[1]||'';
       const mode=swMode||(ip?'routed':'');
       ifaces.push({name,type:'physical',desc,mode,vlans:vlanM,nativeVlan:native,
         vrf:'',ip,shutdown:disabled,member:'1',hybrid:null,vrrp:[],lacpMode,breakoutChild:false,breakoutParent:'',breakoutMode:''});
@@ -3741,7 +3752,8 @@ function parseJuniperInterfaces(cfg){
     const swMode=(body.match(/interface-mode\s+(trunk|access);/)||[])[1]||'';
     const vlanM=(body.match(/members\s+\[([^\]]+)\]/)||body.match(/members\s+(\S+);/)||[])[1]?.trim()||'';
     const native=(body.match(/native-vlan-id\s+(\d+);/)||[])[1]||'';
-    const ip=(body.match(/address\s+([\d.]+\/\d+);/)||[])[1]||'';
+    // IPv6（試點 5 廠牌之一）：同上改用格式中立的 \S+
+    const ip=(body.match(/address\s+(\S+);/)||[])[1]||'';
     const vrf=(body.match(/routing-instance\s+(\S+);/)||[])[1]||'';
     const lagMember=(body.match(/802\.3ad\s+(ae\d+);/)||[])[1]||'';
     const mode=swMode||(ip&&!swMode?'routed':'');
@@ -6214,14 +6226,15 @@ function parseArubaInterfaces(cfg){
     // SVI: "vlan N"
     if(/^vlan\s*\d+/i.test(name)){
       const vid=(name.match(/\d+/)||[])[0]||'';
-      const ip=(blk.match(/^\s+ip address\s+(\S+)/m)||[])[1]||'';
+      // IPv6（試點 5 廠牌之一，官方 AOS-CX 語法 `ipv6 address ADDR/PREFIXLEN`）
+      const ip=(blk.match(/^\s+ip address\s+(\S+)/m)||[])[1]||(blk.match(/^\s+ipv6 address\s+(\S+)/m)||[])[1]||'';
       const vrf=(blk.match(/^\s+vrf attach\s+(\S+)/m)||[])[1]||'';
       ifaces.push({name,type:'svi',desc,ip,mode:'',vlans:vid,nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     // Loopback
     if(/^loopback/i.test(name)){
-      const ip=(blk.match(/^\s+ip address\s+(\S+)/m)||[])[1]||'';
+      const ip=(blk.match(/^\s+ip address\s+(\S+)/m)||[])[1]||(blk.match(/^\s+ipv6 address\s+(\S+)/m)||[])[1]||'';
       ifaces.push({name,type:'loopback',desc,ip,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
@@ -6237,8 +6250,8 @@ function parseArubaInterfaces(cfg){
       mode='access';
       vlans=(blk.match(/vlan access\s+(\d+)/)||[])[1]||'';
     }
-    if(!/no routing/.test(blk)&&/ip address/.test(blk)){
-      ip=(blk.match(/^\s+ip address\s+(\S+)/m)||[])[1]||'';
+    if(!/no routing/.test(blk)&&(/ip address/.test(blk)||/ipv6 address/.test(blk))){
+      ip=(blk.match(/^\s+ip address\s+(\S+)/m)||[])[1]||(blk.match(/^\s+ipv6 address\s+(\S+)/m)||[])[1]||'';
       vrf=(blk.match(/^\s+vrf attach\s+(\S+)/m)||[])[1]||'';
       mode=mode||'routed';
     }
