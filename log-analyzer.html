@@ -1227,7 +1227,12 @@ async function buildIntelIndex(intelList) {
       const bits = bitsRaw === undefined ? 128 : Number(bitsRaw);
       const baseInt = ipv6ToBigInt(base);
       if (baseInt === null || !Number.isInteger(bits) || bits < 0 || bits > 128) continue; // 無效 CIDR 靜默略過，比照 IPv4 分支既有慣例
-      const masked = baseInt & ipv6MaskForBits(bits);
+      // 2026-08-10 效能修復：真實 v2fly geoip.dat（77萬筆 IPv6，非本輪先前用隨機亂數合成測試
+      // 資料能重現的規模）實測 Map 直接用 BigInt 當 key 會產生嚴重雜湊碰撞，20萬筆就要 14.5
+      // 秒且資料量 x2 耗時 x4（明顯 O(n²)，隨機亂數 key 因雜湊分布均勻不會踩到這個問題，才會
+      // 一直沒被抓到）；改用 BigInt.toString(36) 字串當 key 後同規模僅 0.3 秒，137萬筆全量僅
+      // 2.7 秒，且恢復線性成長——V8 對字串的雜湊/相等比較是高度最佳化路徑，BigInt 則否
+      const masked = (baseInt & ipv6MaskForBits(bits)).toString(36);
       if (!cidr6ByPrefix.has(bits)) cidr6ByPrefix.set(bits, new Map());
       cidr6ByPrefix.get(bits).set(masked, e);
       cidr6Count++;
@@ -1261,7 +1266,7 @@ function intelLookup(index, ip) {
     const ip6Int = ipv6ToBigInt(ip);
     if (ip6Int === null) return null;
     for (const [bits, bucket] of index.cidr6ByPrefix) {
-      const hit = bucket.get(ip6Int & ipv6MaskForBits(bits));
+      const hit = bucket.get((ip6Int & ipv6MaskForBits(bits)).toString(36)); // key 格式須與 buildIntelIndex() 一致（字串非 BigInt，見上方效能修復註解）
       if (hit) return hit;
     }
     return null;
