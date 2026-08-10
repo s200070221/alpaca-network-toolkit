@@ -802,9 +802,17 @@ function detectScanHeuristicCEF(events, opts) {
 }
 const IP_RE_G = /\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/g;
 function isPlausibleIPv4(ip) { return ip.split('.').every(p => Number(p) <= 255); }
+// IPv6_RE/MAC_SHAPE_RE 原本只給去識別化模組用（下方 replaceIPsInLine() 仍引用同一份定義），
+// 搬到這裡讓情資比對/掃描偵測的候選 IP 擷取也能共用，不重複定義兩份正則
+const IPv6_RE = /(?<!\w)(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}|(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}|(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}|(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}|:(?:(?::[0-9a-fA-F]{1,4}){1,7}|:))(?![:\w])/g;
+// 冒號格式 MAC 與 IPv6_RE 的形狀重疊，真實 IPv6 地址不會是這個形狀（沒有 :: 縮寫、每組固定
+// 2 碼），排除避免誤判成 IPv6
+const MAC_SHAPE_RE = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
 function extractIPsFromText(text) {
   if (!text) return [];
-  return Array.from(new Set((text.match(IP_RE_G) || []).filter(isPlausibleIPv4)));
+  const v4 = (text.match(IP_RE_G) || []).filter(isPlausibleIPv4);
+  const v6 = (text.match(IPv6_RE) || []).filter(m => m.split(':').length >= 4 && !MAC_SHAPE_RE.test(m));
+  return Array.from(new Set([...v4, ...v6]));
 }
 // 通用 key=value / key="value" 擷取：FortiGate 等廠牌原生 syslog log body 常見用這種語法
 // （非 CEF，但語法相近，非結構化格式的 RFC3164/5424 MSG 欄位裡常見），僅供「可選顯示欄位」
@@ -1104,6 +1112,23 @@ function geoDatParseEntry(bytes) {
   }
   return { countryCode, cidrs };
 }
+// 16-byte raw IPv6 → 冒號十六進位字串，套用最長連續零群組的 "::" 縮寫（僅縮寫首個最長的
+// 連續零群組，符合一般慣例；ip.dat 記錄本身無壓縮格式需求，此處純粹是為了可讀性與讓
+// buildIntelIndex()/ipv6ToBigInt() 能正常解析）
+function formatIPv6Bytes(bytes) {
+  const groups = [];
+  for (let i = 0; i < 16; i += 2) groups.push(((bytes[i] << 8) | bytes[i + 1]).toString(16));
+  let bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+  groups.forEach((g, i) => {
+    if (g === '0') { if (curStart === -1) curStart = i; curLen++; }
+    else { if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; } curStart = -1; curLen = 0; }
+  });
+  if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; }
+  if (bestLen < 2) return groups.join(':');
+  const head = groups.slice(0, bestStart).join(':');
+  const tail = groups.slice(bestStart + bestLen).join(':');
+  return `${head}::${tail}`;
+}
 // 輸出形狀與 parseIntelList() 一致（{name, entries:[{value, meta}]}），可直接餵給既有
 // buildIntelIndex()，索引/查詢/CIDR 分桶效能優化全數共用，不重新設計一套比對邏輯
 function parseGeoIPDat(buffer) {
@@ -1119,8 +1144,9 @@ function parseGeoIPDat(buffer) {
     if (fieldNum !== 1) continue;
     const entry = geoDatParseEntry(val);
     entry.cidrs.forEach(c => {
-      if (!c.ip || c.ip.length !== 4) return; // 僅解析 IPv4，16-byte IPv6 直接跳過（已知限制）
-      entries.push({ value: `${Array.from(c.ip).join('.')}/${c.prefix}`, meta: { country: entry.countryCode } });
+      if (!c.ip || (c.ip.length !== 4 && c.ip.length !== 16)) return; // 僅解析 IPv4(4-byte)/IPv6(16-byte)
+      const value = c.ip.length === 4 ? `${Array.from(c.ip).join('.')}/${c.prefix}` : `${formatIPv6Bytes(c.ip)}/${c.prefix}`;
+      entries.push({ value, meta: { country: entry.countryCode } });
     });
   }
   return { name: 'geoip.dat', entries };
@@ -1129,6 +1155,24 @@ function ipToInt(ip) {
   const p = ip.split('.').map(Number);
   if (p.length !== 4 || p.some(n => Number.isNaN(n) || n < 0 || n > 255)) return null;
   return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3];
+}
+// IPv6 是 128-bit，JS 位元運算子（<<、>>>）僅支援 32-bit，改用 BigInt。"::" 縮寫展開成 8
+// 組 16-bit hex 後串成單一 BigInt；格式不合法（如多個 "::"、非 hex 字元、組數不對）回傳 null
+function ipv6ToBigInt(ip) {
+  if (!ip || ip.indexOf(':') === -1) return null;
+  const parts = ip.split('::');
+  if (parts.length > 2) return null;
+  const head = parts[0] ? parts[0].split(':') : [];
+  const tail = parts.length === 2 && parts[1] ? parts[1].split(':') : [];
+  if (parts.length === 1) { if (head.length !== 8) return null; }
+  else if (head.length + tail.length >= 8) return null;
+  const missing = parts.length === 2 ? 8 - head.length - tail.length : 0;
+  const groups = parts.length === 2 ? [...head, ...Array(missing).fill('0'), ...tail] : head;
+  if (groups.length !== 8 || groups.some(g => !/^[0-9a-fA-F]{1,4}$/.test(g))) return null;
+  return groups.reduce((acc, g) => (acc << 16n) | BigInt(parseInt(g, 16)), 0n);
+}
+function ipv6MaskForBits(bits) {
+  return bits === 0 ? 0n : ((1n << BigInt(bits)) - 1n) << BigInt(128 - bits);
 }
 function cidrMatch(ip, cidr) {
   const [base, bits] = cidr.split('/');
@@ -1149,25 +1193,59 @@ function cidrMatch(ip, cidr) {
 // 對 INTEL_LISTS／SAFE_LISTS 這類沒有 country 欄位的一般情資清單而言只是多一個空陣列，
 // 成本可忽略，不需要為 GeoIP 另開一份專用索引函式
 function buildIntelIndex(intelList) {
-  const exact = new Map(), cidrByPrefix = new Map(), countrySet = new Set();
-  let cidrCount = 0;
+  const exact = new Map(), cidrByPrefix = new Map(), cidr6ByPrefix = new Map(), countrySet = new Set();
+  let cidrCount = 0, cidr6Count = 0, hasBroadCidr = false;
   intelList.entries.forEach(e => {
     if (e.meta && e.meta.country) countrySet.add(e.meta.country);
-    if (!e.value.includes('/')) { exact.set(e.value, e); return; }
+    if (!e.value.includes('/')) {
+      // 單一位址（IPv4/IPv6 皆可）：intelLookup() 的 exact.has(ip) 是純字串比對，本來就不挑
+      // v4/v6，直接存進同一個 Map 即可，不需要分開處理
+      exact.set(e.value, e); return;
+    }
     const [base, bitsRaw] = e.value.split('/');
+    if (base.includes(':')) {
+      const bits = bitsRaw === undefined ? 128 : Number(bitsRaw);
+      const baseInt = ipv6ToBigInt(base);
+      if (baseInt === null || !Number.isInteger(bits) || bits < 0 || bits > 128) return; // 無效 CIDR 靜默略過，比照 IPv4 分支既有慣例
+      const masked = baseInt & ipv6MaskForBits(bits);
+      if (!cidr6ByPrefix.has(bits)) cidr6ByPrefix.set(bits, new Map());
+      cidr6ByPrefix.get(bits).set(masked, e);
+      cidr6Count++;
+      // IPv6 版的過寬 CIDR 警告，比例比照 IPv4（bits<=8 佔 32-bit 的 25%）：128-bit 的 25% 是 32
+      if (bits <= 32) hasBroadCidr = true;
+      return;
+    }
     const bits = bitsRaw === undefined ? 32 : Number(bitsRaw);
     const baseInt = ipToInt(base);
-    if (baseInt === null || Number.isNaN(bits)) return; // 無效 CIDR 靜默略過，比照既有 cidrMatch() 對無效輸入回傳 false 的寬容慣例
+    // 2026-08-09 稽核修復：原本只檢查 baseInt/bits 是否為 null/NaN，未驗證 bits 落在 0-32
+    // 合法範圍；bits 為負數時（如格式錯誤的 "x.x.x.x/-1"）會落入下方位移運算，JS 位移運算子
+    // 對 ≥32 的位移量取模 32，產生不可預期（非崩潰但邏輯錯誤）的遮罩值，而非被判定無效略過
+    if (baseInt === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return; // 無效 CIDR 靜默略過，比照既有 cidrMatch() 對無效輸入回傳 false 的寬容慣例
     const mask = bits === 0 ? 0 : (bits >= 32 ? 0xFFFFFFFF : (~((1 << (32 - bits)) - 1)) >>> 0);
     const masked = (baseInt & mask) >>> 0;
     if (!cidrByPrefix.has(bits)) cidrByPrefix.set(bits, new Map());
     cidrByPrefix.get(bits).set(masked, e);
     cidrCount++;
+    // 2026-08-09 稽核修復：CIDR /0 誤放入白名單（safeIndexes）會讓 matchThreatIntel() 對
+    // 每一個候選 IP 都命中該索引直接 return，等於整個「已知情資命中」偵測全面靜默失效且
+    // 無任何警告；prefix ≤ 8 已是異常寬鬆（單一條目涵蓋逾 1600 萬個位址），標記供上傳流程
+    // 提示使用者（console.warn 供除錯；UI 端見 renderSafeList() 對 hasBroadCidr 的 ⚠️ 標示）
+    if (bits <= 8) hasBroadCidr = true;
   });
-  return { name: intelList.name, exact, cidrByPrefix, count: exact.size + cidrCount, countries: Array.from(countrySet).sort() };
+  if (hasBroadCidr) console.warn(`[log_analyzer] 情資清單「${intelList.name}」含異常寬鬆的 CIDR（前綴 ≤ 8，IPv6 則 ≤ 32），若用於安全清單會讓比對全面失效`);
+  return { name: intelList.name, exact, cidrByPrefix, cidr6ByPrefix, count: exact.size + cidrCount + cidr6Count, hasBroadCidr, countries: Array.from(countrySet).sort() };
 }
 function intelLookup(index, ip) {
   if (index.exact.has(ip)) return index.exact.get(ip);
+  if (ip.includes(':')) {
+    const ip6Int = ipv6ToBigInt(ip);
+    if (ip6Int === null) return null;
+    for (const [bits, bucket] of index.cidr6ByPrefix) {
+      const hit = bucket.get(ip6Int & ipv6MaskForBits(bits));
+      if (hit) return hit;
+    }
+    return null;
+  }
   const ipInt = ipToInt(ip);
   if (ipInt === null) return null;
   for (const [bits, bucket] of index.cidrByPrefix) {
@@ -1403,10 +1481,29 @@ function anonMAC(mac) {
   return formatMAC(hex, mac);
 }
 const IPv4_RE = /(?<![.\d])(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?![.\d])/g;
+// 2026-08-09 稽核修復：去識別化模組先前完全沒有 IPv6 支援，真實 IPv6 位址在自由文字 msg
+// 中會原樣殘留；比照 config_anonymizer 已有的 IPv6_RE/anonIPv6() 邏輯移植（ctrs.ip6 計數器
+// 早已存在於上方 ctrs 物件定義，先前只是缺對應的正則與函式，形同虛設）
+// 2026-08-09 稽核修復（移植自 config_anonymizer 後實測發現）：原本開頭排除的
+// `(?<![:\w])` 連 ":" 都排除，導致真實常見的「介面名稱:IP」格式（如 Cisco ASA
+// deny log 的 "src outside:2001:db8::1/443"，冒號直接緊鄰位址前）完全匹配不到——
+// IPv6 位址前一個字元剛好也是冒號時被誤判為「這是某個更長序列的中段」而跳過整個
+// 位址。改為只排除英數字元 `(?<!\w)`，MAC 位址的排除交由呼叫端既有的 MAC_SHAPE_RE
+// 判斷式負責（MAC 固定 6 組 2 碼、不含 "::" 縮寫，本身就不會被此正則的形狀比對命中，
+// 不依賴這個 lookbehind）。IPv6_RE/MAC_SHAPE_RE 定義已搬到檔案上方（IP_RE_G 旁），
+// 供情資比對/掃描偵測的候選 IP 擷取共用，此處沿用同一份不重複定義
+function anonIPv6(ip) {
+  if (mappings.ip.has(ip)) return mappings.ip.get(ip);
+  ctrs.ip6++;
+  const mapped = `2001:db8::${ctrs.ip6}`;
+  mappings.ip.set(ip, mapped);
+  return mapped;
+}
 const MAC_COLON_RE = /\b([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b/g;
 const MAC_HYPHEN_RE = /\b([0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}\b/g;
 const MAC_DOT_RE = /\b([0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}\b/g;
 function replaceIPsInLine(line) {
+  line = line.replace(IPv6_RE, m => (m.split(':').length >= 4 && !MAC_SHAPE_RE.test(m) ? anonIPv6(m) : m));
   return line.replace(IPv4_RE, m => (isValidIPv4(m) && classifyIP(m) !== 'skip' ? anonIP(m) : m));
 }
 function replaceMACsInLine(line) {
@@ -1564,6 +1661,9 @@ function checkResidualLog(text) {
     if (!line.trim()) return;
     const ipMatches = line.match(new RegExp(ipLike.source, 'g'));
     if (ipMatches && ipMatches.some(m => !/^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(m))) warnings.push({ line: i + 1, text: line.trim() });
+    // 2026-08-09 稽核修復：先前只檢查 IPv4，救援網對 IPv6 完全沒有偵測能力
+    const ip6Matches = line.match(new RegExp(IPv6_RE.source, 'g'));
+    if (ip6Matches && ip6Matches.some(m => !/^2001:db8::/i.test(m) && !MAC_SHAPE_RE.test(m))) warnings.push({ line: i + 1, text: line.trim() });
     const macMatches = line.match(new RegExp(macLike.source, 'g'));
     if (macMatches && macMatches.some(m => !/^02/i.test(m.replace(/[:.-]/g, '')))) warnings.push({ line: i + 1, text: line.trim() });
   });
@@ -1609,7 +1709,7 @@ const LANG = {
     'sev.critical':'嚴重','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'資訊',
     'issues.title':'③ 問題清單（基本資安分析）','issues.empty':'未發現符合規則的問題','issues.col_category':'類別','issues.col_severity':'嚴重程度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_source':'情資來源','issues.col_basis':'比對依據','issues.col_sample':'範例','issues.filter_all_sources':'全部來源','issues.source_filter_label':'篩選情資來源：',
     'conf.confirmed':'已確認','conf.heuristic':'推測',
-    'cat.authFail':'認證失敗','cat.denyBlock':'連線遭拒/阻擋','cat.attack':'攻擊/惡意軟體relevant','cat.scanFlood':'掃描/洪水攻擊','cat.exceedThreshold':'超過門檻','cat.other':'其他','cat.freqLabel':'頻率異常：','cat.possibleScan':'疑似掃描行為','cat.knownIOC':'已知情資命中','cat.volumeAnomaly':'異常流量','cat.geoRisk':'地理位置風險','cat.geoIPRisk':'地理位置風險（IP查表）','note.bruteForce':'疑似猜密碼/暴力破解','note.scanOrMisconfig':'疑似掃描或誤設定','note.freqAnomaly':'頻率異常','note.possibleScan':'疑似 Port/主機掃描','note.knownIOC':'已知情資命中',
+    'cat.authFail':'認證失敗','cat.denyBlock':'連線遭拒/阻擋','cat.attack':'攻擊/惡意軟體','cat.scanFlood':'掃描/洪水攻擊','cat.exceedThreshold':'超過門檻','cat.other':'其他','cat.freqLabel':'頻率異常：','cat.possibleScan':'疑似掃描行為','cat.knownIOC':'已知情資命中','cat.volumeAnomaly':'異常流量','cat.geoRisk':'地理位置風險','cat.geoIPRisk':'地理位置風險（IP查表）','note.bruteForce':'疑似猜密碼/暴力破解','note.scanOrMisconfig':'疑似掃描或誤設定','note.freqAnomaly':'頻率異常','note.possibleScan':'疑似 Port/主機掃描','note.knownIOC':'已知情資命中',
     'intel.title':'④ 威脅情資本機比對清單','intel.hint':'匯入公開或內部的 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON，如 Spamhaus DROP 匯出格式），僅在本機比對，工具不會主動連網查詢。命中會標記為「已確認」的高風險問題。','intel.add_btn':'上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自填）','intel.count_label':'筆','intel.remove_btn':'移除','intel.empty':'尚未匯入任何情資清單',
     'safelist.title':'⑤ 已知安全清單（白名單）','safelist.hint':'匯入自行維護的已知安全 IP/CIDR 清單（純文字、CSV 或 JSON／NDJSON），命中時不會被標記為已知情資命中，用於排除公開清單常誤中的內網網段或已知合法服務。','safelist.name_placeholder':'清單名稱','safelist.add_btn':'上傳清單','safelist.template_btn':'下載範例CSV','safelist.empty':'尚未匯入任何安全清單',
     'geo.title':'⑥ GeoIP 位置資料庫比對','geo.hint':'匯入 CIDR→國家對照表：可上傳純文字/CSV（表頭需含 cidr 與 country 欄位）或 v2fly/Xray 格式的 geoip.dat 二進位檔（僅解析 IPv4）。命中後若該國家落在上方「地理位置風險標記」勾選清單，會標記為地理位置風險（IP查表版）。資料庫需自行下載，本工具不內建。','geo.name_placeholder':'清單名稱（選填，未填則用檔名）','geo.add_btn':'上傳清單','geo.empty':'尚未匯入任何 GeoIP 資料庫','geo.riskGroupLabel':'高風險國家','geo.continent.asia':'亞洲','geo.continent.europe':'歐洲','geo.continent.africa':'非洲','geo.continent.namerica':'北美洲','geo.continent.samerica':'南美洲','geo.continent.oceania':'大洋洲','geo.continent.other':'其他/未分類',
@@ -2235,7 +2335,7 @@ function renderSafeList() {
   const box = document.getElementById('safelist-list');
   if (!SAFE_LISTS.length) { box.innerHTML = `<div class="empty">${tr('safelist.empty')}</div>`; return; }
   box.innerHTML = SAFE_LISTS.map((l, i) => `<div class="intel-row">
-    <span class="n">${esc(l.name)} — ${l.index.count} ${tr('intel.count_label')}</span>
+    <span class="n">${l.index.hasBroadCidr ? '⚠️ ' : ''}${esc(l.name)} — ${l.index.count} ${tr('intel.count_label')}</span>
     <button class="btn" data-idx="${i}" data-act="rm-safelist">${tr('intel.remove_btn')}</button>
   </div>`).join('');
   box.querySelectorAll('[data-act="rm-safelist"]').forEach(b => b.onclick = () => { SAFE_LISTS.splice(Number(b.dataset.idx), 1); renderSafeList(); });
@@ -2277,32 +2377,52 @@ function showProgress(labelKey) {
 function hideProgress() {
   document.getElementById('progress-label').classList.remove('active');
 }
+// 2026-08-09 稽核修復：doAnalyze() 是 async 函式，過程中多次 await yieldToUI() 讓出主執行緒，
+// 依序覆寫模組層級共享狀態（RAW_TEXT/EVENTS/ISSUES/ANON_EVENTS）；按鈕本身沒有在執行期間
+// disable，快速連點或上傳新檔後又再次點擊會讓兩次呼叫交錯執行，較新一次可能在較舊一次的
+// await 空檔被覆寫，最終畫面可能是兩次執行結果的混合。比照 network_analyzer 既有的
+// _dropGen 世代計數器防呆模式：每次呼叫遞增世代號，await 之後比對是否仍是最新一次呼叫，
+// 不是則靜默中止（不覆寫任何狀態、不隱藏可能屬於新一次呼叫的進度條）
+let _analyzeGen = 0;
 async function doAnalyze() {
   const text = PENDING_LARGE_TEXT !== null ? PENDING_LARGE_TEXT : document.getElementById('paste-area').value;
   if (!text.trim()) return;
-  RAW_TEXT = text;
-  showProgress('import.progress_parsing');
-  await yieldToUI();
-  const { events } = parseLogText(text);
-  EVENTS = events;
-  showProgress('import.progress_analyzing');
-  await yieldToUI();
-  const indexes = INTEL_LISTS.map(l => l.index);
-  const safeIndexes = SAFE_LISTS.map(l => l.index);
-  const geoIndexes = GEO_LISTS.map(l => l.index);
-  const windowSec = Number(document.getElementById('opt-freq-window').value) || 60;
-  const freqThreshold = Number(document.getElementById('opt-freq-threshold').value) || 5;
-  const scanThreshold = Number(document.getElementById('opt-scan-threshold').value) || 5;
-  const volumeThreshold = (Number(document.getElementById('opt-volume-threshold').value) || 50) * 1024 * 1024;
-  const riskCountries = getRiskCountries();
-  ISSUES = buildIssueList(EVENTS, indexes, { windowMs: windowSec * 1000, freqThreshold, scanThreshold, safeIndexes, volumeThreshold, riskCountries, geoIndexes });
-  ANON_EVENTS = null;
-  showProgress('import.progress_rendering');
-  await yieldToUI();
-  renderResults();
-  renderIssues();
-  renderTimeline();
-  hideProgress();
+  const myGen = ++_analyzeGen;
+  const btn = document.getElementById('btn-analyze');
+  if (btn) btn.disabled = true;
+  try {
+    RAW_TEXT = text;
+    showProgress('import.progress_parsing');
+    await yieldToUI();
+    if (myGen !== _analyzeGen) return;
+    const { events } = parseLogText(text);
+    EVENTS = events;
+    showProgress('import.progress_analyzing');
+    await yieldToUI();
+    if (myGen !== _analyzeGen) return;
+    const indexes = INTEL_LISTS.map(l => l.index);
+    const safeIndexes = SAFE_LISTS.map(l => l.index);
+    const geoIndexes = GEO_LISTS.map(l => l.index);
+    // 2026-08-09 稽核修復：原本用 `||` 取預設值，使用者刻意填 0（HTML min 屬性只是 UI 提示，
+    // 手動輸入不受限制）時，`0 || default` 會把合法的 0 當成「未填」而換回預設值，明確設定
+    // 被靜默忽略且畫面無任何提示；改用顯式判斷，僅在非有限數字或 ≤0 時才 fallback
+    const numOr = (id, def) => { const n = Number(document.getElementById(id).value); return Number.isFinite(n) && n > 0 ? n : def; };
+    const windowSec = numOr('opt-freq-window', 60);
+    const freqThreshold = numOr('opt-freq-threshold', 5);
+    const scanThreshold = numOr('opt-scan-threshold', 5);
+    const volumeThreshold = numOr('opt-volume-threshold', 50) * 1024 * 1024;
+    const riskCountries = getRiskCountries();
+    ISSUES = buildIssueList(EVENTS, indexes, { windowMs: windowSec * 1000, freqThreshold, scanThreshold, safeIndexes, volumeThreshold, riskCountries, geoIndexes });
+    ANON_EVENTS = null;
+    showProgress('import.progress_rendering');
+    await yieldToUI();
+    if (myGen !== _analyzeGen) return;
+    renderResults();
+    renderIssues();
+    renderTimeline();
+  } finally {
+    if (myGen === _analyzeGen) { hideProgress(); if (btn) btn.disabled = false; }
+  }
 }
 function doClear() {
   document.getElementById('paste-area').value = '';
@@ -2315,14 +2435,20 @@ function doClear() {
 // 支援一次選取/拖放多個檔案：依原始順序平行讀取後 join 成單一文字餵給既有分析流程，
 // 大檔案門檻判斷改用合併後的總行數/總位元組數；file 參數同時相容單一 File（Array.isArray
 // 防呆），呼叫端一律傳陣列
+// 2026-08-09 稽核修復：連續兩次選檔/拖放時，較慢的一次（如較大檔案）晚完成會覆蓋較快一次
+// 已寫入的 PENDING_LARGE_TEXT／file-loaded-label，造成顯示與實際暫存內容不一致；比照
+// doAnalyze() 與 network_analyzer 既有的 _dropGen 模式加上世代計數器
+let _uploadGen = 0;
 function doUploadFile(files) {
   const fileList = Array.isArray(files) ? files : [files];
+  const myGen = ++_uploadGen;
   Promise.all(fileList.map(f => new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
     reader.onerror = () => reject(reader.error);
     reader.readAsText(f);
   }))).then(contents => {
+    if (myGen !== _uploadGen) return;
     const text = contents.map(c => c.replace(/\s+$/, '')).join('\n');
     const totalSize = fileList.reduce((sum, f) => sum + f.size, 0);
     const lineCount = (text.match(/\n/g) || []).length + 1;
