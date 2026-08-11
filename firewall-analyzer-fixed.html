@@ -10046,6 +10046,23 @@ const ZyxelParser = (() => {
         startIp, endIp, iface: '-', members: '-', comment: '',
       });
     }
+    // 官方 CLI Reference Guide（ZLD 27.2.1，Address Object Commands）確認 IPv6 位址物件
+    // 使用獨立關鍵字 address6-object（非 address-object 加冒號值），語法：
+    // address6-object object_name {ipv6_address | ipv6_range | ipv6_subnet}
+    // 先前完全沒有對應解析路徑，這批物件從未被解析出來（非型別判斷順序錯誤）
+    const re6 = /^address6-object\s+(\S+)\s+(\S+)/gm;
+    let m6;
+    while ((m6 = re6.exec(text)) !== null) {
+      const name = m6[1], val = m6[2];
+      const type = val.includes('/') ? 'ipmask' : val.includes('-') ? 'iprange' : 'ipmask';
+      const [startIp, endIp] = val.includes('-') && type === 'iprange' ? val.split('-') : ['-', '-'];
+      out.push({
+        category: 'address6', name, type,
+        subnet: type === 'ipmask' ? val : '-',
+        fqdn: '-',
+        startIp, endIp, iface: '-', members: '-', comment: '',
+      });
+    }
     return out;
   }
 
@@ -10066,7 +10083,7 @@ const ZyxelParser = (() => {
     return out;
   }
 
-  function parsePolicies(blocks) {
+  function parsePolicies(blocks, addrTypeMap) {
     return blocks.policies.map(rule => {
       const body = rule.lines.join('\n');
       const from = (body.match(/^from\s+(\S+)/m) || [])[1] || 'any';
@@ -10078,10 +10095,12 @@ const ZyxelParser = (() => {
       const name = (body.match(/^name\s+(\S+)/m) || [])[1] || `Rule-${rule.num}`;
       const desc = (body.match(/^description\s+(.+)/m) || [])[1] || '';
       const noActivate = /^no\s+activate\s*$/m.test(body);
+      const srcAddrSplit = _splitAddr(srcAddr, addrTypeMap);
+      const dstAddrSplit = _splitAddr(dstAddr, addrTypeMap);
       return {
         id: parseInt(rule.num, 10) || 0, name,
         srcIntf: from, dstIntf: to, srcAddr, dstAddr,
-        srcAddr4: srcAddr, srcAddr6: '-', dstAddr4: dstAddr, dstAddr6: '-',
+        srcAddr4: srcAddrSplit.v4, srcAddr6: srcAddrSplit.v6, dstAddr4: dstAddrSplit.v4, dstAddr6: dstAddrSplit.v6,
         service, schedule: 'always',
         action: /^(allow)$/i.test(actionRaw) ? 'accept' : actionRaw.toLowerCase(),
         nat: 'disable', ippool: 'disable', poolname: '-',
@@ -10145,14 +10164,16 @@ const ZyxelParser = (() => {
   function parse(text) {
     const blocks = splitBlocks(text);
     const staticRoutes = parseRoutes(text);
+    const addresses = parseAddressObjects(text);
+    const addrTypeMap = buildAddrTypeMap(addresses);
     return {
       vendor: 'Zyxel',
       deviceInfo: parseDeviceInfo(text),
       interfaces: parseInterfaces(blocks),
-      policies: parsePolicies(blocks),
+      policies: parsePolicies(blocks, addrTypeMap),
       routes: staticRoutes.concat(parseInterfaceGateways(blocks, staticRoutes.length + 1)),
       ha: null, nat: [], vpn: [],
-      addresses: parseAddressObjects(text),
+      addresses,
       services: parseServiceObjects(text),
       users: [], schedules: [],
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
@@ -10681,11 +10702,16 @@ const OpenWrtParser = (() => {
       const name = val(s, 'name', '') || `Rule-${idx}`;
       const proto = val(s, 'proto', 'any');
       const dport = val(s, 'dest_port', '');
+      // 官方文件與社群範例確認 UCI 的 src_ip/dest_ip 本身可直接承載 IPv4 或 IPv6 字面值/CIDR
+      // （如 option src_ip 'fdca:f00:ba3::/64'），無獨立的 src_ip6/dest_ip6 欄位，family
+      // 選項僅輔助宣告非必要；沒有具名位址物件概念（既有範圍界定），故用免 map 版純冒號偵測
+      const srcAddrSplit = _splitAddr(val(s, 'src_ip', 'any'));
+      const dstAddrSplit = _splitAddr(val(s, 'dest_ip', 'any'));
       out.push({
         id: idx, name,
         srcIntf: val(s, 'src', 'any') || 'any', dstIntf: val(s, 'dest', 'any') || 'any',
         srcAddr: val(s, 'src_ip', 'any'), dstAddr: val(s, 'dest_ip', 'any'),
-        srcAddr4: val(s, 'src_ip', 'any'), srcAddr6: '-', dstAddr4: val(s, 'dest_ip', 'any'), dstAddr6: '-',
+        srcAddr4: srcAddrSplit.v4, srcAddr6: srcAddrSplit.v6, dstAddr4: dstAddrSplit.v4, dstAddr6: dstAddrSplit.v6,
         service: dport ? `${proto}/${dport}` : proto,
         schedule: 'always',
         action: val(s, 'target', 'REJECT').toUpperCase() === 'ACCEPT' ? 'accept' : 'deny',
