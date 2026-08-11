@@ -80,6 +80,11 @@ td input.i-name{min-width:170px}
 .import-fallback{margin-top:10px;margin-bottom:12px}
 .import-fallback summary{cursor:pointer;font-size:12px;color:var(--text-mid)}
 .import-fallback summary:hover{color:var(--accent)}
+.ipedit-help{margin-bottom:14px}
+.ipedit-help summary{cursor:pointer;font-size:12px;color:var(--text-mid)}
+.ipedit-help summary:hover{color:var(--accent)}
+.ipedit-help p{font-size:12px;color:var(--text-mid);margin:8px 0}
+.ipedit-help pre{background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:Menlo,'Courier New',monospace;font-size:11.5px;padding:10px;overflow-x:auto;white-space:pre}
 th.col-access,th.col-trunk,th.col-hybrid,th.col-fortilink,th.col-brocade-qos,td.col-access,td.col-trunk,td.col-hybrid,td.col-fortilink,td.col-brocade-qos{display:none}
 th.col-access.show,td.col-access.show{display:table-cell}
 th.col-trunk.show,td.col-trunk.show{display:table-cell}
@@ -302,6 +307,37 @@ input.valid,select.valid{border-color:var(--green)!important}
 
   <div class="card">
     <h2 data-i18n="sec.iface">Interface 設定</h2>
+    <details class="ipedit-help">
+      <summary data-i18n="lbl.ipEditSummary">🔧 找不到 IP 欄位？點此看如何手動加入（含次要 IP）</summary>
+      <p data-i18n="lbl.ipEditIntro">本工具的表單目前不提供 Interface／VLAN 的 IP 輸入欄位（僅能透過「匯入既有設定檔」從已有 IP 的設定檔回填）；如需設定或新增 IP（含次要 IP／Secondary IP），請在下方產生設定文字後直接手動編輯，以下為 4 家常見廠牌的參考語法：</p>
+      <pre>--- Cisco IOS-XE ---
+interface GigabitEthernet1/0/1
+ ip address 192.168.1.1 255.255.255.0
+ ip address 192.168.2.1 255.255.255.0 secondary
+
+--- HPE Comware（僅 VLAN-interface／Loopback，官方文件未涵蓋一般物理埠）---
+interface Vlan-interface10
+ ip address 192.168.1.1 255.255.255.0
+ ip address 192.168.2.1 255.255.255.0 sub
+
+--- Aruba CX (AOS-CX) ---
+interface vlan 10
+ ip address 192.168.1.1/24
+ ip address 192.168.2.1/24 secondary
+
+--- FortiSwitch ---
+config system interface
+ edit "vlan10"
+  set ip 192.168.1.1 255.255.255.0
+  set secondary-IP enable
+  config secondaryip
+   edit 1
+    set ip 192.168.2.1 255.255.255.0
+   next
+  end
+ next
+end</pre>
+    </details>
     <div class="row" id="breakout-helper-row">
       <label data-i18n="lbl.breakoutParent">母埠名稱</label>
       <input id="breakout-parent-name" placeholder="e.g. FortyGigE1/0/1">
@@ -9064,7 +9100,7 @@ const LANG={
     'opt.secNone':'-','opt.secAuth':'Authenticator','opt.secSupp':'Supplicant',
     'opt.qosPolice':'Police','opt.qosPriority':'Priority','opt.qosShape':'Shape','opt.qosBandwidth':'Bandwidth',
     'opt.aclExtended':'Extended/Advanced','opt.aclStandard':'Standard/Basic','opt.aclPermit':'Permit','opt.aclDeny':'Deny','opt.aclIn':'In','opt.aclOut':'Out',
-    'sec.import':'匯入既有設定檔','lbl.importUpload':'上傳設定檔（或直接貼於下方）','lbl.importPaste':'貼上設定檔內容','lbl.importFile':'此欄僅用於上傳 switch-config-parser.html 這支程式檔案（不是您的交換器設定檔）','lbl.importFallbackSummary':'⚙️ 疑難排解：找不到解析引擎時手動上傳','btn.parseImport':'解析並帶入表單',
+    'sec.import':'匯入既有設定檔','lbl.importUpload':'上傳設定檔（或直接貼於下方）','lbl.importPaste':'貼上設定檔內容','lbl.importFile':'此欄僅用於上傳 switch-config-parser.html 這支程式檔案（不是您的交換器設定檔）','lbl.importFallbackSummary':'⚙️ 疑難排解：找不到解析引擎時手動上傳','btn.parseImport':'解析並帶入表單','lbl.ipEditSummary':'🔧 找不到 IP 欄位？點此看如何手動加入（含次要 IP）','lbl.ipEditIntro':'本工具的表單目前不提供 Interface／VLAN 的 IP 輸入欄位（僅能透過「匯入既有設定檔」從已有 IP 的設定檔回填）；如需設定或新增 IP（含次要 IP／Secondary IP），請在下方產生設定文字後直接手動編輯，以下為 4 家常見廠牌的參考語法：',
     'msg.importEmpty':'請先貼上設定檔內容','msg.importBasicFallback':'因無法與大型解析工具同步或尚未匯入完整解析器，將使用內建基礎解析模式','msg.importNoVendor':'無法辨識廠牌，請確認貼上的內容是否為支援的設定檔格式','msg.importSuccess':'解析成功，已帶入表單','msg.appliedModel':'✓ 目前套用 {vendor} 的 {model} 之預設設定',
     'th.areaType':'Type','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'No-Summary',
     'sec.bgp':'BGP 設定','lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':'Networks','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'描述','lbl.bgpPeerGroup':'Peer Group','lbl.bgpTimerKeepalive':'Timer Keepalive','lbl.bgpTimerHold':'Timer Hold',
@@ -9110,7 +9146,7 @@ const LANG={
     'opt.secNone':'-','opt.secAuth':'Authenticator','opt.secSupp':'Supplicant',
     'opt.qosPolice':'Police','opt.qosPriority':'Priority','opt.qosShape':'Shape','opt.qosBandwidth':'Bandwidth',
     'opt.aclExtended':'Extended/Advanced','opt.aclStandard':'Standard/Basic','opt.aclPermit':'Permit','opt.aclDeny':'Deny','opt.aclIn':'In','opt.aclOut':'Out',
-    'sec.import':'Import Existing Config','lbl.importUpload':'Upload Config File (or paste below)','lbl.importPaste':'Paste Config Content','lbl.importFile':'This field is only for uploading the switch-config-parser.html program file (not your switch config)','lbl.importFallbackSummary':"⚙️ Troubleshooting: manual upload if the parser engine isn't found",'btn.parseImport':'Parse & Fill Form',
+    'sec.import':'Import Existing Config','lbl.importUpload':'Upload Config File (or paste below)','lbl.importPaste':'Paste Config Content','lbl.importFile':'This field is only for uploading the switch-config-parser.html program file (not your switch config)','lbl.importFallbackSummary':"⚙️ Troubleshooting: manual upload if the parser engine isn't found",'btn.parseImport':'Parse & Fill Form','lbl.ipEditSummary':"🔧 Can't find an IP field? Click here for how to add one by hand (incl. secondary IP)",'lbl.ipEditIntro':"This tool's form does not currently provide an IP input field for Interface/VLAN (IP is only populated by importing an existing config that already has one). If you need to set or add an IP (including a secondary IP), edit the generated config text by hand after generating it below. Reference syntax for 4 common vendors:",
     'msg.importEmpty':'Please paste config content first','msg.importBasicFallback':'Could not sync with the full parser tool, or none has been loaded yet — using built-in basic parsing mode','msg.importNoVendor':'Vendor not recognized — please check the pasted content is a supported config format','msg.importSuccess':'Parsed successfully — form has been filled','msg.appliedModel':'✓ Now applying default settings for {vendor} {model}','btn.downloadJson':'Download JSON','btn.downloadTxt':'Download Text','btn.downloadWord':'Download Word','col.ifDesc':'Description','col.ifMode':'Mode','col.ifName':'Interface Name','col.ifVlan':'VLAN','col.remark':'Remark','col.vlanId':'VLAN ID','col.vlanName':'VLAN Name','doc.deviceInfo':'Device Info','doc.disclaimer':'Disclaimer','doc.ifaceTitle':'Interface Configuration','doc.redundancyTitle':'Redundancy Summary','doc.routingTitle':'Routing Protocol Summary','doc.timestamp':'Generated Time','doc.title':'Switch Config Document','doc.vlanTitle':'VLAN Planning','doc.wordError':'Word library not loaded. This feature requires network access.','fmt.json':'JSON','fmt.txt':'Text','fmt.word':'Word',
     'th.areaType':'Type','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'No-Summary',
     'sec.bgp':'BGP Settings','lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':'Networks','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'Description','lbl.bgpPeerGroup':'Peer Group','lbl.bgpTimerKeepalive':'Timer Keepalive','lbl.bgpTimerHold':'Timer Hold',
@@ -9156,7 +9192,7 @@ const LANG={
     'opt.secNone':'-','opt.secAuth':'認証機','opt.secSupp':'サプリカント',
     'opt.qosPolice':'ポリシング','opt.qosPriority':'優先度','opt.qosShape':'シェーピング','opt.qosBandwidth':'帯域幅',
     'opt.aclExtended':'拡張/Advanced','opt.aclStandard':'標準/Basic','opt.aclPermit':'許可','opt.aclDeny':'拒否','opt.aclIn':'イン','opt.aclOut':'アウト',
-    'sec.import':'既存設定のインポート','lbl.importUpload':'設定ファイルをアップロード（または下に貼り付け）','lbl.importPaste':'設定内容を貼り付け','lbl.importFile':'この欄は switch-config-parser.html プログラムファイルのアップロード専用です（お使いの設定ファイルではありません）','lbl.importFallbackSummary':'⚙️ トラブルシューティング：解析エンジンが見つからない場合の手動アップロード','btn.parseImport':'解析してフォームに反映',
+    'sec.import':'既存設定のインポート','lbl.importUpload':'設定ファイルをアップロード（または下に貼り付け）','lbl.importPaste':'設定内容を貼り付け','lbl.importFile':'この欄は switch-config-parser.html プログラムファイルのアップロード専用です（お使いの設定ファイルではありません）','lbl.importFallbackSummary':'⚙️ トラブルシューティング：解析エンジンが見つからない場合の手動アップロード','btn.parseImport':'解析してフォームに反映','lbl.ipEditSummary':'🔧 IP欄が見つかりませんか？手動での追加方法（セカンダリIP含む）はこちら','lbl.ipEditIntro':'本ツールのフォームには現在 Interface／VLAN の IP 入力欄がありません（既に IP を含む設定ファイルを「既存設定のインポート」で読み込んだ場合のみ反映されます）。IP の設定・追加（セカンダリ IP を含む）が必要な場合は、下記で設定文字列を生成後、直接手動で編集してください。以下は代表的な4社の参考構文です：',
     'msg.importEmpty':'先に設定内容を貼り付けてください','msg.importBasicFallback':'大型解析ツールと同期できないか、まだ読み込まれていないため、内蔵の簡易解析モードを使用します','msg.importNoVendor':'ベンダーを識別できません。貼り付けた内容が対応形式か確認してください','msg.importSuccess':'解析に成功しました。フォームに反映されました','msg.appliedModel':'✓ 現在 {vendor} の {model} のデフォルト設定を適用しています','btn.downloadJson':'JSON をダウンロード','btn.downloadTxt':'テキストをダウンロード','btn.downloadWord':'Word をダウンロード','col.ifDesc':'説明','col.ifMode':'モード','col.ifName':'インターフェース名','col.ifVlan':'VLAN','col.remark':'備考','col.vlanId':'VLAN ID','col.vlanName':'VLAN 名','doc.deviceInfo':'デバイス情報','doc.disclaimer':'免責事項','doc.ifaceTitle':'インターフェース設定','doc.redundancyTitle':'冗長性設定','doc.routingTitle':'ルーティング設定','doc.timestamp':'生成時間','doc.title':'スイッチ設定文書','doc.vlanTitle':'VLAN計画','doc.wordError':'Word ライブラリが読み込まれていません。','fmt.json':'JSON','fmt.txt':'テキスト','fmt.word':'Word',
     'th.areaType':'タイプ','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'No-Summary',
     'sec.bgp':'BGP設定','lbl.bgpAsn':'ASN','lbl.bgpRid':'ルーターID','lbl.bgpNetworks':'ネットワーク','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'説明','lbl.bgpPeerGroup':'ピアグループ','lbl.bgpTimerKeepalive':'タイマー Keepalive','lbl.bgpTimerHold':'タイマー Hold',
@@ -9198,7 +9234,7 @@ const LANG={
     'opt.secNone':'-','opt.secAuth':"wanI'wI'",'opt.secSupp':'boQwI\'',
     'opt.qosPolice':"yer",'opt.qosPriority':"batlh",'opt.qosShape':"chenmoH",'opt.qosBandwidth':"yab",
     'opt.aclExtended':"tIn",'opt.aclStandard':"mach",'opt.aclPermit':"chaw'",'opt.aclDeny':"chaw'be'",'opt.aclIn':"Sup",'opt.aclOut':"mej",
-    'sec.import':"De' chenmoHwI' chel",'lbl.importUpload':"De' ghItlh chel (joq bIng pol)",'lbl.importPaste':"De' chel",'lbl.importFile':"chenmoHwI' ghItlh neH; De' lIj ghobe'",'lbl.importFallbackSummary':"chenmoHwI' tu'lu'be'chugh: lIj lo'",'btn.parseImport':"chel 'ej chenmoH",
+    'sec.import':"De' chenmoHwI' chel",'lbl.importUpload':"De' ghItlh chel (joq bIng pol)",'lbl.importPaste':"De' chel",'lbl.importFile':"chenmoHwI' ghItlh neH; De' lIj ghobe'",'lbl.importFallbackSummary':"chenmoHwI' tu'lu'be'chugh: lIj lo'",'btn.parseImport':"chel 'ej chenmoH",'lbl.ipEditSummary':"IP veb tu'lu'be'? naDev legh (secondary IP je)",'lbl.ipEditIntro':"chenmoHwI'vam IP veb tu'lu'be' Interface/VLAN nIvbogh; De' ghajbogh chel neH IP tu'lu'. IP chenmoH nIvbogh (secondary je), De' ghItlh tlhej bulk lo'laHghach.",
     'msg.importEmpty':"De' yIchel!",'msg.importBasicFallback':"chenmoHwI' tIn ghobe'; chenmoHwI' mach lo'lu'",'msg.importNoVendor':"chenmoHwI' Sovbe'",'msg.importSuccess':"chelta'! maj",'msg.appliedModel':"✓ {vendor} {model} lo'laH pagh",'btn.downloadJson':'JSON tlhIngan','btn.downloadTxt':'Text tlhIngan','btn.downloadWord':'Word tlhIngan','col.ifDesc':'QIn','col.ifMode':'mIw','col.ifName':'Interface','col.ifVlan':'VLAN','col.remark':'QIn','col.vlanId':'VLAN ID','col.vlanName':'VLAN pong','doc.deviceInfo':'Device','doc.disclaimer':'yIqIm','doc.ifaceTitle':'Interface Config','doc.redundancyTitle':'Redundancy','doc.routingTitle':'Routing','doc.timestamp':'Time','doc.title':'Document','doc.vlanTitle':'VLAN','doc.wordError':'Word not loaded','fmt.json':'JSON','fmt.txt':'ghItlh','fmt.word':'Word','opt.modelBackbone':'HomwI\'','opt.modelFiber':'Fiber','opt.modelModular':'Modular','opt.modelNone':'pagh',
     'msg.templateOverwriteConfirm':'Template "{name}" tu\'lu\'ta\'; choH DaneH\'a\'?','msg.templateDeleteConfirm':'Template "{name}" Say\'moH DaneH\'a\'? qaSpu\'DI\' choHlaHbe\'','ph.dhcpRelayIface':'pagh lo\' = Hoch',
     'opt.modelMidRange':'botlhHom module','opt.modelHighEndModular':'tInHom module','opt.modelAccessLayer':'\'el rav','opt.modelHighPerf':'tIn HoS','opt.modelNoBreakout':'Breakout Sovbe\'','opt.modelBreakoutSupport':'Breakout lo\'laH','opt.modelHighPerfAccess':'tIn HoS \'el','opt.modelCoreAggregation':'botlh tay\'moH','opt.modelAccessPoE':'\'el PoE','opt.modelHighDensity':'tIn law\'','opt.modelMediumConfidence':'botlh Sov','opt.modelHighEnd':'tIn mIw','opt.modelCurrentGen':'DaH poH','opt.modelExpressedAs100G':'100G rur','opt.modelLineCard':'Line Card chenmoH','opt.modelCopper':'roQ','opt.modelSuccessor':'teq','opt.modelEntry':'wa\'DIch','opt.modelMidTier':'botlh mIw','opt.modelCampusAccess':'veng \'el','opt.modelDataCenter':'De\' buq','opt.modelBranch':'veH rav','opt.modelUplinkModule':'uplink module','opt.modelOptional':'wIv','opt.modelCompactDesktop':'mach Desktop','opt.modelDesktop':'Desktop juH','opt.modelReplaces':'teqmoH','opt.modelNextGen':'poH chIch','opt.modelStackable':'tetlh lo\'laH',
@@ -9248,7 +9284,7 @@ const LANG={
     'opt.secNone':'-','opt.secAuth':'Gatekeep','opt.secSupp':'Beggar',
     'opt.qosPolice':'Patrol','opt.qosPriority':'First Dibs','opt.qosShape':'Trim Sails','opt.qosBandwidth':'Cargo Hold',
     'opt.aclExtended':'Full Rigged','opt.aclStandard':'Plain Sail','opt.aclPermit':'Let Pass','opt.aclDeny':'Cannons Fire','opt.aclIn':'Incomin','opt.aclOut':'Outgoin',
-    'sec.import':"Chart Salvagin'",'lbl.importUpload':"Hoist yer chart file (or paste below)",'lbl.importPaste':"Paste yer old chart",'lbl.importFile':"This be fer the salvage engine file only, not yer treasure map!",'lbl.importFallbackSummary':"⚙️ Trouble on deck: hoist the engine file by hand",'btn.parseImport':"Salvage & Fill!",
+    'sec.import':"Chart Salvagin'",'lbl.importUpload':"Hoist yer chart file (or paste below)",'lbl.importPaste':"Paste yer old chart",'lbl.importFile':"This be fer the salvage engine file only, not yer treasure map!",'lbl.importFallbackSummary':"⚙️ Trouble on deck: hoist the engine file by hand",'btn.parseImport':"Salvage & Fill!",'lbl.ipEditSummary':"🔧 No IP box on the chart? Click here to chart one by hand (secondary treasure included)",'lbl.ipEditIntro':"This here tool's form don't have an IP box fer Interface/VLAN (only fills in when ye salvage an old chart that already had one). If ye need to set or add an IP (aye, a secondary one too), edit the forged config text by hand after she's generated below. Here be reference lingo fer 4 common vessels:",
     'msg.importEmpty':"Paste a chart first, matey!",'msg.importBasicFallback':"Can't sync with the big salvage engine, so usin' the ship's own basic rigging instead",'msg.importNoVendor':"Can't tell whose ship this be",'msg.importSuccess':"Salvaged! All aboard",'msg.appliedModel':"✓ Rigged fer {vendor} {model}, ye scallywag!",'btn.downloadJson':'Download JSON, matey','btn.downloadTxt':'Download Text, aye','btn.downloadWord':'Download Word, arr','col.ifDesc':'Description, matey','col.ifMode':'Mode, arr','col.ifName':'Interface, cap\'n','col.ifVlan':'VLAN, aye','col.remark':'Remark, savvy','col.vlanId':'VLAN ID, arr','col.vlanName':'VLAN, ye scallywag','doc.deviceInfo':'Device, cap\'n','doc.disclaimer':'Heed this, landlubber','doc.ifaceTitle':'Interface, arr','doc.redundancyTitle':'Redundancy, arr','doc.routingTitle':'Routing, cap\'n','doc.timestamp':'Time, cap\'n','doc.title':'Switch Config, aye','doc.vlanTitle':'VLAN Plan, matey','doc.wordError':'Word be not ready, matey','fmt.json':'JSON, arr','fmt.txt':'Text, cap\'n','fmt.word':'Word, savvy',
     'th.areaType':'Kind','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'No-Summary, matey',
     'sec.bgp':"BGP Riggin'",'lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':'Waters','th.peerIp':"Mate's IP",'th.peerAs':'AS','th.peerDesc':'Log Entry','lbl.bgpPeerGroup':'Crew Group','lbl.bgpTimerKeepalive':'Watch Bell','lbl.bgpTimerHold':'Hold Bell',
@@ -9293,7 +9329,7 @@ const LANG={
     'opt.secNone':'-','opt.secAuth':'🔑','opt.secSupp':'🙋',
     'opt.qosPolice':'👮','opt.qosPriority':'⭐','opt.qosShape':'📐','opt.qosBandwidth':'📶',
     'opt.aclExtended':'🔬','opt.aclStandard':'📏','opt.aclPermit':'✅','opt.aclDeny':'🚫','opt.aclIn':'⬇️','opt.aclOut':'⬆️',
-    'sec.import':'📥⚙️','lbl.importUpload':'📤📄(⬇️貼)','lbl.importPaste':'📋➡️','lbl.importFile':'📄🔧≠📤📄❗','lbl.importFallbackSummary':'⚙️❓✋📄','btn.parseImport':'🔍➡️📝',
+    'sec.import':'📥⚙️','lbl.importUpload':'📤📄(⬇️貼)','lbl.importPaste':'📋➡️','lbl.importFile':'📄🔧≠📤📄❗','lbl.importFallbackSummary':'⚙️❓✋📄','btn.parseImport':'🔍➡️📝','lbl.ipEditSummary':'🔧❓📦🌐➕✋(➕2️⃣🌐)','lbl.ipEditIntro':'📋❌📦🌐(Interface/VLAN)：📥📄✅有🌐才會➡️填。要➕🌐(含2️⃣)請下方產生文字後✋✏️，4家參考語法⬇️：',
     'msg.importEmpty':'📋❓','msg.importBasicFallback':'🔗❌🏭➡️🔧📉','msg.importNoVendor':'🏭❓','msg.importSuccess':'✅📝','msg.appliedModel':'✓ ⚙️ {vendor} {model} ✨','btn.downloadJson':'📥 JSON','btn.downloadTxt':'📄 Text','btn.downloadWord':'📘 Word','col.ifDesc':'📝 Desc','col.ifMode':'⚙ Mode','col.ifName':'🔌 Iface','col.ifVlan':'🌐 VLAN','col.remark':'📌 Remark','col.vlanId':'🏷 VLAN ID','col.vlanName':'🏷 Name','doc.deviceInfo':'🖥 Device','doc.disclaimer':'⚠ Notice','doc.ifaceTitle':'🔌 Config','doc.redundancyTitle':'🔄 Redundancy','doc.routingTitle':'🛣 Routing','doc.timestamp':'⏰ Time','doc.title':'📄 Config','doc.vlanTitle':'📋 VLAN','doc.wordError':'⚠ Word unavailable','fmt.json':'{ JSON }','fmt.txt':'📄 Text','fmt.word':'📘 Word',
     'th.areaType':'🏷️','opt.typeNormal':'⚪','opt.typeStub':'🔸','opt.typeNssa':'🔹','th.noSummary':'🚫📋',
     'sec.bgp':'🛰️⚙️','lbl.bgpAsn':'🆔','lbl.bgpRid':'🆔🛰️','lbl.bgpNetworks':'🌐','th.peerIp':'🔌🌐','th.peerAs':'🆔','th.peerDesc':'📝','lbl.bgpPeerGroup':'👥','lbl.bgpTimerKeepalive':'⏱️💓','lbl.bgpTimerHold':'⏱️✋',
@@ -9338,7 +9374,7 @@ const LANG={
     'opt.secNone':'無','opt.secAuth':'驗證端','opt.secSupp':'請求端',
     'opt.qosPolice':'流量監管','opt.qosPriority':'優先權處置','opt.qosShape':'流量整形','opt.qosBandwidth':'頻寬保證',
     'opt.aclExtended':'延伸式/進階式','opt.aclStandard':'標準式/基本式','opt.aclPermit':'允許','opt.aclDeny':'拒絕','opt.aclIn':'入向','opt.aclOut':'出向',
-    'sec.import':'既有設定文件匯入作業','lbl.importUpload':'請上傳設定文件（或於下方貼上內容）','lbl.importPaste':'請貼上設定文件內容','lbl.importFile':'本欄僅供上傳 switch-config-parser.html 應用程式檔案之用（非交換器設定文件）','lbl.importFallbackSummary':'⚙️ 疑難排解事項：解析引擎未能載入時之人工上傳作業','btn.parseImport':'執行解析並套入表單',
+    'sec.import':'既有設定文件匯入作業','lbl.importUpload':'請上傳設定文件（或於下方貼上內容）','lbl.importPaste':'請貼上設定文件內容','lbl.importFile':'本欄僅供上傳 switch-config-parser.html 應用程式檔案之用（非交換器設定文件）','lbl.importFallbackSummary':'⚙️ 疑難排解事項：解析引擎未能載入時之人工上傳作業','btn.parseImport':'執行解析並套入表單','lbl.ipEditSummary':'⚙️ 查無 IP 欄位相關事宜：人工新增作業說明（含次要 IP 事項）','lbl.ipEditIntro':'本系統表單現行未提供 Interface／VLAN 之 IP 輸入欄位（僅得透過「既有設定文件匯入作業」由既存 IP 之設定文件回填）；如有設定或新增 IP 之需求（含次要 IP 事項），請於下方生成設定文字後逕行人工編修，茲檢附常見四家廠牌參考語法如下：',
     'msg.importEmpty':'請先貼上設定文件內容以利執行作業','msg.importBasicFallback':'因無法與完整版解析工具同步或尚未載入完整版解析引擎，本次將採用內建基礎解析模式進行作業','msg.importNoVendor':'無法辨識設備廠牌，請確認文件格式是否符合規範','msg.importSuccess':'解析作業已完成，資料已套入表單','msg.appliedModel':'✓ 爰以 {vendor} {model} 之預設設定供應中','btn.downloadJson':'下載 JSON','btn.downloadTxt':'下載文本','btn.downloadWord':'下載 Word','col.ifDesc':'描述','col.ifMode':'模式','col.ifName':'介面名稱','col.ifVlan':'VLAN','col.remark':'備註','col.vlanId':'VLAN ID','col.vlanName':'VLAN 名稱','doc.deviceInfo':'設備信息','doc.disclaimer':'免責聲明','doc.ifaceTitle':'介面配置','doc.redundancyTitle':'冗餘配置','doc.routingTitle':'路由協議','doc.timestamp':'生成時間','doc.title':'交換器設定文檔','doc.vlanTitle':'VLAN 規劃','doc.wordError':'Word 庫未加載。需要網路。','fmt.json':'JSON','fmt.txt':'文本','fmt.word':'Word',
     'th.areaType':'區域類型','opt.typeNormal':'一般區域','opt.typeStub':'Stub 區域','opt.typeNssa':'NSSA 區域','th.noSummary':'不彙總路由事項',
     'sec.bgp':'BGP 路由組態事項','lbl.bgpAsn':'自治系統編號','lbl.bgpRid':'路由器識別碼','lbl.bgpNetworks':'廣播網段','th.peerIp':'鄰居位址欄位','th.peerAs':'AS 編號欄位','th.peerDesc':'說明欄位','lbl.bgpPeerGroup':'鄰居群組欄位','lbl.bgpTimerKeepalive':'保活計時器欄位','lbl.bgpTimerHold':'保持計時器欄位',
@@ -9383,7 +9419,7 @@ const LANG={
     'opt.secNone':'無喵','opt.secAuth':'驗證喵','opt.secSupp':'請求喵',
     'opt.qosPolice':'監管喵','opt.qosPriority':'優先喵','opt.qosShape':'整形喵','opt.qosBandwidth':'頻寬喵',
     'opt.aclExtended':'進階喵','opt.aclStandard':'基本喵','opt.aclPermit':'允許喵','opt.aclDeny':'拒絕喵','opt.aclIn':'入喵','opt.aclOut':'出喵',
-    'sec.import':'匯入設定喵','lbl.importUpload':'上傳設定檔喵（或貼上喵）','lbl.importPaste':'貼上設定喵~','lbl.importFile':'這欄只能傳解析器檔案喵，不是設定檔喵！','lbl.importFallbackSummary':'⚙️ 疑難排解喵：找不到解析器時手動傳喵','btn.parseImport':'解析帶入喵！',
+    'sec.import':'匯入設定喵','lbl.importUpload':'上傳設定檔喵（或貼上喵）','lbl.importPaste':'貼上設定喵~','lbl.importFile':'這欄只能傳解析器檔案喵，不是設定檔喵！','lbl.importFallbackSummary':'⚙️ 疑難排解喵：找不到解析器時手動傳喵','btn.parseImport':'解析帶入喵！','lbl.ipEditSummary':'🔧 找不到IP欄位喵？點這裡看怎麼手動加喵（含次要IP喵）','lbl.ipEditIntro':'這個工具的表單目前沒有IP輸入欄喵（只有匯入已有IP的設定檔才會帶入喵）；如果要設定或新增IP（含次要IP喵），請在下方產生文字後自己手動編輯喵，以下是4家常見廠牌的參考語法喵：',
     'msg.importEmpty':'先貼設定喵！','msg.importBasicFallback':'跟不上大解析器喵，用內建簡單版喵！','msg.importNoVendor':'認不出廠牌喵…','msg.importSuccess':'解析成功喵！','msg.appliedModel':'✓ 套用 {vendor} {model} 設定喵🐱','btn.downloadJson':'🐱 JSON','btn.downloadTxt':'🐱 Text','btn.downloadWord':'🐱 Word','col.ifDesc':'🐱 Desc','col.ifMode':'🐱 Mode','col.ifName':'🐱 Iface','col.ifVlan':'🐱 VLAN','col.remark':'🐱 Remark','col.vlanId':'🐱 ID','col.vlanName':'🐱 Name','doc.deviceInfo':'🐱 Device','doc.disclaimer':'🐱 Notice','doc.ifaceTitle':'🐱 Config','doc.redundancyTitle':'🐱 Redundancy','doc.routingTitle':'🐱 Routing','doc.timestamp':'🐱 Time','doc.title':'🐱 Config','doc.vlanTitle':'🐱 VLAN','doc.wordError':'🐱 Word error','fmt.json':'🐱 JSON','fmt.txt':'🐱 Text','fmt.word':'🐱 Word','opt.vendorNXOS':'🐱 NXOS',
     'th.areaType':'Type喵','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'不彙總喵',
     'sec.bgp':'BGP 設定喵','lbl.bgpAsn':'ASN喵','lbl.bgpRid':'Router ID喵','lbl.bgpNetworks':'Networks喵','th.peerIp':'Peer IP喵','th.peerAs':'AS喵','th.peerDesc':'描述喵','lbl.bgpPeerGroup':'Peer Group喵','lbl.bgpTimerKeepalive':'Timer Keepalive喵','lbl.bgpTimerHold':'Timer Hold喵',
@@ -9428,7 +9464,7 @@ const LANG={
     'opt.secNone':'無豆','opt.secAuth':'驗證豆','opt.secSupp':'請求豆',
     'opt.qosPolice':'監管豆','opt.qosPriority':'優先豆','opt.qosShape':'整形豆','opt.qosBandwidth':'頻寬豆',
     'opt.aclExtended':'進階豆','opt.aclStandard':'基本豆','opt.aclPermit':'允許豆','opt.aclDeny':'拒絕豆','opt.aclIn':'入豆','opt.aclOut':'出豆',
-    'sec.import':'🥕匯入豆定','lbl.importUpload':'🥕上傳豆定（或貼豆）','lbl.importPaste':'貼上豆定','lbl.importFile':'這裡只能傳解析豆案，不是設定豆喔！','lbl.importFallbackSummary':'⚙️ 疑難排豆：找不到解析豆時手動傳豆','btn.parseImport':'解析帶入豆！',
+    'sec.import':'🥕匯入豆定','lbl.importUpload':'🥕上傳豆定（或貼豆）','lbl.importPaste':'貼上豆定','lbl.importFile':'這裡只能傳解析豆案，不是設定豆喔！','lbl.importFallbackSummary':'⚙️ 疑難排豆：找不到解析豆時手動傳豆','btn.parseImport':'解析帶入豆！','lbl.ipEditSummary':'🔧 找不到IP豆位？點這裡看怎麼手動加豆（含次要IP豆）','lbl.ipEditIntro':'這個豆具的表單目前沒有IP輸入豆位（只有匯入已有IP的豆定檔才會帶入）；如果要豆定或新增IP（含次要IP），請在下方產生豆定文字後自己手動編輯，以下是4家常見廠豆的參考語豆：',
     'msg.importEmpty':'先貼豆定！','msg.importBasicFallback':'跟不上大解析豆，用內建豆豆版！','msg.importNoVendor':'認不出豆牌…','msg.importSuccess':'解析成功豆！','msg.appliedModel':'✓ 套用 {vendor} {model} 豆定🫛','btn.downloadJson':'💚 JSON','btn.downloadTxt':'💚 Text','btn.downloadWord':'💚 Word','col.ifDesc':'💚 Desc','col.ifMode':'💚 Mode','col.ifName':'💚 Iface','col.ifVlan':'💚 VLAN','col.remark':'💚 Remark','col.vlanId':'💚 ID','col.vlanName':'💚 Name','doc.deviceInfo':'💚 Device','doc.disclaimer':'💚 Notice','doc.ifaceTitle':'💚 Config','doc.redundancyTitle':'💚 Redundancy','doc.routingTitle':'💚 Routing','doc.timestamp':'💚 Time','doc.title':'💚 Config','doc.vlanTitle':'💚 VLAN','doc.wordError':'💚 Word error','fmt.json':'💚 JSON','fmt.txt':'💚 Text','fmt.word':'💚 Word','opt.vendorNXOS':'💚 NXOS',
     'th.areaType':'Type','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'不彙總豆',
     'sec.bgp':'BGP 豆定','lbl.bgpAsn':'ASN','lbl.bgpRid':'Router ID','lbl.bgpNetworks':'Networks','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'豆述','lbl.bgpPeerGroup':'Peer 豆roup','lbl.bgpTimerKeepalive':'Timer 豆eepalive','lbl.bgpTimerHold':'Timer 豆old',
@@ -9473,7 +9509,7 @@ const LANG={
     'opt.secNone':'無咩-aca','opt.secAuth':'驗咩證-aca','opt.secSupp':'請咩求-aca',
     'opt.qosPolice':'監咩管-aca','opt.qosPriority':'優咩先-aca','opt.qosShape':'整咩形-aca','opt.qosBandwidth':'頻咩寬-aca',
     'opt.aclExtended':'進咩階-aca','opt.aclStandard':'基咩本-aca','opt.aclPermit':'允咩許-aca','opt.aclDeny':'拒咩絕-aca','opt.aclIn':'入咩-aca','opt.aclOut':'出咩-aca',
-    'sec.import':'匯咩入設咩定-aca','lbl.importUpload':'上咩傳設咩定檔-aca','lbl.importPaste':'貼咩上設咩定-aca','lbl.importFile':'此咩欄僅咩傳解咩析器檔咩案-aca（非咩設咩定檔-aca）','lbl.importFallbackSummary':'⚙️ 疑咩難排咩解-aca','btn.parseImport':'解咩析帶咩入-aca',
+    'sec.import':'匯咩入設咩定-aca','lbl.importUpload':'上咩傳設咩定檔-aca','lbl.importPaste':'貼咩上設咩定-aca','lbl.importFile':'此咩欄僅咩傳解咩析器檔咩案-aca（非咩設咩定檔-aca）','lbl.importFallbackSummary':'⚙️ 疑咩難排咩解-aca','btn.parseImport':'解咩析帶咩入-aca','lbl.ipEditSummary':'🔧 找咩不到IP欄咩位-aca？點咩此看咩手動加咩入-aca（含咩次要IP-aca）','lbl.ipEditIntro':'本咩工具表咩單目前不咩提供IP輸咩入欄咩位-aca；如咩需設咩定或新咩增IP（含咩次要IP-aca），請咩手動編咩輯匯出文字-aca，以咩下為4家咩參考語咩法-aca',
     'msg.importEmpty':'先貼咩設定-aca','msg.importBasicFallback':'同咩步不咩了-aca，用內咩建基咩礎解咩析-aca','msg.importNoVendor':'認不咩出廠咩牌-aca','msg.importSuccess':'解析咩成功-aca','msg.appliedModel':'✓ 套用 {vendor} {model} 咩-aca🦙','btn.downloadJson':'🦙 JSON','btn.downloadTxt':'🦙 Text','btn.downloadWord':'🦙 Word','col.ifDesc':'🦙 Desc','col.ifMode':'🦙 Mode','col.ifName':'🦙 Iface','col.ifVlan':'🦙 VLAN','col.remark':'🦙 Remark','col.vlanId':'🦙 ID','col.vlanName':'🦙 Name','doc.deviceInfo':'🦙 Device','doc.disclaimer':'🦙 Notice','doc.ifaceTitle':'🦙 Config','doc.redundancyTitle':'🦙 Redundancy','doc.routingTitle':'🦙 Routing','doc.timestamp':'🦙 Time','doc.title':'🦙 Config','doc.vlanTitle':'🦙 VLAN','doc.wordError':'🦙 Word error','fmt.json':'🦙 JSON','fmt.txt':'🦙 Text','fmt.word':'🦙 Word','opt.vendorNXOS':'🦙 NXOS',
     'th.areaType':'Ty咩pe-aca','opt.typeNormal':'No咩rm-aca','opt.typeStub':'St咩ub-aca','opt.typeNssa':'NS咩SA-aca','th.noSummary':'不咩彙總-aca',
     'sec.bgp':'B咩GP 設咩定-aca','lbl.bgpAsn':'AS咩N-aca','lbl.bgpRid':'Ro咩ut咩er ID-aca','lbl.bgpNetworks':'Ne咩tw咩orks-aca','th.peerIp':'Pe咩er IP-aca','th.peerAs':'AS-aca','th.peerDesc':'描咩述-aca','lbl.bgpPeerGroup':'Pe咩er Gr咩oup-aca','lbl.bgpTimerKeepalive':'Ti咩me咩r Ke咩ep-aca','lbl.bgpTimerHold':'Ti咩me咩r Ho咩ld-aca',
@@ -9518,7 +9554,7 @@ const LANG={
     'opt.secNone':'無，隨便','opt.secAuth':'驗證（嘆）','opt.secSupp':'請求，算了',
     'opt.qosPolice':'監管（嘆）','opt.qosPriority':'優先，反正都一樣','opt.qosShape':'整形，隨便','opt.qosBandwidth':'頻寬，算了',
     'opt.aclExtended':'進階，隨便','opt.aclStandard':'基本，反正都一樣','opt.aclPermit':'允許（嘆）','opt.aclDeny':'拒絕，算了','opt.aclIn':'入，隨便','opt.aclOut':'出，隨便',
-    'sec.import':'匯入設定，好啦','lbl.importUpload':'上傳設定檔，算了','lbl.importPaste':'貼上設定（嘆）','lbl.importFile':'這欄只能傳解析器，不是設定檔，看清楚（嘆）','lbl.importFallbackSummary':'⚙️ 疑難排解，找不到就手動傳，隨便','btn.parseImport':'解析帶入，好啦',
+    'sec.import':'匯入設定，好啦','lbl.importUpload':'上傳設定檔，算了','lbl.importPaste':'貼上設定（嘆）','lbl.importFile':'這欄只能傳解析器，不是設定檔，看清楚（嘆）','lbl.importFallbackSummary':'⚙️ 疑難排解，找不到就手動傳，隨便','btn.parseImport':'解析帶入，好啦','lbl.ipEditSummary':'🔧 沒有 IP 欄位，點這裡看看吧（嘆）','lbl.ipEditIntro':'這工具沒有 IP 輸入欄位，只能匯入才會有，隨便；要設定就自己手動改，反正下面有範例（嘆）',
     'msg.importEmpty':'先貼設定啦','msg.importBasicFallback':'跟不上完整版，算了，用內建陽春版','msg.importNoVendor':'認不出廠牌，反正都一樣','msg.importSuccess':'解析成功，隨便','msg.appliedModel':'✓ 套用 {vendor} {model}，算了','btn.downloadJson':'下載 JSON，隨便','btn.downloadTxt':'下載文字檔，算了','btn.downloadWord':'下載 Word，反正都一樣','col.ifDesc':'描述（嘆）','col.ifMode':'模式，隨便','col.ifName':'介面名稱，反正都一樣','col.ifVlan':'VLAN，隨便','col.remark':'備註，反正沒差','col.vlanId':'VLAN ID','col.vlanName':'VLAN 名稱，算了','doc.deviceInfo':'設備資訊（嘆）','doc.disclaimer':'免責聲明，反正你也不會看','doc.ifaceTitle':'介面配置，隨便','doc.redundancyTitle':'冗餘配置摘要，反正都一樣','doc.routingTitle':'路由協議摘要，算了','doc.timestamp':'生成時間（嘆）','doc.title':'交換器設定文檔，隨便','doc.vlanTitle':'VLAN 規劃，反正都一樣','doc.wordError':'Word 元件尚未載入，反正也沒差（嘆）','fmt.json':'JSON','fmt.txt':'文字檔，隨便','fmt.word':'Word，算了','opt.vendorNXOS':'Cisco NXOS，隨便',
     'th.areaType':'Type（嘆）','opt.typeNormal':'Normal','opt.typeStub':'Stub','opt.typeNssa':'NSSA','th.noSummary':'不彙總，隨便',
     'sec.bgp':'BGP 設定，隨便','lbl.bgpAsn':'ASN（嘆）','lbl.bgpRid':'Router ID（嘆）','lbl.bgpNetworks':'Networks，反正都一樣','th.peerIp':'Peer IP','th.peerAs':'AS','th.peerDesc':'描述，算了','lbl.bgpPeerGroup':'Peer Group（嘆）','lbl.bgpTimerKeepalive':'Timer Keepalive，隨便','lbl.bgpTimerHold':'Timer Hold，反正都一樣',
