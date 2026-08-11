@@ -1253,14 +1253,19 @@ function renderComwareInterface(iface,lacpList,aclList,securityList,stp,breakout
   if(iface.vrf)lines.push(` ip binding vpn-instance ${iface.vrf}`);
   // IPv6（試點 5 廠牌之一，已查證官方 H3C IPv6 basics commands 文件：`ipv6 address ADDR/PREFIXLEN`，
   // 與 IPv4 CIDR 慣例一致的 slash 寫法；SVI/實體埠/Loopback 皆同一指令直出，不需遮罩換算）
+  // 次要IP（Secondary IP，官方 H3C IP addressing commands 文件：`ip address A B
+  // sub`，僅 VLAN-interface／Loopback，不涵蓋一般物理埠；僅取第一筆為 MVP 範圍）
+  const secLine=iface.secondaryIp&&!iface.secondaryIp.includes(':')?(()=>{const [sip,slen]=iface.secondaryIp.split('/');return sip&&slen?` ip address ${sip} ${maskFromCidr(slen)} sub`:'';})():'';
   if(iface.ip){
     if(iface.ip.includes(':')){
       lines.push(` ipv6 address ${iface.ip}`);
     }else if(iface.type==='svi'){
       const [ip,len]=iface.ip.split('/');
       lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+      if(secLine)lines.push(secLine);
     }else{
       lines.push(` ip address ${iface.ip}`);
+      if(iface.type==='loopback'&&secLine)lines.push(secLine);
     }
   }
   const lg=findLacpGroup(lacpList,iface.name);
@@ -1760,7 +1765,7 @@ function renderFortiSwitchL3Interfaces(ifaces,vrrpList,dhcpList){
   // "config system interface"，switch_analyzer 對此區塊只用非 global 的 .match()）
   (ifaces||[]).forEach(i=>{
     if(!i.ip)return;
-    groups.set(i.name,{ifname:i.name,vlanId:i.vlans||'',ip:i.ip,vrrpEntries:[],relayServers:[],option82:false});
+    groups.set(i.name,{ifname:i.name,vlanId:i.vlans||'',ip:i.ip,secondaryIp:i.secondaryIp||'',vrrpEntries:[],relayServers:[],option82:false});
   });
   groupVrrpByVlan(vrrpList).forEach(g=>{
     const ifname='vlan'+g.vlanId;
@@ -1793,6 +1798,19 @@ function renderFortiSwitchL3Interfaces(ifaces,vrrpList,dhcpList){
       }else{
         const [ip,len]=g.ip.split('/');
         lines.push(`        set ip ${ip} ${maskFromCidr(len)}`);
+        // 次要IP（Secondary IP，官方 FortiSwitchOS Administration Guide／CLI Reference：
+        // `set secondary-IP enable` + 巢狀 `config secondaryip`；僅取第一筆為 MVP 範圍）
+        if(g.secondaryIp&&!g.secondaryIp.includes(':')){
+          const [sip,slen]=g.secondaryIp.split('/');
+          if(sip&&slen){
+            lines.push('        set secondary-IP enable');
+            lines.push('        config secondaryip');
+            lines.push('            edit 1');
+            lines.push(`                set ip ${sip} ${maskFromCidr(slen)}`);
+            lines.push('            next');
+            lines.push('        end');
+          }
+        }
       }
     }
     if(g.relayServers.length){
@@ -1981,13 +1999,21 @@ function renderArubaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,b
   // 或顯式 `no routing`（L2 模式，真機對非路由埠一律顯式宣告，非必要但合法冗餘）。
   // IPv6（試點 5 廠牌之一，官方 AOS-CX IPv6 Quick Start Guide 確認 `ipv6 address ADDR/PREFIXLEN`，
   // 本來就是直出無遮罩換算，僅需切換關鍵字）
+  // 次要IP（Secondary IP，官方 AOS-CX IP Services Guide／CLI 文件：`ip address
+  // ADDR/PREFIX secondary`，Layer 3 interface（含 VLAN SVI）皆適用；僅取第一筆為
+  // MVP 範圍，本來就是直出 CIDR 不需遮罩換算）
+  const secLine=iface.secondaryIp&&!iface.secondaryIp.includes(':')?`    ip address ${iface.secondaryIp} secondary`:'';
   if(iface.type==='svi'||iface.type==='loopback'){
-    if(iface.ip)lines.push(`    ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
+    if(iface.ip){
+      lines.push(`    ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
+      if(!iface.ip.includes(':')&&secLine)lines.push(secLine);
+    }
   }else{
     // 實體埠（含未標示 type 的手動輸入資料，預設視為實體埠）
     if(iface.mode==='routed'&&iface.ip){
       lines.push('    routing');
       lines.push(`    ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
+      if(!iface.ip.includes(':')&&secLine)lines.push(secLine);
     }else if(iface.mode==='trunk'||iface.mode==='access'){
       lines.push('    no routing');
     }
@@ -2220,6 +2246,9 @@ function renderCiscoInterface(iface,lacpList,dhcpList,aclList,securityList,stp){
   // ip address 之前宣告（真實語法要求，變更 VRF 會清空既有 IP）。Management 介面的
   // vrf 欄位是解析器固定塞入的 'MGMT' 標記（非真實解析到的關鍵字），不在此處理範圍。
   // IPv6（試點 5 廠牌之一，標準 Cisco IOS 語法 `ipv6 address ADDR/PREFIXLEN`，不需遮罩換算）
+  // 次要IP（Secondary IP，官方 IP Addressing Services Command Reference：`ip
+  // address A B secondary`，IPv4 專屬機制，僅取第一筆為 MVP 範圍）
+  const secLine=iface.secondaryIp&&!iface.secondaryIp.includes(':')?(()=>{const [sip,slen]=iface.secondaryIp.split('/');return sip&&slen?` ip address ${sip} ${maskFromCidr(slen)} secondary`:'';})():'';
   if(iface.type==='svi'){
     if(iface.vrf)lines.push(` ip vrf forwarding ${iface.vrf}`);
     if(iface.ip){
@@ -2228,14 +2257,21 @@ function renderCiscoInterface(iface,lacpList,dhcpList,aclList,securityList,stp){
       }else{
         const [ip,len]=iface.ip.split('/');
         lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+        if(secLine)lines.push(secLine);
       }
     }
   }else if(iface.type==='loopback'){
-    if(iface.ip)lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
+    if(iface.ip){
+      lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
+      if(!iface.ip.includes(':')&&secLine)lines.push(secLine);
+    }
   }else if(iface.type==='physical'&&iface.mode==='routed'){
     lines.push(' no switchport');
     if(iface.vrf)lines.push(` ip vrf forwarding ${iface.vrf}`);
-    if(iface.ip)lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
+    if(iface.ip){
+      lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
+      if(!iface.ip.includes(':')&&secLine)lines.push(secLine);
+    }
   }
   const lg=findLacpGroup(lacpList,iface.name);
   if(!lg)lines.push(...ciscoSwitchportLines(iface));
@@ -3005,14 +3041,18 @@ function renderRuijieInterface(iface,lacpList,dhcpList,aclList,securityList,stp)
   const isMgmt=/^Management/i.test(iface.name);
   if(iface.type==='svi'){
     if(iface.ip){
-      const [ip,len]=iface.ip.split('/');
-      lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+      if(iface.ip.includes(':')){
+        lines.push(` ipv6 address ${iface.ip}`);
+      }else{
+        const [ip,len]=iface.ip.split('/');
+        lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+      }
     }
   }else if(iface.type==='loopback'||isMgmt){
-    if(iface.ip)lines.push(` ip address ${iface.ip}`);
+    if(iface.ip)lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
   }else if(iface.mode==='routed'&&iface.ip){
     lines.push(' no switchport');
-    lines.push(` ip address ${iface.ip}`);
+    lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
   }
   if(iface.vrf&&!isMgmt)lines.push(` ip vrf forwarding ${iface.vrf}`);
   if(lg){
@@ -3927,8 +3967,16 @@ function renderAlcatelInterfaceExtras(interfaces){
     if(!iface.name)return;
     if(iface.type==='svi'||iface.type==='loopback'){
       if(iface.ip){
-        const [ip,len]=iface.ip.split('/');
-        if(ip&&len)lines.push(`ip interface "${iface.name}" address ${ip} mask ${maskFromCidr(len)}`);
+        if(iface.ip.includes(':')){
+          // IPv6 為兩段式指令，結構與 IPv4 單行語法不同：先建立具名 IPv6 介面
+          // （綁定 VLAN 或 loopback0），再指派位址（位址在前、介面名稱在後）
+          const bind=iface.type==='loopback'?'loopback0':`vlan ${iface.vlans}`;
+          lines.push(`ipv6 interface "${iface.name}" ${bind}`);
+          lines.push(`ipv6 address ${iface.ip} "${iface.name}"`);
+        }else{
+          const [ip,len]=iface.ip.split('/');
+          if(ip&&len)lines.push(`ip interface "${iface.name}" address ${ip} mask ${maskFromCidr(len)}`);
+        }
       }
     }else{
       if(iface.desc)lines.push(`-> interfaces ${iface.name} alias "${iface.desc}"`);
