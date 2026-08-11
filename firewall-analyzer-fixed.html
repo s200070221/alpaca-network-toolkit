@@ -10835,7 +10835,7 @@ const CiscoASAParser = (() => {
     return ifaces;
   }
 
-  function parsePolicies(text) {
+  function parsePolicies(text, addrTypeMap) {
     const policies = [];
     let id = 1;
     for (const line of text.split('\n')) {
@@ -10861,8 +10861,8 @@ const CiscoASAParser = (() => {
       }
       if (parts[i]==='eq'&&parts[i+1]) svc=`${proto}/${parts[i+1]}`;
       else if (parts[i]==='range'&&parts[i+1]&&parts[i+2]) svc=`${proto}/${parts[i+1]}-${parts[i+2]}`;
-      const srcAddrSplit = _splitAddr(src);
-      const dstAddrSplit = _splitAddr(dst);
+      const srcAddrSplit = _splitAddr(src, addrTypeMap);
+      const dstAddrSplit = _splitAddr(dst, addrTypeMap);
       // ASA 原生支援的 ACE 修飾字：行尾 `inactive` 停用該筆規則（不刪除）；`log disable`
       // 明確關閉該筆日誌（預設情況下 ASA 對每筆 ACE 皆會記錄，非顯式停用即視為有記錄）。
       // status/logtraffic 欄位值須與其餘廠牌 parser 共用慣例一致（'enable'/'disable'，全小寫），
@@ -10889,17 +10889,43 @@ const CiscoASAParser = (() => {
         const t = l.trim();
         if (!t||t.startsWith('!')) continue;
         const mH = t.match(/^host\s+(\S+)/);
-        const mS = t.match(/^subnet\s+(\S+)\s+(\S+)/);
+        // 官方語法（Cisco Secure Firewall ASA CLI Configuration Guide）：
+        // subnet {IPv4_address IPv4_mask | IPv6_address/IPv6_prefix} —— IPv6 是單一 token 的
+        // 斜線 CIDR 寫法，與 IPv4 雙 token（位址+遮罩）不同，需分開比對，不能共用同一個正則
+        const mS6 = t.match(/^subnet\s+(\S+\/\d+)$/);
+        const mS4 = t.match(/^subnet\s+(\S+)\s+(\S+)/);
         const mR = t.match(/^range\s+(\S+)\s+(\S+)/);
         const mN = t.match(/^network-object\s+(.+)/);
         if (mH) members.push(mH[1]);
-        else if (mS) members.push(`${mS[1]}/${mS[2]}`);
+        else if (mS6) members.push(mS6[1]);
+        else if (mS4) members.push(`${mS4[1]}/${mS4[2]}`);
         else if (mR) members.push(`${mR[1]}-${mR[2]}`);
         else if (mN) members.push(mN[1].trim());
       }
-      addrs.push({ name, type:mGrp?'group':'host', subnet:members[0]||'-', members, color:'0' });
+      // category：ASA 語法沒有獨立的 v4/v6 物件關鍵字（host/subnet 兩者共用，格式差異只在值
+      // 本身），buildAddrTypeMap()/buildCiscoASAAddrTypeMap() 對 'address'/'address6' 一視
+      // 同仁（用 colon 偵測值本身判斷型別），固定填 'address'/'address-group' 即可。
+      // members 改存逗號分隔字串（比照專案既有慣例，UI 渲染與其他廠牌 parser 皆預期字串）
+      addrs.push({ name, type:mGrp?'group':'host', category:mGrp?'address-group':'address', subnet:members[0]||'-', members:members.join(', '), color:'0' });
     }
     return addrs;
+  }
+  // ASA 的 group members 是原始片段字串（如 "host 2001:db8::1"／"192.168.1.0/24"／
+  // "object WEB-SERVER"），不是共用 buildAddrTypeMap() 群組邏輯假設的「純名稱清單」，故先
+  // 沿用共用函式處理好 host 型別物件的分類，再疊加一輪 ASA 專屬的 group 分類覆寫回 map
+  function buildCiscoASAAddrTypeMap(addressObjects) {
+    const map = buildAddrTypeMap(addressObjects);
+    (addressObjects || []).forEach(o => {
+      if (o.type !== 'group') return;
+      const frags = (o.members || '').split(/\s*,\s*/).filter(Boolean);
+      const types = new Set();
+      frags.forEach(f => {
+        if (f.startsWith('object ')) types.add(map.get(f.slice(7)) || 'v4');
+        else types.add(f.includes(':') ? 'v6' : 'v4');
+      });
+      map.set(o.name, types.size > 1 ? 'mixed' : (types.values().next().value || 'v4'));
+    });
+    return map;
   }
 
   function parseServiceObjects(text) {
@@ -11204,12 +11230,14 @@ const CiscoASAParser = (() => {
   }
 
   function parse(text) {
+    const addresses = parseAddressObjects(text);
+    const addrTypeMap = buildCiscoASAAddrTypeMap(addresses);
     return {
       vendor: 'Cisco ASA',
       deviceInfo:  parseDeviceInfo(text),
       interfaces:  parseInterfaces(text),
-      policies:    parsePolicies(text),
-      addresses:   parseAddressObjects(text),
+      policies:    parsePolicies(text, addrTypeMap),
+      addresses,
       services:    parseServiceObjects(text),
       nat:         parseNAT(text),
       routes:      parseRoutes(text),
