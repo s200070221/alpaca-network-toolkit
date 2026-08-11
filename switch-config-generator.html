@@ -1782,9 +1782,18 @@ function renderFortiSwitchL3Interfaces(ifaces,vrrpList,dhcpList){
   groups.forEach(g=>{
     lines.push(`    edit "${g.ifname}"`);
     if(g.vlanId)lines.push(`        set vlanid ${g.vlanId}`);
+    // 官方 FortiSwitchOS Administration Guide／CLI Reference 確認 IPv6 為巢狀區塊
+    // `config ipv6` / `set ip6-address ADDR/PREFIXLEN` / `end`，與 IPv4 扁平 `set ip A B`
+    // 結構不同（直出完整 CIDR，不需 maskFromCidr() 換算）
     if(g.ip){
-      const [ip,len]=g.ip.split('/');
-      lines.push(`        set ip ${ip} ${maskFromCidr(len)}`);
+      if(g.ip.includes(':')){
+        lines.push('        config ipv6');
+        lines.push(`            set ip6-address ${g.ip}`);
+        lines.push('        end');
+      }else{
+        const [ip,len]=g.ip.split('/');
+        lines.push(`        set ip ${ip} ${maskFromCidr(len)}`);
+      }
     }
     if(g.relayServers.length){
       lines.push('        set dhcp-relay-service enable');
@@ -2483,10 +2492,8 @@ function renderDellOS10VLANs(vlans,vrrpList,interfaces){
     const lines=[`interface vlan${id}`];
     if(v&&v.name)lines.push(` description ${v.name}`);
     const ip=(svi&&svi.ip)||(g&&g.ip)||'';
-    if(ip){
-      const [ipAddr,len]=ip.split('/');
-      lines.push(` ip address ${ipAddr}/${len}`);
-    }
+    // 官方 SmartFabric OS10 User Guide 確認 IPv6 語法 `ipv6 address ADDR/PREFIXLEN`
+    if(ip)lines.push(` ${ip.includes(':')?'ipv6':'ip'} address ${ip}`);
     if(svi&&svi.vrf)lines.push(` ip vrf forwarding ${svi.vrf}`);
     if(g)g.entries.forEach(e=>{
       lines.push(` vrrp-group ${e.vrid}`);
@@ -2531,7 +2538,9 @@ function renderDellOS10Interface(iface,lacpList,aclList,securityList,stp){
     // 輸出過，routed 埠的 ip/vrf 從未寫回設定文字）
     lines.push(' no switchport');
   }
-  if(iface.ip)lines.push(` ip address ${iface.ip}`);
+  // 官方 SmartFabric OS10 User Guide 確認 IPv6 語法 `ipv6 address ADDR/PREFIXLEN`，iface.ip
+  // 本來就直接存完整 CIDR 字串輸出（無遮罩換算），只需依冒號判斷切換關鍵字
+  if(iface.ip)lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
   if(iface.vrf&&!isMgmt)lines.push(` ip vrf forwarding ${iface.vrf}`);
   if(lg){
     const modeWord=lg.mode==='active'?'active':lg.mode==='passive'?'passive':'on';
@@ -3171,21 +3180,23 @@ function renderNetgearInterface(iface,lacpList){
   if(iface.desc)lines.push(` description ${iface.desc}`);
   const lg=findLacpGroup(lacpList,iface.name);
   if(!lg)lines.push(...netgearSwitchportLines(iface));
+  // 官方 KB（kb.netgear.com/21969，逐字指令稿）確認 IPv6 需先 `ipv6 enable` 再 `ipv6 address
+  // ADDR/PREFIXLEN`（直出完整 CIDR，不像 IPv4 需要 maskFromCidr() 換算雙 token 遮罩）
   if(iface.type==='svi'){
     if(iface.ip){
-      const [ip,len]=iface.ip.split('/');
       lines.push(' routing');
-      lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+      if(iface.ip.includes(':')){ lines.push(' ipv6 enable'); lines.push(` ipv6 address ${iface.ip}`); }
+      else{ const [ip,len]=iface.ip.split('/'); lines.push(` ip address ${ip} ${maskFromCidr(len)}`); }
     }
   }else if(iface.type==='loopback'){
     if(iface.ip){
-      const [ip,len]=iface.ip.includes('/')?iface.ip.split('/'):[iface.ip,'32'];
-      lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+      if(iface.ip.includes(':')){ lines.push(' ipv6 enable'); lines.push(` ipv6 address ${iface.ip}`); }
+      else{ const [ip,len]=iface.ip.includes('/')?iface.ip.split('/'):[iface.ip,'32']; lines.push(` ip address ${ip} ${maskFromCidr(len)}`); }
     }
   }else if(iface.mode==='routed'&&iface.ip){
-    const [ip,len]=iface.ip.split('/');
     lines.push(' routing');
-    lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+    if(iface.ip.includes(':')){ lines.push(' ipv6 enable'); lines.push(` ipv6 address ${iface.ip}`); }
+    else{ const [ip,len]=iface.ip.split('/'); lines.push(` ip address ${ip} ${maskFromCidr(len)}`); }
   }
   // 2026-08-09 對外查證官方 NETGEAR KB（kb.netgear.com/21635，逐字指令稿）修正：addport
   // 是在 LAG 自己的介面區塊內宣告要加入的實體成員埠，並非「member 埠自己宣告要加入哪個
@@ -3626,9 +3637,11 @@ function renderBrocadeVEBlocks(interfaces,vrrpList,ospfAreaVe,dhcpList,ripPorts)
     const lines=[`interface ve ${vid}`];
     if(iface&&iface.desc)lines.push(` port-name ${iface.desc}`);
     const ip=(iface&&iface.ip)||(g&&g.ip)||'';
+    // 官方 FastIron Command Reference 確認 VE 介面 IPv6 語法 `ipv6 address ADDR/PREFIXLEN`
+    // （直出完整 CIDR，不像 IPv4 需要 maskFromCidr() 換算雙 token 遮罩）
     if(ip){
-      const[ipAddr,len]=ip.split('/');
-      lines.push(` ip address ${ipAddr} ${maskFromCidr(len)}`);
+      if(ip.includes(':'))lines.push(` ipv6 address ${ip}`);
+      else{ const[ipAddr,len]=ip.split('/'); lines.push(` ip address ${ipAddr} ${maskFromCidr(len)}`); }
     }
     if(iface&&iface.vrf)lines.push(` vrf forwarding ${iface.vrf}`);
     if(ospfAreaVe&&ospfAreaVe[vid]!==undefined)lines.push(` ip ospf area ${ospfAreaVe[vid]}`);

@@ -3407,6 +3407,9 @@ function parseDellIP(body){
   if(cidr)return cidr;
   const m=body.match(/^\s*ip address\s+([\d.]+)\s+([\d.]+)/m);
   if(m)return m[1]+'/'+cidrFromMask(m[2]);
+  // 官方 SmartFabric OS10 User Guide 確認 IPv6 語法 `ipv6 address ADDR/PREFIXLEN`
+  const v6=(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1];
+  if(v6)return v6;
   return'';
 }
 
@@ -5640,7 +5643,8 @@ function parseBrocadeInterfaces(cfg){
     const vid=vm[1];
     const desc=(blk.match(/^\s+port-name\s+(.+)/m)||[])[1]?.trim()||'';
     const ipM=blk.match(/^\s+ip address\s+([\d.]+)\s+([\d.]+)/m);
-    const ip=ipM?ipM[1]+'/'+maskToCIDR(ipM[2]):'';
+    // 官方 FastIron Command Reference 確認 VE 介面 IPv6 語法 `ipv6 address ADDR/PREFIXLEN`
+    const ip=ipM?ipM[1]+'/'+maskToCIDR(ipM[2]):(blk.match(/^\s+ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
     const vrf=(blk.match(/^\s+vrf\s+forwarding\s+(\S+)/m)||[])[1]||'';
     ifaces.push({name:'ve'+vid,type:'svi',desc,mode:'',vlans:vid,nativeVlan:'',vrf,ip,shutdown:false,member:'1',hybrid:null,vrrp:[]});
   }
@@ -6420,7 +6424,10 @@ function parseFortiInterfaces(cfg){
   }
   function processBody(name, body){
     const ip=(body.match(/set ip\s+([\d.]+)\s+([\d.]+)/));
-    const ipStr=ip?ip[1]+'/'+cidrFromMask(ip[2]):'';
+    // 官方文件確認 IPv6 為巢狀 `config ipv6` / `set ip6-address ADDR/PREFIXLEN` / `end`；
+    // body 本來就含 edit/next 之間的全部原始行（含巢狀 config/end 區塊），直接正則比對即可
+    const ip6=(body.match(/set ip6-address\s+(\S+\/\d+)/));
+    const ipStr=ip?ip[1]+'/'+cidrFromMask(ip[2]):(ip6?ip6[1]:'');
     const vrf=(body.match(/set vrf\s+(\d+)/)||[])[1]||'';
     const desc=(body.match(/set description\s+"?([^"\n]+)"?/)||[])[1]||'';
     const vlan=(body.match(/set vlanid\s+(\d+)/)||[])[1]||'';
@@ -8935,14 +8942,16 @@ function parseNetgearInterfaces(cfg){
     if(/^vlan\s+\d+\s*$/i.test(rawName)){
       const vid=(rawName.match(/\d+/)||[])[0]||'';
       const ipM=body.match(/^\s*ip address\s+([\d.]+)\s+([\d.]+)/m);
-      const ip=ipM?ipM[1]+'/'+cidrFromMask(ipM[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
+      // 官方 KB（kb.netgear.com/21969）確認 IPv6 語法 `ipv6 address ADDR/PREFIXLEN`（需搭配
+      // `ipv6 enable`，但該行本身不含位址值，round-trip 只需正確解析 ipv6 address 這行）
+      const ip=ipM?ipM[1]+'/'+cidrFromMask(ipM[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
       ifaces.push({name:'vlan '+vid,type:'svi',desc,ip,mode:'',vlans:vid,nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     // Loopback: "interface loopback N"
     if(/^loopback\s+\d+\s*$/i.test(rawName)){
       const ipM=body.match(/^\s*ip address\s+([\d.]+)\s+([\d.]+)/m);
-      const ip=ipM?ipM[1]+'/'+cidrFromMask(ipM[2]):'';
+      const ip=ipM?ipM[1]+'/'+cidrFromMask(ipM[2]):(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
       ifaces.push({name:rawName.replace(/\s+/g,' '),type:'loopback',desc,ip,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
@@ -8953,7 +8962,7 @@ function parseNetgearInterfaces(cfg){
     const routed=/^\s*routing\s*$/m.test(body)&&!/no routing/m.test(body);
     if(routed){
       const ipM=body.match(/^\s*ip address\s+([\d.]+)\s+([\d.]+)/m);
-      ip=ipM?ipM[1]+'/'+cidrFromMask(ipM[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
+      ip=ipM?ipM[1]+'/'+cidrFromMask(ipM[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
       mode='routed';
     }else{
       const modeM=body.match(/^\s*switchport mode\s+(\S+)/m);
