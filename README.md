@@ -14,7 +14,7 @@
 | 🔀 交換器設定解析器 | `switch-config-parser.html` | 解析 HPE Comware／Cisco IOS-XE／NX-OS／Aruba CX／ProCurve／FortiSwitch／Juniper／Extreme／Alcatel／Brocade-ICX／Dell OS10／Arista／MikroTik RouterOS／Ruijie RGOS／Netgear M4300／Ubiquiti EdgeSwitch 等 16 家廠牌，視覺化 Port/VLAN/路由/堆疊拓撲。Comware／Cisco IOS-XE／Arista／Aruba CX／Juniper／Dell OS10／Cisco NX-OS／Ruckus-Brocade ICX／Netgear M4300／FortiSwitch／SONiC／Ruijie RGOS／Alcatel OmniSwitch 共 13 家已支援 Interface/VLAN SVI 的 IPv6；Comware／Cisco IOS-XE／Aruba CX／FortiSwitch 4 家另支援介面次要IP（Secondary IP） |
 | 🛠️ 交換器設定產生器 | `switch-config-generator.html` | 表單輸入產生上述廠牌的交換器設定指令，並支援反向匯入既有設定檔自動帶入表單。同上 13 家已支援輸出 Interface/VLAN SVI 的 IPv6 設定，4 家已支援輸出次要IP設定 |
 | 🔒 設定檔去識別化工具 | `config-anonymizer.html` | 掃描並一致性替換設定檔中的 IP／主機名稱／密碼等敏感資訊，供分享/求助使用，支援 AES-256 加密還原對照表；IPv4/IPv6 皆完整支援 |
-| 📜 Log 分析與去識別化工具 🧪實驗中 | `log-analyzer.html` | 匯入交換器/防火牆 log（CEF、LEEF、標準 Syslog RFC3164/RFC5424、FortiGate 原生 key=value），依嚴重程度排序並找出可能問題（頻率異常、掃描 heuristic），支援本機威脅情資清單比對（僅本機、不連網，含 IPv4/IPv6 CIDR）與敏感欄位去識別化；`fetch_threat_intel.ps1` 為選用的獨立輔助腳本，在瀏覽器外下載並合併公開黑名單為單一檔案供匯入，工具本身仍維持不連網 |
+| 📜 Log 分析與去識別化工具 🧪實驗中 | `log-analyzer.html` | 匯入交換器/防火牆 log（CEF、LEEF、標準 Syslog RFC3164/RFC5424、FortiGate 原生 key=value），依嚴重程度排序並找出可能問題（頻率異常、掃描 heuristic），支援本機威脅情資清單比對（僅本機、不連網，含 IPv4/IPv6 CIDR）與敏感欄位去識別化，事件清單可正規化匯出為 CSV；`fetch_threat_intel.ps1` 為選用的獨立輔助腳本，在瀏覽器外下載並合併公開黑名單為單一檔案供匯入，工具本身仍維持不連網 |
 | 🌐 六工具入口頁 | `network-analyzer.html` | 自動偵測拖入設定檔的廠牌並導向對應工具 |
 
 ## 使用說明文件
