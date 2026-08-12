@@ -177,8 +177,10 @@ function parseSONiC(cfg){
       nativeVlan,vrf:'',shutdown:false,member:'1',hybrid:null,vrrp:[]});
   });
   Object.keys(sviIpByVlan).forEach(vlanName=>{
-    // MVP：僅取第一個 CIDR，多 CIDR（次要位址）為已知限制
+    // 次要IP（2026-08-12 新增）：第二筆 CIDR 存進 secondaryIp（比照 Cisco/Comware/Aruba-CX/
+    // FortiSwitch 既有命名慣例），僅取第一筆次要IP為 MVP 範圍，第三筆以上仍為已知限制
     interfaces.push({name:vlanName,type:'svi',desc:'',ip:sviIpByVlan[vlanName][0],
+      secondaryIp:sviIpByVlan[vlanName][1]||'',
       mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown:false,member:'1',hybrid:null,vrrp:[]});
   });
   const routedIp={};
@@ -196,8 +198,9 @@ function parseSONiC(cfg){
   });
   Object.entries(routedIp).forEach(([name,cidrs])=>{
     if(seen.has(name))return; // 不會同時是 L2 VLAN member 又是 L3 routed
+    // 次要IP（2026-08-12 新增）：同上，第二筆 CIDR 存進 secondaryIp
     interfaces.push({name,type:'physical',desc:'',mode:'routed',vlans:'',nativeVlan:'',
-      vrf:'',ip:cidrs[0],shutdown:false,member:'1',hybrid:null,vrrp:[]});
+      vrf:'',ip:cidrs[0],secondaryIp:cidrs[1]||'',shutdown:false,member:'1',hybrid:null,vrrp:[]});
   });
 
   // STATIC_ROUTE：key = "vrf-name|prefix"，'default' 正規化為 ''（比照其餘廠牌 parseXXXRoutes
