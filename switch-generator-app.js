@@ -2534,7 +2534,13 @@ async function parseAndImport(){
   if(vendor==='sonic'){
     (parsed.interfaces||[]).forEach(i=>{
       if(!i.ip)return;
-      if(i.type==='svi'||i.mode==='routed')addSonicL3Row(i.name,i.ip);
+      if(i.type==='svi'||i.mode==='routed'){
+        addSonicL3Row(i.name,i.ip);
+        // 次要IP（2026-08-12 新增）：parseSONiC() 已補上 secondaryIp（第二筆 CIDR），這裡
+        // 額外加一列同名列——sonicL3Interfaces 本來就是靠複合鍵 name+cidr 支援同名多列，
+        // 不需要新增 UI 欄位
+        if(i.secondaryIp)addSonicL3Row(i.name,i.secondaryIp);
+      }
     });
   }
 
