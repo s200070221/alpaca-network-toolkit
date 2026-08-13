@@ -31,6 +31,16 @@ function renderExtremeVLANs(vlans,interfaces){
     if(v.desc)lines.push(`configure vlan ${v.name} description "${v.desc}"`);
     (taggedMap[v.name]||[]).forEach(p=>lines.push(`configure vlan ${v.name} add ports ${p} tagged`));
     (untaggedMap[v.name]||[]).forEach(p=>lines.push(`configure vlan ${v.name} add ports ${p} untagged`));
+    // IP（2026-08-12 補上，既有缺口——parseExtremeXOSVLANs() 早就解析 v.ip，但
+    // renderExtremeVLANs() 從未輸出過，官方 `configure vlan NAME ipaddress A.B.C.D M.M.M.M`
+    // 為 dotted-mask 雙 token 語法，與 parser 端擷取語法一致，故換算回去輸出）
+    if(v.ip&&!v.ip.includes(':')){
+      const [ipAddr,len]=v.ip.split('/');
+      lines.push(`configure vlan ${v.name} ipaddress ${ipAddr} ${maskFromCidr(len)}`);
+    }
+    // 次要IP（2026-08-12 新增）：官方 `configure vlan NAME add secondary-ipaddress IP/N`，
+    // 僅取第一筆為 MVP 範圍
+    if(v.secondaryIp&&!v.secondaryIp.includes(':'))lines.push(`configure vlan ${v.name} add secondary-ipaddress ${v.secondaryIp}`);
     return lines.join('\n');
   }).join('\n#\n');
 }

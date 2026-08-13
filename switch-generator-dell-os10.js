@@ -12,6 +12,8 @@ function renderDellOS10VLANs(vlans,vrrpList,interfaces){
     const ip=(svi&&svi.ip)||(g&&g.ip)||'';
     // 官方 SmartFabric OS10 User Guide 確認 IPv6 語法 `ipv6 address ADDR/PREFIXLEN`
     if(ip)lines.push(` ${ip.includes(':')?'ipv6':'ip'} address ${ip}`);
+    // 次要IP（2026-08-12 新增）：官方 `ip address A/N secondary`，僅取第一筆為 MVP 範圍
+    if(svi&&svi.secondaryIp&&!svi.secondaryIp.includes(':'))lines.push(` ip address ${svi.secondaryIp} secondary`);
     if(svi&&svi.vrf)lines.push(` ip vrf forwarding ${svi.vrf}`);
     if(g)g.entries.forEach(e=>{
       lines.push(` vrrp-group ${e.vrid}`);
@@ -59,6 +61,8 @@ function renderDellOS10Interface(iface,lacpList,aclList,securityList,stp){
   // 官方 SmartFabric OS10 User Guide 確認 IPv6 語法 `ipv6 address ADDR/PREFIXLEN`，iface.ip
   // 本來就直接存完整 CIDR 字串輸出（無遮罩換算），只需依冒號判斷切換關鍵字
   if(iface.ip)lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
+  // 次要IP（2026-08-12 新增）：官方 `ip address A/N secondary`，僅取第一筆為 MVP 範圍
+  if(iface.secondaryIp&&!iface.secondaryIp.includes(':'))lines.push(` ip address ${iface.secondaryIp} secondary`);
   if(iface.vrf&&!isMgmt)lines.push(` ip vrf forwarding ${iface.vrf}`);
   if(lg){
     const modeWord=lg.mode==='active'?'active':lg.mode==='passive'?'passive':'on';

@@ -29,6 +29,19 @@ function renderProCurveVLANs(vlans,interfaces,ospf,dhcp){
     const tagged=taggedMap[String(v.id)]||[];
     if(untagged.length)lines.push(`   untagged ${untagged.join(',')}`);
     if(tagged.length)lines.push(`   tagged ${tagged.join(',')}`);
+    // IP（2026-08-12 補上，既有缺口——parseVlans() 早就解析 v.ip，但 renderProCurveVLANs()
+    // 從未輸出過；v.ip 存的是 parser 端原樣擷取的「IP/遮罩」字串（斜線分隔但非真正 CIDR
+    // prefix，因 ProCurve CLI 本身就是雙 token dotted-mask 語法），直接還原成兩個 token 輸出）
+    if(v.ip){
+      const [vip,vmask]=v.ip.split('/');
+      if(vip&&vmask)lines.push(`   ip address ${vip} ${vmask}`);
+    }
+    // 次要IP（2026-08-12 新增）：ProCurve 無 secondary 關鍵字，同一 VLAN 底下再宣告一行
+    // ip address（不同子網）即為次要位址，僅取第一筆為 MVP 範圍
+    if(v.secondaryIp){
+      const [sip,smask]=v.secondaryIp.split('/');
+      if(sip&&smask)lines.push(`   ip address ${sip} ${smask}`);
+    }
     if(areaOfVlan[String(v.id)])lines.push(`   ip ospf area ${areaOfVlan[String(v.id)]}`);
     (helperOfVlan[String(v.id)]||[]).forEach(ip=>lines.push(`   ip helper-address ${ip}`));
     lines.push('   exit');

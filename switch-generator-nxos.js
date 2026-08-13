@@ -34,6 +34,8 @@ function renderNXOSInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vp
   if(iface.ip&&iface.ip!=='-'){
     if(iface.type!=='svi'&&!isLoopback)lines.push(' no switchport');
     lines.push(` ip address ${iface.ip}`);
+    // 次要IP（2026-08-12 新增）：官方 `ip address A/N secondary`，僅取第一筆為 MVP 範圍
+    if(iface.secondaryIp)lines.push(` ip address ${iface.secondaryIp} secondary`);
   }
   if(iface.vrf)lines.push(` vrf member ${iface.vrf}`);
   if(iface.mtu)lines.push(` mtu ${iface.mtu}`);

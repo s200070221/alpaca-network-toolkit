@@ -85,11 +85,23 @@ const OpenWrtParser = (() => {
     (pkgs.network || []).filter(s => s.type === 'interface').forEach(s => {
       const name = s.name || '(anonymous)';
       const ip = val(s, 'ipaddr', '-');
+      // 次要IP（2026-08-12 新增，官方 OpenWrt UCI 慣例確認主要位址用 `option ipaddr`，額外的
+      // 次要位址用重複的 `list ipaddr 'A.B.C.D/N'` 行；通用 tokenizer parseUCI() 早就把重複的
+      // list KEY VALUE 收集進 s.lists[key] 陣列，這裡只需消費，不用改字彙掃描層。list 形式的
+      // 位址值本身是 CIDR（含 prefix），與 option ipaddr/option netmask 分開兩欄不同，需拆解；
+      // 僅取第一筆次要IP為 MVP 範圍，比照其餘廠牌既有限制）
+      const ipList = (s.lists && s.lists.ipaddr) || [];
+      let secondaryIp = '-', secondaryMask = '-';
+      if (ipList[0]) {
+        const [sip, sbits] = ipList[0].split('/');
+        if (sip) { secondaryIp = sip; secondaryMask = sbits ? prefixToMask(parseInt(sbits)) : '255.255.255.255'; }
+      }
       out.push({
         name, ip, mask: val(s, 'netmask', '-'), type: 'physical', vlanId: '-',
         alias: val(s, 'ifname') || val(s, 'device') || name, desc: '',
         status: 'up', mtu: '-', speed: '-', mode: val(s, 'proto') === 'dhcp' ? 'dhcp' : 'static',
         vdom: '-', role: /^wan/i.test(name) ? 'WAN' : 'LAN', allowaccess: '-',
+        secondaryIp, secondaryMask,
       });
     });
     return out;
@@ -98,6 +110,11 @@ const OpenWrtParser = (() => {
   function bitsFromMask(mask) {
     if (!mask) return null;
     return mask.split('.').reduce((n, o) => { let b = parseInt(o, 10) >>> 0, c = 0; while (b) { b &= (b - 1); c++; } return n + c; }, 0);
+  }
+  function prefixToMask(bits) {
+    if (bits === null || bits === undefined || isNaN(bits)) return '255.255.255.0';
+    const n = (0xFFFFFFFF << (32 - parseInt(bits))) >>> 0;
+    return [(n>>>24)&0xFF,(n>>>16)&0xFF,(n>>>8)&0xFF,n&0xFF].join('.');
   }
 
   function parseRoutes(pkgs) {
