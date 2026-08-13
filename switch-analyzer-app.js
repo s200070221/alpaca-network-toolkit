@@ -2340,7 +2340,7 @@ function exportHTMLReport(mode){
 <div class="card" id="sec-interfaces">
   <h2>${tr('rpt.if_list')}</h2>
   <table>
-    <thead><tr><th>${tr('col.name')}</th><th>${tr('rpt.col_desc')}</th><th>${tr('col.type')}</th><th>${tr('col.mode')}</th><th>${tr('col.vlan_native')}</th><th>${tr('rpt.col_hybrid_detail')}</th><th>${tr('rpt.col_ip')}</th><th>VRF</th><th>${tr('rpt.col_status')}</th></tr></thead>
+    <thead><tr><th>${tr('col.name')}</th><th>${tr('rpt.col_desc')}</th><th>${tr('col.type')}</th><th>${tr('col.mode')}</th><th>${tr('col.vlan_native')}</th><th>${tr('rpt.col_hybrid_detail')}</th><th>${tr('rpt.col_ip')}</th>${p.interfaces.some(i=>i.ip6)?`<th>${tr('rpt.col_ipv6')}</th>`:''}<th>VRF</th><th>${tr('rpt.col_status')}</th></tr></thead>
     <tbody>
     ${p.interfaces.filter(i=>i.type!=='null').map(i=>`<tr>
       <td class="mono" style="white-space:nowrap">${esc(i.name)}</td>
@@ -2350,6 +2350,7 @@ function exportHTMLReport(mode){
       <td class="mono">${esc(i.vlans||'—')}${i.nativeVlan?'<br><small>Native:'+esc(i.nativeVlan)+'</small>':''}</td>
       <td style="font-size:11px;line-height:1.7">${fmtHybrid(i.hybrid)}</td>
       <td class="mono">${esc(i.ip||'—')}</td>
+      ${p.interfaces.some(x=>x.ip6)?`<td class="mono">${esc(i.ip6||'—')}</td>`:''}
       <td class="mono" style="color:#e67e22">${esc(i.vrf||'—')}</td>
       <td class="${i.shutdown?'down':'up'}">${i.shutdown?tr('rpt.shutdown_on'):tr('rpt.shutdown_off')}</td>
     </tr>`).join('')}
