@@ -22,14 +22,23 @@ function parseProCurve(cfg) {
       // 判斷「這台設備上真的有這個實體埠」的線索之一，另存供 synthesizeMissingInterfaces() 使用
       const noUntagged=(b.match(/^\s+no untagged\s+(.+)/m)||[])[1]?.trim()||'';
       // extract IP if present (default gateway SVI)
-      const mIp=b.match(/^\s+ip address\s+(\S+)\s+(\S+)/m);
+      // 次要IP（2026-08-12 新增，中信心度：多個獨立來源交叉確認 ProCurve 無 secondary 關鍵字，
+      // 同一 VLAN 上第一個手動設定的 IP 是主要位址，後續設定的（不同子網）自動變成次要位址，
+      // 最多 7 個；官方 HP "Configuring IP Addressing" 章節確認機制存在，惟 WebFetch 對該 PDF
+      // 解析不完整未能取得逐字指令範例——僅取第一筆次要IP為 MVP 範圍，比照其餘廠牌既有限制）
+      const ipMatches=[...b.matchAll(/^\s+ip address\s+(\S+)\s+(\S+)/mg)];
+      const mIp=ipMatches[0];
+      const mSecIp=ipMatches[1];
       // 修正既有 bug：其餘所有廠牌的 vlan 物件皆有 ipSubnets 欄位（共用 UI 摘要卡片
       // buildSumCards() 讀 v.ipSubnets.length 判斷有 IP 的 VLAN 數），parseProCurve()
       // 原本只有單一字串 ip 欄位、從未設定 ipSubnets，導致透過真實 UI 分析流程（doAnalyze()）
       // 時 buildSumCards() 直接對 undefined.length 拋錯、整個分析結果打不開——只有繞過 UI
       // 直接呼叫 parseProCurve() 的既有測試不會觸發，故先前未被發現
       const ipSubnets=mIp?[{network:mIp[1],mask:mIp[2],cidr:`${mIp[1]}/${cidrFromMask(mIp[2])}`}]:[];
-      vlans.push({ id, name, tagged, untagged, noUntagged, ports:[], ip:mIp?`${mIp[1]}/${mIp[2]}`:'', ipSubnets });
+      // secondaryIp 比照上面 ip 欄位既有慣例（原樣 dotted-mask 字串以 / 相接，非真正 CIDR
+      // prefix），與 renderProCurveVLANs() 的 v.secondaryIp.split('/') 還原邏輯一致
+      const secondaryIp=mSecIp?`${mSecIp[1]}/${mSecIp[2]}`:'';
+      vlans.push({ id, name, tagged, untagged, noUntagged, ports:[], ip:mIp?`${mIp[1]}/${mIp[2]}`:'', secondaryIp, ipSubnets });
     }
     return vlans;
   }

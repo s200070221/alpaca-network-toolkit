@@ -39,6 +39,11 @@ function renderAristaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,
   // 直接原樣擷取的「IP 遮罩」字串（未轉 CIDR），直接輸出即可。Loopback 在整份 generator
   // 先前完全沒有輸出路徑，也是靠這裡補上（比照 Aruba CX renderArubaInterface() 的既有寫法）
   const isMgmt=/^Management/i.test(iface.name);
+  // 次要IP（2026-08-12 新增）：parseCiscoInterfaces() 早就會透過共用函式解析出 Arista 的
+  // secondaryIp（官方語法與 Cisco 相同 `ip address A B secondary`），但 renderAristaInterface()
+  // 從未輸出過，比照 switch-generator-cisco.js:38 的 secLine 寫法補上；secondaryIp 一律是
+  // CIDR 字串（不分介面類型），IPv6 無次要位址機制故排除
+  const secLine=iface.secondaryIp&&!iface.secondaryIp.includes(':')?(()=>{const [sip,slen]=iface.secondaryIp.split('/');return sip&&slen?` ip address ${sip} ${maskFromCidr(slen)} secondary`:'';})():'';
   // IPv6（試點 5 廠牌之一，官方 EOS User Manual 確認 interface 模式下 `ipv6 address ADDR/PREFIXLEN`
   // 與 Cisco 語法一致，不需遮罩換算）
   if(iface.type==='svi'){
@@ -48,13 +53,18 @@ function renderAristaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,
       }else{
         const [ip,len]=iface.ip.split('/');
         lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
+        if(secLine)lines.push(secLine);
       }
     }
   }else if(iface.type==='loopback'||isMgmt){
-    if(iface.ip)lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
+    if(iface.ip){
+      lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
+      if(!iface.ip.includes(':')&&secLine)lines.push(secLine);
+    }
   }else if(iface.mode==='routed'&&iface.ip){
     lines.push(' no switchport');
     lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
+    if(!iface.ip.includes(':')&&secLine)lines.push(secLine);
   }
   // vrf（2026-08-08 查證修正）：官方 EOS 4.23+ 語法為裸 "vrf NAME"（"vrf forwarding" 已廢棄），
   // parseCiscoInterfaces() 已同步改用 vendor 分流偵測；management 介面固定為 MGMT，是 parser

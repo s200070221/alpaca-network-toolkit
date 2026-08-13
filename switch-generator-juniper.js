@@ -68,6 +68,10 @@ function renderJuniperInterface(iface,lacpList){
     lines.push('        unit 0 {');
     lines.push(`            family ${fam} {`);
     lines.push(`                address ${iface.ip};`);
+    // 次要IP（2026-08-12 新增）：Junos 無 secondary 關鍵字，同一 family inet {} 區塊內
+    // 再宣告一筆 address statement 即為附加位址，比照本專案 firewall_analyzer Juniper SRX
+    // 既有慣例；僅取第一筆次要IP為 MVP 範圍
+    if(iface.secondaryIp&&(iface.secondaryIp.includes(':')===iface.ip.includes(':')))lines.push(`                address ${iface.secondaryIp};`);
     lines.push('            }');
     lines.push('        }');
   }
@@ -91,6 +95,8 @@ function renderJuniperIRB(svis){
       const fam=i.ip.includes(':')?'inet6':'inet';
       lines.push(`            family ${fam} {`);
       lines.push(`                address ${i.ip};`);
+      // 次要IP（2026-08-12 新增）：同 routed 實體埠，附加式機制在同一 family 區塊內再加一筆
+      if(i.secondaryIp&&(i.secondaryIp.includes(':')===i.ip.includes(':')))lines.push(`                address ${i.secondaryIp};`);
       lines.push('            }');
     }
     lines.push('        }');

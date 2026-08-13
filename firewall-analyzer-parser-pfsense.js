@@ -108,6 +108,25 @@ const PfsenseParser = (() => {
     };
   }
 
+  // 次要IP（IP Alias VIP，2026-08-12 新增，官方 docs.netgate.com "Virtual IP Addresses"
+  // 頁面確認 <mode>ipalias</mode> 為次要IP機制；VIP 是獨立於 <interfaces> 之外的頂層
+  // <virtualip><vip>...</vip></virtualip> 區塊，<interface> 值是內部代稱（wan/lan/optN，
+  // 與 buildIfMap() 的 key 同一套命名空間），非真實介面名稱 realif，故依內部代稱分組合併
+  // 回對應介面；僅取第一筆次要IP為 MVP 範圍，比照其餘廠牌既有限制）
+  function parseSecondaryIps(xml) {
+    const result = {};
+    const ipaliasVips = xblks(xv(xml,'virtualip')||'', 'vip').filter(b => /<mode>\s*ipalias\s*<\/mode>/i.test(b._inner));
+    ipaliasVips.forEach(b => {
+      const inner = b._inner;
+      const ifKey = (xv(inner,'interface')||'').toLowerCase();
+      if (!ifKey || result[ifKey]) return;
+      const subnet = xv(inner,'subnet');
+      const bits = xv(inner,'subnet_bits');
+      if (subnet) result[ifKey] = { ip: subnet, mask: bits ? prefixToMask(parseInt(bits)) : '255.255.255.255' };
+    });
+    return result;
+  }
+
   // ── Interfaces ────────────────────────────────────────────────────────────
   function parseInterfaces(xml) {
     const ifaces = [];
@@ -115,16 +134,20 @@ const PfsenseParser = (() => {
     if (!ifXml) return ifaces;
 
     const ifMap = buildIfMap(ifXml);
+    const secondaryIpMap = parseSecondaryIps(xml);
 
     Object.entries(ifMap).forEach(([key, ifc]) => {
       const ip   = ifc.ipaddr === 'dhcp' ? 'DHCP' : ifc.ipaddr;
       const mask = ip && ip !== 'DHCP' && ip !== '-' ? prefixToMask(parseInt(ifc.subnet)) : '-';
       const role = key==='wan' ? 'WAN' : key==='lan' ? 'LAN' : key.startsWith('opt') ? 'DMZ' : 'Unknown';
+      const secIp = secondaryIpMap[key];
       ifaces.push({
         name:    ifc.realif || key,
         alias:   ifc.descr  || key.toUpperCase(),
         ip:      ip !== '-' ? ip : '-',
         mask,
+        secondaryIp:   secIp ? secIp.ip   : '-',
+        secondaryMask: secIp ? secIp.mask : '-',
         type:    ifc.realif && ifc.realif.includes('vlan') ? 'vlan' : 'physical',
         vlanId:  '-',
         vdom:    key,

@@ -223,6 +223,11 @@ function renderBrocadeVEBlocks(interfaces,vrrpList,ospfAreaVe,dhcpList,ripPorts)
       if(ip.includes(':'))lines.push(` ipv6 address ${ip}`);
       else{ const[ipAddr,len]=ip.split('/'); lines.push(` ip address ${ipAddr} ${maskFromCidr(len)}`); }
     }
+    // 次要IP（2026-08-12 新增）：官方 `ip address A B secondary`，僅取第一筆為 MVP 範圍
+    if(iface&&iface.secondaryIp&&!iface.secondaryIp.includes(':')){
+      const[secIp,secLen]=iface.secondaryIp.split('/');
+      lines.push(` ip address ${secIp} ${maskFromCidr(secLen)} secondary`);
+    }
     if(iface&&iface.vrf)lines.push(` vrf forwarding ${iface.vrf}`);
     if(ospfAreaVe&&ospfAreaVe[vid]!==undefined)lines.push(` ip ospf area ${ospfAreaVe[vid]}`);
     if(ripVeIds.has(vid))lines.push(' ip rip');
