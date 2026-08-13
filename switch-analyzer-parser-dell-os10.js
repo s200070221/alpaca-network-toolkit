@@ -80,6 +80,12 @@ function parseDellIP(body){
   if(v6)return v6;
   return'';
 }
+// 雙棧修復（2026-08-13 新增）：獨立無條件擷取 ipv6 address，不受 parseDellIP() 是否已抓到
+// IPv4 值影響（原本 parseDellIP() 只在找不到 IPv4 時才 fallback 讀 ipv6 address，同一介面
+// 同時設定 IPv4+IPv6 時 IPv6 會被靜默丟棄）
+function parseDellIP6(body){
+  return(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
+}
 
 // 次要IP（2026-08-12 新增，中信心度：官方 Dell SmartFabric OS10 User Guide "Assign Interface
 // IP Address" 確認 `ip address A.B.C.D/N secondary` 語法，WebFetch 只拿到目錄殼，靠搜尋引擎
@@ -105,13 +111,15 @@ function parseDellOS10Interfaces(cfg){
     // Management interface (OS10: management1/1/1, OS9: ManagementEthernet 0/0)
     if(/^management/i.test(name)){
       const ip=parseDellIP(body);
+      const ip6=parseDellIP6(body);
       const secondaryIp=parseDellSecondaryIP(body);
-      ifaces.push({name,type:'physical',desc,ip,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf:'MGMT',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      ifaces.push({name,type:'physical',desc,ip,ip6,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf:'MGMT',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     // SVI: interface vlan N (OS10) / interface Vlan N (OS9)
     if(/^[Vv]lan\s*\d+/i.test(name)){
       const ip=parseDellIP(body);
+      const ip6=parseDellIP6(body);
       const secondaryIp=parseDellSecondaryIP(body);
       const vrf=(body.match(/ip vrf forwarding\s+(\S+)/)||[])[1]||'';
       const vrrpList=[];
@@ -122,7 +130,7 @@ function parseDellOS10Interfaces(cfg){
         const prio=(vgBody.match(/priority\s+(\d+)/)||[])[1]||'100';
         if(vip)vrrpList.push({vrid:vg[1],vip,priority:prio,type:'VRRP'});
       }
-      ifaces.push({name,type:'svi',desc,ip,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:vrrpList,breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      ifaces.push({name,type:'svi',desc,ip,ip6,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:vrrpList,breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     // Port-channel
@@ -130,8 +138,9 @@ function parseDellOS10Interfaces(cfg){
       const noRouting=/no switchport/.test(body);
       if(noRouting){
         const ip=parseDellIP(body);
+        const ip6=parseDellIP6(body);
         const secondaryIp=parseDellSecondaryIP(body);
-        ifaces.push({name,type:'physical',desc,mode:'routed',vlans:'',nativeVlan:'',vrf:'',ip,secondaryIp,shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+        ifaces.push({name,type:'physical',desc,mode:'routed',vlans:'',nativeVlan:'',vrf:'',ip,ip6,secondaryIp,shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       }else{
         const mode=(body.match(/switchport mode\s+(\S+)/)||[])[1]||'';
         const vlans=(body.match(/switchport trunk allowed vlan\s+([^\n]+)/)||[])[1]?.trim()||'';
@@ -150,9 +159,10 @@ function parseDellOS10Interfaces(cfg){
     const noRouting=/no switchport/.test(body);
     if(noRouting){
       const ip=parseDellIP(body);
+      const ip6=parseDellIP6(body);
       const secondaryIp=parseDellSecondaryIP(body);
       const vrf=(body.match(/ip vrf forwarding\s+(\S+)/)||[])[1]||'';
-      ifaces.push({name,type:'physical',desc,mode:'routed',vlans:'',nativeVlan:'',vrf,ip,secondaryIp,shutdown,member,hybrid:null,vrrp:[],breakoutChild,breakoutParent,breakoutMode:''});
+      ifaces.push({name,type:'physical',desc,mode:'routed',vlans:'',nativeVlan:'',vrf,ip,ip6,secondaryIp,shutdown,member,hybrid:null,vrrp:[],breakoutChild,breakoutParent,breakoutMode:''});
       continue;
     }
     const modeM=body.match(/switchport mode\s+(\S+)/);

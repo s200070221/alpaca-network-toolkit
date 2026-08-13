@@ -27,7 +27,10 @@ function parseFortiInterfaces(cfg){
     // 官方文件確認 IPv6 為巢狀 `config ipv6` / `set ip6-address ADDR/PREFIXLEN` / `end`；
     // body 本來就含 edit/next 之間的全部原始行（含巢狀 config/end 區塊），直接正則比對即可
     const ip6=(body.match(/set ip6-address\s+(\S+\/\d+)/));
-    const ipStr=ip?ip[1]+'/'+cidrFromMask(ip[2]):(ip6?ip6[1]:'');
+    const ipStr=ip?ip[1]+'/'+cidrFromMask(ip[2]):'';
+    // 雙棧修復（2026-08-13 新增）：ip6 原本已各自獨立擷取，但先前只是拿來組出單一 ipStr
+    // 三元運算式（IPv4 存在時直接捨棄 ip6），從未真正存進物件；改為獨立欄位無條件保留
+    const ip6Str=ip6?ip6[1]:'';
     // 次要IP（Secondary IP，官方 FortiSwitchOS Administration Guide／CLI Reference：
     // 巢狀 `config secondaryip` / `edit 1` / `set ip A B`；僅取第一筆為 MVP 範圍）
     const secBlockM=body.match(/config secondaryip\n([\s\S]*?)^[ \t]*end/m);
@@ -49,7 +52,7 @@ function parseFortiInterfaces(cfg){
       if(vrId)vrrp.push({id:vrId,ip:vrip,priority:prio});
     }
     const bkMatch=name.match(/^(port\d+)\.([1-4])$/i);
-    ifaces.push({name,type,desc,ip:ipStr,secondaryIp,mode:'',vlans:vlan,nativeVlan:'',vrf,shutdown:status,member:'1',hybrid:null,vrrp,fortilinkDiscovery:false,breakoutChild:!!bkMatch,breakoutParent:bkMatch?bkMatch[1]:'',breakoutMode:''});
+    ifaces.push({name,type,desc,ip:ipStr,ip6:ip6Str,secondaryIp,mode:'',vlans:vlan,nativeVlan:'',vrf,shutdown:status,member:'1',hybrid:null,vrrp,fortilinkDiscovery:false,breakoutChild:!!bkMatch,breakoutParent:bkMatch?bkMatch[1]:'',breakoutMode:''});
   }
 
   // Physical ports

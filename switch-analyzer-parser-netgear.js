@@ -40,24 +40,30 @@ function parseNetgearInterfaces(cfg){
       // 官方 KB（kb.netgear.com/21969）確認 IPv6 語法 `ipv6 address ADDR/PREFIXLEN`（需搭配
       // `ipv6 enable`，但該行本身不含位址值，round-trip 只需正確解析 ipv6 address 這行）
       const ip=ipM?ipM[1]+'/'+cidrFromMask(ipM[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
-      ifaces.push({name:'vlan '+vid,type:'svi',desc,ip,mode:'',vlans:vid,nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      // 雙棧修復（2026-08-13 新增）：ip6 獨立無條件擷取，不再受 ip 是否已有值影響
+      const ip6=(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
+      ifaces.push({name:'vlan '+vid,type:'svi',desc,ip,ip6,mode:'',vlans:vid,nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     // Loopback: "interface loopback N"
     if(/^loopback\s+\d+\s*$/i.test(rawName)){
       const ipM=body.match(/^\s*ip address\s+([\d.]+)\s+([\d.]+)/m);
       const ip=ipM?ipM[1]+'/'+cidrFromMask(ipM[2]):(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
-      ifaces.push({name:rawName.replace(/\s+/g,' '),type:'loopback',desc,ip,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      // 雙棧修復（2026-08-13 新增，同 VLAN）
+      const ip6=(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
+      ifaces.push({name:rawName.replace(/\s+/g,' '),type:'loopback',desc,ip,ip6,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     // Physical port ("unit/slot/port") 或 LAG（"lag N"）
     const name=rawName;
     const member=(name.match(/^(\d+)\//)||[])[1]||'1';
-    let mode='',vlans='',nativeVlan='',ip='';
+    let mode='',vlans='',nativeVlan='',ip='',ip6='';
     const routed=/^\s*routing\s*$/m.test(body)&&!/no routing/m.test(body);
     if(routed){
       const ipM=body.match(/^\s*ip address\s+([\d.]+)\s+([\d.]+)/m);
       ip=ipM?ipM[1]+'/'+cidrFromMask(ipM[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
+      // 雙棧修復（2026-08-13 新增，同 VLAN/Loopback）
+      ip6=(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
       mode='routed';
     }else{
       const modeM=body.match(/^\s*switchport mode\s+(\S+)/m);
@@ -86,7 +92,7 @@ function parseNetgearInterfaces(cfg){
         }
       }
     }
-    ifaces.push({name,type:'physical',desc,mode,vlans:(vlans||'').toString().trim(),nativeVlan,vrf:'',ip,shutdown,member,hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+    ifaces.push({name,type:'physical',desc,mode,vlans:(vlans||'').toString().trim(),nativeVlan,vrf:'',ip,ip6,shutdown,member,hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
   }
   return ifaces;
 }
