@@ -141,10 +141,20 @@ function parseAlcatelInterfaces(cfg){
   }
   const v6AddrRe=/^(?:->\s*)?ipv6 address\s+(\S+\/\d+)\s+"?(\S+?)"?$/gm;
   while((m=v6AddrRe.exec(cfg))!==null){
-    const ip=m[1],name=m[2].replace(/"/g,'');
+    const ip6=m[1],name=m[2].replace(/"/g,'');
     const bind=v6IfBind[name]||{};
     const isLoop=bind.isLoop||name.toLowerCase().includes('loop');
-    ifaces.push({name,type:isLoop?'loopback':'svi',desc:'',mode:'',vlans:bind.vid||'',nativeVlan:'',vrf:'',ip,shutdown:false,member:'1',hybrid:null,vrrp:[]});
+    // 雙棧修復（2026-08-13 新增）：先前 IPv4/IPv6 兩段解析邏輯完全獨立，各自 push 出獨立的
+    // ifaces 陣列元素，若同名介面同時有 IPv4+IPv6 會產生兩筆 name 相同的物件，任何用
+    // .find(i=>i.name===x) 依名稱查找單一介面的下游邏輯只會取到第一筆（IPv4）、IPv6 那筆
+    // 被架空。改為先查找是否已有同名的 IPv4 介面物件，有則合併進其 ip6 欄位；找不到（純
+    // IPv6-only 介面）才維持 push 新物件，值存進 ip6（ip 留空字串，不塞進 ip 造成語意混淆）
+    const existing=ifaces.find(i=>i.name===name);
+    if(existing){
+      existing.ip6=ip6;
+    }else{
+      ifaces.push({name,type:isLoop?'loopback':'svi',desc:'',mode:'',vlans:bind.vid||'',nativeVlan:'',vrf:'',ip:'',ip6,shutdown:false,member:'1',hybrid:null,vrrp:[]});
+    }
   }
   return ifaces;
 }

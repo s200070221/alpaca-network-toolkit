@@ -64,6 +64,18 @@ function parseJuniperVLANs(cfg){
   return vlans;
 }
 
+// 雙棧/次要IP 分桶修復（2026-08-13 新增）：`matchAll(/address\s+(\S+);/g)` 對整個介面
+// 區塊掃描時不分辨該 address statement 是在 `family inet {}` 還是 `family inet6 {}`
+// 區塊裡，只依「文件出現順序」把第一筆丟進 ip、第二筆丟進 secondaryIp——真實雙棧介面
+// （1 個 IPv4 + 1 個 IPv6）會讓 IPv6 值被誤標成「IPv4 的次要位址」；若同時又有真正的
+// 次要 IPv4（3 個 address statement），第 3 筆會被完全捨棄。改為依內容判斷版本（含冒號
+// 即 IPv6，比照專案既有慣例）分桶，ip=v4[0]、secondaryIp=v4[1]、ip6=v6[0]，三者互不覆蓋
+function classifyJunosAddrs(rawAddrs){
+  const v4=rawAddrs.filter(a=>!a.includes(':'));
+  const v6=rawAddrs.filter(a=>a.includes(':'));
+  return{ip:v4[0]||'',secondaryIp:v4[1]||'',ip6:v6[0]||''};
+}
+
 // ── Interfaces ────────────────────────────────────────────
 function parseJuniperInterfaces(cfg){
   const ifaces=[];
@@ -97,24 +109,24 @@ function parseJuniperInterfaces(cfg){
         // 次要IP（2026-08-12 新增）：Junos 無 `secondary` 關鍵字，同一 `family inet {}` 區塊內
         // 重複宣告 `address` statement 即為附加位址（官方 Junos "Protocol Family and Interface
         // Address Properties" 文件確認，與本專案 firewall_analyzer 的 Juniper SRX parser 同一套
-        // 機制），改用 matchAll 補抓第二筆存進 secondaryIp，僅取第一筆次要IP為 MVP 範圍
-        const uAddrs=[...ubody.matchAll(/address\s+(\S+);/g)];
-        const ip=uAddrs[0]?.[1]||'';
-        const secondaryIp=uAddrs[1]?.[1]||'';
+        // 機制）；雙棧修復（2026-08-13）：改用 classifyJunosAddrs() 依內容分辨版本，避免 IPv6
+        // 誤標成次要 IPv4
+        const uAddrs=[...ubody.matchAll(/address\s+(\S+);/g)].map(m=>m[1]);
+        const {ip,secondaryIp,ip6}=classifyJunosAddrs(uAddrs);
         ifaces.push({name:'irb.'+uid,type:'svi',desc:udesc,mode:'',
-          vlans:uid,nativeVlan:'',vrf:'',ip,secondaryIp,shutdown:false,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+          vlans:uid,nativeVlan:'',vrf:'',ip,ip6,secondaryIp,shutdown:false,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       }
       continue;
     }
 
     // ── Loopback ─────────────────────────────────────────
     if(/^lo[\d]/i.test(name)){
-      // 次要IP（2026-08-12 新增）：同 IRB，附加式機制取第二筆 address statement
-      const loAddrs=[...body.matchAll(/address\s+(\S+);/g)];
-      const ip=loAddrs[0]?.[1]||'';
-      const secondaryIp=loAddrs[1]?.[1]||'';
+      // 次要IP（2026-08-12 新增）：同 IRB，附加式機制取第二筆 address statement；雙棧修復
+      // （2026-08-13）：改用 classifyJunosAddrs() 依內容分辨版本
+      const loAddrs=[...body.matchAll(/address\s+(\S+);/g)].map(m=>m[1]);
+      const {ip,secondaryIp,ip6}=classifyJunosAddrs(loAddrs);
       ifaces.push({name,type:'loopback',desc,mode:'',vlans:'',nativeVlan:'',
-        vrf:'',ip,secondaryIp,shutdown:disabled,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+        vrf:'',ip,ip6,secondaryIp,shutdown:disabled,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
 
@@ -126,13 +138,13 @@ function parseJuniperInterfaces(cfg){
       const native=(body.match(/native-vlan-id\s+(\d+);/)||[])[1]||'';
       // IPv6（試點 5 廠牌之一）：改用格式中立的 \S+，比照 IRB/Loopback 分支既有寫法（本來就不限定
       // IPv4 字元類別），family inet/inet6 皆可原樣擷取
-      // 次要IP（2026-08-12 新增）：同 IRB，附加式機制取第二筆 address statement
-      const aeAddrs=[...body.matchAll(/address\s+(\S+);/g)];
-      const ip=aeAddrs[0]?.[1]||'';
-      const secondaryIp=aeAddrs[1]?.[1]||'';
+      // 次要IP（2026-08-12 新增）：同 IRB，附加式機制取第二筆 address statement；雙棧修復
+      // （2026-08-13）：改用 classifyJunosAddrs() 依內容分辨版本
+      const aeAddrs=[...body.matchAll(/address\s+(\S+);/g)].map(m=>m[1]);
+      const {ip,secondaryIp,ip6}=classifyJunosAddrs(aeAddrs);
       const mode=swMode||(ip?'routed':'');
       ifaces.push({name,type:'physical',desc,mode,vlans:vlanM,nativeVlan:native,
-        vrf:'',ip,secondaryIp,shutdown:disabled,member:'1',hybrid:null,vrrp:[],lacpMode,breakoutChild:false,breakoutParent:'',breakoutMode:''});
+        vrf:'',ip,ip6,secondaryIp,shutdown:disabled,member:'1',hybrid:null,vrrp:[],lacpMode,breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
 
@@ -141,10 +153,10 @@ function parseJuniperInterfaces(cfg){
     const vlanM=(body.match(/members\s+\[([^\]]+)\]/)||body.match(/members\s+(\S+);/)||[])[1]?.trim()||'';
     const native=(body.match(/native-vlan-id\s+(\d+);/)||[])[1]||'';
     // IPv6（試點 5 廠牌之一）：同上改用格式中立的 \S+
-    // 次要IP（2026-08-12 新增）：同 IRB，附加式機制取第二筆 address statement
-    const physAddrs=[...body.matchAll(/address\s+(\S+);/g)];
-    const ip=physAddrs[0]?.[1]||'';
-    const secondaryIp=physAddrs[1]?.[1]||'';
+    // 次要IP（2026-08-12 新增）：同 IRB，附加式機制取第二筆 address statement；雙棧修復
+    // （2026-08-13）：改用 classifyJunosAddrs() 依內容分辨版本
+    const physAddrs=[...body.matchAll(/address\s+(\S+);/g)].map(m=>m[1]);
+    const {ip,secondaryIp,ip6}=classifyJunosAddrs(physAddrs);
     const vrf=(body.match(/routing-instance\s+(\S+);/)||[])[1]||'';
     const lagMember=(body.match(/802\.3ad\s+(ae\d+);/)||[])[1]||'';
     const mode=swMode||(ip&&!swMode?'routed':'');
@@ -154,7 +166,7 @@ function parseJuniperInterfaces(cfg){
     const breakoutParent=bkMatch?`${bkMatch[1]}-${bkMatch[2]}`:'';
 
     ifaces.push({name,type:'physical',desc,mode,vlans:vlanM,nativeVlan:native,
-      vrf,ip,secondaryIp,shutdown:disabled,member:'1',hybrid:null,vrrp:[],lagMember,breakoutChild,breakoutParent,breakoutMode:''});
+      vrf,ip,ip6,secondaryIp,shutdown:disabled,member:'1',hybrid:null,vrrp:[],lagMember,breakoutChild,breakoutParent,breakoutMode:''});
   }
   // vrf 逆向掃描（2026-07-27 對外查證修正）：真實 Junos VRF 介面綁定語法方向是反過來的
   // routing-instances { NAME { interface X; } }，並非本函式上面 `routing-instance\s+(\S+);`

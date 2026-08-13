@@ -43,6 +43,13 @@ function parseNXOS(cfg) {
       const mIp=b.match(/^\s+ip address\s+(\S+)\/(\d+)/m);
       const mVrf=b.match(/^\s+vrf member\s+(\S+)/m);
       const ip=mIp?`${mIp[1]}/${mIp[2]}`:'-';
+      // IPv6（2026-08-13 新增，修復先前查證錯誤——原本認為既有 `ip address` 正則的 \S+
+      // 已格式中立可直接比對到 IPv6 值，但該正則字面比對的是 "ip address" 這個關鍵字本身，
+      // 真實 NX-OS 語法是不同的關鍵字 "ipv6 address"，先前根本沒有比對到任何真實 IPv6 設定，
+      // 既有測試 TN14/TN15 是用錯誤語法 `ip address <IPv6值>` 巧合通過的假陽性；沿用 Cisco
+      // 家族已查證的同款語法 `ipv6 address ADDR/PREFIXLEN`，獨立無條件擷取，支援雙棧）
+      const mIp6=b.match(/^\s+ipv6 address\s+(\S+)/m);
+      const ip6=mIp6?mIp6[1]:'';
       // 次要IP（2026-08-12 新增，中信心度：官方 Cisco Nexus NX-OS Unicast Routing Command
       // Reference 的 `ip address` 頁面確認 `secondary` 關鍵字，惟 WebFetch 被 Cisco WAF 擋
       // 403，僅能用搜尋引擎索引摘要佐證，建議實作後另行覆核官方頁面）：`ip address A/N secondary`，
@@ -60,7 +67,7 @@ function parseNXOS(cfg) {
       // 而非這裡的 status 字串，原本沒有這個欄位導致該欄一律顯示成 enabled、down 篩選對 NX-OS 永遠篩不到
       const memberMatch=name.match(/^Ethernet(\d+)\//i);
       const member=memberMatch?memberMatch[1]:'1';
-      ifaces.push({ name, desc, status:shut?'disabled':'connected', shutdown:shut, member, mode:mMode?mMode[1]:'', ip, secondaryIp, vlan, vrf:mVrf?mVrf[1]:'', type, breakoutChild, breakoutParent, breakoutMode:'' });
+      ifaces.push({ name, desc, status:shut?'disabled':'connected', shutdown:shut, member, mode:mMode?mMode[1]:'', ip, ip6, secondaryIp, vlan, vrf:mVrf?mVrf[1]:'', type, breakoutChild, breakoutParent, breakoutMode:'' });
     }
     return ifaces;
   }

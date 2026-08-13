@@ -131,17 +131,21 @@ function parseArubaInterfaces(cfg){
       const vid=(name.match(/\d+/)||[])[0]||'';
       // IPv6（試點 5 廠牌之一，官方 AOS-CX 語法 `ipv6 address ADDR/PREFIXLEN`）
       const ip=(blk.match(/^\s+ip address\s+(\S+)/m)||[])[1]||(blk.match(/^\s+ipv6 address\s+(\S+)/m)||[])[1]||'';
+      // 雙棧修復（2026-08-13 新增）：ip6 獨立無條件擷取，不再受 ip 是否已有值影響
+      const ip6=(blk.match(/^\s+ipv6 address\s+(\S+)/m)||[])[1]||'';
       const vrf=(blk.match(/^\s+vrf attach\s+(\S+)/m)||[])[1]||'';
-      ifaces.push({name,type:'svi',desc,ip,secondaryIp,mode:'',vlans:vid,nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      ifaces.push({name,type:'svi',desc,ip,ip6,secondaryIp,mode:'',vlans:vid,nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     // Loopback
     if(/^loopback/i.test(name)){
       const ip=(blk.match(/^\s+ip address\s+(\S+)/m)||[])[1]||(blk.match(/^\s+ipv6 address\s+(\S+)/m)||[])[1]||'';
-      ifaces.push({name,type:'loopback',desc,ip,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      // 雙棧修復（2026-08-13 新增，同 SVI）
+      const ip6=(blk.match(/^\s+ipv6 address\s+(\S+)/m)||[])[1]||'';
+      ifaces.push({name,type:'loopback',desc,ip,ip6,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
-    let mode='',vlans='',nativeVlan='',vrf='',ip='';
+    let mode='',vlans='',nativeVlan='',vrf='',ip='',ip6='';
     if(/vlan trunk/.test(blk)){
       mode='trunk';
       let rawAllowed=(blk.match(/vlan trunk allowed\s+([^\n]+)/)||[])[1]?.trim()||'';
@@ -155,6 +159,8 @@ function parseArubaInterfaces(cfg){
     }
     if(!/no routing/.test(blk)&&(/ip address/.test(blk)||/ipv6 address/.test(blk))){
       ip=(blk.match(/^\s+ip address\s+(\S+)/m)||[])[1]||(blk.match(/^\s+ipv6 address\s+(\S+)/m)||[])[1]||'';
+      // 雙棧修復（2026-08-13 新增，同 SVI/Loopback）
+      ip6=(blk.match(/^\s+ipv6 address\s+(\S+)/m)||[])[1]||'';
       vrf=(blk.match(/^\s+vrf attach\s+(\S+)/m)||[])[1]||'';
       mode=mode||'routed';
     }
@@ -167,7 +173,7 @@ function parseArubaInterfaces(cfg){
     const bkMatch=name.match(/^(\d+\/\d+\/\d+):([1-4])$/);
     const breakoutChild=!!bkMatch;
     const breakoutParent=bkMatch?bkMatch[1]:'';
-    ifaces.push({name,type:isVSF?'stack':'physical',desc,mode,vlans,nativeVlan,vrf,ip,secondaryIp,shutdown,member,hybrid:null,vrrp:[],breakoutChild,breakoutParent,breakoutMode});
+    ifaces.push({name,type:isVSF?'stack':'physical',desc,mode,vlans,nativeVlan,vrf,ip,ip6,secondaryIp,shutdown,member,hybrid:null,vrrp:[],breakoutChild,breakoutParent,breakoutMode});
   }
   return ifaces;
 }
