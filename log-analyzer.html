@@ -78,6 +78,12 @@ th.sortable-col:hover{color:var(--accent)}
 .badge.Medium{background:rgba(245,158,11,.18);color:var(--yellow)}
 .badge.Low{background:rgba(56,189,248,.18);color:var(--accent3)}
 .badge.Info{background:var(--surface3);color:var(--text-dim)}
+/* 淺色模式對比度修復（2026-08-13，比照 switch_analyzer/firewall_analyzer 同款修法）：
+   Critical/High/Medium 實測分別僅 3.80/3.07/2.78:1（WCAG AA 要求 4.5:1）不合格；
+   Low／Info 實測已達 5.16/6.59:1，維持不變不重複覆寫 */
+body[data-theme="light"] .badge.Critical{background:rgba(239,68,68,.2);color:#b91c1c}
+body[data-theme="light"] .badge.High{background:rgba(251,146,60,.2);color:#9a3412}
+body[data-theme="light"] .badge.Medium{background:rgba(245,158,11,.22);color:#92400e}
 .conf-tag{font-size:9px;padding:1px 6px;border-radius:4px}
 .conf-tag.confirmed{background:rgba(16,185,129,.15);color:var(--green)}
 .conf-tag.heuristic{background:rgba(167,139,250,.15);color:var(--purple)}

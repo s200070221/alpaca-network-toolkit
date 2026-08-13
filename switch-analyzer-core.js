@@ -855,6 +855,12 @@ function _parseACLComware(cfg){
     const num=m[2]||m[3];
     const typeName=m[1]||(parseInt(num)<3000?'basic':'advanced');
     const alias=m[4]||null,body=m[5];
+    // ipVersion（2026-08-13 新增，使用者提供真實 HPE 5720 去識別化設定檔驗證發現：Comware
+    // 的 IPv4 ACL 與 IPv6 ACL 是各自獨立的號碼空間，同一號碼可以同時是一條 IPv4 ACL 與一條
+    // IPv6 ACL——真實檔案就有 "acl number 2000"（IPv4）與 "acl ipv6 number 2000"（IPv6）並存
+    // 的案例。原本 name 只存號碼，兩者會撞名；依 header 是否含 ipv6 關鍵字判斷，不依賴號碼
+    // 區間猜測（IPv6 basic 與 IPv4 basic 官方文件確認共用同一段 2000-2999 號碼區間）
+    const ipVersion=/^acl\s+ipv6\s+/.test(m[0])?'v6':'v4';
     const rules=[];
     // 已查證真實 Comware 匯出檔後修正兩處既有 bug：
     // (1) basic ACL 規則列（如 "rule 5 permit source X Y logging"）動作後面接的是
@@ -880,9 +886,11 @@ function _parseACLComware(cfg){
       const portM=rest.match(/destination-port\s+(?:eq|range|gt|lt)\s+(\S+)/);
       rules.push({seq:rm[1],action:rm[2],protocol:proto,src:srcM?srcM[1]:'-',dst:dstM?dstM[1]:'-',dstPort:portM?portM[1]:'',remark:''});
     }
-    acls.push({name:alias||num,type:typeName==='basic'?'basic':'advanced',vendor:'comware',rules,appliedOn:[]});
+    acls.push({name:alias||num,type:typeName==='basic'?'basic':'advanced',ipVersion,vendor:'comware',rules,appliedOn:[]});
   }
-  // Interface packet-filter
+  // Interface packet-filter：裸 `packet-filter NUMBER inbound/outbound` 官方語法只套用
+  // IPv4（IPv6 有獨立的 `packet-filter ipv6 NUMBER` 指令，本輪查無真實範例不猜測支援），
+  // 故比對時限定 ipVersion==='v4'，避免同號碼 IPv6 ACL 造成誤配對
   const ifBlocks=cfg.split(/(?=^(?:interface|Interface)\s)/m);
   for(const blk of ifBlocks){
     const ifLine=blk.match(/^(?:interface|Interface)\s+(\S.*)/m);
@@ -890,7 +898,7 @@ function _parseACLComware(cfg){
     const ifName=ifLine[1].trim();
     const pfRe=/packet-filter\s+(\S+)\s+(inbound|outbound)/gi;
     let pm;
-    while((pm=pfRe.exec(blk))!==null){const acl=acls.find(a=>a.name===pm[1]||(a.name!==a.name&&a.name===pm[1]));if(acl)acl.appliedOn.push({interface:ifName,direction:pm[2].startsWith('in')?'in':'out'});}
+    while((pm=pfRe.exec(blk))!==null){const acl=acls.find(a=>a.name===pm[1]&&a.ipVersion==='v4');if(acl)acl.appliedOn.push({interface:ifName,direction:pm[2].startsWith('in')?'in':'out'});}
   }
   return acls;
 }

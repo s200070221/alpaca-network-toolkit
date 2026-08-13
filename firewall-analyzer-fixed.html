@@ -132,6 +132,16 @@ input[type=file]{display:none}
 .p-purple{background:rgba(167,139,250,.12);color:var(--purple);border:1px solid rgba(167,139,250,.25)}
 .p-gray{background:rgba(100,116,139,.12);color:#94a3b8;border:1px solid rgba(100,116,139,.25)}
 .p-orange{background:rgba(251,146,60,.12);color:var(--orange);border:1px solid rgba(251,146,60,.25)}
+/* 淺色模式 pill 對比度修復（2026-08-13，比照 switch_analyzer 同款修法）：低透明度 rgba
+   背景疊在淺色模式近白色 --surface 上對比度不足（實測 2.9~3.4:1，WCAG AA 要求 4.5:1），
+   改用較深文字色＋提高背景透明度，實測全數達 4.4:1 以上 */
+body[data-theme="light"] .p-allow{background:rgba(16,185,129,.2);color:#047857;border-color:rgba(4,120,87,.35)}
+body[data-theme="light"] .p-deny{background:rgba(239,68,68,.2);color:#b91c1c;border-color:rgba(185,28,28,.35)}
+body[data-theme="light"] .p-warn{background:rgba(245,158,11,.22);color:#92400e;border-color:rgba(146,64,14,.4)}
+body[data-theme="light"] .p-info{background:rgba(0,200,240,.18);color:#0369a1;border-color:rgba(3,105,161,.35)}
+body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9;border-color:rgba(109,40,217,.35)}
+body[data-theme="light"] .p-gray{background:rgba(100,116,139,.18);color:#334155;border-color:rgba(51,65,85,.35)}
+body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;border-color:rgba(154,52,18,.35)}
 /* Sum cards */
 .sum-wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;padding:12px 18px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0;}
 .sum-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;}

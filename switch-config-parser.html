@@ -204,6 +204,29 @@ input[type=file]{display:none}
 .p-warn{background:rgba(251,191,36,.12);color:#f59e0b;border:1px solid rgba(251,191,36,.3)}
 .p-orange{background:rgba(251,146,60,.12);color:#f97316;border:1px solid rgba(251,146,60,.3)}
 .p-purple{background:rgba(167,139,250,.12);color:#a78bfa;border:1px solid rgba(167,139,250,.3)}
+/* 淺色模式 pill 對比度修復（2026-08-13 新增）：上方 18 個 .p-* 是針對深色背景調校的低透明度
+   （rgba alpha .1~.15），疊在淺色模式近白色 --surface 上背景幾乎看不出色差，且其中 5 個
+   （p-standby/p-ip/p-gray/p-warn/p-orange）文字色是寫死 hex 完全沒有隨主題變深，經瀏覽器
+   實測全數對比度落在 2.9~3.4:1（WCAG AA 一般文字要求 4.5:1）不合格；以下改用較深/較高飽和度
+   的文字色＋提高背景透明度（.18~.22），實測全數達 4.4~8.3:1 合格 */
+body[data-theme="light"] .p-trunk{background:rgba(245,158,11,.22);color:#92400e;border-color:rgba(146,64,14,.35)}
+body[data-theme="light"] .p-access{background:rgba(16,185,129,.2);color:#047857;border-color:rgba(4,120,87,.35)}
+body[data-theme="light"] .p-hybrid{background:rgba(167,139,250,.2);color:#6d28d9;border-color:rgba(109,40,217,.35)}
+body[data-theme="light"] .p-vlan{background:rgba(0,200,240,.18);color:#0369a1;border-color:rgba(3,105,161,.35)}
+body[data-theme="light"] .p-route{background:rgba(167,139,250,.2);color:#6d28d9;border-color:rgba(109,40,217,.35)}
+body[data-theme="light"] .p-vrf{background:rgba(45,212,191,.2);color:#0f766e;border-color:rgba(15,118,110,.35)}
+body[data-theme="light"] .p-up{background:rgba(16,185,129,.2);color:#047857;border-color:rgba(4,120,87,.35)}
+body[data-theme="light"] .p-down{background:rgba(239,68,68,.2);color:#b91c1c;border-color:rgba(185,28,28,.35)}
+body[data-theme="light"] .p-svi{background:rgba(56,189,248,.18);color:#0369a1;border-color:rgba(3,105,161,.35)}
+body[data-theme="light"] .p-stack{background:rgba(251,146,60,.2);color:#9a3412;border-color:rgba(154,52,18,.35)}
+body[data-theme="light"] .p-master{background:rgba(0,200,240,.22);color:#0369a1;border-color:rgba(3,105,161,.4)}
+body[data-theme="light"] .p-standby{background:rgba(100,116,139,.18);color:#334155;border-color:rgba(51,65,85,.35)}
+body[data-theme="light"] .p-ip{background:rgba(244,114,182,.18);color:#be185d;border-color:rgba(190,24,93,.35)}
+body[data-theme="light"] .p-info{background:rgba(0,200,240,.18);color:#0369a1;border-color:rgba(3,105,161,.35)}
+body[data-theme="light"] .p-gray{background:rgba(100,116,139,.18);color:#334155;border-color:rgba(51,65,85,.35)}
+body[data-theme="light"] .p-warn{background:rgba(251,191,36,.22);color:#92400e;border-color:rgba(146,64,14,.4)}
+body[data-theme="light"] .p-orange{background:rgba(249,115,22,.2);color:#9a3412;border-color:rgba(154,52,18,.35)}
+body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9;border-color:rgba(109,40,217,.35)}
 
 /* Section headers in tables */
 .sec-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;padding:10px 0 4px}

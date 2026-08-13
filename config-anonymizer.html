@@ -79,6 +79,19 @@ body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans TC',syste
 .batch-file-row{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--surface2);border-radius:6px;margin-bottom:4px;font-size:11px}
 .batch-file-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
 .batch-controls{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+/* 批次處理狀態 pill（2026-08-13 新增，修復既有缺失 bug）：renderBatchList() 早已引用
+   p-allow/p-deny/p-warn/p-dim 四個 class（見 status===done/error/processing 分支），但全檔案
+   查無 .pill 基底樣式與這四個 variant 的任何 CSS 定義，pill 完全沒有顏色/樣式；比照
+   switch_analyzer／firewall_analyzer 既有 .pill/.p-* 命名慣例補上，深色/淺色模式一併到位 */
+.pill{display:inline-block;padding:1px 7px;border-radius:5px;font-size:10px;font-family:'JetBrains Mono',monospace;font-weight:600;white-space:nowrap}
+.p-allow{background:rgba(16,185,129,.12);color:var(--green);border:1px solid rgba(16,185,129,.25)}
+.p-deny{background:rgba(239,68,68,.12);color:var(--red);border:1px solid rgba(239,68,68,.25)}
+.p-warn{background:rgba(245,158,11,.12);color:var(--yellow);border:1px solid rgba(245,158,11,.25)}
+.p-dim{background:rgba(100,116,139,.12);color:#94a3b8;border:1px solid rgba(100,116,139,.25)}
+body[data-theme="light"] .p-allow{background:rgba(16,185,129,.2);color:#047857;border-color:rgba(4,120,87,.35)}
+body[data-theme="light"] .p-deny{background:rgba(239,68,68,.2);color:#b91c1c;border-color:rgba(185,28,28,.35)}
+body[data-theme="light"] .p-warn{background:rgba(245,158,11,.22);color:#92400e;border-color:rgba(146,64,14,.4)}
+body[data-theme="light"] .p-dim{background:rgba(100,116,139,.18);color:#334155;border-color:rgba(51,65,85,.35)}
 /* Restore diff */
 .diff-summary{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0 8px;font-size:11px}
 .diff-stat{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:5px;background:var(--surface2)}

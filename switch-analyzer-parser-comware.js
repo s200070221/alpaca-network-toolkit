@@ -139,6 +139,11 @@ function parseInterfaces(cfg){
       let ip=ipRaw[1]&&ipRaw[2]?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(blk.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
       // IPv6（試點 5 廠牌之一，官方語法 `ipv6 address ADDR/PREFIXLEN`，不需遮罩換算）
       if(!ip)ip=(blk.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
+      // 雙棧修復（2026-08-13 新增，使用者提供真實 HPE 5720 去識別化設定檔驗證發現：同一 VLAN
+      // 介面若同時設定 IPv4 與 IPv6（企業網路常見雙棧設定），原本 `if(!ip)` 判斷式會讓 IPv6
+      // 位址被靜默丟棄，只剩 IPv4。新增獨立 ip6 欄位，不受 ip 是否已填的條件限制，兩者可並存；
+      // 僅修 Comware 這一家，其餘已完成 IPv6 的廠牌有同一模式限制，非本輪範圍）
+      const ip6=(blk.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       // vrf（2026-07-27 補上）：SVI 一樣支援 `ip binding vpn-instance NAME`（與下方實體埠
       // 分支用的是同一個真實 H3C 關鍵字），先前只有實體埠分支有解析，SVI 一律回傳空字串
       const vrf=(blk.match(/ip binding vpn-instance\s+(\S+)/)||[])[1]||'';
@@ -148,13 +153,15 @@ function parseInterfaces(cfg){
         const prio=(blk.match(new RegExp('vrrp vrid\\s+'+vvm[1]+'\\s+priority\\s+(\\d+)'))||[])[1]||'100';
         vrrpList.push({vrid:vvm[1],vip:vvm[2],priority:prio});
       }
-      ifaces.push({name,type:'svi',desc,ip,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:vrrpList,breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      ifaces.push({name,type:'svi',desc,ip,ip6,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:vrrpList,breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     if(/^LoopBack/i.test(name)){
       let ip=(blk.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
       if(!ip)ip=(blk.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
-      ifaces.push({name,type:'loopback',desc,ip,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      // 雙棧修復（2026-08-13 新增，同上 VLAN 介面）
+      const ip6=(blk.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
+      ifaces.push({name,type:'loopback',desc,ip,ip6,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     let mode='',vlans='',nativeVlan='',hybrid=null;
@@ -180,15 +187,22 @@ function parseInterfaces(cfg){
       nativeVlan=hybrid.pvid;
     }
     const vrf=(blk.match(/ip binding vpn-instance\s+(\S+)/)||[])[1]||'';
-    let ip=(blk.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+    // 修復（2026-08-13 新增，使用者提供真實檔案發現）：`\s+` 會吃到換行，若該埠是
+    // `ip address dhcp-alloc`（單 token，如 M-GigabitEthernet 管理埠常見語法）而非雙 token
+    // dotted-mask 格式，原正則會誤跨行吃到下一行 `ipv6 address ...` 的第一個字當作第二個
+    // token，導致 ip 欄位混入垃圾字串；改用 `[ \t]+` 限制在同一行內，並保留單 token
+    // fallback（如 dhcp-alloc）
+    let ip=(blk.match(/^[ \t]*ip address[ \t]+(\S+[ \t]+\S+)/m)||[])[1]||(blk.match(/^[ \t]*ip address[ \t]+(\S+)/m)||[])[1]||'';
     if(!ip)ip=(blk.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
+    // 雙棧修復（2026-08-13 新增，同上 VLAN 介面）
+    const ip6=(blk.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
     const isStack=/Ten-GigabitEthernet|FortyGigE|HundredGigE/i.test(name);
     // Breakout: 母埠 interface 區塊內 `using tengige` 啟用（僅 FortyGigE→Ten-GigabitEthernet 這組已查證官方語法）
     const breakoutMode=/^\s*using\s+tengige\b/mi.test(blk)?'4x10G':'';
     const bkMatch=name.match(/^Ten-GigabitEthernet(\d+\/\d+\/\d+):([1-4])$/i);
     const breakoutChild=!!bkMatch;
     const breakoutParent=bkMatch?`FortyGigE${bkMatch[1]}`:'';
-    ifaces.push({name,type:isStack?'stack':'physical',desc,mode,vlans:vlans.trim(),nativeVlan,vrf,ip,shutdown,member:mem,hybrid,vrrp:[],breakoutChild,breakoutParent,breakoutMode});
+    ifaces.push({name,type:isStack?'stack':'physical',desc,mode,vlans:vlans.trim(),nativeVlan,vrf,ip,ip6,shutdown,member:mem,hybrid,vrrp:[],breakoutChild,breakoutParent,breakoutMode});
   }
   return ifaces;
 }
@@ -207,6 +221,19 @@ function parseRoutes(cfg){
     else if(/^\d+$/.test(m[3])){dst=m[2]+'/'+m[3];}
     else{dst=m[2]+'/0';gw=m[3]+' '+m[4];}
     const gwIsInterface=gw&&!gw.match(/^\d+\.\d+\.\d+\.\d+/);
+    routes.push({dst,gw,vrf,gwIsInterface});
+  }
+  // IPv6 靜態路由（2026-08-13 新增，使用者提供真實 HPE 5720 去識別化設定檔驗證）：官方語法
+  // `ipv6 route-static ipv6-address prefix-length [vpn-instance NAME] next-hop`，prefix-length
+  // 是數字（非遮罩），與 IPv4 版本三 token 形狀相同，真實檔案內 6 筆皆為此形式（含 `::` 當
+  // 預設路由位址）。介面型 next-hop 官方文件有記載但無真實範例可驗證，比照 gwIsInterface
+  // 既有慣例用內容判斷（含冒號視為 IPv6 位址，否則視為介面名稱）
+  const re6=/ipv6 route-static(?:\s+vpn-instance\s+(\S+))?\s+(\S+)\s+(\d+)\s+(\S+)/g;
+  while((m=re6.exec(cfg))!==null){
+    const vrf=m[1]||'';
+    const dst=m[2]+'/'+m[3];
+    const gw=m[4];
+    const gwIsInterface=!!gw&&!gw.includes(':');
     routes.push({dst,gw,vrf,gwIsInterface});
   }
   return routes;

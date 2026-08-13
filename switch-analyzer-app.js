@@ -1123,7 +1123,7 @@ function renderPorts(){
   const rows=ph.map(i=>({
     name:i.name,member:i.member,type:i.type,desc:i.desc,
     mode:i.mode||i.type,vlans:i.vlans||'—',native:i.nativeVlan||'—',
-    ip:i.ip||'—',vrf:i.vrf||'—',_shutdown:!!i.shutdown,status:i.shutdown?tr('val.disabled'):tr('val.enabled'),
+    ip:i.ip||'—',ip6:i.ip6||'—',vrf:i.vrf||'—',_shutdown:!!i.shutdown,status:i.shutdown?tr('val.disabled'):tr('val.enabled'),
     name_html:`<span class="mono" style="color:var(--accent3)">${esc(i.name)}</span>`,
     member_html:`<span class="pill p-stack">M${i.member}</span>`,
     type_html:`<span class="pill p-${i.type==='svi'?'svi':i.type==='stack'?'stack':'info'}">${i.type==='stack'?tr('port.type_stack'):i.type}</span>`,
@@ -1131,13 +1131,14 @@ function renderPorts(){
     vlans_html:i.vlans?`<span class="pill p-vlan">${esc(i.vlans.substring(0,26)+(i.vlans.length>26?'…':''))}</span>`:'<span style="color:var(--text-muted)">—</span>',
     hybrid_html:i.mode==='hybrid'?hybridCell(i):'—',
     ip_html:i.ip?`<span class="mono" style="font-size:11px">${esc(i.ip)}</span>`:'—',
+    ip6_html:i.ip6?`<span class="mono" style="font-size:11px">${esc(i.ip6)}</span>`:'—',
     vrf_html:i.vrf?`<span class="pill p-vrf">${esc(i.vrf)}</span>`:'—',
     status_html:`<span class="pill p-${i.shutdown?'down':'up'}">${i.shutdown?tr('port.down'):tr('port.up')}</span>`,
     vrrp_html:i.vrrp&&i.vrrp.length?i.vrrp.map(v=>`<span class="pill p-info">VRID${v.vrid}:${v.vip}</span>`).join(' '):'—',
     fortilink_html:i.fortilinkDiscovery?`<span class="pill p-up">${tr('val.enabled')}</span>`:'—',
     breakout_html:i.breakoutMode?`<span class="pill p-master" title="${esc(i.name)}">${esc(i.breakoutMode)}</span>`:i.breakoutChild?`<span class="pill p-standby">→ ${esc(i.breakoutParent)}</span>`:'—',
   }));
-  tableData=rows;tableKeys=['name','member','type','mode','vlans','native','ip','vrf','status'];
+  tableData=rows;tableKeys=['name','member','type','mode','vlans','native','ip','ip6','vrf','status'];
   const fSel=document.getElementById('filter-sel');
   const fv=fSel?.value||'all';
   const filterFn={all:null,trunk:r=>r.mode==='trunk',access:r=>r.mode==='access',hybrid:r=>r.mode==='hybrid',svi:r=>r.type==='svi',stack:r=>r.type==='stack',down:r=>r._shutdown,vrf:r=>r.vrf!=='—'}[fv]||null;
@@ -1145,7 +1146,10 @@ function renderPorts(){
   const hasVRRP=ph.some(i=>i.vrrp&&i.vrrp.length);
   const hasFortilinkDiscovery=ph.some(i=>i.fortilinkDiscovery);
   const hasBreakout=ph.some(i=>i.breakoutMode||i.breakoutChild);
-  const hdrs=[{key:'name',label:tr('col.iface')},{key:'member',label:'M'},{key:'type',label:tr('col.type')},{key:'mode',label:tip('tip.trunk',tr('col.mode'))},{key:'vlans',label:tip('tip.vlan_range','VLAN')},{key:'native',label:tip('tip.pvid','Native')},{key:'ip',label:tr('col.ip_addr')},{key:'vrf',label:'VRF'}];
+  const hasIPv6=ph.some(i=>i.ip6);
+  const hdrs=[{key:'name',label:tr('col.iface')},{key:'member',label:'M'},{key:'type',label:tr('col.type')},{key:'mode',label:tip('tip.trunk',tr('col.mode'))},{key:'vlans',label:tip('tip.vlan_range','VLAN')},{key:'native',label:tip('tip.pvid','Native')},{key:'ip',label:tr('col.ip_addr')}];
+  if(hasIPv6)hdrs.push({key:'ip6',label:tr('col.ipv6_addr')});
+  hdrs.push({key:'vrf',label:'VRF'});
   if(hasHybrid)hdrs.push({key:'hybrid',label:tr('col.hybrid_info')});
   if(hasVRRP)hdrs.push({key:'vrrp',label:'VRRP'});
   if(hasFortilinkDiscovery)hdrs.push({key:'fortilink',label:tr('col.fortilink_discovery')});
@@ -1381,7 +1385,7 @@ function dlCSV(rows,hdrs,fn){
 function dlTxt(t,fn){const b=new Blob([t],{type:'text/plain;charset=utf-8;'});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);}
 function dlHtml(t,fn){const b=new Blob([t],{type:'text/html;charset=utf-8;'});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);}
 function exportVLANsCSV(){if(!parsed){alert(tr('msg.no_config'));return;}dlCSV(parsed.vlans.map(v=>[v.id,v.name,v.ipSubnets.map(s=>s.cidr).join(';'),v.ipSubnets.length]),['VLAN_ID',tr('col.vlan_name'),'ip-subnet-vlan',tr('col.subnet_count')],`${hn()}_vlans.csv`);}
-function exportPortsCSV(){if(!parsed){alert(tr('msg.no_config'));return;}const ph=parsed.interfaces.filter(i=>i.type!=='null');dlCSV(ph.map(i=>[i.name,i.member,i.type,i.desc,i.mode,i.vlans,i.nativeVlan,i.ip,i.vrf,i.shutdown?tr('rt.auto_sum_off'):tr('rt.auto_sum_on'),i.hybrid?[i.hybrid.pvid,...i.hybrid.untagged,...i.hybrid.tagged].join(';'):'',i.hybrid?.hasIPSub?tr('val.yes'):'',i.hybrid?.hasQinQ?tr('val.yes'):'']),[tr('col.iface'),tr('col.member'),tr('col.type'),tr('col.desc'),tr('col.mode'),'VLAN','Native','IP','VRF',tr('col.status'),tr('col.hybrid_info'),'IPsub','QinQ'],`${hn()}_ports.csv`);}
+function exportPortsCSV(){if(!parsed){alert(tr('msg.no_config'));return;}const ph=parsed.interfaces.filter(i=>i.type!=='null');dlCSV(ph.map(i=>[i.name,i.member,i.type,i.desc,i.mode,i.vlans,i.nativeVlan,i.ip,i.ip6||'',i.vrf,i.shutdown?tr('rt.auto_sum_off'):tr('rt.auto_sum_on'),i.hybrid?[i.hybrid.pvid,...i.hybrid.untagged,...i.hybrid.tagged].join(';'):'',i.hybrid?.hasIPSub?tr('val.yes'):'',i.hybrid?.hasQinQ?tr('val.yes'):'']),[tr('col.iface'),tr('col.member'),tr('col.type'),tr('col.desc'),tr('col.mode'),'VLAN','Native','IP',tr('col.ipv6_addr'),'VRF',tr('col.status'),tr('col.hybrid_info'),'IPsub','QinQ'],`${hn()}_ports.csv`);}
 function exportRoutesCSV(){if(!parsed){alert(tr('msg.no_config'));return;}dlCSV(parsed.routes.map(r=>[r.dst,r.gw,r.vrf||'']),[tr('col.dst'),tr('col.gw'),'VRF'],`${hn()}_routes.csv`);}
 // 修正既有 bug（同 renderLACP()）：ProCurve/ArubaOS-Switch 的 members 是逗號分隔字串非陣列
 function _lacpMembersArr(x){return Array.isArray(x.members)?x.members:String(x.members||'').split(',').map(s=>s.trim()).filter(Boolean);}
@@ -1476,6 +1480,7 @@ function renderACL(){
         <span style="color:var(--text-muted);margin-right:2px">▶</span>
         <span class="mono" style="color:var(--accent3);font-weight:600">${esc(a.name)}</span>
         ${typeBadge(a.type)}
+        ${a.ipVersion==='v6'?`<span class="pill p-svi" style="font-size:9px">IPv6</span>`:''}
         ${a.vendor?`<span class="pill p-gray" style="font-size:9px">${esc(a.vendor)}</span>`:''}
         ${applied?`<span style="margin-left:8px;display:flex;flex-wrap:wrap;gap:2px">${applied}</span>`:''}
         <span style="margin-left:auto;color:var(--text-muted);font-size:11px">${a.rules.length} rules</span>
