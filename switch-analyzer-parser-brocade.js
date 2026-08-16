@@ -311,6 +311,13 @@ function parseBrocadeRoutes(cfg){
     else dst=m[1]+'/'+maskToCIDR(m[3]);
     routes.push({dst,gw,vrf:'',gwIsInterface:false});
   }
+  // IPv6 靜態路由（2026-08-13 十一續新增）：官方語法 "ipv6 route PREFIX/LEN {ADDR|ethernet N ADDR}"，
+  // MVP 僅取單一 next-hop token（interface+link-local 雙 token 形式不在本輪範圍）
+  const re6=/^ipv6 route\s+(\S+)\s+(\S+)/gm;
+  while((m=re6.exec(cfg))!==null){
+    const dst=m[1],gw=m[2];
+    routes.push({dst,gw,vrf:'',gwIsInterface:!gw.includes(':')});
+  }
   return routes;
 }
 

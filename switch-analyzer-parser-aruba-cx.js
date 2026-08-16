@@ -190,6 +190,17 @@ function parseArubaRoutes(cfg){
     const gwIsInterface=gw&&!gw.match(/^\d+\.\d+\.\d+\.\d+/);
     if(dst&&gw)routes.push({dst,gw,vrf,gwIsInterface});
   }
+  // IPv6 靜態路由（2026-08-13 十一續新增）：官方語法 "ipv6 route DST/PREFIX {GW|IFACE} [vrf NAME]"，
+  // vrf 為後綴形式，比照上方 v4 邏輯偵測並剝離
+  const lineRe6=/^ipv6 route (.+)$/gm;
+  while((m=lineRe6.exec(cfg))!==null){
+    const parts=m[1].trim().split(/\s+/);
+    let dst=parts[0],gw='',vrf='';
+    if(parts.length>=2&&parts[parts.length-2]==='vrf'){vrf=parts[parts.length-1];parts.splice(-2,2);}
+    if(parts.length===2)gw=parts[1];
+    const gwIsInterface=gw&&!gw.includes(':');
+    if(dst&&gw)routes.push({dst,gw,vrf,gwIsInterface});
+  }
   return routes;
 }
 

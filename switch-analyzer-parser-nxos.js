@@ -92,6 +92,13 @@ function parseNXOS(cfg) {
       if (!m) continue;
       routes.push({ dst:`${m[1]}/${m[2]}`, gw:m[3], gwIsInterface:!/^\d+\.\d+\.\d+\.\d+/.test(m[3]), metric:'1', vrf:'', type:'static', iface:'' });
     }
+    // IPv6 靜態路由（2026-08-13 十一續新增）：官方語法 "ipv6 route PREFIX/LEN NEXTHOP ..."，
+    // 先前 ip address 假陽性修復（九續）只涵蓋介面，路由這邊從未被觸及過，獨立補上
+    for (const line of cfg.split('\n')) {
+      const m6=line.match(/^ipv6 route\s+(\S+)\/(\d+)\s+(\S+)/);
+      if (!m6) continue;
+      routes.push({ dst:`${m6[1]}/${m6[2]}`, gw:m6[3], gwIsInterface:!m6[3].includes(':'), metric:'1', vrf:'', type:'static', iface:'' });
+    }
     return routes;
   }
   function parseVRFs() {

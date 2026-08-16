@@ -227,6 +227,10 @@ function parseAlcatelRoutes(cfg){
   while((m=reB.exec(cfg))!==null){const dst=m[1]+'/'+maskToCIDR(m[2]),gw=m[3];if(!routes.find(r=>r.dst===dst))routes.push({dst,gw,vrf:'',gwIsInterface:false});}
   const dgRe=/^->\s*ip default-gateway\s+([\d.]+)/gm;
   while((m=dgRe.exec(cfg))!==null)if(!routes.find(r=>r.dst==='0.0.0.0/0'))routes.push({dst:'0.0.0.0/0',gw:m[1],vrf:'',gwIsInterface:false});
+  // IPv6 靜態路由（2026-08-13 十一續新增）：官方語法 "ipv6 static-route PREFIX/LEN gateway ADDR"，
+  // "->" 前綴設為選填，比照上方 v4 reA 的既有慣例
+  const reA6=/^(?:->\s*)?ipv6 static-route\s+(\S+)\s+gateway\s+(\S+)/gm;
+  while((m=reA6.exec(cfg))!==null)routes.push({dst:m[1],gw:m[2],vrf:'',gwIsInterface:false});
   return routes;
 }
 

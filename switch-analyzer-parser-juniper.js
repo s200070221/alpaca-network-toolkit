@@ -261,18 +261,20 @@ function parseJuniperRoutes(cfg){
   const routes=[];
 
   // Helper: parse static routes from a routing-options block
+  // 字元類別放寬（2026-08-13 十一續）：[\d./]+／[\d.]+ 只認點分十進位，改成
+  // [0-9a-fA-F:./]+／[0-9a-fA-F:.]+ 讓同一份邏輯能同時處理 IPv4/IPv6（十六進位+冒號）
   function extractStatic(roBlock, vrf){
     if(!roBlock)return;
     const staticBlock=junosBlock(roBlock,'static');
     if(!staticBlock)return;
     let m;
     // Single-line: "route X next-hop Y;"
-    const lineRe=/route\s+([\d./]+)\s+next-hop\s+([\d.]+);/g;
+    const lineRe=/route\s+([0-9a-fA-F:./]+)\s+next-hop\s+([0-9a-fA-F:.]+);/g;
     while((m=lineRe.exec(staticBlock))!==null)
       if(!routes.find(r=>r.dst===m[1]&&r.vrf===vrf))
         routes.push({dst:m[1],gw:m[2],vrf,gwIsInterface:false});
     // Single-line discard: "route X discard;"
-    const discRe=/route\s+([\d./]+)\s+discard;/g;
+    const discRe=/route\s+([0-9a-fA-F:./]+)\s+discard;/g;
     while((m=discRe.exec(staticBlock))!==null)
       if(!routes.find(r=>r.dst===m[1]&&r.vrf===vrf))
         routes.push({dst:m[1],gw:'discard',vrf,gwIsInterface:true});
@@ -282,10 +284,12 @@ function parseJuniperRoutes(cfg){
       if(!/^route\s/i.test(rname))continue;
       const dst=rname.replace(/^route\s+/,'').trim();
       if(routes.find(r=>r.dst===dst&&r.vrf===vrf))continue;
-      const nh=(rbody.match(/next-hop\s+([\d.]+);/)||
-                rbody.match(/next-hop\s+([\d.]+\.\d+\.\d+\.\d+)/)||[])[1]||'';
+      const nh=(rbody.match(/next-hop\s+([0-9a-fA-F:.]+);/)||
+                rbody.match(/next-hop\s+([0-9a-fA-F:.]+\.\d+\.\d+\.\d+)/)||[])[1]||'';
       const disc=/\bdiscard;/.test(rbody);
-      const gwIsIf=nh&&!nh.match(/^\d+\.\d+\.\d+\.\d+/);
+      // gwIsInterface 判斷（2026-08-13 十一續修正）：原本「不是點分十進位」就視為介面名稱，
+      // 會把 IPv6 位址（不含點分十進位、但含冒號）誤判成介面；改成「不是點分十進位且不含冒號」
+      const gwIsIf=nh&&!nh.match(/^\d+\.\d+\.\d+\.\d+/)&&!nh.includes(':');
       if(disc) routes.push({dst,gw:'discard',vrf,gwIsInterface:true});
       else if(nh) routes.push({dst,gw:nh,vrf,gwIsInterface:gwIsIf});
     }
@@ -294,6 +298,13 @@ function parseJuniperRoutes(cfg){
   // Top-level routing-options
   const roBlock=junosBlock(cfg,'routing-options');
   extractStatic(roBlock,'');
+  // IPv6 靜態路由（2026-08-13 十一續新增）：缺口比其餘廠牌更結構性——IPv6 靜態路由巢狀在
+  // routing-options { rib inet6.0 { static { ... } } }，比 IPv4 版本多一層 rib inet6.0{}，
+  // 原本 extractStatic() 只會抓到 routing-options{} 底下第一層的 static{}（IPv4）；
+  // junosBlock() 本身格式中立（keyword 可含空格），直接傳入 'rib inet6.0' 即可正確比對，
+  // 不需改動該函式本身
+  const rib6Block=junosBlock(roBlock,'rib inet6.0');
+  extractStatic(rib6Block,'');
 
   // Per-VRF: routing-instances { NAME { routing-options { static { ... } } } }
   const riBlock=junosBlock(cfg,'routing-instances');
@@ -302,7 +313,11 @@ function parseJuniperRoutes(cfg){
     for(const{name:rname,content:rbody}of riSubs){
       const vrfName=rname.trim();
       const vrfRO=junosBlock(rbody,'routing-options');
-      if(vrfRO) extractStatic(vrfRO, vrfName);
+      if(vrfRO){
+        extractStatic(vrfRO, vrfName);
+        const vrfRib6Block=junosBlock(vrfRO,'rib inet6.0');
+        extractStatic(vrfRib6Block, vrfName);
+      }
     }
   }
 

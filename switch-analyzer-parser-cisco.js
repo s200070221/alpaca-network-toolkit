@@ -203,6 +203,16 @@ function parseCiscoRoutes(cfg){
     const gwIsInterface=gw&&!gw.match(/^\d+\.\d+\.\d+\.\d+/);
     routes.push({dst,gw,vrf,gwIsInterface});
   }
+  // IPv6 靜態路由（2026-08-13 十一續新增）：官方語法 "ipv6 route [vrf VRF] PREFIX/LEN NEXTHOP"，
+  // 獨立關鍵字非 "ip route" 放寬字元類別可解決，prefix/length 已是單一 token 不需 mask 換算；
+  // Arista EOS 委派同一函式（parseArista()→parseCiscoRoutes()）免費一起修好
+  const re6=/^ipv6 route(?:\s+vrf\s+(\S+))?\s+(\S+)\s+(\S+)/gm;
+  while((m=re6.exec(cfg))!==null){
+    const vrf=m[1]||'';
+    const dst=m[2],gw=m[3];
+    const gwIsInterface=gw&&!gw.includes(':');
+    routes.push({dst,gw,vrf,gwIsInterface});
+  }
   return routes;
 }
 
