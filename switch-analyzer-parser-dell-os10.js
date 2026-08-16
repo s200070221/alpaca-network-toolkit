@@ -202,6 +202,13 @@ function parseDellOS10Routes(cfg){
   const re3=/^management route\s+([\d.]+\/\d+)\s+(\S+)/gm;
   while((m=re3.exec(cfg))!==null)
     routes.push({dst:m[1],gw:m[2],vrf:'MGMT',gwIsInterface:false});
+  // IPv6 靜態路由（2026-08-13 十一續新增）：官方語法 "ipv6 route PREFIX/MASK {NEXTHOP|IFACE}"，
+  // 獨立關鍵字，不含 vrf（v4 版本本身也沒有 vrf 欄位，比照維持）
+  const re4=/^ipv6 route\s+(\S+)\s+(\S+)/gm;
+  while((m=re4.exec(cfg))!==null){
+    const dst=m[1],gw=m[2];
+    routes.push({dst,gw,vrf:'',gwIsInterface:!gw.includes(':')});
+  }
   return routes;
 }
 

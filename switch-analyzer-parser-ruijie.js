@@ -155,6 +155,24 @@ function parseRuijieRoutes(cfg){
     }
     routes.push({dst,gw,vrf,gwIsInterface});
   }
+  // IPv6 靜態路由（2026-08-13 十一續新增）：官方語法 "ipv6 route [vrf NAME] PREFIX/LEN {ADDR|IFACE}"，
+  // prefix/length 已是單一 token；沿用上方既有「介面名稱含空格」偵測邏輯（VLAN 1 等）
+  const re6=/^ipv6 route(?:\s+vrf\s+(\S+))?\s+(\S+)\s+(.+)$/gm;
+  while((m=re6.exec(cfg))!==null){
+    const vrf=m[1]||'';
+    const dst=m[2];
+    const rest=m[3].trim();
+    const ifaceMatch=rest.match(/^(VLAN|GigabitEthernet|TenGigabitEthernet|AggregatePort|Loopback|Null|MTGigabitEthernet)\s+(\S+)(?:\s+(\S+))?$/i);
+    let gw,gwIsInterface;
+    if(ifaceMatch){
+      if(ifaceMatch[3]){gw=ifaceMatch[3];gwIsInterface=false;}
+      else{gw=`${ifaceMatch[1]} ${ifaceMatch[2]}`;gwIsInterface=true;}
+    }else{
+      gw=rest.split(/\s+/)[0];
+      gwIsInterface=!gw.includes(':');
+    }
+    routes.push({dst,gw,vrf,gwIsInterface});
+  }
   return routes;
 }
 function parseRuijie(cfg){

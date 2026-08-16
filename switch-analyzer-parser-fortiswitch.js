@@ -140,9 +140,12 @@ function parseFortiStack(cfg){
   return {type:'MCLAG',members,links:trunks};
 }
 
-function parseFortiStaticRoutes(cfg){
+// IPv6 靜態路由（2026-08-13 十一續新增）：官方 "config router static6" 巢狀區塊內欄位仍叫
+// "set dst"／"set gateway"（非 dst6/gateway6，已查證），原本 "config router static\n" 的區塊
+// 擷取正則因 "static6" 後面不是換行字元而完全比對不到，整個 IPv6 路由區塊對解析器是隱形的；
+// 抽成小函式讓 static／static6 兩個區塊共用同一段內層擷取邏輯
+function extractFortiStaticBlock(block){
   const routes=[];
-  const block=(cfg.match(/^config router static\n([\s\S]*?)^end/m)||[])[1]||'';
   const re=/edit\s+(\d+)\n([\s\S]*?)(?=^[ \t]*next|^end)/gm;
   let m;
   while((m=re.exec(block))!==null){
@@ -153,6 +156,11 @@ function parseFortiStaticRoutes(cfg){
     if(dst)routes.push({dst,gw,dev,proto:'Static'});
   }
   return routes;
+}
+function parseFortiStaticRoutes(cfg){
+  const block=(cfg.match(/^config router static\n([\s\S]*?)^end/m)||[])[1]||'';
+  const block6=(cfg.match(/^config router static6\n([\s\S]*?)^end/m)||[])[1]||'';
+  return [...extractFortiStaticBlock(block),...extractFortiStaticBlock(block6)];
 }
 
 function parseFortiRouting(cfg){
