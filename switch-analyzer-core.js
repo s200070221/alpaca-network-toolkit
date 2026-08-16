@@ -908,7 +908,12 @@ function _parseACLArubaCX(cfg){
   const aclRe=/^access-list\s+(ip|ipv6|mac)\s+(\S+)([\s\S]*?)(?=^access-list\s|^interface\s|(?![\s\S]))/gm;
   let m;
   while((m=aclRe.exec(cfg))!==null){
-    const name=m[2],body=m[3];
+    // 命名空間碰撞修復（2026-08-13 十二續新增）：官方 AOS-CX 文件確認 ACL 有 ip／ipv6／mac
+    // 三個獨立命名空間，同一 ID 可在三者間重複使用；原本第一個捕獲群組（型別）被丟棄，
+    // 完全不記錄是哪一種命名空間。aclType 保留原始三值供下方比對用，ipVersion 映射給
+    // renderACL() 既有的廠牌無關 IPv6 徽章判斷式沿用（v6/v4/''，比照 Comware 既有慣例）
+    const aclType=m[1],name=m[2],body=m[3];
+    const ipVersion=aclType==='ipv6'?'v6':aclType==='ip'?'v4':'';
     const rules=[];
     const rRe=/^\s+(\d+)\s+(permit|deny)\s+(.+)/gm;
     let rm;
@@ -916,7 +921,7 @@ function _parseACLArubaCX(cfg){
       const parts=rm[3].trim().split(/\s+/);
       rules.push({seq:rm[1],action:rm[2],protocol:parts[0]||'any',src:parts[1]||'-',dst:parts[2]||'-',dstPort:'',remark:''});
     }
-    acls.push({name,type:'extended',vendor:'aruba-cx',rules,appliedOn:[]});
+    acls.push({name,type:'extended',aclType,ipVersion,vendor:'aruba-cx',rules,appliedOn:[]});
   }
   // Interface apply
   const ifBlocks=cfg.split(/(?=^interface\s)/m);
@@ -924,21 +929,40 @@ function _parseACLArubaCX(cfg){
     const ifLine=blk.match(/^interface\s+(\S.*)/m);
     if(!ifLine)continue;
     const ifName=ifLine[1].trim();
-    const apRe=/apply access-list\s+(?:ip|ipv6|mac)\s+(\S+)\s+(in|out)/gi;
+    // 命名空間碰撞修復：原本 (?:ip|ipv6|mac) 是非捕獲群組，套用比對時完全沒有型別過濾，
+    // apply access-list ipv6 X in 可能誤套用到同名的 IPv4/MAC ACL；改捕獲型別並比對 aclType
+    const apRe=/apply access-list\s+(ip|ipv6|mac)\s+(\S+)\s+(in|out)/gi;
     let am;
-    while((am=apRe.exec(blk))!==null){const acl=acls.find(a=>a.name===am[1]);if(acl)acl.appliedOn.push({interface:ifName,direction:am[2].toLowerCase()});}
+    while((am=apRe.exec(blk))!==null){
+      const wantType=am[1].toLowerCase();
+      const acl=acls.find(a=>a.name===am[2]&&a.aclType===wantType);
+      if(acl)acl.appliedOn.push({interface:ifName,direction:am[3].toLowerCase()});
+    }
   }
   return acls;
 }
 function _parseACLJuniper(cfg){
   const acls=[];
-  const filterNames=new Set();
-  const fnRe=/set firewall (?:family \S+ )?filter\s+(\S+)\s+term\s+/g;
+  // 命名空間碰撞修復（2026-08-13 十二續新增）：Junos firewall filter 依 family inet／
+  // family inet6 階層分別宣告，同名 filter 可分別存在於兩個 family 下；原本 filterNames
+  // 只收集純名稱（Set），termRe 擷取規則時同樣不分 family 全文件比對，導致兩個同名 filter
+  // 的規則內容被直接合併進同一個 ACL 物件（比命名衝突更嚴重，規則本身被污染）。改用
+  // family+name 複合鍵區分（family 原本是非捕獲群組，改成捕獲群組）
+  const filterKeys=[]; const seenKeys={};
+  const fnRe=/set firewall (family \S+ )?filter\s+(\S+)\s+term\s+/g;
   let m;
-  while((m=fnRe.exec(cfg))!==null)filterNames.add(m[1]);
-  for(const fname of filterNames){
+  while((m=fnRe.exec(cfg))!==null){
+    const family=m[1]?m[1].trim():'';
+    const key=family+' '+m[2];
+    if(!seenKeys[key]){seenKeys[key]=1;filterKeys.push({family,name:m[2]});}
+  }
+  for(const{family,name:fname}of filterKeys){
     const rules=[];
-    const termRe=new RegExp('set firewall (?:family \\S+ )?filter\\s+'+fname.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s+term\\s+(\\S+)\\s+(.*?)$','gm');
+    // family 前綴限定 termRe 只比對同一個 family 下的行，family 為空字串（未宣告）時
+    // 前綴同樣為空，比照原本「未宣告 family」語意獨立成一個 bucket，不會誤吃有宣告
+    // family 的行（因為那些行 "firewall " 後面緊接的是 "family X"，不是 "filter"）
+    const famPrefix=family?family.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s+':'';
+    const termRe=new RegExp('set firewall '+famPrefix+'filter\\s+'+fname.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s+term\\s+(\\S+)\\s+(.*?)$','gm');
     const terms={};
     let tm;
     while((tm=termRe.exec(cfg))!==null){
@@ -957,11 +981,19 @@ function _parseACLJuniper(cfg){
       const dst=(body.from.join(' ').match(/destination-address\s+(\S+)/)||[])[1]||'-';
       rules.push({seq:term,action,protocol:'any',src,dst,dstPort:'',remark:''});
     }
-    if(rules.length)acls.push({name:fname,type:'extended',vendor:'juniper',rules,appliedOn:[]});
+    const famName=family.replace(/^family\s+/,'');
+    const ipVersion=famName==='inet6'?'v6':famName==='inet'?'v4':'';
+    if(rules.length)acls.push({name:fname,type:'extended',ipVersion,vendor:'juniper',rules,appliedOn:[]});
   }
-  // Interface filter
-  const apRe=/set interfaces\s+(\S+)\s+(?:unit \d+ )?family\s+\S+\s+filter\s+(input|output)\s+(\S+)/g;
-  while((m=apRe.exec(cfg))!==null){const acl=acls.find(a=>a.name===m[3]);if(acl)acl.appliedOn.push({interface:m[1],direction:m[2]==='input'?'in':'out'});}
+  // Interface filter：補上捕獲 family，套用比對時加上 ipVersion 條件，避免誤套到另一個
+  // family 同名 filter
+  const apRe=/set interfaces\s+(\S+)\s+(?:unit \d+ )?family\s+(\S+)\s+filter\s+(input|output)\s+(\S+)/g;
+  while((m=apRe.exec(cfg))!==null){
+    const fam=m[2];
+    const wantVersion=fam==='inet6'?'v6':fam==='inet'?'v4':'';
+    const acl=acls.find(a=>a.name===m[4]&&a.ipVersion===wantVersion);
+    if(acl)acl.appliedOn.push({interface:m[1],direction:m[3]==='input'?'in':'out'});
+  }
   return acls;
 }
 function _parseACLExtreme(cfg){
