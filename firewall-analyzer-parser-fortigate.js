@@ -305,16 +305,18 @@ const FortigateParser = (() => {
     return parseEdits(sectionLines).map(e => {
       const t = e.text;
       const ipraw = gv(t, 'ip'); const iparts = ipraw ? ipraw.split(/\s+/) : [];
-      // 次要IP（Secondary IP，官方 FortiOS CLI Reference：`config secondaryip`／`edit 1`／
-      // `set ip A B` 巢狀區塊；僅取第一筆為 MVP 範圍）
+      // 次要IP（Secondary IP，官方 FortiOS CLI Reference：`config secondaryip`／`edit N`／
+      // `set ip A B` 巢狀區塊，每個 `edit N` 為一筆次要IP；2026-08-17 從「僅取第一筆」擴大
+      // 為完整收集全部 edit 的 `set ip`）
       const secBlockM = t.match(/config secondaryip\n([\s\S]*?)^\s*end\b/m);
-      const secRaw = secBlockM ? gv(secBlockM[1], 'ip') : '';
-      const secParts = secRaw ? secRaw.split(/\s+/) : [];
+      const secondaryIps = secBlockM
+        ? [...secBlockM[1].matchAll(/^\s*set ip\s+(\S+)\s+(\S+)/gm)].map(m => ({ ip: m[1], mask: m[2] }))
+        : [];
       const explicitVdom = gv(t, 'vdom') || vdomName;
       return {
         name: e.name, alias: gv(t, 'alias') || '-',
         ip: iparts[0] || '-', mask: iparts[1] || '-',
-        secondaryIp: secParts[0] || '-', secondaryMask: secParts[1] || '-',
+        secondaryIps,
         type: gv(t, 'type') || 'physical',
         vlanId: gv(t, 'vlanid') || '-',
         vdom: explicitVdom,

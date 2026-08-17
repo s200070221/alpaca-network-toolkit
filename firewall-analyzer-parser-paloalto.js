@@ -133,17 +133,22 @@ const PaloAltoParser = (() => {
         // 文件確認一個 L3 介面可有多筆 <entry name="X"/>（「A single Layer 3 interface
         // supports multiple static IPv4 and static IPv6 addresses」）；entry 為 self-closing
         // 標籤，xva()/xlist() 認得的是 <tag>...</tag> 配對格式抓不到，故直接對 <ip> 區塊
-        // 內容做全域 name 屬性擷取，取得完整清單（第一筆主要IP、第二筆次要IP，僅取第一筆
-        // 次要IP為 MVP 範圍）
+        // 內容做全域 name 屬性擷取，取得完整清單（官方 PAN-OS 文件確認一個 L3 介面可有
+        // 多筆位址，2026-08-17 從「僅取第一筆次要IP」擴大為完整收集全部次要IP）
         const ipEntryAll = [...xv(layer3||eth._inner,'ip').matchAll(/<entry\s+name="([\d.]+\/\d+)"/g)].map(m=>m[1]);
         // Format: <ip><entry name="192.168.1.1/24"/></ip> — IP as entry name
         const ipEntryM = (layer3||eth._inner).match(/<ip>\s*<entry\s+name="([\d.]+\/\d+)"/);
-        const ipRaw = ipList[0] || ipFromTag || ipEntryAll[0] || (ipEntryM?ipEntryM[1]:'');
+        // 主要/次要IP 一律取自同一個來源清單（依既有優先序挑出第一個有命中的來源），
+        // 避免混用不同 XML 格式變體的清單造成資料錯置
+        const activeIpList = ipList.length ? ipList : (ipFromTag ? [ipFromTag] : (ipEntryAll.length ? ipEntryAll : (ipEntryM ? [ipEntryM[1]] : [])));
+        const ipRaw = activeIpList[0] || '';
         const ip = ipRaw;
         const [ipAddr, prefix] = ip ? ip.split('/') : ['-', '-'];
-        // 次要IP（Secondary IP，MVP 僅取第一筆）
-        const secIpRaw = ipList[1] || ipEntryAll[1] || '';
-        const [secIpAddr, secPrefix] = secIpRaw ? secIpRaw.split('/') : ['-', '-'];
+        // 次要IP（2026-08-17 擴大為完整收集，非僅取第一筆）
+        const secondaryIps = activeIpList.slice(1).map(raw => {
+          const [a, p] = raw.split('/');
+          return { ip: a || '-', mask: p ? prefixToMask(parseInt(p)) : '-' };
+        });
         const mtu   = xv(eth._inner, 'mtu') || '1500';
         const link  = xv(eth._inner, 'link-state') || 'up';
         const itype = xv(eth._inner, 'layer3') ? 'physical' : xv(eth._inner, 'layer2') ? 'layer2' : xv(eth._inner, 'tap') ? 'tap' : 'physical';
@@ -152,8 +157,7 @@ const PaloAltoParser = (() => {
           name, alias: xv(eth._inner, 'comment') || '-',
           ip: ipAddr || '-',
           mask: prefix ? prefixToMask(parseInt(prefix)) : '-',
-          secondaryIp: secIpAddr || '-',
-          secondaryMask: secPrefix ? prefixToMask(parseInt(secPrefix)) : '-',
+          secondaryIps,
           type: itype, vlanId: '-',
           vdom: xv(eth._inner, 'vsys') || 'vsys1',
           _vdom: xv(eth._inner, 'vsys') || 'vsys1',

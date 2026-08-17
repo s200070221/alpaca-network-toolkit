@@ -163,6 +163,16 @@ const JuniperParser = (() => {
   }
 
   // ── Interfaces ────────────────────────────────────────────────────────────
+  // 次要IP（Secondary IP，官方 Junos family inet 文件：同一 family inet 區塊內可重複宣告
+  // 多筆 `address` statement，附加式非關鍵字機制；2026-08-17 從「僅取第二筆」擴大為完整
+  // 收集全部次要IP）
+  function _addrListToSecondaryIps(addrList) {
+    return addrList.slice(1).map(v => {
+      const raw = v.slice('address'.length).trim();
+      const parts = raw.split('/');
+      return { ip: parts[0] || '-', mask: parts[1] ? prefixToMask(parseInt(parts[1])) : '-' };
+    });
+  }
   function parseInterfaces(tree) {
     const ifaces = [];
     const intfNode = path(tree, ['interfaces']);
@@ -211,10 +221,8 @@ const JuniperParser = (() => {
           const unitName = `${ifName}.${unitNum}`;
           const inetNode = path(unode, ['family inet']);
           const ip4 = inetNode ? val(inetNode, 'address') : '';
-          // 次要IP（Secondary IP，官方 Junos family inet 文件：同一 family inet 區塊內可
-          // 重複宣告多筆 `address` statement，附加式非關鍵字機制；僅取第二筆為 MVP 範圍）
           const addrList = inetNode ? inetNode._values.filter(v => v === 'address' || v.startsWith('address ')) : [];
-          const ip4b = addrList.length > 1 ? addrList[1].slice('address'.length).trim() : '';
+          const secondaryIps = _addrListToSecondaryIps(addrList);
           const vlanId = val(unode, 'vlan-id') || val(unode, 'vlan-tags outer') || '-';
           const udesc = val(unode, 'description').replace(/^"|"$/g,'') || desc;
           const zone = ifaceZoneMap[unitName] || ifaceZoneMap[ifName] || '';
@@ -225,17 +233,10 @@ const JuniperParser = (() => {
             ipAddr = parts[0];
             if (parts[1]) mask = prefixToMask(parseInt(parts[1]));
           }
-          let secondaryIp = '-', secondaryMask = '-';
-          if (ip4b) {
-            const parts = ip4b.split('/');
-            secondaryIp = parts[0];
-            if (parts[1]) secondaryMask = prefixToMask(parseInt(parts[1]));
-          }
-
           ifaces.push({
             name: unitName, alias: udesc || '-',
             ip: ipAddr, mask,
-            secondaryIp, secondaryMask,
+            secondaryIps,
             type: vlanId !== '-' ? 'vlan' : ifType,
             vlanId, vdom: zone || '-',
             role: zone ? mapZoneRole(zone) : guessRole(ifName),
@@ -251,15 +252,13 @@ const JuniperParser = (() => {
         const inetNode = path(ifNode, ['family inet']);
         const ip4 = inetNode ? val(inetNode, 'address') : '';
         const addrList = inetNode ? inetNode._values.filter(v => v === 'address' || v.startsWith('address ')) : [];
-        const ip4b = addrList.length > 1 ? addrList[1].slice('address'.length).trim() : '';
+        const secondaryIps = _addrListToSecondaryIps(addrList);
         const zone = ifaceZoneMap[ifName] || '';
         let ipAddr = '-', mask = '-';
         if (ip4) { const p = ip4.split('/'); ipAddr=p[0]; if(p[1])mask=prefixToMask(parseInt(p[1])); }
-        let secondaryIp = '-', secondaryMask = '-';
-        if (ip4b) { const p = ip4b.split('/'); secondaryIp=p[0]; if(p[1])secondaryMask=prefixToMask(parseInt(p[1])); }
         ifaces.push({
           name: ifName, alias: desc||'-', ip: ipAddr, mask,
-          secondaryIp, secondaryMask,
+          secondaryIps,
           type: ifType, vlanId: '-', vdom: zone||'-',
           role: zone ? mapZoneRole(zone) : guessRole(ifName),
           status: link, speed: val(ifNode,'speed')||'-', mtu,

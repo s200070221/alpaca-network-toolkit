@@ -124,8 +124,8 @@ function parseArubaInterfaces(cfg){
     const shutdown=/^\s+shutdown\s*$/m.test(blk)&&!/no shutdown/.test(blk);
     const member=(name.match(/^(\d+)\//)||[])[1]||'1';
     // 次要IP（Secondary IP，官方 AOS-CX IP Services Guide／CLI 文件：`ip address
-    // ADDR/PREFIX secondary`；僅取第一筆為 MVP 範圍）
-    const secondaryIp=(blk.match(/^\s+ip address\s+(\S+)\s+secondary/m)||[])[1]||'';
+    // ADDR/PREFIX secondary`；2026-08-17 從「僅取第一筆」擴大為完整收集）
+    const secondaryIps=[...blk.matchAll(/^\s+ip address\s+(\S+)\s+secondary/gm)].map(m=>m[1]);
     // SVI: "vlan N"
     if(/^vlan\s*\d+/i.test(name)){
       const vid=(name.match(/\d+/)||[])[0]||'';
@@ -134,7 +134,7 @@ function parseArubaInterfaces(cfg){
       // 雙棧修復（2026-08-13 新增）：ip6 獨立無條件擷取，不再受 ip 是否已有值影響
       const ip6=(blk.match(/^\s+ipv6 address\s+(\S+)/m)||[])[1]||'';
       const vrf=(blk.match(/^\s+vrf attach\s+(\S+)/m)||[])[1]||'';
-      ifaces.push({name,type:'svi',desc,ip,ip6,secondaryIp,mode:'',vlans:vid,nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      ifaces.push({name,type:'svi',desc,ip,ip6,secondaryIps,mode:'',vlans:vid,nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     // Loopback
@@ -142,7 +142,7 @@ function parseArubaInterfaces(cfg){
       const ip=(blk.match(/^\s+ip address\s+(\S+)/m)||[])[1]||(blk.match(/^\s+ipv6 address\s+(\S+)/m)||[])[1]||'';
       // 雙棧修復（2026-08-13 新增，同 SVI）
       const ip6=(blk.match(/^\s+ipv6 address\s+(\S+)/m)||[])[1]||'';
-      ifaces.push({name,type:'loopback',desc,ip,ip6,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      ifaces.push({name,type:'loopback',desc,ip,ip6,secondaryIps,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     let mode='',vlans='',nativeVlan='',vrf='',ip='',ip6='';
@@ -173,7 +173,7 @@ function parseArubaInterfaces(cfg){
     const bkMatch=name.match(/^(\d+\/\d+\/\d+):([1-4])$/);
     const breakoutChild=!!bkMatch;
     const breakoutParent=bkMatch?bkMatch[1]:'';
-    ifaces.push({name,type:isVSF?'stack':'physical',desc,mode,vlans,nativeVlan,vrf,ip,ip6,secondaryIp,shutdown,member,hybrid:null,vrrp:[],breakoutChild,breakoutParent,breakoutMode});
+    ifaces.push({name,type:isVSF?'stack':'physical',desc,mode,vlans,nativeVlan,vrf,ip,ip6,secondaryIps,shutdown,member,hybrid:null,vrrp:[],breakoutChild,breakoutParent,breakoutMode});
   }
   return ifaces;
 }

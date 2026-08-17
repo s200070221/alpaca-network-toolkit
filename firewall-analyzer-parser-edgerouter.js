@@ -158,14 +158,17 @@ const EdgeRouterParser = (() => {
       const addr = val(node, 'address');
       const [ip, mask] = addr && addr.includes('/') ? cidrSplit(addr) : ['-', '-'];
       // 次要IP（Secondary IP，官方 VyOS/EdgeOS 文件：同一介面可重複宣告多筆 `address`
-      // statement，附加式非關鍵字機制，與 Junos 同款；僅取第二筆為 MVP 範圍）
-      const secAddr = vals(node, 'address')[1] || '';
-      const [secIp, secMask] = secAddr && secAddr.includes('/') ? cidrSplit(secAddr) : ['-', '-'];
+      // statement，附加式非關鍵字機制，與 Junos 同款；2026-08-17 從「僅取第二筆」擴大為
+      // 完整收集全部次要IP）
+      const secondaryIps = vals(node, 'address').slice(1).map(a => {
+        const [i, m] = a && a.includes('/') ? cidrSplit(a) : ['-', '-'];
+        return { ip: i, mask: m };
+      });
       const desc = val(node, 'description') || '';
       const fw = child(node, 'firewall');
       const boundRulesets = fw ? ['in', 'out', 'local'].map(d => val(child(fw, d), 'name')).filter(Boolean) : [];
       out.push({
-        name, ip, mask, secondaryIp: secIp, secondaryMask: secMask, type: 'physical', vlanId: '-', alias: name, desc,
+        name, ip, mask, secondaryIps, type: 'physical', vlanId: '-', alias: name, desc,
         status: hasFlag(node, 'disable') ? 'down' : 'up',
         mtu: val(node, 'mtu') || '-', speed: '-', mode: addr ? 'static' : 'dhcp',
         vdom: '-', role: inferRole(desc, boundRulesets), allowaccess: '-',
@@ -178,7 +181,7 @@ const EdgeRouterParser = (() => {
         const [vip, vmask] = vaddr && vaddr.includes('/') ? cidrSplit(vaddr) : ['-', '-'];
         const vdesc = val(vnode, 'description') || '';
         out.push({
-          name: `${name}.${vlanId}`, ip: vip, mask: vmask, secondaryIp: '-', secondaryMask: '-', type: 'physical', vlanId, alias: `${name}.${vlanId}`,
+          name: `${name}.${vlanId}`, ip: vip, mask: vmask, secondaryIps: [], type: 'physical', vlanId, alias: `${name}.${vlanId}`,
           desc: vdesc, status: hasFlag(vnode, 'disable') ? 'down' : 'up',
           mtu: '-', speed: '-', mode: vaddr ? 'static' : 'dhcp', vdom: '-', role: inferRole(vdesc, []), allowaccess: '-',
         });

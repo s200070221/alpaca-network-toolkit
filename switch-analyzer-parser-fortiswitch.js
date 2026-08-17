@@ -32,10 +32,12 @@ function parseFortiInterfaces(cfg){
     // 三元運算式（IPv4 存在時直接捨棄 ip6），從未真正存進物件；改為獨立欄位無條件保留
     const ip6Str=ip6?ip6[1]:'';
     // 次要IP（Secondary IP，官方 FortiSwitchOS Administration Guide／CLI Reference：
-    // 巢狀 `config secondaryip` / `edit 1` / `set ip A B`；僅取第一筆為 MVP 範圍）
+    // 巢狀 `config secondaryip` / `edit N` / `set ip A B`，每個 edit 為一筆次要IP；
+    // 2026-08-17 從「僅取第一筆」擴大為完整收集全部 edit 的 `set ip`）
     const secBlockM=body.match(/config secondaryip\n([\s\S]*?)^[ \t]*end/m);
-    const secIpM=secBlockM?secBlockM[1].match(/set ip\s+([\d.]+)\s+([\d.]+)/):null;
-    const secondaryIp=secIpM?secIpM[1]+'/'+cidrFromMask(secIpM[2]):'';
+    const secondaryIps=secBlockM
+      ? [...secBlockM[1].matchAll(/set ip\s+([\d.]+)\s+([\d.]+)/g)].map(m=>m[1]+'/'+cidrFromMask(m[2]))
+      : [];
     const vrf=(body.match(/set vrf\s+(\d+)/)||[])[1]||'';
     const desc=(body.match(/set description\s+"?([^"\n]+)"?/)||[])[1]||'';
     const vlan=(body.match(/set vlanid\s+(\d+)/)||[])[1]||'';
@@ -52,7 +54,7 @@ function parseFortiInterfaces(cfg){
       if(vrId)vrrp.push({id:vrId,ip:vrip,priority:prio});
     }
     const bkMatch=name.match(/^(port\d+)\.([1-4])$/i);
-    ifaces.push({name,type,desc,ip:ipStr,ip6:ip6Str,secondaryIp,mode:'',vlans:vlan,nativeVlan:'',vrf,shutdown:status,member:'1',hybrid:null,vrrp,fortilinkDiscovery:false,breakoutChild:!!bkMatch,breakoutParent:bkMatch?bkMatch[1]:'',breakoutMode:''});
+    ifaces.push({name,type,desc,ip:ipStr,ip6:ip6Str,secondaryIps,mode:'',vlans:vlan,nativeVlan:'',vrf,shutdown:status,member:'1',hybrid:null,vrrp,fortilinkDiscovery:false,breakoutChild:!!bkMatch,breakoutParent:bkMatch?bkMatch[1]:'',breakoutMode:''});
   }
 
   // Physical ports
