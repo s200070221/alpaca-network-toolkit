@@ -16,7 +16,7 @@ const Reporter = (() => {
     switch (section) {
       case 'interfaces':
         headers = [tr('col.name'),tr('col.alias'),tr('col.ip'),tr('col.mask'),tr('col.secondaryIp'),tr('col.type'),tr('col.vlan_id'),tr('col.vdom'),tr('col.role'),tr('col.speed'),tr('col.mtu'),tr('col.mac'),tr('col.mode'),tr('col.status'),tr('col.allowaccess'),tr('col.desc')];
-        rows = data.map(r => [r.name,r.alias,r.ip,r.mask,r.secondaryIp&&r.secondaryIp!=='-'?`${r.secondaryIp}${r.secondaryMask&&r.secondaryMask!=='-'?' / '+r.secondaryMask:''}`:'-',r.type,r.vlanId,r.vdom,r.role,r.speed,r.mtu,r.macaddr,r.mode,r.status,r.allowaccess,r.desc]);
+        rows = data.map(r => [r.name,r.alias,r.ip,r.mask,(r.secondaryIps&&r.secondaryIps.length)?r.secondaryIps.map(s=>`${s.ip}${s.mask&&s.mask!=='-'?' / '+s.mask:''}`).join('; '):'-',r.type,r.vlanId,r.vdom,r.role,r.speed,r.mtu,r.macaddr,r.mode,r.status,r.allowaccess,r.desc]);
         break;
       case 'policies':
         headers = ['ID',tr('col.name'),tr('col.src_intf'),tr('col.dst_intf'),tr('col.src_addr'),tr('col.dst_addr'),tr('col.service'),tr('col.schedule'),tr('col.action'),'NAT','IP Pool','Pool Name',tr('col.log'),'UTM-AV','UTM-Web','UTM-IPS','UTM-App',tr('col.status'),tr('col.users'),tr('col.groups'),tr('col.comments')];

@@ -131,9 +131,9 @@ function parseInterfaces(cfg){
       continue;
     }
     // 次要IP（Secondary IP，官方 H3C IP addressing commands 文件：`ip address A B
-    // sub`，僅 VLAN-interface／Loopback，不涵蓋一般物理埠；僅取第一筆為 MVP 範圍）
-    const secIpM=(blk.match(/^\s*ip address\s+(\S+)\s+(\S+)\s+sub/m)||[]);
-    const secondaryIp=secIpM[1]&&secIpM[2]?secIpM[1]+'/'+cidrFromMask(secIpM[2]):'';
+    // sub`，僅 VLAN-interface／Loopback，不涵蓋一般物理埠；2026-08-17 從「僅取第一筆」
+    // 擴大為完整收集）
+    const secondaryIps=[...blk.matchAll(/^\s*ip address\s+(\S+)\s+(\S+)\s+sub/gm)].map(m=>m[1]+'/'+cidrFromMask(m[2]));
     if(/^Vlan-interface/i.test(name)){
       const ipRaw=(blk.match(/^\s*ip address\s+(\S+)\s+(\S+)/m)||[]);
       let ip=ipRaw[1]&&ipRaw[2]?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(blk.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
@@ -153,7 +153,7 @@ function parseInterfaces(cfg){
         const prio=(blk.match(new RegExp('vrrp vrid\\s+'+vvm[1]+'\\s+priority\\s+(\\d+)'))||[])[1]||'100';
         vrrpList.push({vrid:vvm[1],vip:vvm[2],priority:prio});
       }
-      ifaces.push({name,type:'svi',desc,ip,ip6,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:vrrpList,breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      ifaces.push({name,type:'svi',desc,ip,ip6,secondaryIps,mode:'',vlans:'',nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:vrrpList,breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     if(/^LoopBack/i.test(name)){
@@ -161,7 +161,7 @@ function parseInterfaces(cfg){
       if(!ip)ip=(blk.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       // 雙棧修復（2026-08-13 新增，同上 VLAN 介面）
       const ip6=(blk.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
-      ifaces.push({name,type:'loopback',desc,ip,ip6,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      ifaces.push({name,type:'loopback',desc,ip,ip6,secondaryIps,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     let mode='',vlans='',nativeVlan='',hybrid=null;

@@ -99,7 +99,7 @@ const MikrotikParser = (() => {
         const name = p['name'] || p['interface'] || '';
         if (!name) return;
         ifaces[name] = ifaces[name] || {
-          name, ip: '-', mask: '-', secondaryIp: '-', secondaryMask: '-', type: type || 'physical',
+          name, ip: '-', mask: '-', secondaryIps: [], type: type || 'physical',
           vlanId: p['vlan-id'] || '-',
           alias: p['name'] || '',
           desc:  p['comment'] || '',
@@ -126,7 +126,7 @@ const MikrotikParser = (() => {
 
       // Ensure interface exists
       ifaces[iface] = ifaces[iface] || {
-        name: iface, ip: '-', mask: '-', secondaryIp: '-', secondaryMask: '-', type: 'physical',
+        name: iface, ip: '-', mask: '-', secondaryIps: [], type: 'physical',
         vlanId: '-', alias: '', desc: p['comment']||'',
         status: 'up', mtu: '-', speed: '-', mode: 'static',
         vdom: '-', role: 'LAN', allowaccess: '-',
@@ -141,13 +141,13 @@ const MikrotikParser = (() => {
       // 資料遺失 bug 修復（非新功能）：原本對同一介面的第二筆 `/ip address add` 直接覆寫，
       // 靜默遺失第一筆資料——RouterOS 官方文件確認同一介面可綁定多筆位址（`/ip address
       // add address=X interface=Y` 重複執行即附加，無 secondary 關鍵字）。改為第一筆寫入
-      // ip/mask，第二筆（含以後，僅保留第一筆次要為 MVP 範圍）寫入 secondaryIp/secondaryMask
+      // ip/mask，第二筆以後（2026-08-17 從「僅保留第一筆」擴大為完整收集）皆推進
+      // secondaryIps 陣列
       if (ifaces[iface].ip === '-') {
         ifaces[iface].ip   = ip;
         ifaces[iface].mask = mask;
-      } else if (ifaces[iface].secondaryIp === '-') {
-        ifaces[iface].secondaryIp   = ip;
-        ifaces[iface].secondaryMask = mask;
+      } else {
+        ifaces[iface].secondaryIps.push({ ip, mask });
       }
       if (p['comment']) ifaces[iface].desc = p['comment'];
     });

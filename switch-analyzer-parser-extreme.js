@@ -47,13 +47,14 @@ function parseExtremeXOSVLANs(cfg){
     const ipM=cfg.match(new RegExp('^configure(?:\\s+vlan)?\\s+"?'+nameEsc+'"?\\s+ipaddress\\s+([\\d.]+)\\s+([\\d.]+)','m'));
     const desc=(descM||[])[1]?.trim()||'';
     const ipCidr=ipM?ipM[1]+'/'+maskToCIDR(ipM[2]):'';
-    // 次要IP（2026-08-12 新增）：同 parseExtremeXOSInterfaces() 的 SVI 擷取邏輯，這裡是
-    // vlans[] 自己獨立的 IP 擷取路徑（既有程式碼本來就與 interfaces[] 各自重複 regex 一次），
-    // 比照既有慣例同步補上，供 renderExtremeVLANs() 直接讀取不需跨陣列查找
-    const secCidrM=cfg.match(new RegExp('^configure(?:\\s+vlan)?\\s+"?'+nameEsc+'"?\\s+add\\s+secondary-ipaddress\\s+([\\d.]+/\\d+)','m'));
-    const secDottedM=cfg.match(new RegExp('^configure(?:\\s+vlan)?\\s+"?'+nameEsc+'"?\\s+add\\s+secondary-ipaddress\\s+([\\d.]+)\\s+([\\d.]+)','m'));
-    const secondaryIp=secCidrM?secCidrM[1]:(secDottedM?secDottedM[1]+'/'+maskToCIDR(secDottedM[2]):'');
-    vlans.push({id,name,desc,ip:ipCidr,secondaryIp,ipSubnets:[]});
+    // 次要IP（2026-08-12 新增，2026-08-17 從「僅取第一筆」擴大為完整收集）：同
+    // parseExtremeXOSInterfaces() 的 SVI 擷取邏輯，這裡是 vlans[] 自己獨立的 IP 擷取路徑
+    // （既有程式碼本來就與 interfaces[] 各自重複 regex 一次），比照既有慣例同步補上，
+    // 供 renderExtremeVLANs() 直接讀取不需跨陣列查找
+    const secCidrAll=[...cfg.matchAll(new RegExp('^configure(?:\\s+vlan)?\\s+"?'+nameEsc+'"?\\s+add\\s+secondary-ipaddress\\s+([\\d.]+/\\d+)','gm'))].map(m=>m[1]);
+    const secDottedAll=[...cfg.matchAll(new RegExp('^configure(?:\\s+vlan)?\\s+"?'+nameEsc+'"?\\s+add\\s+secondary-ipaddress\\s+([\\d.]+)\\s+([\\d.]+)','gm'))].map(m=>m[1]+'/'+maskToCIDR(m[2]));
+    const secondaryIps=secCidrAll.length?secCidrAll:secDottedAll;
+    vlans.push({id,name,desc,ip:ipCidr,secondaryIps,ipSubnets:[]});
   }
   vlans.sort((a,b)=>parseInt(a.id)-parseInt(b.id));
   return vlans;
@@ -157,16 +158,16 @@ function parseExtremeXOSInterfaces(cfg){
     if(['stacking','ospf','vrrp','bgp'].includes(name.toLowerCase()))continue;
     const ip=m[2],mask=m[3],vid=vlanNameToId[name]||'';
     const cidr=ip+'/'+maskToCIDR(mask);
-    // 次要IP（2026-08-12 新增，中高信心度：官方 ExtremeXOS Command Reference Guide
-    // `configure {vlan} vlan_name add secondary-ipaddress [ip_address {netmask}|ipNetmask]`，
-    // documentation.extremenetworks.com 官方域名兩次獨立搜尋索引摘要互相印證含完整範例
-    // `configure vlan multi add secondary-ipaddress 10.1.1.1/24`；同時支援 CIDR 與 dotted-mask
-    // 兩種寫法，僅取第一筆次要IP為 MVP 範圍）
+    // 次要IP（2026-08-12 新增，2026-08-17 從「僅取第一筆」擴大為完整收集，中高信心度：
+    // 官方 ExtremeXOS Command Reference Guide `configure {vlan} vlan_name add
+    // secondary-ipaddress [ip_address {netmask}|ipNetmask]`，documentation.extremenetworks.com
+    // 官方域名兩次獨立搜尋索引摘要互相印證含完整範例 `configure vlan multi add
+    // secondary-ipaddress 10.1.1.1/24`；同時支援 CIDR 與 dotted-mask 兩種寫法）
     const nameEsc=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-    const secCidrM=cfg.match(new RegExp('^configure(?:\\s+vlan)?\\s+"?'+nameEsc+'"?\\s+add\\s+secondary-ipaddress\\s+([\\d.]+/\\d+)','m'));
-    const secDottedM=cfg.match(new RegExp('^configure(?:\\s+vlan)?\\s+"?'+nameEsc+'"?\\s+add\\s+secondary-ipaddress\\s+([\\d.]+)\\s+([\\d.]+)','m'));
-    const secondaryIp=secCidrM?secCidrM[1]:(secDottedM?secDottedM[1]+'/'+maskToCIDR(secDottedM[2]):'');
-    ifaces.push({name:'vlan.'+name,type:'svi',desc:'',mode:'',vlans:vid,nativeVlan:'',vrf:'',ip:cidr,secondaryIp,shutdown:false,member:'1',hybrid:null,vrrp:[]});
+    const secCidrAll=[...cfg.matchAll(new RegExp('^configure(?:\\s+vlan)?\\s+"?'+nameEsc+'"?\\s+add\\s+secondary-ipaddress\\s+([\\d.]+/\\d+)','gm'))].map(m=>m[1]);
+    const secDottedAll=[...cfg.matchAll(new RegExp('^configure(?:\\s+vlan)?\\s+"?'+nameEsc+'"?\\s+add\\s+secondary-ipaddress\\s+([\\d.]+)\\s+([\\d.]+)','gm'))].map(m=>m[1]+'/'+maskToCIDR(m[2]));
+    const secondaryIps=secCidrAll.length?secCidrAll:secDottedAll;
+    ifaces.push({name:'vlan.'+name,type:'svi',desc:'',mode:'',vlans:vid,nativeVlan:'',vrf:'',ip:cidr,secondaryIps,shutdown:false,member:'1',hybrid:null,vrrp:[]});
   }
   return ifaces;
 }

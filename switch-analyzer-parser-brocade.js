@@ -215,13 +215,12 @@ function parseBrocadeInterfaces(cfg){
     const ip=ipM?ipM[1]+'/'+maskToCIDR(ipM[2]):(blk.match(/^\s+ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
     // 雙棧修復（2026-08-13 新增）：ip6 獨立無條件擷取，不再受 ip 是否已有值影響
     const ip6=(blk.match(/^\s+ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
-    // 次要IP（2026-08-12 新增，官方 Ruckus FastIron Command Reference 08.0.60 `ip address`
-    // 頁面確認 `secondary` 關鍵字，明確排除 Management 介面；僅 VE 支援，Loopback 該頁面未
-    // 提及不猜測；僅取第一筆次要IP為 MVP 範圍）
-    const secIpM=blk.match(/^\s+ip address\s+([\d.]+)\s+([\d.]+)\s+secondary/m);
-    const secondaryIp=secIpM?secIpM[1]+'/'+maskToCIDR(secIpM[2]):'';
+    // 次要IP（2026-08-12 新增，2026-08-17 從「僅取第一筆」擴大為完整收集，官方 Ruckus
+    // FastIron Command Reference 08.0.60 `ip address` 頁面確認 `secondary` 關鍵字，明確
+    // 排除 Management 介面；僅 VE 支援，Loopback 該頁面未提及不猜測）
+    const secondaryIps=[...blk.matchAll(/^\s+ip address\s+([\d.]+)\s+([\d.]+)\s+secondary/gm)].map(m=>m[1]+'/'+maskToCIDR(m[2]));
     const vrf=(blk.match(/^\s+vrf\s+forwarding\s+(\S+)/m)||[])[1]||'';
-    ifaces.push({name:'ve'+vid,type:'svi',desc,mode:'',vlans:vid,nativeVlan:'',vrf,ip,ip6,secondaryIp,shutdown:false,member:'1',hybrid:null,vrrp:[]});
+    ifaces.push({name:'ve'+vid,type:'svi',desc,mode:'',vlans:vid,nativeVlan:'',vrf,ip,ip6,secondaryIps,shutdown:false,member:'1',hybrid:null,vrrp:[]});
   }
 
   // Loopback（同一類邊界切割修正，見上方 SVI 註解）

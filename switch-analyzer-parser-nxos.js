@@ -50,12 +50,11 @@ function parseNXOS(cfg) {
       // 家族已查證的同款語法 `ipv6 address ADDR/PREFIXLEN`，獨立無條件擷取，支援雙棧）
       const mIp6=b.match(/^\s+ipv6 address\s+(\S+)/m);
       const ip6=mIp6?mIp6[1]:'';
-      // 次要IP（2026-08-12 新增，中信心度：官方 Cisco Nexus NX-OS Unicast Routing Command
-      // Reference 的 `ip address` 頁面確認 `secondary` 關鍵字，惟 WebFetch 被 Cisco WAF 擋
-      // 403，僅能用搜尋引擎索引摘要佐證，建議實作後另行覆核官方頁面）：`ip address A/N secondary`，
-      // 僅取第一筆次要IP為 MVP 範圍，比照其餘廠牌既有限制
-      const mSecIp=b.match(/^\s+ip address\s+(\S+)\/(\d+)\s+secondary/m);
-      const secondaryIp=mSecIp?`${mSecIp[1]}/${mSecIp[2]}`:'';
+      // 次要IP（2026-08-12 新增，2026-08-17 從「僅取第一筆」擴大為完整收集，中信心度：官方
+      // Cisco Nexus NX-OS Unicast Routing Command Reference 的 `ip address` 頁面確認
+      // `secondary` 關鍵字，惟 WebFetch 被 Cisco WAF 擋 403，僅能用搜尋引擎索引摘要佐證，
+      // 建議實作後另行覆核官方頁面）：`ip address A/N secondary`
+      const secondaryIps=[...b.matchAll(/^\s+ip address\s+(\S+)\/(\d+)\s+secondary/gm)].map(m=>`${m[1]}/${m[2]}`);
       const vlan=mAccess?mAccess[1]:mTrunk?mTrunk[1].trim():'';
       const type=name.startsWith('Vlan')?'svi':name.startsWith('port-channel')||name.startsWith('Port-channel')?'lag':'physical';
       // Breakout: 子埠命名為三段式 Ethernet<mod>/<port>/<1-4>（獨立 `interface breakout module...map` 指令啟用，見 parseBreakout）
@@ -67,7 +66,7 @@ function parseNXOS(cfg) {
       // 而非這裡的 status 字串，原本沒有這個欄位導致該欄一律顯示成 enabled、down 篩選對 NX-OS 永遠篩不到
       const memberMatch=name.match(/^Ethernet(\d+)\//i);
       const member=memberMatch?memberMatch[1]:'1';
-      ifaces.push({ name, desc, status:shut?'disabled':'connected', shutdown:shut, member, mode:mMode?mMode[1]:'', ip, ip6, secondaryIp, vlan, vrf:mVrf?mVrf[1]:'', type, breakoutChild, breakoutParent, breakoutMode:'' });
+      ifaces.push({ name, desc, status:shut?'disabled':'connected', shutdown:shut, member, mode:mMode?mMode[1]:'', ip, ip6, secondaryIps, vlan, vrf:mVrf?mVrf[1]:'', type, breakoutChild, breakoutParent, breakoutMode:'' });
     }
     return ifaces;
   }

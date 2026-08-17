@@ -74,9 +74,8 @@ function parseCiscoInterfaces(cfg,vendor){
 
     // 次要IP（Secondary IP，官方 Cisco IP Addressing Services Command Reference：
     // `ip address A.B.C.D M.M.M.M secondary`，Arista EOS 共用同一語法／同一 parser
-    // 分流路徑；僅取第一筆次要IP，多筆為已知 MVP 限制）
-    const secIpM=(body.match(/^\s*ip address\s+(\S+)\s+(\S+)\s+secondary/m)||[]);
-    const secondaryIp=secIpM[1]&&secIpM[2]?secIpM[1]+'/'+cidrFromMask(secIpM[2]):'';
+    // 分流路徑；2026-08-17 從「僅取第一筆」擴大為完整收集）
+    const secondaryIps=[...body.matchAll(/^\s*ip address\s+(\S+)\s+(\S+)\s+secondary/gm)].map(m=>m[1]+'/'+cidrFromMask(m[2]));
     // Loopback
     if(/^Loopback/i.test(name)){
       let ip=(body.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
@@ -85,7 +84,7 @@ function parseCiscoInterfaces(cfg,vendor){
       // 雙棧修復（2026-08-13 新增）：ip6 獨立無條件擷取，不再受 if(!ip) 影響（同一介面
       // 同時設定 IPv4+IPv6 時，原本 ipv6 只在 ip 為空時才讀取，雙棧會靜默丟失 IPv6）
       const ip6=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
-      ifaces.push({name,type:'loopback',desc,ip,ip6,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
+      ifaces.push({name,type:'loopback',desc,ip,ip6,secondaryIps,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
       continue;
     }
     // SVI: Vlan interface
@@ -103,7 +102,7 @@ function parseCiscoInterfaces(cfg,vendor){
         const prio=(body.match(new RegExp('standby\\s+'+hm[1]+'\\s+priority\\s+(\\d+)'))||[])[1]||'100';
         vrrpList.push({vrid:hm[1],vip:hm[2],priority:prio,type:'HSRP'});
       }
-      ifaces.push({name,type:'svi',desc,ip,ip6,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:vrrpList,breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
+      ifaces.push({name,type:'svi',desc,ip,ip6,secondaryIps,mode:'',vlans:'',nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:vrrpList,breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
       continue;
     }
     // Management (no routing)
@@ -112,7 +111,7 @@ function parseCiscoInterfaces(cfg,vendor){
       if(!ip)ip=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       // 雙棧修復（2026-08-13 新增，同 Loopback）
       const ip6=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
-      ifaces.push({name,type:'physical',desc,ip,ip6,secondaryIp,mode:'',vlans:'',nativeVlan:'',vrf:'MGMT',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
+      ifaces.push({name,type:'physical',desc,ip,ip6,secondaryIps,mode:'',vlans:'',nativeVlan:'',vrf:'MGMT',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
       continue;
     }
     // Physical / Stack
@@ -125,7 +124,7 @@ function parseCiscoInterfaces(cfg,vendor){
       // 雙棧修復（2026-08-13 新增，同 Loopback）
       const ip6=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       vrf=(body.match(vrfRe)||[])[1]||'';
-      ifaces.push({name,type:'physical',desc,mode:'routed',vlans:'',nativeVlan:'',vrf,ip,ip6,secondaryIp,shutdown,member,hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
+      ifaces.push({name,type:'physical',desc,mode:'routed',vlans:'',nativeVlan:'',vrf,ip,ip6,secondaryIps,shutdown,member,hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
       continue;
     }
     // Switchport
