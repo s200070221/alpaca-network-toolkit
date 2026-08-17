@@ -695,12 +695,15 @@ function parseACL(cfg, vendor){
   if(vendor==='routeros') return _parseACLRouterOS(cfg);
   if(vendor==='sonic') return _parseACLSONiC(cfg);
   if(vendor==='alcatel') return [];
-  // ProCurve／Netgear／EdgeSwitch：本專案從未真正實作這三家的 ACL 解析（procurve.js 甚至
-  // 留了一個空的 ACL 章節標題但無函式內容），三者查無官方 ACL 語法佐證（Netgear/EdgeSwitch
-  // 見各自 parser 檔頭已知限制註記）；先前沒有顯式排除，會意外落入下面的 _parseACLCisco()
-  // fallback，產生「看似有解析結果、實際語法未經驗證」的假象。2026-08-17 查證 IPv6 ACL 時
-  // 意外發現此缺口，比照既有 Alcatel return [] 模式明確排除，避免虛假產出
-  if(vendor==='procurve'||vendor==='netgear'||vendor==='edgeswitch') return [];
+  // Netgear：2026-08-17 對外查證官方 kb.netgear.com 逐字 KB 文章（IPv4 數字型 ACL／IPv6
+  // 具名 ACL 皆有完整範例）後新增，見 _parseACLNetgear() 上方註解
+  if(vendor==='netgear') return _parseACLNetgear(cfg);
+  // ProCurve／EdgeSwitch：本專案從未真正實作這兩家的 ACL 解析（procurve.js 甚至留了一個
+  // 空的 ACL 章節標題但無函式內容），查無官方 ACL 語法佐證（EdgeSwitch 見 parser 檔頭已知
+  // 限制註記）；先前沒有顯式排除，會意外落入下面的 _parseACLCisco() fallback，產生「看似
+  // 有解析結果、實際語法未經驗證」的假象。2026-08-17 查證 IPv6 ACL 時意外發現此缺口，比照
+  // 既有 Alcatel return [] 模式明確排除，避免虛假產出
+  if(vendor==='procurve'||vendor==='edgeswitch') return [];
   // NX-OS：2026-07-22 對外查證官方 Cisco NX-OS Security Configuration Guide 後新增獨立
   // 分支——先前沿用 _parseACLCisco()（IOS-XE 語法），但真實 NX-OS 語法完全不同：容器是
   // 裸 "ip access-list NAME"（沒有 standard/extended 關鍵字），規則列是「序號在最前面、
@@ -803,36 +806,128 @@ function _parseACLRouterOS(cfg){
   collect(/^\/ipv6\s+firewall\s+filter\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m,'v6');
   return rules;
 }
-// FortiSwitch 原本完全沒有 ACL parser 支援（本次新增）。語法為本專案設計，比照既有
-// FortiOS config/edit/next/end 慣例，未對照實機驗證：
+// FortiSwitch ACL 支援（2026-08-17 改用真實語法重寫）。原本是本專案自創、未對照實機驗證的
+// 扁平語法（`set action deny|allow`／`set srcaddr`／`set dstaddr`），對外查證官方
+// FortiSwitchOS 7.2.10 Administration Guide "Configuring an ACL policy" 後發現與真實
+// 語法完全不同——是巢狀 config classifier/config action 子區塊，且原生支援獨立的 IPv6
+// 分類欄位（`set src-ip6-prefix`/`set dst-ip6-prefix`，與 IPv4 的 `set src-ip-prefix`/
+// `set dst-ip-prefix` 是不同欄位，非共用同一個 srcaddr/dstaddr）：
 //   config switch acl ingress
-//       edit N
-//           set description "NAME"
-//           set ingress-interface "port1"
-//           set action deny|allow
-//           set srcaddr "..."
-//           set dstaddr "..."
-//           set service "..."
+//       edit <policy_ID>
+//           set description <string>
+//           set ingress-interface <port_name>
+//           config classifier
+//               set src-ip-prefix <IPv4_address> <mask>
+//               set dst-ip-prefix <IPv4_address> <mask>
+//               set src-ip6-prefix <IPv6_address> <prefix>
+//               set dst-ip6-prefix <IPv6_address> <prefix>
+//               set src-mac <MAC_address>
+//               set dst-mac <MAC_address>
+//               set service <service-id>
+//           end
+//           config action
+//               set drop {enable|disable}
+//           end
 //       next
 //   end
-// 同一個 description 底下可有多筆 edit（多筆 rule），依 name 分組成同一個 ACL 物件。
+// 真實模型裡一個 edit 就是一條規則（match classifier + action），沒有「一個具名 ACL 底下
+// 多筆規則」這種容器概念，原本用 description 分組多筆 edit 的假設本身也是臆測；本輪改為
+// 每個 edit 各自視為一筆獨立 ACL（name 優先取 description，沒有則用 policy_ID）。
+// `set drop enable` 才是拒絕，未設定或 disable 視為不丟棄（即比對後放行，非傳統路由器式
+// 明確 permit）。本輪僅涵蓋 ingress ACL（與既有排除範圍相同），egress/prelookup 為後續候選
 function _parseACLFortiSwitch(cfg){
   const acls=[];
-  const byName={};
   const block=(cfg.match(/^config switch acl ingress\n([\s\S]*?)^end/m)||[])[1]||'';
-  const re=/edit\s+(\d+)\n([\s\S]*?)(?=^[ \t]*next|^end)/gm;
+  const re=/edit\s+(\d+)\n([\s\S]*?)(?=^[ \t]*next\b|^end\b)/gm;
   let m;
   while((m=re.exec(block))!==null){
-    const seq=m[1],body=m[2];
-    const name=(body.match(/set description\s+"?([^"\n]+)"?/)||[])[1]||('ACL'+seq);
-    const action=(body.match(/set action\s+(\S+)/)||[])[1]||'deny';
-    const src=(body.match(/set srcaddr\s+"?([^"\n]+)"?/)||[])[1]||'-';
-    const dst=(body.match(/set dstaddr\s+"?([^"\n]+)"?/)||[])[1]||'-';
-    const service=(body.match(/set service\s+"?([^"\n]+)"?/)||[])[1]||'';
+    const policyId=m[1],body=m[2];
+    const name=(body.match(/set description\s+"?([^"\n]+)"?/)||[])[1]||policyId;
     const ifaceName=(body.match(/set ingress-interface\s+"?([^"\n]+)"?/)||[])[1]||'';
-    if(!byName[name]){byName[name]={name,type:'ingress',vendor:'fortiswitch',rules:[],appliedOn:[]};acls.push(byName[name]);}
-    byName[name].rules.push({seq,action,protocol:service||'ip',src,dst,dstPort:'',remark:''});
-    if(ifaceName)byName[name].appliedOn.push({interface:ifaceName,direction:'in'});
+    const classifierBody=(body.match(/config classifier\n([\s\S]*?)\n\s*end\b/)||[])[1]||'';
+    const actionBody=(body.match(/config action\n([\s\S]*?)\n\s*end\b/)||[])[1]||'';
+    const srcIp4=classifierBody.match(/set src-ip-prefix\s+(\S+)\s+(\S+)/)||[];
+    const dstIp4=classifierBody.match(/set dst-ip-prefix\s+(\S+)\s+(\S+)/)||[];
+    const srcIp6=classifierBody.match(/set src-ip6-prefix\s+(\S+)\s+(\S+)/)||[];
+    const dstIp6=classifierBody.match(/set dst-ip6-prefix\s+(\S+)\s+(\S+)/)||[];
+    const srcMac=(classifierBody.match(/set src-mac\s+(\S+)/)||[])[1];
+    const dstMac=(classifierBody.match(/set dst-mac\s+(\S+)/)||[])[1];
+    const service=(classifierBody.match(/set service\s+"?([^"\n]+)"?/)||[])[1]||'';
+    const ipVersion=(srcIp6[1]||dstIp6[1])?'v6':(srcIp4[1]||dstIp4[1])?'v4':'';
+    const src=srcIp6[1]?`${srcIp6[1]}/${srcIp6[2]}`:srcIp4[1]?`${srcIp4[1]} ${srcIp4[2]}`:(srcMac||'-');
+    const dst=dstIp6[1]?`${dstIp6[1]}/${dstIp6[2]}`:dstIp4[1]?`${dstIp4[1]} ${dstIp4[2]}`:(dstMac||'-');
+    const dropped=/set drop\s+enable/.test(actionBody);
+    acls.push({
+      name,type:'extended',ipVersion,vendor:'fortiswitch',
+      rules:[{seq:policyId,action:dropped?'deny':'permit',protocol:service||'ip',src,dst,dstPort:'',remark:''}],
+      appliedOn:ifaceName?[{interface:ifaceName,direction:'in'}]:[]
+    });
+  }
+  return acls;
+}
+// Netgear M4300 ACL 支援（2026-08-17 新增，對外查證官方 kb.netgear.com 逐字 KB 文章確認，
+// 詳見 kb.netgear.com/21730「How do I configure an IPv6 ACL」＋ kb.netgear.com/21708／
+// 21713／21716 系列 IPv4 ACL 文章）：
+// IPv4 僅支援數字型 ACL（`access-list N permit|deny protocol src [wildcard] dst [wildcard]
+// [eq port]`，規則列格式與 Cisco extended ACL 相同——network+wildcard-mask 兩 token）；
+// 對外查證未能找到具名 IPv4 ACL 的容器關鍵字逐字佐證（搜尋結果僅示範數字型），比照專案
+// 「查無來源不可臆測」原則不猜測具名語法，僅支援已確認的數字型。介面套用
+// `ip access-group N in`。IPv6 為具名 ACL：`ipv6 access-list NAME` 進入子模式後逐行
+// `permit|deny protocol src dst [eq port]`（無 access-list 前綴，與 Cisco IOS 家族同款
+// 子模式語法），介面套用 `ipv6 traffic-filter NAME in`（KB21730 逐字確認）
+function _parseACLNetgear(cfg){
+  const acls=[];
+  const tok=(parts,i)=>{
+    if(parts[i]==='host')return{val:'host '+(parts[i+1]||''),next:i+2};
+    if(parts[i]==='any')return{val:'any',next:i+1};
+    if(parts[i+1]&&/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(parts[i+1]))return{val:parts[i]+' '+parts[i+1],next:i+2};
+    return{val:parts[i]||'-',next:i+1};
+  };
+  // 數字型 IPv4
+  const numRe=/^access-list\s+(\d+)\s+(permit|deny)\s+(.*)/gm;
+  const numG={};
+  let m;
+  while((m=numRe.exec(cfg))!==null){
+    const num=m[1],action=m[2];
+    const parts=m[3].trim().split(/\s+/);
+    const proto=parts[0]||'ip';
+    const s=tok(parts,1);
+    const d=tok(parts,s.next);
+    const eq=parts.indexOf('eq',d.next);
+    const dstPort=eq>-1?(parts[eq+1]||''):'';
+    if(!numG[num]){numG[num]={name:num,type:'extended',aclType:'ip',ipVersion:'v4',vendor:'netgear',rules:[],appliedOn:[]};acls.push(numG[num]);}
+    numG[num].rules.push({seq:'',action,protocol:proto,src:s.val,dst:d.val,dstPort,remark:''});
+  }
+  // 具名 IPv6
+  const acl6Re=/^ipv6 access-list\s+(\S+)([\s\S]*?)(?=^access-list\s|^ipv6 access-list\s|(?![\s\S]))/gm;
+  while((m=acl6Re.exec(cfg))!==null){
+    const name=m[1],body=m[2];
+    const rules=[];
+    const rRe=/^\s*(permit|deny)\s+(.+)/gm;
+    let rm;
+    while((rm=rRe.exec(body))!==null){
+      const parts=rm[2].trim().split(/\s+/);
+      const proto=parts[0]||'ipv6';
+      const s=tok(parts,1);
+      const d=tok(parts,s.next);
+      const eq=parts.indexOf('eq',d.next);
+      const dstPort=eq>-1?(parts[eq+1]||''):'';
+      rules.push({seq:'',action:rm[1],protocol:proto,src:s.val,dst:d.val,dstPort,remark:''});
+    }
+    acls.push({name,type:'extended',aclType:'ipv6',ipVersion:'v6',vendor:'netgear',rules,appliedOn:[]});
+  }
+  // Interface application
+  const ifBlocks=cfg.split(/(?=^interface\s+)/m);
+  for(const blk of ifBlocks){
+    const ifLine=blk.match(/^interface\s+(\S.*)/m);
+    if(!ifLine)continue;
+    const ifName=ifLine[1].trim();
+    const agRe=/^\s*ip access-group\s+(\d+)\s+(in|out)/gim;
+    let am;
+    while((am=agRe.exec(blk))!==null){const acl=acls.find(a=>a.name===am[1]&&a.aclType==='ip');if(acl)acl.appliedOn.push({interface:ifName,direction:am[2].toLowerCase()});}
+    const ag6Re=/^\s*ipv6 traffic-filter\s+(\S+)\s+(in|out)/gim;
+    let am6;
+    while((am6=ag6Re.exec(blk))!==null){const acl=acls.find(a=>a.name===am6[1]&&a.aclType==='ipv6');if(acl)acl.appliedOn.push({interface:ifName,direction:am6[2].toLowerCase()});}
   }
   return acls;
 }
@@ -852,11 +947,28 @@ function _parseACLCisco(cfg){
     // 不影響 Cisco 既有裸數字/無前綴格式
     const rRe=/^\s*(?:seq\s+)?(?:(\d+)\s+)?(permit|deny)\s+(.+)/gm;
     let rm;
+    // 2026-08-17 修復：原本 extended 分支對「network wildcard-mask」兩 token 位址格式
+    // （如 "10.0.0.0 0.0.0.255"）只消耗 1 個 token，wildcard mask 值被誤吃成 dst，
+    // "host X"/"any"/裸 token 格式不受影響。改用明確的 token 消耗 helper，依序判斷
+    // host（2 token）／any（1 token）／network+wildcard-mask（下一個 token 符合點分
+    // 四段格式時消耗 2 token）／裸 token（1 token，object-group 名稱等仍為已知限制不
+    // 擴大處理，與修復前行為一致）
+    const _ciscoAddrTok=(parts,i)=>{
+      if(parts[i]==='host')return{val:'host '+(parts[i+1]||''),next:i+2};
+      if(parts[i]==='any')return{val:'any',next:i+1};
+      if(parts[i+1]&&/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(parts[i+1]))return{val:parts[i]+' '+parts[i+1],next:i+2};
+      return{val:parts[i]||'-',next:i+1};
+    };
     while((rm=rRe.exec(body))!==null){
       const parts=rm[3].trim().split(/\s+/);
       let proto='ip',src='-',dst='-',dstPort='';
       if(type==='standard'){src=parts[0]==='host'?'host '+parts[1]:parts[0]+(parts[1]&&!/^(eq|gt|lt|log)/.test(parts[1])?' '+parts[1]:'');}
-      else{proto=parts[0]||'ip';let i=1;if(parts[i]==='host')src='host '+parts[++i],i++;else src=parts[i]+(parts[i+1]&&!/^(host|any|eq|gt|lt|log|\d{1,3}\.\d)/.test(parts[i+1])?'':' '),i++;if(parts[i]==='host')dst='host '+parts[++i],i++;else dst=parts[i]||'-';const eq=parts.indexOf('eq',i);if(eq>-1)dstPort=parts[eq+1]||'';}
+      else{
+        proto=parts[0]||'ip';
+        const s=_ciscoAddrTok(parts,1);src=s.val;
+        const d=_ciscoAddrTok(parts,s.next);dst=d.val;
+        const eq=parts.indexOf('eq',d.next);if(eq>-1)dstPort=parts[eq+1]||'';
+      }
       rules.push({seq:rm[1]||'',action:rm[2],protocol:proto,src:src.trim(),dst:dst.trim(),dstPort,remark:''});
     }
     // remarks
