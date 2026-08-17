@@ -1443,9 +1443,47 @@ function exportSTPCSV(){
   );
 }
 
+// MikroTik RouterOS：_parseACLRouterOS() 回傳的是扁平 chain-based 規則清單（無 name/
+// rules/appliedOn 包裝，刻意設計成與其餘廠牌不同形狀，見該函式註解），套用下方共用
+// {name,rules,appliedOn} 邏輯會直接因存取 undefined 屬性而壞掉；改用專屬簡化表格渲染
+// （2026-08-17 意外發現：此分支先前完全不存在，RouterOS 的 ACL 分頁在瀏覽器中從未能
+// 正常顯示過，非本輪 IPv6 新增才出現的問題）
+function renderRouterOSACL(rules){
+  const permitCount=rules.filter(r=>r.action==='accept').length;
+  const denyCount=rules.filter(r=>r.action==='drop'||r.action==='reject').length;
+  const cards=`<div class="sum-cards">
+    <div class="sum-card"><div class="sv">${rules.length}</div><div class="sl">Rules</div></div>
+    <div class="sum-card"><div class="sv" style="color:var(--green)">${permitCount}</div><div class="sl">Accept</div></div>
+    <div class="sum-card"><div class="sv" style="color:var(--red)">${denyCount}</div><div class="sl">Drop/Reject</div></div>
+  </div>`;
+  const q=(document.getElementById('search-inp')?.value||'').toLowerCase();
+  const filtered=rules.filter(r=>!q||r.chain.toLowerCase().includes(q)||(r.comment||'').toLowerCase().includes(q));
+  const rowsHtml=filtered.map(r=>{
+    const aCls=r.action==='accept'?'color:var(--green)':(r.action==='drop'||r.action==='reject')?'color:var(--red)':'';
+    return`<tr>
+      <td class="mono" style="font-size:11px">${esc(r.chain)}</td>
+      <td style="${aCls};font-weight:600">${esc(r.action)}${r.family==='v6'?` <span class="pill p-svi" style="font-size:9px">IPv6</span>`:''}</td>
+      <td class="mono" style="font-size:11px">${esc(r.protocol||'any')}</td>
+      <td class="mono" style="font-size:11px">${esc(r.srcAddress||'—')}</td>
+      <td class="mono" style="font-size:11px">${esc(r.dstAddress||'—')}</td>
+      <td class="mono" style="font-size:11px">${esc(r.dstPort||'—')}</td>
+      <td class="mono" style="font-size:11px">${esc(r.inInterface||'—')}</td>
+      <td style="color:var(--text-muted);font-size:11px">${esc(r.comment||'')}</td>
+    </tr>`;
+  }).join('');
+  return`<div class="tbar"><div class="search-wrap"><span class="search-ico">🔍</span><input class="search-inp" id="search-inp" placeholder="${tr('search.placeholder')}" oninput="debouncedRenderView('acl')"></div></div>`
+    +cards
+    +`<div class="tbl-wrap" style="overflow-y:auto;flex:1;min-height:0"><table class="data-table"><thead><tr>
+      <th>${tr('acl.col_chain')}</th><th>${tr('acl.col_action')}</th><th>${tr('acl.col_proto')}</th>
+      <th>${tr('acl.col_src')}</th><th>${tr('acl.col_dst')}</th><th>${tr('acl.col_port')}</th>
+      <th>${tr('col.interface')}</th><th>${tr('acl.col_remark')}</th>
+    </tr></thead><tbody>${rowsHtml}</tbody></table></div>`
+    +(filtered.length<rules.length?`<div class="tbl-foot"><span>${filtered.length} / ${rules.length} rules</span></div>`:'');
+}
 function renderACL(){
   const acls=(parsed.acls||[]);
   if(!acls.length)return`<div class="nodata">${tr('acl.none')}</div>`;
+  if(parsed.vendor==='routeros')return renderRouterOSACL(acls);
   const permitCount=acls.reduce((n,a)=>n+a.rules.filter(r=>r.action==='permit').length,0);
   const denyCount=acls.reduce((n,a)=>n+a.rules.filter(r=>r.action==='deny').length,0);
   const cards=`<div class="sum-cards">

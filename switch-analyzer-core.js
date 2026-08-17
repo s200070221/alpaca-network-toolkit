@@ -695,6 +695,12 @@ function parseACL(cfg, vendor){
   if(vendor==='routeros') return _parseACLRouterOS(cfg);
   if(vendor==='sonic') return _parseACLSONiC(cfg);
   if(vendor==='alcatel') return [];
+  // ProCurve／Netgear／EdgeSwitch：本專案從未真正實作這三家的 ACL 解析（procurve.js 甚至
+  // 留了一個空的 ACL 章節標題但無函式內容），三者查無官方 ACL 語法佐證（Netgear/EdgeSwitch
+  // 見各自 parser 檔頭已知限制註記）；先前沒有顯式排除，會意外落入下面的 _parseACLCisco()
+  // fallback，產生「看似有解析結果、實際語法未經驗證」的假象。2026-08-17 查證 IPv6 ACL 時
+  // 意外發現此缺口，比照既有 Alcatel return [] 模式明確排除，避免虛假產出
+  if(vendor==='procurve'||vendor==='netgear'||vendor==='edgeswitch') return [];
   // NX-OS：2026-07-22 對外查證官方 Cisco NX-OS Security Configuration Guide 後新增獨立
   // 分支——先前沿用 _parseACLCisco()（IOS-XE 語法），但真實 NX-OS 語法完全不同：容器是
   // 裸 "ip access-list NAME"（沒有 standard/extended 關鍵字），規則列是「序號在最前面、
@@ -704,9 +710,13 @@ function parseACL(cfg, vendor){
   if(vendor==='nxos') return _parseACLNXOS(cfg);
   return _parseACLCisco(cfg);
 }
+// IPv6（2026-08-17 新增，對外查證官方 Cisco NX-OS Security Command Reference 確認）：
+// `ipv6 access-list NAME` 容器與規則列格式（裸序號在前、無 rule/seq 關鍵字，與既有 IPv4
+// 分支同款）與 IPv4 平行、獨立命名空間；介面套用關鍵字是 "ipv6 port traffic-filter"
+// （與 IPv4 的 "ip access-group" 不同字面），故新增 aclType 欄位避免同名誤配對
 function _parseACLNXOS(cfg){
   const acls=[];
-  const aclRe=/^ip access-list\s+(\S+)\s*\n([\s\S]*?)(?=^ip access-list\s|(?![\s\S]))/gm;
+  const aclRe=/^ip access-list\s+(\S+)\s*\n([\s\S]*?)(?=^ip access-list\s|^ipv6 access-list\s|(?![\s\S]))/gm;
   let m;
   while((m=aclRe.exec(cfg))!==null){
     const name=m[1],body=m[2];
@@ -723,7 +733,25 @@ function _parseACLNXOS(cfg){
       const dstPort=eqIdx>-1?parts[eqIdx+1]||'':'';
       rules.push({seq:rm[1],action:rm[2],protocol:proto,src:(src||'-').trim(),dst:(dst||'-').trim(),dstPort,remark:''});
     }
-    acls.push({name,type:'extended',vendor:'nxos',rules,appliedOn:[]});
+    acls.push({name,type:'extended',aclType:'ip',ipVersion:'v4',vendor:'nxos',rules,appliedOn:[]});
+  }
+  const acl6Re=/^ipv6 access-list\s+(\S+)\s*\n([\s\S]*?)(?=^ip access-list\s|^ipv6 access-list\s|(?![\s\S]))/gm;
+  while((m=acl6Re.exec(cfg))!==null){
+    const name=m[1],body=m[2];
+    const rules=[];
+    const rRe=/^\s*(\d+)\s+(permit|deny)\s+(.+)/gm;
+    let rm;
+    while((rm=rRe.exec(body))!==null){
+      const parts=rm[3].trim().split(/\s+/);
+      const proto=parts[0]||'ipv6';
+      let i=1,src,dst;
+      if(parts[i]==='host'){src='host '+parts[i+1];i+=2;}else{src=parts[i];i++;}
+      if(parts[i]==='host'){dst='host '+parts[i+1];i+=2;}else{dst=parts[i]||'-';i++;}
+      const eqIdx=parts.indexOf('eq',i);
+      const dstPort=eqIdx>-1?parts[eqIdx+1]||'':'';
+      rules.push({seq:rm[1],action:rm[2],protocol:proto,src:(src||'-').trim(),dst:(dst||'-').trim(),dstPort,remark:''});
+    }
+    acls.push({name,type:'extended',aclType:'ipv6',ipVersion:'v6',vendor:'nxos',rules,appliedOn:[]});
   }
   const ifBlocks=cfg.split(/(?=^interface\s)/m);
   for(const blk of ifBlocks){
@@ -732,8 +760,13 @@ function _parseACLNXOS(cfg){
     const ifName=ifLine[1].trim();
     const agRe=/^\s*ip access-group\s+(\S+)\s+(in|out)/gim; let am;
     while((am=agRe.exec(blk))!==null){
-      const acl=acls.find(a=>a.name===am[1]);
+      const acl=acls.find(a=>a.name===am[1]&&a.aclType==='ip');
       if(acl)acl.appliedOn.push({interface:ifName,direction:am[2].toLowerCase()});
+    }
+    const ag6Re=/^\s*ipv6 port traffic-filter\s+(\S+)\s+(in|out)/gim; let am6;
+    while((am6=ag6Re.exec(blk))!==null){
+      const acl=acls.find(a=>a.name===am6[1]&&a.aclType==='ipv6');
+      if(acl)acl.appliedOn.push({interface:ifName,direction:am6[2].toLowerCase()});
     }
   }
   return acls;
@@ -742,24 +775,32 @@ function _parseACLNXOS(cfg){
 // 頁確認）：`/ip firewall filter` 是 chain-based 扁平規則清單（chain=forward/input/output，
 // action=accept/drop），非 Cisco 式具名 ACL 物件，故不沿用共用 {name,rules,appliedOn}
 // 巢狀形狀，改用專屬扁平陣列形狀
+// IPv6 支援（2026-08-17 新增，官方 help.mikrotik.com 確認 `/ipv6 firewall filter` 與
+// `/ip firewall filter` 語法平行，chain 名稱如 forward/input/output 兩邊會重複使用）：
+// 這不是名稱碰撞風險（規則本身無名稱），而是 family 混淆風險——若不標記版本，UI 上無法
+// 分辨同一條 "chain=forward action=accept" 規則究竟是 v4 還是 v6，故每筆規則新增 family 欄位
 function _parseACLRouterOS(cfg){
   const rules=[];
-  const block=cfg.match(/^\/ip\s+firewall\s+filter\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
-  if(!block)return rules;
-  block[1].split('\n').filter(l=>/^add\s/.test(l)).forEach(l=>{
-    const chain=(l.match(/\bchain=(\S+)/)||[])[1]||'';
-    const action=(l.match(/\baction=(\S+)/)||[])[1]||'';
-    if(!chain||!action)return;
-    rules.push({
-      chain,action,
-      protocol:(l.match(/\bprotocol=(\S+)/)||[])[1]||'',
-      srcAddress:(l.match(/\bsrc-address=(\S+)/)||[])[1]||'',
-      dstAddress:(l.match(/\bdst-address=(\S+)/)||[])[1]||'',
-      dstPort:(l.match(/\bdst-port=(\S+)/)||[])[1]||'',
-      inInterface:(l.match(/\bin-interface=(\S+)/)||[])[1]||'',
-      comment:(l.match(/\bcomment="([^"]*)"/)||[])[1]||'',
+  function collect(re,family){
+    const block=cfg.match(re);
+    if(!block)return;
+    block[1].split('\n').filter(l=>/^add\s/.test(l)).forEach(l=>{
+      const chain=(l.match(/\bchain=(\S+)/)||[])[1]||'';
+      const action=(l.match(/\baction=(\S+)/)||[])[1]||'';
+      if(!chain||!action)return;
+      rules.push({
+        chain,action,family,
+        protocol:(l.match(/\bprotocol=(\S+)/)||[])[1]||'',
+        srcAddress:(l.match(/\bsrc-address=(\S+)/)||[])[1]||'',
+        dstAddress:(l.match(/\bdst-address=(\S+)/)||[])[1]||'',
+        dstPort:(l.match(/\bdst-port=(\S+)/)||[])[1]||'',
+        inInterface:(l.match(/\bin-interface=(\S+)/)||[])[1]||'',
+        comment:(l.match(/\bcomment="([^"]*)"/)||[])[1]||'',
+      });
     });
-  });
+  }
+  collect(/^\/ip\s+firewall\s+filter\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m,'v4');
+  collect(/^\/ipv6\s+firewall\s+filter\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m,'v6');
   return rules;
 }
 // FortiSwitch 原本完全沒有 ACL parser 支援（本次新增）。語法為本專案設計，比照既有
@@ -800,7 +841,8 @@ function _parseACLCisco(cfg){
   // Named ACLs
   // 修正：原本用 \Z（JS 正則不支援，等同字面 'Z' 字元）當字串結尾 fallback，
   // 若該 ACL 剛好是檔案最後一段且內容不含字母 Z，會完全解析不到；改用既有慣例 (?![\s\S])
-  const aclRe=/^ip access-list\s+(standard|extended)\s+(\S+)([\s\S]*?)(?=^ip access-list\s|(?![\s\S]))/gm;
+  // 邊界同時涵蓋 ipv6 access-list，避免 IPv4 named ACL 貪婪吃到後面的 IPv6 區塊
+  const aclRe=/^ip access-list\s+(standard|extended)\s+(\S+)([\s\S]*?)(?=^ip access-list\s|^ipv6 access-list\s|(?![\s\S]))/gm;
   let m;
   while((m=aclRe.exec(cfg))!==null){
     const type=m[1],name=m[2],body=m[3];
@@ -820,14 +862,43 @@ function _parseACLCisco(cfg){
     // remarks
     const rkRe=/^\s*remark\s+(.*)/gm;
     while((rm=rkRe.exec(body))!==null)rules.push({seq:'',action:'remark',protocol:'',src:'',dst:'',dstPort:'',remark:rm[1]});
-    acls.push({name,type,vendor:'cisco',rules,appliedOn:[]});
+    acls.push({name,type,aclType:'ip',ipVersion:'v4',vendor:'cisco',rules,appliedOn:[]});
   }
-  // Numbered ACLs
+  // IPv6 Named ACLs（2026-08-17 新增，對外查證官方 Cisco/Arista/Dell 文件確認：`ipv6
+  // access-list NAME` 容器語法與規則列格式（permit|deny protocol src dst，無 standard/
+  // extended 關鍵字）在這批共用此函式的 IOS 系語系廠牌（Cisco/Arista/Dell OS10）高度一致；
+  // Cisco/Arista 介面套用關鍵字是 "ipv6 traffic-filter"，Dell OS10 官方文件確認是
+  // "ipv6 access-group"（與 v4 同關鍵字），Brocade/Ruijie 未能查到介面套用關鍵字逐字佐證，
+  // 兩個關鍵字都嘗試比對，對不到的廠牌僅 appliedOn 留空（不影響 ACL 本身正確解析）。
+  // aclType 比照既有 Aruba CX 模式（core.js 上方 _parseACLArubaCX() 參考實作）新增，
+  // 讓 IPv4/IPv6 各自獨立命名空間的廠牌（Cisco/Arista/Dell）介面套用比對時不會誤配對；
+  // Ruckus/Brocade FastIron 官方文件另外確認 ACL 名稱在 v4/v6 間必須全域唯一（無碰撞
+  // 風險），沿用同一份 aclType 欄位不影響其正確性
+  const acl6Re=/^ipv6 access-list\s+(\S+)([\s\S]*?)(?=^ip access-list\s|^ipv6 access-list\s|(?![\s\S]))/gm;
+  while((m=acl6Re.exec(cfg))!==null){
+    const name=m[1],body=m[2];
+    const rules=[];
+    const rRe=/^\s*(?:sequence\s+)?(?:(\d+)\s+)?(permit|deny)\s+(.+)/gm;
+    let rm;
+    while((rm=rRe.exec(body))!==null){
+      const parts=rm[3].trim().split(/\s+/);
+      const proto=parts[0]||'ipv6';let i=1,src,dst,dstPort='';
+      if(parts[i]==='host'){src='host '+parts[i+1];i+=2;}else{src=parts[i]||'-';i++;}
+      if(parts[i]==='host'){dst='host '+parts[i+1];i+=2;}else{dst=parts[i]||'-';i++;}
+      const eq=parts.indexOf('eq',i);
+      if(eq>-1)dstPort=parts[eq+1]||'';
+      rules.push({seq:rm[1]||'',action:rm[2],protocol:proto,src:(src||'-').trim(),dst:(dst||'-').trim(),dstPort,remark:''});
+    }
+    const rkRe=/^\s*remark\s+(.*)/gm;
+    while((rm=rkRe.exec(body))!==null)rules.push({seq:'',action:'remark',protocol:'',src:'',dst:'',dstPort:'',remark:rm[1]});
+    acls.push({name,type:'extended',aclType:'ipv6',ipVersion:'v6',vendor:'cisco',rules,appliedOn:[]});
+  }
+  // Numbered ACLs（傳統數字型 ACL 定義上僅 IPv4，無 IPv6 等效語法）
   const numRe=/^access-list\s+(\d+)\s+(permit|deny)\s+(.*)/gm;
   const numG={};
   while((m=numRe.exec(cfg))!==null){
     const num=m[1],type=parseInt(num)<=99?'standard':'extended';
-    if(!numG[num]){numG[num]={name:num,type,vendor:'cisco',rules:[],appliedOn:[]};acls.push(numG[num]);}
+    if(!numG[num]){numG[num]={name:num,type,aclType:'ip',ipVersion:'v4',vendor:'cisco',rules:[],appliedOn:[]};acls.push(numG[num]);}
     numG[num].rules.push({seq:'',action:m[2],protocol:'ip',src:m[3].trim(),dst:'',dstPort:'',remark:''});
   }
   // Interface application
@@ -837,7 +908,11 @@ function _parseACLCisco(cfg){
     if(!ifLine)continue;
     const ifName=ifLine[1].trim();
     const agRe=/ip access-group\s+(\S+)\s+(in|out)/gi;
-    while((m=agRe.exec(blk))!==null){const acl=acls.find(a=>a.name===m[1]);if(acl)acl.appliedOn.push({interface:ifName,direction:m[2].toLowerCase()});}
+    while((m=agRe.exec(blk))!==null){const acl=acls.find(a=>a.name===m[1]&&a.aclType==='ip');if(acl)acl.appliedOn.push({interface:ifName,direction:m[2].toLowerCase()});}
+    // ipv6 traffic-filter（Cisco/Arista）／ipv6 access-group（Dell OS10）：先以 aclType
+    // 限定只比對 IPv6 ACL，避免萬一同名 IPv4 ACL 誤配對
+    const ag6Re=/ipv6 (?:traffic-filter|access-group)\s+(\S+)\s+(in|out)/gi;
+    while((m=ag6Re.exec(blk))!==null){const acl=acls.find(a=>a.name===m[1]&&a.aclType==='ipv6');if(acl)acl.appliedOn.push({interface:ifName,direction:m[2].toLowerCase()});}
   }
   return acls;
 }
