@@ -10,6 +10,11 @@ function sonicEmptyResult(){
 // 不限協定，統一回填 'ip'（比照 Cisco 慣例）。簽章比照其餘 _parseACLXxx(cfg) 慣例吃原始
 // 字串（被 parseACL() 統一 dispatcher 呼叫，非從 parseSONiC() 內部呼叫——ACL 資料流走
 // res.acls（parseACL 統一計算，見 parseAny()），與 parseSONiC() 自己回傳的 res 無關）
+// IPv6 支援（2026-08-17 新增）：ACL_TABLE.type 官方 schema 為 L3（IPv4）/L3V6（IPv6），
+// 填入 ipVersion；ACL_RULE 的 IPv6 規則用獨立欄位名 SRC_IPV6/DST_IPV6（非與 SRC_IP/DST_IP
+// 同欄位混用），原本只讀 SRC_IP/DST_IP 導致 v6 規則位址靜默顯示 '-'，改為找不到 v4 欄位
+// 才 fallback 讀 v6 欄位。ACL_TABLE 表名在 schema 層強制全域唯一，本質無 v4/v6 命名空間
+// 碰撞風險，純粹是欄位對應缺口
 const SONIC_IP_PROTO_REV={6:'tcp',17:'udp',1:'icmp'};
 function _parseACLSONiC(cfg){
   let db;
@@ -17,7 +22,8 @@ function _parseACLSONiC(cfg){
   if(!db||typeof db!=='object')return [];
   const acls=[];
   Object.entries(db.ACL_TABLE||{}).forEach(([name,t])=>{
-    acls.push({name,type:'extended',vendor:'sonic',rules:[],
+    const ipVersion=t&&t.type==='L3V6'?'v6':t&&t.type==='L3'?'v4':'';
+    acls.push({name,type:'extended',ipVersion,vendor:'sonic',rules:[],
       appliedOn:((t&&t.ports)||[]).map(p=>({interface:p,direction:'in'}))});
   });
   Object.entries(db.ACL_RULE||{}).forEach(([key,val])=>{
@@ -29,8 +35,8 @@ function _parseACLSONiC(cfg){
       seq:val&&val.PRIORITY!==undefined?String(val.PRIORITY):'',
       action:val&&val.PACKET_ACTION==='DROP'?'deny':'permit',
       protocol:SONIC_IP_PROTO_REV[val&&val.IP_PROTOCOL]||'ip',
-      src:(val&&val.SRC_IP)||'-',
-      dst:(val&&val.DST_IP)||'-',
+      src:(val&&(val.SRC_IP||val.SRC_IPV6))||'-',
+      dst:(val&&(val.DST_IP||val.DST_IPV6))||'-',
       dstPort:val&&val.L4_DST_PORT!==undefined?String(val.L4_DST_PORT):'',
       remark:'',
     });
