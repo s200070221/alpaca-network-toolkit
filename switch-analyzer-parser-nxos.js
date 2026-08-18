@@ -144,10 +144,19 @@ function parseNXOS(cfg) {
       }
     }
     flush();
+    // IPv6（2026-08-18 新增，官方 NX-OS Unicast Routing Configuration Guide 確認 network
+    // 巢狀在獨立的 address-family ipv6 unicast 子模式內，與既有 IPv4 版本
+    // address-family ipv4 unicast 同一層級，比照 Comware/Cisco 已驗證過的 bodyV4 排除模式）
+    const networks6=[]; const afv6=body.match(/^\s*address-family ipv6(?:\s+unicast)?\s*\n([\s\S]*?)(?=^\s*address-family\b|^\s*exit-address-family\b|(?![\s\S]))/m);
+    if(afv6){
+      const nr6=/^\s*network\s+([0-9a-fA-F:]+\/\d+)\b/gm; let nm6;
+      while((nm6=nr6.exec(afv6[1]))!==null)networks6.push(nm6[1]);
+    }
+    const bodyV4=afv6?body.slice(0,afv6.index)+body.slice(afv6.index+afv6[0].length):body;
     const networks=[]; let nm;
     const nr=/^\s*network\s+([\d./]+)/gm;
-    while((nm=nr.exec(body))!==null)networks.push(nm[1]);
-    return [{ asn, routerId:rid, peers, networks }];
+    while((nm=nr.exec(bodyV4))!==null)networks.push(nm[1]);
+    return [{ asn, routerId:rid, peers, networks, networks6 }];
   }
   function parseOSPF() {
     // routerId 欄位原本誤植為 rid，與其餘所有廠牌／switch_analyzer 自己的 OSPF report／

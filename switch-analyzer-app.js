@@ -2972,6 +2972,11 @@ function renderOSPFTopo(ospfList){
   return`<div style="background:var(--surface2);border-radius:8px;padding:12px">${svg}</div>`;
 }
 
+// BGP IPv6（2026-08-18）：比照 VRRP_IPV6_UNCONFIRMED_VENDORS 慣例——peer／networks
+// 皆查無官方語法佐證的廠牌完整排除加註；peer 已支援但 networks（network 陳述式）語法
+// 查無官方佐證的廠牌僅加註較窄範圍的提示，避免使用者誤判成裝置真的沒有宣告 IPv6 網段
+const BGP_IPV6_UNCONFIRMED_VENDORS=['alcatel'];
+const BGP_NETWORKS6_UNCONFIRMED_VENDORS=['brocade','extreme'];
 function renderRoutingProtocols(){
   const ospf=parsed.ospf||[];
   const ospf6=parsed.ospf6||[];
@@ -3057,6 +3062,10 @@ function renderRoutingProtocols(){
   // BGP section
   if(bgp.length){
     h+=`<div style="padding:12px 18px 0"><div class="sec-title">BGP（${bgp.length} ${tr('rt.n_as')}）</div></div>`;
+    if(BGP_IPV6_UNCONFIRMED_VENDORS.includes(parsed.vendor))
+      h+=`<div class="hint" style="padding:8px 18px;color:var(--text-dim);font-size:11px;border-bottom:1px solid var(--border)">⚠️ ${tr('bgp.ipv6_unconfirmed_note')}</div>`;
+    else if(BGP_NETWORKS6_UNCONFIRMED_VENDORS.includes(parsed.vendor))
+      h+=`<div class="hint" style="padding:8px 18px;color:var(--text-dim);font-size:11px;border-bottom:1px solid var(--border)">⚠️ ${tr('bgp.networks6_unconfirmed_note')}</div>`;
     bgp.forEach(b=>{
       const ibgp=b.peers.filter(p=>p.type==='iBGP');
       const ebgp=b.peers.filter(p=>p.type==='eBGP');

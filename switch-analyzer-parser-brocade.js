@@ -371,8 +371,11 @@ function parseBrocadeBGP(cfg){
   const asn=(body.match(/^\s+local-as\s+(\d+)/m)||[])[1]||'';
   if(!asn)return[];
   const rid=(cfg.match(/^ip router-id\s+([\d.]+)/m)||[])[1]||'';
+  // IPv6 peer（2026-08-18 修正，官方 FastIron Command Reference 確認真實逐字範例
+  // "neighbor 1000::1 remote-as 2"，與既有 IPv4 語法同一層級，僅字元類別過窄需放寬；
+  // IPv6 版本的 network 陳述式查無官方逐字語法佐證，本輪不實作，UI 端加註窄範圍警語）
   const peers=[]; let m;
-  const re=/^\s+neighbor\s+([\d.]+)\s+remote-as\s+(\d+)/gm;
+  const re=/^\s+neighbor\s+(\S+)\s+remote-as\s+(\d+)/gm;
   while((m=re.exec(body))!==null){
     const ip=m[1],peerAS=m[2];
     const descM=body.match(new RegExp('^\\s+neighbor\\s+'+ip.replace(/\./g,'\\.')+'\\s+description\\s+([^\\n]+)','m'));

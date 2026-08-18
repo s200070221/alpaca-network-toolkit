@@ -288,9 +288,18 @@ function parseDellOS10BGP(cfg){
       const desc=(body.match(new RegExp('neighbor\\s+'+ip.replace(/\./g,'\\.')+'\\s+description\\s+([^\\n]+)'))||[])[1]||'';
       peers.push({ip,as:peerAs,desc:desc.trim(),type:peerAs===asn?'iBGP':'eBGP'});
     }
+    // IPv6（2026-08-18 新增，官方 SmartFabric OS10 User Guide＋官方社群版主回覆確認
+    // network 巢狀在獨立的 address-family ipv6 unicast 子模式內，結構與 Comware/Cisco/
+    // Aruba CX 已驗證過的 bodyV4 排除模式一致）
+    const nets6=[];const afv6=body.match(/^\s*address-family ipv6(?:\s+unicast)?\s*\n([\s\S]*?)(?=^\s*address-family\b|^\s*exit-address-family\b|(?![\s\S]))/m);
+    if(afv6){
+      const nr6=/network\s+([0-9a-fA-F:]+\/\d+)\b/g;let nm6;
+      while((nm6=nr6.exec(afv6[1]))!==null)nets6.push(nm6[1]);
+    }
+    const bodyV4=afv6?body.slice(0,afv6.index)+body.slice(afv6.index+afv6[0].length):body;
     const nets=[];const nr=/network\s+([\d.\/]+)/g;let nm;
-    while((nm=nr.exec(body))!==null)nets.push(nm[1]);
-    bgpList.push({asn,routerId:rid,peers,networks:nets});
+    while((nm=nr.exec(bodyV4))!==null)nets.push(nm[1]);
+    bgpList.push({asn,routerId:rid,peers,networks:nets,networks6:nets6});
   }
   return bgpList;
 }
