@@ -245,7 +245,10 @@ function parseExtremeXOSBGP(cfg){
   // 2026-07-15 查證修正：官方文件確認建立 BGP neighbor 的指令是 "create bgp neighbor IP
   // remote-AS-number N"（動詞 create，非猜測的 "configure bgp add neighbor"），需搭配另一行
   // "enable bgp neighbor IP" 才會生效，但該啟用行不影響本解析器所需欄位故不額外檢查
-  const re=/^create bgp neighbor\s+([\d.]+)\s+remote-AS-number\s+(\d+)/gim;
+  // IPv6（2026-08-18 修正）：官方文件確認真實逐字範例 "create bgp neighbor 2001:db8::1
+  // remote-AS-number 64512"，與既有 IPv4 語法同一指令、僅字元類別過窄需放寬；IPv6 版本的
+  // configure bgp add network 陳述式查無官方逐字語法佐證，本輪不實作，UI 端加註窄範圍警語
+  const re=/^create bgp neighbor\s+(\S+)\s+remote-AS-number\s+(\d+)/gim;
   while((m=re.exec(cfg))!==null){
     const ip=m[1],peerAS=m[2];
     const descM=cfg.match(new RegExp('^configure bgp neighbor\\s+'+ip.replace(/\./g,'\\.')+'\\s+description\\s+"?([^"\\n]+)"?','m'));

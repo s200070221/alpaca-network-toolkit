@@ -391,7 +391,9 @@ function parseJuniperBGP(cfg){
       peers.push({ip,as:peerAS,desc,type:peerType,group:groupName});
     }
     // Also single-line neighbors (no sub-block)
-    const snRe=/neighbor\s+([\d.]+);/g; let snm;
+    // 2026-08-18 修正：原字元類別 [\d.]+ 為 IPv4-only，子區塊內 neighbor 名稱擷取本來就用
+    // .replace() 去前綴、格式已中立，此單行 fallback 正則放寬為格式中立一併涵蓋 IPv6
+    const snRe=/neighbor\s+([^\s;]+);/g; let snm;
     while((snm=snRe.exec(gbody))!==null){
       if(!peers.find(p=>p.ip===snm[1]&&p.group===groupName))
         peers.push({ip:snm[1],as:groupAS,desc:'',
