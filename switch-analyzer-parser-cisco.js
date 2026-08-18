@@ -271,9 +271,21 @@ function parseCiscoBGP(cfg){
       const desc=(body.match(new RegExp('neighbor\\s+'+ip.replace(/\./g,'\\.')+'\\s+description\\s+([^\\n]+)'))||[])[1]||'';
       peers.push({ip, as:peerAs, desc:desc.trim(), type:peerAs===asn?'iBGP':'eBGP'});
     }
+    // IPv6（2026-08-18 新增，官方 Cisco BGP Configuration Guide 確認 network 巢狀在獨立的
+    // address-family ipv6 [unicast] 子模式內，語法為標準 slash-CIDR "network X:X::X/N"，
+    // 子模式以官方 exit-address-family 關鍵字或下一個 address-family 結尾；此函式為
+    // cisco/arista/ruijie 共用，惠及三家）。先算出 IPv6 子區塊範圍，再從 body 中挖除該
+    // 段落後才餵給下方 IPv4 network 正則掃描——否則 IPv6 位址開頭的十進位數字（如
+    // "2001:db8::"）會被 IPv4 正則的寬鬆字元類別 [\d.]+ 誤吃成一筆假的 IPv4 network
+    const nets6=[]; const afv6=body.match(/^\s*address-family ipv6(?:\s+unicast)?\s*\n([\s\S]*?)(?=^\s*address-family\b|^\s*exit-address-family\b|(?![\s\S]))/m);
+    if(afv6){
+      const nr6=/network\s+([0-9a-fA-F:]+\/\d+)\b/g; let nm6;
+      while((nm6=nr6.exec(afv6[1]))!==null)nets6.push(nm6[1]);
+    }
+    const bodyV4=afv6?body.slice(0,afv6.index)+body.slice(afv6.index+afv6[0].length):body;
     const nets=[]; const nr=/network\s+([\d.]+)(?:\s+mask\s+([\d.]+))?/g; let nm;
-    while((nm=nr.exec(body))!==null)nets.push(nm[1]+(nm[2]?'/'+cidrFromMask(nm[2]):''));
-    bgpList.push({asn, routerId:rid, peers, networks:nets});
+    while((nm=nr.exec(bodyV4))!==null)nets.push(nm[1]+(nm[2]?'/'+cidrFromMask(nm[2]):''));
+    bgpList.push({asn, routerId:rid, peers, networks:nets, networks6:nets6});
   }
   return bgpList;
 }

@@ -136,13 +136,23 @@ function parseRouterOSBGP(cfg){
   const asn=(instLine.match(/\bas=(\S+)/)||[])[1]||'-';
   const routerId=(instLine.match(/router-id=(\S+)/)||[])[1]||'-';
 
-  const peers=[]; let listName='';
+  // IPv6（2026-08-18 新增，官方 MikroTik 文件確認 /routing bgp connection 的
+  // address-families= 參數逐 connection 宣告可為 ipv4/ipv6/ipv4,ipv6；listName 拆成
+  // listName4/listName6 依該行宣告的 family 分流，沿用既有「只取第一筆命中」局限
+  // （非本輪擴大修復範圍）
+  const peers=[]; let listName4='', listName6='';
   const connBlock=cfg.match(/^\/routing\s+bgp\s+connection\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
   (connBlock?connBlock[1].split('\n'):[]).filter(l=>/^add\s/.test(l)).forEach(l=>{
     const ip=(l.match(/remote\.address=([^\s\/]+)/)||[])[1]||'';
     const as=(l.match(/remote\.as=(\S+)/)||[])[1]||'';
     const name=(l.match(/\bname=(\S+)/)||[])[1]||'';
-    if(!listName){const lm=l.match(/output\.network=(\S+)/);if(lm)listName=lm[1];}
+    const af=(l.match(/\baddress-families=(\S+)/)||[])[1]||'';
+    const fams=af.split(',');
+    const lm=l.match(/output\.network=(\S+)/);
+    if(lm){
+      if(fams.includes('ipv6')&&!listName6)listName6=lm[1];
+      if((fams.includes('ipv4')||!af)&&!listName4)listName4=lm[1];
+    }
     if(ip)peers.push({ip,as,desc:name});
   });
 
@@ -150,17 +160,29 @@ function parseRouterOSBGP(cfg){
   // 引用的是 /ip firewall address-list 位址清單名稱，須另外掃描該區塊取出同名清單的
   // 所有 address= 值
   const networks=[];
-  if(listName){
+  if(listName4){
     const alBlock=cfg.match(/^\/ip\s+firewall\s+address-list\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
-    const listEsc=listName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const listEsc=listName4.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
     (alBlock?alBlock[1].split('\n'):[]).filter(l=>/^add\s/.test(l)).forEach(l=>{
       if(!new RegExp('list='+listEsc+'(\\s|$)').test(l))return;
       const addr=(l.match(/\baddress=(\S+)/)||[])[1];
       if(addr)networks.push(addr);
     });
   }
+  // IPv6 版本引用的是獨立的 /ipv6 firewall address-list（非 /ip firewall address-list），
+  // 官方文件確認語法為 /ipv6 firewall address-list add list=NAME address=ADDR/PREFIXLEN
+  const networks6=[];
+  if(listName6){
+    const alBlock6=cfg.match(/^\/ipv6\s+firewall\s+address-list\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
+    const listEsc6=listName6.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    (alBlock6?alBlock6[1].split('\n'):[]).filter(l=>/^add\s/.test(l)).forEach(l=>{
+      if(!new RegExp('list='+listEsc6+'(\\s|$)').test(l))return;
+      const addr=(l.match(/\baddress=(\S+)/)||[])[1];
+      if(addr)networks6.push(addr);
+    });
+  }
 
-  return[{asn,routerId,peers,networks}];
+  return[{asn,routerId,peers,networks,networks6}];
 }
 // 官方文件查證（help.mikrotik.com「Bonding」頁）：真實選單是 `/interface bonding`
 // （非原本誤寫的 `/interface bond`，兩者完全不同指令，原本的正則永遠比對不到任何真實匯出
