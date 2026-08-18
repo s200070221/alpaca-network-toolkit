@@ -1991,14 +1991,17 @@ function parseVRRP(cfg, vendor){
       merged[name]=(merged[name]||'')+body;
     }
     for(const [iface,body] of Object.entries(merged)){
-      if(!/vrrp vrid/.test(body))continue;
+      // IPv6（2026-08-17 新增，官方 H3C VRRP commands 手冊確認 `vrrp ipv6 vrid N` 是與
+      // IPv4 `vrrp vrid N` 平行的獨立指令，非同一 vrid 命名空間下的欄位差異）：guard 條件
+      // 一併涵蓋，避免只有 IPv6 宣告、無 IPv4 的介面被整段跳過
+      if(!/vrrp (?:vrid|ipv6 vrid)/.test(body))continue;
       const vridSet={};let m;
       // Collect all fields per VRID
       const allVrids=[...body.matchAll(/vrrp vrid\s+(\d+)/g)].map(x=>x[1]);
       const uniq=[...new Set(allVrids)];
       for(const vrid of uniq){
         const re=new RegExp('vrrp vrid\\s+'+vrid+'\\s+([^\\n]+)','g');
-        const rec={vrid,interface:iface,vip:'',priority:'100',preempt:false,authMode:'',authKey:'',trackIf:'',trackReduced:'',version:'2'};
+        const rec={vrid,interface:iface,vip:'',vip6:'',priority:'100',preempt:false,authMode:'',authKey:'',trackIf:'',trackReduced:'',version:'2'};
         let line;
         while((line=re.exec(body))!==null){
           const rest=line[1].trim();
@@ -2016,21 +2019,48 @@ function parseVRRP(cfg, vendor){
         }
         groups.push(rec);
       }
+      // IPv6 vrid（同一 interface+vrid 若已有 IPv4 記錄則合併 vip6，否則新增獨立記錄）
+      const allVrids6=[...body.matchAll(/vrrp ipv6 vrid\s+(\d+)/g)].map(x=>x[1]);
+      for(const vrid of [...new Set(allVrids6)]){
+        const re6=new RegExp('vrrp ipv6 vrid\\s+'+vrid+'\\s+([^\\n]+)','g');
+        let vip6='',line6;
+        while((line6=re6.exec(body))!==null){
+          const rest=line6[1].trim();
+          if(/^virtual-ip\s/.test(rest))vip6=(rest.match(/virtual-ip\s+(\S+)/)||[])[1]||vip6;
+        }
+        if(!vip6)continue;
+        const existing=groups.find(g=>g.interface===iface&&g.vrid===vrid);
+        if(existing)existing.vip6=vip6;
+        else groups.push({vrid,interface:iface,vip:'',vip6,priority:'100',preempt:false,authMode:'',authKey:'',trackIf:'',trackReduced:'',version:'2'});
+      }
     }
   } else if(vendor==='dell-os10'){
     // Dell OS10: "vrrp-group N" block inside interface vlan
+    // IPv6（2026-08-17 新增，官方 SmartFabric OS10 User Guide 確認 `vrrp-ipv6-group N` 是
+    // 與 IPv4 `vrrp-group N` 平行的獨立關鍵字，非同一 group 命名空間下的欄位差異）：
+    // 兩段正則的 lookahead 皆須互相涵蓋對方關鍵字，避免其中一段非貪婪擷取內容溢出到另一段區塊
     const raw=cfg.split('\ninterface ');
     for(const blk of raw.slice(1)){
       const name=blk.split('\n')[0].trim();
       const body=blk.slice(name.length);
-      if(!/vrrp-group/.test(body))continue;
-      const vgRe=/vrrp-group\s+(\d+)([\s\S]*?)(?=vrrp-group|\n\S|$)/g;let vg;
+      if(!/vrrp-group|vrrp-ipv6-group/.test(body))continue;
+      const vgRe=/(?<!ipv6-)vrrp-group\s+(\d+)([\s\S]*?)(?=vrrp-ipv6-group|vrrp-group|\n\S|$)/g;let vg;
       while((vg=vgRe.exec(body))!==null){
         const vgBody=vg[2];
         const vip=(vgBody.match(/virtual-address\s+(\S+)/)||[])[1]||'';
         const priority=(vgBody.match(/priority\s+(\d+)/)||[])[1]||'100';
         const preempt=/preempt/.test(vgBody);
-        if(vip)groups.push({vrid:vg[1],interface:name,vip,priority,preempt,authMode:'',trackIf:'',trackReduced:'',version:'2'});
+        if(vip)groups.push({vrid:vg[1],interface:name,vip,vip6:'',priority,preempt,authMode:'',trackIf:'',trackReduced:'',version:'2'});
+      }
+      const vg6Re=/vrrp-ipv6-group\s+(\d+)([\s\S]*?)(?=vrrp-ipv6-group|vrrp-group|\n\S|$)/g;let vg6;
+      while((vg6=vg6Re.exec(body))!==null){
+        const vrid=vg6[1],vip6=(vg6[2].match(/virtual-address\s+(\S+)/)||[])[1]||'';
+        if(!vip6)continue;
+        const priority=(vg6[2].match(/priority\s+(\d+)/)||[])[1]||'100';
+        const preempt=/preempt/.test(vg6[2]);
+        const existing=groups.find(g=>g.interface===name&&g.vrid===vrid);
+        if(existing)existing.vip6=vip6;
+        else groups.push({vrid,interface:name,vip:'',vip6,priority,preempt,authMode:'',trackIf:'',trackReduced:'',version:'2'});
       }
     }
   } else if(vendor==='cisco'){
