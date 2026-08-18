@@ -2073,11 +2073,17 @@ function parseVRRP(cfg, vendor){
       const vridSet=new Set([...body.matchAll(/standby\s+(\d+)/g)].map(x=>x[1]));
       for(const vrid of vridSet){
         const re=new RegExp('standby\\s+'+vrid+'\\s+([^\\n]+)','g');
-        const rec={vrid,interface:name,vip:'',priority:'100',preempt:false,authMode:'',trackIf:'',trackReduced:'',version:'HSRP',type:'HSRP'};
+        const rec={vrid,interface:name,vip:'',vip6:'',priority:'100',preempt:false,authMode:'',trackIf:'',trackReduced:'',version:'HSRP',type:'HSRP'};
         let line;
         while((line=re.exec(body))!==null){
           const rest=line[1].trim();
           if(/^ip\s/.test(rest))rec.vip=(rest.match(/ip\s+(\S+)/)||[])[1]||'';
+          // IPv6（2026-08-18 新增，官方 Cisco HSRP for IPv6 Configuration Guide 確認同一
+          // standby N 指令樹的關鍵字擴充："standby N ipv6 autoconfig"（自動衍生 link-local，
+          // 存字面值 "autoconfig"）或 "standby N ipv6 ADDR"（顯式位址），前提須先在介面上
+          // 宣告 "standby version 2"（HSRP for IPv6 僅 v2 支援，本工具不驗證此前提條件，
+          // 沿用既有專案慣例只解析欄位值不驗證裝置端合法性）
+          else if(/^ipv6\s/.test(rest))rec.vip6=(rest.match(/ipv6\s+(\S+)/)||[])[1]||'';
           else if(/^priority\s/.test(rest))rec.priority=(rest.match(/priority\s+(\d+)/)||[])[1]||'100';
           else if(/^preempt/.test(rest))rec.preempt=true;
           else if(/^authentication/.test(rest))rec.authMode='configured';
@@ -2125,11 +2131,11 @@ function parseVRRP(cfg, vendor){
       merged[name]=(merged[name]||'')+body;
     }
     for(const [iface,body] of Object.entries(merged)){
-      if(!/vrrp\s+\d+\s+ipv4\s+\d/.test(body))continue;
+      if(!/vrrp\s+\d+\s+ipv4\s+\d/.test(body)&&!/vrrp\s+\d+\s+ipv6\s+\S/.test(body))continue;
       const vridSet=new Set([...body.matchAll(/vrrp\s+(\d+)\s+ipv4\s+\d/g)].map(x=>x[1]));
       for(const vrid of vridSet){
         const re=new RegExp('vrrp\\s+'+vrid+'\\s+([^\\n]+)','g');
-        const rec={vrid,interface:iface,vip:'',priority:'100',preempt:true,authMode:'',trackIf:'',trackReduced:'',version:'2'};
+        const rec={vrid,interface:iface,vip:'',vip6:'',priority:'100',preempt:true,authMode:'',trackIf:'',trackReduced:'',version:'2'};
         let line;
         while((line=re.exec(body))!==null){
           const rest=line[1].trim();
@@ -2138,6 +2144,21 @@ function parseVRRP(cfg, vendor){
         }
         if(new RegExp('no\\s+vrrp\\s+'+vrid+'\\s+preempt').test(body))rec.preempt=false;
         if(rec.vip)groups.push(rec);
+      }
+      // IPv6（2026-08-18 新增，官方 Arista EOS User Manual 確認 IPv6 VRRP 用獨立的
+      // "vrrp N ipv6 ADDR" 宣告——N 是該 IPv6 群組自己的 vrid（可能與同介面 IPv4 群組的
+      // vrid 相同或不同，非強制共用同一 vrid 命名空間），啟用前提須先在某個 vrid 上宣告
+      // "vrrp N ipv4 version 3"（v2 僅支援 IPv4，此工具不驗證此前提，僅解析欄位值）；
+      // 依 interface+vrid 合併回既有 IPv4 記錄，找不到則新增獨立記錄
+      const vridSet6=new Set([...body.matchAll(/vrrp\s+(\d+)\s+ipv6\s+(\S+)/g)].map(x=>x[1]));
+      for(const vrid of vridSet6){
+        const re6=new RegExp('vrrp\\s+'+vrid+'\\s+ipv6\\s+(\\S+)','g');
+        const m6=re6.exec(body);
+        if(!m6)continue;
+        const vip6=m6[1];
+        const existing=groups.find(g=>g.interface===iface&&g.vrid===vrid);
+        if(existing)existing.vip6=vip6;
+        else groups.push({vrid,interface:iface,vip:'',vip6,priority:'100',preempt:true,authMode:'',trackIf:'',trackReduced:'',version:'2'});
       }
     }
   } else if(vendor==='ruijie'){
@@ -2219,20 +2240,26 @@ function parseVRRP(cfg, vendor){
       for(const line of body.split('\n')){
         const mGrp=line.match(/^(\s+)hsrp\s+(\d+)\s*$/);
         if(mGrp){
-          if(cur&&cur.vip)groups.push(cur);
+          if(cur&&(cur.vip||cur.vip6))groups.push(cur);
           groupIndent=mGrp[1].length;
-          cur={vrid:mGrp[2],interface:name,vip:'',priority:'100',preempt:false,authMode:'',trackIf:'',trackReduced:'',version:'HSRP',type:'HSRP'};
+          cur={vrid:mGrp[2],interface:name,vip:'',vip6:'',priority:'100',preempt:false,authMode:'',trackIf:'',trackReduced:'',version:'HSRP',type:'HSRP'};
           continue;
         }
         if(!cur)continue;
         const indentM=line.match(/^(\s*)\S/);
         const lineIndent=indentM?indentM[1].length:0;
-        if(!line.trim()||lineIndent<=groupIndent){ if(cur&&cur.vip)groups.push(cur); cur=null; continue; }
+        if(!line.trim()||lineIndent<=groupIndent){ if(cur&&(cur.vip||cur.vip6))groups.push(cur); cur=null; continue; }
         const mVip=line.match(/^\s+ip\s+(\S+)/); if(mVip){cur.vip=mVip[1]; continue;}
+        // IPv6（2026-08-18 新增，NX-OS 官方文件確認 HSRP for IPv6 沿用與 Cisco IOS-XE 同款
+        // "standby version 2" 前提＋"ipv6 autoconfig"／"ipv6 ADDR" 機制；NX-OS 巢狀 hsrp N {}
+        // 區塊內既有 ip/priority/preempt 皆為同層級 sibling 行，ipv6 比照同一模式新增為另一
+        // sibling 行，未取得 NX-OS 巢狀寫法的逐字官方範例，但與既有已查證的巢狀區塊結構
+        // 一致，信心度中高）
+        const mVip6=line.match(/^\s+ipv6\s+(\S+)/); if(mVip6){cur.vip6=mVip6[1]; continue;}
         const mPrio=line.match(/^\s+priority\s+(\d+)/); if(mPrio){cur.priority=mPrio[1]; continue;}
         if(/^\s+preempt\b/.test(line)){cur.preempt=true; continue;}
       }
-      if(cur&&cur.vip)groups.push(cur);
+      if(cur&&(cur.vip||cur.vip6))groups.push(cur);
     }
   }
   return groups;
