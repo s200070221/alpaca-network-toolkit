@@ -3096,12 +3096,19 @@ function renderRoutingProtocols(){
 // ══════════════════════════════════════════════════════
 
 // Comware: extract VRRP from merged interface blocks
+// VRRP IPv6（2026-08-18）：已查證官方語法並實作的廠牌（vip6 欄位有意義）；另有廠牌已確認
+// 有真實 VRRP/VRRP-E 支援，但 IPv6 版本兩輪對外查證仍查無官方逐字語法佐證，本工具尚未支援
+// 解析——刻意與「查無 IPv6 資料＝裝置真的沒有」分開標示，避免使用者誤判，比照專案一貫
+// 「不猜測」原則（同 RouterOS RIPng／Check Point 次要IP 的既有處理方式）
+const VRRP_IPV6_UNCONFIRMED_VENDORS=['aruba','extreme','brocade','ruijie','netgear','alcatel'];
 function renderVRRP(){
   const groups=parsed.vrrp||[];
-  const isHSRP=parsed.vendor==='cisco';
+  const isHSRP=parsed.vendor==='cisco'||parsed.vendor==='nxos';
   const proto=isHSRP?'HSRP':'VRRP';
+  const ipv6UnconfirmedNote=VRRP_IPV6_UNCONFIRMED_VENDORS.includes(parsed.vendor)
+    ?`<div class="hint" style="padding:8px 18px;color:var(--text-dim);font-size:11px;border-bottom:1px solid var(--border)">⚠️ ${tr('vrrp.ipv6_unconfirmed_note')}</div>`:'';
   if(!groups.length)
-    return`<div class="nodata">${tr('msg.no_vrrp_pre')}${proto}${tr('msg.no_vrrp_suf')}</div>`;
+    return`${ipv6UnconfirmedNote}<div class="nodata">${tr('msg.no_vrrp_pre')}${proto}${tr('msg.no_vrrp_suf')}</div>`;
 
   // Sort by interface then VRID
   const sorted=[...groups].sort((a,b)=>a.interface.localeCompare(b.interface)||parseInt(a.vrid)-parseInt(b.vrid));
@@ -3147,6 +3154,7 @@ function renderVRRP(){
   const body=filtered.map(r=>`<tr>${hdrs.map(h=>`<td>${r[h.key+'_html']||esc(String(r[h.key]??''))}</td>`).join('')}</tr>`).join('');
 
   return`<div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+    ${ipv6UnconfirmedNote}
     <div class="tbar">
       <div class="search-wrap"><span class="search-ico">🔍</span><input class="search-inp" id="search-inp" placeholder="${tr('search.prefix')} ${proto}..." oninput="debouncedRenderView('vrrp')"></div>
       <button class="btn btn-ghost btn-sm" onclick="exportVRRPCSV()">${tr('btn.export_csv')}</button>
