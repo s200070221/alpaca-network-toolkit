@@ -3033,7 +3033,7 @@ function renderRoutingProtocols(){
           <td style="color:var(--text-dim)">${esc(p.desc||'—')}</td>
         </tr>`).join('')}
         </tbody></table>`:'<div style="color:var(--text-muted);font-size:12px;padding:4px 0">'+tr('rt.no_peers')+'</div>'}
-        <div style="padding-top:6px;font-size:11px;color:var(--text-dim)">iBGP: ${ibgp.length} · eBGP: ${ebgp.length} · ${tr('rt.bgp_net')}: ${b.networks.length}${b.timers?` · Keepalive: ${b.timers.keepalive}s · Holdtime: ${b.timers.holdtime}s`:''}</div>
+        <div style="padding-top:6px;font-size:11px;color:var(--text-dim)">iBGP: ${ibgp.length} · eBGP: ${ebgp.length} · ${tr('rt.bgp_net')}: ${b.networks.length}${b.networks6&&b.networks6.length?` + ${b.networks6.length} IPv6`:''}${b.timers?` · Keepalive: ${b.timers.keepalive}s · Holdtime: ${b.timers.holdtime}s`:''}</div>
         ${b.peerGroups&&b.peerGroups.length?`<div style="padding-top:2px;font-size:11px;color:var(--text-dim)">Peer Groups: ${b.peerGroups.map(g=>`<span class="pill p-gray" style="font-size:10px">${esc(g.name)}${g.type?' ('+esc(g.type)+')':''}</span>`).join(' ')}</div>`:''}
       </div></div>`;
     });

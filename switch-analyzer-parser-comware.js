@@ -554,9 +554,23 @@ function parseBGP(cfg){
       const peerType=peerAs===asn?'iBGP':'eBGP';
       peers.push({ip, as:peerAs, desc:desc.trim(), type:peerType});
     }
+    // IPv6（2026-08-18 新增，官方 H3C BGP Commands 手冊確認 network 巢狀在獨立的
+    // address-family ipv6 子模式內，語法為 "network ipv6-address prefix-length"——前綴
+    // 長度是空格分隔的獨立參數，非 slash-CIDR，與現有 IPv4 "network A.B.C.D mask" 同款
+    // 空格分隔慣例一致；子模式結尾比照 H3C 慣例，遇下一個 address-family 或單獨一行的 #
+    // 即停）。先算出 IPv6 子區塊範圍，再從 body 中挖除該段落後才餵給下方 IPv4 network
+    // 正則掃描——否則 IPv6 位址開頭的十進位數字（如 "2001:db8::"）會被 IPv4 正則的
+    // 寬鬆字元類別 [\d./]+ 誤吃成一筆假的 IPv4 network（如 "2001"）
+    const nets6=[];
+    const afv6=body.match(/^\s*address-family ipv6(?:\s+unicast)?\s*\n([\s\S]*?)(?=^\s*address-family\b|^\s*#\s*$|(?![\s\S]))/m);
+    if(afv6){
+      const nr6=/network\s+([0-9a-fA-F:]+)\s+(\d+)\b/g; let nm6;
+      while((nm6=nr6.exec(afv6[1]))!==null)nets6.push(nm6[1]+'/'+nm6[2]);
+    }
+    const bodyV4=afv6?body.slice(0,afv6.index)+body.slice(afv6.index+afv6[0].length):body;
     // Networks advertised (supports "network A.B.C.D mask" or "network prefix/len")
     const nets=[]; const nr=/network\s+([\d./]+)(?:\s+(\d+\.\d+\.\d+\.\d+))?/g; let nm;
-    while((nm=nr.exec(body))!==null){
+    while((nm=nr.exec(bodyV4))!==null){
       const dst=nm[1];
       if(nm[2])nets.push(dst+'/'+cidrFromMask(nm[2]));
       else nets.push(dst);
@@ -571,7 +585,7 @@ function parseBGP(cfg){
     // N N" 備援保留（不影響 Comware 真實匯出檔解析，純粹避免誤刪原有容錯路徑）
     const timerM=body.match(/timer\s+keepalive\s+(\d+)\s+hold\s+(\d+)/i)||body.match(/timers(?:\s+bgp)?\s+(\d+)\s+(\d+)/i);
     const timers=timerM?{keepalive:timerM[1],holdtime:timerM[2]}:null;
-    bgpList.push({asn,routerId:rid,peers,networks:nets,peerGroups,timers});
+    bgpList.push({asn,routerId:rid,peers,networks:nets,networks6:nets6,peerGroups,timers});
   }
   return bgpList;
 }
