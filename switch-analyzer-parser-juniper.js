@@ -360,6 +360,41 @@ function parseJuniperOSPF(cfg){
   return areas.length?[{pid:'1',routerId:rid,areas,protocol:'ospf'}]:[];
 }
 
+// OSPFv3（2026-08-18 新增，官方 Junos OSPF User Guide 確認 `protocols ospf3 { area X
+// { interface Y; } }`，與 IPv4 `protocols ospf` 結構完全平行，僅頂層關鍵字換成
+// `ospf3`；沿用既有 junosBlock()/junosSubBlocks() 擷取邏輯，areas[].interfaces 為介面
+// 名稱字串陣列，與本會話稍早 Comware/Cisco/RouterOS 已建立的 ospf6 資料形狀一致）
+function parseJuniperOSPFv3(cfg){
+  const protoBlock=junosBlock(cfg,'protocols');
+  if(!protoBlock)return[];
+  const ospf3Block=junosBlock(protoBlock,'ospf3')||junosBlock(cfg,'ospf3');
+  if(!ospf3Block)return[];
+  const roBlock=junosBlock(cfg,'routing-options');
+  const rid=(roBlock.match(/router-id\s+([\d.]+);/)||[])[1]||'';
+  const areas=[];
+  const areaSubs=junosSubBlocks(ospf3Block);
+  for(const{name,content:abody}of areaSubs){
+    if(!/^area\s/i.test(name))continue;
+    const areaId=name.replace(/^area\s+/,'').trim();
+    const interfaces=[];
+    const ifRe=/interface\s+([\w.\-\/]+)/g; let im;
+    while((im=ifRe.exec(abody))!==null){
+      const iname=im[1].replace(';','').trim();
+      if(iname&&!iname.includes('{'))
+        interfaces.push(iname);
+    }
+    const ifSubs=junosSubBlocks(abody);
+    for(const{name:iname}of ifSubs){
+      if(/^interface\s/i.test(iname)){
+        const ifn=iname.replace(/^interface\s+/,'').trim();
+        if(!interfaces.includes(ifn))interfaces.push(ifn);
+      }
+    }
+    areas.push({area:areaId,interfaces});
+  }
+  return areas.length?[{pid:'1',routerId:rid,areas}]:[];
+}
+
 // ── BGP ───────────────────────────────────────────────────
 function parseJuniperBGP(cfg){
   const protoBlock=junosBlock(cfg,'protocols');
@@ -573,6 +608,7 @@ function parseJuniper(cfg){
     vrfs:        parseJuniperVRFs(cfg),
     users:       parseJuniperUsers(cfg),
     ospf:        parseJuniperOSPF(cfg),
+    ospf6:       parseJuniperOSPFv3(cfg),
     bgp:         parseJuniperBGP(cfg),
     vrrp:[], rip:[], vxlan:null,
     dhcp:        parseJuniperDHCP(cfg),

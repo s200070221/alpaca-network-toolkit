@@ -244,6 +244,11 @@ function parseArubaUsers(cfg){
 }
 
 function parseArubaOSPF(cfg){
+  // 2026-08-18 修復：doAnalyze() 對貼上的設定檔內容做 .trim()，若使用者貼上的設定檔本身
+  // 結尾無換行字元，下方逐行擷取正則的重複群組 [^\n]*\n 要求每一行都要有結尾換行字元才會
+  // 被收進區塊內容，會導致「檔案最後一段」的最後一行（常是最後一個 interface 的關聯指派）
+  // 靜默漏解析；統一補上結尾換行字元避免此邊界情況
+  if(!cfg.endsWith('\n'))cfg=cfg+'\n';
   const processes=[]; let m;
   const re=/^router ospf\s+(\d+)\n((?:(?!^(?:router|bgp|interface|vlan|ip\s+route|user)\b)[^\n]*\n)*)/gm;
   while((m=re.exec(cfg))!==null){
@@ -268,6 +273,34 @@ function parseArubaOSPF(cfg){
       const area=aim[1];
       if(!areaMap.has(area))areaMap.set(area,{area,networks:[]});
       areaMap.get(area).networks.push({network:ifName,wildcard:''});
+    }
+    processes.push({pid,routerId:rid,areas:Array.from(areaMap.values())});
+  }
+  return processes;
+}
+
+// OSPFv3（2026-08-18 新增，官方 Aruba CX IP Routing Guide 確認 `router ospfv3 <pid>
+// [vrf <vrf>]` + bare `area X` 宣告，與 IPv4 `router ospf` 結構完全平行；真正的
+// area/介面關聯同樣在各自 interface 區塊內用 `ipv6 ospfv3 <pid> area <area>` 逐一指派）
+function parseArubaOSPFv3(cfg){
+  // 修復同 parseArubaOSPF()：結尾補上換行字元，避免檔案最後一段的最後一行漏解析
+  if(!cfg.endsWith('\n'))cfg=cfg+'\n';
+  const processes=[]; let m;
+  const re=/^router ospfv3\s+(\d+)(?:\s+vrf\s+\S+)?\n((?:(?!^(?:router|bgp|interface|vlan|ip\s+route|user)\b)[^\n]*\n)*)/gm;
+  while((m=re.exec(cfg))!==null){
+    const pid=m[1],body=m[2];
+    const rid=(body.match(/router-id\s+(\S+)/)||[])[1]||'';
+    const areaMap=new Map();
+    const ar=/^\s*area\s+([\d.]+)\s*$/gm; let am;
+    while((am=ar.exec(body))!==null)if(!areaMap.has(am[1]))areaMap.set(am[1],{area:am[1],interfaces:[]});
+    const ifRe=/^interface\s+([^\n]+)\n((?:(?!^(?:interface|router|vlan|ip\s+route|user)\b)[^\n]*\n)*)/gm; let ifm;
+    while((ifm=ifRe.exec(cfg))!==null){
+      const ifName=ifm[1].trim().replace(/^(vlan)\s+(\d+)$/i,'$1$2').replace(/^(loopback)\s+(\d+)$/i,'$1$2');
+      const aim=ifm[2].match(new RegExp('ipv6 ospfv3\\s+'+pid+'\\s+area\\s+([\\d.]+)'));
+      if(!aim)continue;
+      const area=aim[1];
+      if(!areaMap.has(area))areaMap.set(area,{area,interfaces:[]});
+      areaMap.get(area).interfaces.push(ifName);
     }
     processes.push({pid,routerId:rid,areas:Array.from(areaMap.values())});
   }
@@ -303,6 +336,24 @@ function parseArubaBGP(cfg){
   return bgpList;
 }
 
+// RIPng（2026-08-18 新增，官方 Aruba CX 文件確認 `router ripng` 為獨立頂層指令進入子模式
+// （maximum-paths/distance/redistribute/timers 等），與 IPv4 `router rip`+network 陳述式
+// 機制不同——RIPng 協定本質是逐介面 enable，介面區塊內 `ipv6 ripng` 出現即視為已啟用；
+// 刻意不重用既有 parseArubaRIP()/parseRIPBlock() 共用邏輯，新增獨立函式）
+function parseArubaRIPng(cfg){
+  if(!/^router ripng\b/m.test(cfg))return[];
+  // 修復同 parseArubaOSPF()：結尾補上換行字元，避免檔案最後一段的最後一行漏解析
+  if(!cfg.endsWith('\n'))cfg=cfg+'\n';
+  const ifaces=[];
+  const ifRe=/^interface\s+([^\n]+)\n((?:(?!^(?:interface|router|vlan|ip\s+route|user)\b)[^\n]*\n)*)/gm; let ifm;
+  while((ifm=ifRe.exec(cfg))!==null){
+    if(!/^\s*ipv6 ripng\b/m.test(ifm[2]))continue;
+    const ifName=ifm[1].trim().replace(/^(vlan)\s+(\d+)$/i,'$1$2').replace(/^(loopback)\s+(\d+)$/i,'$1$2');
+    ifaces.push(ifName);
+  }
+  return[{pid:'1',interfaces:ifaces,redistribute:[]}];
+}
+
 function parseAruba(cfg){
   const sys=parseArubaSysInfo(cfg);
   const stack=parseArubaVSF(cfg);
@@ -312,11 +363,13 @@ function parseAruba(cfg){
   const vrfs=parseArubaVRFs(cfg);
   const users=parseArubaUsers(cfg);
   const ospf=parseArubaOSPF(cfg);
+  const ospf6=parseArubaOSPFv3(cfg);
   const bgp=parseArubaBGP(cfg);
   const rip=parseArubaRIP(cfg);
+  const rip6=parseArubaRIPng(cfg);
   const vrrpA=parseVRRP(cfg,'aruba');
   const vxlanA=parseVXLAN(cfg,'aruba');
-  return{sys,irf:null,stack,vlans,interfaces,routes,vrfs,users,ospf,bgp,rip,vrrp:vrrpA,vxlan:vxlanA,vendor:'aruba'};
+  return{sys,irf:null,stack,vlans,interfaces,routes,vrfs,users,ospf,ospf6,bgp,rip,rip6,vrrp:vrrpA,vxlan:vxlanA,vendor:'aruba'};
 }
 
 

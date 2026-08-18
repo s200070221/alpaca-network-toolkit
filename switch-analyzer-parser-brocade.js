@@ -360,6 +360,55 @@ function parseBrocadeOSPF(cfg){
   return areaList.length?[{pid:'1',routerId:rid,areas:areaList,protocol:'ospf'}]:[];
 }
 
+// OSPFv3（2026-08-18 新增，官方 FastIron Command Reference 確認真實逐字範例
+// `ipv6 router ospf [vrf V]` 全域啟用 + 介面 `ipv6 ospf area X`，與 IPv4 baseline
+// 結構完全平行——本身就是逐介面掃描動態建立 area 清單，非 network 陳述式）
+function parseBrocadeOSPFv3(cfg){
+  if(!/^ipv6 router ospf\b/m.test(cfg))return[];
+  const rid=(cfg.match(/^ip router-id\s+([\d.]+)/m)||[])[1]||'';
+  const areas={};
+  const ifBlocks=cfg.split(/^(?=interface\s)/m);
+  for(const blk of ifBlocks){
+    const veM=blk.match(/^interface\s+ve\s+(\d+)/i);
+    const loM=blk.match(/^interface\s+loopback\s+(\d+)/i);
+    const ethM=blk.match(/^interface\s+(?:e(?:the(?:rnet)?)?\s+)?([\d][^\s]*)/i);
+    let ifName='';
+    if(veM)ifName='ve'+veM[1];
+    else if(loM)ifName='loopback'+loM[1];
+    else if(ethM)ifName='e'+ethM[1];
+    if(!ifName)continue;
+    const aM=blk.match(/^\s+ipv6 ospf area\s+([\d.]+)/m);
+    if(aM){
+      const area=aM[1];
+      if(!areas[area])areas[area]=[];
+      areas[area].push(ifName);
+    }
+  }
+  const areaList=Object.entries(areas).map(([area,interfaces])=>({area,interfaces}));
+  return areaList.length?[{pid:'1',routerId:rid,areas:areaList}]:[];
+}
+
+// RIPng（2026-08-18 新增，官方 FastIron Command Reference 確認真實逐字範例
+// `ipv6 router rip` 全域啟用 + 介面 `ipv6 rip enable`，與 IPv4 baseline 的
+// `router rip`+逐介面 `ip rip` 結構完全平行）
+function parseBrocadeRIPng(cfg){
+  if(!/^ipv6 router rip\b/m.test(cfg))return[];
+  const ifaces=[];
+  const ifBlocks=cfg.split(/^(?=interface\s)/m);
+  for(const blk of ifBlocks){
+    const veM=blk.match(/^interface\s+ve\s+(\d+)/i);
+    const loM=blk.match(/^interface\s+loopback\s+(\d+)/i);
+    const ethM=blk.match(/^interface\s+(?:e(?:the(?:rnet)?)?\s+)?([\d][^\s]*)/i);
+    let ifName='';
+    if(veM)ifName='ve'+veM[1];
+    else if(loM)ifName='loopback'+loM[1];
+    else if(ethM)ifName='e'+ethM[1];
+    if(!ifName)continue;
+    if(/^\s+ipv6 rip enable\b/m.test(blk))ifaces.push(ifName);
+  }
+  return ifaces.length?[{pid:'1',interfaces:ifaces,redistribute:[]}]:[];
+}
+
 // 2026-07-14 修正：原本套用 Cisco 式 `router bgp N`（ASN 直接接在同一行），已對外
 // 查證官方文件確認實際語法是 `router bgp`（不含 ASN）進入子模式後，用獨立指令
 // `local-as N` 設定 ASN；router-id 同樣是全域 `ip router-id A.B.C.D`（與 OSPF 共用），
@@ -587,9 +636,11 @@ function parseBrocade(cfg){
     vrfs:[], dhcp: parseBrocadeDHCP(cfg),
     users:      parseBrocadeUsers(cfg),
     ospf:       parseBrocadeOSPF(cfg),
+    ospf6:      parseBrocadeOSPFv3(cfg),
     bgp:        parseBrocadeBGP(cfg),
     vrrp:       parseBrocadeVRRP(cfg),
     rip:        parseBrocadeRIP(cfg),
+    rip6:       parseBrocadeRIPng(cfg),
     qos:        parseBrocadeQoS(cfg),
     vxlan:null,
     vendor:'brocade'
