@@ -76,10 +76,12 @@ function parseArista(cfg){
   const vrfs=parseCiscoVRFs(cfg,'arista');
   const users=parseCiscoUsers(cfg);
   const ospf=parseCiscoOSPF(cfg);
+  const ospf6=parseCiscoOSPFv3(cfg);
   const bgp=parseCiscoBGP(cfg);
   const rip=parseCiscoRIP(cfg);
+  const rip6=parseCiscoRIPng(cfg);
   const vrrp=parseVRRP(cfg,'arista');
-  return{sys,irf:null,stack:mlag,vlans,interfaces,routes,vrfs,users,ospf,bgp,rip,vrrp,vxlan:null,breakouts,vendor:'arista'};
+  return{sys,irf:null,stack:mlag,vlans,interfaces,routes,vrfs,users,ospf,ospf6,bgp,rip,rip6,vrrp,vxlan:null,breakouts,vendor:'arista'};
 }
 
 // ════════════════════════════════════════════════════

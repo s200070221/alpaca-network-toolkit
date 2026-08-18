@@ -98,20 +98,36 @@ function parseRouterOSRoutes(cfg){
 // 逐介面宣告所屬 area（比照既有 Juniper/Brocade「OSPF area 底下宣告介面名稱非 CIDR」慣例）。
 // 原本 parseRouterOSOSPF() 只偵測關鍵字存在就回傳寫死的假資料（router-id 永遠是 '-'），
 // 即使真實匯出設定檔含 router-id 也讀不到，屬未完成的殘留 stub，已修正為真實逐行解析
+//
+// OSPFv3（2026-08-18 新增）：官方文件確認 RouterOS 7 把 OSPFv2/OSPFv3 統一進同一個
+// /routing ospf 選單，用 instance 的 version=2／version=3 屬性區分（缺省視為 2，向下
+// 相容既有純 IPv4 單一 instance 設定檔），area 用 instance= 屬性歸屬到對應 instance，
+// interface-template 語法不分版本。原本此函式只取 instance 區塊「第一筆」add 行
+// （.find()），無法支援多 instance 並存，已改寫為逐一處理全部 instance，最後依
+// version 分桶回傳 {ospf, ospf6}（v3 桶的 networks[].network 本來就是介面名稱，直接
+// 取出組成 interfaces 陣列，與 Comware/Cisco 系 ospf6 形狀一致）
 function parseRouterOSOSPF(cfg){
   const instBlock=cfg.match(/^\/routing\s+ospf\s+instance\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
-  if(!instBlock)return[];
-  const instLine=(instBlock[1].split('\n').find(l=>/^add\s/.test(l))||'');
-  const routerId=(instLine.match(/router-id=(\S+)/)||[])[1]||'-';
-  const instName=(instLine.match(/name=(\S+)/)||[])[1]||'default';
+  if(!instBlock)return{ospf:[],ospf6:[]};
+  const instances=instBlock[1].split('\n').filter(l=>/^add\s/.test(l)).map(l=>({
+    name:(l.match(/\bname=(\S+)/)||[])[1]||'default',
+    routerId:(l.match(/router-id=(\S+)/)||[])[1]||'-',
+    version:(l.match(/\bversion=(\S+)/)||[])[1]||'2',
+    areas:[],
+  }));
+  if(!instances.length)return{ospf:[],ospf6:[]};
 
-  const areas=[];
+  const allAreas=[];
   const areaBlock=cfg.match(/^\/routing\s+ospf\s+area\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
   (areaBlock?areaBlock[1].split('\n'):[]).filter(l=>/^add\s/.test(l)).forEach(l=>{
     const areaId=(l.match(/area-id=(\S+)/)||[])[1]||'0.0.0.0';
     const areaName=(l.match(/\bname=(\S+)/)||[])[1]||'';
     const type=(l.match(/\btype=(\S+)/)||[])[1]||'default';
-    areas.push({area:areaId,_name:areaName,type,networks:[]});
+    const instRef=(l.match(/\binstance=(\S+)/)||[])[1]||'';
+    const inst=instances.find(i=>i.name===instRef)||instances[0];
+    const area={area:areaId,_name:areaName,type,networks:[]};
+    inst.areas.push(area);
+    allAreas.push(area);
   });
 
   const tmplBlock=cfg.match(/^\/routing\s+ospf\s+interface-template\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
@@ -119,11 +135,20 @@ function parseRouterOSOSPF(cfg){
     const ifaces=(l.match(/interfaces=(\S+)/)||[])[1]||'';
     const areaRef=(l.match(/\barea=(\S+)/)||[])[1]||'';
     // area-template 引用的可能是 area 的 name 也可能直接是 area-id，兩種都嘗試比對
-    const area=areas.find(a=>a._name===areaRef||a.area===areaRef);
+    const area=allAreas.find(a=>a._name===areaRef||a.area===areaRef);
     if(area&&ifaces)ifaces.split(',').forEach(iface=>area.networks.push({network:iface,wildcard:'0.0.0.0'}));
   });
 
-  return[{pid:instName,routerId,areas:areas.length?areas:[{area:'0.0.0.0',type:'default',networks:[]}]}];
+  const ospf=[], ospf6=[];
+  instances.forEach(inst=>{
+    const areas=inst.areas.length?inst.areas:[{area:'0.0.0.0',type:'default',networks:[]}];
+    if(inst.version==='3'){
+      ospf6.push({pid:inst.name,routerId:inst.routerId,areas:areas.map(a=>({area:a.area,interfaces:a.networks.map(n=>n.network)}))});
+    } else {
+      ospf.push({pid:inst.name,routerId:inst.routerId,areas});
+    }
+  });
+  return{ospf,ospf6};
 }
 // 官方文件查證（help.mikrotik.com「/routing/bgp」頁）：本地 AS 號碼與 router-id 是
 // `/routing bgp instance` 的屬性；peer 建立為 `/routing bgp connection`（非舊版 `/routing bgp peer`），
@@ -430,7 +455,7 @@ function parseRouterOS(cfg){
     lacp:rosLacp,
     routes:parseRouterOSRoutes(cfg),vrfs:[],
     users:parseRouterOSUsers(cfg),
-    ospf:parseRouterOSOSPF(cfg),
+    ...parseRouterOSOSPF(cfg),
     bgp:parseRouterOSBGP(cfg),
     rip:parseRouterOSRIP(cfg),vrrp:_parseVRRPRouterOS(cfg),vxlan:null,
     dhcp:parseRouterOSDHCP(cfg),
