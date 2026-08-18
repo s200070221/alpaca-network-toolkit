@@ -369,6 +369,16 @@ function _parseVRRPRouterOS(cfg){
     const addrM=l.match(/\baddress=([^\s\/]+)/);
     if(addrM)vipByVrrpIface[ifaceM[1]]=addrM[1];
   });
+  // IPv6（2026-08-17 新增，官方 MikroTik VRRP 文件確認 `v3-protocol=ipv6` 旗標區分
+  // IPv6 執行個體，VIP 改由 `/ipv6 address` 宣告，與既有 `/ip address` 反查機制對稱）
+  const addr6Block=cfg.match(/^\/ipv6\s+address\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
+  const vipByVrrpIface6={};
+  (addr6Block?addr6Block[1].split('\n'):[]).filter(l=>/^add\s/.test(l)).forEach(l=>{
+    const ifaceM=l.match(/\binterface=(vrrp\d+)/);
+    if(!ifaceM)return;
+    const addrM=l.match(/\baddress=([^\s\/]+)/);
+    if(addrM)vipByVrrpIface6[ifaceM[1]]=addrM[1];
+  });
   let idx=0;
   block[1].split('\n').filter(l=>/^add\s/.test(l)).forEach(l=>{
     idx++;
@@ -379,8 +389,10 @@ function _parseVRRPRouterOS(cfg){
     const preempt=!/preemption-mode=no/.test(l);
     const nameM=l.match(/\bname=(\S+)/);
     const vrrpIfaceName=nameM?nameM[1]:'vrrp'+idx;
-    const vip=vipByVrrpIface[vrrpIfaceName]||'';
-    groups.push({vrid,interface:iface,vip,priority,preempt,authMode:'',trackIf:'',trackReduced:'',version:'2'});
+    const isV6=/\bv3-protocol=ipv6/.test(l);
+    const vip=isV6?'':(vipByVrrpIface[vrrpIfaceName]||'');
+    const vip6=isV6?(vipByVrrpIface6[vrrpIfaceName]||''):'';
+    groups.push({vrid,interface:iface,vip,vip6,priority,preempt,authMode:'',trackIf:'',trackReduced:'',version:'2'});
   });
   return groups;
 }

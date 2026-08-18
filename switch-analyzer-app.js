@@ -1139,7 +1139,7 @@ function renderPorts(){
     fortilink_html:i.fortilinkDiscovery?`<span class="pill p-up">${tr('val.enabled')}</span>`:'—',
     breakout_html:i.breakoutMode?`<span class="pill p-master" title="${esc(i.name)}">${esc(i.breakoutMode)}</span>`:i.breakoutChild?`<span class="pill p-standby">→ ${esc(i.breakoutParent)}</span>`:'—',
   }));
-  tableData=rows;tableKeys=['name','member','type','mode','vlans','native','ip','ip6','secondaryIp','vrf','status'];
+  tableData=rows;
   const fSel=document.getElementById('filter-sel');
   const fv=fSel?.value||'all';
   const filterFn={all:null,trunk:r=>r.mode==='trunk',access:r=>r.mode==='access',hybrid:r=>r.mode==='hybrid',svi:r=>r.type==='svi',stack:r=>r.type==='stack',down:r=>r._shutdown,vrf:r=>r.vrf!=='—'}[fv]||null;
@@ -1158,6 +1158,12 @@ function renderPorts(){
   if(hasFortilinkDiscovery)hdrs.push({key:'fortilink',label:tr('col.fortilink_discovery')});
   if(hasBreakout)hdrs.push({key:'breakout',label:tr('col.breakout')});
   hdrs.push({key:'status',label:tr('col.status')});
+  // 修復（2026-08-17）：原本 tableKeys 是寫死的靜態陣列，與上方依 hasIPv6/hasSecondaryIp/
+  // hasHybrid/hasVRRP/hasFortilinkDiscovery/hasBreakout 條件動態增減欄位的 hdrs 長度可能
+  // 對不上，doSort() 依索引 tableKeys[sortCol] 取排序鍵時會對錯欄位（例如條件式欄位缺席時，
+  // 後面的固定欄位如 vrf/status 會抓到錯誤的鍵名）；改為直接從最終的 hdrs 衍生，比照
+  // renderVRRP() 等其餘函式既有正確寫法
+  tableKeys=hdrs.map(h=>h.key);
   const {html,count,total}=renderTable(hdrs,rows,filterFn);
   return toggleHtml+mkTbar('search-inp',[{v:'all',l:tr('filter.all')},{v:'trunk',l:'Trunk'},{v:'access',l:'Access'},{v:'hybrid',l:'Hybrid'},{v:'svi',l:'SVI'},{v:'stack',l:tr('filter.stack_port')},{v:'down',l:tr('filter.disabled')},{v:'vrf',l:tr('filter.has_vrf')}],'exportPortsCSV')+
     `<div class="tbl-wrap">${html}</div><div class="tbl-foot"><span>${count} / ${total} ${tr('unit.count')}</span><span>Hybrid: ${ph.filter(i=>i.mode==='hybrid').length} · SVI: ${parsed.interfaces.filter(i=>i.type==='svi').length}</span></div>`;
@@ -3062,13 +3068,15 @@ function renderVRRP(){
 
   // Sort by interface then VRID
   const sorted=[...groups].sort((a,b)=>a.interface.localeCompare(b.interface)||parseInt(a.vrid)-parseInt(b.vrid));
+  const hasVip6=groups.some(g=>g.vip6);
 
   const rows=sorted.map(g=>({
-    vrid:g.vrid, iface:g.interface, vip:g.vip, prio:g.priority,
+    vrid:g.vrid, iface:g.interface, vip:g.vip, vip6:g.vip6||'', prio:g.priority,
     preempt:g.preempt, auth:g.authMode, track:g.trackIf, ver:g.version||'2',
     vrid_html:`<span class="pill p-stack">${proto} ${esc(g.vrid)}</span>`,
     iface_html:`<span class="mono" style="color:var(--accent3)">${esc(g.interface)}</span>`,
     vip_html:g.vip?`<span class="mono" style="color:var(--green)">${esc(g.vip)}</span>`:'<span style="color:var(--text-muted)">—</span>',
+    vip6_html:g.vip6?`<span class="mono" style="color:var(--green)">${esc(g.vip6)}</span>`:'<span style="color:var(--text-muted)">—</span>',
     prio_html:`<span class="mono" style="color:${parseInt(g.priority)>100?'var(--yellow)':parseInt(g.priority)===100?'var(--text-dim)':'var(--red)'}">${esc(g.priority)}</span>`,
     preempt_html:g.preempt?pill('p-up',tr('vrrp.preempt_yes')):pill('p-gray',tr('vrrp.preempt_no')),
     auth_html:g.authMode?pill('p-info',g.authMode):'<span style="color:var(--text-muted)">—</span>',
@@ -3080,12 +3088,15 @@ function renderVRRP(){
     {key:'vrid',label:proto+' '+tr('col.vrrp_group')},
     {key:'iface',label:tr('col.iface')},
     {key:'vip',label:tr('col.vrrp_vip')},
+  ];
+  if(hasVip6)hdrs.push({key:'vip6',label:tr('col.vrrp_vip6')});
+  hdrs.push(
     {key:'prio',label:tr('col.vrrp_priority')},
     {key:'ver',label:tr('col.version')},
     {key:'preempt',label:tr('col.vrrp_preempt')},
     {key:'auth',label:tr('col.vrrp_auth')},
     {key:'track',label:tr('col.vrrp_track_if')},
-  ];
+  );
   // Stats
   const highPrio=groups.filter(g=>parseInt(g.priority)>100);
   const tracked=groups.filter(g=>g.trackIf);
@@ -3114,8 +3125,8 @@ function renderVRRP(){
 function exportVRRPCSV(){
   if(!parsed){alert(tr('msg.no_config'));return;}
   const isHSRP=parsed.vendor==='cisco';
-  dlCSV(parsed.vrrp.map(g=>[g.vrid,g.interface,g.vip,g.priority,g.version||'2',g.preempt?tr('val.yes'):tr('val.no'),g.authMode||'',g.trackIf||'',g.trackReduced||'']),
-    [tr('col.vrrp_group'),tr('col.iface'),tr('col.vrrp_vip'),tr('col.vrrp_priority'),tr('col.vrrp_version'),tr('col.vrrp_preempt'),tr('col.vrrp_auth'),tr('col.vrrp_track_if'),tr('col.vrrp_track_dec')],
+  dlCSV(parsed.vrrp.map(g=>[g.vrid,g.interface,g.vip,g.vip6||'',g.priority,g.version||'2',g.preempt?tr('val.yes'):tr('val.no'),g.authMode||'',g.trackIf||'',g.trackReduced||'']),
+    [tr('col.vrrp_group'),tr('col.iface'),tr('col.vrrp_vip'),tr('col.vrrp_vip6'),tr('col.vrrp_priority'),tr('col.vrrp_version'),tr('col.vrrp_preempt'),tr('col.vrrp_auth'),tr('col.vrrp_track_if'),tr('col.vrrp_track_dec')],
     `${hn()}_${isHSRP?'hsrp':'vrrp'}.csv`);
 }
 
