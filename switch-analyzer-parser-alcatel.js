@@ -248,6 +248,22 @@ function parseAlcatelOSPF(cfg){
   return areaList.length?[{pid:'1',routerId:rid,areas:areaList,protocol:'ospf'}]:[];
 }
 
+// OSPFv3（2026-08-18 新增，官方 OmniSwitch CLI Reference Guide 確認完整指令家族存在
+// `ipv6 ospf admin-state`／`ipv6 ospf interface admin-state`／`ipv6 ospf interface area`
+// 等，與 IPv4 指令家族逐一對應，僅前綴由 `ip` 換成 `ipv6`）
+function parseAlcatelOSPFv3(cfg){
+  const hasOSPF=/^->\s*ipv6 ospf admin-state enable/m.test(cfg)||/^ipv6 ospf admin-state enable/m.test(cfg)||/^(?:->\s*)?ipv6 ospf interface\b/m.test(cfg);
+  if(!hasOSPF)return[];
+  const rid=(cfg.match(/^(?:->\s*)?ipv6 ospf router-id\s+([\d.]+)/m)||[])[1]||'';
+  const areas={}; let m;
+  const areaRe=/^(?:->\s*)?ipv6 ospf area\s+([\d.]+)/gm;
+  while((m=areaRe.exec(cfg))!==null)areas[m[1]]=areas[m[1]]||[];
+  const ifRe=/^(?:->\s*)?ipv6 ospf interface\s+"?(\S+?)"?\s+area\s+([\d.]+)/gm;
+  while((m=ifRe.exec(cfg))!==null){const iname=m[1].replace(/"/g,''),area=m[2];if(!areas[area])areas[area]=[];areas[area].push(iname);}
+  const areaList=Object.entries(areas).map(([area,interfaces])=>({area,interfaces}));
+  return areaList.length?[{pid:'1',routerId:rid,areas:areaList}]:[];
+}
+
 
 function parseAlcatelBGP(cfg){
   const asn=(cfg.match(/^->\s*ip bgp autonomous-system\s+(\d+)/m)||[])[1]||'';
@@ -372,6 +388,7 @@ function parseAlcatel(cfg){
     vrfs:[], dhcp:[],
     users:      parseAlcatelUsers(cfg),
     ospf:       parseAlcatelOSPF(cfg),
+    ospf6:      parseAlcatelOSPFv3(cfg),
     bgp:        parseAlcatelBGP(cfg),
     vrrp:       parseAlcatelVRRP(cfg),
     rip:[], vxlan:null,

@@ -163,7 +163,11 @@ function parseProCurve(cfg) {
   // （單一子網），故逐 VLAN 區塊掃描取得。routerId 欄位原本誤植為 `rid`，與其餘所有廠牌
   // ／switch_analyzer 自己的 OSPF report／CSV 匯出（皆讀 o.routerId）不符，一併修正。
   function parseOSPF() {
-    if (!/^router ospf/m.test(cfg)) return [];
+    // 2026-08-18 修復：原正則 /^router ospf/ 無字尾邊界，會誤吃新增的 `router ospf3
+    // enable`（OSPFv3 專屬指令，非 IPv4 OSPF），導致純 OSPFv3 設定檔的裝置也會誤判成有
+    // IPv4 OSPF 並顯示一張全空的 OSPF 卡片；加上 \b 字尾邊界即可正確排除（"ospf3" 的
+    // f/3 皆為 word 字元，之間無邊界，\b 天然就會擋掉，無需額外負向前瞻）
+    if (!/^router ospf\b/m.test(cfg)) return [];
     const routerId=(cfg.match(/^\s+router-id\s+(\S+)/m)||[])[1]||'';
     const areas=[];
     for (const b of cfg.split(/^(?=vlan\s+\d)/m)) {
@@ -177,6 +181,35 @@ function parseProCurve(cfg) {
       entry.networks.push({ network:mV[1] });
     }
     return [{ pid:'1', routerId, areas }];
+  }
+  // OSPFv3（2026-08-18 新增，官方 arubanetworking.hpe.com AOS-S IPv6 文件確認：
+  // `ipv6 unicast-routing` + `router ospf3 enable`（**注意廠牌用字是 ospf3 非
+  // ospfv3**）啟用；VLAN/Loopback 介面用 `ipv6 ospf3 area <id>` 逐一指派，與 IPv4
+  // 結構完全平行，僅關鍵字前綴由 `ip` 換成 `ipv6`、協定名稱由 `ospf` 換成 `ospf3`）
+  function parseOSPFv3() {
+    if (!/^router ospf3 enable/m.test(cfg)) return [];
+    const areas=[];
+    for (const b of cfg.split(/^(?=vlan\s+\d)/m)) {
+      const mV=b.match(/^vlan\s+(\d+)/);
+      if (!mV) continue;
+      const aM=b.match(/^\s+ipv6 ospf3(?:\s+[\da-fA-F:]+)?\s+area\s+([\d.]+)/m);
+      if (!aM) continue;
+      const area=aM[1];
+      let entry=areas.find(a=>a.area===area);
+      if (!entry) { entry={ area, interfaces:[] }; areas.push(entry); }
+      entry.interfaces.push('vlan'+mV[1]);
+    }
+    for (const b of cfg.split(/^(?=interface\s+loopback\s+\d)/m)) {
+      const mL=b.match(/^interface\s+loopback\s+(\d+)/);
+      if (!mL) continue;
+      const aM=b.match(/^\s+ipv6 ospf3\s+area\s+([\d.]+)/m);
+      if (!aM) continue;
+      const area=aM[1];
+      let entry=areas.find(a=>a.area===area);
+      if (!entry) { entry={ area, interfaces:[] }; areas.push(entry); }
+      entry.interfaces.push('loopback'+mL[1]);
+    }
+    return areas.length?[{ pid:'1', routerId:'', areas }]:[];
   }
   // 2026-07-22 新增（真實 HPE 5412zl 匯出檔查證）：DHCP relay 解析。ArubaOS-Switch 真實語法
   // 是逐 VLAN 內宣告 `ip helper-address <server-ip>`（非全域設定），資料形狀比照其餘廠牌
@@ -233,6 +266,7 @@ function parseProCurve(cfg) {
     users:      parseUsers(),
     dhcp:       parseDhcpRelay(),
     ospf:       parseOSPF(),
+    ospf6:      parseOSPFv3(),
     bgp:        [],
     rip:        [],
     vrrp:       [],

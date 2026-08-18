@@ -185,8 +185,8 @@ function parseFortiStaticRoutes(cfg){
 }
 
 function parseFortiRouting(cfg){
-  const result={ospf:[], bgp:[], rip:[]};
-  
+  const result={ospf:[], ospf6:[], bgp:[], rip:[], rip6:[]};
+
   // OSPF
   const ospfBlock=(cfg.match(/^config router ospf\n([\s\S]*?)^end/m)||[])[1];
   if(ospfBlock){
@@ -218,7 +218,36 @@ function parseFortiRouting(cfg){
     }
     result.ospf.push({pid:'1',routerId:rid,areas});
   }
-  
+
+  // OSPFv3（2026-08-18 新增，官方 FortiGate/FortiOS 文件確認 `config router ospf6`
+  // 巢狀 `config area`／`config ospf6-interface`，與 IPv4 baseline 用 `config network`
+  // 掛 `set area` 不同——IPv6 版本改用逐介面 `config ospf6-interface` 內
+  // `set interface`/`set area` 指派，比照本會話已建立的 ospf6 資料形狀（areas[].interfaces)）
+  const ospf6Block=(cfg.match(/^config router ospf6\n([\s\S]*?)^end/m)||[])[1];
+  if(ospf6Block){
+    const rid=(ospf6Block.match(/set router-id\s+(\S+)/)||[])[1]||'';
+    const areaMap=new Map();
+    const areaRe=/config area\n([\s\S]*?)^    end/gm; let am6;
+    while((am6=areaRe.exec(ospf6Block))!==null){
+      const aidRe=/edit\s+(\S+)/gm; let aidm;
+      while((aidm=aidRe.exec(am6[1]))!==null){
+        if(!areaMap.has(aidm[1]))areaMap.set(aidm[1],{area:aidm[1],interfaces:[]});
+      }
+    }
+    const if6Re=/config ospf6-interface\n([\s\S]*?)^    end/gm; let if6m;
+    while((if6m=if6Re.exec(ospf6Block))!==null){
+      const editRe=/edit\s+"?([^"\n]+)"?\n([\s\S]*?)(?=^\s*next|^end)/gm; let em6;
+      while((em6=editRe.exec(if6m[1]))!==null){
+        const ifaceName=(em6[2].match(/set interface\s+"?([^"\n]+)"?/)||[])[1]||em6[1];
+        const areaId=(em6[2].match(/set area\s+(\S+)/)||[])[1];
+        if(!areaId)continue;
+        if(!areaMap.has(areaId))areaMap.set(areaId,{area:areaId,interfaces:[]});
+        areaMap.get(areaId).interfaces.push(ifaceName);
+      }
+    }
+    result.ospf6.push({pid:'1',routerId:rid,areas:Array.from(areaMap.values())});
+  }
+
   // RIP
   const ripBlock=(cfg.match(/^config router rip\n([\s\S]*?)^end/m)||[])[1];
   if(ripBlock){
@@ -237,7 +266,22 @@ function parseFortiRouting(cfg){
     }
     result.rip.push({pid:'1',version:'2',vrf:'',networks:nets,redistribute,passive:[],peers:[],autoSummary:null});
   }
-  
+
+  // RIPng（2026-08-18 新增，官方 FortiGate/FortiOS 文件確認 `config router ripng`
+  // 巢狀 `config interface`，與 IPv4 baseline 用 `config network`/`set prefix` 不同——
+  // RIPng 協定本質是逐介面 enable，`config interface` 底下每個 `edit <ifname>` 條目
+  // 即視為該介面已啟用 RIPng）
+  const ripngBlock=(cfg.match(/^config router ripng\n([\s\S]*?)^end/m)||[])[1];
+  if(ripngBlock){
+    const ifaces=[];
+    const ifRe=/config interface\n([\s\S]*?)^    end/gm; let ifrm;
+    while((ifrm=ifRe.exec(ripngBlock))!==null){
+      const editRe=/edit\s+"?([^"\n]+)"?/gm; let erm;
+      while((erm=editRe.exec(ifrm[1]))!==null)ifaces.push(erm[1]);
+    }
+    if(ifaces.length)result.rip6.push({pid:'1',interfaces:ifaces,redistribute:[]});
+  }
+
   // BGP
   const bgpBlock=(cfg.match(/^config router bgp\n([\s\S]*?)^end/m)||[])[1];
   if(bgpBlock){
@@ -293,7 +337,7 @@ function parseFortiSwitch(cfg){
   return {
     sys, irf:null, stack, vlans, interfaces,
     routes, vrfs:[], users:[],
-    ospf:routing.ospf, bgp:routing.bgp, rip:routing.rip,
+    ospf:routing.ospf, ospf6:routing.ospf6, bgp:routing.bgp, rip:routing.rip, rip6:routing.rip6,
     lacp:lacpFt, dhcp:dhcpFt,
     vrrp:interfaces.flatMap(i=>(i.vrrp||[]).map(v=>({interface:i.name, ...v}))),
     vxlan:null, vendor:'fortiswitch', breakouts:parseFortiSwitchBreakout(cfg)

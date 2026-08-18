@@ -161,13 +161,53 @@ function parseNXOS(cfg) {
   function parseOSPF() {
     // routerId 欄位原本誤植為 rid，與其餘所有廠牌／switch_analyzer 自己的 OSPF report／
     // CSV 匯出（皆讀 o.routerId）不符，一併修正（2026-07-17，與 ProCurve 同一類型的既有 bug）
+    // 2026-08-18 修復既有殘缺 stub：原本完全沒有 areas 欄位，官方 NX-OS Unicast Routing
+    // Configuration Guide 確認 OSPF 為逐介面指派（非 network 陳述式）：
+    // `ip router ospf <pid> area <area>`，比照 Brocade/Alcatel 既有逐介面掃描模式補上。
+    // areas[].networks[].network 借用既有欄位存介面名稱（與 IPv4 OSPF 卡片渲染函式既有
+    // 慣例一致，注意不可用 ospf6 專屬的 areas[].interfaces 形狀，否則會讓既有 v4 卡片
+    // 存取 a.networks.length 時因欄位不存在而拋錯）
     const ospf=[];
     for (const b of cfg.split(/^(?=router ospf\s)/m)) {
-      const m=b.match(/^router ospf\s+(\d+)/);
+      const m=b.match(/^router ospf\s+(\S+)/);
       if (!m) continue;
-      ospf.push({ pid:m[1], routerId:(b.match(/^\s+router-id\s+(\S+)/m)||[])[1]||'' });
+      const pid=m[1];
+      const areaMap=new Map();
+      for (const ib of cfg.split(/^(?=interface\s)/m)) {
+        const ifM=ib.match(/^interface\s+(\S+)/);
+        if (!ifM) continue;
+        const aM=ib.match(new RegExp('^\\s+ip router ospf\\s+'+pid.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s+area\\s+([\\d.]+)','m'));
+        if (!aM) continue;
+        const area=aM[1];
+        if (!areaMap.has(area)) areaMap.set(area,{area,networks:[]});
+        areaMap.get(area).networks.push({network:ifM[1],wildcard:''});
+      }
+      ospf.push({ pid, routerId:(b.match(/^\s+router-id\s+(\S+)/m)||[])[1]||'', areas:Array.from(areaMap.values()) });
     }
     return ospf;
+  }
+  // OSPFv3（2026-08-18 新增，官方 NX-OS Unicast Routing Configuration Guide 確認獨立頂層
+  // `router ospfv3 <tag>` + 介面 `ipv6 router ospfv3 <tag> area <area>`，與 IPv4 baseline
+  // 修復後的逐介面指派結構完全平行，僅指令前綴多 `ipv6`／協定名稱多 `v3`）
+  function parseOSPFv3() {
+    const ospf6=[];
+    for (const b of cfg.split(/^(?=router ospfv3\s)/m)) {
+      const m=b.match(/^router ospfv3\s+(\S+)/);
+      if (!m) continue;
+      const pid=m[1];
+      const areaMap=new Map();
+      for (const ib of cfg.split(/^(?=interface\s)/m)) {
+        const ifM=ib.match(/^interface\s+(\S+)/);
+        if (!ifM) continue;
+        const aM=ib.match(new RegExp('^\\s+ipv6 router ospfv3\\s+'+pid.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s+area\\s+([\\d.]+)','m'));
+        if (!aM) continue;
+        const area=aM[1];
+        if (!areaMap.has(area)) areaMap.set(area,{area,interfaces:[]});
+        areaMap.get(area).interfaces.push(ifM[1]);
+      }
+      ospf6.push({ pid, routerId:(b.match(/^\s+router-id\s+(\S+)/m)||[])[1]||'', areas:Array.from(areaMap.values()) });
+    }
+    return ospf6;
   }
   function parseUsers() {
     const users=[];
@@ -198,6 +238,7 @@ function parseNXOS(cfg) {
     vrfs:       parseVRFs(),
     users:      parseUsers(),
     ospf:       parseOSPF(),
+    ospf6:      parseOSPFv3(),
     bgp:        parseBGP(),
     rip:        [],
     vrrp:       parseVRRP(cfg,'nxos'),

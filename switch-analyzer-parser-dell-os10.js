@@ -276,6 +276,36 @@ function parseDellOS10OSPF(cfg){
   return processes;
 }
 
+// OSPFv3（2026-08-18 新增，官方 SmartFabric OS10 User Guide 確認 `router ospfv3
+// [vrf <vrf>]` 為獨立頂層指令；與 IPv4 baseline 用全域 network 陳述式不同——OSPFv3
+// 協定本質是逐介面指派，真正的 area 關聯是各自 interface 區塊內用
+// `ipv6 ospf <pid> area <area>` 逐一指派）
+function parseDellOS10OSPFv3(cfg){
+  // 2026-08-18 修復：doAnalyze() 對貼上的設定檔內容做 .trim()，若設定檔本身結尾無換行
+  // 字元，下方逐行擷取正則的重複群組 [^\n]*\n 要求每一行都要有結尾換行字元才會被收進
+  // 區塊內容，會導致最後一個 interface 的關聯指派靜默漏解析；統一補上結尾換行字元
+  if(!cfg.endsWith('\n'))cfg=cfg+'\n';
+  const processes=[];let m;
+  const re=/^router ospfv3(?:\s+vrf\s+\S+)?([\s\S]*?)(?=^router\s|^interface\s|^ip\s|^!\s*$|(?![\s\S]))/gm;
+  while((m=re.exec(cfg))!==null){
+    const body=m[1];
+    const pid='1';
+    const rid=(body.match(/router-id\s+(\S+)/)||[])[1]||'';
+    const areaMap=new Map();
+    const ifRe=/^interface\s+([^\n]+)\n((?:(?!^(?:interface|router|ip\s)\b)[^\n]*\n)*)/gm; let ifm;
+    while((ifm=ifRe.exec(cfg))!==null){
+      const ifName=ifm[1].trim();
+      const aim=ifm[2].match(/ipv6 ospf\s+\S+\s+area\s+([\d.]+)/);
+      if(!aim)continue;
+      const area=aim[1];
+      if(!areaMap.has(area))areaMap.set(area,{area,interfaces:[]});
+      areaMap.get(area).interfaces.push(ifName);
+    }
+    processes.push({pid,routerId:rid,areas:Array.from(areaMap.values())});
+  }
+  return processes;
+}
+
 function parseDellOS10BGP(cfg){
   const bgpList=[];let m;
   const re=/^router bgp\s+(\d+)([\s\S]*?)(?=^router\s|^interface\s|^ip\s+route\s|^!\s*$|(?![\s\S]))/gm;
@@ -315,6 +345,7 @@ function parseDellOS10(cfg){
   const vrfs=parseDellOS10VRFs(cfg);
   const users=parseDellOS10Users(cfg);
   const ospf=parseDellOS10OSPF(cfg);
+  const ospf6=parseDellOS10OSPFv3(cfg);
   const bgp=parseDellOS10BGP(cfg);
   const vrrp=parseVRRP(cfg,'dell-os10');
   const breakouts=parseDellOS10Breakout(cfg);
@@ -322,7 +353,7 @@ function parseDellOS10(cfg){
     const iface=interfaces.find(f=>f.name.toLowerCase()===b.parentPort.toLowerCase());
     if(iface)iface.breakoutMode=b.mode;
   });
-  return{sys,irf:null,stack,vlans,interfaces,routes,vrfs,users,ospf,bgp,rip:[],vrrp,vxlan:null,vendor:'dell-os10',breakouts};
+  return{sys,irf:null,stack,vlans,interfaces,routes,vrfs,users,ospf,ospf6,bgp,rip:[],vrrp,vxlan:null,vendor:'dell-os10',breakouts};
 }
 
 // ═ Juniper EX/QFX Parser ═

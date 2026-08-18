@@ -2977,6 +2977,11 @@ function renderOSPFTopo(ospfList){
 // 查無官方佐證的廠牌僅加註較窄範圍的提示，避免使用者誤判成裝置真的沒有宣告 IPv6 網段
 const BGP_IPV6_UNCONFIRMED_VENDORS=['alcatel'];
 const BGP_NETWORKS6_UNCONFIRMED_VENDORS=['brocade','extreme'];
+// OSPFv3/RIPng（2026-08-18）：查證後信心度不足以安全實作的廠牌，比照 VRRP／BGP 慣例
+// 加註警語。OSPF/RIP 本身沒有 BGP 那種「peer/networks 可分開查證」的窄範圍情境
+// （要嘛整個 OSPFv3/RIPng 協定樹都排除、要嘛不排除），故僅單一完整警語。
+const OSPF_IPV6_UNCONFIRMED_VENDORS=['extreme','netgear'];
+const RIP_IPV6_UNCONFIRMED_VENDORS=['netgear'];
 function renderRoutingProtocols(){
   const ospf=parsed.ospf||[];
   const ospf6=parsed.ospf6||[];
@@ -2989,6 +2994,8 @@ function renderRoutingProtocols(){
   // OSPF section
   if(ospf.length){
     h+=`<div style="padding:12px 18px 0"><div class="sec-title">OSPF（${ospf.length} ${tr('rt.n_process')}）</div></div>`;
+    if(OSPF_IPV6_UNCONFIRMED_VENDORS.includes(parsed.vendor))
+      h+=`<div class="hint" style="padding:8px 18px;color:var(--text-dim);font-size:11px;border-bottom:1px solid var(--border)">⚠️ ${tr('ospf.ipv6_unconfirmed_note')}</div>`;
     ospf.forEach(p=>{
       const totalNets=p.areas.reduce((s,a)=>s+a.networks.length,0);
       h+=`<div style="padding:4px 18px 10px"><div class="ov-card">
@@ -3025,6 +3032,8 @@ function renderRoutingProtocols(){
   // RIP section
   if(rip.length){
     h+=`<div style="padding:12px 18px 0"><div class="sec-title">RIP / RIPv2（${rip.length} ${tr('rt.n_process')}）</div></div>`;
+    if(RIP_IPV6_UNCONFIRMED_VENDORS.includes(parsed.vendor))
+      h+=`<div class="hint" style="padding:8px 18px;color:var(--text-dim);font-size:11px;border-bottom:1px solid var(--border)">⚠️ ${tr('rip.ipv6_unconfirmed_note')}</div>`;
     rip.forEach(r=>{
       const ver=r.version==='2'?'RIPv2':r.version==='1'?'RIPv1':'RIP';
       h+=`<div style="padding:4px 18px 10px"><div class="ov-card">
