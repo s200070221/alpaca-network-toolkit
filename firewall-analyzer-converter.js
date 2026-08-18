@@ -265,6 +265,17 @@ const Converter = (() => {
         L.push(`    edit "${i.name}"`);
         L.push(`        set vdom "root"`);
         if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP') L.push(`        set ip ${i.ip} ${i.mask&&i.mask!=='-'?i.mask:'255.255.255.0'}`);
+        // 次要IP（2026-08-18 補上輸出端，官方 FortiOS CLI Reference 巢狀 config secondaryip／
+        // edit N／set ip A B，與 firewall-analyzer-parser-fortigate.js 既有解析語法對稱）
+        if(i.secondaryIps&&i.secondaryIps.length){
+          L.push('        config secondaryip');
+          i.secondaryIps.forEach((s,idx)=>{
+            L.push(`            edit ${idx+1}`);
+            L.push(`                set ip ${s.ip} ${s.mask&&s.mask!=='-'?s.mask:'255.255.255.0'}`);
+            L.push('            next');
+          });
+          L.push('        end');
+        }
         if(i.type==='vlan') { L.push(`        set type vlan`); if(i.vlanId&&i.vlanId!=='-') L.push(`        set vlanid ${i.vlanId}`); if(i.interface&&i.interface!=='-') L.push(`        set interface "${i.interface}"`); }
         else L.push(`        set type ${i.type||'physical'}`);
         if(i.alias&&i.alias!=='-') L.push(`        set alias "${i.alias}"`);
@@ -743,6 +754,15 @@ const Converter = (() => {
     // 掛在 <ethernet> 底下，不符合 PAN-OS 真實子介面規範（必須巢狀在父介面 <layer3><units>
     // 底下＋帶 <tag>）。改為兩層迴圈：先跑實體介面，各自查詢屬於它的 VLAN 子介面巢狀輸出到
     // <units>；找不到對應父介面的孤兒子介面（來源資料不完整時）退回原本的扁平輸出，避免資料消失
+    // 次要IP（2026-08-18 補上輸出端，官方 PAN-OS 真實匯出格式在 <ip> 標籤內用多筆
+    // <entry name="CIDR"/> 清單表示，非 <member> 清單，與 parser 端既有 xlist() 讀取語法對稱）
+    const ipEntries=ifc=>{
+      const list=[];
+      if(ifc.ip&&ifc.ip!=='-'&&ifc.ip!=='DHCP') list.push(cidr(ifc.ip,ifc.mask));
+      (ifc.secondaryIps||[]).forEach(s=>list.push(cidr(s.ip,s.mask)));
+      return list.map(c=>`<entry name="${esc(c)}"/>`).join('');
+    };
+    const hasAnyIp=ifc=>(ifc.ip&&ifc.ip!=='-'&&ifc.ip!=='DHCP')||(ifc.secondaryIps&&ifc.secondaryIps.length);
     if(parsed.interfaces.length) {
       L.push('      <interface><ethernet>');
       const physicals=parsed.interfaces.filter(i=>!i.type||i.type==='physical');
@@ -750,13 +770,13 @@ const Converter = (() => {
       physicals.forEach(i=>{
         L.push(`        <entry name="${esc(i.name)}">`);
         const kids=vlans.filter(v=>v.interface===i.name);
-        if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP'||kids.length){
+        if(hasAnyIp(i)||kids.length){
           L.push('          <layer3>');
-          if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP') L.push(`            <ip><entry name="${esc(cidr(i.ip,i.mask))}"/></ip>`);
+          if(hasAnyIp(i)) L.push(`            <ip>${ipEntries(i)}</ip>`);
           if(kids.length){
             L.push('            <units>');
             kids.forEach(v=>{
-              const vip=v.ip&&v.ip!=='-'&&v.ip!=='DHCP'?`<ip><entry name="${esc(cidr(v.ip,v.mask))}"/></ip>`:'';
+              const vip=hasAnyIp(v)?`<ip>${ipEntries(v)}</ip>`:'';
               L.push(`              <entry name="${esc(v.name)}"><tag>${esc(v.vlanId)}</tag>${vip}</entry>`);
             });
             L.push('            </units>');
@@ -768,7 +788,7 @@ const Converter = (() => {
       });
       vlans.filter(v=>!physicals.some(i=>i.name===v.interface)).forEach(v=>{
         L.push(`        <entry name="${esc(v.name)}">`);
-        if(v.ip&&v.ip!=='-'&&v.ip!=='DHCP') L.push(`          <layer3><ip><entry name="${esc(cidr(v.ip,v.mask))}"/></ip></layer3>`);
+        if(hasAnyIp(v)) L.push(`          <layer3><ip>${ipEntries(v)}</ip></layer3>`);
         if(v.desc&&v.desc!=='-') L.push(`          <comment>${esc(v.desc)}</comment>`);
         L.push('        </entry>');
       });
@@ -889,7 +909,15 @@ const Converter = (() => {
         units.forEach(u2=>{
           L.push(`${I(2)}unit ${u2._u} {`);
           if(u2.vlanId&&u2.vlanId!=='-') L.push(`${I(3)}vlan-id ${u2.vlanId};`);
-          if(u2.ip&&u2.ip!=='-'&&u2.ip!=='DHCP') L.push(`${I(3)}family inet { address ${cidr(u2.ip,u2.mask)}; }`);
+          // 次要IP（2026-08-18 補上輸出端，官方 Junos "Protocol Family and Interface Address
+          // Properties" 確認同一 family inet {} 區塊內重複宣告 address 陳述式即為附加式次要IP，
+          // 無 secondary 關鍵字，與 parser 端既有 _addrListToSecondaryIps() 語法對稱）
+          if(u2.secondaryIps&&u2.secondaryIps.length){
+            L.push(`${I(3)}family inet {`);
+            if(u2.ip&&u2.ip!=='-'&&u2.ip!=='DHCP') L.push(`${I(4)}address ${cidr(u2.ip,u2.mask)};`);
+            u2.secondaryIps.forEach(s=>L.push(`${I(4)}address ${cidr(s.ip,s.mask)};`));
+            L.push(`${I(3)}}`);
+          } else if(u2.ip&&u2.ip!=='-'&&u2.ip!=='DHCP') L.push(`${I(3)}family inet { address ${cidr(u2.ip,u2.mask)}; }`);
           L.push(`${I(2)}}`);
         });
         L.push(`${I(1)}}`);
@@ -1067,6 +1095,10 @@ const Converter = (() => {
     // （原本 fallback "opt${idx}" 在 idx=8 時會產生 "opt8"，直接跳過 "opt7"）
     const pfIfKey=idx=>idx===0?'wan':idx===1?'lan':`opt${idx-1}`;
     L.push('  <interfaces>');
+    // 次要IP（2026-08-18 補上輸出端，累積各介面的內部代稱 key，供迴圈結束後組裝 <virtualip>
+    // 區塊時引用；官方 docs.netgate.com "Virtual IP Addresses" 確認 IP Alias 是獨立於
+    // <interfaces> 之外的頂層區塊，非巢狀在介面本身內，與 parser 端既有 parseSecondaryIps() 對稱）
+    const pfSecondaryVips=[];
     parsed.interfaces.forEach((ifc,idx)=>{
       const key=pfIfKey(idx);
       L.push(`    <${key}>`);
@@ -1077,8 +1109,21 @@ const Converter = (() => {
       if(ifc.status!=='down'&&ifc.status!=='Disable') L.push('      <enable></enable>');
       if(ifc.mtu&&ifc.mtu!=='1500') L.push(`      <mtu>${esc(ifc.mtu)}</mtu>`);
       L.push(`    </${key}>`);
+      (ifc.secondaryIps||[]).forEach(s=>pfSecondaryVips.push({key,ip:s.ip,bits:bits(s.mask)}));
     });
     L.push('  </interfaces>');
+    if(pfSecondaryVips.length){
+      L.push('  <virtualip>');
+      pfSecondaryVips.forEach(v=>{
+        L.push('    <vip>');
+        L.push('      <mode>ipalias</mode>');
+        L.push(`      <interface>${esc(v.key)}</interface>`);
+        L.push(`      <subnet>${esc(v.ip)}</subnet>`);
+        L.push(`      <subnet_bits>${v.bits}</subnet_bits>`);
+        L.push('    </vip>');
+      });
+      L.push('  </virtualip>');
+    }
 
     // gateways
     const defRoute=parsed.routes.find(r=>(r.type==='static'||r.type==='default')&&(r.dst==='0.0.0.0/0'||r.dst.startsWith('0.0.0.0')));
@@ -1528,9 +1573,15 @@ const Converter = (() => {
 
     const ifaceLines=[];
     parsed.interfaces.forEach(i=>{
-      if(!i.ip||i.ip==='-'||i.ip==='DHCP')return;
+      const hasIp=i.ip&&i.ip!=='-'&&i.ip!=='DHCP';
+      const hasSecondary=i.secondaryIps&&i.secondaryIps.length;
+      if(!hasIp&&!hasSecondary)return;
       ifaceLines.push(`    ethernet ${i.name} {`);
-      ifaceLines.push(`        address ${i.ip}/${bits(i.mask||'255.255.255.0')}`);
+      if(hasIp)ifaceLines.push(`        address ${i.ip}/${bits(i.mask||'255.255.255.0')}`);
+      // 次要IP（2026-08-18 補上輸出端，官方 VyOS/EdgeOS 文件確認同一介面可重複宣告多筆
+      // address statement 即為附加式次要IP，無 secondary 關鍵字，與 parser 端既有
+      // vals(node,'address').slice(1) 語法對稱）
+      (i.secondaryIps||[]).forEach(s=>ifaceLines.push(`        address ${s.ip}/${bits(s.mask||'255.255.255.0')}`));
       if(i.desc&&i.desc!=='-')ifaceLines.push(`        description ${i.desc}`);
       ifaceLines.push('    }');
     });
@@ -1648,6 +1699,10 @@ const Converter = (() => {
       L.push(`\toption proto 'static'`);
       L.push(`\toption ipaddr '${i.ip}'`);
       if(i.mask&&i.mask!=='-')L.push(`\toption netmask '${i.mask}'`);
+      // 次要IP（2026-08-18 補上輸出端，官方 OpenWrt UCI 慣例確認額外位址用重複的
+      // list ipaddr 'A.B.C.D/N' 行（CIDR 格式，與主要位址 option ipaddr/option netmask
+      // 分開兩欄不同），與 parser 端既有 s.lists.ipaddr 語法對稱）
+      (i.secondaryIps||[]).forEach(s=>L.push(`\tlist ipaddr '${cidr(s.ip,s.mask)}'`));
       L.push('');
     });
     const routes=(parsed.routes||[]).filter(r=>r.type==='static'||r.type==='default');
@@ -1728,11 +1783,18 @@ const Converter = (() => {
     if(parsed.interfaces.length) {
       L.push('/ip address');
       parsed.interfaces.forEach(i=>{
+        const ifName=(i.type==='vlan'&&i.vlanId&&i.vlanId!=='-'&&i.interface)?`vlan${i.vlanId}`:i.name;
         if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP') {
           const pfx=i.mask&&i.mask!=='-'?(i.mask.includes('.')?bits(i.mask):i.mask):'24';
-          const ifName=(i.type==='vlan'&&i.vlanId&&i.vlanId!=='-'&&i.interface)?`vlan${i.vlanId}`:i.name;
           L.push(`add address=${i.ip}/${pfx} interface=${ifName}${i.desc&&i.desc!=='-'?' comment="'+i.desc+'"':''}`);
         }
+        // 次要IP（2026-08-18 補上輸出端，官方文件確認同一介面重複 /ip address add 即為附加式
+        // 次要IP，無 secondary 關鍵字，與 parser 端既有「第一筆進 ip/mask、後續進
+        // secondaryIps」邏輯對稱）
+        (i.secondaryIps||[]).forEach(s=>{
+          const spfx=s.mask&&s.mask!=='-'?(s.mask.includes('.')?bits(s.mask):s.mask):'24';
+          L.push(`add address=${s.ip}/${spfx} interface=${ifName}`);
+        });
       });
       L.push('');
     }
