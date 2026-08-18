@@ -307,6 +307,62 @@ function parseCiscoOSPF(cfg){
   return processes;
 }
 
+// ── OSPFv3 Parser（2026-08-18 新增，僅涵蓋舊式 "ipv6 router ospf" 語法，官方 Cisco
+// OSPFv3 Configuration Example 已查證真實範例；新式 "router ospfv3"／"ospfv3 N ipv6
+// area X" 語法查無同等完整度佐證明確排除，屬已知限制。此函式為 cisco/arista/ruijie
+// 共用，惠及三家）───────────────────────────────────────────────
+// IPv6 OSPF 進程視圖本身不含 area 宣告（與 v4 的 "network ... area N" 完全不同），
+// area 清單完全靠介面視圖的 "ipv6 ospf N area X" 反查取得；既有 parseCiscoOSPF() 的
+// "^router ospf" 正則不會誤判 "ipv6 router ospf"（不是同一行首字），互不衝突。
+function parseCiscoOSPFv3(cfg){
+  const processes=[]; let m;
+  const re=/^ipv6 router ospf\s+(\d+)([\s\S]*?)(?=^ipv6 router|^router\s|^interface\s|^end\b|(?![\s\S]))/gm;
+  while((m=re.exec(cfg))!==null){
+    const pid=m[1], body=m[2];
+    const rid=(body.match(/router-id\s+(\S+)/)||[])[1]||'';
+    processes.push({pid,routerId:rid,areas:[]});
+  }
+  const raw=cfg.split('\ninterface ');
+  for(const blk of raw.slice(1)){
+    const name=blk.split('\n')[0].trim();
+    const body=blk.slice(name.length);
+    const re2=/ipv6 ospf\s+(\d+)\s+area\s+(\S+)/g; let rm;
+    while((rm=re2.exec(body))!==null){
+      const proc=processes.find(p=>p.pid===rm[1]);
+      if(!proc)continue;
+      let area=proc.areas.find(a=>a.area===rm[2]);
+      if(!area){area={area:rm[2],interfaces:[]};proc.areas.push(area);}
+      if(!area.interfaces.includes(name))area.interfaces.push(name);
+    }
+  }
+  return processes;
+}
+
+// ── RIPng Parser（2026-08-18 新增，官方 Cisco IPv6 RIP Configuration Guide＋社群範例
+// 交叉確認 "ipv6 router rip <NAME>"——process-id 是名稱字串非數字，與 v4 RIP 資料形狀
+// 不同；介面視圖 "ipv6 rip NAME enable" 啟用。此函式為 cisco/arista/ruijie 共用）
+function parseCiscoRIPng(cfg){
+  const list=[]; let m;
+  const re=/^ipv6 router rip\s+(\S+)([\s\S]*?)(?=^ipv6 router|^router\s|^interface\s|^end\b|(?![\s\S]))/gm;
+  while((m=re.exec(cfg))!==null){
+    const pid=m[1], body=m[2];
+    const redistribute=[]; const rr=/redistribute\s+(\S+)/g; let rm;
+    while((rm=rr.exec(body))!==null)redistribute.push(rm[1].trim());
+    list.push({pid,interfaces:[],redistribute});
+  }
+  const raw=cfg.split('\ninterface ');
+  for(const blk of raw.slice(1)){
+    const name=blk.split('\n')[0].trim();
+    const body=blk.slice(name.length);
+    const re2=/ipv6 rip\s+(\S+)\s+enable/g; let rm2;
+    while((rm2=re2.exec(body))!==null){
+      const proc=list.find(p=>p.pid===rm2[1]);
+      if(proc&&!proc.interfaces.includes(name))proc.interfaces.push(name);
+    }
+  }
+  return list;
+}
+
 // ── Master Parse ──────────────────────────────────────────────
 function parseCisco(cfg){
   const sys=parseCiscoSysInfo(cfg);
@@ -317,8 +373,10 @@ function parseCisco(cfg){
   const vrfs=parseCiscoVRFs(cfg);
   const users=parseCiscoUsers(cfg);
   const ospf=parseCiscoOSPF(cfg);
+  const ospf6=parseCiscoOSPFv3(cfg);
   const bgp=parseCiscoBGP(cfg);
   const rip=parseCiscoRIP(cfg);
+  const rip6=parseCiscoRIPng(cfg);
   const vrrp=parseVRRP(cfg,'cisco');
   const breakouts=parseCiscoBreakout(cfg);
   // pattern A（9300X 模組換位編號）子埠命名無法從介面名稱本身反推母埠，需用 breakouts 裡的
@@ -336,7 +394,7 @@ function parseCisco(cfg){
       if(iface){iface.breakoutChild=true;iface.breakoutParent=`FortyGigabitEthernet${b.switchNum}/${slot}/${portNum}`;iface.breakoutScheme='renumber';}
     }
   }
-  return{sys,irf:null,stack,vlans,interfaces,routes,vrfs,users,ospf,bgp,rip,vrrp,vxlan:null,vendor:'cisco',breakouts};
+  return{sys,irf:null,stack,vlans,interfaces,routes,vrfs,users,ospf,ospf6,bgp,rip,rip6,vrrp,vxlan:null,vendor:'cisco',breakouts};
 }
 
 // ═ Dell EMC OS10 Parser ═════════════════════════════════════

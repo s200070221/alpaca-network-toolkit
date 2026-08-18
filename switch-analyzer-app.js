@@ -2974,9 +2974,11 @@ function renderOSPFTopo(ospfList){
 
 function renderRoutingProtocols(){
   const ospf=parsed.ospf||[];
+  const ospf6=parsed.ospf6||[];
   const bgp=parsed.bgp||[];
   const rip=parsed.rip||[];
-  if(!ospf.length&&!bgp.length&&!rip.length)
+  const rip6=parsed.rip6||[];
+  if(!ospf.length&&!ospf6.length&&!bgp.length&&!rip.length&&!rip6.length)
     return`<div class="nodata">${tr('rt.no_dynamic')}<br><span style="font-size:11px;color:var(--text-muted)">${tr('rt.no_dynamic_sub')}</span></div>`;
   let h='';
   // OSPF section
@@ -2997,6 +2999,24 @@ function renderRoutingProtocols(){
       </div></div>`;
     });
   }
+  // OSPFv3 section（2026-08-18 新增，area 成員關係是逐介面 enable 而非 network+wildcard，
+  // 故用介面清單 pill 而非網段清單；沿用既有 "OSPF" 標題不翻譯字面詞慣例，不新增 i18n key）
+  if(ospf6.length){
+    h+=`<div style="padding:12px 18px 0"><div class="sec-title">OSPFv3（${ospf6.length} ${tr('rt.n_process')}）</div></div>`;
+    ospf6.forEach(p=>{
+      const totalIf=p.areas.reduce((s,a)=>s+a.interfaces.length,0);
+      h+=`<div style="padding:4px 18px 10px"><div class="ov-card">
+        <div class="ov-card-title">📡 OSPFv3 ${tr('col.process_id')} ${esc(p.pid)}${p.routerId?' · Router-ID '+esc(p.routerId):''}</div>
+        <table class="data-tbl"><thead><tr><th>${tr('col.area')}</th><th>${tr('col.iface')}</th></tr></thead><tbody>
+        ${p.areas.map(a=>`<tr>
+          <td><span class="pill p-info">Area ${esc(a.area)}</span></td>
+          <td class="mono">${a.interfaces.map(i=>`<span class="pill p-route">${esc(i)}</span>`).join(' ')||'—'}</td>
+        </tr>`).join('')}
+        </tbody></table>
+        <div style="padding-top:6px;font-size:11px;color:var(--text-dim)">${p.areas.length} ${tr('rt.ospf_footer')} · ${totalIf} ${tr('col.iface')}</div>
+      </div></div>`;
+    });
+  }
   // RIP section
   if(rip.length){
     h+=`<div style="padding:12px 18px 0"><div class="sec-title">RIP / RIPv2（${rip.length} ${tr('rt.n_process')}）</div></div>`;
@@ -3014,6 +3034,23 @@ function renderRoutingProtocols(){
           </tr>
         </tbody></table>
         <div style="padding-top:6px;font-size:11px;color:var(--text-dim)">Network: ${(r.networks||[]).length} · Peer/Neighbor: ${(r.peers||[]).length}${r.timers?' · Timers '+esc(r.timers):''}${r.defaultMetric?' · Default metric '+esc(r.defaultMetric):''}</div>
+      </div></div>`;
+    });
+  }
+  // RIPng section（2026-08-18 新增，link-based 機制，逐介面 enable 非 network 陳述式，
+  // pid 對 Cisco 系是名稱字串非數字）
+  if(rip6.length){
+    h+=`<div style="padding:12px 18px 0"><div class="sec-title">RIPng（${rip6.length} ${tr('rt.n_process')}）</div></div>`;
+    rip6.forEach(r=>{
+      h+=`<div style="padding:4px 18px 10px"><div class="ov-card">
+        <div class="ov-card-title">🛰️ RIPng ${tr('col.process_id')} ${esc(r.pid)}</div>
+        <table class="data-tbl"><thead><tr><th>${tr('col.iface')}</th><th>${tr('col.redistribute')}</th></tr></thead><tbody>
+          <tr>
+            <td class="mono">${(r.interfaces||[]).map(i=>`<span class="pill p-route">${esc(i)}</span>`).join(' ')||'—'}</td>
+            <td class="mono">${(r.redistribute||[]).map(x=>esc(x)).join('<br>')||'—'}</td>
+          </tr>
+        </tbody></table>
+        <div style="padding-top:6px;font-size:11px;color:var(--text-dim)">${(r.interfaces||[]).length} ${tr('col.iface')}</div>
       </div></div>`;
     });
   }

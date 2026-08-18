@@ -538,6 +538,67 @@ function parseOSPF(cfg){
   return processes;
 }
 
+// ── OSPFv3 Parser (Comware，2026-08-18 新增) ───────────────────
+// 官方 H3C OSPFv3 Commands 手冊確認：ospfv3 為獨立頂層指令樹（非 "ospf N" 底下的子模式），
+// area 在 ospfv3 區塊內只是「存在宣告」（無巢狀 network 陳述式），真正的介面成員關係要看
+// 介面視圖的 "ospfv3 N area X [instance Y]" 指令——已用真實去識別化範例檔
+// （comware_ipv6_real_sample.cfg）交叉確認區塊結構。既有 parseOSPF() 的頂層正則要求
+// "ospf" 後接空白，"ospfv3 1" 中 "ospf" 後接 "v3"（非空白）不會誤判，兩者互不衝突。
+function parseOSPFv3(cfg){
+  const processes=[]; let m;
+  const pr=/^ospfv3\s+(\d+)\s*\n((?:[ \t][^\n]*\n)*)/gm;
+  while((m=pr.exec(cfg))!==null){
+    const pid=m[1], body=m[2];
+    const rid=(body.match(/router-id\s+(\S+)/)||[])[1]||'';
+    const areas=[]; const ar=/[ \t]area\s+(\S+)/g; let am;
+    while((am=ar.exec(body))!==null){
+      if(!areas.find(a=>a.area===am[1]))areas.push({area:am[1],interfaces:[]});
+    }
+    processes.push({pid,routerId:rid,areas});
+  }
+  // 逐介面反查 "ospfv3 PID area AREA"（比照 VRRP/BGP 既有的 cfg.split('\ninterface ') 慣例）
+  const raw=cfg.split('\ninterface ');
+  for(const blk of raw.slice(1)){
+    const name=blk.split('\n')[0].trim();
+    const body=blk.slice(name.length);
+    const re=/ospfv3\s+(\d+)\s+area\s+(\S+)/g; let rm;
+    while((rm=re.exec(body))!==null){
+      const proc=processes.find(p=>p.pid===rm[1]);
+      if(!proc)continue;
+      let area=proc.areas.find(a=>a.area===rm[2]);
+      if(!area){area={area:rm[2],interfaces:[]};proc.areas.push(area);}
+      if(!area.interfaces.includes(name))area.interfaces.push(name);
+    }
+  }
+  return processes;
+}
+
+// ── RIPng Parser (Comware，2026-08-18 新增) ────────────────────
+// 官方 H3C RIPng Commands 手冊確認："ripng [ process-id ]" 為獨立頂層指令（預設值 1），
+// 介面視圖 "ripng N enable" 啟用；既有 parseRIP() 的頂層正則在 "ripng 1" 位置會因
+// "rip" 後直接接 "ng"（非空白/非換行）導致整段匹配失敗，兩者互不衝突。
+function parseRIPng(cfg){
+  const list=[]; let m;
+  const pr=/^ripng(?:\s+(\d+))?\s*\n((?:[ \t][^\n]*\n)*)/gm;
+  while((m=pr.exec(cfg))!==null){
+    const pid=m[1]||'1', body=m[2];
+    const redistribute=[]; const rr=/(?:import-route|redistribute)\s+(\S+)/g; let rm;
+    while((rm=rr.exec(body))!==null)redistribute.push(rm[1].trim());
+    list.push({pid,interfaces:[],redistribute});
+  }
+  const raw=cfg.split('\ninterface ');
+  for(const blk of raw.slice(1)){
+    const name=blk.split('\n')[0].trim();
+    const body=blk.slice(name.length);
+    const re=/ripng\s+(\d+)\s+enable/g; let rm2;
+    while((rm2=re.exec(body))!==null){
+      const proc=list.find(p=>p.pid===rm2[1]);
+      if(proc&&!proc.interfaces.includes(name))proc.interfaces.push(name);
+    }
+  }
+  return list;
+}
+
 // ── BGP Parser (Comware) ─────────────────────────────────────
 function parseBGP(cfg){
   const bgpList=[]; let m;
@@ -673,11 +734,13 @@ function parseComware(cfg){
   const vrfs=parseVRFs(cfg);
   const users=parseUsers(cfg);
   const ospf=parseOSPF(cfg);
+  const ospf6=parseOSPFv3(cfg);
   const bgp=parseBGP(cfg);
   const rip=parseRIP(cfg);
+  const rip6=parseRIPng(cfg);
   const vrrp=parseVRRP(cfg,'comware');
   const vxlan=parseVXLAN(cfg,'comware');
-  return{sys,irf,vlans,interfaces,routes,vrfs,users,ospf,bgp,rip,vrrp,vxlan};
+  return{sys,irf,vlans,interfaces,routes,vrfs,users,ospf,ospf6,bgp,rip,rip6,vrrp,vxlan};
 }
 
 // ═ Cisco IOS/IOS-XE Parser ═
