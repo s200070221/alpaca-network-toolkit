@@ -43,15 +43,34 @@ function parseFortiInterfaces(cfg){
     const vlan=(body.match(/set vlanid\s+(\d+)/)||[])[1]||'';
     const status=body.includes('set status down');
     const type=vlan?'svi':'physical';
+    // 修復（2026-08-18）：原本欄位命名為 id/ip，但 renderVRRP()／exportVRRPCSV() 全廠牌
+    // 共用的既有慣例是 vrid/vip（含 preempt/authMode/trackIf/version 等欄位），FortiSwitch
+    // 因命名不一致導致這些資料先前在畫面上完全顯示不出來（群組編號/VIP/搶佔狀態皆是
+    // undefined）——本工具從未有 FortiSwitch VRRP 的測試覆蓋，此缺陷從未被發現；一併修正
+    // 為與其餘廠牌一致的標準形狀，非本輪新增 IPv6 才引入的問題
     const vrrp=[];
     const vrrpRe=/config vrrp\n([\s\S]*?)^[ \t]*end/gm;
     let vm;
     while((vm=vrrpRe.exec(body))!==null){
       const vbody=vm[1];
       const vrId=(vbody.match(/edit\s+(\d+)/)||[])[1];
-      const vrip=(vbody.match(/set vrip\s+(\S+)/)||[])[1];
+      const vrip=(vbody.match(/set vrip\s+(\S+)/)||[])[1]||'';
       const prio=(vbody.match(/set priority\s+(\d+)/)||[])[1]||'100';
-      if(vrId)vrrp.push({id:vrId,ip:vrip,priority:prio});
+      if(vrId)vrrp.push({vrid:vrId,vip:vrip,vip6:'',priority:prio,preempt:false,authMode:'',trackIf:'',trackReduced:'',version:'2'});
+    }
+    // IPv6（2026-08-18 新增，官方 FortiSwitchOS Administration Guide 確認巢狀
+    // config ipv6 { ... config vrrp6 { edit N; set priority; set vrip6; } } 結構，與既有
+    // config vrrp 平行；依 vrid 合併回既有 IPv4 記錄，找不到則新增獨立記錄）
+    const vrrp6Re=/config vrrp6\n([\s\S]*?)^[ \t]*end/gm;
+    let vm6;
+    while((vm6=vrrp6Re.exec(body))!==null){
+      const vbody6=vm6[1];
+      const vrId6=(vbody6.match(/edit\s+(\d+)/)||[])[1];
+      const vrip6=(vbody6.match(/set vrip6\s+(\S+)/)||[])[1]||'';
+      if(!vrId6||!vrip6)continue;
+      const existing=vrrp.find(v=>v.vrid===vrId6);
+      if(existing)existing.vip6=vrip6;
+      else vrrp.push({vrid:vrId6,vip:'',vip6:vrip6,priority:(vbody6.match(/set priority\s+(\d+)/)||[])[1]||'100',preempt:false,authMode:'',trackIf:'',trackReduced:'',version:'2'});
     }
     const bkMatch=name.match(/^(port\d+)\.([1-4])$/i);
     ifaces.push({name,type,desc,ip:ipStr,ip6:ip6Str,secondaryIps,mode:'',vlans:vlan,nativeVlan:'',vrf,shutdown:status,member:'1',hybrid:null,vrrp,fortilinkDiscovery:false,breakoutChild:!!bkMatch,breakoutParent:bkMatch?bkMatch[1]:'',breakoutMode:''});
