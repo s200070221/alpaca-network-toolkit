@@ -308,11 +308,19 @@ function parseSNMP(cfg, vendor){
     while((m=reC.exec(cfg))!==null)pushC(m[1]);
     const reU=/set snmp v3 usm local-engine user\s+(\S+)/g;
     while((m=reU.exec(cfg))!==null)pushU(m[1]);
+    // Trap host（2026-08-19 新增，對外查證官方 Junos SNMP Trap Groups 文件確認）：
+    // set snmp trap-group NAME targets ip-address（community 即 trap-group 名稱本身）
+    const reH=/set snmp trap-group\s+\S+\s+targets\s+(\S+)/g;
+    while((m=reH.exec(cfg))!==null)pushH(m[1]);
   }else if(vendor==='alcatel'){
     // 官方 OmniSwitch CLI Reference 查證：snmp community map NAME [user ...] enable
     // （v3 使用者語法官方文件未能取得逐字確認，比照專案慣例不臆測，僅做 community）
     let m; const reC=/->?\s*snmp community map\s+(\S+)/g;
     while((m=reC.exec(cfg))!==null)pushC(m[1]);
+    // Trap host（2026-08-19 新增，對外查證官方 OmniSwitch AOS CLI Reference 真實範例確認）：
+    // snmp station ip-address [port] "user" v1|v2c|v3 enable
+    const reH=/->?\s*snmp station\s+(\S+)/g;
+    while((m=reH.exec(cfg))!==null)pushH(m[1]);
   }else if(vendor==='extreme'){
     // 官方 ExtremeXOS Command Reference 查證：
     // configure snmp add community {readonly|readwrite} NAME
@@ -320,6 +328,12 @@ function parseSNMP(cfg, vendor){
     while((m=reC.exec(cfg))!==null)pushC(m[1]);
     const reU=/configure\s+snmpv3\s+add\s+user\s+(\S+)/g;
     while((m=reU.exec(cfg))!==null)pushU(m[1]);
+    // Trap host（2026-08-19 新增，對外查證官方 ExtremeXOS Command Reference 確認，v1/v2c
+    // 簡易版，與同批查證發現的 SNMPv3 target-addr 機制（需額外 target-params 交叉引用）
+    // 分屬不同複雜度，此為與既有 community 語法家族（v1/v2c）相符的版本）：
+    // configure snmp add trapreceiver ip-address community community-name
+    const reH=/configure\s+snmp\s+add\s+trapreceiver\s+(\S+)/g;
+    while((m=reH.exec(cfg))!==null)pushH(m[1]);
   }else if(vendor==='routeros'){
     // 官方 RouterOS SNMP 文件查證：/snmp community add name=NAME ...（v7 統一 v1/v2c/v3
     // 於同一物件，含 authentication-protocol=／security=authPriv|private 視為 v3）
@@ -331,6 +345,12 @@ function parseSNMP(cfg, vendor){
       const isV3=/authentication-protocol=|security=(private|authpriv)/i.test(line);
       if(isV3)pushU(nameM[1]); else pushC(nameM[1]);
     }
+    // Trap host（2026-08-19 新增，中高信心：官方文件確認 trap-target/trap-community 為
+    // /snmp 單例選單下的真實屬性，但官方文件本身未附完整逐字 set 指令範例，比照 /snmp
+    // 選單本身唯一有範例的 "set enabled yes" 語法慣例推得；trap-target 為 list 型別，
+    // 可能逗號分隔多筆）
+    const reH=/\/snmp\s+set\s+[^\n]*trap-target=([^\s,]+)/g;
+    while((m=reH.exec(cfg))!==null)pushH(m[1]);
   }else if(vendor==='procurve'){
     // 官方 ArubaOS-Switch (AOS-S) MCG 查證：snmp-server community STRING [operator|manager]。
     // 2026-07-22 對外查證真實 HPE 5412zl 匯出檔後修正：字串值真實常見帶雙引號包裹
@@ -340,6 +360,10 @@ function parseSNMP(cfg, vendor){
     while((m=reC.exec(cfg))!==null)pushC(m[1]);
     const reU=/^\s*snmpv3\s+user\s+(\S+)/gm;
     while((m=reU.exec(cfg))!==null)pushU(m[1]);
+    // Trap host（2026-08-19 新增，對外查證官方 ArubaOS-Switch (AOS-S) MCG 真實範例確認）：
+    // snmp-server host ip-address "community" [trap-level LEVEL]
+    const reH=/^\s*snmp-server\s+host\s+(\S+)/gm;
+    while((m=reH.exec(cfg))!==null)pushH(m[1]);
   }else if(vendor==='aruba'){
     // 官方 AOS-CX SNMP 命令查證：snmp-server community STRING（無 ro/rw 關鍵字）；
     // v3 使用者無 "v3" 標記字面，snmp-server user NAME auth ... 即代表 v3
@@ -347,6 +371,10 @@ function parseSNMP(cfg, vendor){
     while((m=reC.exec(cfg))!==null)pushC(m[1]);
     const reU=/^\s*snmp-server\s+user\s+(\S+)\s+auth\b/gm;
     while((m=reU.exec(cfg))!==null)pushU(m[1]);
+    // Trap host（2026-08-19 新增，對外查證官方 AOS-CX 文件真實範例確認）：
+    // snmp-server host ip-address trap version {v1|v2c|v3} [community STRING]
+    const reH=/^\s*snmp-server\s+host\s+(\S+)\s+trap\b/gm;
+    while((m=reH.exec(cfg))!==null)pushH(m[1]);
   }else{
     // cisco(IOS-XE)／dell-os10／nxos／arista／brocade(ICX) 共用同一套
     // "snmp-server community NAME [ro|rw]"／"snmp-server user NAME ... v3" 語法家族，
