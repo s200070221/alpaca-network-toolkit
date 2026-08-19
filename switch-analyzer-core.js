@@ -44,7 +44,10 @@ function _onLangChange() {
   // 更新 nav-irf-lbl（依廠牌決定文字，不含 data-i18n）
   var irfLbl = document.getElementById('nav-irf-lbl');
   if (irfLbl && typeof parsed !== 'undefined' && parsed) {
-    irfLbl.textContent = parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('nav.irf.cisco'):parsed.vendor==='nxos'?tr('nav.irf.cisco'):parsed.vendor==='comware'?tr('nav.irf.comware'):parsed.vendor==='aruba'?tr('nav.irf.aruba'):parsed.vendor==='procurve'?tr('nav.irf.default'):parsed.vendor==='fortiswitch'?tr('nav.irf.forti'):parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?'Virtual Chassis':parsed.vendor==='alcatel'&&parsed.stack?'Alcatel Stack':parsed.vendor==='extreme'&&parsed.stack?'ExtremeStack':parsed.vendor==='brocade'&&parsed.stack?tr('nav.irf.brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('nav.irf.dell_vlt'):parsed.vendor==='dell-os10'&&parsed.stack?tr('nav.irf.dell_stack'):tr('nav.irf.default');
+    // 2026-08-19 補上與 switch-analyzer-app.js 的 showResultViews() 同步（doAnalyze() 結尾
+    // 呼叫 setLang() 觸發本函式，會覆蓋 showResultViews() 剛設好的值，故兩處必須保持一致）：
+    // 補上先前就已存在、僅這裡漏掉的 Arista MLAG 分支，以及新增的 Juniper MC-LAG 分支
+    irfLbl.textContent = parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('nav.irf.cisco'):parsed.vendor==='nxos'?tr('nav.irf.cisco'):parsed.vendor==='comware'?tr('nav.irf.comware'):parsed.vendor==='aruba'?tr('nav.irf.aruba'):parsed.vendor==='procurve'?tr('nav.irf.default'):parsed.vendor==='fortiswitch'?tr('nav.irf.forti'):parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?'Virtual Chassis':parsed.vendor==='juniper'&&parsed.stack?.type==='MC-LAG'?'Juniper MC-LAG':parsed.vendor==='alcatel'&&parsed.stack?'Alcatel Stack':parsed.vendor==='extreme'&&parsed.stack?'ExtremeStack':parsed.vendor==='brocade'&&parsed.stack?tr('nav.irf.brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('nav.irf.dell_vlt'):parsed.vendor==='dell-os10'&&parsed.stack?tr('nav.irf.dell_stack'):tr('nav.irf.default');
   }
   // data-tip 更新（sidebar 折疊時的 CSS tooltip，attribute 無法用 data-i18n）
   [['nav-upload','nav.upload'],['nav-overview','nav.overview'],
@@ -1877,12 +1880,79 @@ const LLDPParser = (() => {
     return entries;
   }
 
+  // ── Arista EOS（2026-08-19 新增）───────────────────
+  // 官方文件本身罕見附完整逐字指令輸出範例，改查證社群維護、以真實裝置輸出建置的
+  // ntc-templates（network automation 界廣泛使用於 netmiko/napalm）
+  // arista_eos_show_lldp_neighbors_detail.textfsm 樣板逐字確認結構：每個本地介面以
+  // "<字> <介面名> <字> <鄰居數>..." 開頭的標頭行起始一個區塊，區塊內固定含
+  // "Chassis ID   :"／"- Port ID type"（觸發子狀態）／"Port ID   : "值""／
+  // "- <字> Name: "值""／"System Description: "值""／"<字> Address   : 值"；
+  // 用標頭行位置切分區塊（而非 lookahead split），避免內文任意處誤判為區塊邊界
+  function parseLLDPArista(text) {
+    const entries = [];
+    const hdrRe = /^\S+\s+(\S+)\s+\S+\s+\d+.*$/gm;
+    const marks = [];
+    let hm;
+    while ((hm = hdrRe.exec(text)) !== null) marks.push({index: hm.index, localPort: hm[1]});
+    for (let i = 0; i < marks.length; i++) {
+      const start = marks[i].index;
+      const end = i + 1 < marks.length ? marks[i+1].index : text.length;
+      const blk = text.slice(start, end);
+      if (!/Chassis ID\s*:/i.test(blk)) continue;
+      const localPort  = marks[i].localPort;
+      const remotePort = (blk.match(/Port ID\s*:\s*"?([^"\n]+?)"?\s*$/im)||[])[1]?.trim()||'';
+      const neighbor   = (blk.match(/-\s+\S+\s+Name:\s*"([^"]+)"/i)||[])[1]?.trim()||'';
+      const platform   = (blk.match(/System Description:\s*"?([^"\n]+)"?/i)||[])[1]?.trim().slice(0,50)||'';
+      const ip         = (blk.match(/\S+\s+Address\s*:\s*([\d.]+)/i)||[])[1]?.trim()||'';
+      if (localPort) entries.push({localPort, neighbor, platform, remotePort, remoteDesc:'', capability:'', ip, protocol:'LLDP'});
+    }
+    return entries;
+  }
+
+  // ── MikroTik RouterOS（2026-08-19 新增）───────────
+  // 官方 MikroTik 文件（help.mikrotik.com "Neighbor discovery"）附逐字範例輸出，固定欄位
+  // 表格 "# INTERFACE ADDRESS MAC-ADDRESS IDENTITY VERSION BOARD"；以 MAC 位址（格式明確
+  // 不會與其他欄位混淆）錨定逐列擷取，避開表格欄寬不固定造成的位置誤判
+  function parseLLDPRouterOS(text) {
+    const entries = [];
+    const re = /^\s*\d+\s+(\S+)\s+(?:(\d+\.\d+\.\d+\.\d+)\s+)?([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(\S+)\s*(.*)$/gm;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      entries.push({localPort:m[1], neighbor:m[4], platform:(m[5]||'').trim().slice(0,50), remotePort:'', remoteDesc:'', capability:'', ip:m[2]||'', protocol:'LLDP'});
+    }
+    return entries;
+  }
+
+  // ── SONiC（2026-08-19 新增）────────────────────────
+  // 多個獨立來源（Dell／Supermicro／Edgecore／Cisco DevNet 官方文件）交叉確認 show lldp
+  // table 逐字範例輸出（開源 sonic-utilities/scripts/lldpshow 標準格式），固定欄位表格
+  // LocalPort/RemoteDevice/RemotePortID/Capability/RemotePortDescr，以 --- 分隔線區分
+  // 表頭與資料列
+  function parseLLDPSonic(text) {
+    const entries = [];
+    const sepIdx = text.search(/^-{5,}/m);
+    if (sepIdx < 0) return entries;
+    const rows = text.slice(sepIdx).split('\n').slice(1);
+    for (const row of rows) {
+      const cols = row.trim().split(/\s{2,}/).filter(Boolean);
+      if (cols.length < 3) continue;
+      const [localPort, neighbor, remotePort, capability, ...descParts] = cols;
+      entries.push({localPort, neighbor, platform:'', remotePort, remoteDesc:descParts.join(' ')||'', capability:capability||'', ip:'', protocol:'LLDP'});
+    }
+    return entries;
+  }
+
   // ── Auto-detect & dispatch ────────────────────────
   function parse(text, vendor) {
     if (!text) return [];
     // 統一在此正規化 CRLF，比照 parseAny() 的既有模式，避免 parseCDP() 的 \n{2,} 區塊分隔
     // 正則在 CRLF 輸入下因空白行實際是 \r\n\r\n（中間夾 \r）而漏抓多筆鄰居
     text = text.replace(/\r\n/g, '\n');
+    // 2026-08-19 新增：Arista 的 "Chassis ID   :" 格式與下方 Juniper 既有簽章
+    // （/Chassis ID\s{2,}:/i）會誤撞，故 Arista 檢查必須排在 Juniper 之前
+    if (/^\s+-\s+Port ID type/m.test(text))                          return parseLLDPArista(text);
+    if (/^\s*#\s+INTERFACE\s+ADDRESS\s+MAC-ADDRESS\s+IDENTITY/im.test(text)) return parseLLDPRouterOS(text);
+    if (/Capability codes:\s*\(R\)\s*Router/i.test(text) || /LocalPort\s+RemoteDevice/i.test(text)) return parseLLDPSonic(text);
     if (/Device ID:/i.test(text))                                    return parseCDP(text);
     if (/LLDP neighbor-information of port/i.test(text))             return parseLLDPComware(text);
     if (/LLDP Remote Device|ChassisType\s*:/i.test(text))            return parseLLDPProCurve(text);
@@ -1904,6 +1974,13 @@ const LLDPParser = (() => {
     if (vendor==='brocade')                   return parseLLDPBrocade(text);
     if (vendor==='alcatel')                   return parseLLDPAlcatel(text);
     if (vendor==='juniper')                   return parseLLDPJuniper(text);
+    // 2026-08-19 新增：nxos 函式命名/註解本來就寫「Cisco IOS / NX-OS LLDP」，僅接線問題
+    // （沿用 IOS 家族相容輸出格式，非新查證）；arista/routeros/sonic 上方 auto-detect
+    // 已可正確命中，此處 vendor fallback 僅作為內容特徵掃描失效時的保底
+    if (vendor==='nxos')                      return parseLLDPCisco(text);
+    if (vendor==='arista')                    return parseLLDPArista(text);
+    if (vendor==='routeros')                  return parseLLDPRouterOS(text);
+    if (vendor==='sonic')                     return parseLLDPSonic(text);
     return parseLLDPCisco(text);
   }
 
