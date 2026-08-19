@@ -272,7 +272,7 @@ function showResultViews(){
   // Update stack nav label based on vendor
   const irfLbl=document.getElementById('nav-irf-lbl');
   if(irfLbl){
-    irfLbl.textContent=parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('nav.irf.cisco'):parsed.vendor==='nxos'?tr('nav.irf.cisco'):parsed.vendor==='comware'?tr('nav.irf.comware'):parsed.vendor==='aruba'?tr('nav.irf.aruba'):parsed.vendor==='procurve'?tr('nav.irf.default'):parsed.vendor==='fortiswitch'?tr('nav.irf.forti'):parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?'Virtual Chassis':parsed.vendor==='alcatel'&&parsed.stack?'Alcatel Stack':parsed.vendor==='extreme'&&parsed.stack?'ExtremeStack':parsed.vendor==='brocade'&&parsed.stack?tr('nav.irf.brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('nav.irf.dell_vlt'):parsed.vendor==='dell-os10'&&parsed.stack?tr('nav.irf.dell_stack'):tr('nav.irf.default');
+    irfLbl.textContent=parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('nav.irf.cisco'):parsed.vendor==='nxos'?tr('nav.irf.cisco'):parsed.vendor==='comware'?tr('nav.irf.comware'):parsed.vendor==='aruba'?tr('nav.irf.aruba'):parsed.vendor==='procurve'?tr('nav.irf.default'):parsed.vendor==='fortiswitch'?tr('nav.irf.forti'):parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?'Virtual Chassis':parsed.vendor==='juniper'&&parsed.stack?.type==='MC-LAG'?'Juniper MC-LAG':parsed.vendor==='alcatel'&&parsed.stack?'Alcatel Stack':parsed.vendor==='extreme'&&parsed.stack?'ExtremeStack':parsed.vendor==='brocade'&&parsed.stack?tr('nav.irf.brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('nav.irf.dell_vlt'):parsed.vendor==='dell-os10'&&parsed.stack?tr('nav.irf.dell_stack'):tr('nav.irf.default');
   }
   // Show nav items
   ['lbl-result','nav-overview','nav-irf','nav-vlans','nav-vlan-matrix','nav-ports','nav-lacp','nav-routes','nav-routing','nav-vrrp','nav-vxlan','nav-vrfs','nav-dhcp','nav-users','nav-lldp','nav-stp','nav-acl','nav-security','nav-qos','nav-snmp','nav-audit'].forEach(id=>{
@@ -329,18 +329,22 @@ function updateCounts(){
   if(ncAudit){ncAudit.textContent=auditCount;ncAudit.style.display=auditCount?'':'none';}
 }
 
-// 沿用同一張卡片渲染 Arista MLAG 與 Cisco NX-OS VPC——概念上都是「雙機互聯冗餘」而非物理堆疊，
-// 差別只在欄位名稱與內容，依 parsed.stack.type 切換要顯示的卡片組
+// 沿用同一張卡片渲染 Arista MLAG／Cisco NX-OS VPC／Juniper MC-LAG（2026-08-19 加入第三種
+// type）——概念上都是「雙機互聯冗餘」而非物理堆疊，差別只在欄位名稱與內容，依
+// parsed.stack.type 三選一切換要顯示的卡片組
 function renderAristaMlag(){
   const mlag=parsed.stack;
   if(!mlag)return'<div class="nodata">'+tr('msg.no_data')+'</div>';
-  const isVpc=mlag.type==='VPC';
-  const title=isVpc?'Cisco NX-OS VPC':'Arista MLAG';
-  const cards=isVpc?[
+  const title=mlag.type==='VPC'?'Cisco NX-OS VPC':mlag.type==='MC-LAG'?'Juniper MC-LAG':'Arista MLAG';
+  const cards=mlag.type==='VPC'?[
     {t:'VPC Domain',v:mlag.domain,c:'var(--accent)',big:true},
     {t:'Peer Link',v:mlag.peerLink,c:'var(--teal)'},
     {t:'Peer Keepalive',v:mlag.peerKeepalive,c:'var(--green)'},
     {t:'Peer Gateway',v:mlag.peerGateway?'Enabled':'Disabled',c:'var(--purple)'},
+  ]:mlag.type==='MC-LAG'?[
+    {t:'MC-AE ID',v:mlag.domain,c:'var(--accent)',big:true},
+    {t:'ICCP Peer',v:mlag.peerLink||'—',c:'var(--teal)'},
+    {t:'Mode',v:mlag.mode||'—',c:'var(--purple)'},
   ]:[
     {t:'Domain ID',v:mlag.domain,c:'var(--accent)',big:true},
     {t:'Peer Link',v:mlag.peerLink,c:'var(--teal)'},
@@ -482,7 +486,7 @@ function renderView(view){
   if(!parsed){tc.innerHTML='<div class="nodata">'+tr('msg.no_config')+'</div>';return;}
   switch(view){
     case'overview': tc.innerHTML=renderOverview();break;
-    case'irf':      tc.innerHTML=parsed.vendor==='cisco'?renderStackWise():parsed.vendor==='aruba'?renderVSF():parsed.vendor==='fortiswitch'?renderMCLAG():parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?renderVC():parsed.vendor==='alcatel'&&parsed.stack?renderAlcatelStack():parsed.vendor==='extreme'&&parsed.stack?renderExtremeStack():parsed.vendor==='brocade'&&parsed.stack?renderBrocadeStack():parsed.vendor==='ruijie'&&parsed.stack?renderRuijieVSU():(parsed.vendor==='arista'||parsed.vendor==='nxos')&&parsed.stack?renderAristaMlag():parsed.vendor==='dell-os10'&&parsed.stack?renderDellStack():renderIRF();break;
+    case'irf':      tc.innerHTML=parsed.vendor==='cisco'?renderStackWise():parsed.vendor==='aruba'?renderVSF():parsed.vendor==='fortiswitch'?renderMCLAG():parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?renderVC():parsed.vendor==='juniper'&&parsed.stack?.type==='MC-LAG'?renderAristaMlag():parsed.vendor==='alcatel'&&parsed.stack?renderAlcatelStack():parsed.vendor==='extreme'&&parsed.stack?renderExtremeStack():parsed.vendor==='brocade'&&parsed.stack?renderBrocadeStack():parsed.vendor==='ruijie'&&parsed.stack?renderRuijieVSU():(parsed.vendor==='arista'||parsed.vendor==='nxos')&&parsed.stack?renderAristaMlag():parsed.vendor==='dell-os10'&&parsed.stack?renderDellStack():renderIRF();break;
     case'routing':  tc.innerHTML=renderRoutingProtocols();break;
     case'vrrp':    tc.innerHTML=renderVRRP();break;
     case'vxlan':   tc.innerHTML=renderVXLAN();break;
@@ -554,21 +558,6 @@ function renderOverview(){
         <span class="ov-key" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(label)}">${esc(label)}</span>
         <span class="ov-val" style="flex-shrink:0;flex:none;word-break:normal;margin-left:8px">${v.ipSubnets.map(s=>pill('ip',s.cidr)).join(' ')}</span>
       </div>`;}).join('')}
-    </div>`;
-  }
-  // VLT summary
-  if(p.vlt){
-    const vlt=p.vlt;
-    const vltLagCount=(vlt.vltLags||[]).length;
-    ovCards+=`<div class="ov-card">
-      <div class="ov-card-title">${tr('ov.vlt_topo')}</div>
-      <div class="ov-row"><span class="ov-key">Domain ID</span><span class="ov-val mono" style="color:var(--accent)">${esc(vlt.domainId)}</span></div>
-      <div class="ov-row"><span class="ov-key">${tr('ov.vlt_priority')}</span><span class="ov-val mono">${esc(vlt.priority||'—')}</span></div>
-      <div class="ov-row"><span class="ov-key">${tr('ov.vlt_backup_dest')}</span><span class="ov-val mono">${esc(vlt.backupDest||'—')}</span></div>
-      <div class="ov-row"><span class="ov-key">Virtual MAC</span><span class="ov-val mono">${esc(vlt.mac||'—')}</span></div>
-      <div class="ov-row"><span class="ov-key">Peer Routing</span><span class="ov-val">${vlt.peerRouting?pill('p-up',tr('rt.auto_sum_on')):pill('p-gray',tr('rt.auto_sum_off'))}</span></div>
-      <div class="ov-row"><span class="ov-key">${tr('ov.vlt_lag_count')}</span><span class="ov-val" style="color:var(--teal)">${vltLagCount}</span></div>
-      ${(vlt.vltLags||[]).slice(0,4).map(l=>`<div class="ov-row"><span class="ov-key mono" style="font-size:11px">${esc(l.pcId)}</span><span class="ov-val">${pill('p-info',l.mode)} ${esc(l.vlans||'—')}</span></div>`).join('')}
     </div>`;
   }
   // VRRP/HSRP summary from dedicated parser

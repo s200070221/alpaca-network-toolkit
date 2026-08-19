@@ -514,6 +514,33 @@ function parseJuniperVC(cfg){
   return{type:'VC', members, links, preprovisioned};
 }
 
+// ── MC-LAG（Multi-Chassis Link Aggregation，2026-08-19 新增）────────────────
+// 官方 Junos MC-LAG 文件查證：mc-ae 巢狀於個別 AE 介面的 aggregated-ether-options 區塊
+// 內（interfaces { aeN { aggregated-ether-options { mc-ae { mc-ae-id N; chassis-id N;
+// mode active-active|active-standby; } } } }），ICCP（跨機互聯控制協定）peer 宣告於
+// 獨立的 protocols iccp 區塊。與 VPC(NX-OS)/MLAG(Arista)/VLT(Dell OS10) 概念相同（雙機
+// 互聯冗餘，非物理堆疊），沿用同一套 parsed.stack={type,domain,peerLink,members} 形狀，
+// 取第一個找到的 mc-ae 介面代表整台裝置的 MC-LAG 身份即可
+function parseJuniperMCLAG(cfg){
+  const interfacesBlock=junosBlock(cfg,'interfaces');
+  if(!interfacesBlock)return null;
+  let mcaeId='',chassisId='',mode='';
+  for(const{content:ifBody}of junosSubBlocks(interfacesBlock)){
+    const aeOptBlock=junosBlock(ifBody,'aggregated-ether-options');
+    const mcaeBlock=aeOptBlock?junosBlock(aeOptBlock,'mc-ae'):'';
+    if(!mcaeBlock)continue;
+    mcaeId=(mcaeBlock.match(/mc-ae-id\s+(\d+);/)||[])[1]||'';
+    chassisId=(mcaeBlock.match(/chassis-id\s+(\d+);/)||[])[1]||'';
+    mode=(mcaeBlock.match(/mode\s+(\S+);/)||[])[1]||'';
+    if(mcaeId)break;
+  }
+  if(!mcaeId)return null;
+  const protocolsBlock=junosBlock(cfg,'protocols');
+  const iccpBlock=protocolsBlock?junosBlock(protocolsBlock,'iccp'):'';
+  const peerLink=(iccpBlock.match(/peer\s+([\d.]+)\s*\{/)||[])[1]||'';
+  return{type:'MC-LAG',domain:mcaeId,peerLink,mode,members:[{id:chassisId}]};
+}
+
 // ── DHCP (Junos: access pools + forwarding-options relay) ─
 function parseJuniperDHCP(cfg){
   const pools=[];
@@ -590,8 +617,9 @@ function parseJuniperDHCP(cfg){
 // ── Top-level ─────────────────────────────────────────────
 function parseJuniper(cfg){
   const vc=parseJuniperVC(cfg);
-  // stack for display: VC uses same structure as IRF/VSF
-  const stack=vc?{type:'VC',members:vc.members,links:vc.links,details:vc}:null;
+  // stack for display: VC uses same structure as IRF/VSF；VC 與 MC-LAG 實務上互斥
+  // （單機不會同時是實體堆疊又是雙機互聯冗餘），VC 優先，找不到 VC 才檢查 MC-LAG
+  const stack=vc?{type:'VC',members:vc.members,links:vc.links,details:vc}:parseJuniperMCLAG(cfg);
   const interfaces=parseJuniperInterfaces(cfg);
   const breakouts=parseJuniperBreakout(cfg);
   breakouts.forEach(b=>{
