@@ -361,6 +361,18 @@
     f('default-admin-name', tr('audit.check_default_admin'), defaultAdmins.length, 'medium',
       defaultAdmins.length ? defaultAdmins.map(u => u.name).slice(0,8).join(', ') + (defaultAdmins.length > 8 ? '…' : '') : tr('audit.none'),
       ['ISO27001 A.5.16', 'PCI-DSS 4.0 2.2.2/8.2.2']);
+    // 10. SNMPv3 認證/加密強度不足（僅涵蓋有實際解析出 v3users 的 6 家：FortiGate/Juniper/PaloAlto/
+    // Sophos/CheckPoint/MikroTik；CiscoASA/pfSense/SonicWall 固定空陣列、EdgeRouter/OpenWrt/Zyxel
+    // 無 snmp 物件，皆非本檢查涵蓋範圍，非「查無弱設定」）
+    const v3users = (snmp && snmp.v3users) || [];
+    const WEAK_AUTH = ['md5'], WEAK_PRIV = ['des'];
+    const weakV3 = v3users.filter(u =>
+      (u.secLevel && u.secLevel !== 'auth-priv') ||
+      (u.authProto && WEAK_AUTH.includes(String(u.authProto).toLowerCase())) ||
+      (u.privProto && WEAK_PRIV.includes(String(u.privProto).toLowerCase())));
+    f('snmpv3-weak', tr('audit.check_snmpv3_weak'), weakV3.length, weakV3.length ? 'medium' : 'low',
+      weakV3.length ? weakV3.map(u => u.name).slice(0,8).join(', ') + (weakV3.length > 8 ? '…' : '') + tr('audit.rec_snmpv3_strong') : tr('audit.none'),
+      ['NIST 800-53 IA-5', 'CIS v8 4.8']);
     return findings;
   }
 
