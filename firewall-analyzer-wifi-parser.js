@@ -5,6 +5,64 @@
  * Returns structured WiFi analysis data
  */
 
+// 2026-08-19 從 parseFortigateWifi() 內部抽到頂層（純函式，無外部依賴，抽出不影響既有
+// 行為）：供本輪新增的 MikroTik/OpenWrt/pfSense WiFi 解析共用，避免重寫評分邏輯
+function gradeVap(vap) {
+  const issues = [];
+  const score_deductions = [];
+
+  if (vap.security === 'open' && !vap.captivePortal) {
+    issues.push({ level: 'critical', msg: 'wifi.msg_fully_open' });
+    score_deductions.push(50);
+  } else if (vap.security === 'open' && vap.captivePortal) {
+    issues.push({ level: 'warn', msg: 'wifi.msg_captive_open' });
+    score_deductions.push(20);
+  }
+
+  if (vap.security.includes('wpa2') && !vap.security.includes('wpa3')) {
+    issues.push({ level: 'info', msg: 'wifi.msg_wpa2_only' });
+    score_deductions.push(5);
+  }
+
+  if (vap.pmf === '-' || vap.pmf === 'disable') {
+    issues.push({ level: 'info', msg: 'wifi.msg_no_pmf' });
+    score_deductions.push(5);
+  }
+
+  if (vap.intraVapPrivacy) {
+    // Good: clients can't talk to each other
+  } else if (vap.security === 'open') {
+    issues.push({ level: 'warn', msg: 'wifi.msg_no_intra_vap' });
+    score_deductions.push(10);
+  }
+
+  const score = Math.max(0, 100 - score_deductions.reduce((a,b) => a+b, 0));
+  const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
+  return { score, grade, issues };
+}
+// 2026-08-19 從 parseFortigateWifi() 內部的 summary 組裝區塊抽到頂層共用（純函式，無外部
+// 依賴）：新增的 3 家 WiFi 解析與 firewall-analyzer-app.js 合併多廠牌 WiFi 資料時共用，
+// 傳入空陣列（wtpProfiles/wtps/widsProfiles）時 AP 相關欄位自然為 0，不需另開簡化版
+function buildWifiSummary(vaps, wtpProfiles, wtps, widsProfiles, country) {
+  return {
+    country: country || '-',
+    ssidCount:    vaps.length,
+    apCount:      wtps.length,
+    profileCount: wtpProfiles.length,
+    widsCount:    widsProfiles.length,
+    openSsids:    vaps.filter(v => v.security === 'open' && !v.captivePortal).length,
+    captiveSsids: vaps.filter(v => v.captivePortal).length,
+    hiddenSsids:  vaps.filter(v => !v.broadcastSsid).length,
+    wpa3Ssids:    vaps.filter(v => v.security.includes('wpa3')).length,
+    vlanSsids:    vaps.filter(v => v.vlanId !== '-').length,
+    wifi6Aps:     wtpProfiles.filter(p => p.wifiGen.includes('Wi-Fi 6')).length,
+    dualBandAps:  wtpProfiles.filter(p => p.has2G && p.has5G).length,
+    criticalIssues: vaps.reduce((n,v) => n + v.secIssues.filter(i=>i.level==='critical').length, 0),
+    warnIssues:     vaps.reduce((n,v) => n + v.secIssues.filter(i=>i.level==='warn').length, 0),
+    avgSecScore:  vaps.length ? Math.round(vaps.reduce((s,v) => s+v.secScore, 0) / vaps.length) : 0,
+  };
+}
+
 function parseFortigateWifi(text) {
   text = text.replace(/\r\n/g, '\n'); // 自我防禦：不依賴呼叫端是否已正規化 CRLF
 
@@ -73,44 +131,7 @@ function parseFortigateWifi(text) {
     return new RegExp(`^\\s*set ${key}\\s`, 'im').test(body);
   }
 
-  // ── Security grading ──────────────────────────────────────────────────────
-  function gradeVap(vap) {
-    const issues = [];
-    const score_deductions = [];
-
-    if (vap.security === 'open' && !vap.captivePortal) {
-      issues.push({ level: 'critical', msg: 'wifi.msg_fully_open' });
-      score_deductions.push(50);
-    } else if (vap.security === 'open' && vap.captivePortal) {
-      issues.push({ level: 'warn', msg: 'wifi.msg_captive_open' });
-      score_deductions.push(20);
-    }
-
-    if (vap.security.includes('wpa2') && !vap.security.includes('wpa3')) {
-      issues.push({ level: 'info', msg: 'wifi.msg_wpa2_only' });
-      score_deductions.push(5);
-    }
-
-    if (vap.pmf === '-' || vap.pmf === 'disable') {
-      issues.push({ level: 'info', msg: 'wifi.msg_no_pmf' });
-      score_deductions.push(5);
-    }
-
-    if (!vap.broadcastSsid) {
-      // Hidden SSID is not actually a security feature but adds management overhead
-    }
-
-    if (vap.intraVapPrivacy) {
-      // Good: clients can't talk to each other
-    } else if (vap.security === 'open') {
-      issues.push({ level: 'warn', msg: 'wifi.msg_no_intra_vap' });
-      score_deductions.push(10);
-    }
-
-    const score = Math.max(0, 100 - score_deductions.reduce((a,b) => a+b, 0));
-    const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
-    return { score, grade, issues };
-  }
+  // ── Security grading：gradeVap() 已抽到檔案頂層共用，此處不再重複定義 ──────
 
   // ── 取得 per-VDOM 文字區塊（single-VDOM 時回傳 [{name:'root', lines:[全文]}]）
   const { vdomBlocks } = FortigateParser.splitTopLevel(text);
@@ -242,23 +263,7 @@ function parseFortigateWifi(text) {
   });
 
   // ── 7. Summary stats ──────────────────────────────────────────────────────
-  const summary = {
-    country,
-    ssidCount:    vaps.length,
-    apCount:      wtps.length,
-    profileCount: wtpProfiles.length,
-    widsCount:    widsProfiles.length,
-    openSsids:    vaps.filter(v => v.security === 'open' && !v.captivePortal).length,
-    captiveSsids: vaps.filter(v => v.captivePortal).length,
-    hiddenSsids:  vaps.filter(v => !v.broadcastSsid).length,
-    wpa3Ssids:    vaps.filter(v => v.security.includes('wpa3')).length,
-    vlanSsids:    vaps.filter(v => v.vlanId !== '-').length,
-    wifi6Aps:     wtpProfiles.filter(p => p.wifiGen.includes('Wi-Fi 6')).length,
-    dualBandAps:  wtpProfiles.filter(p => p.has2G && p.has5G).length,
-    criticalIssues: vaps.reduce((n,v) => n + v.secIssues.filter(i=>i.level==='critical').length, 0),
-    warnIssues:     vaps.reduce((n,v) => n + v.secIssues.filter(i=>i.level==='warn').length, 0),
-    avgSecScore:  vaps.length ? Math.round(vaps.reduce((s,v) => s+v.secScore, 0) / vaps.length) : 0,
-  };
+  const summary = buildWifiSummary(vaps, wtpProfiles, wtps, widsProfiles, country);
 
   return { vaps, wtpProfiles, wtps, widsProfiles, summary };
 }
@@ -439,6 +444,114 @@ function parseFortigateSwitchController(text) {
   };
 
   return { switches, ports, macPolicies, nacPolicies, nacDevices, summary };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// 2026-08-19 新增：MikroTik／OpenWrt／pfSense 三家對外查證後確認可解析 WiFi/WLAN
+// 設定，補上原本「僅 FortiGate 支援」的缺口。三者皆為「自身即為 AP」架構（非 FortiGate
+// 那種控制器管理外接 AP 的模型），故只填 vaps（SSID 清單）＋summary，wtpProfiles/wtps/
+// widsProfiles 固定空陣列，沿用頂層共用的 gradeVap()/buildWifiSummary()。
+// Sophos／SonicWall 對外查證後查無可信 CLI/config 語法佐證，維持排除（見
+// firewall-analyzer-app.js 的 WIFI_UNSUPPORTED 清單）。
+// ══════════════════════════════════════════════════════════════════
+
+// ── MikroTik RouterOS ────────────────────────────────────────────────────
+// 官方 MikroTik 文件真實範例查證：RouterOS v7.13+ 統一 /interface wifi 選單，單行 set/add
+// 指令內用點號巢狀屬性路徑（configuration.ssid=／security.authentication-types=／
+// configuration.hide-ssid=）。舊版 /interface wireless（ssid= 直接屬性＋security-profile
+// 具名物件交叉引用）語法本輪未涵蓋，MVP 範圍僅新版統一選單。
+function parseMikrotikWifi(text) {
+  text = text.replace(/\r\n/g, '\n');
+  const vaps = [];
+  // 真實 /export 輸出是「區塊標頭 + 後續裸 set/add 行」（/interface wifi 單獨一行，接著
+  // 逐行 set/add 不重複路徑），非每行自帶完整路徑；同時保留對單行自帶完整路徑格式的相容
+  const bodyLines = [];
+  let inWifiCtx = false;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    const inlineM = /^\/interface\s+(?:wifi|wifiwave2)\s+(?:set|add)\s+(.+)$/i.exec(line);
+    if (inlineM) { bodyLines.push(inlineM[1]); continue; }
+    if (/^\/interface\s+(?:wifi|wifiwave2)\s*$/i.test(line)) { inWifiCtx = true; continue; }
+    if (/^\//.test(line)) { inWifiCtx = false; continue; }
+    if (inWifiCtx && /^(?:set|add)\s+/i.test(line)) bodyLines.push(line.replace(/^(?:set|add)\s+/i, ''));
+  }
+  for (const line of bodyLines) {
+    const ssidM = /configuration\.ssid=("([^"]*)"|\S+)/.exec(line);
+    if (!ssidM) continue;
+    const ssid = (ssidM[2] !== undefined ? ssidM[2] : ssidM[1]).replace(/^"|"$/g, '');
+    const nameM = /default-name=([^\s\]]+)/.exec(line) || /^\[?\s*(\S+)/.exec(line);
+    const name = nameM ? nameM[1].replace(/[\[\]]/g, '') : ssid;
+    const authM = /security\.authentication-types=("([^"]*)"|\S+)/.exec(line);
+    const authRaw = authM ? (authM[2] !== undefined ? authM[2] : authM[1]).replace(/^"|"$/g, '') : '';
+    const security = /wpa3/i.test(authRaw) ? 'wpa3' : /wpa2/i.test(authRaw) ? 'wpa2-only' : authRaw ? authRaw : 'open';
+    const hideM = /configuration\.hide-ssid=(\S+)/.exec(line);
+    const broadcastSsid = !(hideM && /yes/i.test(hideM[1]));
+    const vap = { name, ssid, security, broadcastSsid, vlanId: '-', captivePortal: false, intraVapPrivacy: false, pmf: '-' };
+    const { score, grade, issues } = gradeVap(vap);
+    vaps.push({ ...vap, secScore: score, secGrade: grade, secIssues: issues });
+  }
+  return { vaps, wtpProfiles: [], wtps: [], widsProfiles: [], summary: buildWifiSummary(vaps, [], [], [], '-') };
+}
+
+// ── OpenWrt (UCI) ────────────────────────────────────────────────────────
+// 官方 UCI Wireless Configuration 文件＋社群範例查證：/etc/config/wireless 內
+// config wifi-iface（option ssid／option encryption／option network／option mode），
+// 與本專案既有 OpenWrtParser.parseUCI() 同一套語法家族，本函式自行輕量重掃描（避免跨
+// 檔案依賴 OpenWrtParser 內部未公開的 parseUCI，該函式僅回傳 network/firewall/dhcp 三個
+// package，未涵蓋 wireless）
+function parseOpenWrtWifi(text) {
+  text = text.replace(/\r\n/g, '\n');
+  const vaps = [];
+  const blocks = text.split(/^config\s+wifi-iface\b/im).slice(1);
+  for (const blk of blocks) {
+    const body = blk.split(/^config\s+\S/im)[0];
+    const ssidM = /^\s*option\s+ssid\s+'?([^'\n]*)'?\s*$/im.exec(body);
+    if (!ssidM) continue;
+    const ssid = ssidM[1].trim();
+    const encM = /^\s*option\s+encryption\s+'?([^'\n]*)'?\s*$/im.exec(body);
+    const encRaw = encM ? encM[1].trim() : '';
+    const security = /sae|wpa3/i.test(encRaw) ? 'wpa3' : /psk2|wpa2/i.test(encRaw) ? 'wpa2-only' : (!encRaw || /none/i.test(encRaw)) ? 'open' : encRaw;
+    const netM = /^\s*option\s+network\s+'?([^'\n]*)'?\s*$/im.exec(body);
+    const name = netM ? netM[1].trim() : ssid;
+    const hideM = /^\s*option\s+hidden\s+'?1'?\s*$/im.test(body);
+    const vap = { name, ssid, security, broadcastSsid: !hideM, vlanId: '-', captivePortal: false, intraVapPrivacy: false, pmf: '-' };
+    const { score, grade, issues } = gradeVap(vap);
+    vaps.push({ ...vap, secScore: score, secGrade: grade, secIssues: issues });
+  }
+  return { vaps, wtpProfiles: [], wtps: [], widsProfiles: [], summary: buildWifiSummary(vaps, [], [], [], '-') };
+}
+
+// ── pfSense ──────────────────────────────────────────────────────────────
+// 官方 pfSense GitHub 原始碼（pfsense/pfsense repo interfaces.php）查證確認欄位路徑：
+// 逐 <interfaces> 子節點（介面代稱如 opt1）檢查是否含 <wireless> 子區塊，取
+// <wireless><mode>／<wireless><ssid>／<wireless><wpa><mode>；沿用既有 xv() 風格但本檔案
+// 獨立輕量實作（不跨檔依賴 PfsenseParser 內部未公開的 xv，避免耦合）
+function parsePfsenseWifi(text) {
+  text = text.replace(/\r\n/g, '\n');
+  const vaps = [];
+  function xv1(xml, tag) {
+    const m = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'i').exec(xml);
+    return m ? m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim() : '';
+  }
+  const ifacesBlock = xv1(text, 'interfaces');
+  if (ifacesBlock) {
+    const ifRe = /<(\w+)>([\s\S]*?)<\/\1>/g;
+    let m;
+    while ((m = ifRe.exec(ifacesBlock)) !== null) {
+      const ifName = m[1], ifBody = m[2];
+      const wlBlock = xv1(ifBody, 'wireless');
+      if (!wlBlock) continue;
+      const ssid = xv1(wlBlock, 'ssid');
+      if (!ssid) continue;
+      const wpaBlock = xv1(wlBlock, 'wpa');
+      const wpaMode = wpaBlock ? xv1(wpaBlock, 'mode') : '';
+      const security = !wpaBlock ? 'open' : /wpa3|sae/i.test(wpaMode) ? 'wpa3' : 'wpa2-only';
+      const vap = { name: ifName, ssid, security, broadcastSsid: true, vlanId: '-', captivePortal: false, intraVapPrivacy: false, pmf: '-' };
+      const { score, grade, issues } = gradeVap(vap);
+      vaps.push({ ...vap, secScore: score, secGrade: grade, secIssues: issues });
+    }
+  }
+  return { vaps, wtpProfiles: [], wtps: [], widsProfiles: [], summary: buildWifiSummary(vaps, [], [], [], '-') };
 }
 
 

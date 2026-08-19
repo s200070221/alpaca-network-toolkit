@@ -3030,6 +3030,21 @@ document.getElementById('geo-risk-filter').addEventListener('input', e => filter
 loadSettings();
 
 renderAll();
+
+// 2026-08-19 新增：接上 network_analyzer 拖放派送機制（比照 switch_analyzer/firewall_
+// analyzer/config_anonymizer/switch_config_generator 既有各自獨立實作的慣例，非共用函式）
+(function(){
+  var _p = localStorage.getItem('_netAnalyzer_pending');
+  if (!_p) return;
+  try {
+    var d = JSON.parse(_p);
+    if (Date.now() - d.ts > 10000) { localStorage.removeItem('_netAnalyzer_pending'); return; }
+    localStorage.removeItem('_netAnalyzer_pending');
+    var pa = document.getElementById('paste-area');
+    if (pa) pa.value = d.text;
+    doAnalyze();
+  } catch(e) {}
+})();
 </script>
 </body>
 </html>

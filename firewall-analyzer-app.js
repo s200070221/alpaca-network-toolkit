@@ -7,6 +7,11 @@
 const App = (() => {
   const ST = { f:null, s:null, c:null, p:null, j:null, x:null, w:null, m:null, a:null, t:null, z:null, r:null, u:null, raw:{f:'',s:'',c:'',p:'',j:'',x:'',w:'',m:'',a:'',t:'',z:'',r:'',u:''} };
   let PARSED=null, CURRENT_SECTION=null, CURRENT_DATA=[], _renderState=null, WIFI_DATA = null, FORTISWITCH_DATA = null;
+  // WiFi/WLAN 解析（2026-08-19 對外查證擴大）：sophos(s)/sonicwall(w) 查無可信 CLI/config
+  // 語法佐證，維持排除；其餘企業防火牆廠牌架構上無內建 WiFi，不列入（無功能可警示，非
+  // 查證不足）。用 ST.raw 的單字母 slot key（非 vendor 字串），比照 FW_SLOT_VENDOR 慣例。
+  // 宣告在此共用頂層作用域（非 analyze() 內部），renderSection() 才能存取到
+  const WIFI_UNSUPPORTED=['s','w'];
   // Query 追蹤結果快取：畫面渲染當下的查詢結果依賴使用者當時輸入的 src/dst/proto/port，
   // 無法在匯出當下重新計算，故需快取「最近一次查詢」的結果供 CSV 匯出按鈕讀取。
   // Audit 分析（shadow/unused-addr/unused-svc/compliance）則不需要快取，因為
@@ -282,21 +287,40 @@ const App = (() => {
       // 開過 Query 分頁，切換到新檔案後直接按「查詢追蹤結果」CSV 匯出按鈕會拿到
       // 舊檔案的過期查詢結果（唯讀稽核發現的既有 bug）
       LAST_QUERY_TRACE = null;
-      // WiFi analysis (FortiGate only)
+      // WiFi analysis（2026-08-19 擴大：原僅 FortiGate，對外查證後新增 mikrotik/openwrt/
+      // pfsense 三家「自身即為 AP」架構的廠牌，合併各自 vaps 並重新計算共用 summary；
+      // sophos/sonicwall 查證後查無語法佐證，維持排除，見下方 WIFI_UNSUPPORTED）
       WIFI_DATA = null;
-      if (ST.raw.f && typeof parseFortigateWifi === 'function') {
-        try {
-          WIFI_DATA = parseFortigateWifi(ST.raw.f);
-          const nw = $('nav-wifi');
-          if (nw) nw.style.display = WIFI_DATA.summary.ssidCount > 0 ? '' : 'none';
-          const nb = $('nc-wifi');
-          if (nb && WIFI_DATA.summary.ssidCount > 0) nb.textContent = WIFI_DATA.summary.ssidCount;
-          // Show WiFi export buttons in export view
-          ['ec-wifi-ssid','ec-wifi-ap'].forEach(id => {
-            const el = $(id);
-            if (el) el.style.display = WIFI_DATA.summary.ssidCount > 0 ? '' : 'none';
-          });
-        } catch(e) { console.warn('WiFi parse error:', e); }
+      {
+        const wifiParts = [];
+        try { if (ST.raw.f && typeof parseFortigateWifi === 'function') wifiParts.push(parseFortigateWifi(ST.raw.f)); } catch(e) { console.warn('WiFi parse error (fortigate):', e); }
+        try { if (ST.raw.m && typeof parseMikrotikWifi === 'function') wifiParts.push(parseMikrotikWifi(ST.raw.m)); } catch(e) { console.warn('WiFi parse error (mikrotik):', e); }
+        try { if (ST.raw.u && typeof parseOpenWrtWifi === 'function') wifiParts.push(parseOpenWrtWifi(ST.raw.u)); } catch(e) { console.warn('WiFi parse error (openwrt):', e); }
+        try { if (ST.raw.x && typeof parsePfsenseWifi === 'function') wifiParts.push(parsePfsenseWifi(ST.raw.x)); } catch(e) { console.warn('WiFi parse error (pfsense):', e); }
+        if (wifiParts.length) {
+          const allVaps = wifiParts.flatMap(p => p.vaps);
+          const allWtpProfiles = wifiParts.flatMap(p => p.wtpProfiles);
+          const allWtps = wifiParts.flatMap(p => p.wtps);
+          const allWidsProfiles = wifiParts.flatMap(p => p.widsProfiles);
+          const country = wifiParts.map(p => p.summary.country).find(c => c && c !== '-') || '-';
+          WIFI_DATA = {
+            vaps: allVaps, wtpProfiles: allWtpProfiles, wtps: allWtps, widsProfiles: allWidsProfiles,
+            summary: buildWifiSummary(allVaps, allWtpProfiles, allWtps, allWidsProfiles, country),
+          };
+        }
+        // 查證後明確排除的廠牌（非查證不足）：即使 nav-wifi 沒有真實資料，只要上傳了
+        // 這些廠牌就仍顯示分頁，讓 wifi.no_data 的專屬警示文字可以被使用者看到，而非
+        // 直接隱藏分頁導致使用者以為工具沒問題只是沒設定 WiFi
+        const hasUnsupportedWifiUpload = WIFI_UNSUPPORTED.some(slot => ST.raw[slot]);
+        const nw = $('nav-wifi');
+        if (nw) nw.style.display = (WIFI_DATA && WIFI_DATA.summary.ssidCount > 0) || hasUnsupportedWifiUpload ? '' : 'none';
+        const nb = $('nc-wifi');
+        if (nb && WIFI_DATA && WIFI_DATA.summary.ssidCount > 0) nb.textContent = WIFI_DATA.summary.ssidCount;
+        // Show WiFi export buttons in export view
+        ['ec-wifi-ssid','ec-wifi-ap'].forEach(id => {
+          const el = $(id);
+          if (el) el.style.display = (WIFI_DATA && WIFI_DATA.summary.ssidCount > 0) ? '' : 'none';
+        });
       }
       // FortiSwitch (FortiLink managed-switch) analysis (FortiGate only)
       FORTISWITCH_DATA = null;
@@ -1339,7 +1363,12 @@ function onParsed(){
 
       case 'wifi':
         $('sum-wrap').innerHTML = '';
-        if (!WIFI_DATA) { $('tbl-wrap').innerHTML='<div class="nodata">'+tr('wifi.no_data')+'</div>'; return; }
+        if (!WIFI_DATA) {
+          // 2026-08-19 新增：上傳的廠牌若命中 WIFI_UNSUPPORTED（查證後確認查無語法佐證），
+          // 顯示專屬警示文字，區分「這廠牌沒設定 WiFi」與「本工具查證後確認不支援解析」
+          const unsupportedMsg = WIFI_UNSUPPORTED.some(slot => ST.raw[slot]) ? tr('wifi.vendor_unsupported') : tr('wifi.no_data');
+          $('tbl-wrap').innerHTML='<div class="nodata">'+unsupportedMsg+'</div>'; return;
+        }
         {
           // 依 ACTIVE_VDOM 過濾 WiFi 資料
           const wv = (ACTIVE_VDOM === '__all__') ? WIFI_DATA : (() => {
