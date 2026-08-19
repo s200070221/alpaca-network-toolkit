@@ -207,7 +207,17 @@ function assembleDellOS10Config(model){
   // 理由與 assembleCiscoConfig 相同：兩者的區塊擷取 regex 只認得下一個同關鍵字區塊或字串結尾
   if(model.acl&&model.acl.length)blocks.push(renderDellOS10ACL(model.acl));
   if(model.qos&&model.qos.length)blocks.push(renderDellOS10QoS(model.qos));
+  const dellUsersBlock=renderDellOS10Users(model.users);
+  if(dellUsersBlock)blocks.push(dellUsersBlock);
   return blocks.join('\n!\n')+'\n';
+}
+// 本機帳號：switch_analyzer 的 parseDellOS10Users() OS10 語法為
+// "username NAME password N HASH role ROLE"（產生器一律輸出此新式語法，非 OS9 的
+// privilege 寫法），密碼固定輸出等級 0（plaintext marker）
+function renderDellOS10Users(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  return list.map(u=>`username ${u.name} password 0 ${u.password} role ${u.role||'sysadmin'}`).join('\n');
 }
 
 // ACL：已查證官方 SmartFabric OS10 User Guide 後新增，真實規則列帶 "seq N" 字面前綴

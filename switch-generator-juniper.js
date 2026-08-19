@@ -319,6 +319,12 @@ function renderJuniperBreakoutExtra(breakouts){
   return `chassis {\n${fpcLines.join('\n')}\n}`;
 }
 
+function renderJuniperUsersBlock(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  const userLines=list.map(u=>`            user ${u.name} {\n                class ${u.role||'operator'};\n                authentication {\n                    encrypted-password "${u.password}";\n                }\n            }`);
+  return `    login {\n${userLines.join('\n')}\n    }`;
+}
 function assembleJuniperConfig(model){
   const dhcpInfo=renderJuniperDHCP(model.dhcp);
   const systemLines=[`    host-name ${model.sysname||'Switch'};`];
@@ -326,6 +332,11 @@ function assembleJuniperConfig(model){
     const dlsIfaces=dhcpInfo.dhcpLocalIfaces.map(f=>`                interface ${f};`).join('\n');
     systemLines.push(`    services {\n        dhcp-local-server {\n${dlsIfaces}\n        }\n    }`);
   }
+  // 本機帳號：巢狀在同一個頂層 system{} 區塊內的 login{} 子區塊（Juniper 同名頂層區塊只能
+  // 出現一次，須合併非分開輸出，見 assembleJuniperConfig() 慣例），語法為
+  // system{login{user NAME{class ROLE;authentication{encrypted-password "HASH";}}}}
+  const juniperUsersBlock=renderJuniperUsersBlock(model.users);
+  if(juniperUsersBlock)systemLines.push(juniperUsersBlock);
   const parts=[`# ${tr('notice.disclaimer')}`,`system {\n${systemLines.join('\n')}\n}`];
   if(dhcpInfo.accessBlock)parts.push(dhcpInfo.accessBlock);
 

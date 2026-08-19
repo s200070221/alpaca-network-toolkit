@@ -179,6 +179,9 @@ function assembleAristaConfig(model){
   // assembleCiscoConfig/assembleDellOS10Config（區塊擷取正則只認得下一個同關鍵字區塊或字串結尾）
   if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
   if(model.qos&&model.qos.length)blocks.push(renderAristaQoS(model.qos));
+  // 本機帳號：與 Cisco IOS 共用同一套 parseCiscoUsers()/renderCiscoUsers()，語法相符
+  const aristaUsersBlock=renderCiscoUsers(model.users);
+  if(aristaUsersBlock)blocks.push(aristaUsersBlock);
   return blocks.join('\n!\n')+'\n';
 }
 
