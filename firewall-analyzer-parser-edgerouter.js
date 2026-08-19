@@ -11,7 +11,8 @@
 // 已查證語法：system/host-name；interfaces/ethernet（含 vif 802.1Q 子介面）；firewall 具名
 // 規則集（default-action／rule N／state／source／destination／log／group 引用）；firewall
 // group（address-group／network-group／port-group）；service/nat（masquerade／source／
-// destination 三種 type）；protocols/static/route。VPN(vpn ipsec)／DHCP Server／Users／
+// destination 三種 type）；protocols/static/route；system/login/user（本機帳號，2026-08-19
+// 對外查證官方 VyOS 文件新增，EdgeOS 為同源 fork 語法一致）。VPN(vpn ipsec)／DHCP Server／
 // Schedules 因本輪未查證完整屬性語法，維持空值不猜測（比照既有 Zyxel 慣例）。
 // 已知信心度較低項目：各層級的 "disable" 裸旗標（停用該介面/規則）依 VyOS/Vyatta 語系通用
 // 慣例支援，但本輪未找到 EdgeOS 官方逐字範例佐證此用法，非查無來源就不支援（該慣例在同語系
@@ -353,6 +354,21 @@ const EdgeRouterParser = (() => {
     return out;
   }
 
+  // system/login/user <name> {authentication{...} level admin|operator} —官方 VyOS 文件
+  // 確認語法（EdgeOS 為同源 fork，語法一致），level 省略時文件明載預設視為 admin。欄位形狀
+  // 比照既有 CiscoASA 最小化慣例，不硬湊查無官方佐證的 status/twoFactor 欄位
+  function parseUsers(tree) {
+    const out = [];
+    const login = child(child(tree, 'system'), 'login');
+    const users = childrenPrefixed(login, 'user');
+    Object.entries(users).forEach(([key, node]) => {
+      const name = key.replace(/^user\s+/, '');
+      const level = val(node, 'level') || 'admin';
+      out.push({ name, role: level, type: level === 'operator' ? 'local' : 'admin' });
+    });
+    return out;
+  }
+
   function detect(text) {
     return /ethernet\s+eth\d+\s*\{/.test(text) && /firewall\s*\{/.test(text);
   }
@@ -372,7 +388,7 @@ const EdgeRouterParser = (() => {
       ha: null, nat: parseNAT(tree), vpn: [],
       addresses,
       services: parseServiceObjects(tree),
-      users: [], schedules: [],
+      users: parseUsers(tree), schedules: [],
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
       // 2026-08-01 瀏覽器端到端測試意外抓到既有的「新增廠牌未同步 onParsed() 資料形狀」bug：
       // onParsed()（App.js）對 d.dhcp/d.dns/d.snmp/d.logservers 只做單層 truthy 判斷（如

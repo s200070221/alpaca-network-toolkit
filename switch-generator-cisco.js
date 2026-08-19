@@ -278,8 +278,24 @@ function assembleCiscoConfig(model){
   // QoS 放最後（同一個原因：policy-map 區塊擷取正則只認得下一個 "policy-map " 或字串
   // 結尾，沒有其他終止字元，比照 ACL/BGP 慣例排在組裝順序最後）
   if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
+  const ciscoUsersBlock=renderCiscoUsers(model.users);
+  if(ciscoUsersBlock)blocks.push(ciscoUsersBlock);
   // 結尾補換行，理由同 assembleArubaConfig
   return blocks.join('\n!\n')+'\n';
+}
+
+// 本機帳號：switch_analyzer 的 parseCiscoUsers()（Cisco IOS/IOS-XE 共用，Arista/Ruijie 重用
+// 同一套 parser 與此 render 函式）僅支援 "username NAME privilege N secret|password N HASH"
+// 語法，role 欄位格式固定為 "privilege-N"；密碼固定輸出等級 0（plaintext marker，parser
+// 本身不驗證雜湊格式是否吻合宣告等級），使用者需自行貼上已產生的雜湊/密碼字串
+function renderCiscoUsers(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  return list.map(u=>{
+    const m=/^privilege-(\d+)$/.exec(u.role||'');
+    const priv=m?m[1]:'15';
+    return `username ${u.name} privilege ${priv} secret 0 ${u.password}`;
+  }).join('\n');
 }
 
 // ══════════════════════════════════════════════════════════════════

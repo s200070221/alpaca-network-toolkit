@@ -396,10 +396,20 @@ function assembleComwareConfig(model){
   if(model.routes&&model.routes.length)blocks.push(renderComwareRoutes(model.routes));
   const comwareVxlan=renderComwareVXLAN(model.vxlan);
   if(comwareVxlan)blocks.push(comwareVxlan);
+  const comwareUsersBlock=renderComwareUsers(model.users);
+  if(comwareUsersBlock)blocks.push(comwareUsersBlock);
   // bgp 放最後：其區塊擷取正則靠負向前瞻(bgp/router/interface/ip route/vlan)判斷結尾，
   // 沒有明確終止字元，若後面還接其他區塊可能被吃進 body，故排在組裝順序最後最安全
   if(model.bgp&&model.bgp.length)blocks.push(renderComwareBGPList(model.bgp));
   return blocks.join('\n');
+}
+// 本機帳號：switch_analyzer 的 parseUsers()（Comware 分支）以 "#" 自我終結的 local-user 區塊
+// 為單位，欄位為 user-role（role）／service-type／password hash|cipher|simple；產生器固定
+// 輸出 password hash（非 weak 的 simple 明文）＋ service-type ssh telnet（常見管理存取方式）
+function renderComwareUsers(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  return list.map(u=>`local-user ${u.name}\n password hash ${u.password}\n service-type ssh telnet\n user-role ${u.role||'network-operator'}\n#`).join('\n');
 }
 
 // ══════════════════════════════════════════════════════════════════

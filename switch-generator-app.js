@@ -1159,9 +1159,13 @@ function updateModeOptions(){
   if(rosAclCard)rosAclCard.style.display=vendor==='routeros'?'':'none';
   const rosQosCard=document.getElementById('routeros-qos-card');
   if(rosQosCard)rosQosCard.style.display=vendor==='routeros'?'':'none';
-  // 本機帳號卡片僅 Aruba ProCurve 適用（switch_analyzer parseUsers() 目前只支援這家）
+  // 本機帳號卡片：ProCurve（既有）＋ 2026-08-19 新增 9 家高信心度廠牌（Cisco IOS/IOS-XE／
+  // Arista／Ruijie／NX-OS／Comware／Dell OS10／Brocade／Aruba CX／Juniper，皆有真實解析
+  // 邏輯且語法在 config_anonymizer 獨立第二套正則交叉驗證過）；其餘廠牌（Extreme/RouterOS/
+  // Alcatel 中信心度、FortiSwitch/Netgear/EdgeSwitch/SONiC 完全零解析）留待後續評估，不開放
+  const USERS_CARD_VENDORS=['procurve','cisco','arista','ruijie','cisco_nxos','comware','dell-os10','brocade','aruba','juniper'];
   const usersCard=document.getElementById('users-card');
-  if(usersCard)usersCard.style.display=vendor==='procurve'?'':'none';
+  if(usersCard)usersCard.style.display=USERS_CARD_VENDORS.includes(vendor)?'':'none';
   // SONiC L3 介面 IP 卡片僅 SONiC 適用（config_db.json 的 INTERFACE/VLAN_INTERFACE/
   // PORTCHANNEL_INTERFACE 三表在通用介面表格找不到可重用欄位，見卡片定義處說明）
   const sonicL3Card=document.getElementById('sonic-l3-card');
@@ -2673,9 +2677,11 @@ async function parseAndImport(){
     (aclList||[]).forEach(r=>addRouterOSAclRow(r.chain,r.action,r.protocol,r.srcAddress,r.dstAddress,r.dstPort,r.inInterface,r.comment));
   }
 
-  // 本機帳號（Aruba ProCurve）：parsed.users 已是 parseProCurve() 既有回傳物件的一部分，
-  // 不需額外抽取；密碼欄位因雜湊值無法從 hasPwd/pwdType 還原，匯入後留空待使用者自行補上
-  if(vendor==='procurve'){
+  // 本機帳號：ProCurve（既有）＋ 2026-08-19 新增 9 家（此處用 switch_analyzer 原生 vendor
+  // 字串，NX-OS 是 'nxos' 非產生器下拉選單用的 'cisco_nxos'，其餘廠牌兩邊命名一致）。
+  // parsed.users 已是各廠牌 parseXxx() 既有回傳物件的一部分，不需額外抽取；密碼欄位因雜湊值
+  // 無法從 hasPwd/pwdType/role 等中繼資料還原，匯入後留空待使用者自行補上
+  if(['procurve','cisco','arista','ruijie','nxos','comware','dell-os10','brocade','aruba','juniper'].includes(vendor)){
     (parsed.users||[]).forEach(u=>addUsersRow(u.name,u.role,''));
   }
 
