@@ -1323,6 +1323,11 @@ function renderMultiTopo(){
   svg+='</svg>';
   return svg;
 }
+// 2026-08-19 新增：LLDP 解析擴大時對外查證後查無可信裝置輸出範例、明確排除的廠牌
+// （非查證不足），與 SNMP/Syslog 兩份排除清單並列於此供 renderLLDP()/renderSNMPSyslog() 使用
+const LLDP_UNSUPPORTED = ['ruijie','netgear','edgeswitch'];
+const SNMP_HOST_UNSUPPORTED = ['fortiswitch','juniper','alcatel','extreme','routeros','procurve','aruba'];
+const SYSLOG_UNSUPPORTED = ['fortiswitch','juniper','alcatel','extreme','routeros','procurve','aruba','edgeswitch','netgear','ruijie','sonic'];
 function renderLLDP(){
   const nbrs=parsed.lldp||[];
   const cmdHints=[
@@ -1331,6 +1336,9 @@ function renderLLDP(){
     'Juniper EX: <code>show lldp neighbors detail</code>',
   ];
   if(!nbrs.length){
+    if(LLDP_UNSUPPORTED.includes(parsed.vendor)){
+      return`<div class="nodata"><p>⚠️ ${tr('lldp.vendor_unsupported')}</p></div>`;
+    }
     return`<div class="nodata"><p>${tr('msg.no_lldp')}</p><p style="margin-top:8px;font-size:12px;color:var(--text-muted)">${tr('lldp.cmd_hint')}：</p><ul style="margin:6px 0 0 16px;font-size:12px;color:var(--text-muted);line-height:2">${cmdHints.map(c=>`<li>${c}</li>`).join('')}</ul></div>`;
   }
   const btnStyle=(active)=>`padding:4px 12px;border-radius:4px;border:1px solid ${active?'var(--accent)':'var(--border)'};cursor:pointer;font-size:12px;background:${active?'var(--accent)':'var(--surface2)'};color:${active?'#fff':'var(--text-dim)'}`;
@@ -1696,7 +1704,11 @@ function renderSNMPSyslog(){
   const snmp=parsed.snmp||{communities:[],v3Users:[],hosts:[]};
   const syslog=parsed.syslog||{servers:[]};
   const total=snmp.communities.length+snmp.v3Users.length+snmp.hosts.length+syslog.servers.length;
-  if(!total)return`<div class="nodata">${tr('snmp.none')}</div>`;
+  const hostUnsupported=SNMP_HOST_UNSUPPORTED.includes(parsed.vendor);
+  const syslogUnsupported=SYSLOG_UNSUPPORTED.includes(parsed.vendor);
+  // 全無資料時，若此廠牌兩項功能皆非查證後明確排除（單純真的沒設定），才維持原本的泛用空狀態；
+  // 只要命中任一排除清單，就該往下渲染完整版面，讓對應卡片顯示警示而非讓使用者誤以為沒設定
+  if(!total&&!hostUnsupported&&!syslogUnsupported)return`<div class="nodata">${tr('snmp.none')}</div>`;
   const cards=`<div class="sum-cards">
     <div class="sum-card"><div class="sv">${snmp.communities.length}</div><div class="sl">${tr('snmp.communities')}</div></div>
     <div class="sum-card"><div class="sv" style="color:var(--purple)">${snmp.v3Users.length}</div><div class="sl">${tr('snmp.v3users')}</div></div>
@@ -1704,8 +1716,10 @@ function renderSNMPSyslog(){
     <div class="sum-card"><div class="sv" style="color:var(--accent)">${syslog.servers.length}</div><div class="sl">${tr('snmp.syslog_servers')}</div></div>
   </div>`;
   const nameTbl=rows=>rows.length?`<table class="data-tbl"><thead><tr><th>${tr('col.name')}</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.name)}</td></tr>`).join('')}</tbody></table>`:`<div class="nodata" style="padding:12px">-</div>`;
-  const hostTbl=rows=>rows.length?`<table class="data-tbl"><thead><tr><th>${tr('col.host')}</th></tr></thead><tbody>${rows.map(r=>`<tr><td class="mono">${esc(r.host)}</td></tr>`).join('')}</tbody></table>`:`<div class="nodata" style="padding:12px">-</div>`;
-  const syslogTbl=rows=>rows.length?`<table class="data-tbl"><thead><tr><th>${tr('col.host')}</th><th>${tr('col.facility')}</th></tr></thead><tbody>${rows.map(r=>`<tr><td class="mono">${esc(r.host)}</td><td>${r.facility?esc(r.facility):'-'}</td></tr>`).join('')}</tbody></table>`:`<div class="nodata" style="padding:12px">-</div>`;
+  const hostTbl=rows=>rows.length?`<table class="data-tbl"><thead><tr><th>${tr('col.host')}</th></tr></thead><tbody>${rows.map(r=>`<tr><td class="mono">${esc(r.host)}</td></tr>`).join('')}</tbody></table>`
+    :hostUnsupported?`<div class="nodata" style="padding:12px;font-size:12px">⚠️ ${tr('snmp.host_unsupported')}</div>`:`<div class="nodata" style="padding:12px">-</div>`;
+  const syslogTbl=rows=>rows.length?`<table class="data-tbl"><thead><tr><th>${tr('col.host')}</th><th>${tr('col.facility')}</th></tr></thead><tbody>${rows.map(r=>`<tr><td class="mono">${esc(r.host)}</td><td>${r.facility?esc(r.facility):'-'}</td></tr>`).join('')}</tbody></table>`
+    :syslogUnsupported?`<div class="nodata" style="padding:12px;font-size:12px">⚠️ ${tr('snmp.syslog_unsupported')}</div>`:`<div class="nodata" style="padding:12px">-</div>`;
   return cards+
     `<div class="ov-card" style="margin-top:12px"><div class="ov-card-title">SNMP Community</div>${nameTbl(snmp.communities)}</div>`+
     `<div class="ov-card" style="margin-top:12px"><div class="ov-card-title">SNMPv3 ${tr('snmp.v3users')}</div>${nameTbl(snmp.v3Users)}</div>`+
