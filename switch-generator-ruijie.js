@@ -188,6 +188,9 @@ function assembleRuijieConfig(model){
   // "type quality-of-service"/kbps 單位詞對 Ruijie 而言查無對應佐證，不應套用）；放最後
   // 理由同 ACL/BGP（policy-map 區塊擷取正則只認得下一個同關鍵字區塊或字串結尾）
   if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
+  // 本機帳號：與 Cisco IOS 共用同一套 parseCiscoUsers()/renderCiscoUsers()，語法相符
+  const ruijieUsersBlock=renderCiscoUsers(model.users);
+  if(ruijieUsersBlock)blocks.push(ruijieUsersBlock);
   return blocks.join('\n!\n')+'\n';
 }
 

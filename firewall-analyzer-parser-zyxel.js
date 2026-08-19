@@ -15,8 +15,9 @@
 //   非 interface 自己宣告）；ip route <dest> <mask> {interface|nexthop} [metric]；
 //   hostname <name>。
 // 無真實裝置匯出檔可比對校正，信心度比照 2026-07-29 Ruijie 先例（純官方文件組出）。
-// VPN／NAT／DHCP／Users／Schedules 因查無足夠把握的完整語法佐證不實作，維持空值，
+// VPN／NAT／DHCP／Schedules 因查無足夠把握的完整語法佐證不實作，維持空值，
 // 不猜測（比照 MikroTik ha/nat/vpn 等既有慣例，讓 getConversionLoss() 透明告知）。
+// Users（本機帳號）已於 2026-08-19 對外查證補上，見 parseUsers()。
 const ZyxelParser = (() => {
   // interface/zone/secure-policy 皆為 "關鍵字 名稱/編號" 開啟 sub-command 模式、
   // 裸行 "exit" 關閉，三者不會互相巢狀（官方文件範例確認 sub-command 內容皆是平鋪
@@ -196,6 +197,25 @@ const ZyxelParser = (() => {
     return out;
   }
 
+  // "username <name> [nopassword|password <pw>] user-type {admin|guest|limited-admin|user}"
+  // （2026-08-19 對外查證官方 ZyWALL/USG (ZLD) CLI Reference Guide「User Setting Commands」
+  // 章節新增，多版本 ZLD 一致）。admin／limited-admin 仍具裝置管理權限，歸類 type:'admin'；
+  // guest／user／ext-user 為一般存取帳號歸 type:'local'。欄位形狀比照既有 CiscoASA 最小化
+  // 慣例（不硬湊查無官方佐證的 status/twoFactor 欄位）
+  function parseUsers(text) {
+    const out = [];
+    const re = /^username\s+(\S+)\s+.*?\buser-type\s+(admin|limited-admin|guest|ext-user|user)\b/gim;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const name = m[1], userType = m[2].toLowerCase();
+      out.push({
+        name, role: userType,
+        type: (userType === 'admin' || userType === 'limited-admin') ? 'admin' : 'local',
+      });
+    }
+    return out;
+  }
+
   function detect(text) {
     return /^secure-policy\s+(?:insert\s+)?\d+/m.test(text)
         && (/^address-object\s+\S+\s+\S+/m.test(text) || /^service-object\s+\S+\s+(tcp|udp)/im.test(text) || /ZyWALL|USG FLEX|Zyxel/i.test(text));
@@ -215,7 +235,7 @@ const ZyxelParser = (() => {
       ha: null, nat: [], vpn: [],
       addresses,
       services: parseServiceObjects(text),
-      users: [], schedules: [],
+      users: parseUsers(text), schedules: [],
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
       // 2026-08-01 瀏覽器端到端測試意外抓到既有的「新增廠牌未同步 onParsed() 資料形狀」bug：
       // onParsed()（App.js）對 d.dhcp/d.dns/d.snmp/d.logservers 只做單層 truthy 判斷（如

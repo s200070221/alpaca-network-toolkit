@@ -248,9 +248,19 @@ function assembleArubaConfig(model){
   // qos schedule-profile（strict/wfq 排程演算法），與目前共用 QoS 表單（policy/class/
   // action/rate/burst 導向）架構完全不相容，需要全新表單欄位才能正確支援，
   // 本輪先移除捏造輸出不臆測，留待未來規劃 queue-profile/schedule-profile 專屬 UI
+  // 本機帳號：沿用 parseArubaUsers() Style B（AOS-CX 新式語法），與 ProCurve「一律輸出新式
+  // 語法」慣例一致；密碼欄位固定標記 ciphertext（parser 正則只記錄型別關鍵字，真正雜湊值
+  // 落在無名 token 內，不影響 role/name round-trip）
+  const arubaUsersBlock=renderArubaUsers(model.users);
+  if(arubaUsersBlock)blocks.push(arubaUsersBlock);
   // 結尾補換行：Aruba 語法無 Comware(#)/FortiSwitch(end) 這類收尾關鍵字，
   // 若最後一行缺少換行字元，parseArubaBGP 等以「每行含尾端 \n」為前提的正則會漏抓最後一行內容
   return blocks.join('\n!\n')+'\n';
+}
+function renderArubaUsers(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  return list.map(u=>`username ${u.name} password ciphertext ${u.password} role ${u.role||'administrators'}`).join('\n');
 }
 
 // ══════════════════════════════════════════════════════════════════

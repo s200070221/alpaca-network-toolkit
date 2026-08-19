@@ -260,7 +260,17 @@ function assembleNXOSConfig(model){
   // _parseACLNXOS() 已同步新增。必須放在組裝順序最後——理由與 assembleDellOS10Config/
   // assembleCiscoConfig 相同：區塊擷取 regex 只認得下一個同關鍵字區塊或字串結尾
   if(model.acl&&model.acl.length)blocks.push(renderNXOSACL(model.acl));
+  const nxosUsersBlock=renderNXOSUsers(model.users);
+  if(nxosUsersBlock)blocks.push(nxosUsersBlock);
   return blocks.join('\n!\n')+'\n';
+}
+// 本機帳號：switch_analyzer 的 parseUsers()（NX-OS 分支）語法為
+// "username NAME password N HASH role ROLE"，role 是直接字面值（非 Cisco IOS 式
+// privilege-N 換算），密碼固定輸出等級 0（plaintext marker）
+function renderNXOSUsers(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  return list.map(u=>`username ${u.name} password 0 ${u.password} role ${u.role||'network-admin'}`).join('\n');
 }
 function renderNXOSACLEntry(a){
   const lines=[`ip access-list ${a.name}`];
