@@ -1178,7 +1178,11 @@ function _parseACLJuniper(cfg){
   while((m=apRe.exec(cfg))!==null){
     const fam=m[2];
     const wantVersion=fam==='inet6'?'v6':fam==='inet'?'v4':'';
-    const acl=acls.find(a=>a.name===m[4]&&a.ipVersion===wantVersion);
+    // fallback：filter 定義未顯式宣告 family（最常見情況，如 switch_config_generator
+    // 產生的 filter）時 ipVersion 為空字串，但介面套用指令永遠顯式宣告 family，精準比對
+    // 永遠對不上；找不到精準符合的才退而求其次比對未宣告 family 的同名 filter，2026-08-13
+    // 命名碰撞修復（兩個同名 filter 分屬不同 family 時精準比對優先）不受影響
+    const acl=acls.find(a=>a.name===m[4]&&a.ipVersion===wantVersion) || acls.find(a=>a.name===m[4]&&a.ipVersion==='');
     if(acl)acl.appliedOn.push({interface:m[1],direction:m[3]==='input'?'in':'out'});
   }
   return acls;
