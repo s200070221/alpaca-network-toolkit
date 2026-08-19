@@ -1960,6 +1960,7 @@ function parseAny(cfg,forceVendor){
   res.acls=parseACL(cfg, vendor);
   res.security=parseSecurity(cfg, vendor);
   res.snmp=parseSNMP(cfg, vendor);
+  res.syslog=parseSyslog(cfg, vendor);
   res.mgmtAccess=parseMgmtAccess(cfg, vendor);
   res.routingAuth=parseRoutingAuth(cfg, vendor);
   // Brocade 的 qos 已在 parseBrocade() 內用專屬形狀（dscpMap/ports）設定，Extreme 的

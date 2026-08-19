@@ -277,9 +277,10 @@ function parseUsers(cfg){
 // 資料形狀比照 firewall_analyzer 既有 parsed.snmp.communities:[{name}]／v3Users:[{name}]，
 // 不重新設計 schema。稽核檢查只需要「v1/v2c community 是否存在」，v3 使用者清單為輔助資訊。
 function parseSNMP(cfg, vendor){
-  const communities=[], v3Users=[], seenC=new Set(), seenU=new Set();
+  const communities=[], v3Users=[], hosts=[], seenC=new Set(), seenU=new Set(), seenH=new Set();
   const pushC=name=>{ if(name&&!seenC.has(name)){seenC.add(name);communities.push({name});} };
   const pushU=name=>{ if(name&&!seenU.has(name)){seenU.add(name);v3Users.push({name});} };
+  const pushH=host=>{ if(host&&!seenH.has(host)){seenH.add(host);hosts.push({host});} };
   if(vendor==='comware'){
     // 官方 H3C Comware Login Management Commands 查證：
     // snmp-agent community {read|write} {simple|cipher} community-name
@@ -287,6 +288,11 @@ function parseSNMP(cfg, vendor){
     while((m=reC.exec(cfg))!==null)pushC(m[1]);
     const reU=/^\s*snmp-agent\s+usm-user\s+v3\s+(\S+)/gm;
     while((m=reU.exec(cfg))!==null)pushU(m[1]);
+    // Trap host（2026-08-19 新增，對外查證官方 H3C SNMP Commands 確認）：
+    // snmp-agent target-host trap address udp-domain ip-address [udp-port N] [dscp N]
+    // params securityname security-string [v1|v2c|v3 ...]
+    const reH=/^\s*snmp-agent\s+target-host\s+trap\s+address\s+udp-domain\s+(\S+)/gm;
+    while((m=reH.exec(cfg))!==null)pushH(m[1]);
   }else if(vendor==='fortiswitch'){
     // 官方 FortiSwitchOS Administration Guide 查證：巢狀區塊語法
     // config system snmp community / edit N / set name "..." / next / end
@@ -349,8 +355,34 @@ function parseSNMP(cfg, vendor){
     while((m=reC.exec(cfg))!==null)pushC(m[1]);
     const reU=/^\s*snmp-server\s+user\s+(\S+)\s+\S+\s+v3\b/gm;
     while((m=reU.exec(cfg))!==null)pushU(m[1]);
+    // Trap host（2026-08-19 新增，對外查證官方命令參考文件確認 5 家共用同一套
+    // "snmp-server host ip-address ..." 語法：Cisco IOS/IOS-XE、NX-OS、Arista EOS、
+    // Dell OS10（SmartFabric OS10 User Guide）、Ruckus/Brocade FastIron 皆一致）
+    const reH=/^\s*snmp-server\s+host\s+(\S+)/gm;
+    while((m=reH.exec(cfg))!==null)pushH(m[1]);
   }
-  return {communities,v3Users};
+  return {communities,v3Users,hosts};
+}
+// Syslog 伺服器解析（2026-08-19 新增，全新功能，第一階段僅涵蓋語法信心度最高、已對外查證
+// 官方文件的一批廠牌；其餘廠牌查無佐證前不猜測語法，維持排除）：
+// - cisco(IOS-XE)／arista／brocade(FastIron)：logging host ip-address [udp-port N]
+// - nxos／dell-os10：logging server host [severity-level ...]（關鍵字為 server 非 host，
+//   與上一組語法家族不同，官方文件已個別查證確認）
+// - comware：info-center loghost host-ip [port N] [channel ... | facility local-number]
+function parseSyslog(cfg, vendor){
+  const servers=[], seen=new Set();
+  const push=(host,facility)=>{ if(host&&!seen.has(host)){seen.add(host);servers.push({host,facility:facility||''});} };
+  if(vendor==='comware'){
+    let m; const re=/^\s*info-center\s+loghost\s+(\S+)(?:[^\n]*?facility\s+(local\d))?/gm;
+    while((m=re.exec(cfg))!==null)push(m[1],m[2]);
+  }else if(vendor==='nxos'||vendor==='dell-os10'){
+    let m; const re=/^\s*logging\s+server\s+(\S+)/gm;
+    while((m=re.exec(cfg))!==null)push(m[1]);
+  }else if(vendor==='cisco'||vendor==='arista'||vendor==='brocade'){
+    let m; const re=/^\s*logging\s+host\s+(\S+)/gm;
+    while((m=re.exec(cfg))!==null)push(m[1]);
+  }
+  return {servers};
 }
 
 // 管理介面 Telnet/SSH 存取解析（2026-07-22 新增，13 廠牌逐一對外查證官方 CLI 文件後實作）。

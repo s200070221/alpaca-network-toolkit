@@ -275,7 +275,7 @@ function showResultViews(){
     irfLbl.textContent=parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('nav.irf.cisco'):parsed.vendor==='nxos'?tr('nav.irf.cisco'):parsed.vendor==='comware'?tr('nav.irf.comware'):parsed.vendor==='aruba'?tr('nav.irf.aruba'):parsed.vendor==='procurve'?tr('nav.irf.default'):parsed.vendor==='fortiswitch'?tr('nav.irf.forti'):parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?'Virtual Chassis':parsed.vendor==='alcatel'&&parsed.stack?'Alcatel Stack':parsed.vendor==='extreme'&&parsed.stack?'ExtremeStack':parsed.vendor==='brocade'&&parsed.stack?tr('nav.irf.brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('nav.irf.dell_vlt'):parsed.vendor==='dell-os10'&&parsed.stack?tr('nav.irf.dell_stack'):tr('nav.irf.default');
   }
   // Show nav items
-  ['lbl-result','nav-overview','nav-irf','nav-vlans','nav-vlan-matrix','nav-ports','nav-lacp','nav-routes','nav-routing','nav-vrrp','nav-vxlan','nav-vrfs','nav-dhcp','nav-users','nav-lldp','nav-stp','nav-acl','nav-security','nav-qos','nav-audit'].forEach(id=>{
+  ['lbl-result','nav-overview','nav-irf','nav-vlans','nav-vlan-matrix','nav-ports','nav-lacp','nav-routes','nav-routing','nav-vrrp','nav-vxlan','nav-vrfs','nav-dhcp','nav-users','nav-lldp','nav-stp','nav-acl','nav-security','nav-qos','nav-snmp','nav-audit'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.style.display='';
   });
   // LLDP badge
@@ -293,6 +293,9 @@ function showResultViews(){
   // QoS badge
   const ncQos=document.getElementById('nc-qos');
   if(ncQos){const cnt=(parsed?.qos||[]).length;ncQos.textContent=cnt;ncQos.style.display=cnt?'':'none';}
+  // SNMP/Syslog badge
+  const ncSnmp=document.getElementById('nc-snmp');
+  if(ncSnmp){const cnt=(parsed?.snmp?.communities?.length||0)+(parsed?.snmp?.v3Users?.length||0)+(parsed?.snmp?.hosts?.length||0)+(parsed?.syslog?.servers?.length||0);ncSnmp.textContent=cnt;ncSnmp.style.display=cnt?'':'none';}
   // Audit badge
   const ncAudit=document.getElementById('nc-audit');
   if(ncAudit){const cnt=analyzeSwitchAudit(parsed).length;ncAudit.textContent=cnt;ncAudit.style.display=cnt?'':'none';}
@@ -468,7 +471,7 @@ function resetAll(){
   document.getElementById('file-chip').style.display='none';
   document.getElementById('nc-irf').textContent='0';
   const vbE=document.getElementById('tb-vendor');if(vbE)vbE.innerHTML='';
-  ['lbl-result','nav-overview','nav-irf','nav-vlans','nav-vlan-matrix','nav-ports','nav-lacp','nav-routes','nav-routing','nav-vrrp','nav-vxlan','nav-vrfs','nav-users','nav-lldp','nav-stp','nav-acl','nav-security','nav-qos','nav-audit'].forEach(id=>{
+  ['lbl-result','nav-overview','nav-irf','nav-vlans','nav-vlan-matrix','nav-ports','nav-lacp','nav-routes','nav-routing','nav-vrrp','nav-vxlan','nav-vrfs','nav-users','nav-lldp','nav-stp','nav-acl','nav-security','nav-qos','nav-snmp','nav-audit'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.style.display='none';
   });
   document.getElementById('nav-upload').classList.add('active');
@@ -493,6 +496,7 @@ function renderView(view){
     case'users':    tc.innerHTML=renderUsers();break;
     case'lldp':     tc.innerHTML=renderLLDP();break;
     case'stp':      tc.innerHTML=renderSTP();break;
+    case'snmp':     tc.innerHTML=renderSNMPSyslog();break;
     case'acl':      tc.innerHTML=renderACL();break;
     case'security': tc.innerHTML=renderSecurity();break;
     case'qos':      tc.innerHTML=renderQoS();break;
@@ -1696,6 +1700,28 @@ function renderQoS(){
   tableData=rows; tableKeys=['policy','cls','action','rate','burst','behavior'];
   const {html,count}=renderTable(hdrs,fmtRows,null);
   return cards+mkTbar('search-inp',null,null)+`<div class="tbl-wrap">${html}</div><div class="tbl-foot"><span>${count} / ${rows.length} ${tr('unit.count')}</span></div>`;
+}
+// SNMP／Syslog 全域管理設定（2026-08-19 新增）：parseSNMP()/parseSyslog() 解析出的資料
+// 先前完全沒有對應顯示區塊（v3Users 解析出來後從未被使用），本函式補上顯示，非新增解析範圍
+function renderSNMPSyslog(){
+  const snmp=parsed.snmp||{communities:[],v3Users:[],hosts:[]};
+  const syslog=parsed.syslog||{servers:[]};
+  const total=snmp.communities.length+snmp.v3Users.length+snmp.hosts.length+syslog.servers.length;
+  if(!total)return`<div class="nodata">${tr('snmp.none')}</div>`;
+  const cards=`<div class="sum-cards">
+    <div class="sum-card"><div class="sv">${snmp.communities.length}</div><div class="sl">${tr('snmp.communities')}</div></div>
+    <div class="sum-card"><div class="sv" style="color:var(--purple)">${snmp.v3Users.length}</div><div class="sl">${tr('snmp.v3users')}</div></div>
+    <div class="sum-card"><div class="sv" style="color:var(--orange)">${snmp.hosts.length}</div><div class="sl">${tr('snmp.hosts')}</div></div>
+    <div class="sum-card"><div class="sv" style="color:var(--accent)">${syslog.servers.length}</div><div class="sl">${tr('snmp.syslog_servers')}</div></div>
+  </div>`;
+  const nameTbl=rows=>rows.length?`<table class="data-tbl"><thead><tr><th>${tr('col.name')}</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.name)}</td></tr>`).join('')}</tbody></table>`:`<div class="nodata" style="padding:12px">-</div>`;
+  const hostTbl=rows=>rows.length?`<table class="data-tbl"><thead><tr><th>${tr('col.host')}</th></tr></thead><tbody>${rows.map(r=>`<tr><td class="mono">${esc(r.host)}</td></tr>`).join('')}</tbody></table>`:`<div class="nodata" style="padding:12px">-</div>`;
+  const syslogTbl=rows=>rows.length?`<table class="data-tbl"><thead><tr><th>${tr('col.host')}</th><th>${tr('col.facility')}</th></tr></thead><tbody>${rows.map(r=>`<tr><td class="mono">${esc(r.host)}</td><td>${r.facility?esc(r.facility):'-'}</td></tr>`).join('')}</tbody></table>`:`<div class="nodata" style="padding:12px">-</div>`;
+  return cards+
+    `<div class="ov-card" style="margin-top:12px"><div class="ov-card-title">SNMP Community</div>${nameTbl(snmp.communities)}</div>`+
+    `<div class="ov-card" style="margin-top:12px"><div class="ov-card-title">SNMPv3 ${tr('snmp.v3users')}</div>${nameTbl(snmp.v3Users)}</div>`+
+    `<div class="ov-card" style="margin-top:12px"><div class="ov-card-title">SNMP ${tr('snmp.hosts')}</div>${hostTbl(snmp.hosts)}</div>`+
+    `<div class="ov-card" style="margin-top:12px"><div class="ov-card-title">${tr('snmp.syslog_servers')}</div>${syslogTbl(syslog.servers)}</div>`;
 }
 function renderSTP(){
   const s=parsed?.stp;

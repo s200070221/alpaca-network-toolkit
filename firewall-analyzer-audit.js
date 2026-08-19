@@ -244,7 +244,11 @@
   // 若差異欄位任一方已是萬用字元（any/all 等），代表其中一條已完全涵蓋另一條，
   // 屬於 analyzeRuleShadowing() 的偵測範圍，本分析刻意排除避免重複提示。
   const _MERGE_FIELDS = ['srcAddr', 'dstAddr', 'service'];
-  const _MERGE_SAME_KEYS = ['action', 'srcIntf', 'dstIntf', 'logtraffic', 'schedule', 'nat'];
+  // poolname：NAT Pool 身份（2026-08-19 新增）。原本只比對 nat enable/disable 旗標，兩條規則
+  // 都開 NAT 但接不同 Pool 時仍會被誤判可合併；poolname/ippool 是全廠牌 parser 皆會回傳的共用
+  // 欄位（僅 FortiGate 目前有真實值，其餘廠牌固定回傳 '-'/'disable' 佔位值，故此變更不影響
+  // 其他廠牌既有行為）
+  const _MERGE_SAME_KEYS = ['action', 'srcIntf', 'dstIntf', 'logtraffic', 'schedule', 'nat', 'poolname'];
   function analyzeMergeSuggestions(policies) {
     const isWild = v => _SHADOW_WILDCARD.has((v || '').trim().toLowerCase());
     const results = [];

@@ -856,22 +856,33 @@ function extractKeyValueFields(text) {
   while ((m = re.exec(text))) fields[m[1].toLowerCase()] = m[2] !== undefined ? m[2] : m[3];
   return fields;
 }
-const SRC_IP_KEYS = ['srcip', 'src_ip', 'source_ip', 'src'];
-const DST_IP_KEYS = ['dstip', 'dst_ip', 'destination_ip', 'dst'];
-const SRC_PORT_KEYS = ['srcport', 'src_port', 'sport', 'spt', 'srcPort'];
-const DST_PORT_KEYS = ['dstport', 'dst_port', 'dport', 'dpt', 'dstPort'];
-const PROTO_KEYS = ['proto', 'protocol'];
+// ECS（Elastic Common Schema）風格點號鍵名（如 source.ip）皆已加入下方各別名表，
+// 由 pickField() 的巢狀路徑走訪負責解析，各表本身不需額外處理
+const SRC_IP_KEYS = ['srcip', 'src_ip', 'source_ip', 'src', 'source.ip'];
+const DST_IP_KEYS = ['dstip', 'dst_ip', 'destination_ip', 'dst', 'destination.ip'];
+const SRC_PORT_KEYS = ['srcport', 'src_port', 'sport', 'spt', 'srcPort', 'source.port'];
+const DST_PORT_KEYS = ['dstport', 'dst_port', 'dport', 'dpt', 'dstPort', 'destination.port'];
+const PROTO_KEYS = ['proto', 'protocol', 'network.protocol'];
 // 主要 log 匯入 JSON 事件用的欄位別名（無統一規格，依常見命名慣例 best-effort 對應）
 const TS_KEYS = ['timestamp', 'time', 'date', '@timestamp', 'eventTime', 'event_time'];
 const SEV_KEYS = ['severity', 'level', 'priority', 'severityLevel', 'log.level'];
-const HOST_KEYS = ['host', 'hostname', 'device', 'source', 'computer', 'dvc'];
+const HOST_KEYS = ['host', 'hostname', 'device', 'source', 'computer', 'dvc', 'host.name'];
 const MSG_KEYS = ['message', 'msg', 'description', 'text', 'log'];
 const APP_KEYS = ['appName', 'application', 'process', 'program', 'service'];
 // JSON 事件的動作/結果欄位別名（供 classifyByKeyword() 比照 CEF/LEEF/FortiGate 的結構化欄位
 // 加強比對慣例使用，2026-08-19 新增；含 ECS 風格點號鍵名 event.action/event.outcome）
 const ACTION_KEYS = ['action', 'outcome', 'result', 'status', 'disposition', 'reason', 'event.action', 'event.outcome'];
+// pickField()：對含 '.' 的 key 先嘗試扁平字面比對（例如 log shipper 匯出的 "event.outcome"
+// 本身就是字面上帶點號的第一層 key，這是 ACTION_KEYS 原本就已支援的情況，須維持不回歸），
+// 找不到才逐層走訪真正巢狀的 ECS JSON（如 {source:{ip:'1.2.3.4'}}），兩種輸入皆可正確命中
 function pickField(fields, keys) {
-  for (const k of keys) { if (fields[k] !== undefined) return fields[k]; }
+  for (const k of keys) {
+    if (fields[k] !== undefined) return fields[k];
+    if (k.indexOf('.') !== -1) {
+      const nested = k.split('.').reduce((o, p) => (o == null ? o : o[p]), fields);
+      if (nested !== undefined) return nested;
+    }
+  }
   return null;
 }
 // 可選顯示欄位（來源/目的 IP、Port、通訊協定）的統一資料來源：CEF 走結構化 extension 欄位；
