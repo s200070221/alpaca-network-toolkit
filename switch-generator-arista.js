@@ -182,6 +182,8 @@ function assembleAristaConfig(model){
   // 本機帳號：與 Cisco IOS 共用同一套 parseCiscoUsers()/renderCiscoUsers()，語法相符
   const aristaUsersBlock=renderCiscoUsers(model.users);
   if(aristaUsersBlock)blocks.push(aristaUsersBlock);
+  if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
+  if(model.syslogServer)blocks.push(`logging host ${model.syslogServer}`);
   return blocks.join('\n!\n')+'\n';
 }
 

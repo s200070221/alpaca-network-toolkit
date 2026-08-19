@@ -398,6 +398,8 @@ function assembleComwareConfig(model){
   if(comwareVxlan)blocks.push(comwareVxlan);
   const comwareUsersBlock=renderComwareUsers(model.users);
   if(comwareUsersBlock)blocks.push(comwareUsersBlock);
+  if(model.snmpTrapHost)blocks.push(`snmp-agent target-host trap address udp-domain ${model.snmpTrapHost} params securityname public v2c`,'#');
+  if(model.syslogServer)blocks.push(`info-center loghost ${model.syslogServer}`,'#');
   // bgp 放最後：其區塊擷取正則靠負向前瞻(bgp/router/interface/ip route/vlan)判斷結尾，
   // 沒有明確終止字元，若後面還接其他區塊可能被吃進 body，故排在組裝順序最後最安全
   if(model.bgp&&model.bgp.length)blocks.push(renderComwareBGPList(model.bgp));

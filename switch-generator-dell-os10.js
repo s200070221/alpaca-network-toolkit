@@ -209,6 +209,8 @@ function assembleDellOS10Config(model){
   if(model.qos&&model.qos.length)blocks.push(renderDellOS10QoS(model.qos));
   const dellUsersBlock=renderDellOS10Users(model.users);
   if(dellUsersBlock)blocks.push(dellUsersBlock);
+  if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
+  if(model.syslogServer)blocks.push(`logging server ${model.syslogServer}`);
   return blocks.join('\n!\n')+'\n';
 }
 // 本機帳號：switch_analyzer 的 parseDellOS10Users() OS10 語法為

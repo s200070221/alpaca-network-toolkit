@@ -1507,6 +1507,8 @@ function collectModel(){
   return {
     vendor:document.getElementById('vendor').value,
     sysname:document.getElementById('hostname').value.trim()||'Switch',
+    snmpTrapHost:document.getElementById('snmp-trap-host').value.trim(),
+    syslogServer:document.getElementById('syslog-server').value.trim(),
     vlans, interfaces, ospf, bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos, stack, users, sonicL3Interfaces, sonicQos, sonicStpVlanIntf,
   };
 }
@@ -1524,6 +1526,8 @@ function applyModelToForm(model){
   document.getElementById('vendor').value=model.vendor||'comware';
   updateModeOptions();
   document.getElementById('hostname').value=model.sysname||'';
+  document.getElementById('snmp-trap-host').value=model.snmpTrapHost||'';
+  document.getElementById('syslog-server').value=model.syslogServer||'';
 
   (model.vlans||[]).forEach(v=>addVlanRow(v.id,v.name));
 

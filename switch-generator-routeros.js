@@ -303,6 +303,7 @@ function assembleRouterOSConfig(model){
   if(aclBlock)blocks.push(aclBlock);
   const qosBlock=renderRouterOSQoS(model.routerosQos);
   if(qosBlock)blocks.push(qosBlock);
+  if(model.snmpTrapHost)blocks.push(`/snmp\nset trap-target=${model.snmpTrapHost} trap-community=public`);
   return blocks.join('\n\n')+'\n';
 }
 

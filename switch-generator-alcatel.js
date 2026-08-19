@@ -187,6 +187,7 @@ function assembleAlcatelConfig(model){
   if(model.bgp&&model.bgp.length)blocks.push(renderAlcatelBGPList(model.bgp));
   const dhcpBlockAl=renderAlcatelDHCP(model.dhcp);
   if(dhcpBlockAl)blocks.push(dhcpBlockAl);
+  if(model.snmpTrapHost)blocks.push(`-> snmp station ${model.snmpTrapHost} "public" v2c enable`);
   return blocks.join('\n!\n')+'\n';
 }
 

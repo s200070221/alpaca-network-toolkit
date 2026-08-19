@@ -391,6 +391,8 @@ function assembleJuniperConfig(model){
   const aclBlock=renderJuniperACL(model.acl);
   if(aclBlock)parts.push(aclBlock);
 
+  if(model.snmpTrapHost)parts.push(`set snmp trap-group public targets ${model.snmpTrapHost}`);
+
   return parts.join('\n');
 }
 

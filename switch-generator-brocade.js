@@ -371,6 +371,8 @@ function assembleBrocadeConfig(model){
   if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
   const brocadeUsersBlock=renderBrocadeUsers(model.users);
   if(brocadeUsersBlock)blocks.push(brocadeUsersBlock);
+  if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
+  if(model.syslogServer)blocks.push(`logging host ${model.syslogServer}`);
   return blocks.join('\n!\n')+'\n';
 }
 // 本機帳號：switch_analyzer 的 parseBrocadeUsers() 語法為

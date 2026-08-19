@@ -311,6 +311,7 @@ function assembleExtremeConfig(model){
   if(qosBlockEx)blocks.push(qosBlockEx);
   const aclBlockEx=renderExtremeACL(model.acl);
   if(aclBlockEx)blocks.push(aclBlockEx);
+  if(model.snmpTrapHost)blocks.push(`configure snmp add trapreceiver ${model.snmpTrapHost} community public`);
   return blocks.join('\n#\n')+'\n';
 }
 
