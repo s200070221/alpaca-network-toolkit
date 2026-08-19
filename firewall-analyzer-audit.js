@@ -321,8 +321,19 @@
     f('snmp-v1v2', tr('audit.check_snmp'), hasV1v2 ? snmp.communities.length : 0, 'high',
       hasV1v2 ? `Community: ${snmp.communities.length}` + tr('audit.rec_snmpv3') : tr('audit.none'),
       ['ISO27001 A.8.24', 'PCI-DSS 4.0 2.2.6', 'NIST 800-53 IA-5', 'CIS v8 4.8']);
-    // 5. 管理員未啟用 2FA
-    const admins = (parsed.users || []).filter(u => u.type === 'admin' && u.status !== 'disable');
+    // 5. 管理員未啟用 2FA（2026-08-19 擴大涵蓋 type==='local' 但實際等同管理員權限的帳號：
+    // CiscoASA 用單數 role 欄位、CheckPoint 用 roles/accessLevel、PaloAlto mgt-config users
+    // 節點本身無角色欄位但本質即管理員帳號、Sophos accessLevel 可能是 admin/super-admin。
+    // 刻意不用一律 type==='local' 的粗暴寫法——會誤觸 FortiGate SSL-VPN/portal 一般使用者
+    // （accessLevel 固定 'user'）與 Sophos 一般權限使用者）
+    const isPrivileged = u => u.status !== 'disable' && (
+      u.type === 'admin' ||
+      u.role === 'admin' ||
+      (Array.isArray(u.roles) && u.roles.includes('admin')) ||
+      u.accessLevel === 'admin' || u.accessLevel === 'super-admin' ||
+      (u.type === 'local' && parsed.vendor === 'PaloAlto')
+    );
+    const admins = (parsed.users || []).filter(isPrivileged);
     const no2fa  = admins.filter(u => !u.twoFactor || u.twoFactor === 'disable');
     f('no-2fa', tr('audit.check_no_2fa'), no2fa.length, 'high',
       no2fa.length ? no2fa.map(u => u.name).slice(0,8).join(', ') + (no2fa.length > 8 ? '…' : '') : tr('audit.all_2fa'),

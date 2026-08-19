@@ -369,7 +369,21 @@ function assembleBrocadeConfig(model){
   // ACL 放最後：parseACL 對 brocade fallback 到 _parseACLCisco，其區塊擷取正則只認得
   // 下一個同關鍵字區塊或字串結尾，理由同 assembleCiscoConfig/assembleDellOS10Config
   if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
+  const brocadeUsersBlock=renderBrocadeUsers(model.users);
+  if(brocadeUsersBlock)blocks.push(brocadeUsersBlock);
   return blocks.join('\n!\n')+'\n';
+}
+// 本機帳號：switch_analyzer 的 parseBrocadeUsers() 語法為
+// "username NAME privilege N password N HASH"，role 由 privilege 數字換算（0=superuser／
+// 4=port-config／其餘=user），故輸出時需反查對應數字；密碼固定輸出等級 8（md5，非 weak 的
+// plaintext）
+function renderBrocadeUsers(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  return list.map(u=>{
+    const priv=u.role==='superuser'?'0':u.role==='port-config'?'4':'5';
+    return `username ${u.name} privilege ${priv} password 8 ${u.password}`;
+  }).join('\n');
 }
 
 // ══════════════════════════════════════════════════════════════════
