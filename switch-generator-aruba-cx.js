@@ -253,6 +253,7 @@ function assembleArubaConfig(model){
   // 落在無名 token 內，不影響 role/name round-trip）
   const arubaUsersBlock=renderArubaUsers(model.users);
   if(arubaUsersBlock)blocks.push(arubaUsersBlock);
+  if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost} trap version 2c`);
   // 結尾補換行：Aruba 語法無 Comware(#)/FortiSwitch(end) 這類收尾關鍵字，
   // 若最後一行缺少換行字元，parseArubaBGP 等以「每行含尾端 \n」為前提的正則會漏抓最後一行內容
   return blocks.join('\n!\n')+'\n';

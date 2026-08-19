@@ -280,6 +280,8 @@ function assembleCiscoConfig(model){
   if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
   const ciscoUsersBlock=renderCiscoUsers(model.users);
   if(ciscoUsersBlock)blocks.push(ciscoUsersBlock);
+  if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
+  if(model.syslogServer)blocks.push(`logging host ${model.syslogServer}`);
   // 結尾補換行，理由同 assembleArubaConfig
   return blocks.join('\n!\n')+'\n';
 }

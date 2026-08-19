@@ -262,6 +262,8 @@ function assembleNXOSConfig(model){
   if(model.acl&&model.acl.length)blocks.push(renderNXOSACL(model.acl));
   const nxosUsersBlock=renderNXOSUsers(model.users);
   if(nxosUsersBlock)blocks.push(nxosUsersBlock);
+  if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
+  if(model.syslogServer)blocks.push(`logging server ${model.syslogServer}`);
   return blocks.join('\n!\n')+'\n';
 }
 // 本機帳號：switch_analyzer 的 parseUsers()（NX-OS 分支）語法為

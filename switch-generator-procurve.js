@@ -119,6 +119,7 @@ function assembleProCurveConfig(model){
   if(dhcpOpt82BlockPC)blocks.push(dhcpOpt82BlockPC);
   const usersBlock=renderProCurveUsers(model.users);
   if(usersBlock)blocks.push(usersBlock);
+  if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost} "public"`);
   return blocks.join('\n')+'\n';
 }
 
