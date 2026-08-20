@@ -242,7 +242,7 @@ function parseNXOS(cfg) {
     bgp:        parseBGP(),
     rip:        [],
     vrrp:       parseVRRP(cfg,'nxos'),
-    vxlan:      null,
+    vxlan:      parseVXLAN(cfg,'nxos'),
     breakouts,
     vendor:     'nxos'
   };
