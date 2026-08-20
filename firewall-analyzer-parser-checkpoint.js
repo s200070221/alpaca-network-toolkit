@@ -726,8 +726,6 @@ const CheckpointParser = (() => {
       dns:        parseDns(text),
       snmp:       parseSnmp(text),
       logservers: parseLogServers(text),
-      snmp:       parseSnmp(text),
-      logservers: parseLogServers(text),
     };
   }
 

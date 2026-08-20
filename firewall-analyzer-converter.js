@@ -375,6 +375,23 @@ const Converter = (() => {
       L.push('end'); L.push('');
     }
 
+    // static6 routes（IPv6，2026-08-20 新增；官方 CLI Reference 確認 dst 直接用 CIDR 表示，
+    // 不像 IPv4 需轉換成點分遮罩，其餘欄位與 IPv4 static route 相同）
+    const sroutes6=parsed.routes.filter(r=>r.type==='static6');
+    if(sroutes6.length) {
+      L.push('config router static6');
+      sroutes6.forEach((r,i)=>{
+        L.push(`    edit ${i+1}`);
+        L.push(`        set dst ${r.dst}`);
+        if(r.gateway&&r.gateway!=='-'&&r.gateway!=='blackhole') L.push(`        set gateway ${r.gateway}`);
+        if(r.device&&r.device!=='-') L.push(`        set device "${r.device}"`);
+        if(r.blackhole==='enable') L.push('        set blackhole enable');
+        if(r.distance&&r.distance!=='-') L.push(`        set distance ${r.distance}`);
+        L.push('    next');
+      });
+      L.push('end'); L.push('');
+    }
+
     // OSPF
     const ospf=parsed.routes.find(r=>r.type==='ospf');
     if(ospf) { L.push('config router ospf'); if(ospf.routerId) L.push(`    set router-id ${ospf.routerId}`); L.push('end'); L.push(''); }
@@ -396,6 +413,22 @@ const Converter = (() => {
     if(vips.length) {
       L.push('config firewall vip');
       vips.forEach(n=>{ L.push(`    edit "${n.name}"`); if(n.extIp&&n.extIp!=='-') L.push(`        set extip ${n.extIp}`); if(n.extIntf&&n.extIntf!=='-') L.push(`        set extintf "${n.extIntf}"`); if(n.mapIp&&n.mapIp!=='-') L.push(`        set mappedip ${n.mapIp}`); if(n.portFwd==='enable') { L.push('        set portforward enable'); if(n.extPort) L.push(`        set extport ${n.extPort}`); if(n.mapPort) L.push(`        set mappedport ${n.mapPort}`); if(n.proto) L.push(`        set protocol ${n.proto}`); } L.push('    next'); });
+      L.push('end'); L.push('');
+    }
+
+    // IPv6 NAT66（ippool6/vip6，2026-08-20 新增；官方 CLI Reference 確認欄位名稱與 IPv4
+    // 版本幾乎相同。vipgrp6 不在本輪範圍——其 IPv4 對應 vipgrp 本身就從未被此函式輸出過，
+    // 是既有、更早的獨立缺口非 IPv6 特有，本輪只補「IPv4 已支援、IPv6 缺席」的兩組）
+    const ippools6=parsed.nat.filter(n=>n.type==='ippool6');
+    if(ippools6.length) {
+      L.push('config firewall ippool6');
+      ippools6.forEach(n=>{ L.push(`    edit "${n.name}"`); if(n.startIp&&n.startIp!=='-') { L.push(`        set startip ${n.startIp}`); L.push(`        set endip ${n.endIp&&n.endIp!=='-'?n.endIp:n.startIp}`); } L.push('    next'); });
+      L.push('end'); L.push('');
+    }
+    const vips6=parsed.nat.filter(n=>n.type==='vip6');
+    if(vips6.length) {
+      L.push('config firewall vip6');
+      vips6.forEach(n=>{ L.push(`    edit "${n.name}"`); if(n.extIp&&n.extIp!=='-') L.push(`        set extip ${n.extIp}`); if(n.extIntf&&n.extIntf!=='-') L.push(`        set extintf "${n.extIntf}"`); if(n.mapIp&&n.mapIp!=='-') L.push(`        set mappedip ${n.mapIp}`); if(n.portFwd==='enable') { L.push('        set portforward enable'); if(n.extPort) L.push(`        set extport ${n.extPort}`); if(n.mapPort) L.push(`        set mappedport ${n.mapPort}`); if(n.proto) L.push(`        set protocol ${n.proto}`); } L.push('    next'); });
       L.push('end'); L.push('');
     }
 
