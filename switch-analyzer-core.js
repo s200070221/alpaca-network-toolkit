@@ -2456,6 +2456,64 @@ function parseVXLAN(cfg, vendor){
       result.evpn.push({name:'l2vpn evpn',rd:'',rtImport:'',rtExport:''});
       result.vnis.forEach(v=>{if(v.mode==='VXLAN')v.mode='BGP-EVPN';});
     }
+  } else if(vendor==='nxos'){
+    // 2026-08-20 新增，官方 Cisco NX-OS VXLAN Configuration Guide（9.2x-10.6x 多版本交叉比對，
+    // cisco.com 直接 fetch 被 WAF 擋 403，改用搜尋引擎索引摘要佐證，信心度中高）確認語法：
+    //   vlan N / vn-segment VNI（L2 VNI 對應）
+    //   interface nve1 / source-interface loopbackX / host-reachability protocol bgp /
+    //     member vni VNI [mcast-group IP | associate-vrf]（同行尾綴與換行巢狀子模式皆存在，
+    //     故用區塊切片後在整段文字內搜尋關鍵字，不依賴嚴格行內/巢狀位置）
+    //   evpn / vni VNI l2 / rd RD / route-target import|export RT（僅 L2 VNI；L3 VNI 的
+    //     RD/RT 定義在 vrf context 內，語法不同，不納入此陣列）
+    // gw（anycast gateway）查證語法片段不完整，非本輪範圍，固定留空。
+    const vlanOfVni=new Map();
+    for(const b of cfg.split(/^(?=vlan\s+\d)/m)){
+      const vM=b.match(/^vlan\s+(\d+)/); const vnM=b.match(/^\s+vn-segment\s+(\d+)/m);
+      if(vM&&vnM)vlanOfVni.set(vnM[1],vM[1]);
+    }
+    const vrfOfVni=new Map();
+    for(const b of cfg.split(/^(?=vrf context\s)/m)){
+      const nM=b.match(/^vrf context\s+(\S+)/); const vnM=b.match(/^\s+vni\s+(\d+)/m);
+      if(nM&&vnM)vrfOfVni.set(vnM[1],nM[1]);
+    }
+    const nveM=cfg.match(/^interface\s+nve\d+\s*\n([\s\S]*?)(?=^\S|(?![\s\S]))/im);
+    if(nveM){
+      const nveBody=nveM[1];
+      result.tunnelMode='vxlan';
+      const hostReachBgp=/^\s*host-reachability protocol bgp\s*$/m.test(nveBody);
+      const srcIf=(nveBody.match(/^\s*source-interface\s+(\S+)/m)||[])[1]||'';
+      if(srcIf){
+        const loRe=new RegExp('^interface\\s+'+srcIf.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s*\\n([\\s\\S]*?)(?=^\\S|(?![\\s\\S]))','im');
+        const loM=cfg.match(loRe);
+        result.vtep=loM?(loM[1].match(/^\s*ip address\s+(\S+?)(?:\/\d+)?\s*$/m)||[])[1]||'':'';
+      }
+      const memberChunks=nveBody.split(/(?=^\s+member vni\s+\d+)/m).filter(c=>/^\s+member vni\s+\d+/.test(c));
+      for(const chunk of memberChunks){
+        const vni=(chunk.match(/^\s+member vni\s+(\d+)/)||[])[1];
+        if(!vni)continue;
+        const isL3=/associate-vrf/.test(chunk);
+        const mcast=(chunk.match(/mcast-group\s+(\S+)/)||[])[1]||'';
+        result.vnis.push({
+          vni, mode:hostReachBgp?'BGP-EVPN':'Static',
+          peers:mcast?[mcast]:[], vlan:vlanOfVni.get(vni)||'',
+          name:isL3?(vrfOfVni.get(vni)||''):'', encap:'vxlan', gw:'',
+        });
+      }
+    }
+    const evpnM=cfg.match(/^evpn\s*\n([\s\S]*?)(?=^\S|(?![\s\S]))/im);
+    if(evpnM){
+      const chunks=evpnM[1].split(/(?=^\s+vni\s+\d+\s+l2)/m).filter(c=>/^\s+vni\s+\d+\s+l2/.test(c));
+      for(const c of chunks){
+        const vni=(c.match(/^\s+vni\s+(\d+)\s+l2/)||[])[1];
+        if(!vni)continue;
+        result.evpn.push({
+          name:'L2VNI-'+vni,
+          rd:(c.match(/^\s+rd\s+(\S+)/m)||[])[1]||'',
+          rtImport:(c.match(/^\s+route-target import\s+(\S+)/m)||[])[1]||'',
+          rtExport:(c.match(/^\s+route-target export\s+(\S+)/m)||[])[1]||'',
+        });
+      }
+    }
   }
   return(result.vnis.length||result.evpn.length||result.vtep)?result:null;
 }
