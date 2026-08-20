@@ -3652,6 +3652,7 @@ const _EGG={
   'egg-yanse': {lang:'yanse', btn:'lang-yanse', toast:'💀 overtime detected...厭世工程師模式啟動，反正早晚都要加班'},
   'egg-leet':  {lang:'leet',  btn:'lang-leet',  toast:'1337 5P34K 4C71V473D. H4X0R M0D3 0N.'},
   'egg-uwu':   {lang:'uwu',   btn:'lang-uwu',   toast:'🐾 Hewwo fwend~ UwU wanguage activeated! OwO'},
+  'egg-wuxia': {lang:'wuxia', btn:'lang-wuxia', toast:'⚔️ 武林秘笈已然出鞘！江湖兒女，且看今朝！'},
 };
 const _eN={},_eT={};
 function initEggListeners(){
