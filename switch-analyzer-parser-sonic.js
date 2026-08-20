@@ -2,7 +2,8 @@ function sonicEmptyResult(){
   return{sys:{hostname:'unknown',version:'',platform:''},irf:null,stack:null,vlans:[],
     interfaces:[],routes:[],lacp:[],vrfs:[],users:[],ospf:[],bgp:[],rip:[],vrrp:[],vxlan:null,
     vendor:'sonic',breakouts:[],qos:{schedulers:[],apply:[]},
-    stp:{mode:null,rootMode:null,timers:{hello:null,forwardDelay:null,maxAge:null},instances:[],ports:[]}};
+    stp:{mode:null,rootMode:null,timers:{hello:null,forwardDelay:null,maxAge:null},instances:[],ports:[]},
+    snmp:{communities:[],v3Users:[],hosts:[]},syslog:{servers:[]}};
 }
 // ACL_TABLE/ACL_RULE → 共用 ACL 形狀（2026-08-08 對外查證新增，原排除項目：官方文件＋
 // 真實範例確認欄位 PRIORITY/PACKET_ACTION/IP_PROTOCOL/SRC_IP/DST_IP/L4_DST_PORT/IP_TYPE，
@@ -117,6 +118,22 @@ function _parseSTPSONiC(cfg){
       priority:val&&val.priority!==undefined?String(val.priority):''};
   });
   return{mode:g.mode||null,rootMode:null,timers:{hello:null,forwardDelay:null,maxAge:null},instances,ports,sonicStpVlanIntf};
+}
+// SNMP_COMMUNITY → 共用 SNMP 形狀 {communities,v3Users,hosts}（2026-08-20 對外查證
+// sonic-net/SONiC 設計文件 doc/snmp/snmp-schema-addition.md 新增，中高信心：此表未列入
+// sonic-yang-models 正式 YANG schema，屬「已實作但未 YANG 驗證」的表格，建議日後找真實
+// config_db.json 範例交叉驗證）。key 即 community 字串，值為 {TYPE:"RO"|"RW"}，本輪只
+// 查證 community，v3Users/hosts 維持空陣列（未查證）
+function _parseSnmpSONiC(db){
+  const communities=Object.keys(db.SNMP_COMMUNITY||{}).map(name=>({name}));
+  return{communities,v3Users:[],hosts:[]};
+}
+// SYSLOG_SERVER → 共用 Syslog 形狀 {servers:[{host,facility}]}（2026-08-20 對外查證官方
+// sonic-buildimage Configuration.md 新增，高信心）。key 即遠端伺服器 IP，facility 欄位
+// 本表無對應概念（有 severity/filter 但語意不同於其他廠牌的 syslog facility），固定留空
+function _parseSyslogSONiC(db){
+  const servers=Object.keys(db.SYSLOG_SERVER||{}).map(host=>({host,facility:''}));
+  return{servers};
 }
 function parseSONiC(cfg){
   let db;
@@ -245,11 +262,13 @@ function parseSONiC(cfg){
   const stpFull=_parseSTPSONiC(cfg);
   const {sonicStpVlanIntf,...stp}=stpFull;
   const qos=_parseQoSSONiC(db);
+  const snmp=_parseSnmpSONiC(db);
+  const syslog=_parseSyslogSONiC(db);
 
   return{
     sys:{hostname,version:'',platform:''},irf:null,stack:null,vlans,interfaces,routes,lacp,
     vrfs:[],users:[],ospf:[],bgp,rip:[],vrrp:[],vxlan:null,vendor:'sonic',breakouts:[],stp,
-    qos,sonicStpVlanIntf
+    qos,sonicStpVlanIntf,snmp,syslog
   };
 }
 

@@ -1331,7 +1331,9 @@ const LLDP_UNSUPPORTED = ['ruijie','netgear','edgeswitch'];
 // 縮小為僅 fortiswitch——官方 CLI Reference 的 community 欄位表完全沒有 host/IP 欄位，
 // 查證後確認為真的不支援，非查證不足
 const SNMP_HOST_UNSUPPORTED = ['fortiswitch'];
-const SYSLOG_UNSUPPORTED = ['fortiswitch','juniper','alcatel','extreme','routeros','procurve','aruba','edgeswitch','netgear','ruijie','sonic'];
+// Syslog 17 家已於 2026-08-20 全數查證涵蓋（sonic 走 parseSONiC() 專屬 JSON 表格解析，
+// 其餘 16 家走 parseSyslog() 文字正則），排除清單清空
+const SYSLOG_UNSUPPORTED = [];
 function renderLLDP(){
   const nbrs=parsed.lldp||[];
   const cmdHints=[

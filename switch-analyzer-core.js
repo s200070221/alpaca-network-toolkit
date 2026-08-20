@@ -2036,8 +2036,12 @@ function parseAny(cfg,forceVendor){
   if(vendor!=='routeros'&&vendor!=='sonic')res.stp=parseSTP(cfg, vendor);
   res.acls=parseACL(cfg, vendor);
   res.security=parseSecurity(cfg, vendor);
-  res.snmp=parseSNMP(cfg, vendor);
-  res.syslog=parseSyslog(cfg, vendor);
+  // sonic：parseSONiC() 已用 SNMP_COMMUNITY/SYSLOG_SERVER 兩個 JSON 表格正確算好
+  // res.snmp/res.syslog（見 _parseSnmpSONiC()/_parseSyslogSONiC()），不可被這裡的共用
+  // 文字正則 dispatcher（對 JSON 文字必定掃不到東西）用空結果覆蓋，比照既有 lacp/dhcp/
+  // stp/qos 排除模式（2026-08-20 新增）
+  if(vendor!=='sonic')res.snmp=parseSNMP(cfg, vendor);
+  if(vendor!=='sonic')res.syslog=parseSyslog(cfg, vendor);
   res.mgmtAccess=parseMgmtAccess(cfg, vendor);
   res.routingAuth=parseRoutingAuth(cfg, vendor);
   // Brocade 的 qos 已在 parseBrocade() 內用專屬形狀（dscpMap/ports）設定，Extreme 的
