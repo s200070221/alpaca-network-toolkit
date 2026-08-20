@@ -765,7 +765,12 @@ const Converter = (() => {
     const hasAnyIp=ifc=>(ifc.ip&&ifc.ip!=='-'&&ifc.ip!=='DHCP')||(ifc.secondaryIps&&ifc.secondaryIps.length);
     if(parsed.interfaces.length) {
       L.push('      <interface><ethernet>');
-      const physicals=parsed.interfaces.filter(i=>!i.type||i.type==='physical');
+      // 2026-08-20 修正：原本只認 type==='physical'/未設定，但 MikroTik parser 的介面
+      // type 依 /interface 區段種類分得更細（ethernet/bridge/tunnel/pppoe...），非
+      // 'physical' 字面值，導致這些介面被靜默排除、完全不輸出（跨廠牌 round-trip 測試
+      // 揪出）。這裡真正的意圖只是「排除 VLAN 子介面」（子介面另外用 kids 巢狀輸出），
+      // 其餘任何 type 都應視為頂層介面
+      const physicals=parsed.interfaces.filter(i=>i.type!=='vlan');
       const vlans=parsed.interfaces.filter(i=>i.type==='vlan');
       physicals.forEach(i=>{
         L.push(`        <entry name="${esc(i.name)}">`);
