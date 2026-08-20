@@ -1050,7 +1050,12 @@ function detectTool(text) {
   if (/^date=\d{4}-\d{2}-\d{2}\s+time=\d{2}:\d{2}:\d{2}\b/m.test(t) && /\blogid=/.test(t)) return {idx:4, vendor:'fortigate'};
   if (/^(?:<\d{1,3}>)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s/m.test(t))            return {idx:4, vendor:'rfc3164'};
   if (/config firewall policy|config vdom/i.test(t))                        return {idx:0, vendor:'f'};
-  if (/set security policies/i.test(t))                                      return {idx:0, vendor:'j'};
+  // 2026-08-20 稽核修復：原本只認扁平 `set security policies` 語法，Junos 階層式大括號
+  // 格式（`security { policies { from-zone X to-zone Y { ... } } }`，juniper_srx_test.conf
+  // 真實範例即此格式）完全比對不到，會落穿到下方新增的交換器 Juniper 判斷式被誤判為
+  // switch_analyzer（兩者皆用 Junos 階層式 interfaces{}/routing-options{} 頂層區塊，語法
+  // 高度重疊，唯一可靠的區分點是 SRX 特有的 security zones/policies 概念，交換器沒有）
+  if (/set security policies/i.test(t)||/^\s*from-zone\s+\S+\s+to-zone\s+\S+/m.test(t))    return {idx:0, vendor:'j'};
   if (/^set hostname\s+\S+/m.test(t) && /^set interface\s+\S+\s+ipv4-address/m.test(t)) return {idx:0, vendor:'c'};
   if (/<config>[\s\S]{0,300}<devices>/m.test(t))                             return {idx:0, vendor:'p'};
   // MikroTik 防火牆訊號：僅認 /ip firewall（真正的防火牆規則區塊）。原本連 /interface bridge
@@ -1079,6 +1084,46 @@ function detectTool(text) {
   if (/sysname\s+\w|irf domain/i.test(t))                                   return {idx:1, vendor:null};
   // MikroTik RouterOS 純交換器訊號（VLAN filtering／橋接，無 /ip firewall 規則時走到這裡）
   if (/\/interface bridge/i.test(t))                                        return {idx:1, vendor:null};
+  // 2026-08-20 稽核修復：Dell OS10／Netgear M4300／EdgeSwitch／Extreme／Alcatel／Brocade
+  // ICX／Juniper 交換器 7 家 switch_analyzer 早已支援解析，但這份獨立維護的簡化偵測規則
+  // 從未同步補上，拖放這些廠牌的設定檔會判定「無法自動識別」。訊號逐字移植自
+  // switch_analyzer 自己的 detectVendor()（switch-analyzer-core.js），比照既有 Zyxel／
+  // EdgeRouter／OpenWrt 訊號移植慣例，皆 vendor:null（不掛廠牌徽章，比照 NX-OS／
+  // ProCurve／Comware 既有做法）。Juniper 交換器訊號（family ethernet-switching／
+  // virtual-chassis／Junos 階層式 interfaces{}+protocols{}+routing-options{}）與上方
+  // Juniper SRX 防火牆訊號（set security policies，扁平 set 語法）完全不同語法家族，
+  // 且 SRX 判斷式已在更前面的 idx:0 區塊攔截，不會衝突。
+  if (/^interface\s+ethernet\d+\/\d+\/\d+/im.test(t)||
+      /^vlt-domain\s+\d+/m.test(t)||
+      /^!\s*Dell (?:EMC )?Networking OS/m.test(t)||
+      /^interface\s+ManagementEthernet/m.test(t)||
+      /^interface\s+fortyGigE\s/m.test(t)||
+      /^stack-unit\s+\d+/m.test(t))                                          return {idx:1, vendor:null};
+  if (/^!Current Configuration:/m.test(t)&&/(NETGEAR|M4300)/i.test(t))       return {idx:1, vendor:null};
+  if (/^!Current Configuration:/m.test(t)&&(/UBNT|EdgeSwitch/i.test(t)||/^\s*vlan participation (include|exclude|auto)/m.test(t))) return {idx:1, vendor:null};
+  if (/^create vlan\s+"?\S/m.test(t)||
+      /^configure sys-name\s+/m.test(t)||
+      /^enable sharing\s+\S+\s+grouping/m.test(t)||
+      /^configure vlan\s+/m.test(t)||
+      /^configure iproute add\s+/m.test(t)||
+      /^enable sharing\s+[\d:]/m.test(t)||/^configure vlan\s+\S+\s+dhcp-address-range/m.test(t)) return {idx:1, vendor:null};
+  if (/^(?:->\s*)?system name\s+/m.test(t)||
+      /^(?:->\s*)?stack set slot\s+/m.test(t)||
+      /^(?:->\s*)?ip interface\s+/m.test(t)||
+      /vlan\s+\d+\s+members\s+port/i.test(t)||
+      /^stacking\s+slot\s+\d/m.test(t)||
+      /^vlan\s+\d+\s+admin-state\s+enable/m.test(t)||
+      /^dhcp-server\s+(?:admin-state|range)\s+/m.test(t)||
+      /^linkagg\s+lacp\s+\d+\s+admin-state/m.test(t)||
+      /^interfaces\s+\S+\s+linkagg\s+\d/m.test(t))                          return {idx:1, vendor:null};
+  if (/^vlan\s+\d+\s+(?:name\s+\S+\s+)?by\s+port/m.test(t)||
+      /^stack unit\s+\d+/m.test(t)||
+      /^\s+tagged\s+e(?:thernet)?\s*[\d/]+/m.test(t)||
+      /^\s+untagged\s+e(?:thernet)?\s*[\d/]+/m.test(t)||
+      /^ip dhcp-server pool\s/m.test(t)||
+      /^lag\s+"\S+"\s+(?:dynamic|static)\s+id\s+\d+/m.test(t)||
+      /^ip vrrp-extended vrid\s/m.test(t))                                   return {idx:1, vendor:null};
+  if (/^version\s+\d+\.\d+R/m.test(t)||/^virtual-chassis\s*\{/m.test(t)||/family\s+ethernet-switching/m.test(t)||((/^interfaces\s*\{/m.test(t)||/^protocols\s*\{/m.test(t))&&/routing-options\s*\{/m.test(t))) return {idx:1, vendor:null};
   // 2026-08-09 稽核修復：此廣義 fallback 規則（僅認泛用關鍵字，不掛廠牌徽章）原本排在
   // NX-OS／ProCurve／Comware 等專屬判斷式之前，若一份 NX-OS 或 ProCurve 設定檔恰好在前
   // 8000 字內同時含這些泛用關鍵字，會被提前攔截導致徽章顯示不精準（仍會正確路由到 switch
