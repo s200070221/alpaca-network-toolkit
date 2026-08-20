@@ -843,7 +843,21 @@ const Converter = (() => {
     L.push('  <devices><entry name="localhost.localdomain">');
     L.push('    <deviceconfig><system>');
     L.push(`      <hostname>${esc(d.hostname)}</hostname>`);
-    L.push('    </system></deviceconfig>');
+    L.push('    </system>');
+    // HA（2026-08-20 新增，LOSS_FIELDS 同廠牌自轉補齊）：<high-availability> 與 <system>
+    // 同層皆在 <deviceconfig> 底下，比照 parseHa() 已查證的官方 KB kA10g000000ClGNCA0 語法
+    if(parsed.ha&&parsed.ha.enabled){
+      const ha=parsed.ha;
+      L.push('    <high-availability>');
+      L.push('      <enabled>yes</enabled>');
+      L.push('      <group>');
+      if(ha.groupId&&ha.groupId!=='-')L.push(`        <group-id>${esc(ha.groupId)}</group-id>`);
+      if(ha.peerIp&&ha.peerIp!=='-')L.push(`        <peer-ip>${esc(ha.peerIp)}</peer-ip>`);
+      if(ha.mode&&ha.mode!=='-')L.push(`        <mode>${esc(ha.mode)}</mode>`);
+      L.push('      </group>');
+      L.push('    </high-availability>');
+    }
+    L.push('    </deviceconfig>');
     L.push('    <network>');
     // Interfaces
     // 2026-07-24 修復：原本把 VLAN 子介面跟實體介面同層對待，直接產生 <entry name="port5.100">
@@ -995,6 +1009,24 @@ const Converter = (() => {
       L.push(`${I(1)}radius-server ${u.server||u.name} { port ${u.port||'1812'}; secret "CHANGE_ME"; }`);
     });
     L.push('}'); L.push('');
+
+    // HA（2026-08-20 新增，LOSS_FIELDS 同廠牌自轉補齊）：chassis cluster，比照 parseHa()
+    // 已查證的官方文件語法。mode 固定為 chassis-cluster（parser 端偵測到 cluster{} 區塊即
+    // 視為啟用，非讀取自欄位值，故此處不輸出 mode 對應指令，parser 本就不依賴它）
+    if(parsed.ha&&parsed.ha.enabled){
+      const ha=parsed.ha;
+      L.push('chassis {');
+      L.push(`${I(1)}cluster {`);
+      const rethM=ha.syncInterface&&ha.syncInterface!=='-'?ha.syncInterface.match(/reth-count\s+(\d+)/):null;
+      if(rethM) L.push(`${I(2)}reth-count ${rethM[1]};`);
+      if(ha.groupId&&ha.groupId!=='-'){
+        L.push(`${I(2)}redundancy-group ${ha.groupId} {`);
+        if(ha.priority&&ha.priority!=='-') L.push(`${I(3)}node 0 priority ${ha.priority};`);
+        L.push(`${I(2)}}`);
+      }
+      L.push(`${I(1)}}`);
+      L.push('}'); L.push('');
+    }
 
     // interfaces
     if(parsed.interfaces.length) {
@@ -1471,6 +1503,25 @@ const Converter = (() => {
     parsed.users.filter(u=>u.type==='admin'||u.type==='local').forEach(u=>{
       L.push(`username ${u.name} password PLACEHOLDER ${u.accessLevel==='read-only'?'privilege 5':'privilege 15'}`);
     });
+
+    // HA（2026-08-20 新增，LOSS_FIELDS 同廠牌自轉補齊，FTD 委派同一套邏輯一併受益）：
+    // 比照 parseHa() 已查證的官方 Failover 語法。syncInterface 存的是 "LOGICAL (PHYSICAL)"
+    // 組合字串（parser 端 `failover lan interface <logical> <physical>` 兩個 token 各自
+    // 存的位置），輸出時需拆解還原成兩個獨立 token；mask 因 parseHa() 本身未擷取保留、
+    // 不影響 groupId/mode/priority/peerIp/vip 的 round-trip，固定輸出常見 /24
+    if(parsed.ha&&parsed.ha.enabled){
+      const ha=parsed.ha;
+      L.push('');
+      L.push('failover');
+      if(ha.mode==='primary')L.push('failover lan unit primary');
+      else if(ha.mode==='secondary')L.push('failover lan unit secondary');
+      const syncM=ha.syncInterface&&ha.syncInterface!=='-'?ha.syncInterface.match(/^(\S+)\s+\(([^)]+)\)$/):null;
+      const logicalName=syncM?syncM[1]:'state';
+      const physIface=syncM?syncM[2]:'GigabitEthernet0/3';
+      L.push(`failover lan interface ${logicalName} ${physIface}`);
+      if(ha.vip&&ha.vip!=='-'&&ha.peerIp&&ha.peerIp!=='-')L.push(`failover interface ip ${logicalName} ${ha.vip} 255.255.255.0 standby ${ha.peerIp}`);
+      if(ha.groupId&&ha.groupId!=='-')L.push(`failover group ${ha.groupId}`);
+    }
 
     return L.join('\n');
   }
@@ -2115,14 +2166,18 @@ const Converter = (() => {
     if(typeof v==='object')return Object.values(v).some(x=>Array.isArray(x)?x.length>0:(x&&typeof x==='object'?hasAnyData(x):!!x));
     return !!v;
   }
-  // 2026-08-20 新增 targetVendor 參數：MikroTik→MikroTik（wlan/wwan/logservers/snmp）與
-  // FortiGate→FortiGate（wwan）四組同廠牌自轉組合已補上真正輸出（見 toMikrotik()/
-  // toFortigate() 對應區塊），這些組合不再算「轉換會遺失」，其餘組合維持原判定不變
+  // 2026-08-20 新增 targetVendor 參數：MikroTik→MikroTik（wlan/wwan/logservers/snmp）、
+  // FortiGate→FortiGate（wwan）、CiscoASA/FTD→CiscoASA/FTD（ha）、PaloAlto→PaloAlto（ha）、
+  // Juniper→Juniper（ha）皆已補上真正輸出（見 toMikrotik()/toFortigate()/toCiscoASA()/
+  // toPaloAlto()/toJuniper() 對應區塊），這些組合不再算「轉換會遺失」，其餘組合維持原判定不變
   function getConversionLoss(parsed,targetVendor){
     return LOSS_FIELDS.filter(f=>{
       if(!hasAnyData(parsed[f.key]))return false;
       if(parsed.vendor==='MikroTik'&&targetVendor==='mikrotik'&&['wlan','wwan','logservers','snmp'].includes(f.key))return false;
       if(parsed.vendor==='FortiGate'&&targetVendor==='fortigate'&&f.key==='wwan')return false;
+      if((parsed.vendor==='Cisco ASA'||parsed.vendor==='Cisco FTD')&&(targetVendor==='ciscoasa'||targetVendor==='ciscoftd')&&f.key==='ha')return false;
+      if(parsed.vendor==='PaloAlto'&&targetVendor==='paloalto'&&f.key==='ha')return false;
+      if(parsed.vendor==='Juniper'&&targetVendor==='juniper'&&f.key==='ha')return false;
       return true;
     }).map(f=>f.label);
   }

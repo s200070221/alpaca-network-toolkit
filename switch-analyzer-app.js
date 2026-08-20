@@ -332,6 +332,25 @@ function updateCounts(){
 // 沿用同一張卡片渲染 Arista MLAG／Cisco NX-OS VPC／Juniper MC-LAG（2026-08-19 加入第三種
 // type）——概念上都是「雙機互聯冗餘」而非物理堆疊，差別只在欄位名稱與內容，依
 // parsed.stack.type 三選一切換要顯示的卡片組
+// 單機視角 peer-link 示意 SVG——雙機互聯拓樸（MLAG/VPC/MC-LAG）的對端裝置本身無法從單一
+// 設定檔得知完整資訊，這裡只畫「本機」實心節點 + 「對端」節點（有可信的對端 IP/位址欄位時
+// 才畫實線＋顯示該值，否則畫虛線＋顯示「未偵測到」），避免虛構對端裝置的身份或狀態
+function buildPeerLinkSVG(hostname,peerLabel,peerKnown,linkLabel,tc){
+  const W=460,H=200;
+  const lx=110,rx=350,cy=100,nodeR=42;
+  let svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" style="width:100%;max-width:480px;max-height:210px">`;
+  svg+=`<line x1="${lx+nodeR}" y1="${cy}" x2="${rx-nodeR}" y2="${cy}" stroke="${tc}" stroke-width="2.5" stroke-opacity="${peerKnown?0.7:0.35}" ${peerKnown?'':'stroke-dasharray="6,4"'}/>`;
+  if(linkLabel)svg+=`<text x="${(lx+rx)/2}" y="${cy-10}" text-anchor="middle" font-size="9" fill="${tc}" font-family="monospace">${esc(linkLabel)}</text>`;
+  svg+=`<circle cx="${lx}" cy="${cy}" r="${nodeR}" fill="var(--surface2)" stroke="${tc}" stroke-width="2.5"/>`;
+  svg+=`<text x="${lx}" y="${cy-4}" text-anchor="middle" dominant-baseline="middle" font-size="10" font-weight="700" fill="${tc}" font-family="monospace">${esc((hostname||'Local').substring(0,12))}</text>`;
+  svg+=`<text x="${lx}" y="${cy+11}" text-anchor="middle" dominant-baseline="middle" font-size="8" fill="var(--text-dim)">Local</text>`;
+  const peerCol=peerKnown?tc:'var(--text-muted)';
+  svg+=`<circle cx="${rx}" cy="${cy}" r="${nodeR}" fill="var(--surface2)" stroke="${peerCol}" stroke-width="2" ${peerKnown?'':'stroke-dasharray="4,3"'}/>`;
+  svg+=`<text x="${rx}" y="${cy-4}" text-anchor="middle" dominant-baseline="middle" font-size="10" font-weight="700" fill="${peerCol}" font-family="monospace">${esc(String(peerLabel).substring(0,14))}</text>`;
+  svg+=`<text x="${rx}" y="${cy+11}" text-anchor="middle" dominant-baseline="middle" font-size="8" fill="var(--text-dim)">Peer</text>`;
+  svg+='</svg>';
+  return svg;
+}
 function renderAristaMlag(){
   const mlag=parsed.stack;
   if(!mlag)return'<div class="nodata">'+tr('msg.no_data')+'</div>';
@@ -351,24 +370,83 @@ function renderAristaMlag(){
     {t:'Peer Address',v:mlag.peerAddr,c:'var(--green)'},
     {t:'Local Interface',v:mlag.localIntf,c:'var(--purple)'},
   ];
+  // 三種類型各自唯一能可信代表「對端」身份的真實欄位（皆為官方語法直接查得的位址/介面，
+  // 非憑空捏造）：VPC 用 peer-keepalive 目的 IP；MC-LAG 的 peerLink 本身其實是 ICCP peer IP；
+  // MLAG 用官方 peer-address。members[] 陣列本身在 arista/nxos 兩家是寫死的假 primary/
+  // secondary 佔位資料（parseAristaMlag()/parseNxosVpc() 皆固定回傳同一組字面值），
+  // 刻意不使用，避免示意圖看似真的解析到對端裝置資訊
+  let peerLabel=tr('stack.not_detected'),peerKnown=false,linkLabel='';
+  if(mlag.type==='VPC'){
+    peerKnown=!!(mlag.peerKeepalive&&mlag.peerKeepalive!=='-');
+    peerLabel=peerKnown?mlag.peerKeepalive:tr('stack.not_detected');
+    linkLabel=mlag.peerLink&&mlag.peerLink!=='-'?mlag.peerLink:'';
+  }else if(mlag.type==='MC-LAG'){
+    peerKnown=!!mlag.peerLink;
+    peerLabel=peerKnown?mlag.peerLink:tr('stack.not_detected');
+    linkLabel='ICCP';
+  }else{
+    peerKnown=!!(mlag.peerAddr&&mlag.peerAddr!=='-');
+    peerLabel=peerKnown?mlag.peerAddr:tr('stack.not_detected');
+    linkLabel=mlag.peerLink&&mlag.peerLink!=='-'?mlag.peerLink:'';
+  }
+  const svg=buildPeerLinkSVG(parsed.sys.hostname,peerLabel,peerKnown,linkLabel,'var(--accent)');
   return`<div style="padding:16px;display:flex;flex-direction:column;gap:12px">
+    <div class="hint" style="padding:8px 14px;color:var(--text-dim);font-size:11px;background:var(--surface2);border-radius:6px">⚠️ ${tr('topo.single_device_note')}</div>
     <div class="card"><div class="card-head">${title}</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;padding:14px 18px">
+      <div style="padding:14px 18px">${svg}</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;padding:0 18px 14px">
         ${cards.map(c=>`<div class="ov-card"><div class="ov-card-title">${c.t}</div><div style="font-size:${c.big?'22':'18'}px;font-weight:${c.big?'700':'600'};color:${c.c}">${esc(String(c.v))}</div></div>`).join('')}
       </div>
     </div>
   </div>`;
 }
-// Ruijie VSU（Virtual Switch Unit）堆疊——member+priority+role 形狀與 StackWise/VLT 較接近，
-// 但目前無真實範例可支撐一套完整拓撲 SVG（如 buildStackWiseSVG／renderDellStack 那樣），
-// 先用簡單卡片呈現域資訊＋成員表＋VSL 鏈路埠清單，避免對低信心度功能過度投入
+// Ruijie VSU（Virtual Switch Unit）堆疊——member+priority+role 為真實解析資料（switch N
+// priority P 逐一宣告），但 VSL 鏈路埠（vsl-port 子模式）只能反推「哪個成員有哪些埠」，
+// 無法得知具體是哪兩個成員的哪個埠互連（比對官方文件仍查無逐一鏈路的宣告語法），故拓撲圖
+// 的節點排列（誰連誰）屬示意佈局非真實鏈路解析，同樣掛上單機視角示意提示
+function buildVSUSVG(p){
+  const vsu=p.stack;
+  const members=vsu.members||[];
+  const vslMap={};
+  (vsu.vsl||[]).forEach(v=>{vslMap[v.memberId]=v.interfaces;});
+  const tc='var(--accent)';
+  const boxW=150,boxH=112,gap=Math.max(200,680/(members.length||1));
+  const W=Math.max(680,members.length*gap+100);
+  const H=260;
+  const startX=Math.max(28,(W-gap*(members.length-1)-boxW)/2);
+  const bY=60;
+  const boxes=members.map((m,i)=>({x:startX+i*gap,cx:startX+i*gap+boxW/2,y:bY,mem:m}));
+  let svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" style="width:100%;max-height:270px">`;
+  const isRing=boxes.length>2;
+  for(let i=0;i<boxes.length;i++){
+    if(i===boxes.length-1&&!isRing)break;
+    const a=boxes[i],b=boxes[(i+1)%boxes.length];
+    const isWrap=i===boxes.length-1;
+    svg+=`<path d="M ${a.cx} ${a.y+boxH+6} C ${a.cx} ${a.y+boxH+40} ${b.cx} ${b.y+boxH+40} ${b.cx} ${b.y+boxH+6}" stroke="${tc}" stroke-width="2.2" fill="none" opacity="${isWrap?0.32:0.6}" ${isWrap?'stroke-dasharray="5,3"':''}/>`;
+  }
+  boxes.forEach(bx=>{
+    const m=bx.mem;
+    const isActive=m.role==='Active';
+    const col=isActive?tc:'var(--green)';
+    svg+=`<rect x="${bx.x}" y="${bx.y}" width="${boxW}" height="${boxH}" rx="10" fill="var(--surface2)" stroke="${col}" stroke-width="${isActive?2:1.4}"/>`;
+    svg+=`<text x="${bx.cx}" y="${bx.y+24}" text-anchor="middle" font-size="12" font-weight="700" fill="${col}" font-family="monospace">VSU${esc(m.id)}</text>`;
+    svg+=`<text x="${bx.cx}" y="${bx.y+42}" text-anchor="middle" font-size="9" fill="${col}">${esc(m.role||'—')}</text>`;
+    svg+=`<text x="${bx.cx}" y="${bx.y+60}" text-anchor="middle" font-size="9" fill="var(--text-dim)" font-family="monospace">prio ${esc(String(m.priority))}</text>`;
+    const vslPorts=(vslMap[m.id]||[]).slice(0,2).join(', ');
+    if(vslPorts)svg+=`<text x="${bx.cx}" y="${bx.y+80}" text-anchor="middle" font-size="8" fill="var(--text-muted)" font-family="monospace">${esc(vslPorts)}</text>`;
+  });
+  svg+='</svg>';
+  return svg;
+}
 function renderRuijieVSU(){
   const vsu=parsed.stack;
   if(!vsu)return'<div class="nodata">'+tr('msg.no_data')+'</div>';
   const vslMap={};
   (vsu.vsl||[]).forEach(v=>{vslMap[v.memberId]=v.interfaces;});
   return`<div style="padding:16px;display:flex;flex-direction:column;gap:12px">
+    <div class="hint" style="padding:8px 14px;color:var(--text-dim);font-size:11px;background:var(--surface2);border-radius:6px">⚠️ ${tr('topo.single_device_note')}</div>
     <div class="card"><div class="card-head">Ruijie VSU</div>
+      <div style="padding:14px 18px">${buildVSUSVG(parsed)}</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;padding:14px 18px">
         <div class="ov-card"><div class="ov-card-title">Domain</div><div style="font-size:22px;font-weight:700;color:var(--accent)">${esc(vsu.domain)}</div></div>
         <div class="ov-card"><div class="ov-card-title">${tr('stack.member_count')}</div><div style="font-size:22px;font-weight:700;color:var(--teal)">${vsu.members.length}</div></div>
@@ -391,9 +469,47 @@ function renderRuijieVSU(){
     </div>
   </div>`;
 }
+let _lacpView='table';
+function buildOneLACPSVG(g){
+  const members=_lacpMembersArr(g);
+  const cnt=members.length||1;
+  const CX=200,CY=150,R=Math.min(110,50+cnt*14),nodeR=30;
+  const W=400,H=300;
+  const positions=members.map((_,i)=>{
+    const a=(2*Math.PI*i/cnt)-Math.PI/2;
+    return{x:CX+R*Math.cos(a),y:CY+R*Math.sin(a)};
+  });
+  let svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" style="width:100%;max-width:420px;max-height:320px">`;
+  positions.forEach(pos=>{
+    svg+=`<line x1="${CX}" y1="${CY}" x2="${pos.x}" y2="${pos.y}" stroke="var(--accent)" stroke-width="2" stroke-opacity="0.5"/>`;
+  });
+  svg+=`<circle cx="${CX}" cy="${CY}" r="${nodeR}" fill="var(--surface2)" stroke="var(--accent)" stroke-width="2.5"/>`;
+  svg+=`<text x="${CX}" y="${CY-3}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="700" fill="var(--accent)" font-family="monospace">${esc(g.name)}</text>`;
+  svg+=`<text x="${CX}" y="${CY+10}" text-anchor="middle" dominant-baseline="middle" font-size="8" fill="var(--text-dim)">${esc(g.mode||'—')}</text>`;
+  positions.forEach((pos,i)=>{
+    const m=members[i];
+    const name=typeof m==='string'?m:m.name;
+    const lm=typeof m==='object'?m.lacpMode:null;
+    const col=lm==='Active'?'var(--green)':lm==='Passive'?'var(--yellow)':'var(--purple)';
+    svg+=`<circle cx="${pos.x}" cy="${pos.y}" r="24" fill="var(--surface2)" stroke="${col}" stroke-width="1.8"/>`;
+    svg+=`<text x="${pos.x}" y="${pos.y-2}" text-anchor="middle" dominant-baseline="middle" font-size="9" font-weight="600" fill="var(--text)" font-family="monospace">${esc((name||'').substring(0,10))}</text>`;
+    if(lm)svg+=`<text x="${pos.x}" y="${pos.y+10}" text-anchor="middle" dominant-baseline="middle" font-size="7" fill="${col}">${esc(lm)}</text>`;
+  });
+  svg+='</svg>';
+  return`<div style="background:var(--surface2);border-radius:8px;padding:10px"><div style="font-size:11px;color:var(--text-dim);padding:0 6px 4px">${esc(g.name)} · MTU ${esc(String(g.mtu||'—'))}</div>${svg}</div>`;
+}
+function buildLACPTopo(l){
+  return`<div style="display:flex;flex-wrap:wrap;gap:14px;padding:14px 18px">${l.map(g=>buildOneLACPSVG(g)).join('')}</div>`;
+}
 function renderLACP(){
   const l=parsed.lacp||[];
   if(!l.length)return'<div class="nodata">'+tr('msg.no_lacp')+'</div>';
+  const btnS=(a)=>`padding:4px 12px;border-radius:4px;border:1px solid ${a?'var(--accent)':'var(--border)'};cursor:pointer;font-size:12px;background:${a?'var(--accent)':'var(--surface2)'};color:${a?'#fff':'var(--text-dim)'}`;
+  const toggle=`<div style="display:flex;gap:6px;padding:12px 18px 0">
+    <button onclick="_lacpView='table';navGo('lacp')" style="${btnS(_lacpView==='table')}">${tr('lldp.view_table')}</button>
+    <button onclick="_lacpView='topo';navGo('lacp')" style="${btnS(_lacpView==='topo')}">${tr('lldp.view_topo')}</button>
+  </div>`;
+  if(_lacpView==='topo')return`<div style="flex:1;overflow-y:auto">${toggle}${buildLACPTopo(l)}</div>`;
   function _mb(m){
     const n=typeof m==='string'?m:m.name;
     const lm=typeof m==='object'?m.lacpMode:null;
@@ -425,7 +541,7 @@ function renderLACP(){
   ];
   tableData=rows; tableKeys=hdrs.map(h=>h.key);
   const {html,count,total}=renderTable(hdrs,rows,null);
-  return mkTbar('search-inp',null,'exportLACPCSV')+
+  return toggle+mkTbar('search-inp',null,'exportLACPCSV')+
     `<div class="tbl-wrap">${html}</div>
      <div class="tbl-foot"><span>${count} / ${total} ${tr('unit.count')}</span></div>`;
 }
@@ -3599,6 +3715,7 @@ setLang('zhTW');
     'egg-cat':   {lang:'cat',   btn:'lang-cat',   toast:'🐱 Nyaa~！喵語模式啟動了喵！meow meow owo'},
     'egg-bean':  {lang:'bean',  btn:'lang-bean',  toast:'🥕🫛🌽 豆語模式啟動！蔬菜智慧已降臨！🌽🫛🥕'},
     'egg-alpaca':{lang:'alpaca',btn:'lang-alpaca',toast:'🦙 咩咩咩！羊咩碼啟動-aca！上傳咩設咩定-aca！🦙'},'egg-yanse':{lang:'yanse',btn:'lang-yanse',toast:'💀 overtime detected...厭世工程師模式啟動，反正早晚都要加班'},
+    'egg-wuxia': {lang:'wuxia', btn:'lang-wuxia', toast:'⚔️ 武林秘笈已然出鞘！江湖兒女，且看今朝！'},
   };
   var _eN={},_eT={};
   document.querySelectorAll('.lang-egg').forEach(function(el){

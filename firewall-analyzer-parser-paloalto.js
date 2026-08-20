@@ -474,7 +474,14 @@ const PaloAltoParser = (() => {
       xblks(xv(text,'ipsec')||text, 'tunnel').forEach(tn => {
         const name  = xname(tn);
         const inner = tn._inner;
-        const gwName = xv(xv(inner,'ike')||inner,'gateway') || xv(inner,'ike-gateway') || '-';
+        // 2026-08-20 修正：真實 PAN-OS XML 用 <auto-key><ike-gateway><entry name="X"/></ike-gateway>
+        // 參照 IKE gateway 物件（比照 ike-crypto-profile 等其他物件的 by-name 參照慣例，
+        // toPaloAlto() 輸出本來就是這個結構），原本的 xv(inner,'ike')/xv(inner,'gateway')
+        // 找不到對應標籤，gwName 永遠解析成 '-'，導致 remote/iface/proposal/dhgrp/lifetime
+        // 等一整組來自 IKE gateway 區塊的欄位全部遺失（round-trip 測試揪出）
+        const ikeGwRefBlock = xv(xv(inner,'auto-key')||inner,'ike-gateway') || xv(inner,'ike-gateway') || '';
+        const gwNameM = ikeGwRefBlock.match(/<entry\s+name="([^"]+)"/);
+        const gwName = gwNameM ? gwNameM[1] : (xv(xv(inner,'ike')||inner,'gateway') || '-');
         const gwInner= ikeGws[gwName] || '';
         const cryptoP2 = xv(inner,'ike-crypto-profile') || xv(xv(inner,'esp')||inner,'ike-crypto-profile') || '-';
         const localSub  = xlist(xv(inner,'tunnel-interface')||inner,'ip')[0] || '-';
@@ -482,7 +489,11 @@ const PaloAltoParser = (() => {
         vpns.push({
           type: 'ipsec-p1', name,
           mode:        xv(gwInner,'version') || 'ikev1',
-          remote:      xv(gwInner,'peer-ip-value') || xv(gwInner,'peer-address') || '-',
+          // 2026-08-20 修正：真實 PAN-OS XML 的 <peer-address> 內還巢狀一層 <ip>（比照
+          // toPaloAlto() 既有輸出 <peer-address><ip>X</ip></peer-address>），原本直接
+          // xv(gwInner,'peer-address') 只拆到外層，回傳整段 "<ip>X</ip>" 字面字串而非
+          // 純 IP（round-trip 測試揪出）
+          remote:      xv(gwInner,'peer-ip-value') || xv(xv(gwInner,'peer-address')||gwInner,'ip') || '-',
           iface:       xv(gwInner,'interface') || xv(inner,'tunnel-interface') || '-',
           ikeVer:      xv(gwInner,'version') === 'ikev2' ? '2' : '1',
           authMethod:  xv(xv(gwInner,'authentication')||gwInner,'pre-shared-key') ? 'psk' : 'certificate',
