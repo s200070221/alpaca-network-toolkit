@@ -375,6 +375,26 @@ function parseSNMP(cfg, vendor){
     // snmp-server host ip-address trap version {v1|v2c|v3} [community STRING]
     const reH=/^\s*snmp-server\s+host\s+(\S+)\s+trap\b/gm;
     while((m=reH.exec(cfg))!==null)pushH(m[1]);
+  }else if(vendor==='edgeswitch'){
+    // 官方 Ubiquiti EdgeSwitch Command Reference 查證（高信心）：
+    // snmp-server community NAME [ro|rw|su] [ipaddress ip-address] [view view-name]
+    // 2026-08-20 從共用 else 分支移出成明確分支（原本落入 else 分支意外湊巧命中，
+    // 因為真實語法恰好也是 "snmp-server community NAME" 開頭；v3/trap host 本輪未查證）
+    let m; const reC=/^\s*snmp-server\s+community\s+(\S+)/gm;
+    while((m=reC.exec(cfg))!==null)pushC(m[1]);
+  }else if(vendor==='ruijie'){
+    // 官方 RGOS Command Reference 查證（中高信心）：
+    // snmp-server community community-string {ro|rw} [acl-number]
+    // 2026-08-20 從共用 else 分支移出成明確分支（原理由同 edgeswitch）
+    let m; const reC=/^\s*snmp-server\s+community\s+(\S+)/gm;
+    while((m=reC.exec(cfg))!==null)pushC(m[1]);
+  }else if(vendor==='netgear'){
+    // 官方 Netgear M4300 CLI Command Reference 查證（中高信心）：
+    // snmp-server community NAME {ro|rw} ipaddress ip-address ipmask mask
+    // 2026-08-20 從共用 else 分支移出成明確分支（原理由同 edgeswitch；ipaddress/ipmask
+    // 不進 communities schema，僅取名稱）
+    let m; const reC=/^\s*snmp-server\s+community\s+(\S+)/gm;
+    while((m=reC.exec(cfg))!==null)pushC(m[1]);
   }else{
     // cisco(IOS-XE)／dell-os10／nxos／arista／brocade(ICX) 共用同一套
     // "snmp-server community NAME [ro|rw]"／"snmp-server user NAME ... v3" 語法家族，
@@ -391,8 +411,9 @@ function parseSNMP(cfg, vendor){
   }
   return {communities,v3Users,hosts};
 }
-// Syslog 伺服器解析（2026-08-19 新增，全新功能，第一階段僅涵蓋語法信心度最高、已對外查證
-// 官方文件的一批廠牌；其餘廠牌查無佐證前不猜測語法，維持排除）：
+// Syslog 伺服器解析（2026-08-19 新增第一階段 6 家；2026-08-20 對外查證後擴大剩餘 11 家，
+// 17 家全數涵蓋，sonic 除外——sonic 走 parseSONiC()/_parseSyslogSONiC() 專屬 JSON 表格
+// 解析，parseAny() 已排除不呼叫本函式，避免真實結果被此處的文字正則空結果覆蓋）：
 // - cisco(IOS-XE)／arista／brocade(FastIron)：logging host ip-address [udp-port N]
 // - nxos／dell-os10：logging server host [severity-level ...]（關鍵字為 server 非 host，
 //   與上一組語法家族不同，官方文件已個別查證確認）
@@ -409,6 +430,72 @@ function parseSyslog(cfg, vendor){
   }else if(vendor==='cisco'||vendor==='arista'||vendor==='brocade'){
     let m; const re=/^\s*logging\s+host\s+(\S+)/gm;
     while((m=re.exec(cfg))!==null)push(m[1]);
+  }else if(vendor==='extreme'){
+    // 官方 ExtremeXOS Command Reference 查證（高信心）：
+    // configure syslog add {ipaddress[:port] | ipaddress tls_port N} {vr NAME} [localN]
+    // IP 與 port 若同時存在會以冒號連接，取冒號前段避免 port 誤併入 IP；facility 為行尾
+    // 可選 local0-7 字面值
+    let m; const re=/configure\s+syslog\s+add\s+([^\s:]+)(?:[^\n]*?\b(local\d)\s*$)?/gm;
+    while((m=re.exec(cfg))!==null)push(m[1],m[2]);
+  }else if(vendor==='procurve'){
+    // 官方 ArubaOS-Switch (AOS-S) MCG 查證（高信心）：logging ip-address [udp|tcp port]
+    // severity/facility 為全域指令（"logging severity"/"logging facility"），非本行參數，
+    // 需明確排除避免誤把這兩個關鍵字當成 host 擷取
+    let m; const re=/^\s*logging\s+(?!facility\b|severity\b)(\S+)/gm;
+    while((m=re.exec(cfg))!==null)push(m[1]);
+  }else if(vendor==='aruba'){
+    // 官方 AOS-CX logging 命令參考查證（高信心）：
+    // logging TARGET [udp|tcp|tls port] [severity LEVEL] [vrf NAME] [filter NAME] ...
+    // 與 ProCurve 分屬不同 vendor 分支，不會互相污染
+    let m; const re=/^\s*logging\s+(\S+)/gm;
+    while((m=re.exec(cfg))!==null)push(m[1]);
+  }else if(vendor==='edgeswitch'||vendor==='netgear'){
+    // 官方 EdgeSwitch Command Reference 查證（EdgeSwitch 高信心／Netgear 中信心，同一
+    // Broadcom ICOS 平台推論，與既有 hostname/LACP 共用慣例一致）：
+    // logging host hostaddress {ipv4|ipv6|dns} port severitylevel
+    let m; const re=/^\s*logging\s+host\s+(\S+)/gm;
+    while((m=re.exec(cfg))!==null)push(m[1]);
+  }else if(vendor==='ruijie'){
+    // 官方 RGOS Command Reference 查證（高信心）：logging ip-address（單行，另有獨立的
+    // "logging trap severity" 全域嚴重等級指令，需明確排除避免誤把 trap 當成 host 擷取）
+    let m; const re=/^\s*logging\s+(?!trap\b)(\S+)/gm;
+    while((m=re.exec(cfg))!==null)push(m[1]);
+  }else if(vendor==='juniper'){
+    // 官方 Junos System Logging 文件查證（高信心）：階層式
+    // system { syslog { host ip-address { facility severity; } } }
+    // parseJuniper() 全檔案慣例僅支援階層式格式（無 flat "set" 語法），本處比照沿用同一
+    // 慣例，重用已存在的平衡大括號 helper junosBlock()（定義於
+    // switch-analyzer-parser-juniper.js，載入後為全域函式，此處可直接呼叫）
+    const blk=typeof junosBlock==='function'?junosBlock(cfg,'syslog'):'';
+    let m; const re=/^\s*host\s+(\S+)\s*\{/gm;
+    while((m=re.exec(blk))!==null)push(m[1]);
+  }else if(vendor==='fortiswitch'){
+    // 官方 FortiSwitchOS CLI Reference 查證（高信心）：巢狀區塊語法，最多 3 組具名
+    // target（syslogd/syslogd2/syslogd3），各自獨立 "set server" 一行
+    // config log {syslogd|syslogd2|syslogd3} setting / set server "ip" / ... / end
+    ['syslogd','syslogd2','syslogd3'].forEach(name=>{
+      const blkRe=new RegExp('^config log '+name+'\\s+setting\\n([\\s\\S]*?)^end\\b','m');
+      const blk=(cfg.match(blkRe)||[])[1]||'';
+      const m=/set\s+server\s+"?([^"\n]+)"?/.exec(blk);
+      if(m)push(m[1]);
+    });
+  }else if(vendor==='alcatel'){
+    // Alcatel-Lucent OmniSwitch (AOS) CLI Reference 查證（中信心，僅第三方鏡射站取得
+    // 原文，未見官方站台原文）：swlog output socket ip-address [remote command-log]
+    let m; const re=/(?:->\s*)?swlog\s+output\s+socket\s+(\S+)/gm;
+    while((m=re.exec(cfg))!==null)push(m[1]);
+  }else if(vendor==='routeros'){
+    // 官方 MikroTik RouterOS v7 文件查證（高信心）：兩段式，遠端 target 定義在
+    // /system logging action，本身即可判斷是否為遠端 syslog server，不需要再關聯到
+    // 引用它的 /system logging 規則那一行
+    // /system logging action add name=NAME target=remote remote=ip-address ...
+    let m; const re=/\/system logging action add\s+([^\n]+)/g;
+    while((m=re.exec(cfg))!==null){
+      const line=m[1];
+      if(!/target=remote\b/.test(line))continue;
+      const hostM=/remote=(\S+)/.exec(line);
+      if(hostM)push(hostM[1]);
+    }
   }
   return {servers};
 }
