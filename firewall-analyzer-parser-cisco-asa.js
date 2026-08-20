@@ -405,12 +405,18 @@ const CiscoASAParser = (() => {
   }
 
   function parseLogServers(text) {
-    const servers = [];
+    // 2026-08-20 修正：原本回傳純陣列＋鍵名 logServers（大寫S），但其餘 12 家 parser 與所有
+    // 消費端（converter/reporter/app.js）一律讀 logservers（全小寫）＋{syslog,fortianalyzer,
+    // netflow,logForward} 物件形狀，鍵名不符導致 ASA/FTD 的 log server 資料永遠不會出現在
+    // 報表/CSV/converter，屬純粹的死欄位。改為對齊共用形狀；level 取自官方語法本來就是
+    // 全域（非逐 host）的 `logging trap <level>`
+    const syslog = [];
+    const level = (text.match(/^logging trap\s+(\S+)/m)||[])[1] || '-';
     for (const line of text.split('\n')) {
       const m = line.match(/^logging host\s+(\S+)\s+(\S+)(?:\s+(\d+))?/);
-      if (m) servers.push({ host:m[2], iface:m[1], port:m[3]||'514', protocol:'udp' });
+      if (m) syslog.push({ server:m[2], iface:m[1], port:m[3]||'514', facility:'-', level, protocol:'UDP', status:'enable' });
     }
-    return servers;
+    return { syslog, fortianalyzer:[], netflow:[], logForward:[] };
   }
 
   // HA/Cluster：已查證官方 Failover 語法——`failover` 單獨一行代表啟用，`failover lan unit
@@ -450,7 +456,7 @@ const CiscoASAParser = (() => {
       dhcp:        parseDhcp(text),
       dns:         parseDns(text),
       snmp:        parseSnmp(text),
-      logServers:  parseLogServers(text),
+      logservers:  parseLogServers(text),
       sdwan:       null,
       ha:          parseHa(text),
       wwan:        null,
