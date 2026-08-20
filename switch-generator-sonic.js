@@ -181,30 +181,6 @@ function sonicAclAddr(v){
   return hostM?hostM[1]+'/32':v;
 }
 
-// ══════════════════════════════════════════════════════════════════
-// Extreme Networks ExtremeXOS (EXOS) render 函式（第 11 個廠牌，MVP 範圍）
-//
-// 語法已於 2026-07-15 對外查證 Extreme Networks 官方 ExtremeXOS Command Reference
-// 並與 switch_analyzer 既有 parseExtremeXOS() 系列函式核對，過程中發現並修正兩處
-// switch_analyzer 既有 bug（原本沿用未經查證的假設語法）：
-//   1. BGP neighbor 建立指令實際是 "create bgp neighbor IP remote-AS-number N"
-//      （動詞 create，原本誤寫成 "configure bgp add neighbor"）
-//   2. VRRP preempt 是旗標式關鍵字 "preempt"/"dont-preempt"，原本誤寫成
-//      "preempt on|off" 帶值語法
-// 詳見 parseExtremeXOSBGP()/parseExtremeXOSVRRP() 修正處與 now.md 對應紀錄。
-//
-// 範圍：Hostname／VLAN／Interface(access/trunk，無 hybrid，membership 以 VLAN 為主體
-// 宣告成員 port，語法為 "configure vlan NAME add ports P tagged/untagged"，與 Cisco 式
-// interface 區塊完全不同)／OSPF(逐 vlan area 指派)／BGP／靜態路由／LACP／VRRP／DHCP
-// （parseExtremeXOSDHCP() 已查證 server+relay 語法，此前 assemble 端未接線，已於後續
-// 修正補上，見 renderExtremeDHCP()）／STP／Security(802.1X+MAC NetLogin)／QoS(QP1-QP8
-// profile 模型，2026-07-19 對外查證新增，詳見 renderExtremeSTP()/renderExtremeSecurity()/
-// renderExtremeQoS() 各處註解)。不含 RIP（switch_analyzer 尚無對應解析）／ACL render
-// （switch_analyzer 的 _parseACLExtreme() 已可解析，但 generator 端尚未接線，為既有
-// 殘留缺口，非本輪範圍，見 now.md）；無匯入既有設定檔路徑（比照 Alcatel/Dell OS10/
-// NX-OS 上市時做法，本次不擴大匯入白名單）。
-// ══════════════════════════════════════════════════════════════════
-
 // VLAN membership 以 VLAN 為主體宣告（"configure vlan NAME add ports P tagged/untagged"），
 // 需要 VLAN ID → NAME 對照表（EXOS 指令用名稱而非 ID），比照 Brocade renderBrocadeVLANs
 // 的「先掃描 interfaces 依 VLAN 分組收集 tagged/untagged port，再逐 VLAN 輸出」慣例

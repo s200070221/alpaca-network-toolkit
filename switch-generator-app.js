@@ -2618,6 +2618,29 @@ async function parseAndImport(){
 
   (parsed.routes||[]).forEach(rt=>addRouteRow(rt.dst,rt.gw,rt.metric));
 
+  // VXLAN（2026-08-20 新增）：僅 Comware/Aruba CX/NX-OS 三家 switch_analyzer 的 parseVXLAN()
+  // 會回傳非 null 資料，其餘廠牌固定 vxlan:null。三家 evpn[]↔vnis[] 的配對方式不同（見
+  // switch-analyzer-core.js 的 parseVXLAN()）：comware 用 evpn.name（VSI 名稱，與
+  // vnis[].name 同義）配對；aruba 的 evpn[] 只是偵測旗標（rd/rtImport/rtExport 恆空字串），
+  // rd 早已直接存在 vnis[].rd，不需要、也無法用 evpn[] 回填；nxos 的 evpn.name 固定是合成
+  // 字串 'L2VNI-'+vni，且 L2 VNI 的 vnis[].name 是空字串（只有 L3 VNI 才有值），必須用
+  // vni 比對、不能用 name。vxlan-vni-body 已在上方清空清單內，vxlan-vtep 先前完全沒被
+  // 匯入邏輯寫入過，一併補上避免舊匯入殘留值誤植為新結果
+  if(parsed.vxlan&&(vendor==='comware'||vendor==='aruba'||vendor==='nxos')){
+    document.getElementById('vxlan-vtep').value=parsed.vxlan.vtep||'';
+    const vxEvpnList=parsed.vxlan.evpn||[];
+    const matchVxEvpn=v=>{
+      if(vendor==='comware')return vxEvpnList.find(e=>e.name===v.name);
+      if(vendor==='nxos')return vxEvpnList.find(e=>e.name==='L2VNI-'+v.vni);
+      return null;
+    };
+    (parsed.vxlan.vnis||[]).forEach(v=>{
+      const e=matchVxEvpn(v);
+      addVxlanVniRow(v.vni,v.vlan,v.name,(v.peers||[]).join(' '),
+        v.rd||e?.rd||'',e?.rtImport||'',e?.rtExport||'',v.gw||'');
+    });
+  }
+
   // Juniper：通用的 fns.parseLACP() dispatcher 沒有 juniper 分支（只有 comware/cisco系/
   // aruba/fortiswitch），改用 parseJuniper() 聚合結果自帶的 parsed.lacp（parseJuniperLACP
   // 產生，members 是純字串陣列，跟其他廠牌 members 為 {name} 物件陣列的形狀不同，故下面

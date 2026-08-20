@@ -980,13 +980,17 @@ const PaloAltoParser = (() => {
     while ((em = entryStartRe.exec(vsysInner)) !== null) {
       const vsysName = em[1];
       let eDepth = 1, ePos = em.index + em[0].length;
-      // Find matching </entry> by counting entry tags
-      const nestedRe = /<\/?entry\b/gi;
+      // Find matching </entry> by counting entry tags. 必須把自我閉合的 <entry .../>
+      // （合法的 PAN-OS XML 精簡寫法，例如 IKE gateway 參照／ip-pool 參照）排除在深度計數
+      // 之外——先前只認 <entry 或 </entry 開頭（不看是否以 /> 結尾），自我閉合標籤會被誤判
+      // 成「只開不關」，讓深度永遠對不平衡，導致真正的頂層 vsys entry 被判定為 malformed
+      // 而跳過，連帶讓內層巢狀的 entry（如 GlobalProtect gateway）被誤判成頂層 vsys
+      const nestedRe = /<entry\b[^>]*?(\/)?>|<\/entry>/gi;
       nestedRe.lastIndex = ePos;
       let nm;
       while ((nm = nestedRe.exec(vsysInner)) !== null && eDepth > 0) {
-        if (!nm[0].startsWith('</')) eDepth++;
-        else { eDepth--; if (eDepth === 0) { ePos = nm.index + nm[0].length + 1; break; } }
+        if (nm[0].startsWith('</')) { eDepth--; if (eDepth === 0) { ePos = nm.index + nm[0].length + 1; break; } }
+        else if (!nm[1]) eDepth++; // 非自我閉合的開始標籤才計入深度
       }
       if (eDepth > 0) continue; // malformed XML
       const inner = vsysInner.slice(em.index + em[0].length, nm.index);

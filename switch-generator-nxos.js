@@ -350,24 +350,3 @@ function renderNXOSACLEntry(a){
 }
 function renderNXOSACL(list){return (list||[]).map(renderNXOSACLEntry).join('\n!\n');}
 
-// ══════════════════════════════════════════════════════════════════
-// Juniper（Junos）render 函式：階層式大括號設定，非逐行指令。
-// switch_analyzer 用 junosBlock/junosSubBlocks 以大括號深度計數取區塊內容
-// （而非其他 4 廠牌那種「下一個關鍵字或字串結尾」的 lookahead），組裝順序因此
-// 不用像 Cisco ACL/QoS 或 Comware BGP 那樣「刻意排最後」；但代價是「同名頂層
-// 區塊只能出現一次」——junosBlock 用非 global 比對，若同一份設定文字出現兩個
-// 獨立的 "interfaces { }"，第二個會被完全忽略。故 assembleJuniperConfig 務必把
-// 一般 interface 與 LACP 產生的 aeN 介面合併進同一個 interfaces{}，OSPF/BGP
-// 合併進同一個 protocols{}，router-id/AS/靜態路由合併進同一個 routing-options{}。
-//
-// 核心功能範圍（比照當初 Comware/Cisco MVP）：Hostname/VLAN/Interface(access/
-// trunk，無 hybrid)/OSPF/BGP/靜態路由/LACP。不含 RIP/VRRP/QoS/Security（switch_
-// analyzer 目前也還沒有這些項目的 Junos parser）。
-//
-// OSPF 語意差異：Junos area 底下宣告的是「介面名稱」而非 network+wildcard CIDR，
-// 沿用既有 Area 表格 UI，但 render 把「Network」欄位的值當成介面名稱使用（
-// wildcard/type 欄位忽略）。
-// BGP 語意差異：Junos 需要 group 名稱，依 peer.as===asn 自動分成 internal-peers/
-// external-peers 兩組（跟 parser 自己推斷 iBGP/eBGP 的邏輯一致），不新增 UI 欄位。
-// ══════════════════════════════════════════════════════════════════
-

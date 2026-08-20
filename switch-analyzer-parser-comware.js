@@ -850,25 +850,6 @@ function parseArubaRIP(cfg){
   return rip;
 }
 
-// ── OSPF + BGP combined routing summary ──────────────────────
-function parseRoutingProtocols(cfg, vendor){
-  const result={ospf:[], bgp:[], rip:[]};
-  if(vendor==='comware'){
-    result.ospf=parseOSPF(cfg);
-    result.bgp=parseBGP(cfg);
-    result.rip=parseRIP(cfg);
-  } else if(vendor==='cisco'){
-    result.ospf=parseCiscoOSPF(cfg);
-    result.bgp=parseCiscoBGP(cfg);
-    result.rip=parseCiscoRIP(cfg);
-  } else if(vendor==='aruba'){
-    result.ospf=parseArubaOSPF(cfg);
-    result.bgp=parseArubaBGP(cfg);
-    result.rip=parseArubaRIP(cfg);
-  }
-  return result;
-}
-
 function parseComware(cfg){
   const sys=parseSysInfo(cfg);
   const irf=parseIRF(cfg);

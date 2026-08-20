@@ -1928,7 +1928,7 @@ function onParsed(){
       $('conv-src').value=rawMap[srcVendor]||JSON.stringify(srcParsed,null,2);
       $('conv-dst').value=CONV_RESULT;
       let convStatusHtml=`<span style="color:var(--green)">${tr('conv.done')}</span> — ${CONV_RESULT.split('\n').length} ${tr('conv.lines_unit')}  |  ${(CONV_RESULT.length/1024).toFixed(1)} KB`;
-      const lossFields=Converter.getConversionLoss(srcParsed);
+      const lossFields=Converter.getConversionLoss(srcParsed,targetVendor);
       if(lossFields.length){
         convStatusHtml+=`<br><span style="color:var(--orange)">${tr('conv.data_loss_warning').replace('{list}',lossFields.join(', '))}</span>`;
       }
