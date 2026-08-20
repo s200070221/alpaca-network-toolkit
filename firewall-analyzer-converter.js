@@ -474,6 +474,69 @@ const Converter = (() => {
       });
       L.push('end');
     }
+
+    // WWAN（2026-08-20 新增，LOSS_FIELDS 同廠牌自轉補齊）：wireless-controller wwan-profile／
+    // system lte-modem／system modem／system 5g-modem 四種區塊，來源為 parseWwan()/
+    // parseLteModem()/parseSystemModem()/parse5GModem() 已解析出的真實資料。密碼類欄位
+    // 一律輸出 PLACEHOLDER（比照既有 IPSec secret 慣例），僅 'enc' 狀態需以 ENC 前綴
+    // 保留可辨識性（parser 判定加密與否靠字面 "ENC" 前綴，非真的解密）
+    if(parsed.wwan){
+      const profiles=parsed.wwan.profiles||[];
+      if(profiles.length){
+        L.push(''); L.push('config wireless-controller wwan-profile');
+        profiles.forEach(p=>{
+          L.push(`    edit "${p.name}"`);
+          if(p.apn&&p.apn!=='-')L.push(`        set apn "${p.apn}"`);
+          if(p.authType&&p.authType!=='-')L.push(`        set auth-type ${p.authType}`);
+          if(p.username&&p.username!=='-')L.push(`        set username "${p.username}"`);
+          if(p.passwd&&p.passwd!=='-')L.push(`        set passwd ${p.passwd==='enc'?'ENC PLACEHOLDER':'PLACEHOLDER'}`);
+          if(p.modemId&&p.modemId!=='-')L.push(`        set modem-id ${p.modemId}`);
+          if(p.simPin==='set')L.push('        set sim-pin PLACEHOLDER');
+          if(p.provider&&p.provider!=='-')L.push(`        set network-provider ${p.provider}`);
+          if(p.dataplan&&p.dataplan!=='-')L.push(`        set dataplan ${p.dataplan}`);
+          L.push('    next');
+        });
+        L.push('end');
+      }
+      if(parsed.wwan.lteModem){
+        const m=parsed.wwan.lteModem;
+        L.push(''); L.push('config system lte-modem');
+        if(m.status)L.push(`    set status ${m.status}`);
+        if(m.autoSwitch)L.push(`    set auto-switch ${m.autoSwitch}`);
+        if(m.modemPort&&m.modemPort!=='-')L.push(`    set modem-port ${m.modemPort}`);
+        if(m.apn&&m.apn!=='-')L.push(`    set apn ${m.apn}`);
+        if(m.authType&&m.authType!=='-')L.push(`    set authtype ${m.authType}`);
+        L.push('end');
+      }
+      if(parsed.wwan.systemModem){
+        const m=parsed.wwan.systemModem;
+        L.push(''); L.push('config system modem');
+        if(m.status)L.push(`    set status ${m.status}`);
+        if(m.altMode)L.push(`    set altmode ${m.altMode}`);
+        if(m.pinInit&&m.pinInit!=='-')L.push(`    set pin-init ${m.pinInit}`);
+        L.push('end');
+      }
+      if(parsed.wwan.modem5G&&(parsed.wwan.modem5G.modem1||parsed.wwan.modem5G.modem2)){
+        L.push(''); L.push('config system 5g-modem');
+        const pushModem=(key,m)=>{
+          if(!m)return;
+          L.push(`    config ${key}`);
+          if(m.apn&&m.apn!=='-')L.push(`        set apn ${m.apn}`);
+          if(m.apnProvider&&m.apnProvider!=='-')L.push(`        set apn-provider ${m.apnProvider}`);
+          if(m.authType&&m.authType!=='-')L.push(`        set auth-type ${m.authType}`);
+          if(m.username&&m.username!=='-')L.push(`        set username ${m.username}`);
+          if(m.passwd&&m.passwd!=='-')L.push(`        set passwd ${m.passwd==='enc'?'ENCPLACEHOLDER':'PLACEHOLDER'}`);
+          if(m.sim1Pin==='set')L.push('        set sim1-pin PLACEHOLDER');
+          if(m.sim2Pin==='set')L.push('        set sim2-pin PLACEHOLDER');
+          if(m.preferSim&&m.preferSim!=='sim1')L.push(`        set preferred-sim ${m.preferSim}`);
+          if(m.interface&&m.interface!=='wwan')L.push(`        set interface ${m.interface}`);
+          L.push('    end');
+        };
+        pushModem('modem1',parsed.wwan.modem5G.modem1);
+        pushModem('modem2',parsed.wwan.modem5G.modem2);
+        L.push('end');
+      }
+    }
     return L.join('\n');
   }
 
@@ -970,7 +1033,7 @@ const Converter = (() => {
       const zIfs=parsed.interfaces.filter(i=>mapZone(i.role,'juniper')===z&&i.ip&&i.ip!=='-'&&i.ip!=='DHCP').map(i=>i.name.includes('.')?i.name:i.name+'.0');
       L.push(`${I(2)}security-zone ${z} {`);
       L.push(`${I(3)}host-inbound-traffic { system-services { ping; ssh; } }`);
-      if(zIfs.length){L.push(`${I(3)}interfaces {`); zIfs.forEach(ii=>L.push(`${I(4)}${ii};`)); L.push(`${I(3)}`);}
+      if(zIfs.length){L.push(`${I(3)}interfaces {`); zIfs.forEach(ii=>L.push(`${I(4)}${ii};`)); L.push(`${I(3)}}`);}
       // address book
       const zA=parsed.addresses.filter(a=>a.category==='address'&&(mapZone(a._vdom||a.vdom||'','juniper')===z||(!a._vdom||a._vdom==='global')));
       const zG=z==='trust'?parsed.addresses.filter(a=>a.category==='address-group'):[];
@@ -1848,6 +1911,124 @@ const Converter = (() => {
       L.push('');
     }
 
+    // WLAN（2026-08-20 新增，LOSS_FIELDS 同廠牌自轉補齊）：/interface wireless
+    // security-profiles + /interface wireless，來源為 parseMikrotikWireless() 已解析出的
+    // 真實資料。CAPsMAN（parsed.wlan.capsmanEnabled/capsmanConfigs）不在本輪範圍
+    if(parsed.wlan){
+      const secProfileList=parsed.wlan.secProfileList||[];
+      if(secProfileList.length){
+        L.push('/interface wireless security-profiles');
+        secProfileList.forEach(s=>{
+          let line=`add name=${s.name}`;
+          if(s.authTypes&&s.authTypes!=='none')line+=` authentication-types=${s.authTypes}`;
+          if(s.mode&&s.mode!=='none')line+=` mode=${s.mode}`;
+          if(s.hasKey)line+=' wpa2-pre-shared-key=PLACEHOLDER';
+          L.push(line);
+        });
+        L.push('');
+      }
+      const wlanIfs=parsed.wlan.interfaces||[];
+      if(wlanIfs.length){
+        L.push('/interface wireless');
+        wlanIfs.forEach(w=>{
+          let line=`add name=${w.name}`;
+          if(w.ssid&&w.ssid!=='-')line+=` ssid=${w.ssid}`;
+          if(w.band&&w.band!=='-')line+=` band=${w.band}`;
+          if(w.mode&&w.mode!=='-')line+=` mode=${w.mode}`;
+          if(w.frequency&&w.frequency!=='auto')line+=` frequency=${w.frequency}`;
+          if(w.channelWidth&&w.channelWidth!=='-')line+=` channel-width=${w.channelWidth}`;
+          if(w.country&&w.country!=='-')line+=` country=${w.country}`;
+          if(w.secProfile&&w.secProfile!=='default')line+=` security-profile=${w.secProfile}`;
+          if(w.disabled==='yes')line+=' disabled=yes';
+          if(w.comment&&w.comment!=='-')line+=` comment="${w.comment}"`;
+          L.push(line);
+        });
+        L.push('');
+      }
+    }
+
+    // WWAN（2026-08-20 新增，LOSS_FIELDS 同廠牌自轉補齊）：/interface lte apn（APN 設定檔）
+    // + /interface lte（介面本體，其 apn= 參數引用的是 APN 設定檔名稱，非介面自己的 APN
+    // 字面值），來源為 parseMikrotikLte() 已解析出的真實資料
+    if(parsed.wwan){
+      const apnProfiles=parsed.wwan.apnProfiles||[];
+      if(apnProfiles.length){
+        L.push('/interface lte apn');
+        apnProfiles.forEach(a=>{
+          let line=`add name=${a.name} apn=${a.apn}`;
+          if(a.authType&&a.authType!=='none')line+=` authentication=${a.authType}`;
+          if(a.username&&a.username!=='-')line+=` user=${a.username}`;
+          if(a.passwd==='set')line+=' password=PLACEHOLDER';
+          if(a.ipType&&a.ipType!=='ipv4')line+=` ip-type=${a.ipType}`;
+          if(a.distance&&a.distance!=='2')line+=` default-route-distance=${a.distance}`;
+          L.push(line);
+        });
+        L.push('');
+      }
+      const lteInterfaces=parsed.wwan.lteInterfaces||[];
+      if(lteInterfaces.length){
+        L.push('/interface lte');
+        lteInterfaces.forEach(l=>{
+          let line=`add name=${l.name}`;
+          if(l.apnProfile&&l.apnProfile!=='-')line+=` apn=${l.apnProfile}`;
+          if(l.allowRoaming==='yes')line+=' allow-roaming=yes';
+          if(l.disabled==='yes')line+=' disabled=yes';
+          if(l.comment&&l.comment!=='-')line+=` comment="${l.comment}"`;
+          L.push(line);
+        });
+        L.push('');
+      }
+    }
+
+    // Log Servers（2026-08-20 新增，LOSS_FIELDS 同廠牌自轉補齊）：/system logging action，
+    // 來源為 parseLogServers() 已解析出的真實資料，name 為 parser 反查用的識別鍵須無條件輸出
+    if(parsed.logservers&&parsed.logservers.syslog&&parsed.logservers.syslog.length){
+      L.push('/system logging action');
+      parsed.logservers.syslog.forEach(s=>{
+        let line=`add name=${s.name} target=remote remote=${s.server}`;
+        if(s.port&&s.port!=='514')line+=` remote-port=${s.port}`;
+        if(s.facility&&s.facility!=='local7')line+=` syslog-facility=${s.facility}`;
+        if(s.format==='BSD')line+=' bsd-syslog=yes';
+        if(s.level&&s.level!=='info')line+=` syslog-severity=${s.level}`;
+        L.push(line);
+      });
+      L.push('');
+    }
+
+    // SNMP（2026-08-20 新增，LOSS_FIELDS 同廠牌自轉補齊）：/snmp（enable/agent）+
+    // /snmp community，來源為 parseSnmp() 已解析出的真實資料。v3 使用者（parsed.snmp.v3users）
+    // 不在本輪範圍——parser 端判定 v3 的依據是 security=private 或 authentication-password
+    // 存在，與一般 community 共用同一個 /snmp community 區塊語法，本輪僅輸出一般 community
+    if(parsed.snmp&&parsed.snmp.enabled){
+      const agent=parsed.snmp.agent||{};
+      // splitSections() 要求區段標頭（/snmp）獨立一行，隨後的 set/add 才會被收進該區段，
+      // 不能寫成 "/snmp set enabled=yes ..." 單行（那樣整行會被誤判成一個不存在的區段名）
+      let line='set enabled=yes';
+      if(agent.contact&&agent.contact!=='-')line+=` contact="${agent.contact}"`;
+      if(agent.location&&agent.location!=='-')line+=` location="${agent.location}"`;
+      if(agent.name&&agent.name!=='-')line+=` name=${agent.name}`;
+      if(agent.version){
+        if(agent.version.includes('v1'))line+=' trap-version=1';
+        else if(agent.version.includes('v3'))line+=' trap-version=3';
+      }
+      const trapIps=(parsed.snmp.trapServers||[]).map(t=>t.ip).filter(Boolean).join(',');
+      if(trapIps)line+=` trap-target=${trapIps}`;
+      L.push('/snmp');
+      L.push(line);
+      L.push('');
+      const communities=(parsed.snmp.communities||[]);
+      if(communities.length){
+        L.push('/snmp community');
+        communities.forEach(c=>{
+          let cline=`add name=${c.name}`;
+          if(c.permission==='rw')cline+=' security=write';
+          if(c.allowedHosts&&c.allowedHosts.length)cline+=` addresses=${c.allowedHosts.join(',')}`;
+          L.push(cline);
+        });
+        L.push('');
+      }
+    }
+
     if(parsed.policies.length) {
       L.push('/ip firewall filter');
       parsed.policies.forEach(p=>{
@@ -1901,8 +2082,16 @@ const Converter = (() => {
     if(typeof v==='object')return Object.values(v).some(x=>Array.isArray(x)?x.length>0:(x&&typeof x==='object'?hasAnyData(x):!!x));
     return !!v;
   }
-  function getConversionLoss(parsed){
-    return LOSS_FIELDS.filter(f=>hasAnyData(parsed[f.key])).map(f=>f.label);
+  // 2026-08-20 新增 targetVendor 參數：MikroTik→MikroTik（wlan/wwan/logservers/snmp）與
+  // FortiGate→FortiGate（wwan）四組同廠牌自轉組合已補上真正輸出（見 toMikrotik()/
+  // toFortigate() 對應區塊），這些組合不再算「轉換會遺失」，其餘組合維持原判定不變
+  function getConversionLoss(parsed,targetVendor){
+    return LOSS_FIELDS.filter(f=>{
+      if(!hasAnyData(parsed[f.key]))return false;
+      if(parsed.vendor==='MikroTik'&&targetVendor==='mikrotik'&&['wlan','wwan','logservers','snmp'].includes(f.key))return false;
+      if(parsed.vendor==='FortiGate'&&targetVendor==='fortigate'&&f.key==='wwan')return false;
+      return true;
+    }).map(f=>f.label);
   }
 
   // 2026-07-24 新增：轉換警語——回答「不同 port 數量/型號能否轉換」的疑慮：能跑，但介面
