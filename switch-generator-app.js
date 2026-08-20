@@ -1179,7 +1179,7 @@ function updateModeOptions(){
   // VPC 卡片僅 Cisco NX-OS 適用，比照 MLAG 慣例
   document.getElementById('vpc-card').style.display=vendor==='cisco_nxos'?'':'none';
   // VXLAN 卡片僅 Comware/Aruba CX 適用（switch_analyzer parseVXLAN() 目前只支援這兩家）
-  document.getElementById('vxlan-card').style.display=(vendor==='comware'||vendor==='aruba')?'':'none';
+  document.getElementById('vxlan-card').style.display=(vendor==='comware'||vendor==='aruba'||vendor==='cisco_nxos')?'':'none';
   // 廠牌裝置真的不支援的功能卡片直接隱藏（VENDOR_INCAPABLE，見該常數定義處的語意說明），
   // 避免使用者填根本用不到的欄位；只是本工具尚未查證語法的項目（VENDOR_UNSUPPORTED）
   // 維持卡片可見＋validateForm() 非阻擋性警告，不在此隱藏

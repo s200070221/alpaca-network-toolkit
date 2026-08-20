@@ -1,9 +1,61 @@
-function renderNXOSVLAN(v){
+function renderNXOSVLAN(v,vnisByVlan){
   const lines=[`vlan ${v.id}`];
   if(v.name)lines.push(` name ${v.name}`);
+  // VXLAN vn-segment（2026-08-20 新增）：合併進同一個既有 VLAN 區塊輸出，而非另開新區塊——
+  // parseNXOS() 的 parseVlans() 用 cfg.split(/^(?=vlan\s+\d)/m) 逐區塊掃描，若同一 VLAN ID
+  // 出現兩個獨立區塊會被拆成兩筆重複記錄
+  const vni=vnisByVlan&&vnisByVlan.get(String(v.id));
+  if(vni)lines.push(` vn-segment ${vni}`);
   return lines.join('\n');
 }
-function renderNXOSVLANs(vlans){return vlans.map(renderNXOSVLAN).join('\n!\n');}
+function renderNXOSVLANs(vlans,vxlan){
+  const vnisByVlan=new Map();
+  ((vxlan&&vxlan.vnis)||[]).forEach(v=>{ if(v.vlan&&v.vni)vnisByVlan.set(String(v.vlan),v.vni); });
+  const covered=new Set((vlans||[]).map(v=>String(v.id)));
+  const blocks=(vlans||[]).map(v=>renderNXOSVLAN(v,vnisByVlan));
+  // VNI 表格填了 vlan 但主 VLAN 表格沒有對應列時的 fallback，避免 vn-segment 對應遺失
+  vnisByVlan.forEach((vni,vlanId)=>{ if(!covered.has(vlanId))blocks.push(`vlan ${vlanId}\n vn-segment ${vni}`); });
+  return blocks.join('\n!\n');
+}
+
+// VXLAN/EVPN（2026-08-20 新增，官方語法見 switch-analyzer-core.js 的 parseVXLAN() nxos 分支
+// 查證記錄）：VTEP 欄位對 NX-OS 語意上是 source-interface 引用的介面名稱（如 loopback1），
+// 與 Comware/Aruba 共用同一份表單但語意是「IP 位址」的慣例不同；VNI 列的 vlan 有值視為
+// L2 VNI（member vni [mcast-group 取 peers[0]]），vlan 空但 name 有值視為 L3 VNI
+// （member vni associate-vrf，name 對應 vrf context 名稱，沿用 parseVXLAN() nxos 分支的
+// 既有反查慣例）；evpn 區塊只收 L2 VNI 且 rd/rtImport/rtExport 任一有值的列，多筆 VNI 合併
+// 進同一個 evpn 頂層區塊（與 Comware evpn vpn-instance 逐一獨立區塊不同，比照官方語法）
+function renderNXOSVXLAN(vxlan){
+  if(!vxlan)return '';
+  const vnis=(vxlan.vnis||[]).filter(v=>v.vni);
+  if(!vnis.length&&!vxlan.vtep)return '';
+  const blocks=[];
+  const nveLines=['interface nve1','  no shutdown'];
+  if(vxlan.vtep)nveLines.push(`  source-interface ${vxlan.vtep}`);
+  nveLines.push('  host-reachability protocol bgp');
+  vnis.forEach(v=>{
+    if(v.vlan){
+      const mcast=(v.peers&&v.peers[0])?` mcast-group ${v.peers[0]}`:'';
+      nveLines.push(`  member vni ${v.vni}${mcast}`);
+    } else if(v.name){
+      nveLines.push(`  member vni ${v.vni}`);
+      nveLines.push(`    associate-vrf`);
+    }
+  });
+  blocks.push(nveLines.join('\n'));
+  const l2=vnis.filter(v=>v.vlan&&(v.rd||v.rtImport||v.rtExport));
+  if(l2.length){
+    const evpnLines=['evpn'];
+    l2.forEach(v=>{
+      evpnLines.push(`  vni ${v.vni} l2`);
+      if(v.rd)evpnLines.push(`    rd ${v.rd}`);
+      if(v.rtImport)evpnLines.push(`    route-target import ${v.rtImport}`);
+      if(v.rtExport)evpnLines.push(`    route-target export ${v.rtExport}`);
+    });
+    blocks.push(evpnLines.join('\n'));
+  }
+  return blocks.join('\n!\n');
+}
 
 // switchport trunk/access（VLAN 屬性）render，NX-OS 專用；抽成獨立函式供
 // renderNXOSInterface() 與 renderNXOSLACPExtra() 共用。屬性不一致時 NX-OS（Cisco EtherChannel
@@ -214,6 +266,10 @@ function assembleNXOSConfig(model){
   if(model.ospf&&model.ospf.length)blocks.push('feature ospf');
   if(model.bgp&&model.bgp.length)blocks.push('feature bgp');
   if(hasVpc)blocks.push('feature vpc');
+  // VXLAN/EVPN：官方 NX-OS VXLAN Configuration Guide 確認 interface nve1／vn-segment 指令
+  // 需要先啟用這兩個 feature 才會被真機接受，否則會被拒絕
+  const hasNxosVxlan=model.vxlan&&((model.vxlan.vnis&&model.vxlan.vnis.length)||model.vxlan.vtep);
+  if(hasNxosVxlan){blocks.push('feature nv overlay');blocks.push('feature vn-segment-vlan-based');}
   // VRRP 在 NX-OS 是掛在 "interface Vlan N" SVI 底下的 HSRP 區塊，真實設備上需要先啟用
   // feature interface-vlan 才能建立 SVI，否則 interface Vlan 指令本身就會被拒絕
   if(model.vrrp&&model.vrrp.length)blocks.push('feature interface-vlan');
@@ -231,11 +287,19 @@ function assembleNXOSConfig(model){
   blocks.push(`hostname ${model.sysname||'Switch'}`);
   const nxosBreakoutBlock=renderNXOSBreakoutBlock(model.breakouts);
   if(nxosBreakoutBlock)blocks.push(nxosBreakoutBlock);
-  if(model.vlans&&model.vlans.length)blocks.push(renderNXOSVLANs(model.vlans));
+  if((model.vlans&&model.vlans.length)||(model.vxlan&&model.vxlan.vnis&&model.vxlan.vnis.some(v=>v.vlan)))blocks.push(renderNXOSVLANs(model.vlans,model.vxlan));
   // VRF：官方文件確認 `vrf member NAME` 要求該 VRF 已用 `vrf context NAME` 建立，否則介面
-  // 會停留在 down 狀態直到 VRF 建立為止，排在 Interfaces 之前輸出
-  const nxosVrfNames=collectVrfNames(model.interfaces);
-  if(nxosVrfNames.length)blocks.push(nxosVrfNames.map(n=>`vrf context ${n}`).join('\n!\n'));
+  // 會停留在 down 狀態直到 VRF 建立為止，排在 Interfaces 之前輸出。VXLAN L3 VNI（VNI 列
+  // 的 vlan 空、name 有值）需要 `vni` 子指令綁定同一個 vrf context 區塊——與介面 VRF
+  // 來源（collectVrfNames）合併輸出，避免同名 vrf context 出現兩個獨立區塊（parseVRFs()
+  // 用 cfg.split(/^(?=vrf context\s)/m) 逐區塊掃描，重複區塊會被拆成兩筆記錄）
+  const l3VniByVrf=new Map();
+  ((model.vxlan&&model.vxlan.vnis)||[]).forEach(v=>{ if(!v.vlan&&v.name&&v.vni)l3VniByVrf.set(v.name,v.vni); });
+  const nxosVrfNames=[...new Set([...collectVrfNames(model.interfaces),...l3VniByVrf.keys()])].sort();
+  if(nxosVrfNames.length)blocks.push(nxosVrfNames.map(n=>{
+    const vni=l3VniByVrf.get(n);
+    return vni?`vrf context ${n}\n vni ${vni}`:`vrf context ${n}`;
+  }).join('\n!\n'));
   // vpc domain 必須排在「把 port-channel 指派為 peer-link」之前輸出：真實 NX-OS 要求
   // vpc domain 物件已存在，才能在 interface/port-channel 區塊內宣告 vpc peer-link，
   // 否則會被拒絕（"Please configure the vpc domain first" 一類訊息，已對外查證官方
@@ -245,6 +309,8 @@ function assembleNXOSConfig(model){
   if(model.interfaces&&model.interfaces.length)blocks.push(renderNXOSInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.vpc));
   const nxosLacpExtra=renderNXOSLACPExtra(model.lacp,model.interfaces);
   if(nxosLacpExtra)blocks.push(nxosLacpExtra);
+  const nxosVxlanBlock=renderNXOSVXLAN(model.vxlan);
+  if(nxosVxlanBlock)blocks.push(nxosVxlanBlock);
   if(model.vrrp&&model.vrrp.length)blocks.push(renderNXOSVRRP(model.vrrp));
   // STP 全域：直接重用 Cisco/Dell OS10 共用的 renderSpanningTreeGlobal（parseSTP 對 nxos
   // 走同一套 Cisco-style generic 分支，語法沿用即可）
