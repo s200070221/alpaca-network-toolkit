@@ -416,9 +416,16 @@ const Converter = (() => {
       L.push('end'); L.push('');
     }
 
-    // IPv6 NAT66（ippool6/vip6，2026-08-20 新增；官方 CLI Reference 確認欄位名稱與 IPv4
-    // 版本幾乎相同。vipgrp6 不在本輪範圍——其 IPv4 對應 vipgrp 本身就從未被此函式輸出過，
-    // 是既有、更早的獨立缺口非 IPv6 特有，本輪只補「IPv4 已支援、IPv6 缺席」的兩組）
+    // VIP Group（vipgrp／vipgrp6，2026-08-21 新增；官方 Fortinet schema 確認欄位名稱
+    // interface/member/comments，vipgrp6 無 interface 欄位）
+    const vipgrps=parsed.nat.filter(n=>n.type==='vipgrp');
+    if(vipgrps.length) {
+      L.push('config firewall vipgrp');
+      vipgrps.forEach(n=>{ L.push(`    edit "${n.name}"`); if(n.extIntf&&n.extIntf!=='-') L.push(`        set interface "${n.extIntf}"`); const ms=sl(n.members); if(ms.length) L.push(`        set member ${ms.map(m=>`"${m}"`).join(' ')}`); if(n.comment&&n.comment!=='-') L.push(`        set comments "${n.comment}"`); L.push('    next'); });
+      L.push('end'); L.push('');
+    }
+
+    // IPv6 NAT66（ippool6/vip6/vipgrp6，官方 CLI Reference 確認欄位名稱與 IPv4 版本幾乎相同）
     const ippools6=parsed.nat.filter(n=>n.type==='ippool6');
     if(ippools6.length) {
       L.push('config firewall ippool6');
@@ -429,6 +436,12 @@ const Converter = (() => {
     if(vips6.length) {
       L.push('config firewall vip6');
       vips6.forEach(n=>{ L.push(`    edit "${n.name}"`); if(n.extIp&&n.extIp!=='-') L.push(`        set extip ${n.extIp}`); if(n.extIntf&&n.extIntf!=='-') L.push(`        set extintf "${n.extIntf}"`); if(n.mapIp&&n.mapIp!=='-') L.push(`        set mappedip ${n.mapIp}`); if(n.portFwd==='enable') { L.push('        set portforward enable'); if(n.extPort) L.push(`        set extport ${n.extPort}`); if(n.mapPort) L.push(`        set mappedport ${n.mapPort}`); if(n.proto) L.push(`        set protocol ${n.proto}`); } L.push('    next'); });
+      L.push('end'); L.push('');
+    }
+    const vipgrps6=parsed.nat.filter(n=>n.type==='vipgrp6');
+    if(vipgrps6.length) {
+      L.push('config firewall vipgrp6');
+      vipgrps6.forEach(n=>{ L.push(`    edit "${n.name}"`); const ms=sl(n.members); if(ms.length) L.push(`        set member ${ms.map(m=>`"${m}"`).join(' ')}`); if(n.comment&&n.comment!=='-') L.push(`        set comments "${n.comment}"`); L.push('    next'); });
       L.push('end'); L.push('');
     }
 
