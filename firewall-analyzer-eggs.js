@@ -64,6 +64,46 @@ setLang('zhTW');
   });
 })();
 
+// 彩蛋：Konami Code → Matrix Firewall Rain（2026-08-21 補實作，先前 console 提示文字空有其名）
+(function setupKonami(){
+  const SEQ=[38,38,40,40,37,39,37,39,66,65]; // ↑↑↓↓←→←→BA
+  let idx=0;
+  document.addEventListener('keydown',e=>{
+    idx=(e.keyCode===SEQ[idx])?idx+1:0;
+    if(idx===SEQ.length){idx=0;startMatrixRain();}
+  });
+})();
+
+function startMatrixRain(){
+  if(document.querySelector('.matrix-overlay'))return;
+  const overlay=document.createElement('div');
+  overlay.className='matrix-overlay';
+  document.body.appendChild(overlay);
+  const words=['ALLOW','DENY','NAT','VPN','ACL','ZONE','POLICY','IPSEC','DMZ','THREAT','REDACTED_SECRET','10.x.x.x','██████████','░░░░░░░░░░'];
+  const cols=Math.floor(window.innerWidth/96)+2;
+  for(let i=0;i<cols;i++){
+    const col=document.createElement('div');
+    col.className='matrix-col';
+    col.style.left=(i*96)+'px';
+    const dur=5+Math.random()*6;
+    col.style.animation=`matrixDrop ${dur}s linear forwards`;
+    col.style.animationDelay=(Math.random()*2.5)+'s';
+    const lines=12+Math.floor(Math.random()*10);
+    for(let j=0;j<lines;j++){
+      const span=document.createElement('span');
+      span.textContent=words[Math.floor(Math.random()*words.length)];
+      const br=0.25+Math.random()*0.75;
+      span.style.color=j===lines-1?'#ffffff':`rgba(0,200,240,${br})`;
+      span.style.textShadow=j===lines-1?'0 0 8px #00c8f0':'none';
+      col.appendChild(span);
+    }
+    overlay.appendChild(col);
+  }
+  const close=()=>overlay.remove();
+  overlay.addEventListener('click',close);
+  setTimeout(close,9000);
+}
+
 // 彩蛋：lang-egg 代表物三連擊
 (function(){
   var _EGG={
