@@ -207,6 +207,15 @@ input.valid,select.valid{border-color:var(--green)!important}
     <span class="lang-egg" id="egg-uwu">🐾</span>
     <span class="lang-egg" id="egg-wuxia">⚔️</span>
     <button id="theme-btn" onclick="toggleTheme()">☀️</button>
+    <button id="tools-nav-btn" onclick="toggleToolsNav(event)" title="切換工具" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;font-size:14px;padding:3px 8px;margin-left:6px;line-height:1">🧭</button>
+    <div id="tools-nav-panel" style="display:none;position:fixed;top:44px;right:12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px;box-shadow:0 6px 20px rgba(0,0,0,.3);z-index:2000;min-width:170px">
+      <span style="display:block;padding:6px 10px;border-radius:6px;color:var(--accent);font-size:12px;margin-bottom:2px;font-weight:600">✓ <span data-i18n="nav.tool_gen">交換器產生器</span></span>
+      <a href="network-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_network">總覽 / Hub</a>
+      <a href="switch-config-parser.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_switch">交換器解析</a>
+      <a href="firewall-analyzer-fixed.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_fw">防火牆分析</a>
+      <a href="config-anonymizer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_ca">設定去識別化</a>
+      <a href="log-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_log">日誌分析</a>
+    </div>
   </div>
 </div>
 
