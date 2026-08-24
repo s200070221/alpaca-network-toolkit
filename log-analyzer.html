@@ -130,6 +130,15 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
   <span class="lang-egg" id="egg-alpaca">🦙</span>
   <span class="lang-egg" id="egg-yanse">😮‍💨</span>
   <span class="lang-egg" id="egg-wuxia">⚔️</span>
+  <button id="tools-nav-btn" onclick="toggleToolsNav(event)" title="切換工具" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;font-size:14px;padding:3px 8px;margin-left:6px;line-height:1">🧭</button>
+  <div id="tools-nav-panel" style="display:none;position:fixed;top:44px;right:12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px;box-shadow:0 6px 20px rgba(0,0,0,.3);z-index:2000;min-width:170px">
+    <span style="display:block;padding:6px 10px;border-radius:6px;color:var(--accent);font-size:12px;margin-bottom:2px;font-weight:600">✓ <span data-i18n="nav.tool_log">日誌分析</span></span>
+    <a href="network-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_network">總覽 / Hub</a>
+    <a href="switch-config-parser.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_switch">交換器解析</a>
+    <a href="switch-config-generator.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_gen">交換器產生器</a>
+    <a href="firewall-analyzer-fixed.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_fw">防火牆分析</a>
+    <a href="config-anonymizer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_ca">設定去識別化</a>
+  </div>
   <div class="sub" id="app-sub"></div>
 </header>
 <div id="disclaimer"></div>
@@ -638,6 +647,91 @@ function eventFromJSONObject(obj, lineNo) {
     msg: pickField(obj, MSG_KEYS) || '', fields: obj
   };
 }
+// Windows Event Log（wevtutil qe .../f:xml、PowerShell Get-WinEvent|ForEach{$_.ToXml()}、
+// Event Viewer「另存所有事件為...」的 XML 匯出）：2026-08-24 新增。真實匯出常見多筆
+// <Event>...</Event> 片段直接串接、沒有共同的根元素包裹（整檔非合法 XML，但每個片段本身
+// 各自合法），故無法整檔 DOMParser 一次解析；比照 parseJSONLogEvents() 既有先例——判定與
+// 解析皆在文字層級（非逐行），由 parseLogText() 呼叫，非 WEL 內容時回傳 null 交給既有邏輯處理。
+// 明確排除範圍：原生二進位 .evtx（瀏覽器端 JS 無法解析，且會違反本工具純前端無外部依賴慣例，
+// 不引入外部 EVTX 解析函式庫）；Sysmon 等廠牌特有 EventData 欄位語意對照（本輪僅做通用
+// System/EventData 欄位擷取，不臆測特定 Provider 的欄位語意）
+function normWinEventLevel(level) {
+  // 官方 Windows Event Level 數值：0=LogAlways/Info, 1=Critical, 2=Error, 3=Warning,
+  // 4=Informational, 5=Verbose（來源：Microsoft Event Schema 文件），對應到既有
+  // severityNorm 五級（Critical/High/Medium/Low/Info），Error 對應 High、Warning 對應 Medium
+  const n = parseInt(level, 10);
+  if (n === 1) return 'Critical';
+  if (n === 2) return 'High';
+  if (n === 3) return 'Medium';
+  if (n === 5) return 'Low';
+  return 'Info'; // 0/4 或無法辨識的數值，比照官方定義的預設層級
+}
+// 常見 Windows Security 事件（4624/4625/4648 等登入相關）帶遠端來源 IP 的 Data 欄位名稱；
+// 對映進通用的 srcip key，讓既有 getEventNetTuple()/extractCandidateIPs() 的
+// pickField(fields, SRC_IP_KEYS) 機制免修改即可命中（SRC_IP_KEYS 定義於上方 [2] 模組）。
+// WEL 事件無明確的「目的 IP」連線元組概念，不臆測 dst 欄位對應。
+const WINEVENT_SRCIP_KEYS = ['IpAddress', 'ClientAddress', 'SourceAddress'];
+// 常見 Windows Security 登入/帳號變更事件的使用者帳號 Data 欄位名稱（4624/4625/4648/4720 等）
+const WINEVENT_USER_KEYS = ['SubjectUserName', 'TargetUserName', 'SubjectAccountName', 'TargetAccountName'];
+function parseWinEventFragment(fragment, lineNo) {
+  let doc;
+  try { doc = new DOMParser().parseFromString(fragment, 'text/xml'); }
+  catch (e) { return null; }
+  if (!doc || doc.getElementsByTagName('parsererror').length) return null;
+  const evtEl = doc.documentElement;
+  if (!evtEl || evtEl.tagName !== 'Event') return null;
+  const sys = evtEl.getElementsByTagName('System')[0];
+  if (!sys) return null;
+  const g = tag => { const el = sys.getElementsByTagName(tag)[0]; return el ? el.textContent.trim() : ''; };
+  const providerEl = sys.getElementsByTagName('Provider')[0];
+  const provider = providerEl ? (providerEl.getAttribute('Name') || '') : '';
+  const eventId = g('EventID');
+  const level = g('Level');
+  const timeCreatedEl = sys.getElementsByTagName('TimeCreated')[0];
+  const timeRaw = timeCreatedEl ? (timeCreatedEl.getAttribute('SystemTime') || '') : '';
+  const ts = timeRaw ? new Date(timeRaw) : null;
+  const timestamp = ts && !isNaN(ts.getTime()) ? ts : null;
+  const recordId = g('EventRecordID');
+  const channel = g('Channel');
+  const computer = g('Computer');
+  const fields = { EventID: eventId, Level: level, Channel: channel, Computer: computer, EventRecordID: recordId, Provider: provider };
+  const dataEls = evtEl.getElementsByTagName('Data');
+  for (let i = 0; i < dataEls.length; i++) {
+    const nameAttr = dataEls[i].getAttribute('Name');
+    if (!nameAttr) continue;
+    fields[nameAttr] = dataEls[i].textContent || '';
+  }
+  const srcVal = WINEVENT_SRCIP_KEYS.map(k => fields[k]).find(v => v);
+  if (srcVal) fields.srcip = srcVal;
+  // WEL 原始 XML（wevtutil 預設 /f:xml）通常不含 rendered message（需查表對照 Provider 的
+  // message table 才能還原，本工具不內建該資料庫，不臆測）；但 wevtutil /f:renderedxml 或
+  // PowerShell 匯出時常見會多帶 <RenderingInfo><Message> 區塊（系統本身已查表解析好的文字，
+  // 非本工具臆測），存在時優先採用，取不到才退回組合 EventID+Provider
+  const renderingInfo = evtEl.getElementsByTagName('RenderingInfo')[0];
+  const messageEl = renderingInfo ? renderingInfo.getElementsByTagName('Message')[0] : null;
+  const renderedMsg = messageEl ? messageEl.textContent.trim() : '';
+  const msg = renderedMsg || (provider ? `EventID ${eventId} (${provider})` : `EventID ${eventId}`);
+  return {
+    format: 'winevent', raw: fragment, lineNo,
+    timestamp, timestampRaw: timeRaw,
+    host: computer, appName: provider, procid: '', msgid: eventId,
+    severityRaw: level, severityNorm: normWinEventLevel(level),
+    facility: null, facilityAuth: false,
+    url: '', httpMethod: '',
+    msg, fields
+  };
+}
+function parseWinEventLogEvents(text) {
+  if (!/<Event[\s>][\s\S]*?xmlns=["']http:\/\/schemas\.microsoft\.com\/win\/2004\/08\/events\/event["']/.test(text)) return null;
+  const matches = text.match(/<Event[\s>][\s\S]*?<\/Event>/g);
+  if (!matches || !matches.length) return null;
+  const events = [];
+  matches.forEach((frag, idx) => {
+    const evt = parseWinEventFragment(frag, idx + 1);
+    if (evt) events.push(evt);
+  });
+  return events.length ? events : null;
+}
 // 主要 log 匯入若整段文字可解析成 JSON/NDJSON，優先走這條路徑（格式判定在文字層級，非逐行）；
 // 解析不到任何看起來像 log 事件的物件則回傳 null，交給既有逐行 CEF/Syslog dispatcher 處理，
 // 兩者互不干擾——CEF/Syslog 每行都不是合法 JSON，JSON.parse 必定失敗，不會誤判
@@ -654,6 +748,8 @@ function parseJSONLogEvents(text) {
 }
 function parseLogText(text) {
   const norm = text.replace(/\r\n/g, '\n');
+  const winEvents = parseWinEventLogEvents(norm);
+  if (winEvents) return { events: winEvents, unparsed: [] };
   const jsonEvents = parseJSONLogEvents(norm);
   if (jsonEvents) return { events: jsonEvents, unparsed: [] };
   const lines = norm.split('\n');
@@ -763,6 +859,12 @@ function classifyByKeyword(evt) {
     // JSON 事件的 fields 就是原始 parse 出的物件本身（無統一規格），msg 常是空泛文字，
     // 額外用 ACTION_KEYS 別名撈出 action/outcome/result 等結構化欄位輔助分類
     parts.push(pickField(evt.fields, ACTION_KEYS) || '');
+  }
+  if (evt.format === 'winevent' && evt.fields) {
+    // WEL 原始 XML 無 rendered message（見 parseWinEventFragment 註解），語意落在
+    // EventData 欄位；常見安全事件（登入/帳號變更）欄位名稱補進比對文字
+    parts.push(evt.fields.SubjectUserName || '', evt.fields.TargetUserName || '',
+      evt.fields.Status || '', evt.fields.FailureReason || '', evt.fields.SubStatus || '');
   }
   const text = parts.join(' ');
   for (const c of KEYWORD_CATEGORIES) { if (c.re.test(text)) return c.id; }
@@ -913,7 +1015,7 @@ function getEventNetTuple(e) {
       proto: e.fields.proto || '-'
     };
   }
-  if ((e.format === 'json' || e.format === 'leef' || e.format === 'fortigate') && e.fields) {
+  if ((e.format === 'json' || e.format === 'leef' || e.format === 'fortigate' || e.format === 'winevent') && e.fields) {
     const src = pickField(e.fields, SRC_IP_KEYS);
     const dst = pickField(e.fields, DST_IP_KEYS);
     const spt = pickField(e.fields, SRC_PORT_KEYS);
@@ -1134,6 +1236,122 @@ function parseIntelList(text, name) {
   }
   return { name: name || '未命名清單', entries };
 }
+
+// ============================================================
+// IP→ASN 資料庫解析＋查詢（2026-08-23 新增，純函式，尚未接線任何 UI）：補齊已知限制
+// 「Spamhaus ASN-DROP 這類以 ASN 為主鍵的情資不支援比對，需額外 IP→ASN 資料庫」缺的那塊——
+// 讓「給一個 IP，查出它屬於哪個 ASN」變成可能。三個常見免費來源（IPtoASN.com ip2asn-*.tsv／
+// DB-IP IP to ASN Lite CSV／IPinfo.io ASN CSV）皆已對外查證，欄位順序共通為
+// 「起始IP, 結束IP, ASN, [組織名稱...]」，差異只在分隔符（IPtoASN 為 tab，其餘為逗號）與
+// 欄位數；不寫死三套獨立 parser，改用內容特徵定位 ASN 欄位（比照本檔 IP_FIELD_RE 用內容
+// 而非寫死欄位名稱的既有慣例），單一函式涵蓋三個來源。
+// ============================================================
+
+function intToIpv4(n) {
+  return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+}
+// BigInt → 完整展開（無 "::" 縮寫）的 8 組 16-bit hex 字串，供 CIDR 字串輸出；
+// ipv6ToBigInt() 本來就接受無縮寫的 8 組形式，不需要額外做 "::" 壓縮
+function bigIntToIpv6(big) {
+  const groups = [];
+  for (let i = 7; i >= 0; i--) groups.push(((big >> BigInt(i * 16)) & 0xFFFFn).toString(16));
+  return groups.join(':');
+}
+// Range→CIDR 標準演算法：從 start 開始，每次找「目前位址對齊、且不超出範圍終點 end」的
+// 最大區塊，輸出成 CIDR，移動到下一段，直到覆蓋整個範圍。用 Math.pow 而非 << 位元位移計算
+// 區塊大小——JS 的 << 對位移量取模 32（"1<<32" 錯誤地等於 1 而非 4294967296），最大可能
+// 區塊（整個 /0）必須避開位元運算，改用一般數字運算（IPv4 32-bit 範圍內精度足夠安全）
+function ipv4RangeToCIDRs(startIp, endIp) {
+  let start = ipToInt(startIp); const end = ipToInt(endIp);
+  if (start === null || end === null || start > end) return [];
+  const cidrs = [];
+  while (start <= end) {
+    let maxBlockBits = 0;
+    for (let b = 0; b <= 32; b++) { if (start % Math.pow(2, b) === 0) maxBlockBits = b; else break; }
+    while (maxBlockBits > 0 && (start + Math.pow(2, maxBlockBits) - 1) > end) maxBlockBits--;
+    cidrs.push(intToIpv4(start) + '/' + (32 - maxBlockBits));
+    start += Math.pow(2, maxBlockBits);
+  }
+  return cidrs;
+}
+// 同上演算法，IPv6 版本改用 BigInt（128-bit，見 ipv6ToBigInt()/ipv6MaskForBits() 既有慣例）
+function ipv6RangeToCIDRs(startIp, endIp) {
+  let start = ipv6ToBigInt(startIp); const end = ipv6ToBigInt(endIp);
+  if (start === null || end === null || start > end) return [];
+  const cidrs = [];
+  while (start <= end) {
+    let maxBlockBits = 0n;
+    for (let b = 0n; b <= 128n; b++) { if (start % (2n ** b) === 0n) maxBlockBits = b; else break; }
+    while (maxBlockBits > 0n && (start + (2n ** maxBlockBits) - 1n) > end) maxBlockBits--;
+    cidrs.push(bigIntToIpv6(start) + '/' + (128n - maxBlockBits).toString());
+    start += 2n ** maxBlockBits;
+  }
+  return cidrs;
+}
+// 輸出形狀與 parseIntelList() 完全相同 {name, entries:[{value, meta}]}，buildIntelIndex()
+// 不需任何修改即可直接吃。範圍不保證對齊 CIDR 邊界，逐列拆成一或多個 CIDR；同一 ASN 對應
+// 多筆 entries 是既有索引設計本來就支援的形狀（GeoIP CIDR 資料庫就是同一種「一個屬性對應
+// 多個不連續 CIDR」形狀）。ASN 欄位找不到（如表頭列，"asn"/"asn_number" 這類欄名不符合
+// AS+數字的格式特徵）或 ASN=0（IPtoASN 未分配/不可路由慣例）皆靜默跳過，比照 buildIntelIndex()
+// 對無效 CIDR 的既有寬容慣例
+// 簡易 RFC4180 引號感知逐欄切割：本檔既有 parseIntelList() 的 CSV 路徑是單純 split(',')，
+// 但 ASN 組織名稱常見內嵌逗號（如 IPinfo.io 真實資料 "Cloudflare, Inc."），沿用簡單切割
+// 會誤切成多欄；僅供 parseAsnDatabase() 使用，不影響 parseIntelList() 既有行為/既有測試
+function splitCSVLine(line) {
+  const out = []; let cur = ''; let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else { inQuotes = false; } }
+      else cur += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ',') { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+// 2026-08-23 改為 chunked async：完整版 IP→ASN 資料庫常有數十萬列（比多數 GeoIP CIDR
+// 清單大一截），同步一次跑完會卡住主執行緒。比照 buildIntelIndex() 既有慣例，用同一個
+// INTEL_INDEX_CHUNK／yieldToUI()（皆定義在本檔下方，函式宣告會被提升，執行期呼叫不受
+// 文字順序影響）每處理 CHUNK 行讓出一次主執行緒；onProgress(done, total) 選填，供未來
+// 若接線上傳 UI 時顯示進度百分比，省略時行為不變（純函式呼叫端需 await，這是本次
+// 改動唯一的破壞性變更——呼叫端已同步更新）
+async function parseAsnDatabase(text, name, onProgress) {
+  const norm = text.replace(/\r\n/g, '\n');
+  const lines = norm.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+  const entries = [];
+  if (!lines.length) return { name: name || '未命名 ASN 資料庫', entries };
+  const delim = lines[0].includes('\t') ? '\t' : ',';
+  for (let li = 0; li < lines.length; li++) {
+    if (li > 0 && li % INTEL_INDEX_CHUNK === 0) { await yieldToUI(); if (onProgress) onProgress(li, lines.length); }
+    const line = lines[li];
+    const cols = (delim === '\t' ? line.split('\t') : splitCSVLine(line)).map(c => c.trim());
+    if (cols.length < 3) continue;
+    const startIp = cols[0], endIp = cols[1];
+    let asn = null, asnColIdx = -1;
+    for (let i = 2; i < cols.length; i++) {
+      const m = /^(?:AS)?(\d+)$/i.exec(cols[i]);
+      if (m) { asn = m[1]; asnColIdx = i; break; }
+    }
+    if (asn === null || asn === '0') continue;
+    const asName = cols.slice(asnColIdx + 1).join(', ');
+    const isV6 = startIp.includes(':');
+    const cidrs = isV6 ? ipv6RangeToCIDRs(startIp, endIp) : ipv4RangeToCIDRs(startIp, endIp);
+    cidrs.forEach(cidr => entries.push({ value: cidr, meta: { asn: 'AS' + asn, asName } }));
+  }
+  return { name: name || '未命名 ASN 資料庫', entries };
+}
+// 薄封裝：intelLookup() 已經會回傳命中 entry，這裡只是少打一次 .meta，方便查詢端直接拿到
+// {asn, asName}；索引本身用既有 buildIntelIndex(parseAsnDatabase(text, name)) 建立即可，
+// 不需要專用的建索引函式
+function lookupASN(asnIndex, ip) {
+  const hit = intelLookup(asnIndex, ip);
+  return hit ? { asn: hit.meta.asn, asName: hit.meta.asName } : null;
+}
+
 // v2fly/Xray geoip.dat：protobuf 二進位格式，schema 固定為
 // GeoIPList{repeated GeoIP entry=1{string country_code=1; repeated CIDR cidr=2{bytes ip=1; uint32 prefix=2;}}}。
 // 手刻 varint + length-delimited 通用解碼（依 tag/wireType 判讀，非猜測固定 byte offset），
@@ -1405,7 +1623,7 @@ function extractCandidateIPs(evt) {
   if (evt.format === 'cef') return [evt.fields.src, evt.fields.dst, evt.fields.shost, evt.fields.dhost].filter(Boolean);
   // json/leef 皆有固定欄位別名可查（比照 getEventNetTuple()），結構化命中的 IP 與 msg 文字
   // 掃描結果併入（不取代），因為 msg 文字裡仍可能有額外 IP
-  if ((evt.format === 'json' || evt.format === 'leef' || evt.format === 'fortigate') && evt.fields) {
+  if ((evt.format === 'json' || evt.format === 'leef' || evt.format === 'fortigate' || evt.format === 'winevent') && evt.fields) {
     // FortiOS traffic log 的 srcip/dstip 在結構化 fields，msg 常是空字串；event/system log
     // 則相反（msg 有內容但通常不含 IP），兩者都掃，邏輯與既有 json/leef 分支一致
     const structured = [pickField(evt.fields, SRC_IP_KEYS), pickField(evt.fields, DST_IP_KEYS)].filter(Boolean);
@@ -1814,6 +2032,23 @@ function rebuildStructuredData(fields) {
   const params = keys.map(k => `${k}="${String(fields[k]).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`).join(' ');
   return `[sdid ${params}]`;
 }
+// Windows Event Log 去識別化後重建 raw XML：不追求逐字還原原始屬性順序/命名空間宣告細節，
+// 產出一份結構有效、內容已去識別化的 <Event> 片段（供下載/複製結果使用）
+const WINEVENT_SYSTEM_KEYS = ['EventID', 'Level', 'Channel', 'Computer', 'EventRecordID', 'Provider'];
+function rebuildWinEventXML(evt) {
+  const f = evt.fields || {};
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  let xml = '<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event"><System>';
+  xml += `<Provider Name="${esc(f.Provider || '')}"/><EventID>${esc(f.EventID || '')}</EventID><Level>${esc(f.Level || '')}</Level>`;
+  xml += `<TimeCreated SystemTime="${esc(evt.timestampRaw || '')}"/><EventRecordID>${esc(f.EventRecordID || '')}</EventRecordID>`;
+  xml += `<Channel>${esc(f.Channel || '')}</Channel><Computer>${esc(evt.host || '')}</Computer></System><EventData>`;
+  Object.keys(f).forEach(k => {
+    if (WINEVENT_SYSTEM_KEYS.includes(k) || k === 'srcip') return; // srcip 是解析階段新增的別名鏡射欄位，非原始 Data，不重複輸出
+    xml += `<Data Name="${esc(k)}">${esc(f[k])}</Data>`;
+  });
+  xml += '</EventData></Event>';
+  return xml;
+}
 function rebuildSyslogRaw(evt) {
   // 原本就沒有 PRI 的 rfc3164 事件（facility===null 是解析階段留下的判斷依據，見
   // parseRFC3164Line）重建時同樣不帶 PRI，避免無中生有塞入假造的 <0>
@@ -1890,6 +2125,17 @@ function anonymizeEvent(evt, opts) {
     if (clone.host) clone.host = anonHostname(clone.host);
     clone.msg = replaceMACsInLine(replaceIPsInLine(clone.msg || '', opts));
     clone.raw = JSON.stringify(clone.fields);
+  } else if (evt.format === 'winevent') {
+    // Windows Event Log 沒有 CEF/LEEF 那種官方固定 sensitive-key 清單，比照既有 JSON 分支
+    // 精神：srcip（parseWinEventFragment 已從 IpAddress/ClientAddress/SourceAddress 對映
+    // 而來的別名欄位）視為 IP 型別去識別化；常見安全事件的使用者帳號欄位另外處理，
+    // 避免真實帳號名稱外洩；其餘未知 Data 欄位（Provider 特有語意，本工具不臆測）維持原樣
+    if (clone.fields.srcip) { clone.fields.srcip = isValidIPv4(clone.fields.srcip) ? anonIP(clone.fields.srcip, opts) : 'REDACTED'; }
+    WINEVENT_SRCIP_KEYS.forEach(k => { if (clone.fields[k]) clone.fields[k] = isValidIPv4(clone.fields[k]) ? anonIP(clone.fields[k], opts) : 'REDACTED'; });
+    WINEVENT_USER_KEYS.forEach(k => { if (clone.fields[k]) clone.fields[k] = anonUser(clone.fields[k]); });
+    if (clone.host) clone.host = anonHostname(clone.host);
+    if (clone.fields.Computer) clone.fields.Computer = clone.host;
+    clone.raw = rebuildWinEventXML(clone);
   } else if (evt.format === 'rfc5424') {
     // Structured Data 的 SD-PARAM 無固定命名規格，無法像 CEF/JSON 依欄位語意分流處理，
     // 一律用通用 IP/MAC 正則替換（與 msg 文字的既有處理方式一致），避免整段欄位被捨棄
@@ -1961,7 +2207,7 @@ const LANG = {
   zhTW: {
     'app.title':'Log 分析與去識別化工具','app.subtitle':'匯入交換器/防火牆 Log（CEF／標準 Syslog），依嚴重程度排序並找出可能問題；本機比對已知情資清單；可對敏感欄位去識別化。全程僅在瀏覽器本機執行，不會連網。',
     'notice.disclaimer':'此功能之分析結果僅供參考，實際處置請自行判斷並謹慎使用',
-    'import.title':'① 匯入 Log','import.hint':'支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式、FortiGate 原生 key=value log（不需 syslog 外殼），以及 JSON/NDJSON，可貼上文字或上傳檔案，亦可直接拖放檔案至此。','import.paste_placeholder':'在此貼上 log 內容，或使用下方上傳按鈕…','import.upload_btn':'上傳檔案','import.analyze_btn':'解析並分析','import.clear_btn':'清空','import.file_loaded':'已載入檔案：','import.progress_parsing':'解析中…','import.progress_analyzing':'情資比對與分類中…','import.progress_rendering':'渲染結果中…','import.progress_correlating':'關聯分析中…','import.large_file_notice':'檔案過大（{name}，共 {lines} 行），內容不於下方文字框顯示，仍會完整解析','opt.freqWindow':'頻率視窗(秒)：','opt.freqThreshold':'頻率門檻(次)：','opt.scanThreshold':'掃描門檻(數)：','opt.volumeThreshold':'流量門檻(MB)：','opt.chainWindow':'關聯時間窗(分)：','opt.geoRiskLabel':'地理位置風險標記：','opt.geoRiskFilter':'篩選國家…',
+    'import.title':'① 匯入 Log','import.hint':'支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式、FortiGate 原生 key=value log（不需 syslog 外殼）、JSON/NDJSON，以及 Windows Event Log（wevtutil/Event Viewer XML 匯出，不支援二進位 .evtx），可貼上文字或上傳檔案，亦可直接拖放檔案至此。','nav.tools_btn':'切換工具','nav.tool_network':'總覽 / Hub','nav.tool_switch':'交換器解析','nav.tool_gen':'交換器產生器','nav.tool_fw':'防火牆分析','nav.tool_ca':'設定去識別化','nav.tool_log':'日誌分析','import.paste_placeholder':'在此貼上 log 內容，或使用下方上傳按鈕…','import.upload_btn':'上傳檔案','import.analyze_btn':'解析並分析','import.clear_btn':'清空','import.file_loaded':'已載入檔案：','import.progress_parsing':'解析中…','import.progress_analyzing':'情資比對與分類中…','import.progress_rendering':'渲染結果中…','import.progress_correlating':'關聯分析中…','import.large_file_notice':'檔案過大（{name}，共 {lines} 行），內容不於下方文字框顯示，仍會完整解析','opt.freqWindow':'頻率視窗(秒)：','opt.freqThreshold':'頻率門檻(次)：','opt.scanThreshold':'掃描門檻(數)：','opt.volumeThreshold':'流量門檻(MB)：','opt.chainWindow':'關聯時間窗(分)：','opt.geoRiskLabel':'地理位置風險標記：','opt.geoRiskFilter':'篩選國家…',
     'results.title':'② 事件清單（依嚴重程度排序）','results.empty':'尚無資料，請先匯入並分析 log','results.col_severity':'嚴重程度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題','results.optional_cols':'顯示欄位：','results.col_src':'來源IP','results.col_dst':'目的IP','results.col_port':'Port','results.col_proto':'通訊協定','results.col_url':'URL/HTTP方法','results.search_placeholder':'搜尋主機/內容…','results.col_msg':'內容','results.summary_label':'統計：','results.timeline_label':'事件時間分布',
     'sev.critical':'嚴重','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'資訊',
     'issues.title':'③ 問題清單（基本資安分析）','issues.empty':'未發現符合規則的問題','issues.col_category':'類別','issues.col_severity':'嚴重程度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_source':'情資來源','issues.col_basis':'比對依據','issues.col_sample':'範例','issues.filter_all_sources':'全部來源','issues.source_filter_label':'篩選情資來源：',
@@ -1980,7 +2226,7 @@ const LANG = {
   en: {
     'app.title':'Log Analyzer & De-identifier','app.subtitle':'Import switch/firewall logs (CEF / standard Syslog), rank by severity and surface likely issues; match against local threat-intel lists; de-identify sensitive fields. Runs entirely in your browser, no network calls.',
     'notice.disclaimer':'Analysis results are for reference only — use your own judgement before acting on them',
-    'import.title':'① Import Log','import.hint':'Supports line-based CEF (Common Event Format), LEEF (Log Event Extended Format), standard Syslog (RFC3164/RFC5424), FortiGate native key=value logs (no syslog envelope needed), and JSON/NDJSON. Paste text, upload, or drag & drop a file.','import.paste_placeholder':'Paste log content here, or use the upload button below…','import.upload_btn':'Upload File','import.analyze_btn':'Parse & Analyze','import.clear_btn':'Clear','import.file_loaded':'Loaded file: ','import.progress_parsing':'Parsing…','import.progress_analyzing':'Matching threat intel & classifying…','import.progress_rendering':'Rendering results…','import.progress_correlating':'Correlating events…','import.large_file_notice':'File too large ({name}, {lines} lines) — content not shown in the box below, still fully parsed','opt.freqWindow':'Freq window (s):','opt.freqThreshold':'Freq threshold:','opt.scanThreshold':'Scan threshold:','opt.volumeThreshold':'Volume threshold (MB):','opt.chainWindow':'Chain window (min):','opt.geoRiskLabel':'Geo-risk countries:','opt.geoRiskFilter':'Filter countries…',
+    'import.title':'① Import Log','import.hint':'Supports line-based CEF (Common Event Format), LEEF (Log Event Extended Format), standard Syslog (RFC3164/RFC5424), FortiGate native key=value logs (no syslog envelope needed), JSON/NDJSON, and Windows Event Log (wevtutil/Event Viewer XML export, binary .evtx not supported). Paste text, upload, or drag & drop a file.','nav.tools_btn':'Switch Tool','nav.tool_network':'Hub','nav.tool_switch':'Switch Analyzer','nav.tool_gen':'Switch Generator','nav.tool_fw':'Firewall Analyzer','nav.tool_ca':'Config Anonymizer','nav.tool_log':'Log Analyzer','import.paste_placeholder':'Paste log content here, or use the upload button below…','import.upload_btn':'Upload File','import.analyze_btn':'Parse & Analyze','import.clear_btn':'Clear','import.file_loaded':'Loaded file: ','import.progress_parsing':'Parsing…','import.progress_analyzing':'Matching threat intel & classifying…','import.progress_rendering':'Rendering results…','import.progress_correlating':'Correlating events…','import.large_file_notice':'File too large ({name}, {lines} lines) — content not shown in the box below, still fully parsed','opt.freqWindow':'Freq window (s):','opt.freqThreshold':'Freq threshold:','opt.scanThreshold':'Scan threshold:','opt.volumeThreshold':'Volume threshold (MB):','opt.chainWindow':'Chain window (min):','opt.geoRiskLabel':'Geo-risk countries:','opt.geoRiskFilter':'Filter countries…',
     'results.title':'② Event List (sorted by severity)','results.empty':'No data yet — import and analyze a log first','results.col_severity':'Severity','results.col_time':'Time','results.col_host':'Host','results.col_format':'Format','results.col_category':'Category','results.col_notes':'Suspected Issue','results.optional_cols':'Show columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.col_url':'URL/Method','results.search_placeholder':'Search host/content…','results.col_msg':'Message','results.summary_label':'Summary: ','results.timeline_label':'Event Timeline',
     'sev.critical':'Critical','sev.high':'High','sev.medium':'Medium','sev.low':'Low','sev.info':'Info',
     'issues.title':'③ Issue List (basic security analysis)','issues.empty':'No rule-based issues found','issues.col_category':'Category','issues.col_severity':'Severity','issues.col_count':'Count','issues.col_confidence':'Confidence','issues.col_source':'Intel Source','issues.col_basis':'Match Basis','issues.col_sample':'Sample','issues.filter_all_sources':'All Sources','issues.source_filter_label':'Filter by intel source:',
@@ -1999,7 +2245,7 @@ const LANG = {
   ja: {
     'app.title':'ログ分析・匿名化ツール','app.subtitle':'スイッチ/ファイアウォールのログ（CEF／標準 Syslog）を取り込み、重要度順に並べ替えて問題点を洗い出します。ローカルの脅威インテリジェンスリストと照合し、機密項目を匿名化できます。すべてブラウザ内で完結し、通信は行いません。',
     'notice.disclaimer':'本機能の分析結果は参考情報です。実際の対応はご自身の判断で慎重に行ってください',
-    'import.title':'① ログ取り込み','import.hint':'行単位の CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）、FortiGate 純正 key=value ログ（syslog エンベロープ不要）、および JSON/NDJSON に対応。テキスト貼り付け、アップロード、ドラッグ＆ドロップに対応。','import.paste_placeholder':'ここにログを貼り付けるか、下のアップロードボタンを使用…','import.upload_btn':'ファイルをアップロード','import.analyze_btn':'解析・分析','import.clear_btn':'クリア','import.file_loaded':'読み込み済みファイル：','import.progress_parsing':'解析中…','import.progress_analyzing':'脅威インテリジェンス照合・分類中…','import.progress_rendering':'結果を描画中…','import.progress_correlating':'相関分析中…','import.large_file_notice':'ファイルが大きすぎます（{name}、{lines} 行）。下のテキストボックスには表示されませんが、解析は正常に行われます','opt.freqWindow':'頻度ウィンドウ(秒)：','opt.freqThreshold':'頻度しきい値：','opt.scanThreshold':'スキャンしきい値：','opt.volumeThreshold':'トラフィック量しきい値(MB)：','opt.chainWindow':'相関ウィンドウ(分)：','opt.geoRiskLabel':'地理的リスク国：','opt.geoRiskFilter':'国を絞り込み…',
+    'import.title':'① ログ取り込み','import.hint':'行単位の CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）、FortiGate 純正 key=value ログ（syslog エンベロープ不要）、JSON/NDJSON、および Windows イベントログ（wevtutil/イベントビューアーの XML エクスポート、バイナリ .evtx 非対応）に対応。テキスト貼り付け、アップロード、ドラッグ＆ドロップに対応。','nav.tools_btn':'ツール切替','nav.tool_network':'ハブ','nav.tool_switch':'スイッチ解析','nav.tool_gen':'スイッチ設定生成','nav.tool_fw':'ファイアウォール解析','nav.tool_ca':'設定匿名化','nav.tool_log':'ログ解析','import.paste_placeholder':'ここにログを貼り付けるか、下のアップロードボタンを使用…','import.upload_btn':'ファイルをアップロード','import.analyze_btn':'解析・分析','import.clear_btn':'クリア','import.file_loaded':'読み込み済みファイル：','import.progress_parsing':'解析中…','import.progress_analyzing':'脅威インテリジェンス照合・分類中…','import.progress_rendering':'結果を描画中…','import.progress_correlating':'相関分析中…','import.large_file_notice':'ファイルが大きすぎます（{name}、{lines} 行）。下のテキストボックスには表示されませんが、解析は正常に行われます','opt.freqWindow':'頻度ウィンドウ(秒)：','opt.freqThreshold':'頻度しきい値：','opt.scanThreshold':'スキャンしきい値：','opt.volumeThreshold':'トラフィック量しきい値(MB)：','opt.chainWindow':'相関ウィンドウ(分)：','opt.geoRiskLabel':'地理的リスク国：','opt.geoRiskFilter':'国を絞り込み…',
     'results.title':'② イベント一覧（重要度順）','results.empty':'データがありません。まずログを取り込んで分析してください','results.col_severity':'重要度','results.col_time':'時刻','results.col_host':'ホスト','results.col_format':'形式','results.col_category':'分類','results.col_notes':'疑わしい問題','results.optional_cols':'表示項目：','results.col_src':'送信元IP','results.col_dst':'宛先IP','results.col_port':'ポート','results.col_proto':'プロトコル','results.col_url':'URL/HTTPメソッド','results.search_placeholder':'ホスト/内容を検索…','results.col_msg':'内容','results.summary_label':'集計：','results.timeline_label':'イベントの時間分布',
     'sev.critical':'重大','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'情報',
     'issues.title':'③ 問題リスト（基本セキュリティ分析）','issues.empty':'該当する問題は見つかりませんでした','issues.col_category':'分類','issues.col_severity':'重要度','issues.col_count':'件数','issues.col_confidence':'信頼度','issues.col_source':'情報源','issues.col_basis':'照合根拠','issues.col_sample':'サンプル','issues.filter_all_sources':'すべての情報源','issues.source_filter_label':'情報源で絞り込み：',
@@ -2018,7 +2264,7 @@ const LANG = {
   tlh:{
     'app.title':'Log analyzer, De-identifier je','app.subtitle':'CEF/Syslog logmey yIlan, severity yIchov, issue yItu\'. Local intel list yIrar. Sensitive field yIde-identify. Browser neH Daq taH, network Qapbe\'.',
     'notice.disclaimer':'analysis result neH reference, cha\' vIt yISovmoH pagh yIruch',
-    'import.title':'① Log yIlan','import.hint':'CEF, LEEF, Syslog (RFC3164/RFC5424), FortiGate key=value (syslog Qapbe\'), JSON chaw\'. Text yIlan, file yIlan, pagh drag\'DIch.','import.paste_placeholder':'log Daq yIlan…','import.upload_btn':'File yIlan','import.analyze_btn':'yIchov','import.clear_btn':'yIchIm','import.file_loaded':'File lanpu\':','import.progress_parsing':'chov…','import.progress_analyzing':'intel chov, segh…','import.progress_rendering':'nov chenmoH…','import.progress_correlating':'chain chov…','import.large_file_notice':'file tIn Doch ({name}, mI\' {lines}); box bIng ghobe\' cha\'lu\', chov naDev','opt.freqWindow':'poH (lup):','opt.freqThreshold':"mIgh QIt:",'opt.scanThreshold':'scan QIt:','opt.volumeThreshold':'traffic QIt:','opt.chainWindow':'chain poH (tup):','opt.geoRiskLabel':'Sep list:','opt.geoRiskFilter':'Sep nej…',
+    'import.title':'① Log yIlan','import.hint':'CEF, LEEF, Syslog (RFC3164/RFC5424), FortiGate key=value (syslog Qapbe\'), JSON chaw\', Windows event De\' (XML neH). Text yIlan, file yIlan, pagh drag\'DIch.','nav.tools_btn':'Doch','nav.tool_network':'Hub','nav.tool_switch':'analyze','nav.tool_gen':'chenmoH','nav.tool_fw':'veS analyze','nav.tool_ca':'So\'','nav.tool_log':'analyze De\'','import.paste_placeholder':'log Daq yIlan…','import.upload_btn':'File yIlan','import.analyze_btn':'yIchov','import.clear_btn':'yIchIm','import.file_loaded':'File lanpu\':','import.progress_parsing':'chov…','import.progress_analyzing':'intel chov, segh…','import.progress_rendering':'nov chenmoH…','import.progress_correlating':'chain chov…','import.large_file_notice':'file tIn Doch ({name}, mI\' {lines}); box bIng ghobe\' cha\'lu\', chov naDev','opt.freqWindow':'poH (lup):','opt.freqThreshold':"mIgh QIt:",'opt.scanThreshold':'scan QIt:','opt.volumeThreshold':'traffic QIt:','opt.chainWindow':'chain poH (tup):','opt.geoRiskLabel':'Sep list:','opt.geoRiskFilter':'Sep nej…',
     'results.title':'② Event tetlh (severity chov)','results.empty':'Data tu\'lu\'be\', first log yIlan','results.col_severity':'severity','results.col_time':'poH','results.col_host':'host','results.col_format':'format','results.col_category':'segh','results.col_notes':'pIH mIgh','results.optional_cols':"cha' ghom:",'results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.col_url':'URL/Qap','results.search_placeholder':'nej host/mu\'meyvam…','results.col_msg':'mu\'meyvam','results.summary_label':'chov:','results.timeline_label':'poH tetlh',
     'sev.critical':'!QIH','sev.high':'chIm','sev.medium':'motlh','sev.low':'mach','sev.info':'De\'',
     'issues.title':'③ Issue tetlh (security chov)','issues.empty':'Issue tu\'lu\'be\'','issues.col_category':'segh','issues.col_severity':'severity','issues.col_count':'\'ar','issues.col_confidence':'HIvqa\'','issues.col_source':'source','issues.col_basis':'meq','issues.col_sample':'nughDoq','issues.filter_all_sources':'Hoch source','issues.source_filter_label':'source yIwIv:',
@@ -2037,7 +2283,7 @@ const LANG = {
   pirate:{
     'app.title':'Log-Readin\' & Face-Hidin\' Tool, Arrr','app.subtitle':'Haul in yer switch/firewall logs (CEF or plain Syslog), rank \'em by how much trouble they be, and sniff out the scallywags. Match against yer own blacklist o\' known villains. Hide the crew\'s true names too. All done right here on yer own ship, no signal sent to shore.',
     'notice.disclaimer':'These findin\'s be just a chart, not the treasure itself — use yer own head afore ye act, matey',
-    'import.title':'① Haul In the Log','import.hint':'Reads CEF, LEEF, plain Syslog (RFC3164/RFC5424), and FortiGate\'s own key=value charts (no syslog riggin\' needed), line by line, plus JSON/NDJSON charts. Paste the scroll, hoist a file aboard, or drag one right onto the deck.','import.paste_placeholder':'Paste yer log scroll here, or hoist a file below…','import.upload_btn':'Hoist File','import.analyze_btn':'Chart & Scan','import.clear_btn':'Swab the Deck','import.file_loaded':'File aboard: ','import.progress_parsing':'Readin\' the scroll…','import.progress_analyzing':'Checkin\' \'gainst the blacklist & sortin\'…','import.progress_rendering':'Drawin\' the chart…','import.progress_correlating':'Chartin\' the chain o\' clues…','import.large_file_notice':'Scroll too big ({name}, {lines} lines) — won\'t show below, but still be read proper','opt.freqWindow':'Bells in a Watch:','opt.freqThreshold':'Ruckus Count:','opt.scanThreshold':"Scoutin' Count:",'opt.volumeThreshold':"Cargo Threshold (MB):",'opt.chainWindow':"Chain Reckonin' (min):",'opt.geoRiskLabel':"Enemy Waters:",'opt.geoRiskFilter':'Search fer a Land…',
+    'import.title':'① Haul In the Log','import.hint':'Reads CEF, LEEF, plain Syslog (RFC3164/RFC5424), and FortiGate\'s own key=value charts (no syslog riggin\' needed), line by line, plus JSON/NDJSON charts, and Windows Event Log XML charts (from wevtutil or Event Viewer — no binary .evtx booty, arr). Paste the scroll, hoist a file aboard, or drag one right onto the deck.','nav.tools_btn':'Change Ships','nav.tool_network':'The Helm','nav.tool_switch':'Switch Chart Reader','nav.tool_gen':'Switch Chart Maker','nav.tool_fw':'Fleet Defense','nav.tool_ca':'Treasure Hider','nav.tool_log':'Ship\'s Log Reader','import.paste_placeholder':'Paste yer log scroll here, or hoist a file below…','import.upload_btn':'Hoist File','import.analyze_btn':'Chart & Scan','import.clear_btn':'Swab the Deck','import.file_loaded':'File aboard: ','import.progress_parsing':'Readin\' the scroll…','import.progress_analyzing':'Checkin\' \'gainst the blacklist & sortin\'…','import.progress_rendering':'Drawin\' the chart…','import.progress_correlating':'Chartin\' the chain o\' clues…','import.large_file_notice':'Scroll too big ({name}, {lines} lines) — won\'t show below, but still be read proper','opt.freqWindow':'Bells in a Watch:','opt.freqThreshold':'Ruckus Count:','opt.scanThreshold':"Scoutin' Count:",'opt.volumeThreshold':"Cargo Threshold (MB):",'opt.chainWindow':"Chain Reckonin' (min):",'opt.geoRiskLabel':"Enemy Waters:",'opt.geoRiskFilter':'Search fer a Land…',
     'results.title':'② The Event Manifest (worst trouble first)','results.empty':'Nothin\' in the hold yet — haul in a log first','results.col_severity':'Trouble','results.col_time':'Bell','results.col_host':'Ship','results.col_format':'Rig','results.col_category':'Kind','results.col_notes':'Suspected Trouble','results.optional_cols':'Show Columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.col_url':'URL/Course','results.search_placeholder':'Search the logbook…','results.col_msg':'Word','results.summary_label':'Tally: ','results.timeline_label':'Timeline o\' Trouble',
     'sev.critical':'Mutiny!','sev.high':'Rough Seas','sev.medium':'Choppy','sev.low':'Calm','sev.info':'Just Gossip',
     'issues.title':'③ Trouble Manifest (basic scoutin\')','issues.empty':'No trouble spotted on the horizon','issues.col_category':'Kind','issues.col_severity':'Trouble','issues.col_count':'Tally','issues.col_confidence':'How Sure','issues.col_source':'Chart Source','issues.col_basis':'The Reason Why','issues.col_sample':'Sample','issues.filter_all_sources':'All Charts','issues.source_filter_label':'Filter by chart:',
@@ -2056,7 +2302,7 @@ const LANG = {
   emoji:{
     'app.title':'📜🔍 + 🕵️‍♂️➡️❓ 工具','app.subtitle':'📥 switch/firewall 📜（CEF/Syslog）➡️ 📊嚴重度排序 ➡️ ❗找問題。🔒本機比對已知🎯清單。🙈把敏感欄位變成❓。全程🖥️本機執行，🚫🌐不連網。',
     'notice.disclaimer':'⚠️ 分析結果僅供參考，實際處置請👤自行判斷',
-    'import.title':'①📥 匯入 Log','import.hint':'支援 CEF/LEEF、標準 Syslog（RFC3164/5424）📄逐行格式、FortiGate🔥原生 key=value（免外殼）＋JSON/NDJSON，可✍️貼上/📎上傳/🖱️拖放。','import.paste_placeholder':'✍️在此貼上 log…','import.upload_btn':'📎上傳檔案','import.analyze_btn':'🔍解析分析','import.clear_btn':'🗑️清空','import.file_loaded':'✅已載入：','import.progress_parsing':'🔍解析中…','import.progress_analyzing':'🎯比對＋🏷️分類中…','import.progress_rendering':'🖼️渲染中…','import.progress_correlating':'🔗🔍關聯中…','import.large_file_notice':'📦檔案過大（{name}，{lines} 行），下方框不顯示內容，仍✅完整解析','opt.freqWindow':'⏱️視窗(秒)：','opt.freqThreshold':'📈門檻(次)：','opt.scanThreshold':'🔦門檻(數)：','opt.volumeThreshold':'📦門檻(MB)：','opt.chainWindow':'🔗⏱️時間窗(分)：','opt.geoRiskLabel':'🌍風險國家：','opt.geoRiskFilter':'🔍篩選國家…',
+    'import.title':'①📥 匯入 Log','import.hint':'支援 CEF/LEEF、標準 Syslog（RFC3164/5424）📄逐行格式、FortiGate🔥原生 key=value（免外殼）＋JSON/NDJSON＋🪟Windows Event Log XML，可✍️貼上/📎上傳/🖱️拖放。','nav.tools_btn':'🧭','nav.tool_network':'🏠','nav.tool_switch':'🔀','nav.tool_gen':'🛠️','nav.tool_fw':'🛡️','nav.tool_ca':'🔒','nav.tool_log':'📜','import.paste_placeholder':'✍️在此貼上 log…','import.upload_btn':'📎上傳檔案','import.analyze_btn':'🔍解析分析','import.clear_btn':'🗑️清空','import.file_loaded':'✅已載入：','import.progress_parsing':'🔍解析中…','import.progress_analyzing':'🎯比對＋🏷️分類中…','import.progress_rendering':'🖼️渲染中…','import.progress_correlating':'🔗🔍關聯中…','import.large_file_notice':'📦檔案過大（{name}，{lines} 行），下方框不顯示內容，仍✅完整解析','opt.freqWindow':'⏱️視窗(秒)：','opt.freqThreshold':'📈門檻(次)：','opt.scanThreshold':'🔦門檻(數)：','opt.volumeThreshold':'📦門檻(MB)：','opt.chainWindow':'🔗⏱️時間窗(分)：','opt.geoRiskLabel':'🌍風險國家：','opt.geoRiskFilter':'🔍篩選國家…',
     'results.title':'②📋 事件清單（依🔥嚴重度）','results.empty':'📭尚無資料','results.col_severity':'🔥嚴重度','results.col_time':'⏰時間','results.col_host':'🖥️主機','results.col_format':'📄格式','results.col_category':'🏷️分類','results.col_notes':'❓疑似問題','results.optional_cols':'👁️欄位：','results.col_src':'📤來源IP','results.col_dst':'📥目的IP','results.col_port':'🔌Port','results.col_proto':'📡協定','results.col_url':'🔗URL/方法','results.search_placeholder':'🔍搜尋主機/內容…','results.col_msg':'💬內容','results.summary_label':'📊統計：','results.timeline_label':'⏱️時間分布',
     'sev.critical':'🔴嚴重','sev.high':'🟠高','sev.medium':'🟡中','sev.low':'🔵低','sev.info':'⚪資訊',
     'issues.title':'③❗ 問題清單','issues.empty':'✅未發現問題','issues.col_category':'🏷️類別','issues.col_severity':'🔥嚴重度','issues.col_count':'🔢次數','issues.col_confidence':'🎯可信度','issues.col_source':'🎯來源','issues.col_basis':'🧩比對依據','issues.col_sample':'📌範例','issues.filter_all_sources':'🌐全部','issues.source_filter_label':'🔎篩選來源：',
@@ -2075,7 +2321,7 @@ const LANG = {
   bureau:{
     'app.title':'日誌分析暨資料去識別化作業系統','app.subtitle':'依規定匯入交換器／防火牆日誌資料（CEF 或標準 Syslog 格式），依嚴重程度分級排序，並依既定規則辨識潛在事項，供權責單位參考。得於本機比對已核備之情資清單，並得對機敏欄位執行去識別化作業。前述作業全程於使用者端瀏覽器執行，不涉及對外傳輸行為。',
     'notice.disclaimer':'本項分析結果僅供參考之用，實際處置事宜請權責人員本於專業判斷審慎為之，本工具不負相關法律責任',
-    'import.title':'第一項：日誌資料匯入作業','import.hint':'本作業支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog (RFC3164/RFC5424) 格式之逐行解析，暨 FortiGate 原生 key=value 格式（無須 syslog 封裝）及 JSON/NDJSON 格式，得以文字貼上、檔案上傳，或拖放檔案方式辦理。','import.paste_placeholder':'請於此欄位貼上日誌內容，或依下方按鈕辦理檔案上傳作業…','import.upload_btn':'辦理檔案上傳','import.analyze_btn':'執行解析暨分析作業','import.clear_btn':'清空本欄位資料','import.file_loaded':'業已載入之檔案：','import.progress_parsing':'解析作業辦理中…','import.progress_analyzing':'情資比對暨分類作業辦理中…','import.progress_rendering':'結果繪製作業辦理中…','import.progress_correlating':'關聯性分析作業執行中…','import.large_file_notice':'檔案容量過大（{name}，計 {lines} 行），其內容不於下方文字框內顯示，惟解析作業仍依規定完整辦理','opt.freqWindow':'頻率視窗（秒）：','opt.freqThreshold':'頻率門檻（次數）：','opt.scanThreshold':'掃描門檻（數量）：','opt.volumeThreshold':'流量門檻（單位：MB，得由使用者自行調整）：','opt.chainWindow':'關聯分析時間窗設定值（分鐘）：','opt.geoRiskLabel':'高風險地理區域標記清單：','opt.geoRiskFilter':'國家篩選查詢欄位：',
+    'import.title':'第一項：日誌資料匯入作業','import.hint':'本作業支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog (RFC3164/RFC5424) 格式之逐行解析，暨 FortiGate 原生 key=value 格式（無須 syslog 封裝）、JSON/NDJSON 格式，以及 Windows Event Log（wevtutil／事件檢視器 XML 匯出格式，二進位 .evtx 格式不予受理），得以文字貼上、檔案上傳，或拖放檔案方式辦理。','nav.tools_btn':'工具切換作業','nav.tool_network':'總覽作業','nav.tool_switch':'交換器設定解析作業','nav.tool_gen':'交換器設定產生作業','nav.tool_fw':'防火牆設定分析作業','nav.tool_ca':'設定檔去識別化作業','nav.tool_log':'日誌分析作業','import.paste_placeholder':'請於此欄位貼上日誌內容，或依下方按鈕辦理檔案上傳作業…','import.upload_btn':'辦理檔案上傳','import.analyze_btn':'執行解析暨分析作業','import.clear_btn':'清空本欄位資料','import.file_loaded':'業已載入之檔案：','import.progress_parsing':'解析作業辦理中…','import.progress_analyzing':'情資比對暨分類作業辦理中…','import.progress_rendering':'結果繪製作業辦理中…','import.progress_correlating':'關聯性分析作業執行中…','import.large_file_notice':'檔案容量過大（{name}，計 {lines} 行），其內容不於下方文字框內顯示，惟解析作業仍依規定完整辦理','opt.freqWindow':'頻率視窗（秒）：','opt.freqThreshold':'頻率門檻（次數）：','opt.scanThreshold':'掃描門檻（數量）：','opt.volumeThreshold':'流量門檻（單位：MB，得由使用者自行調整）：','opt.chainWindow':'關聯分析時間窗設定值（分鐘）：','opt.geoRiskLabel':'高風險地理區域標記清單：','opt.geoRiskFilter':'國家篩選查詢欄位：',
     'results.title':'第二項：事件清冊（依嚴重程度分級排序）','results.empty':'目前尚無資料，請依第一項規定辦理匯入及分析作業','results.col_severity':'嚴重程度等級','results.col_time':'發生時間','results.col_host':'主機識別資料','results.col_format':'資料格式','results.col_category':'事件分類','results.col_notes':'疑似問題事項','results.optional_cols':'顯示欄位：','results.col_src':'來源位址','results.col_dst':'目的位址','results.col_port':'埠口','results.col_proto':'通訊協定','results.col_url':'網址／傳輸方法','results.search_placeholder':'請輸入主機/內容關鍵字以辦理搜尋…','results.col_msg':'事件內容','results.summary_label':'統計摘要：','results.timeline_label':'事件時間分布圖',
     'sev.critical':'甲級（嚴重）','sev.high':'乙級（高）','sev.medium':'丙級（中）','sev.low':'丁級（低）','sev.info':'參考資訊',
     'issues.title':'第三項：問題清冊（基本資安分析作業）','issues.empty':'依現行規則，未查得相符之問題事項','issues.col_category':'問題類別','issues.col_severity':'嚴重程度等級','issues.col_count':'發生次數','issues.col_confidence':'可信程度','issues.col_source':'情資來源','issues.col_basis':'比對依據說明','issues.col_sample':'代表性樣本','issues.filter_all_sources':'全部來源','issues.source_filter_label':'情資來源篩選：',
@@ -2094,7 +2340,7 @@ const LANG = {
   cat:{
     'app.title':'Log 分析去識別化工具喵','app.subtitle':'把交換器/防火牆的 log 叼進來喵，CEF 跟 Syslog 都吃，依嚴重度排排站，找出可疑的老鼠喵。可以在自己地盤比對情資清單，也能把機敏欄位藏起來喵。全程窩在瀏覽器裡不出門喵。',
     'notice.disclaimer':'分析結果只是聞一聞喵，真的要怎麼辦還是主人自己決定喵',
-    'import.title':'①叼log進來喵','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424）跟 FortiGate 原生 key=value（不用外殼喵）都吃喵，JSON/NDJSON 也吃喵，貼上文字、叼檔案、或直接拖進來都可以喵。','import.paste_placeholder':'log 貼在這裡喵…','import.upload_btn':'叼檔案進來喵','import.analyze_btn':'聞一聞分析喵','import.clear_btn':'抓沙清空喵','import.file_loaded':'已經叼進來的檔案喵：','import.progress_parsing':'聞一聞中喵…','import.progress_analyzing':'比對壞蛋分類中喵…','import.progress_rendering':'畫出來中喵…','import.progress_correlating':'正在聞出關聯喵…','import.large_file_notice':'檔案太大了喵（{name}，{lines} 行），下面框框不顯示喵，但還是會聞完喵','opt.freqWindow':'時間窗(秒)喵：','opt.freqThreshold':'門檻(次)喵：','opt.scanThreshold':'掃描門檻喵：','opt.volumeThreshold':'流量門檻喵(MB)：','opt.chainWindow':'關聯時間窗喵(分)：','opt.geoRiskLabel':'危險國家清單喵：','opt.geoRiskFilter':'找國家喵…',
+    'import.title':'①叼log進來喵','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424）跟 FortiGate 原生 key=value（不用外殼喵）都吃喵，JSON/NDJSON 也吃喵，連 Windows Event Log XML 也吃喵，貼上文字、叼檔案、或直接拖進來都可以喵。','nav.tools_btn':'切換工具喵','nav.tool_network':'總覽喵','nav.tool_switch':'交換器解析喵','nav.tool_gen':'交換器產生喵','nav.tool_fw':'防火牆分析喵','nav.tool_ca':'去識別化喵','nav.tool_log':'日誌分析喵','import.paste_placeholder':'log 貼在這裡喵…','import.upload_btn':'叼檔案進來喵','import.analyze_btn':'聞一聞分析喵','import.clear_btn':'抓沙清空喵','import.file_loaded':'已經叼進來的檔案喵：','import.progress_parsing':'聞一聞中喵…','import.progress_analyzing':'比對壞蛋分類中喵…','import.progress_rendering':'畫出來中喵…','import.progress_correlating':'正在聞出關聯喵…','import.large_file_notice':'檔案太大了喵（{name}，{lines} 行），下面框框不顯示喵，但還是會聞完喵','opt.freqWindow':'時間窗(秒)喵：','opt.freqThreshold':'門檻(次)喵：','opt.scanThreshold':'掃描門檻喵：','opt.volumeThreshold':'流量門檻喵(MB)：','opt.chainWindow':'關聯時間窗喵(分)：','opt.geoRiskLabel':'危險國家清單喵：','opt.geoRiskFilter':'找國家喵…',
     'results.title':'②事件清單（照嚴重度排排站喵）','results.empty':'還沒東西可以聞喵，先匯入 log 喵','results.col_severity':'嚴重度喵','results.col_time':'時間喵','results.col_host':'主機喵','results.col_format':'格式喵','results.col_category':'分類喵','results.col_notes':'疑似問題喵','results.optional_cols':'顯示欄位喵：','results.col_src':'來源IP喵','results.col_dst':'目的IP喵','results.col_port':'Port喵','results.col_proto':'協定喵','results.col_url':'URL喵','results.search_placeholder':'搜尋主機/內容喵…','results.col_msg':'內容喵','results.summary_label':'統計喵：','results.timeline_label':'什麼時候喵',
     'sev.critical':'超嚴重喵!!','sev.high':'很在意喵','sev.medium':'普通喵','sev.low':'不太在意喵','sev.info':'路過看看喵',
     'issues.title':'③問題清單（聞出來的可疑喵）','issues.empty':'沒聞到什麼可疑的喵','issues.col_category':'類別喵','issues.col_severity':'嚴重度喵','issues.col_count':'次數喵','issues.col_confidence':'有多確定喵','issues.col_source':'哪來的喵','issues.col_basis':'為什麼喵','issues.col_sample':'範例喵','issues.filter_all_sources':'全部喵','issues.source_filter_label':'挑來源喵：',
@@ -2113,7 +2359,7 @@ const LANG = {
   bean:{
     'app.title':'🫘 Log 分析去識別化工具','app.subtitle':'把 switch/firewall 的 🫘log（CEF/Syslog）倒進來，依🌶️辣度排序找出問題🥕。可在本機比對🍅情資清單，把機敏欄位變成🥔。全程在自家🥬廚房完成，不出門連網。',
     'notice.disclaimer':'分析結果只是一盤🥗參考菜，真正怎麼處理請自己掂量',
-    'import.title':'①倒入🫘Log','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424）與 FortiGate🍅原生 key=value（免外殼）都能煮，JSON/NDJSON 也能下鍋，貼上文字、上傳🥔檔案、或直接拖進鍋裡皆可。','import.paste_placeholder':'把 log 倒在這裡…','import.upload_btn':'🥔上傳檔案','import.analyze_btn':'🔥開火分析','import.clear_btn':'🧹清鍋','import.file_loaded':'已下鍋的檔案：','import.progress_parsing':'🔥燉煮中…','import.progress_analyzing':'比對配料分類中…','import.progress_rendering':'擺盤中…','import.progress_correlating':'正在串連食材線索…','import.large_file_notice':'食材太多了（{name}，{lines} 行），下面菜籃不顯示，但還是會煮完','opt.freqWindow':'⏱️時間窗(秒)：','opt.freqThreshold':'🌶️門檻(次)：','opt.scanThreshold':'🔦掃描門檻：','opt.volumeThreshold':'流量門檻🥔(MB)：','opt.chainWindow':'串連時間窗🥕(分)：','opt.geoRiskLabel':'危險國家清單🍆：','opt.geoRiskFilter':'🥕找國家…',
+    'import.title':'①倒入🫘Log','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424）與 FortiGate🍅原生 key=value（免外殼）都能煮，JSON/NDJSON 也能下鍋，Windows Event Log XML 一樣能燉，貼上文字、上傳🥔檔案、或直接拖進鍋裡皆可。','nav.tools_btn':'切換豆具','nav.tool_network':'總豆','nav.tool_switch':'交換豆解析','nav.tool_gen':'交換豆產生','nav.tool_fw':'防火豆分析','nav.tool_ca':'豆識別化','nav.tool_log':'日誌豆析','import.paste_placeholder':'把 log 倒在這裡…','import.upload_btn':'🥔上傳檔案','import.analyze_btn':'🔥開火分析','import.clear_btn':'🧹清鍋','import.file_loaded':'已下鍋的檔案：','import.progress_parsing':'🔥燉煮中…','import.progress_analyzing':'比對配料分類中…','import.progress_rendering':'擺盤中…','import.progress_correlating':'正在串連食材線索…','import.large_file_notice':'食材太多了（{name}，{lines} 行），下面菜籃不顯示，但還是會煮完','opt.freqWindow':'⏱️時間窗(秒)：','opt.freqThreshold':'🌶️門檻(次)：','opt.scanThreshold':'🔦掃描門檻：','opt.volumeThreshold':'流量門檻🥔(MB)：','opt.chainWindow':'串連時間窗🥕(分)：','opt.geoRiskLabel':'危險國家清單🍆：','opt.geoRiskFilter':'🥕找國家…',
     'results.title':'②事件清單（依🌶️辣度排序）','results.empty':'鍋子還是空的，先倒入 log 吧','results.col_severity':'🌶️辣度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題🌶️','results.optional_cols':'顯示欄位🌶️：','results.col_src':'來源IP🥕','results.col_dst':'目的IP🍆','results.col_port':'Port🌽','results.col_proto':'協定🫘','results.col_url':'網址🥦','results.search_placeholder':'🔍搜尋主機/內容…','results.col_msg':'內容','results.summary_label':'總計：','results.timeline_label':'🌶️時間軸',
     'sev.critical':'🌶️🌶️🌶️超辣','sev.high':'🌶️🌶️辣','sev.medium':'🌶️微辣','sev.low':'🥒清淡','sev.info':'🥬爽口',
     'issues.title':'③問題清單（基本廚房安全檢查）','issues.empty':'廚房目前一切正常','issues.col_category':'類別','issues.col_severity':'🌶️辣度','issues.col_count':'份數','issues.col_confidence':'火候','issues.col_source':'食材來源','issues.col_basis':'配方依據🥕','issues.col_sample':'試吃樣本','issues.filter_all_sources':'全部食材','issues.source_filter_label':'挑食材來源：',
@@ -2132,7 +2378,7 @@ const LANG = {
   alpaca:{
     'app.title':'Log分析咩去識別化-aca工具','app.subtitle':'把switch/firewall咩log（CEF/Syslog）牽進來-aca，依嚴重度排隊咩，找出怪怪的問題-aca。可以在自家草原比對情資名單咩，也能把機敏欄位藏起來-aca。全程在瀏覽器裡吃草，不出門連網咩。',
     'notice.disclaimer':'分析結果只是聞一聞咩，真的怎麼辦要主人自己想-aca',
-    'import.title':'①牽log咩進來-aca','import.hint':'CEF、LEEF、標準Syslog（RFC3164/5424）跟FortiGate原生key=value（不用外殼咩）咩都吃-aca，JSON/NDJSON也吃咩，貼文字、牽檔案、或拖進來都可以咩。','import.paste_placeholder':'log貼在這裡咩…','import.upload_btn':'牽檔案進來-aca','import.analyze_btn':'咩一下分析-aca','import.clear_btn':'清空草原咩','import.file_loaded':'已經牽進來咩檔案-aca：','import.progress_parsing':'咩一下中-aca…','import.progress_analyzing':'比對壞蛋分類中咩…','import.progress_rendering':'畫出來中-aca…','import.progress_correlating':'正在咩出關聯-aca…','import.large_file_notice':'檔案太大咩（{name}，{lines} 行），下面框框不顯示-aca，但還是會咩完咩','opt.freqWindow':'時間窗(秒)咩：','opt.freqThreshold':'門檻(次)-aca：','opt.scanThreshold':'掃描門檻咩：','opt.volumeThreshold':'流量門檻咩(MB)：','opt.chainWindow':'關聯時間窗咩(分)：','opt.geoRiskLabel':'危險國家清單咩：','opt.geoRiskFilter':'找國家咩…',
+    'import.title':'①牽log咩進來-aca','import.hint':'CEF、LEEF、標準Syslog（RFC3164/5424）跟FortiGate原生key=value（不用外殼咩）咩都吃-aca，JSON/NDJSON也吃咩，Windows Event Log XML也吃咩，貼文字、牽檔案、或拖進來都可以咩。','nav.tools_btn':'切咩換工咩具-aca','nav.tool_network':'總咩覽-aca','nav.tool_switch':'交咩換器咩解咩析-aca','nav.tool_gen':'交咩換器咩產咩生-aca','nav.tool_fw':'防咩火咩牆咩分咩析-aca','nav.tool_ca':'去咩識咩別咩化-aca','nav.tool_log':'日咩誌咩分咩析-aca','import.paste_placeholder':'log貼在這裡咩…','import.upload_btn':'牽檔案進來-aca','import.analyze_btn':'咩一下分析-aca','import.clear_btn':'清空草原咩','import.file_loaded':'已經牽進來咩檔案-aca：','import.progress_parsing':'咩一下中-aca…','import.progress_analyzing':'比對壞蛋分類中咩…','import.progress_rendering':'畫出來中-aca…','import.progress_correlating':'正在咩出關聯-aca…','import.large_file_notice':'檔案太大咩（{name}，{lines} 行），下面框框不顯示-aca，但還是會咩完咩','opt.freqWindow':'時間窗(秒)咩：','opt.freqThreshold':'門檻(次)-aca：','opt.scanThreshold':'掃描門檻咩：','opt.volumeThreshold':'流量門檻咩(MB)：','opt.chainWindow':'關聯時間窗咩(分)：','opt.geoRiskLabel':'危險國家清單咩：','opt.geoRiskFilter':'找國家咩…',
     'results.title':'②事件清單（排隊咩排隊-aca）','results.empty':'草原還空空咩，先牽log進來-aca','results.col_severity':'嚴重度咩','results.col_time':'時間-aca','results.col_host':'主機咩','results.col_format':'格式-aca','results.col_category':'分類咩','results.col_notes':'疑似問題-aca','results.optional_cols':'顯示欄位咩：','results.col_src':'來源IP咩','results.col_dst':'目的IP-aca','results.col_port':'Port咩','results.col_proto':'協定-aca','results.col_url':'網址咩','results.search_placeholder':'搜尋主機/內容咩…','results.col_msg':'內容-aca','results.summary_label':'統計咩：','results.timeline_label':'什麼時候咩',
     'sev.critical':'超嚴重咩!!!','sev.high':'很緊張-aca','sev.medium':'普通咩','sev.low':'放輕鬆-aca','sev.info':'路過看看咩',
     'issues.title':'③問題清單（咩出來的怪怪咩）','issues.empty':'沒咩到什麼怪怪的-aca','issues.col_category':'類別咩','issues.col_severity':'嚴重度-aca','issues.col_count':'次數咩','issues.col_confidence':'有多確定-aca','issues.col_source':'哪來的-aca','issues.col_basis':'依據咩','issues.col_sample':'範例咩','issues.filter_all_sources':'全部咩','issues.source_filter_label':'挑來源-aca：',
@@ -2151,7 +2397,7 @@ const LANG = {
   yanse:{
     'app.title':'Log 分析去識別化工具（唉，又一個工具）','app.subtitle':'把 switch/firewall 的 log 倒進來，CEF 跟 Syslog 都收，依嚴重度排一排，找出問題……看了也不一定會處理啦。可以在本機比對情資清單，把機敏欄位藏起來，反正做不做都差不多，至少不連網。',
     'notice.disclaimer':'分析結果就參考參考吧，反正最後還是要自己判斷，工具也救不了什麼',
-    'import.title':'①匯入 Log（好，開始了）','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424），連 FortiGate 原生 key=value 格式也吃（不用 syslog 外殼，隨便啦），JSON/NDJSON 也行，貼上文字、上傳、拖放都可以，隨便啦。','import.paste_placeholder':'log 貼這裡吧……','import.upload_btn':'上傳檔案（好啦）','import.analyze_btn':'解析分析（好啦）','import.clear_btn':'清空（算了）','import.file_loaded':'已載入檔案，然後呢：','import.progress_parsing':'解析中，等一下吧…','import.progress_analyzing':'比對分類中，反正很快…','import.progress_rendering':'畫結果中…','import.progress_correlating':'在串關聯，隨便等等…','import.large_file_notice':'檔案太大了（{name}，{lines} 行），下面不顯示，反正你也不會看，但還是會解析完','opt.freqWindow':'頻率視窗(秒)，隨便：','opt.freqThreshold':'頻率門檻，反正：','opt.scanThreshold':'掃描門檻，看看就好：','opt.volumeThreshold':'流量門檻，隨便你調（MB）：','opt.chainWindow':'關聯時間窗(分)，隨便填：','opt.geoRiskLabel':'風險國家，你自己選：','opt.geoRiskFilter':'篩選，隨便打…',
+    'import.title':'①匯入 Log（好，開始了）','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424），連 FortiGate 原生 key=value 格式也吃（不用 syslog 外殼，隨便啦），JSON/NDJSON 也行，Windows Event Log XML 也行啦，貼上文字、上傳、拖放都可以，隨便啦。','nav.tools_btn':'切換工具，隨便','nav.tool_network':'總覽，反正沒差','nav.tool_switch':'交換器解析，算了','nav.tool_gen':'交換器產生，隨便啦','nav.tool_fw':'防火牆分析，管它的','nav.tool_ca':'去識別化，懶得說','nav.tool_log':'日誌分析，早就知道','import.paste_placeholder':'log 貼這裡吧……','import.upload_btn':'上傳檔案（好啦）','import.analyze_btn':'解析分析（好啦）','import.clear_btn':'清空（算了）','import.file_loaded':'已載入檔案，然後呢：','import.progress_parsing':'解析中，等一下吧…','import.progress_analyzing':'比對分類中，反正很快…','import.progress_rendering':'畫結果中…','import.progress_correlating':'在串關聯，隨便等等…','import.large_file_notice':'檔案太大了（{name}，{lines} 行），下面不顯示，反正你也不會看，但還是會解析完','opt.freqWindow':'頻率視窗(秒)，隨便：','opt.freqThreshold':'頻率門檻，反正：','opt.scanThreshold':'掃描門檻，看看就好：','opt.volumeThreshold':'流量門檻，隨便你調（MB）：','opt.chainWindow':'關聯時間窗(分)，隨便填：','opt.geoRiskLabel':'風險國家，你自己選：','opt.geoRiskFilter':'篩選，隨便打…',
     'results.title':'②事件清單（依嚴重度排序，反正都要看）','results.empty':'沒資料，匯入再說吧','results.col_severity':'嚴重度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題（隨便看看）','results.optional_cols':'顯示欄位，隨便：','results.col_src':'來源IP，反正','results.col_dst':'目的IP，沒差','results.col_port':'Port，看看就好','results.col_proto':'協定，算了','results.col_url':'網址，隨便','results.search_placeholder':'搜尋，隨便打打…','results.col_msg':'內容','results.summary_label':'統計，看看就好：','results.timeline_label':'時間分布，看看就好',
     'sev.critical':'嚴重（唉）','sev.high':'高（麻煩）','sev.medium':'中（還好）','sev.low':'低（無所謂）','sev.info':'資訊（隨便）',
     'issues.title':'③問題清單（找到了，然後呢）','issues.empty':'沒發現問題，也許只是還沒發現','issues.col_category':'類別','issues.col_severity':'嚴重度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_source':'來源','issues.col_basis':'依據，其實也沒差','issues.col_sample':'範例，隨便看看','issues.filter_all_sources':'全部','issues.source_filter_label':'篩來源，隨便：',
@@ -2168,7 +2414,7 @@ const LANG = {
     'egg.escToast':'啊啊啊，分析到頭痛，清掉吧，反正下次還是要重做，唉'
   }
 ,
-  wuxia:{'app.title':'Log 分析與隱姓埋名工具','app.subtitle':'引入交換器/護派結界 Log（CEF／標準 Syslog），依嚴重程度排序並找出可能問題；本門核對已知江湖黑名單；可對敏感欄位隱姓埋名。全程僅在瀏覽器本門執行，不會連網。','notice.disclaimer':'此招式之分析結果僅供參考，實際處置請自行判斷並謹慎使用','import.title':'① 引入 Log','import.hint':'能通 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式、FortiGate 原生 key=value 誌錄（不需 syslog 外殼），以及 JSON/NDJSON，可呈上文字或呈遞卷宗，亦可直接拖放卷宗至此。','import.paste_placeholder':'在此呈上誌錄內容，或用下方呈遞之鈕…','import.upload_btn':'呈遞卷宗','import.analyze_btn':'探查並分析','import.clear_btn':'清盤重來','import.file_loaded':'已翻閱卷宗：','import.progress_parsing':'探查中…','import.progress_analyzing':'密報核對與分類中…','import.progress_rendering':'繪製秘錄中…','import.progress_correlating':'牽連查探中…','import.large_file_notice':'檔案過大（{name}，共 {lines} 行），內容不於下方文字框顯示，仍會完整探查','opt.freqWindow':'次數窗口（瞬息）：','opt.freqThreshold':'次數門檻（樁）：','opt.scanThreshold':'巡山查探門檻(數)：','opt.volumeThreshold':'江湖路量門檻（MB）：','opt.chainWindow':'牽連時辰窗（刻）：','opt.geoRiskLabel':'地理位置凶險標記：','opt.geoRiskFilter':'過濾門人國家…','results.title':'② 事件名冊（依嚴重程度排序）','results.empty':'尚江湖無蹤，請先引入並分析 log','results.col_severity':'凶險程度','results.col_time':'時辰','results.col_host':'山莊','results.col_format':'門派功法','results.col_category':'流派','results.col_notes':'疑似隱患','results.optional_cols':'顯示之欄：','results.col_src':'出處IP','results.col_dst':'去向 IP','results.col_port':'Port','results.col_proto':'通訊門派心法','results.col_url':'去處／取用招式','results.search_placeholder':'尋人啟事主機/內容…','results.col_msg':'內文','results.summary_label':'統共：','results.timeline_label':'江湖異動時辰分布','sev.critical':'凶險','sev.high':'高危','sev.medium':'平和','sev.low':'輕微','sev.info':'底細','issues.title':'③ 問題名冊（基本資安分析）','issues.empty':'未發現符合門規的問題','issues.col_category':'流派','issues.col_severity':'凶險程度','issues.col_count':'回數','issues.col_confidence':'可信之度','issues.col_source':'密報出處','issues.col_basis':'核對依據','issues.col_sample':'示範','issues.filter_all_sources':'滿門出處','issues.source_filter_label':'過濾門人密報出處：','chain.title':'疑似連環殺局','chain.empty':'查無相符之連環殺局','chain.col_actor':'出處/行為者','chain.col_stages':'招式順序','chain.col_first':'頭一回時辰','chain.col_last':'末了時辰','chain.col_span':'涵蓋時辰','chain.stage_recon':'🔍 探路','chain.stage_access':'🔑 試探取用','chain.stage_malicious':'⚠ 已知邪魔','chain.stage_postActivity':'📤 疑似後續舉動','conf.confirmed':'已印證','conf.heuristic':'推演','cat.authFail':'驗明正身走火入魔','cat.denyBlock':'來訪遭逐出山門','cat.attack':'偷襲／邪魔武功','cat.scanFlood':'巡山查探/洪水攻擊','cat.exceedThreshold':'越過門檻','cat.other':'雜項','cat.freqLabel':'次數紊亂：','cat.possibleScan':'疑似巡山查探行為','cat.knownIOC':'已知密報命中','cat.volumeAnomaly':'江湖路量紊亂','cat.geoRisk':'地理位置凶險','cat.geoIPRisk':'地理位置凶險（IP查表）','note.bruteForce':'疑似猜內功心法/暴力破解','note.scanOrMisconfig':'疑似巡山查探或誤之約','note.freqAnomaly':'次數紊亂','note.possibleScan':'疑似 Port/主機巡山查探','note.knownIOC':'已知密報命中','intel.title':'④ 江湖密報本門核對名冊','intel.hint':'引入公開或內部的 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON，如 Spamhaus DROP 攜卷下山格式），僅在本門核對，工具不會主動連網查詢。命中會標記為「已確認」的高凶險問題。','intel.add_btn':'上傳名冊','intel.name_placeholder':'名冊名號','intel.date_placeholder':'密報日期（自填）','intel.count_label':'樁','intel.remove_btn':'剔除','intel.empty':'尚未引入任何江湖黑名單','safelist.title':'⑤ 已知護派名冊（白名單）','safelist.hint':'引入自行維護的已知護派 IP/CIDR 名冊（純文字、CSV 或 JSON／NDJSON），命中時不會被標記為已知密報命中，用於剔除公開名冊常誤中的內網轄境或已知合法服務。','safelist.name_placeholder':'名冊名號','safelist.add_btn':'上傳名冊','safelist.template_btn':'攜下山範例CSV','safelist.empty':'尚未引入任何護派名冊','geo.title':'⑥ GeoIP 位置資料庫核對','geo.hint':'引入 CIDR→國家對照表：可上傳純文字/CSV（表頭需含 cidr 與 country 欄位）或 v2fly/Xray 格式的 geoip.dat 二進位檔（僅探查 IPv4）。命中後若該國家落在上方「地理位置凶險標記」勾選名冊，會標記為地理位置凶險（IP查表版）。資料庫需自行攜下山，本工具不內建。','geo.name_placeholder':'名冊名號（選填，未填則用檔名）','geo.add_btn':'上傳名冊','geo.empty':'尚未引入任何 GeoIP 資料庫','geo.riskGroupLabel':'高凶險國家','geo.continent.asia':'東方大陸','geo.continent.europe':'歐羅巴','geo.continent.africa':'黑陸','geo.continent.namerica':'北美','geo.continent.samerica':'南美','geo.continent.oceania':'南洋群島','geo.continent.other':'雜項/未分類','guide.title':'⑦ 如何取得外部密報','guide.body':'本工具僅做本門核對，不會主動連網抓取或回傳任何資料。\n常見公開密報出處（用途說明，正式攜下山網址請自行查詢官方頁面）：\n• Spamhaus DROP/EDROP — 已知惡意轄境（CIDR）名冊\n• Emerging Threats / Proofpoint compromised-ips — 已知遭入侵主機 IP 名冊\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — 惡意軟體 C2 相關 IOC\n• FireHOL Level 1 — 聚合 Spamhaus/DShield/Abuse.ch 等多出處轄境名冊：https://iplists.firehol.org/files/firehol_level1.netset（純文字、# 開頭註解，可直接貼上本頁引入）\n• EmergingThreats Block List — IDS/IPS 常用攻擊者 IP 名冊：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字，可直接貼上引入）\n• CINS Army List — 高信譽度攻擊出處 IP：https://cinsscore.com/list/ci-badguys.txt（純文字、每行一個 IP，可直接貼上引入）\n• Blocklist.de — 蜜罐/入侵偵測回報彙整攻擊出處 IP：https://www.blocklist.de/downloads/export-ips_all.txt（純文字、每行一個 IP，可直接貼上引入）\n• DShield/SANS ISC Block List — 近 3 天最活躍攻擊轄境：https://www.dshield.org/block.txt（⚠️ tab 分隔多欄位名冊，非單欄 CIDR，直接貼上只會取到每列第一欄的轄境起手 IP 做單一 IP 精確核對、不會展開成 /24，核對涵蓋率大幅降低，指點先自行處理組成 CIDR 再引入）\n上述皆為公開純文字檔案，可直接攜下山後貼上或另存檔案再用本頁「上傳名冊」引入；AbuseIPDB 等需註冊/API 金鑰才能取得的服務未列入。\n多數公開名冊各自有使用條款（部分僅供非商業/個人使用），攜下山與使用前請自行確認條款；指點至少每月更新一次，過舊名冊參考價值降低。','deid.title':'⑧ 隱姓埋名','deid.hint':'將事件中的 IP／山莊名號／道號替換為一致映射的假值（IP 採 RFC5737 文件用轄境）。請先完成③④的問題分析與密報核對，隱姓埋名後的假 IP 將無法再命中真實江湖黑名單。','deid.preserve_last_octet':'保留 IP 末位真身','deid.run_btn':'執行隱姓埋名','deid.download_btn':'攜下山隱姓埋名結果','deid.stat_replaced':'已易容','deid.stat_ip':'IP','deid.stat_hostname':'山莊名號','deid.stat_user':'道號','deid.stat_mac':'MAC','deid.stat_bucket_overflow':'⚠ {range} 類別已隱姓埋名超過 254 個不同出處 IP（目前 {count} 個），假座標將重複使用，可能對應到走火入魔的原始 IP','export.csv_btn':'攜卷下山問題名冊 CSV','results.export_csv_btn':'攜卷下山事件名冊 CSV','btn.html_report':'📄 HTML 秘錄','btn.print_full_report':'🖨 完整秘錄 PDF','err.popup_blocked':'瀏覽器封鎖了彈出視窗，請准入山門後再試一次','report.title':'分析秘錄','report.total_events':'事件統共','report.formats':'涵蓋門派功法','report.severity_summary':'凶險度分布','report.sample_events':'示範江湖異動','footer.note':'誌錄查探坊 v1 — 一人一劍，不入江湖，不呈遞任何底細','egg.escToast':'哎呀呀，查探到頭疼，先歇著下次再論',},
+  wuxia:{'app.title':'Log 分析與隱姓埋名工具','app.subtitle':'引入交換器/護派結界 Log（CEF／標準 Syslog），依嚴重程度排序並找出可能問題；本門核對已知江湖黑名單；可對敏感欄位隱姓埋名。全程僅在瀏覽器本門執行，不會連網。','notice.disclaimer':'此招式之分析結果僅供參考，實際處置請自行判斷並謹慎使用','import.title':'① 引入 Log','import.hint':'能通 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式、FortiGate 原生 key=value 誌錄（不需 syslog 外殼）、JSON/NDJSON，以及 Windows 江湖誌（wevtutil／事件檢視器 XML 卷宗，不通二進位 .evtx 密卷），可呈上文字或呈遞卷宗，亦可直接拖放卷宗至此。','nav.tools_btn':'轉換武館','nav.tool_network':'總館','nav.tool_switch':'解卷武館','nav.tool_gen':'造卷武館','nav.tool_fw':'護院武館','nav.tool_ca':'隱蹤武館','nav.tool_log':'巡誌武館','import.paste_placeholder':'在此呈上誌錄內容，或用下方呈遞之鈕…','import.upload_btn':'呈遞卷宗','import.analyze_btn':'探查並分析','import.clear_btn':'清盤重來','import.file_loaded':'已翻閱卷宗：','import.progress_parsing':'探查中…','import.progress_analyzing':'密報核對與分類中…','import.progress_rendering':'繪製秘錄中…','import.progress_correlating':'牽連查探中…','import.large_file_notice':'檔案過大（{name}，共 {lines} 行），內容不於下方文字框顯示，仍會完整探查','opt.freqWindow':'次數窗口（瞬息）：','opt.freqThreshold':'次數門檻（樁）：','opt.scanThreshold':'巡山查探門檻(數)：','opt.volumeThreshold':'江湖路量門檻（MB）：','opt.chainWindow':'牽連時辰窗（刻）：','opt.geoRiskLabel':'地理位置凶險標記：','opt.geoRiskFilter':'過濾門人國家…','results.title':'② 事件名冊（依嚴重程度排序）','results.empty':'尚江湖無蹤，請先引入並分析 log','results.col_severity':'凶險程度','results.col_time':'時辰','results.col_host':'山莊','results.col_format':'門派功法','results.col_category':'流派','results.col_notes':'疑似隱患','results.optional_cols':'顯示之欄：','results.col_src':'出處IP','results.col_dst':'去向 IP','results.col_port':'Port','results.col_proto':'通訊門派心法','results.col_url':'去處／取用招式','results.search_placeholder':'尋人啟事主機/內容…','results.col_msg':'內文','results.summary_label':'統共：','results.timeline_label':'江湖異動時辰分布','sev.critical':'凶險','sev.high':'高危','sev.medium':'平和','sev.low':'輕微','sev.info':'底細','issues.title':'③ 問題名冊（基本資安分析）','issues.empty':'未發現符合門規的問題','issues.col_category':'流派','issues.col_severity':'凶險程度','issues.col_count':'回數','issues.col_confidence':'可信之度','issues.col_source':'密報出處','issues.col_basis':'核對依據','issues.col_sample':'示範','issues.filter_all_sources':'滿門出處','issues.source_filter_label':'過濾門人密報出處：','chain.title':'疑似連環殺局','chain.empty':'查無相符之連環殺局','chain.col_actor':'出處/行為者','chain.col_stages':'招式順序','chain.col_first':'頭一回時辰','chain.col_last':'末了時辰','chain.col_span':'涵蓋時辰','chain.stage_recon':'🔍 探路','chain.stage_access':'🔑 試探取用','chain.stage_malicious':'⚠ 已知邪魔','chain.stage_postActivity':'📤 疑似後續舉動','conf.confirmed':'已印證','conf.heuristic':'推演','cat.authFail':'驗明正身走火入魔','cat.denyBlock':'來訪遭逐出山門','cat.attack':'偷襲／邪魔武功','cat.scanFlood':'巡山查探/洪水攻擊','cat.exceedThreshold':'越過門檻','cat.other':'雜項','cat.freqLabel':'次數紊亂：','cat.possibleScan':'疑似巡山查探行為','cat.knownIOC':'已知密報命中','cat.volumeAnomaly':'江湖路量紊亂','cat.geoRisk':'地理位置凶險','cat.geoIPRisk':'地理位置凶險（IP查表）','note.bruteForce':'疑似猜內功心法/暴力破解','note.scanOrMisconfig':'疑似巡山查探或誤之約','note.freqAnomaly':'次數紊亂','note.possibleScan':'疑似 Port/主機巡山查探','note.knownIOC':'已知密報命中','intel.title':'④ 江湖密報本門核對名冊','intel.hint':'引入公開或內部的 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON，如 Spamhaus DROP 攜卷下山格式），僅在本門核對，工具不會主動連網查詢。命中會標記為「已確認」的高凶險問題。','intel.add_btn':'上傳名冊','intel.name_placeholder':'名冊名號','intel.date_placeholder':'密報日期（自填）','intel.count_label':'樁','intel.remove_btn':'剔除','intel.empty':'尚未引入任何江湖黑名單','safelist.title':'⑤ 已知護派名冊（白名單）','safelist.hint':'引入自行維護的已知護派 IP/CIDR 名冊（純文字、CSV 或 JSON／NDJSON），命中時不會被標記為已知密報命中，用於剔除公開名冊常誤中的內網轄境或已知合法服務。','safelist.name_placeholder':'名冊名號','safelist.add_btn':'上傳名冊','safelist.template_btn':'攜下山範例CSV','safelist.empty':'尚未引入任何護派名冊','geo.title':'⑥ GeoIP 位置資料庫核對','geo.hint':'引入 CIDR→國家對照表：可上傳純文字/CSV（表頭需含 cidr 與 country 欄位）或 v2fly/Xray 格式的 geoip.dat 二進位檔（僅探查 IPv4）。命中後若該國家落在上方「地理位置凶險標記」勾選名冊，會標記為地理位置凶險（IP查表版）。資料庫需自行攜下山，本工具不內建。','geo.name_placeholder':'名冊名號（選填，未填則用檔名）','geo.add_btn':'上傳名冊','geo.empty':'尚未引入任何 GeoIP 資料庫','geo.riskGroupLabel':'高凶險國家','geo.continent.asia':'東方大陸','geo.continent.europe':'歐羅巴','geo.continent.africa':'黑陸','geo.continent.namerica':'北美','geo.continent.samerica':'南美','geo.continent.oceania':'南洋群島','geo.continent.other':'雜項/未分類','guide.title':'⑦ 如何取得外部密報','guide.body':'本工具僅做本門核對，不會主動連網抓取或回傳任何資料。\n常見公開密報出處（用途說明，正式攜下山網址請自行查詢官方頁面）：\n• Spamhaus DROP/EDROP — 已知惡意轄境（CIDR）名冊\n• Emerging Threats / Proofpoint compromised-ips — 已知遭入侵主機 IP 名冊\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — 惡意軟體 C2 相關 IOC\n• FireHOL Level 1 — 聚合 Spamhaus/DShield/Abuse.ch 等多出處轄境名冊：https://iplists.firehol.org/files/firehol_level1.netset（純文字、# 開頭註解，可直接貼上本頁引入）\n• EmergingThreats Block List — IDS/IPS 常用攻擊者 IP 名冊：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字，可直接貼上引入）\n• CINS Army List — 高信譽度攻擊出處 IP：https://cinsscore.com/list/ci-badguys.txt（純文字、每行一個 IP，可直接貼上引入）\n• Blocklist.de — 蜜罐/入侵偵測回報彙整攻擊出處 IP：https://www.blocklist.de/downloads/export-ips_all.txt（純文字、每行一個 IP，可直接貼上引入）\n• DShield/SANS ISC Block List — 近 3 天最活躍攻擊轄境：https://www.dshield.org/block.txt（⚠️ tab 分隔多欄位名冊，非單欄 CIDR，直接貼上只會取到每列第一欄的轄境起手 IP 做單一 IP 精確核對、不會展開成 /24，核對涵蓋率大幅降低，指點先自行處理組成 CIDR 再引入）\n上述皆為公開純文字檔案，可直接攜下山後貼上或另存檔案再用本頁「上傳名冊」引入；AbuseIPDB 等需註冊/API 金鑰才能取得的服務未列入。\n多數公開名冊各自有使用條款（部分僅供非商業/個人使用），攜下山與使用前請自行確認條款；指點至少每月更新一次，過舊名冊參考價值降低。','deid.title':'⑧ 隱姓埋名','deid.hint':'將事件中的 IP／山莊名號／道號替換為一致映射的假值（IP 採 RFC5737 文件用轄境）。請先完成③④的問題分析與密報核對，隱姓埋名後的假 IP 將無法再命中真實江湖黑名單。','deid.preserve_last_octet':'保留 IP 末位真身','deid.run_btn':'執行隱姓埋名','deid.download_btn':'攜下山隱姓埋名結果','deid.stat_replaced':'已易容','deid.stat_ip':'IP','deid.stat_hostname':'山莊名號','deid.stat_user':'道號','deid.stat_mac':'MAC','deid.stat_bucket_overflow':'⚠ {range} 類別已隱姓埋名超過 254 個不同出處 IP（目前 {count} 個），假座標將重複使用，可能對應到走火入魔的原始 IP','export.csv_btn':'攜卷下山問題名冊 CSV','results.export_csv_btn':'攜卷下山事件名冊 CSV','btn.html_report':'📄 HTML 秘錄','btn.print_full_report':'🖨 完整秘錄 PDF','err.popup_blocked':'瀏覽器封鎖了彈出視窗，請准入山門後再試一次','report.title':'分析秘錄','report.total_events':'事件統共','report.formats':'涵蓋門派功法','report.severity_summary':'凶險度分布','report.sample_events':'示範江湖異動','footer.note':'誌錄查探坊 v1 — 一人一劍，不入江湖，不呈遞任何底細','egg.escToast':'哎呀呀，查探到頭疼，先歇著下次再論',},
 };
 const EGG_LANGS = ['tlh','pirate','leet','emoji','uwu','bureau','cat','bean','alpaca','yanse','wuxia'];
 let unlockedEggs = { tlh:false, pirate:false, leet:false, emoji:false, uwu:false, bureau:false, cat:false, bean:false, alpaca:false, yanse:false };
@@ -2179,6 +2425,20 @@ function leetify(s) { return s.replace(/[aeiostl]/gi, c => ({a:'4',e:'3',i:'1',o
 function uwuify(s) { return s.replace(/th/gi,'d').replace(/[rl]/gi,'w').replace(/n([aeiou])/gi,'ny$1'); }
 const BEAN_MAP = { a:'🫘', e:'🥦', i:'🥕', o:'🥔', u:'🍆' };
 function beanify(s) { return s.replace(/[aeiou]/gi, c => BEAN_MAP[c.toLowerCase()] || c); }
+
+// ── 跨工具導覽（2026-08-24 新增）：見 switch_analyzer 同名函式註解
+function toggleToolsNav(e) {
+  if (e) e.stopPropagation();
+  const p = document.getElementById('tools-nav-panel');
+  if (!p) return;
+  p.style.display = (p.style.display === 'none' || !p.style.display) ? 'block' : 'none';
+}
+document.addEventListener('click', function (e) {
+  const p = document.getElementById('tools-nav-panel');
+  if (p && p.style.display === 'block' && !p.contains(e.target) && e.target.id !== 'tools-nav-btn') {
+    p.style.display = 'none';
+  }
+});
 
 function tr(key) {
   if (currentLang === 'leet') return leetify(LANG.en[key] || LANG.zhTW[key] || key);
@@ -2319,6 +2579,9 @@ document.querySelectorAll('.lang-egg').forEach(el => {
 function renderStatic() {
   document.getElementById('app-title').textContent = tr('app.title');
   document.getElementById('app-sub').textContent = tr('app.subtitle');
+  // 跨工具導覽面板（2026-08-24 新增）：本檔案沒有通用的 [data-i18n] 掃描機制（靠 renderAll()
+  // 整段重繪），比照本函式既有逐一手動更新慣例，範圍限定在導覽面板內
+  document.querySelectorAll('#tools-nav-panel [data-i18n]').forEach(el => { el.textContent = tr(el.dataset.i18n); });
   document.getElementById('disclaimer').textContent = '⚠ ' + tr('notice.disclaimer');
   document.getElementById('t-import-title').textContent = tr('import.title');
   document.getElementById('t-import-hint').textContent = tr('import.hint');

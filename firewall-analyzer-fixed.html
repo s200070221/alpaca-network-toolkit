@@ -482,6 +482,15 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
     <span class="topbar-title" id="tb-title" data-i18n="title">防火牆設定分析器</span>
     <span class="topbar-meta" id="tb-meta"></span>
     <button id="theme-btn" onclick="toggleTheme()" title="切換明/暗模式" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;font-size:14px;padding:3px 8px;margin-left:auto;margin-right:8px;line-height:1">☀️</button>
+    <button id="tools-nav-btn" onclick="toggleToolsNav(event)" title="切換工具" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;font-size:14px;padding:3px 8px;margin-right:8px;line-height:1">🧭</button>
+    <div id="tools-nav-panel" style="display:none;position:fixed;top:44px;right:12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px;box-shadow:0 6px 20px rgba(0,0,0,.3);z-index:2000;min-width:170px">
+      <span style="display:block;padding:6px 10px;border-radius:6px;color:var(--accent);font-size:12px;margin-bottom:2px;font-weight:600">✓ <span data-i18n="nav.tool_fw">防火牆分析</span></span>
+      <a href="network-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_network">總覽 / Hub</a>
+      <a href="switch-config-parser.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_switch">交換器解析</a>
+      <a href="switch-config-generator.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_gen">交換器產生器</a>
+      <a href="config-anonymizer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_ca">設定去識別化</a>
+      <a href="log-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_log">日誌分析</a>
+    </div>
     <div class="topbar-actions" id="tb-actions" style="display:none">
       <button class="btn btn-ghost btn-sm" onclick="showView('perms')">🔑 <span data-i18n="btn.perms">權限</span></button>
       <button class="btn btn-ghost btn-sm" onclick="showView('convert')">🔄 <span data-i18n="btn.convert">轉換</span></button>
@@ -689,6 +698,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
         <div class="export-card" id="ec-fortiswitch-mac-policies" style="display:none" onclick="doExport('csv-fortiswitch-mac-policies')"><div class="ec-ico">🔗</div><div class="ec-title" data-i18n="ec.fortiswitch_mac_policies">MAC 綁定原則</div><div class="ec-sub">CSV</div></div>
         <div class="export-card" id="ec-fortiswitch-nac-policies" style="display:none" onclick="doExport('csv-fortiswitch-nac-policies')"><div class="ec-ico">🔗</div><div class="ec-title" data-i18n="ec.fortiswitch_nac_policies">NAC 原則</div><div class="ec-sub">CSV</div></div>
         <div class="export-card" onclick="doExport('csv-shadow')"><div class="ec-ico">🛡️</div><div class="ec-title" data-i18n="audit.shadow_title">規則遮蔽分析</div><div class="ec-sub">CSV</div></div>
+        <div class="export-card" onclick="doExport('csv-deny-blocking')"><div class="ec-ico">🚫</div><div class="ec-title" data-i18n="audit.deny_block_title">較早 Deny 阻擋偵測</div><div class="ec-sub">CSV</div></div>
         <div class="export-card" onclick="doExport('csv-merge-suggest')"><div class="ec-ico">🔀</div><div class="ec-title" data-i18n="audit.merge_title">相鄰規則合併建議</div><div class="ec-sub">CSV</div></div>
         <div class="export-card" onclick="doExport('csv-unused-addr')"><div class="ec-ico">📦</div><div class="ec-title" data-i18n="audit.unused_addr_header">未使用位址物件</div><div class="ec-sub">CSV</div></div>
         <div class="export-card" onclick="doExport('csv-unused-svc')"><div class="ec-ico">🔧</div><div class="ec-title" data-i18n="audit.unused_svc_header">未使用服務物件</div><div class="ec-sub">CSV</div></div>

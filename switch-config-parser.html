@@ -516,6 +516,7 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
   <nav class="sb-nav">
     <div class="nav-grp-lbl" data-i18n="nav.func_group">功能</div>
     <div class="nav-item active" id="nav-upload" data-tip="載入設定" onclick="navGo('upload')"><span class="ico">📄</span><span class="nav-lbl" data-i18n="nav.upload">載入設定檔</span></div>
+    <div class="nav-item" id="nav-diff" data-tip="設定比較" onclick="navGo('diff')"><span class="ico">🔄</span><span class="nav-lbl" data-i18n="nav.diff">設定比較</span></div>
     <div class="nav-grp-lbl" id="lbl-result" data-i18n="nav.result_group" style="display:none">解析結果</div>
     <div class="nav-item" id="nav-overview" data-tip="總覽" onclick="navGo('overview')" style="display:none"><span class="ico">📊</span><span class="nav-lbl" data-i18n="nav.overview">總覽</span></div>
     <div class="nav-item" id="nav-irf" data-tip="堆疊拓撲" onclick="navGo('irf')" style="display:none"><span class="ico">🔗</span><span class="nav-lbl" id="nav-irf-lbl">堆疊拓撲</span><span class="cnt" id="nc-irf">0</span></div>
@@ -549,6 +550,15 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
     <span class="tb-meta" id="tb-meta"></span>
     <span id="tb-vendor"></span>
     <button id="theme-btn" onclick="toggleTheme()" title="切換明/暗模式" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;font-size:14px;padding:3px 8px;margin-left:8px;line-height:1">☀️</button>
+    <button id="tools-nav-btn" onclick="toggleToolsNav(event)" title="切換工具" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;font-size:14px;padding:3px 8px;margin-left:6px;line-height:1">🧭</button>
+    <div id="tools-nav-panel" style="display:none;position:fixed;top:44px;right:12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px;box-shadow:0 6px 20px rgba(0,0,0,.3);z-index:2000;min-width:170px">
+      <span style="display:block;padding:6px 10px;border-radius:6px;color:var(--accent);font-size:12px;margin-bottom:2px;font-weight:600">✓ <span data-i18n="nav.tool_switch">交換器解析</span></span>
+      <a href="network-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_network">總覽 / Hub</a>
+      <a href="switch-config-generator.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_gen">交換器產生器</a>
+      <a href="firewall-analyzer-fixed.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_fw">防火牆分析</a>
+      <a href="config-anonymizer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_ca">設定去識別化</a>
+      <a href="log-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_log">日誌分析</a>
+    </div>
     <div class="tb-right" id="tb-actions" style="display:none">
       <button class="btn btn-ghost btn-sm" onclick="exportCSV()" data-i18n="btn.export_csv">⬇ 匯出 CSV</button>
       <button class="btn btn-ghost btn-sm" onclick="exportJSON()" data-i18n="btn.export_json">⬇ 匯出 JSON</button>
