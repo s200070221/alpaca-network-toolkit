@@ -11,10 +11,15 @@ const JuniperParser = (() => {
   // Returns a nested object tree from Junos "show configuration" output
   function parseJunosTree(text) {
     // Normalize: remove version header comments, collapse continuations
-    // Note: Junos 緊湊格式（all on one line）暫不支援
-    // 標準的 'show configuration' 縮排格式完全支援
+    // 2026-08-24 修正：先前這裡的說明自相矛盾（同時宣稱「compact 格式暫不支援」與
+    // 「Handles both compact single-line and standard indented formats」）。實際情況：
+    // tokenizeJunos() 是逐字元掃描（非逐行），對大括號階層格式（含刻意壓成單行的變體）
+    // 天生就能正確處理，本來就支援。真正完全不支援的是另一種截然不同的語法家族——
+    // `show configuration | display set` 扁平格式（裸 "set security policies ..." 行，
+    // 無大括號階層），這種格式 tokenizeJunos()/parseJunosTree() 從未處理過；
+    // firewall-analyzer-app.js 的 analyze() 已於本輪新增偵測與非阻塞 UI 警告
+    // （msg.junos_display_set_unsupported），避免使用者誤以為解析結果完整。
     // Tokenize JunOS config into normalized lines (each ending with { ; or being } alone)
-    // Handles both compact single-line and standard indented formats
     function tokenizeJunos(src) {
       const out = [];
       let buf = '';

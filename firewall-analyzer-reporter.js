@@ -345,7 +345,15 @@ td:first-child,th:first-child{padding-left:16px}
 b{font-weight:600}small{color:#64748b;font-size:11px}
 @media print{body{background:#fff;color:#000}table{border:1px solid #ccc}th{background:#f5f5f5;color:#333;-webkit-print-color-adjust:exact;print-color-adjust:exact}td{border-bottom:1px solid #eee}.badge-allow{background:#d1fae5;color:#065f46}.badge-deny{background:#fee2e2;color:#991b1b}@page{margin:1.5cm}}`;
 
-  function exportHTML(parsed, wifiData) {
+  // 2026-08-24 新增（candidate list #11）：本函式先前是同步整段字串拼接，大量規則的
+  // 設定檔匯出時會讓畫面凍結；現有 11 個天然的分段建置點（policyRows/ifaceRows/...）
+  // 剛好可以插入 yield point，不需拆解迴圈。本檔案自己的 IIFE 作用域無法直接取用
+  // app.js 的 ms()（各模組是各自獨立的頂層 IIFE，非共用作用域），故在此複製一份同款
+  // 極簡 helper；規模僅 ~11 次 yield（非數千次迴圈），用簡單 setTimeout 已足夠，
+  // 不需要 log_analyzer 那種對抗瀏覽器巢狀計時器節流的 MessageChannel 版本。
+  const ms = t => new Promise(r => setTimeout(r, t));
+
+  async function exportHTML(parsed, wifiData) {
     const vendor = parsed.vendor;
     const info   = parsed.deviceInfo;
     const now    = new Date().toLocaleString(_lang==='ja'?'ja-JP':_lang==='en'?'en-US':'zh-TW');
@@ -373,6 +381,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
         <td><span class="badge ${p.status==='enable'||p.status==='Enable'?'badge-on':'badge-off'}">${esc(p.status)}</span></td>
         <td>${esc(p.comments)}</td>
       </tr>`).join('');
+    await ms(0);
 
     const ifaceRows = parsed.interfaces.map(i =>
       `<tr>
@@ -382,6 +391,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
         <td><span class="badge" style="background:#334155;color:#94a3b8">${esc(i.role)}</span></td>
         <td>${esc(i.status)}</td><td>${esc(i.desc)}</td>
       </tr>`).join('');
+    await ms(0);
 
     const routeRows = parsed.routes.map(r =>
       `<tr>
@@ -389,6 +399,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
         <td>${esc(r.dst)}</td><td>${esc(r.gateway)}</td><td>${esc(r.device)}</td>
         <td>${esc(r.distance)}</td><td>${esc(r.status)}</td><td>${esc(r.comment)}</td>
       </tr>`).join('');
+    await ms(0);
 
     const vpnRows = parsed.vpn.map(v =>
       `<tr>
@@ -406,6 +417,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
           <td>${esc(p.localSub)}</td><td>${esc(p.remoteSub)}</td>
         </tr>`)
     ).join('');
+    await ms(0);
 
     const addrRows = parsed.addresses.slice(0, 200).map(a =>
       `<tr>
@@ -422,6 +434,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
         <td>${esc(u.authType||u.groupType||'-')}</td>
         <td>${esc(u.members||'-')}</td><td>${esc(u.email||u.server||'-')}</td>
       </tr>`).join('');
+    await ms(0);
 
     // SD-WAN section for exportHTML
     const sdwanSection = (() => {
@@ -447,6 +460,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       h+='</tbody></table></div></div>';
       return h;
     })();
+    await ms(0);
 
     const haSection = (() => {
       const ha = parsed.ha;
@@ -459,6 +473,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       h+='</tbody></table></div></div>';
       return h;
     })();
+    await ms(0);
 
     const allowN = parsed.policies.filter(p => p.action==='accept').length;
     const denyN  = parsed.policies.length - allowN;
@@ -556,6 +571,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       return h;
     }
     const wifiSection = buildWifiSection(wifiData);
+    await ms(0);
 
     const wwanSection = (() => {
       const ww = parsed.wwan;
@@ -620,6 +636,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       h += '</div>';
       return h;
     })();
+    await ms(0);
 
     const wlanSection = (() => {
       const wl = parsed.wlan;

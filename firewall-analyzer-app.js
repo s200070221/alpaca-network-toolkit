@@ -84,6 +84,14 @@ const App = (() => {
     return 'unknown';
   }
 
+  // Junos `display set` 扁平格式偵測（2026-08-24 新增，見 parser-juniper.js 開頭同日註解）：
+  // 大括號階層格式（parseJunosTree() 支援）幾乎必含 '{'；display set 匯出是連續多行裸
+  // "set ..." 指令、完全無大括號。純函式抽出以利測試（DOM 無關），呼叫端見 analyze()。
+  function isJunosDisplaySet(text) {
+    if (!text || /\{/.test(text)) return false;
+    return (text.match(/^set\s+\S/gm) || []).length >= 3;
+  }
+
   function pickFile(v,inp){
     if(!inp.files.length)return;
     const f=inp.files[0]; ST[v]=f;
@@ -237,6 +245,13 @@ const App = (() => {
         const detected=detectFwVendor(ST.raw[v]);
         if(detected!=='unknown'&&detected!==FW_SLOT_VENDOR[v]){
           warnMsgs.push(tr('msg.vendor_mismatch').replace('{slot}',FW_SLOT_LABEL[v]).replace('{detected}',FW_DETECTED_LABEL[detected]||detected));
+        }
+        // Junos `display set` 扁平格式（"show configuration | display set"，裸 "set ..." 行、
+        // 無大括號階層）偵測：JuniperParser 的 parseJunosTree()/tokenizeJunos() 僅支援大括號
+        // 階層格式（含單行變體），display set 語法完全不支援，靜默誤判/解析不完整卻無任何
+        // 提示；比照上方 vendor_mismatch 慣例，非阻塞警告（解析仍會嘗試進行）
+        if(v==='j'&&isJunosDisplaySet(ST.raw.j)){
+          warnMsgs.push(tr('msg.junos_display_set_unsupported'));
         }
       });
       if(warnMsgs.length){
@@ -1520,6 +1535,7 @@ function onParsed(){
         $('filter-type').style.display   = 'none';
         if (!PARSED) { $('tbl-wrap').innerHTML = '<div class="nodata">'+tr('msg.no_data_yet')+'</div>'; return; }
         const _sh  = analyzeRuleShadowing(PARSED.policies || []);
+        const _db  = analyzeDenyBlocking(PARSED.policies || []);
         const _mg  = analyzeMergeSuggestions(PARSED.policies || []);
         const _un  = analyzeUnusedObjects(PARSED);
         const _co  = analyzeCompliance(PARSED);
@@ -1527,13 +1543,14 @@ function onParsed(){
         const _med = _co.filter(f => f.risk === 'medium').length;
         $('sum-wrap').innerHTML = sumC([
           { l:tr('audit.sum_shadow'),      v: _sh.length,              c: _sh.length  ? 'var(--red)'    : 'var(--green)' },
+          { l:tr('audit.sum_deny_block'),  v: _db.length,               c: _db.length  ? 'var(--red)'    : 'var(--green)' },
           { l:tr('audit.sum_merge'),       v: _mg.length,               c: _mg.length  ? 'var(--teal)'   : 'var(--green)' },
           { l:tr('audit.sum_unused_addr'), v: _un.unusedAddrs.length,  c: _un.unusedAddrs.length ? 'var(--yellow)' : 'var(--green)' },
           { l:tr('audit.sum_unused_svc'),  v: _un.unusedSvcs.length,   c: _un.unusedSvcs.length  ? 'var(--orange)' : 'var(--green)' },
           { l:tr('audit.sum_high_risk'),   v: _hi,                     c: _hi   ? 'var(--red)'    : 'var(--green)' },
           { l:tr('audit.sum_mid_risk'),    v: _med,                    c: _med  ? 'var(--yellow)' : 'var(--green)' },
         ]);
-        $('tbl-cnt').textContent = `${_sh.length + _mg.length + _un.unusedAddrs.length + _un.unusedSvcs.length + _hi + _med} ${tr('unit.findings')}`;
+        $('tbl-cnt').textContent = `${_sh.length + _db.length + _mg.length + _un.unusedAddrs.length + _un.unusedSvcs.length + _hi + _med} ${tr('unit.findings')}`;
         // Zone 拓樸圖：表格/拓樸切換，比照 case 'routes' 內既有 BGP peer 拓樸的 _fwBgpView 慣例
         let _zoneHtml = buildZoneMatrixHtml(PARSED.policies);
         if (_zoneHtml) {
@@ -1541,7 +1558,7 @@ function onParsed(){
           const _zTgl=`<div style="display:flex;gap:5px;margin-bottom:8px"><button onclick="window._fwZoneView='table';renderSection('audit')" style="${_zbs(!window._fwZoneView||window._fwZoneView==='table')}">${tr('routing.view_table')}</button><button onclick="window._fwZoneView='topo';renderSection('audit')" style="${_zbs(window._fwZoneView==='topo')}">${tr('routing.view_topo')}</button></div>`;
           _zoneHtml = _zTgl + (window._fwZoneView==='topo' ? buildZoneTopoHtml(PARSED.policies) : _zoneHtml);
         }
-        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildMergeHtml(_mg) + buildUnusedHtml(_un) + buildComplianceHtml(_co)
+        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildUnusedHtml(_un) + buildComplianceHtml(_co)
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
               <div id="health-result" style="margin-top:12px"></div>
@@ -2003,13 +2020,14 @@ function onParsed(){
     // 皆為純函式，直接在匯出當下用目前的 d（=PARSED）即時計算，不依賴使用者是否切過
     // Audit 分頁的渲染快取——這樣「尚未分析」與「分析過但 0 筆」不會混淆成同一種空白結果
     'shadow': d => analyzeRuleShadowing(d.policies||[]),
+    'deny-blocking': d => analyzeDenyBlocking(d.policies||[]),
     'merge-suggest': d => analyzeMergeSuggestions(d.policies||[]),
     'unused-addr': d => analyzeUnusedObjects(d).unusedAddrs,
     'unused-svc': d => analyzeUnusedObjects(d).unusedSvcs,
     'compliance': d => analyzeCompliance(d),
   };
 
-  function doExport(type){
+  async function doExport(type){
     if(type.startsWith('csv-diff-')){
       // 新舊比對是獨立於 ST/PARSED 的比對流程，不受單一設定分析的 PARSED 門檻限制
       if(!DIFF_RESULT)return;
@@ -2024,14 +2042,24 @@ function onParsed(){
     const hn=d.deviceInfo.hostname;
     const ds=dateStr();
     if(type==='html-report'){
-      Reporter.download(Reporter.exportHTML(d, WIFI_DATA),`fw_report_${hn}_${ds}.html`,'text/html');
+      // 2026-08-24：exportHTML() 已改為 chunked async（大量規則時避免同步拼接凍結畫面），
+      // 呼叫端改 await；用滑鼠游標變化給使用者簡單的視覺回饋（沙漏/wait），比修改匯出卡片
+      // 內部 DOM 結構安全，不依賴卡片的巢狀標籤結構
+      document.body.style.cursor='wait';
+      try{
+        const html=await Reporter.exportHTML(d, WIFI_DATA);
+        Reporter.download(html,`fw_report_${hn}_${ds}.html`,'text/html');
+      } finally {
+        document.body.style.cursor='';
+      }
     }
     else if(type==='print-pdf'){
       // 重用既有 exportHTML() 產生的報表字串（含內嵌 @media print CSS），開新視窗列印，
       // 使用者可在瀏覽器列印對話框選「另存為 PDF」；零外部依賴、離線可用
       const printWin=window.open('','_blank');
       if(!printWin){alert(tr('err.popup_blocked'));return;}
-      printWin.document.open();printWin.document.write(Reporter.exportHTML(d, WIFI_DATA));printWin.document.close();
+      const html=await Reporter.exportHTML(d, WIFI_DATA);
+      printWin.document.open();printWin.document.write(html);printWin.document.close();
       printWin.onload=()=>{printWin.focus();printWin.print();};
     }
     else if(type==='json'){
@@ -3154,7 +3182,7 @@ function startMatrixRain(){
     el.innerHTML='<svg width="48" height="56" viewBox="0 0 48 56" xmlns="http://www.w3.org/2000/svg"><ellipse cx="24" cy="38" rx="14" ry="12" fill="#c8b89a"/><rect x="18" y="20" width="8" height="16" rx="4" fill="#c8b89a"/><ellipse cx="22" cy="16" rx="9" ry="8" fill="#d4c4a0"/><ellipse cx="15" cy="10" rx="3" ry="5" fill="#c8b89a"/><ellipse cx="29" cy="10" rx="3" ry="5" fill="#c8b89a"/><ellipse cx="15" cy="10" rx="1.5" ry="3" fill="#e8b4b8"/><ellipse cx="29" cy="10" rx="1.5" ry="3" fill="#e8b4b8"/><circle cx="18" cy="15" r="2" fill="#4a3728"/><circle cx="26" cy="15" r="2" fill="#4a3728"/><circle cx="18.7" cy="14.3" r=".6" fill="#fff"/><circle cx="26.7" cy="14.3" r=".6" fill="#fff"/><ellipse cx="22" cy="20" rx="3" ry="2" fill="#b09070"/><circle cx="20.5" cy="20" r=".8" fill="#7a5a40"/><circle cx="23.5" cy="20" r=".8" fill="#7a5a40"/><ellipse cx="22" cy="9" rx="7" ry="4" fill="#e8dcc8"/><ellipse cx="18" cy="8" rx="4" ry="3" fill="#e8dcc8"/><ellipse cx="26" cy="8" rx="4" ry="3" fill="#e8dcc8"/><rect x="13" y="47" width="5" height="8" rx="2.5" fill="#b09070"/><rect x="20" y="47" width="5" height="8" rx="2.5" fill="#b09070"/><rect x="28" y="47" width="5" height="8" rx="2.5" fill="#b09070"/><ellipse cx="37" cy="36" rx="4" ry="3" fill="#d4c4a0"/></svg>';
   })();
   // 稽核函式供外部呼叫（診斷 / 整合測試）
-  window._auditFns = { analyzeRuleShadowing, analyzeUnusedObjects, analyzeCompliance };
+  window._auditFns = { analyzeRuleShadowing, analyzeDenyBlocking, analyzeUnusedObjects, analyzeCompliance };
   // 測試注入：直接設定 PARSED 並觸發 onParsed（供自動化測試）
   window._injectParsed = function(d) { PARSED = d; onParsed(); };
   // 入口頁拖入自動載入
