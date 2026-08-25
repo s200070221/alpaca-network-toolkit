@@ -156,25 +156,92 @@
     return map;
   }
 
+  // 較早的 deny 規則擋住較晚的 accept 規則：與 analyzeRuleShadowing()（較早 accept 遮蔽較晚 accept，
+  // 屬於「規則冗餘可精簡」）是不同性質的問題——這裡是「規則被擋住形同虛設」，對安全稽核更關鍵
+  // （使用者可能誤以為某條 accept 規則生效，實際上流量早被更前面的 deny 攔截）。獨立成一個函式，
+  // 不與 analyzeRuleShadowing 合併，避免混淆兩種問題的語意與後續建議動作。全專案 12 家廠牌的
+  // policies 正規化模型 action 欄位只有二元值 accept/deny（見 firewall-analyzer-parser-fortigate.js
+  // 的 `gv(t,'action')||'deny'` 預設值慣例），不需處理 vendor 專屬的 drop/reject 同義詞。
+  function analyzeDenyBlocking(policies) {
+    const toSet = _shadowToSet, covers = _shadowCovers, intfCovers = _shadowIntfCovers;
+    const results = [];
+    const active = policies.filter(p => p.status !== 'disable');
+    for (let i = 0; i < active.length; i++) {
+      const later = active[i];
+      if (later.action !== 'accept') continue;   // 只關心「本該生效的 accept 規則」被擋住的情境
+      const lSrc = toSet(later.srcAddr), lDst = toSet(later.dstAddr), lSvc = toSet(later.service);
+      for (let j = 0; j < i; j++) {
+        const earlier = active[j];
+        if (earlier.action !== 'deny') continue;
+        if (earlier._vdom !== later._vdom) continue;
+        if (!intfCovers(earlier.srcIntf, later.srcIntf)) continue;
+        if (!intfCovers(earlier.dstIntf, later.dstIntf)) continue;
+        const eSrc = toSet(earlier.srcAddr), eDst = toSet(earlier.dstAddr), eSvc = toSet(earlier.service);
+        if (!covers(eSrc, lSrc) || !covers(eDst, lDst) || !covers(eSvc, lSvc)) continue;
+        results.push({ blockedId: later.id, blockedName: later.name,
+          blockingId: earlier.id, blockingName: earlier.name });
+        break;
+      }
+    }
+    return results;
+  }
+
+  // 跨廠牌都存在的通用萬用字元關鍵字，非任何特定廠牌命名，任何廠牌 fallback 皆套用
+  const _COMMON_BUILTINS = ['all', 'any', 'ALL', 'none', 'NONE'];
+  // parsed.vendor（各 parser 回傳的頂層 vendor 字串，如 'FortiGate'/'Cisco ASA'）→ 該廠牌出廠
+  // 預設/內建位址、服務物件名稱清單。查無官方文件佐證的廠牌不列在此 Map，analyzeUnusedObjects()
+  // 會 fallback 使用 _COMMON_BUILTINS，避免臆測名稱造成誤判「已使用」而漏掉真正未使用物件。
+  const VENDOR_BUILTINS = new Map([
+    // FortiGate 出廠預設地址/服務物件（既有清單，2026-08-25 前即已驗證，原樣保留）
+    ['FortiGate', [
+      ..._COMMON_BUILTINS,
+      'INTERNET', 'LAN_SUBNETS', 'SSLVPN_TUNNEL_ADDR1', 'SSLVPN_TUNNEL_ADDR1_IPV6',
+      'FABRIC_DEVICE', 'FIREWALL_AUTH_PORTAL_ADDRESS',
+      'PING', 'DNS', 'DNS-UDP', 'HTTP', 'HTTPS', 'SSH', 'FTP', 'SMTP', 'POP3', 'IMAP', 'IMAPS', 'SMTPS',
+      'ALL_ICMP', 'ALL_ICMP6', 'ALL_TCP', 'ALL_UDP',
+      'BGP', 'RIP', 'OSPF', 'NTP', 'SNMP', 'SNMP-TRAP',
+      'TELNET', 'RDP', 'VNC', 'SMB', 'NetBIOS-DS', 'NetBIOS-NS', 'NetBIOS-SS',
+      'LDAP', 'LDAPS', 'RADIUS', 'KERBEROS', 'KERBEROS-UDP',
+      'SIP', 'H323', 'MGCP', 'SCCP',
+      'IKE', 'PPTP', 'L2TP', 'GRE',
+      'DHCP', 'TFTP', 'NFS', 'RSYNC', 'SAMBA',
+      'IRC', 'QUAKE', 'PC-Anywhere-Data', 'Squid',
+      'TRACEROUTE', 'SYSLOG', 'WCCP',
+    ]],
+    // Cisco ASA/FTD 官方網路物件關鍵字（ASA Command Reference 明確定義，基礎且無爭議）
+    ['Cisco ASA', [..._COMMON_BUILTINS, 'any4', 'any6']],
+    // PaloAlto：PAN-OS 官方文件（Objects > Services, PAN-OS 11.1 Web Interface Help）明確記載
+    // service-http／service-https 為 predefined service（不會出現在 `show service` 這類僅列出
+    // 自訂物件的指令輸出），高信心度；PAN-OS 無出廠預設地址物件（"any" 僅為比對關鍵字非具名物件）
+    ['PaloAlto', [..._COMMON_BUILTINS, 'service-http', 'service-https']],
+    // pfSense：官方文件（docs.netgate.com「Alias Types」頁）列出的系統保留別名（system alias），
+    // 高信心度；pfSense 無出廠預設服務物件（服務直接以埠號寫在規則內，無具名物件概念）
+    ['pfSense', [..._COMMON_BUILTINS, 'bogons', 'sshguard', 'snort2c', 'virusprot', 'vpn_networks', 'negate_networks', 'tonatsubnets']],
+    // Juniper SRX：Junos 官方文件（Junos Default Groups）明確記載 junos-defaults group 內建
+    // 大量不可刪除/編輯的 predefined application，高信心度（第三方 majornetwork.net 逐一列表僅作
+    // 輔助佐證非主要依據）；Junos 無出廠預設 address-book 物件（"any" 僅為 policy 比對關鍵字）
+    ['Juniper', [
+      ..._COMMON_BUILTINS,
+      'junos-http', 'junos-https', 'junos-ftp', 'junos-ssh', 'junos-telnet',
+      'junos-dns-udp', 'junos-dns-tcp', 'junos-dhcp-server', 'junos-dhcp-client',
+      'junos-smtp', 'junos-ntp', 'junos-snmp', 'junos-ldap', 'junos-imap', 'junos-pop3',
+      'junos-nfs', 'junos-tftp', 'junos-ping', 'junos-icmp-all',
+    ]],
+    // 以下廠牌已派研究 agent 查證（2026-08-25），皆因信心度不足未列入，fallback 套用
+    // _COMMON_BUILTINS，比照專案「不猜測」原則：
+    // - Check Point：官方文件僅查到 SMB Appliance 產品線（非本工具鎖定的 Gaia R8x）的 System
+    //   Services 清單（HTTP/HTTPS/FTP/PPTP_TCP/SNMP/SSH/Citrix），產品線不符，不採用
+    // - SonicWall：官方文件確認存在預設 Address/Service Object，但頁面未能取得逐一具名清單
+    // - MikroTik／EdgeRouter：官方文件確認無出廠預設具名物件，本來就不需要清單（fallback 已足夠）
+    // - Zyxel：僅論壇討論串佐證單一 service group 名稱（非官方 CLI Reference 逐條記載）
+    // - Sophos：官方文件僅確認 Local Service ACL（設備管理存取控制）清單，與一般 Objects >
+    //   Services（防火牆規則用）類別是否相同查無佐證，不確定是否適用
+    // - OpenWrt：parser 本身 `addresses`/`services` 固定回傳空陣列（UCI 無對應物件概念），
+    //   此函式對 OpenWrt 天生無作用，不需要清單
+  ]);
+
   function analyzeUnusedObjects(parsed) {
-    const BUILTINS = new Set([
-      // 通用
-      'all','any','ALL','none','NONE',
-      // 預設地址物件
-      'INTERNET','LAN_SUBNETS','SSLVPN_TUNNEL_ADDR1','SSLVPN_TUNNEL_ADDR1_IPV6',
-      'FABRIC_DEVICE','FIREWALL_AUTH_PORTAL_ADDRESS',
-      // 預設服務（FortiGate 出廠預設 + full-config 輸出常見）
-      'PING','DNS','DNS-UDP','HTTP','HTTPS','SSH','FTP','SMTP','POP3','IMAP','IMAPS','SMTPS',
-      'ALL_ICMP','ALL_ICMP6','ALL_TCP','ALL_UDP',
-      'BGP','RIP','OSPF','NTP','SNMP','SNMP-TRAP',
-      'TELNET','RDP','VNC','SMB','NetBIOS-DS','NetBIOS-NS','NetBIOS-SS',
-      'LDAP','LDAPS','RADIUS','KERBEROS','KERBEROS-UDP',
-      'SIP','H323','MGCP','SCCP',
-      'IKE','PPTP','L2TP','GRE',
-      'DHCP','TFTP','NFS','RSYNC','SAMBA',
-      'IRC','QUAKE','PC-Anywhere-Data','Squid',
-      'TRACEROUTE','SYSLOG','WCCP',
-    ]);
+    const BUILTINS = new Set(VENDOR_BUILTINS.get(parsed.vendor) || _COMMON_BUILTINS);
     // type 為系統自動管理，不需出現在 policy 中即算「已使用」
     const AUTO_TYPES = new Set(['interface-subnet','dynamic','wildcard-fqdn','geography']);
 
@@ -475,6 +542,21 @@
     return h;
   }
 
+  function buildDenyBlockHtml(results) {
+    let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--red);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + tip('tip.deny_block', tr('audit.deny_block_title')) + '</div>';
+    if (!results.length) {
+      h += '<div class="nodata" style="padding:14px 0;color:var(--green)">' + esc(tr('audit.deny_block_none')) + '</div></div>';
+      return h;
+    }
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_blocked_id') + '</th><th>' + tr('audit.col_blocked_name') + '</th><th>' + tr('audit.col_blocking_id') + '</th><th>' + tr('audit.col_blocking_name') + '</th></tr></thead><tbody>';
+    results.forEach(r => {
+      const jh = tr('audit.jump_hint');
+      h += `<tr><td class="mono"><span class="clickable-cell" style="color:var(--red)" onclick="window._jumpToPolicy('${esc(r.blockedId)}')" title="${esc(jh)}">${esc(r.blockedId)}</span></td><td>${esc(r.blockedName||'-')}</td><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy('${esc(r.blockingId)}')" title="${esc(jh)}">${esc(r.blockingId)}</span></td><td>${esc(r.blockingName||'-')}</td></tr>`;
+    });
+    h += '</tbody></table></div></div>';
+    return h;
+  }
+
   const _MERGE_FIELD_LABEL = { srcAddr: 'col.src_addr', dstAddr: 'col.dst_addr', service: 'col.service' };
   function buildMergeHtml(results) {
     let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + tip('tip.merge', tr('audit.merge_title')) + '</div>';
@@ -585,6 +667,9 @@
     const shadowMap = buildShadowMap(policies);
     const shadowCount = Object.values(shadowMap).reduce((s, arr) => s + arr.length, 0);
     if (shadowCount) { score -= shadowCount * 5; issues.push({sev:'warn', label:tr('health.shadowed'), count:shadowCount}); }
+    // T2b: rules blocked by an earlier deny rule（同 T2 權重，皆屬「規則永不生效」類問題）
+    const denyBlockedCount = analyzeDenyBlocking(policies).length;
+    if (denyBlockedCount) { score -= denyBlockedCount * 5; issues.push({sev:'warn', label:tr('health.deny_blocked'), count:denyBlockedCount}); }
     // T3: disabled rules（欄位值一律是 'disable'，非 'disabled'，見 _runPolicyQuery()/各 assemble 函式既有慣例）
     const disabled = policies.filter(p => p.status === 'disable' || p.enabled === false || p.enabled === 'disable');
     if (disabled.length > 3) { score -= (disabled.length - 3) * 2; issues.push({sev:'info', label:tr('health.disabled'), count:disabled.length}); }
