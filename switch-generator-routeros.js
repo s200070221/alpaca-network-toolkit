@@ -81,6 +81,20 @@ function renderRouterOSLACP(list){
   return ['/interface bonding',...list.map(renderRouterOSLACPGroup)].join('\n');
 }
 
+// 本機帳號（2026-08-26 新增）：switch_analyzer 既有 parseRouterOSUsers() 語法為
+// "/user\nadd name=NAME password=PASSWORD group=read|write|full"。**重要限制**：真實
+// RouterOS `/export` 匯出檔本來就不含密碼欄位（官方文件明確記載密碼永不匯出），此為
+// 裝置本身設計非本工具缺陷，故本功能僅能單向「表單→設定檔」產生，無法做「匯入既有
+// 設定檔→回填密碼」的 round-trip；group 非 read/write/full 三選一時 fallback 'full'
+function renderRouterOSUsers(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  return ['/user',...list.map(u=>{
+    const group=/^(read|write|full)$/.test(u.role||'')?u.role:'full';
+    return `add name=${u.name} password=${u.password} group=${group}`;
+  })].join('\n');
+}
+
 function renderRouterOSRoutes(list){
   if(!list||!list.length)return '';
   return ['/ip route',...list.map(r=>`add destination=${r.dst} gateway=${r.gw}`)].join('\n');
@@ -110,6 +124,29 @@ function renderRouterOSOSPF(list){
   return lines.join('\n');
 }
 
+// OSPFv3（2026-08-23 新增）：官方文件確認 RouterOS 7 把 OSPFv2/OSPFv3 統一進同一個
+// /routing ospf 選單，用 instance 的 version=3 屬性區分；o.pid 就是 parser 端解析到的
+// instance name= 原值（非數字流水號），areas[].interfaces 本來就是介面名稱字串陣列
+// （與 IPv4 areas[].networks[].network 形狀不同，見 parseRouterOSOSPF() 分桶邏輯）
+function renderRouterOSOSPFv3(list){
+  const o=(list||[])[0];
+  if(!o)return '';
+  const iname=o.pid||'default6';
+  const lines=['/routing ospf instance',`add name=${iname} version=3${o.routerId?` router-id=${o.routerId}`:''}`];
+  const areas=(o.areas||[]);
+  if(areas.length){
+    lines.push('','/routing ospf area');
+    areas.forEach((a,idx)=>lines.push(`add name=${iname}area${idx} area-id=${a.area} instance=${iname}`));
+    const tmplLines=[];
+    areas.forEach((a,idx)=>{
+      const ifaces=(a.interfaces||[]).filter(Boolean);
+      if(ifaces.length)tmplLines.push(`add area=${iname}area${idx} interfaces=${ifaces.join(',')}`);
+    });
+    if(tmplLines.length)lines.push('','/routing ospf interface-template',...tmplLines);
+  }
+  return lines.join('\n');
+}
+
 // Networks（2026-07-17 對外查證官方 MikroTik RouterOS 文件 /routing/bgp 頁面確認）：
 // output.network 參數其實直接暴露在 /routing/bgp/connection 選單內（官方文件：
 // "template-specific parameters are also directly exposed in this menu"），不需要
@@ -124,17 +161,32 @@ function renderRouterOSBGP(list){
   if(!b)return '';
   const lines=[];
   const networks=b.networks||[];
+  const networks6=b.networks6||[];
   if(networks.length){
     lines.push('/ip firewall address-list');
     networks.forEach(n=>lines.push(`add list=bgp-networks address=${n}`));
     lines.push('');
   }
+  // IPv6（2026-08-23 新增）：官方文件確認 IPv6 版本引用獨立的 /ipv6 firewall address-list
+  // （非 /ip firewall address-list），與既有 IPv4 清單並行
+  if(networks6.length){
+    lines.push('/ipv6 firewall address-list');
+    networks6.forEach(n=>lines.push(`add list=bgp-networks6 address=${n}`));
+    lines.push('');
+  }
   lines.push('/routing bgp instance',`add name=default as=${b.asn}${b.routerId?` router-id=${b.routerId}`:''}`);
   const peers=(b.peers||[]);
   if(peers.length){
-    const outputParams=networks.length?' output.network=bgp-networks output.network-blackhole=yes':'';
+    // address-families=：官方文件確認逐 connection 宣告可為 ipv4/ipv6/ipv4,ipv6；本工具
+    // peer 資料不分家族，依是否有對應 networks/networks6 推斷要開哪些 family。
+    // output.network= 每行只能有一個（parser 端 _parseVRRPRouterOS 姊妹函式 parseBGP()
+    // 用非 global 的 .match() 只取第一筆命中，若同一行輸出兩個 output.network= 會讓 v6
+    // 清單名稱被誤判成 v4 清單名稱），v4/v6 皆有時優先輸出 v4，比照 parser 端既有限制
+    const fams=[networks.length?'ipv4':'',networks6.length?'ipv6':''].filter(Boolean).join(',')||'ipv4';
+    const outputParams=networks.length?' output.network=bgp-networks output.network-blackhole=yes':
+      (networks6.length?' output.network=bgp-networks6':'');
     lines.push('','/routing bgp connection');
-    peers.forEach((p,idx)=>lines.push(`add name=${p.desc||'peer'+idx} remote.address=${p.ip} remote.as=${p.as} instance=default${outputParams}`));
+    peers.forEach((p,idx)=>lines.push(`add name=${p.desc||'peer'+idx} remote.address=${p.ip} remote.as=${p.as} instance=default address-families=${fams}${outputParams}`));
   }
   return lines.join('\n');
 }
@@ -197,20 +249,30 @@ function renderRouterOSRIP(list){
 // 順序）宣告。沿用既有共用 VRRP 表單，`vlanId` 欄位對 RouterOS 而言儲存底層實體介面
 // 名稱（如 ether3），非數字 VLAN ID（比照 parseRouterOS 端 _parseVRRPRouterOS 的
 // 欄位語意，程式註解與 now.md 皆有標明）
+// IPv6（2026-08-23 新增）：官方文件確認 `v3-protocol=ipv6` 旗標區分 IPv6 執行個體，VIP
+// 改宣告在 `/ipv6 address`；parser 端每個 `/interface vrrp add` 行各自對應一筆獨立記錄
+// （vip／vip6 互斥，非同一筆記錄合併兩者），介面命名靠「未顯式 name= 時的循序邏輯介面
+// 命名」（interface=vrrpN，N 為 add 行出現順序），render 端須維持與 parser 端一致的
+// forEach 順序（idx+1）才能正確 round-trip
 function renderRouterOSVRRP(vrrpList){
-  const list=(vrrpList||[]).filter(v=>v.vlanId&&v.vrid);
+  const list=(vrrpList||[]).filter(v=>v.vlanId&&v.vrid&&(v.vip||v.vip6));
   if(!list.length)return '';
   const vrrpLines=['/interface vrrp'];
   const addrLines=[];
+  const addr6Lines=[];
   list.forEach((v,idx)=>{
+    const isV6=!!v.vip6&&!v.vip;
     let line=`add interface=${v.vlanId} vrid=${v.vrid}`;
+    if(isV6)line+=' v3-protocol=ipv6';
     if(v.priority)line+=` priority=${v.priority}`;
     if(v.preempt===false)line+=' preemption-mode=no';
     vrrpLines.push(line);
-    if(v.vip)addrLines.push(`add address=${v.vip} interface=vrrp${idx+1}`);
+    if(isV6){ if(v.vip6)addr6Lines.push(`add address=${v.vip6} interface=vrrp${idx+1}`); }
+    else if(v.vip)addrLines.push(`add address=${v.vip} interface=vrrp${idx+1}`);
   });
   const blocks=[vrrpLines.join('\n')];
   if(addrLines.length)blocks.push(['/ip address',...addrLines].join('\n'));
+  if(addr6Lines.length)blocks.push(['/ipv6 address',...addr6Lines].join('\n'));
   return blocks.join('\n\n');
 }
 
@@ -289,6 +351,8 @@ function assembleRouterOSConfig(model){
   if(routeBlock)blocks.push(routeBlock);
   const ospfBlock=renderRouterOSOSPF(model.ospf);
   if(ospfBlock)blocks.push(ospfBlock);
+  const ospf6Block=renderRouterOSOSPFv3(model.ospf6);
+  if(ospf6Block)blocks.push(ospf6Block);
   const ripBlock=renderRouterOSRIP(model.rip);
   if(ripBlock)blocks.push(ripBlock);
   const vrrpBlock=renderRouterOSVRRP(model.vrrp);
@@ -303,6 +367,8 @@ function assembleRouterOSConfig(model){
   if(aclBlock)blocks.push(aclBlock);
   const qosBlock=renderRouterOSQoS(model.routerosQos);
   if(qosBlock)blocks.push(qosBlock);
+  const usersBlock=renderRouterOSUsers(model.users);
+  if(usersBlock)blocks.push(usersBlock);
   if(model.snmpTrapHost)blocks.push(`/snmp\nset trap-target=${model.snmpTrapHost} trap-community=public`);
   return blocks.join('\n\n')+'\n';
 }
