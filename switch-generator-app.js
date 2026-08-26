@@ -625,6 +625,14 @@ const DEVICE_MODELS={
       {prefix:'0/',from:49,to:50,speed:'1G'},
       {prefix:'0/',from:51,to:52,speed:'10G'}],poe:true},
   ],
+  planet:[
+    {value:'sgs-6341-24t4x',label:'Planet SGS-6341-24T4X (24×1G + 4×SFP+ 10G)',ports:[
+      {prefix:'ethernet 1/0/',from:1,to:24,speed:'1G'},
+      {prefix:'ethernet 1/0/',from:25,to:28,speed:'10G'}],poe:false},
+    {value:'sgs-6341-48t4x',label:'Planet SGS-6341-48T4X (48×1G + 4×SFP+ 10G)',ports:[
+      {prefix:'ethernet 1/0/',from:1,to:48,speed:'1G'},
+      {prefix:'ethernet 1/0/',from:49,to:52,speed:'10G'}],poe:false},
+  ],
 };
 
 function updateDeviceModelOptions(){
@@ -1198,7 +1206,7 @@ function updateModeOptions(){
   });
   document.querySelectorAll('.i-mode').forEach(sel=>{
     const hybridOpt=sel.querySelector('option[value="hybrid"]');
-    if(vendor!=='comware'&&vendor!=='ruijie'){
+    if(vendor!=='comware'&&vendor!=='ruijie'&&vendor!=='planet'){
       if(sel.value==='hybrid'){
         // 目標廠牌無 hybrid 概念，強制轉為 trunk 前，把 hybrid 的 VLAN 資料搬到 trunk 對應欄位，
         // 避免介面在切換廠牌後變成完全沒有 VLAN 指定的空白 trunk port（保留原 hybrid 欄位資料，不清空）
@@ -1225,6 +1233,7 @@ function updateModeOptions(){
     }
   });
   // VSU 卡片僅 Ruijie RGOS 適用（比照 MLAG/VPC 慣例）
+
   const vsuCard=document.getElementById('vsu-card');
   if(vsuCard)vsuCard.style.display=vendor==='ruijie'?'':'none';
   updateDeviceModelOptions();
@@ -1848,6 +1857,12 @@ const VENDOR_UNSUPPORTED={
   // rip/vrrp/dhcpServer/dhcpRelay：SONiC 傳統模式僅單一 BGP instance、RIP v7 待查證，
   // 本輪範圍未涵蓋
   sonic:['rip','vrrp','dhcpServer','dhcpRelay'],
+  // Planet SGS-6341 系列：ACL／QoS／STP／DHCP Server／DHCP Relay 本輪未查得官方語法
+  // 佐證，不猜測；Security（802.1X port-control+MAC port-security）已查證官方語法
+  // 並完整實作 parser+render（見 switch-generator-planet.js 的 planetSecurityLines()），
+  // 不列入此清單；Users（本機帳號）同樣未查證，共用清單無對應 key 故不列出但表單本來
+  // 就不會顯示該廠牌的 Users 卡片（見下方 VENDOR_INCAPABLE 之外的既有隱藏機制）
+  planet:['acl','qos','stp','dhcpServer','dhcpRelay'],
 };
 const VENDOR_FEATURE_LABEL={bgp:'BGP',rip:'RIP',vrrp:'VRRP',dhcpServer:'DHCP Server',dhcpRelay:'DHCP Relay',acl:'ACL',qos:'QoS',security:'Port Security/802.1X',stp:'STP',routes:'Static Routes'};
 
@@ -1897,7 +1912,7 @@ function comwareOspfNetworkWarnings(model){
   return warnings;
 }
 
-const LACP_AGGREGATE_VENDORS=new Set(['comware','juniper','aruba','cisco','cisco_nxos','dell-os10','arista','ruijie','netgear','edgeswitch']);
+const LACP_AGGREGATE_VENDORS=new Set(['comware','juniper','aruba','cisco','cisco_nxos','dell-os10','arista','ruijie','netgear','edgeswitch','planet']);
 function comwareLacpAttrWarnings(model){
   const warnings=[];
   if(!model||!LACP_AGGREGATE_VENDORS.has(model.vendor))return warnings;
@@ -1985,8 +2000,8 @@ function validateForm(){
       }
     }
 
-    // Hybrid 港口檢查（僅 Comware／Ruijie 支援）
-    if(iface.mode==='hybrid'&&model.vendor!=='comware'&&model.vendor!=='ruijie'){
+    // Hybrid 港口檢查（僅 Comware／Ruijie／Planet 支援）
+    if(iface.mode==='hybrid'&&model.vendor!=='comware'&&model.vendor!=='ruijie'&&model.vendor!=='planet'){
       errors.push(`❌ ${tr('val.vendor_no_hybrid').replace('{vendor}',model.vendor).replace('{name}',iface.name)}`);
       markInvalid(ifaceRows[i]?.querySelector('.i-mode'));
     }
@@ -2254,6 +2269,7 @@ function generate(fromImport=false){
   else if(model.vendor==='netgear')cfg=assembleNetgearConfig(model);
   else if(model.vendor==='edgeswitch')cfg=assembleEdgeSwitchConfig(model);
   else if(model.vendor==='sonic')cfg=assembleSONiCConfig(model);
+  else if(model.vendor==='planet')cfg=assemblePlanetConfig(model);
   else cfg=assembleComwareConfig(model);
   document.getElementById('output').value=cfg;
   checkGeneratorEggs(model.sysname);
@@ -2452,7 +2468,7 @@ async function loadParserFunctions(){
   const extraStart=script.indexOf('function parseVRRP');
   const extraEnd=script.indexOf('function renderVRRP');
   const extraFnText=(extraStart>0&&extraEnd>extraStart)?script.slice(extraStart,extraEnd):'function parseVRRP(){return [];}\nfunction parseVXLAN(){return {vtep:"",vnis:[],evpn:[],tunnelMode:""};}';
-  const sandboxFn=new Function(pure+'\n'+extraFnText+'\nreturn { detectVendor:detectVendor, parseComware:parseComware, parseCisco:parseCisco, parseAruba:parseAruba, parseFortiSwitch:parseFortiSwitch, parseJuniper:parseJuniper, parseNXOS:parseNXOS, parseArista:parseArista, parseRuijie:parseRuijie, parseNetgear:parseNetgear, parseEdgeSwitch:parseEdgeSwitch, parseDellOS10:parseDellOS10, parseBrocade:parseBrocade, parseAlcatel:parseAlcatel, parseExtremeXOS:parseExtremeXOS, parseProCurve:parseProCurve, parseRouterOS:parseRouterOS, parseSONiC:parseSONiC, parseLACP:parseLACP, parseDHCP:parseDHCP, parseACL:parseACL, parseQoS:parseQoS, parseSecurity:parseSecurity, parseSTP:parseSTP, parseVRRP:parseVRRP };');
+  const sandboxFn=new Function(pure+'\n'+extraFnText+'\nreturn { detectVendor:detectVendor, parseComware:parseComware, parseCisco:parseCisco, parseAruba:parseAruba, parseFortiSwitch:parseFortiSwitch, parseJuniper:parseJuniper, parseNXOS:parseNXOS, parseArista:parseArista, parseRuijie:parseRuijie, parseNetgear:parseNetgear, parseEdgeSwitch:parseEdgeSwitch, parseDellOS10:parseDellOS10, parseBrocade:parseBrocade, parseAlcatel:parseAlcatel, parseExtremeXOS:parseExtremeXOS, parseProCurve:parseProCurve, parseRouterOS:parseRouterOS, parseSONiC:parseSONiC, parsePlanet:parsePlanet, parseLACP:parseLACP, parseDHCP:parseDHCP, parseACL:parseACL, parseQoS:parseQoS, parseSecurity:parseSecurity, parseSTP:parseSTP, parseVRRP:parseVRRP };');
   _parserFnsCache=sandboxFn();
   return _parserFnsCache;
 }
@@ -2475,7 +2491,7 @@ async function parseAndImport(){
   const api=fns||BasicParser;
 
   const vendor=api.detectVendor(text);
-  if(!vendor||!['comware','cisco','aruba','fortiswitch','juniper','nxos','arista','dell-os10','brocade','alcatel','extreme','procurve','routeros','ruijie','netgear','edgeswitch','sonic'].includes(vendor)){
+  if(!vendor||!['comware','cisco','aruba','fortiswitch','juniper','nxos','arista','dell-os10','brocade','alcatel','extreme','procurve','routeros','ruijie','netgear','edgeswitch','sonic','planet'].includes(vendor)){
     showImportMsg(tr('msg.importNoVendor'),true);
     return;
   }
@@ -2501,6 +2517,7 @@ async function parseAndImport(){
   else if(vendor==='procurve')parsed=api.parseProCurve(text);
   else if(vendor==='routeros')parsed=api.parseRouterOS(text);
   else if(vendor==='sonic')parsed=api.parseSONiC(text);
+  else if(vendor==='planet')parsed=api.parsePlanet(text);
   else{
     parsed=api.parseNXOS(text);
     // parseNXOS() 的 interface 物件形狀跟其餘廠牌不同（vlan 為單數欄位、無 nativeVlan/hybrid），
@@ -2564,7 +2581,10 @@ async function parseAndImport(){
   // 產生，已含合併在 interface ve N 區塊內的資料），否則永遠回空陣列
   // Alcatel／Extreme XOS：通用 dispatcher 同樣沒有這兩個廠牌的分支，改用各自聚合結果自帶的
   // parsed.vrrp（parseAlcatelVRRP／parseExtremeXOSVRRP 產生）
-  const vrrpBypass=vendor==='brocade'||vendor==='alcatel'||vendor==='extreme'||vendor==='procurve'||vendor==='routeros';
+  // Planet：parsePlanetVRRP() 是獨立函式（全域 "router vrrp N" 實例架構，非巢狀在
+  // interface 區塊內，與共用 parseVRRP() dispatcher 完全不同結構），dispatcher 無
+  // planet 分支，改用 parsePlanet() 聚合結果自帶的 parsed.vrrp
+  const vrrpBypass=vendor==='brocade'||vendor==='alcatel'||vendor==='extreme'||vendor==='procurve'||vendor==='routeros'||vendor==='planet';
   const vrrpList=fns?(vrrpBypass?(parsed.vrrp||[]):fns.parseVRRP(text,vendor)):[]; // BasicParser 不含 VRRP
   (vrrpList||[]).forEach(v=>{
     const svi=(parsed.interfaces||[]).find(i=>i.name===v.interface);
@@ -2997,6 +3017,7 @@ function processBulkCSV(){
   else if(model.vendor==='netgear')cfg=assembleNetgearConfig(model);
   else if(model.vendor==='edgeswitch')cfg=assembleEdgeSwitchConfig(model);
         else if(model.vendor==='sonic')cfg=assembleSONiCConfig(model);
+        else if(model.vendor==='planet')cfg=assemblePlanetConfig(model);
         else cfg=assembleComwareConfig(model);
 
         window.bulkConfigs[row.devicename]=cfg;

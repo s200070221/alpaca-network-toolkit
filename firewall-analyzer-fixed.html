@@ -588,6 +588,12 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
           <div class="file-chip" id="uc-chip" style="display:none"><span>📄</span><span class="fn" id="uc-name"></span><span class="rm" onclick="clearFile(event,'u')">✕</span></div>
           <input type="file" id="ui" accept=".txt,.conf,.cfg" onchange="pickFile('u',this)">
         </div>
+        <div class="ucard" style="border-color:rgba(120,40,140,.4)" id="gc" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('gc').classList.add('drag-over')" ondragleave="document.getElementById('gc').classList.remove('drag-over')" ondrop="handleDrop(event,'g')" onclick="document.getElementById('gi').click()">
+          <div class="ucard-head"><div class="vendor-dot" style="background:rgba(120,40,140,.15)">🔒</div><div><h3 style="color:#78288c">WatchGuard Firebox</h3><div class="ver">Fireware XTM/OS · config.xml</div></div></div>
+          <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_watchguard">config.xml 匯出格式，MVP 範圍僅涵蓋 interfaces/policies/addresses/services/routes</div></div>
+          <div class="file-chip" id="gc-chip" style="display:none"><span>📄</span><span class="fn" id="gc-name"></span><span class="rm" onclick="clearFile(event,'g')">✕</span></div>
+          <input type="file" id="gi" accept=".xml" onchange="pickFile('g',this)">
+        </div>
       </div>
       <div class="analyze-row">
         <button class="btn-analyze" id="btn-go" onclick="analyze()" disabled>🔍 <span data-i18n="btn.analyze">開始分析</span></button>
@@ -782,6 +788,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 <script src="firewall-analyzer-parser-zyxel.js"></script>
 <script src="firewall-analyzer-parser-edgerouter.js"></script>
 <script src="firewall-analyzer-parser-openwrt.js"></script>
+<script src="firewall-analyzer-parser-watchguard.js"></script>
 <script src="firewall-analyzer-parser-cisco-asa.js"></script>
 <script src="firewall-analyzer-converter.js"></script>
 <script src="firewall-analyzer-reporter.js"></script>
