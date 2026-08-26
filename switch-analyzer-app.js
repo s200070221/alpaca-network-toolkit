@@ -1446,7 +1446,9 @@ function renderMultiTopo(){
 }
 // 2026-08-19 新增：LLDP 解析擴大時對外查證後查無可信裝置輸出範例、明確排除的廠牌
 // （非查證不足），與 SNMP/Syslog 兩份排除清單並列於此供 renderLLDP()/renderSNMPSyslog() 使用
-const LLDP_UNSUPPORTED = ['ruijie','netgear','edgeswitch'];
+// 2026-08-26 新增：edgeswitch 已對外查證官方 Command Reference Manual 取得完整 detail 模式
+// 輸出範例（Remote Identifier: 為區塊起始），移出排除清單，見 parseLLDPEdgeSwitch()
+const LLDP_UNSUPPORTED = ['ruijie','netgear'];
 // 2026-08-19（續）：juniper/alcatel/extreme/routeros/procurve/aruba 6 家已對外查證官方
 // 語法補上 trap host 解析（見 switch-analyzer-parser-comware.js parseSNMP()），排除清單
 // 縮小為僅 fortiswitch——官方 CLI Reference 的 community 欄位表完全沒有 host/IP 欄位，
