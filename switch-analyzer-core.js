@@ -1786,6 +1786,34 @@ const LLDPParser = (() => {
     return entries;
   }
 
+  // ── Ubiquiti EdgeSwitch（Broadcom ICOS 家族，與 Dell OS10 同源系統）──
+  // 官方 EdgeSwitch ES-24-250W Command Reference Manual 查證：detail 模式每筆鄰居以
+  // "Remote Identifier:" 起始，區塊內未見本地介面欄位；本地介面只出現在 summary 模式
+  // （"Local Interface | RemID | Chassis ID | Port ID | System Name" 表格）。故本解析器
+  // 優先合併兩段輸出，用 RemID 對照回填本地介面；若使用者只貼 detail 沒有 summary，
+  // 本地介面留空 '-'，不臆測（比照專案「查無佐證不猜測」慣例）。
+  function parseLLDPEdgeSwitch(text) {
+    const entries = [];
+    const summaryMap = {}; // RemID -> Local Interface
+    const summaryLineRe = /^(\S+)\s+(\d+)\s+([0-9A-Fa-f:]{17})\s+(\S+)\s+(.+)$/gm;
+    let sm;
+    while ((sm = summaryLineRe.exec(text)) !== null) {
+      summaryMap[sm[2]] = sm[1];
+    }
+    const blocks = text.split(/^(?=Remote Identifier:)/m).filter(b => /Remote Identifier:/i.test(b));
+    for (const blk of blocks) {
+      const remId      = (blk.match(/Remote Identifier:\s*(\S+)/i)||[])[1]?.trim()||'';
+      const neighbor    = (blk.match(/System Name:\s*(.+)/i)||[])[1]?.trim()||'';
+      const remotePort  = (blk.match(/^Port ID:\s*(.+)$/im)||[])[1]?.trim()||'';
+      const platform    = (blk.match(/System Description:\s*(.+)/i)||[])[1]?.trim().slice(0,50)||'';
+      const ip          = (blk.match(/Management Address:.*?Address:\s*([\d.]+)/i)||[])[1]?.trim()||'';
+      const cap         = (blk.match(/System Capabilities(?:\s+Supported)?:\s*(.+)/i)||[])[1]?.trim()||'';
+      const localPort   = summaryMap[remId] || '-';
+      if (remId) entries.push({localPort, neighbor, platform, remotePort, remoteDesc:'', capability:cap, ip, protocol:'LLDP'});
+    }
+    return entries;
+  }
+
   // ── Dell EMC OS10 ─────────────────────────────────
   function parseLLDPDell(text) {
     const entries = [];
@@ -1956,6 +1984,10 @@ const LLDPParser = (() => {
     if (/Device ID:/i.test(text))                                    return parseCDP(text);
     if (/LLDP neighbor-information of port/i.test(text))             return parseLLDPComware(text);
     if (/LLDP Remote Device|ChassisType\s*:/i.test(text))            return parseLLDPProCurve(text);
+    // 2026-08-26 新增：EdgeSwitch 的 "Chassis ID:" 大小寫不分時會被下方 Cisco 簽章
+    // （/Chassis id:/i）誤撞，故 EdgeSwitch 檢查必須排在 Cisco 之前（比照上方 Arista/Juniper
+    // 既有慣例）
+    if (/Remote Identifier:/i.test(text))                             return parseLLDPEdgeSwitch(text);
     if (/Local Intf:/i.test(text) || /Chassis id:/i.test(text))      return parseLLDPCisco(text);
     if (/SystemName\s*:/m.test(text) && /Port\s+:/m.test(text))      return parseLLDPArubaCX(text);
     if (/NeighborIndex:/i.test(text))                                 return parseLLDPDell(text);
@@ -1969,6 +2001,7 @@ const LLDPParser = (() => {
     if (vendor==='procurve')                  return parseLLDPProCurve(text);
     if (vendor==='aruba')                     return parseLLDPArubaCX(text);
     if (vendor==='dell-os10')                 return parseLLDPDell(text);
+    if (vendor==='edgeswitch')                return parseLLDPEdgeSwitch(text);
     if (vendor==='fortiswitch')               return parseLLDPFortiSwitch(text);
     if (vendor==='extreme')                   return parseLLDPExtreme(text);
     if (vendor==='brocade')                   return parseLLDPBrocade(text);
