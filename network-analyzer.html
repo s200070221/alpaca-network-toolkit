@@ -198,25 +198,25 @@ a{text-decoration:none;color:inherit}
 .drop-close{position:absolute;top:20px;right:24px;background:none;border:none;color:#64748b;font-size:22px;cursor:pointer;line-height:1;z-index:1}
 .drop-close:hover{color:#e2e8f0}
 @media print{
-  .header,.tool-grid{page-break-inside:avoid}
+  .header,.cards{page-break-inside:avoid}
   .upload-actions,.lang-bar,.drop-zone{display:none!important}
   body{background:#fff!important;color:#000!important}
-  .tool-card{border:1px solid #ccc;box-shadow:none}
+  .card{border:1px solid #ccc;box-shadow:none}
   @page{margin:1.5cm}
 }
 </style>
 </head>
 <body>
 
-<div class="header">
+<header class="header" id="topbar">
   <div class="logo" id="logo-btn" style="cursor:pointer" title="">
     <div class="logo-icon">🌐</div>
     <div class="logo-text">
-      <h1 id="h-suite">Network Analyzer Suite</h1>
+      <h1 id="h-suite" class="tb-title">Network Analyzer Suite</h1>
       <p id="h-sub">Pure JS · 零伺服器 · 單檔執行</p>
     </div>
   </div>
-  <div class="lang-bar">
+  <div class="lang-bar lang-switcher">
     <button class="lang-btn active" data-lang="zhTW" onclick="setLang('zhTW')">繁中</button>
     <button class="lang-btn"        data-lang="en"   onclick="setLang('en')">EN</button>
     <button class="lang-btn"        data-lang="ja"   onclick="setLang('ja')">日本語</button>
@@ -246,7 +246,7 @@ a{text-decoration:none;color:inherit}
       <a href="log-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_log">日誌分析</a>
     </div>
   </div>
-</div>
+</header>
 
 <div class="hero">
   <p class="hero-sub" id="h-hero"></p>
