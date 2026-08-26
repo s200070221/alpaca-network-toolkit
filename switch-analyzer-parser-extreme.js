@@ -471,6 +471,21 @@ function parseExtremeQoS(cfg){
   return {profiles, dscpMap, ports:Object.values(portMap)};
 }
 
+// Breakout：獨立頂層指令 `configure ports <port_list> partition [1x100G|1x40G|2x50G|4x10G|4x25G]`
+// （官方 ExtremeXOS Command Reference 已查證）。子埠命名是「QSFP bank 最低編號埠起遞增」，
+// 非附加尾碼，無通用公式可從介面名稱反推母子關係（每台裝置的 bank 分配不同），故本輪
+// MVP 範圍僅支援啟用指令本身 round-trip（model.breakouts[]），不嘗試偵測 interfaces[]
+// 上的 breakoutChild/breakoutParent（比照專案「查無佐證不猜測」慣例，非漏做）
+function parseExtremeBreakout(cfg){
+  const breakouts=[];
+  const re=/^configure ports\s+(\S+)\s+partition\s+(\S+)/gm;
+  let m;
+  while((m=re.exec(cfg))!==null){
+    breakouts.push({parentPort:m[1], mode:m[2], vendor:'extreme', raw:m[0]});
+  }
+  return breakouts;
+}
+
 function parseExtremeXOS(cfg){
   const stk=parseExtremeXOSStack(cfg);
   return{
@@ -478,6 +493,7 @@ function parseExtremeXOS(cfg){
     irf:null, stack:stk,
     vlans:      parseExtremeXOSVLANs(cfg),
     interfaces: parseExtremeXOSInterfaces(cfg),
+    breakouts:  parseExtremeBreakout(cfg),
     lacp:       parseExtremeXOSLACP(cfg),
     routes:     parseExtremeXOSRoutes(cfg),
     vrfs:[], dhcp: parseExtremeXOSDHCP(cfg),

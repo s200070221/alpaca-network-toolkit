@@ -172,6 +172,14 @@ function assembleSONiCConfig(model){
   });
   if(sonicAnyDot1x)db.HOSTAPD_GLOBAL_CONFIG={dot1x_system_auth_control:'enable'};
 
+  // BREAKOUT_CFG：brkout_mode 只需簡化字串（如 "4x25G"），parser 端正則不要求 `[原始速率]`
+  // 後綴即可正確解析回同一個 mode 值，故不需重建官方真實輸出常見的中括號附加資訊
+  const sonicBreakouts=(model.breakouts||[]).filter(b=>b.vendor==='sonic');
+  if(sonicBreakouts.length){
+    db.BREAKOUT_CFG={};
+    sonicBreakouts.forEach(b=>{ db.BREAKOUT_CFG[b.parentPort]={brkout_mode:b.mode}; });
+  }
+
   return JSON.stringify(db,null,2)+'\n';
 }
 const SONIC_IP_PROTO={tcp:6,udp:17,icmp:1};

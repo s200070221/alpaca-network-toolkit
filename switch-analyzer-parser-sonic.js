@@ -150,6 +150,18 @@ function parseSONiC(cfg){
     return{id,name:'',ipSubnets:[]};
   }).sort((a,b)=>parseInt(a.id,10)-parseInt(b.id,10));
 
+  // BREAKOUT_CFG 表格（2026-08-26 新增，官方 sonic-net/SONiC Dynamic Port Breakout HLD
+  // 文件查證：{"Ethernet0":{"brkout_mode":"4x25G[10G]"}}，動態生效不需 reload）。子埠依
+  // 平台 lane 對照表產生全新編號，非附加尾碼，無通用公式可反推母子關係（每個硬體 SKU 的
+  // lane 分配不同），故本輪 MVP 範圍僅支援 BREAKOUT_CFG 本身 round-trip，不觸碰 PORT
+  // 表格、不嘗試產生子埠 interface 物件（比照專案「查無佐證不猜測」慣例，非漏做）
+  const breakouts=Object.entries(db.BREAKOUT_CFG||{}).map(([port,v])=>{
+    const raw=(v&&v.brkout_mode)||'';
+    const m=raw.match(/^(\d+)x(\d+G)/i);
+    const mode=m?`${m[1]}x${m[2].toUpperCase()}`:raw;
+    return{parentPort:port, mode, vendor:'sonic', raw};
+  });
+
   // VLAN_MEMBER → 逐 port 彙整 untagged（最多1）／tagged（可多筆）
   const memberMap={};
   Object.entries(db.VLAN_MEMBER||{}).forEach(([key,val])=>{
@@ -267,7 +279,7 @@ function parseSONiC(cfg){
 
   return{
     sys:{hostname,version:'',platform:''},irf:null,stack:null,vlans,interfaces,routes,lacp,
-    vrfs:[],users:[],ospf:[],bgp,rip:[],vrrp:[],vxlan:null,vendor:'sonic',breakouts:[],stp,
+    vrfs:[],users:[],ospf:[],bgp,rip:[],vrrp:[],vxlan:null,vendor:'sonic',breakouts,stp,
     qos,sonicStpVlanIntf,snmp,syslog
   };
 }
