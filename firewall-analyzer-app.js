@@ -51,7 +51,10 @@ const App = (() => {
     // 對應訊號（2026-07-17 測試 juniper_srx_test.conf 大括號格式時發現此落差）
     juniper:    { p:[/^set system host-name/m, /^set interfaces .* family inet/m, /Juniper Networks|JUNOS/i, /^system\s*\{/m, /^\s*host-name\s+\S+;/m], min:1 },
     checkpoint: { p:[/^set hostname /m, /^set interface .* ipv4-address/m, /Check Point/i], min:2 },
-    pfsense:    { p:[/<pfsense>/i, /pfSense|OPNsense/i, /<version>[\d.]+<\/version>/], min:1 },
+    // <opnsense> 根標籤訊號：OPNsense（pfSense fork，沿用同一個 PfsenseParser，非獨立
+    // vendor id）官方 config.xml.sample 已查證根標籤是 <opnsense> 非 <pfsense>，第二個
+    // 訊號 /pfSense|OPNsense/i 本來就會命中 OPNsense 匯出檔內的字樣，此為額外穩健度補強
+    pfsense:    { p:[/<pfsense>/i, /<opnsense>/i, /pfSense|OPNsense/i, /<version>[\d.]+<\/version>/], min:1 },
     sonicwall:  { p:[/<SonicWALLconfig/i, /SonicWall|SonicOS/i], min:1 },
     mikrotik:   { p:[/^\/ip\s+(?:firewall|address|route)/m, /^\/system\s+identity/m, /RouterOS/i], min:1 },
     ciscoasa:   { p:[/^ASA Version\s+\S+/m, /^NGFW Version\s+\S+/m, /^nameif\s+\S+/m, /^failover\s*$/m], min:1 },
