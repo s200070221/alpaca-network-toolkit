@@ -1161,9 +1161,13 @@ function updateModeOptions(){
   if(rosQosCard)rosQosCard.style.display=vendor==='routeros'?'':'none';
   // 本機帳號卡片：ProCurve（既有）＋ 2026-08-19 新增 9 家高信心度廠牌（Cisco IOS/IOS-XE／
   // Arista／Ruijie／NX-OS／Comware／Dell OS10／Brocade／Aruba CX／Juniper，皆有真實解析
-  // 邏輯且語法在 config_anonymizer 獨立第二套正則交叉驗證過）；其餘廠牌（Extreme/RouterOS/
-  // Alcatel 中信心度、FortiSwitch/Netgear/EdgeSwitch/SONiC 完全零解析）留待後續評估，不開放
-  const USERS_CARD_VENDORS=['procurve','cisco','arista','ruijie','cisco_nxos','comware','dell-os10','brocade','aruba','juniper'];
+  // 邏輯且語法在 config_anonymizer 獨立第二套正則交叉驗證過）＋ 2026-08-26 新增 Extreme
+  // EXOS／MikroTik RouterOS（switch_analyzer 既有 parseExtremeXOSUsers()/parseRouterOSUsers()
+  // 早已存在，本輪僅補 generator 端 render；RouterOS 因真實 /export 不含密碼欄位，僅能單向
+  // 產生無法 round-trip 密碼）；Alcatel 中信心度、FortiSwitch/Netgear/EdgeSwitch/SONiC 完全
+  // 零解析（EdgeSwitch/FortiSwitch/Netgear 已於 2026-08-23 補上 switch_analyzer 端解析，
+  // generator 端尚未接線）留待後續評估，不開放
+  const USERS_CARD_VENDORS=['procurve','cisco','arista','ruijie','cisco_nxos','comware','dell-os10','brocade','aruba','juniper','extreme','routeros'];
   const usersCard=document.getElementById('users-card');
   if(usersCard)usersCard.style.display=USERS_CARD_VENDORS.includes(vendor)?'':'none';
   // SONiC L3 介面 IP 卡片僅 SONiC 適用（config_db.json 的 INTERFACE/VLAN_INTERFACE/
@@ -2544,10 +2548,10 @@ async function parseAndImport(){
       if(!i.ip)return;
       if(i.type==='svi'||i.mode==='routed'){
         addSonicL3Row(i.name,i.ip);
-        // 次要IP（2026-08-12 新增）：parseSONiC() 已補上 secondaryIp（第二筆 CIDR），這裡
-        // 額外加一列同名列——sonicL3Interfaces 本來就是靠複合鍵 name+cidr 支援同名多列，
-        // 不需要新增 UI 欄位
-        if(i.secondaryIp)addSonicL3Row(i.name,i.secondaryIp);
+        // 次要IP（2026-08-23 陣列化）：parser 端 2026-08-17 已從「僅取第一筆」擴充為完整
+        // 陣列 secondaryIps，這裡逐筆加同名列——sonicL3Interfaces 本來就是靠複合鍵
+        // name+cidr 支援同名多列，不需要新增 UI 欄位
+        (i.secondaryIps||[]).forEach(s=>addSonicL3Row(i.name,s));
       }
     });
   }
@@ -2705,11 +2709,18 @@ async function parseAndImport(){
   }
 
   // 本機帳號：ProCurve（既有）＋ 2026-08-19 新增 9 家（此處用 switch_analyzer 原生 vendor
-  // 字串，NX-OS 是 'nxos' 非產生器下拉選單用的 'cisco_nxos'，其餘廠牌兩邊命名一致）。
-  // parsed.users 已是各廠牌 parseXxx() 既有回傳物件的一部分，不需額外抽取；密碼欄位因雜湊值
-  // 無法從 hasPwd/pwdType/role 等中繼資料還原，匯入後留空待使用者自行補上
-  if(['procurve','cisco','arista','ruijie','nxos','comware','dell-os10','brocade','aruba','juniper'].includes(vendor)){
+  // 字串，NX-OS 是 'nxos' 非產生器下拉選單用的 'cisco_nxos'，其餘廠牌兩邊命名一致）＋
+  // 2026-08-26 新增 Extreme（parseExtremeXOSUsers() 回傳 {name,role,...}，欄位與其餘廠牌
+  // 相容可共用此陣列）。parsed.users 已是各廠牌 parseXxx() 既有回傳物件的一部分，不需額外
+  // 抽取；密碼欄位因雜湊值無法從 hasPwd/pwdType/role 等中繼資料還原，匯入後留空待使用者自行補上
+  if(['procurve','cisco','arista','ruijie','nxos','comware','dell-os10','brocade','aruba','juniper','extreme'].includes(vendor)){
     (parsed.users||[]).forEach(u=>addUsersRow(u.name,u.role,''));
+  }
+  // RouterOS：parseRouterOSUsers() 回傳形狀是 {username,group,privilege}，欄位名與其餘廠牌
+  // 的 {name,role} 完全不同，若塞進上面共用陣列會因 u.name/u.role 皆為 undefined 而靜默產生
+  // 空白列（比照同檔案 RouterOS ACL 既有「形狀不同另開專屬分支」慣例，見上方 aclList 處理）
+  if(vendor==='routeros'){
+    (parsed.users||[]).forEach(u=>addUsersRow(u.username,u.group,''));
   }
 
   // QoS：BasicParser 未涵蓋此欄位，只有完整版（fns）才映射；Comware 沒有 action/rate/burst
@@ -3505,6 +3516,20 @@ function setLang(lang){
 }
 
 // ── theme ──────────────────────────────────────────────────────────
+// ── 跨工具導覽（2026-08-24 新增）：見 switch_analyzer 同名函式註解
+function toggleToolsNav(e){
+  if(e)e.stopPropagation();
+  const p=document.getElementById('tools-nav-panel');
+  if(!p)return;
+  p.style.display=(p.style.display==='none'||!p.style.display)?'block':'none';
+}
+document.addEventListener('click',function(e){
+  const p=document.getElementById('tools-nav-panel');
+  if(p&&p.style.display==='block'&&!p.contains(e.target)&&e.target.id!=='tools-nav-btn'){
+    p.style.display='none';
+  }
+});
+
 function setTheme(t){document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';localStorage.setItem('cw_theme',t);}
 function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
 (function(){const s=localStorage.getItem('cw_theme');const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();

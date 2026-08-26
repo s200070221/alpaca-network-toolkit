@@ -60,9 +60,9 @@ function renderExtremeVLANs(vlans,interfaces){
       const [ipAddr,len]=v.ip.split('/');
       lines.push(`configure vlan ${v.name} ipaddress ${ipAddr} ${maskFromCidr(len)}`);
     }
-    // 次要IP（2026-08-12 新增）：官方 `configure vlan NAME add secondary-ipaddress IP/N`，
-    // 僅取第一筆為 MVP 範圍
-    if(v.secondaryIp&&!v.secondaryIp.includes(':'))lines.push(`configure vlan ${v.name} add secondary-ipaddress ${v.secondaryIp}`);
+    // 次要IP（2026-08-23 陣列化）：官方 `configure vlan NAME add secondary-ipaddress IP/N`；
+    // parser 端 2026-08-17 已從「僅取第一筆」擴充為完整陣列 secondaryIps
+    (v.secondaryIps||[]).filter(s=>!s.includes(':')).forEach(s=>lines.push(`configure vlan ${v.name} add secondary-ipaddress ${s}`));
     return lines.join('\n');
   }).join('\n#\n');
 }
@@ -310,6 +310,20 @@ function renderExtremeACLEntry(a){
 }
 function renderExtremeACL(list){return (list||[]).map(renderExtremeACLEntry).join('\n#\n');}
 
+// 本機帳號（2026-08-26 新增）：switch_analyzer 既有 parseExtremeXOSUsers() 語法為
+// "create account admin/user/lawful-intercept NAME encrypted HASH"（Format B：name 不加
+// 引號，官方文件三種帳號類型同時扮演權限等級：admin=讀寫／user=唯讀／lawful-intercept=
+// 特殊唯讀），密碼固定輸出 encrypted 關鍵字（parser 端 exosPwdType() 依雜湊前綴判斷型別，
+// 不驗證雜湊格式是否吻合宣告等級，比照全專案既有慣例）；role 非三選一時 fallback 'admin'
+function renderExtremeUsers(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  return list.map(u=>{
+    const role=/^(admin|user|lawful-intercept)$/.test(u.role||'')?u.role:'admin';
+    return `create account ${role} ${u.name} encrypted ${u.password}`;
+  }).join('\n');
+}
+
 function assembleExtremeConfig(model){
   const blocks=[`# ${tr('notice.disclaimer')}`,`configure snmp sysname ${model.sysname||'Switch'}`];
   const vlanBlockEx=renderExtremeVLANs(model.vlans,model.interfaces);
@@ -333,6 +347,8 @@ function assembleExtremeConfig(model){
   if(qosBlockEx)blocks.push(qosBlockEx);
   const aclBlockEx=renderExtremeACL(model.acl);
   if(aclBlockEx)blocks.push(aclBlockEx);
+  const usersBlockEx=renderExtremeUsers(model.users);
+  if(usersBlockEx)blocks.push(usersBlockEx);
   if(model.snmpTrapHost)blocks.push(`configure snmp add trapreceiver ${model.snmpTrapHost} community public`);
   return blocks.join('\n#\n')+'\n';
 }
