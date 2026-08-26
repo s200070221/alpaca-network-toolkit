@@ -2,6 +2,21 @@ function brocadePortName(name){
   return String(name||'').replace(/^e(?:the(?:rnet)?)?\s*/i,'').trim();
 }
 
+// 官方語法 `breakout ethernet PORT to ethernet PORT:N`，N 僅 2/4 兩種合法值；4x25G 由收發模組
+// 決定速率、指令本身不區分 4x10G/4x25G，無法可靠 round-trip 故不輸出（比照 NX-OS 2x50G 排除慣例）
+function renderBrocadeBreakoutBlock(breakouts){
+  const brBreakouts=(breakouts||[]).filter(b=>b.vendor==='brocade');
+  if(!brBreakouts.length)return '';
+  const lines=brBreakouts.map(b=>{
+    const port=brocadePortName(b.parentPort);
+    if(!port)return '';
+    if(b.mode==='2x50G')return `breakout ethernet ${port} to ethernet ${port}:2`;
+    if(b.mode==='4x10G')return `breakout ethernet ${port} to ethernet ${port}:4`;
+    return '';
+  }).filter(Boolean);
+  return lines.join('\n');
+}
+
 function renderBrocadeVLANs(vlans,interfaces){
   const taggedMap={},untaggedMap={};
   (interfaces||[]).forEach(iface=>{
@@ -86,7 +101,7 @@ function findBrocadeQosPort(qos,ifaceName){
   return ((qos&&qos.ports)||[]).find(p=>brocadePortName(p.port)===port);
 }
 
-function renderBrocadeInterface(iface,aclList,ripPorts,securityList,qos,ospfAreaOther){
+function renderBrocadeInterface(iface,aclList,ripPorts,securityList,qos,ospfAreaOther,ospfAreaOther6){
   const port=brocadePortName(iface.name);
   const lines=[`interface ethernet ${port}`];
   if(iface.desc)lines.push(` port-name ${iface.desc}`);
@@ -105,6 +120,10 @@ function renderBrocadeInterface(iface,aclList,ripPorts,securityList,qos,ospfArea
   // （parser 產生的 network 值固定帶 "e" 前綴）兩種來源格式
   const ospfArea=ospfAreaOther&&ospfAreaOther[port];
   if(ospfArea!==undefined)lines.push(` ip ospf area ${ospfArea}`);
+  // OSPFv3（2026-08-23 新增）：官方語法 "ipv6 ospf area X"，無 pid 前綴，比照 IPv4 同一套
+  // 依介面前綴分流查詢表模式
+  const ospfArea6=ospfAreaOther6&&ospfAreaOther6[port];
+  if(ospfArea6!==undefined)lines.push(` ipv6 ospf area ${ospfArea6}`);
   // dot1x port-control auto：2026-07-22 對外查證後修正為逐 interface 區塊內的裸指令
   // （無 ethernet PORT 參數），與全域 authentication 區塊內的 dot1x enable 是分開兩處
   if(findBrocadeDot1x(securityList,iface.name))lines.push(' dot1x port-control auto');
@@ -121,12 +140,12 @@ function renderBrocadeInterface(iface,aclList,ripPorts,securityList,qos,ospfArea
   }
   return lines.join('\n');
 }
-function renderBrocadeInterfaces(ifaces,aclList,ripPorts,securityList,qos,ospfAreaOther){return (ifaces||[]).map(i=>renderBrocadeInterface(i,aclList,ripPorts,securityList,qos,ospfAreaOther)).join('\n!\n');}
+function renderBrocadeInterfaces(ifaces,aclList,ripPorts,securityList,qos,ospfAreaOther,ospfAreaOther6){return (ifaces||[]).map(i=>renderBrocadeInterface(i,aclList,ripPorts,securityList,qos,ospfAreaOther,ospfAreaOther6)).join('\n!\n');}
 
 // Loopback：官方 FastIron 支援 `interface loopback N` 底下設定 `ip address`，本輪新增
 // （2026-07-27）——先前全檔案沒有任何輸出路徑，若誤流入 renderBrocadeInterface() 會被
 // brocadePortName() 誤轉成 `interface ethernet loopbackN` 這種不存在的語法
-function renderBrocadeLoopback(iface,ospfAreaOther){
+function renderBrocadeLoopback(iface,ospfAreaOther,ospfAreaOther6){
   const lines=[`interface loopback ${iface.name.replace(/^loopback/i,'')}`];
   if(iface.ip){
     const [ip,len]=iface.ip.split('/');
@@ -136,9 +155,11 @@ function renderBrocadeLoopback(iface,ospfAreaOther){
   // 與 renderBrocadeInterface() 用同一套正規化規則查找 groupBrocadeOspfAreas() 的 other map
   const ospfArea=ospfAreaOther&&ospfAreaOther[brocadePortName(iface.name)];
   if(ospfArea!==undefined)lines.push(` ip ospf area ${ospfArea}`);
+  const ospfArea6=ospfAreaOther6&&ospfAreaOther6[brocadePortName(iface.name)];
+  if(ospfArea6!==undefined)lines.push(` ipv6 ospf area ${ospfArea6}`);
   return lines.join('\n');
 }
-function renderBrocadeLoopbacks(ifaces,ospfAreaOther){return (ifaces||[]).filter(i=>i.type==='loopback').map(i=>renderBrocadeLoopback(i,ospfAreaOther)).join('\n!\n');}
+function renderBrocadeLoopbacks(ifaces,ospfAreaOther,ospfAreaOther6){return (ifaces||[]).filter(i=>i.type==='loopback').map(i=>renderBrocadeLoopback(i,ospfAreaOther,ospfAreaOther6)).join('\n!\n');}
 
 // LACP：只產生已對外查證的主要語法（獨立 `lag "NAME" dynamic|static id N` +
 // `ports ethe ...` 區塊），不產生 parseBrocadeLACP 另外兼容、但未查證來源的
@@ -192,13 +213,30 @@ function groupBrocadeOspfAreas(ospfList){
   return {ve,other};
 }
 
+// OSPFv3（2026-08-23 新增）：ospf6 的 areas[].interfaces 本來就是介面名稱字串陣列
+// （"veN"／"loopbackN"／"eX/Y/Z"），比照 groupBrocadeOspfAreas() 依前綴分流成 ve/其他兩組
+function groupBrocadeOspfAreas6(ospf6List){
+  const ve={},other={};
+  (ospf6List||[]).forEach(o=>{
+    (o.areas||[]).forEach(a=>{
+      (a.interfaces||[]).forEach(name=>{
+        const n=String(name||'').trim();
+        const m=/^ve(\d+)$/i.exec(n);
+        if(m)ve[m[1]]=a.area;
+        else if(n)other[brocadePortName(n)]=a.area;
+      });
+    });
+  });
+  return {ve,other};
+}
+
 // VE(SVI) 區塊：2026-07-27 新增 interfaces 參數，改以 model.interfaces 裡 type==='svi' 的
 // 項目為主要驅動來源（才能取得 SVI 自己的 ip/vrf），VRRP/OSPF/DHCP/RIP 反查邏輯保留作為
 // fallback——確保沒有獨立 SVI 宣告、但只掛了 VRRP-E/OSPF area/DHCP relay/RIP 的介面仍能
 // 正確產生 `interface ve N` 區塊（見既有 T310 測試情境）。ospfAreaVe 只含 ve 介面的 area
 // 指派（見 groupBrocadeOspfAreas()），非 ve 介面已改在 renderBrocadeInterface()/
 // renderBrocadeLoopback() 各自輸出，不會再混進這裡。
-function renderBrocadeVEBlocks(interfaces,vrrpList,ospfAreaVe,dhcpList,ripPorts){
+function renderBrocadeVEBlocks(interfaces,vrrpList,ospfAreaVe,dhcpList,ripPorts,ospfAreaVe6){
   const vrrpGroups=groupVrrpByVlan(vrrpList);
   const vrrpMap=new Map(vrrpGroups.map(g=>[String(g.vlanId),g]));
   const sviMap=new Map((interfaces||[]).filter(i=>i.type==='svi')
@@ -223,13 +261,15 @@ function renderBrocadeVEBlocks(interfaces,vrrpList,ospfAreaVe,dhcpList,ripPorts)
       if(ip.includes(':'))lines.push(` ipv6 address ${ip}`);
       else{ const[ipAddr,len]=ip.split('/'); lines.push(` ip address ${ipAddr} ${maskFromCidr(len)}`); }
     }
-    // 次要IP（2026-08-12 新增）：官方 `ip address A B secondary`，僅取第一筆為 MVP 範圍
-    if(iface&&iface.secondaryIp&&!iface.secondaryIp.includes(':')){
-      const[secIp,secLen]=iface.secondaryIp.split('/');
+    // 次要IP（2026-08-23 陣列化）：官方 `ip address A B secondary`；parser 端 2026-08-17
+    // 已從「僅取第一筆」擴充為完整陣列 secondaryIps
+    (iface&&iface.secondaryIps||[]).filter(s=>!s.includes(':')).forEach(s=>{
+      const[secIp,secLen]=s.split('/');
       lines.push(` ip address ${secIp} ${maskFromCidr(secLen)} secondary`);
-    }
+    });
     if(iface&&iface.vrf)lines.push(` vrf forwarding ${iface.vrf}`);
     if(ospfAreaVe&&ospfAreaVe[vid]!==undefined)lines.push(` ip ospf area ${ospfAreaVe[vid]}`);
+    if(ospfAreaVe6&&ospfAreaVe6[vid]!==undefined)lines.push(` ipv6 ospf area ${ospfAreaVe6[vid]}`);
     if(ripVeIds.has(vid))lines.push(' ip rip');
     findDhcpRelays(dhcpList,'ve'+vid).forEach(rel=>lines.push(` ip helper-address ${rel.relayServer}`));
     if(g)g.entries.forEach(e=>{
@@ -248,6 +288,13 @@ function renderBrocadeVEBlocks(interfaces,vrrpList,ospfAreaVe,dhcpList,ripPorts)
 // `ip ospf area X`（已由 renderBrocadeVEBlocks() 處理），此函式僅需啟用 process 本身
 function renderBrocadeOSPFGlobal(list){
   return (list||[]).map(()=>'router ospf').join('\n!\n');
+}
+
+// OSPFv3（2026-08-23 新增）：官方 FastIron Command Reference 確認全域啟用 "ipv6 router ospf"
+// （無 pid 參數），area 指派完全逐介面 "ipv6 ospf area X"（已由 renderBrocadeVEBlocks()/
+// renderBrocadeInterface()/renderBrocadeLoopback() 處理）
+function renderBrocadeOSPFv3Global(list){
+  return (list&&list.length)?'ipv6 router ospf':'';
 }
 
 // Networks（2026-07-17 對外查證官方 FastIron L3 Routing Configuration Guide 確認）：
@@ -321,6 +368,9 @@ function renderBrocadeDHCPSnooping(dhcpList,vlans){
 
 function assembleBrocadeConfig(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`hostname ${model.sysname||'Switch'}`];
+  if(model.breakouts&&model.breakouts.some(b=>b.vendor==='brocade'))blocks.push(`! ${tr('notice.brocadeBreakoutWarning')}`);
+  const brocadeBreakoutBlock=renderBrocadeBreakoutBlock(model.breakouts);
+  if(brocadeBreakoutBlock)blocks.push(brocadeBreakoutBlock);
   const ridLine=renderBrocadeRouterId(model.ospf,model.bgp);
   if(ridLine)blocks.push(ridLine);
   const vlanBlock=renderBrocadeVLANs(model.vlans,model.interfaces);
@@ -333,23 +383,26 @@ function assembleBrocadeConfig(model){
   // OSPF area 依介面名稱分流成 ve／其他（實體埠/loopback）兩組，避免非 ve 介面被誤塞進
   // VE 區塊（見 groupBrocadeOspfAreas() 上方註解，P0 正確性 bug 修正）
   const {ve:ospfAreaVe,other:ospfAreaOther}=groupBrocadeOspfAreas(model.ospf);
+  const {ve:ospfAreaVe6,other:ospfAreaOther6}=groupBrocadeOspfAreas6(model.ospf6);
   // OSPF：官方文件將「先啟用 OSPF」列為建議步驟順序，早於「指派介面到 area」，排在
   // VE／實體埠／loopback 區塊（內嵌逐介面 `ip ospf area`）之前輸出
   const ospfBlockBr=renderBrocadeOSPFGlobal(model.ospf);
   if(ospfBlockBr)blocks.push(ospfBlockBr);
+  const ospf6BlockBr=renderBrocadeOSPFv3Global(model.ospf6);
+  if(ospf6BlockBr)blocks.push(ospf6BlockBr);
   // VRRP-E 需要先在全域啟用，否則真實設備會拒絕底下的 ip vrrp-extended vrid 指令
   // （已查證官方文件），parseBrocadeVRRP 不要求此行也能正確解析，純粹為真實設備
   // 正確性補上，不影響 round-trip；2026-08-06 修正：先前這行寫在 veBlock 之後，
   // 跟本段註解自己講的順序要求恰好相反，等於白寫
   if(model.vrrp&&model.vrrp.length)blocks.push('router vrrp-extended');
-  const veBlock=renderBrocadeVEBlocks(model.interfaces,model.vrrp,ospfAreaVe,model.dhcp,ripPorts);
+  const veBlock=renderBrocadeVEBlocks(model.interfaces,model.vrrp,ospfAreaVe,model.dhcp,ripPorts,ospfAreaVe6);
   if(veBlock)blocks.push(veBlock);
   // 實體埠：排除 svi/loopback 類型（已分別由 renderBrocadeVEBlocks()/renderBrocadeLoopbacks()
   // 處理），避免同一介面被 brocadePortName() 誤轉成 `interface ethernet veN`/`loopbackN`
   // 這種不存在的語法（P0 正確性 bug 修正，見 renderBrocadeVEBlocks() 上方註解）
   const brocadePhysicalIfaces=(model.interfaces||[]).filter(i=>i.type!=='svi'&&i.type!=='loopback');
-  if(brocadePhysicalIfaces.length)blocks.push(renderBrocadeInterfaces(brocadePhysicalIfaces,model.acl,ripPorts,model.security,model.brocadeQos,ospfAreaOther));
-  const loopbackBlockBr=renderBrocadeLoopbacks(model.interfaces,ospfAreaOther);
+  if(brocadePhysicalIfaces.length)blocks.push(renderBrocadeInterfaces(brocadePhysicalIfaces,model.acl,ripPorts,model.security,model.brocadeQos,ospfAreaOther,ospfAreaOther6));
+  const loopbackBlockBr=renderBrocadeLoopbacks(model.interfaces,ospfAreaOther,ospfAreaOther6);
   if(loopbackBlockBr)blocks.push(loopbackBlockBr);
   const lacpBlockBr=renderBrocadeLACP(model.lacp);
   if(lacpBlockBr)blocks.push(lacpBlockBr);

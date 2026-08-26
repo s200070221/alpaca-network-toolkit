@@ -324,8 +324,19 @@ function renderExtremeUsers(users){
   }).join('\n');
 }
 
+// 官方語法 `configure ports PORT partition {10G|4x10G|4x25G|2x50G|40G}`，速率字串本身即為指令
+// 參數，無需額外轉換；EXOS 30.2 以前版本需 save configuration + reboot 才會生效
+function renderExtremePartitionBlock(breakouts){
+  const exBreakouts=(breakouts||[]).filter(b=>b.vendor==='extreme');
+  if(!exBreakouts.length)return '';
+  return exBreakouts.map(b=>`configure ports ${b.parentPort} partition ${b.mode}`).join('\n');
+}
+
 function assembleExtremeConfig(model){
   const blocks=[`# ${tr('notice.disclaimer')}`,`configure snmp sysname ${model.sysname||'Switch'}`];
+  if(model.breakouts&&model.breakouts.some(b=>b.vendor==='extreme'))blocks.push(`# ${tr('notice.extremeBreakoutWarning')}`);
+  const extremePartitionBlock=renderExtremePartitionBlock(model.breakouts);
+  if(extremePartitionBlock)blocks.push(extremePartitionBlock);
   const vlanBlockEx=renderExtremeVLANs(model.vlans,model.interfaces);
   if(vlanBlockEx)blocks.push(vlanBlockEx);
   const shutdownBlockEx=renderExtremeInterfaceShutdown(model.interfaces);

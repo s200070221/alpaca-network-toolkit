@@ -196,7 +196,12 @@ function parseBrocadeInterfaces(cfg){
     const mem=(port.match(/^(\d+)\//)||[])[1]||'1';
     const lagM=blk.match(/^\s+link-aggregate\s+(\d+)/m)||blk.match(/^\s+lag\s+(\d+)/m);
     const lagMember=lagM?'lag'+lagM[1]:'';
-    ifaces.push({name:'e'+port,type:'physical',desc,mode,vlans,nativeVlan,vrf:'',ip:'',shutdown,member:mem,hybrid:null,vrrp:[],lagMember});
+    // Breakout: 子埠命名為 unit/slot/port:1~4（獨立 `breakout ethernet X to ethernet Y`
+    // 指令啟用，見 parseBrocadeBreakout()），官方查證需 write memory+reload 才生效
+    const bkMatch=port.match(/^(\d+\/\d+\/\d+):([1-4])$/);
+    const breakoutChild=!!bkMatch;
+    const breakoutParent=bkMatch?'e'+bkMatch[1]:'';
+    ifaces.push({name:'e'+port,type:'physical',desc,mode,vlans,nativeVlan,vrf:'',ip:'',shutdown,member:mem,hybrid:null,vrrp:[],lagMember,breakoutChild,breakoutParent,breakoutMode:''});
   }
 
   // SVIs / ve interfaces  (Virtual Ethernet)
@@ -624,13 +629,40 @@ function parseBrocadeQoS(cfg){
   return {dscpMap,ports};
 }
 
+// Breakout：獨立頂層指令 `breakout ethernet X to ethernet Y`（範圍寫法，官方 FastIron
+// Command Reference／Management Guide 已查證，單埠寫法 `breakout ethernet X` 亦支援，
+// 兩種寫法皆只認第一個埠當母埠——若為範圍寫法，X 為母埠，X~Y 之間視為同一組拆分不逐一列出）
+function parseBrocadeBreakout(cfg){
+  const breakouts=[];
+  const re=/^breakout ethernet\s+(\S+?)(?:\s+to\s+ethernet\s+(\S+))?\s*$/gm;
+  let m;
+  while((m=re.exec(cfg))!==null){
+    const parent='e'+m[1];
+    // 依範圍終點的子埠序號反推拆分比例（4 埠=4x，2 埠=2x，其餘無法判斷時預設 4x10G）
+    let mode='4x10G';
+    if(m[2]){
+      const endNum=parseInt((m[2].match(/:(\d+)$/)||[])[1]||'4',10);
+      mode=endNum===2?'2x50G':'4x10G';
+    }
+    breakouts.push({parentPort:parent, mode, vendor:'brocade', raw:m[0]});
+  }
+  return breakouts;
+}
+
 function parseBrocade(cfg){
   const stk=parseBrocadeStack(cfg);
+  const interfaces=parseBrocadeInterfaces(cfg);
+  const breakouts=parseBrocadeBreakout(cfg);
+  breakouts.forEach(b=>{
+    const iface=interfaces.find(f=>f.name.toLowerCase()===b.parentPort.toLowerCase());
+    if(iface)iface.breakoutMode=b.mode;
+  });
   return{
     sys:        parseBrocadeSysInfo(cfg),
     irf:null, stack:stk,
     vlans:      parseBrocadeVLANs(cfg),
-    interfaces: parseBrocadeInterfaces(cfg),
+    interfaces,
+    breakouts,
     lacp:       parseBrocadeLACP(cfg),
     routes:     parseBrocadeRoutes(cfg),
     vrfs:[], dhcp: parseBrocadeDHCP(cfg),
