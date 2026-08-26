@@ -276,6 +276,7 @@ input.valid,select.valid{border-color:var(--green)!important}
         <option value="netgear" data-i18n="opt.vendorNetgear">Netgear M4300</option>
         <option value="edgeswitch" data-i18n="opt.vendorEdgeswitch">Ubiquiti EdgeSwitch</option>
         <option value="sonic" data-i18n="opt.vendorSonic">SONiC (config_db.json)</option>
+        <option value="planet" data-i18n="opt.vendorPlanet">Planet Technology</option>
       </select>
       <label data-i18n="lbl.deviceModel">常用機種</label>
       <select id="device-model" onchange="applyDeviceModel()" data-tip="套用後會清空並重新產生 Interface 表格（含 mgmt 介面），僅供快速帶入常見機型的埠位數量與速度，之後仍可手動調整">
@@ -1007,6 +1008,7 @@ end</pre>
 <script src="switch-generator-routeros.js"></script>
 <script src="switch-generator-nxos.js"></script>
 <script src="switch-generator-juniper.js"></script>
+<script src="switch-generator-planet.js"></script>
 <script src="switch-generator-i18n.js"></script>
 <script src="switch-generator-app.js"></script>
 <div class="mini-alpaca" id="mini-alpaca" onclick="startRain(true)" onmouseenter="eggMouseOver()" title="100% 非 AI 生成 — 純手工製作">

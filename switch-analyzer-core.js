@@ -134,6 +134,19 @@ function detectVendor(cfg){
      (/^interface\s+Ethernet\d+(?:\/\d+)?\s*$/m.test(cfg)&&/^ip routing$/m.test(cfg)))return'arista';
   // RouterOS / MikroTik: 必須在 cisco 之前，避免 /ip route 行觸發 cisco 誤判
   if(/^\s*\/interface|\/ip\s+(?:address|firewall|route)|\/system\s+identity/m.test(cfg))return'routeros';
+  // Planet Technology SGS-6341 系列：CLI 骨架整體近似 Cisco IOS Classic（hostname／
+  // switchport mode），必須在 cisco 之前判斷，否則會被下面通用的 cisco 比對誤判；也
+  // 必須排在 Ruijie 之前——Ruijie 的判斷式含通用的 `switchport mode hybrid` 弱訊號，
+  // Planet 設定檔若含 hybrid 介面會先被 Ruijie 判斷式攔截誤判（2026-08-26 實測踩坑
+  // 修正，原本排在 Ruijie 之後）。官方 SGS-6341 Series Command Guide 直接 fetch 逐字
+  // 查證，查無足夠獨特的 show running-config 表頭字樣可用，改用「hostname + ethernet
+  // slot/port 命名（含空格）+ switchport mode」三重弱訊號組合判斷：介面命名
+  // "ethernet 1/0/5"（ethernet 與 slot/port 之間有空格，與 Dell OS10
+  // "ethernet1/1/1"〔無空格，見上方 dell-os10 判斷式〕不同）；Brocade FastIron 雖也用
+  // "interface ethernet"（見下方 brocade 判斷式），但官方語法從未使用 "switchport"
+  // 關鍵字（FastIron 用 tagged/untagged）；Ruijie 用 "GigabitEthernet 0/1" 命名前綴
+  // （非裸 "ethernet"），三訊號組合後不會與既有 17 家任何一家碰撞
+  if(/^hostname\s+\S+/m.test(cfg)&&/^interface\s+ethernet\s+\d+\/\d+\/\d+/m.test(cfg)&&/^\s*switchport mode\s+(trunk|access|hybrid)/m.test(cfg))return'planet';
   // Ruijie RGOS：語法系出 Cisco IOS 風格，必須在 cisco 之前判斷。用 Ruijie 專屬（Cisco 沒有）
   // 的關鍵字組合避免誤判其他 12 家：AggregatePort 聚合介面命名（Cisco 是 channel-group／
   // Port-channel）／switchport mode hybrid（Cisco 無 hybrid 模式）／VSU 堆疊 switch virtual domain。
@@ -670,6 +683,33 @@ function parseLACP(cfg, vendor){
       lacp.push({name,mode,members:membersByName[name]||[]});
     });
     lacp.sort((a,b)=>parseInt(a.name.match(/\d+/)[0])-parseInt(b.name.match(/\d+/)[0]));
+  }else if(vendor==='planet'){
+    // Planet SGS-6341 系列：聚合介面稱為 "port-channel N"（非 Ruijie 的
+    // AggregatePort），成員埠在自己的 interface 區塊內用 "port-group N mode
+    // {active|passive|on}" 宣告（on=靜態聚合，非 LACP 協商），查證來源：官方
+    // SGS-6341 Series Command Guide，關鍵字結構與 Ruijie 幾乎一致，僅容器介面
+    // 名稱與 on/static 選項不同
+    const ifaceMap={};
+    cfg.split(/\ninterface /).slice(1).forEach(blk=>{
+      const name=blk.split('\n')[0].trim();
+      ifaceMap[name]=blk;
+    });
+    const membersByGid={}, modeByGid={};
+    Object.entries(ifaceMap).forEach(([name,blk])=>{
+      const pgm=blk.match(/port-group\s+(\d+)\s+mode\s+(active|passive|on)/i);
+      if(pgm){
+        const raw=pgm[2].toLowerCase();
+        const lm=raw==='on'?null:(raw[0].toUpperCase()+raw.slice(1));
+        membersByGid[pgm[1]]=(membersByGid[pgm[1]]||[]).concat({name,lacpMode:lm});
+        if(!modeByGid[pgm[1]])modeByGid[pgm[1]]=raw==='on'?'Static':lm;
+      }
+    });
+    Object.entries(ifaceMap).forEach(([name,blk])=>{
+      if(!/^port-channel\s*\d+/i.test(name))return;
+      const gid=name.match(/\d+/)[0];
+      lacp.push({name:name.replace(/\s+/g,''),mode:modeByGid[gid]||'Static',members:membersByGid[gid]||[]});
+    });
+    lacp.sort((a,b)=>parseInt(a.name.match(/\d+/)[0])-parseInt(b.name.match(/\d+/)[0]));
   }
   return lacp;
 }
@@ -707,6 +747,10 @@ function parseACL(cfg, vendor){
   // 有解析結果、實際語法未經驗證」的假象。2026-08-17 查證 IPv6 ACL 時意外發現此缺口，比照
   // 既有 Alcatel return [] 模式明確排除，避免虛假產出
   if(vendor==='procurve'||vendor==='edgeswitch') return [];
+  // Planet：本輪明確不實作 ACL（查無官方語法佐證，不猜測），比照既有 Alcatel/
+  // ProCurve/EdgeSwitch 模式明確排除，避免落入下面的 _parseACLCisco() fallback
+  // 產生「看似有解析結果、實際語法未經驗證」的假象
+  if(vendor==='planet') return [];
   // NX-OS：2026-07-22 對外查證官方 Cisco NX-OS Security Configuration Guide 後新增獨立
   // 分支——先前沿用 _parseACLCisco()（IOS-XE 語法），但真實 NX-OS 語法完全不同：容器是
   // 裸 "ip access-list NAME"（沒有 standard/extended 關鍵字），規則列是「序號在最前面、
@@ -1257,6 +1301,12 @@ function parseSecurity(cfg, vendor){
   // authenticator PORT client-limit/guest-vlan）其實是 ArubaOS-Switch/ProCurve
   // （procurve 廠牌）語法，錯用在 aruba(CX) 分支上，一併移除
   if(vendor==='aruba') return _parseSecurityArubaCX(cfg);
+  // Planet SGS-6341 系列：802.1X 用 "dot1x port-control auto"（generic fallback loop
+  // 本來就認得這個關鍵字，但 MAC port-security 用 "switchport mac-address dynamic
+  // maximum"／"switchport mac-address violation"，與其餘廠牌慣用的
+  // "port-security"/"mac-learn limit" 關鍵字完全不同，generic fallback 抓不到，
+  // 故新增獨立分支
+  if(vendor==='planet') return _parseSecurityPlanet(cfg);
   const result=[];
   // 修正：\Z 在 JS 正則不支援（同一類 bug，見 _parseACLCisco 註解），改用 (?![\s\S])
   const ifRe=/^(?:interface|Interface)\s+(\S.*?)\s*$([\s\S]*?)(?=^(?:interface|Interface)\s|(?![\s\S]))/gm;
@@ -2036,6 +2086,7 @@ function parseAny(cfg,forceVendor){
   else if(vendor==='ruijie') res=parseRuijie(cfg);
   else if(vendor==='netgear') res=parseNetgear(cfg);
   else if(vendor==='edgeswitch') res=parseEdgeSwitch(cfg);
+  else if(vendor==='planet') res=parsePlanet(cfg);
   else if(vendor==='cisco') res=parseCisco(cfg);
   else if(vendor==='aruba') res=parseAruba(cfg);
   else if(vendor==='fortiswitch') res=parseFortiSwitch(cfg);

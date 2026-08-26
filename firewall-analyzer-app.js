@@ -5,13 +5,23 @@
 //  Features: 4-vendor parse, 12-path convert, user permissions
 // ═══════════════════════════════════════════════════════════════
 const App = (() => {
-  const ST = { f:null, s:null, c:null, p:null, j:null, x:null, w:null, m:null, a:null, t:null, z:null, r:null, u:null, raw:{f:'',s:'',c:'',p:'',j:'',x:'',w:'',m:'',a:'',t:'',z:'',r:'',u:''} };
+  const ST = { f:null, s:null, c:null, p:null, j:null, x:null, w:null, m:null, a:null, t:null, z:null, r:null, u:null, g:null, raw:{f:'',s:'',c:'',p:'',j:'',x:'',w:'',m:'',a:'',t:'',z:'',r:'',u:'',g:''} };
   let PARSED=null, CURRENT_SECTION=null, CURRENT_DATA=[], _renderState=null, WIFI_DATA = null, FORTISWITCH_DATA = null;
   // WiFi/WLAN 解析（2026-08-19 對外查證擴大）：sophos(s)/sonicwall(w) 查無可信 CLI/config
   // 語法佐證，維持排除；其餘企業防火牆廠牌架構上無內建 WiFi，不列入（無功能可警示，非
   // 查證不足）。用 ST.raw 的單字母 slot key（非 vendor 字串），比照 FW_SLOT_VENDOR 慣例。
   // 宣告在此共用頂層作用域（非 analyze() 內部），renderSection() 才能存取到
   const WIFI_UNSUPPORTED=['s','w'];
+  // NAT/VPN/Users 查無官方 schema 佐證的廠牌白名單（2026-08-26 新增，WatchGuard 一次補齊
+  // 三項；比照上方 WIFI_UNSUPPORTED 設計精神，但刻意各自獨立宣告——NAT/VPN/Users 是三個
+  // 各自獨立的分頁/功能，未來若某廠牌只有其中一項查無佐證，不該被迫綁在同一份清單）。
+  // 與 WIFI_UNSUPPORTED 的差異：WIFI_DATA 是完全獨立於 PARSED 之外的旁路全域變數，
+  // nat/vpn/users 則是 PARSED 的核心陣列欄位，merge()/renderSection() 全部假設是陣列
+  // （無 optional chaining guard），故 WatchGuardParser 對這三個欄位一律回傳 []（非 null），
+  // 這份清單只影響「分頁顯示什麼文字」的判斷，不影響底層資料形狀
+  const NAT_UNSUPPORTED=['g'];
+  const VPN_UNSUPPORTED=['g'];
+  const USERS_UNSUPPORTED=['g'];
   // Query 追蹤結果快取：畫面渲染當下的查詢結果依賴使用者當時輸入的 src/dst/proto/port，
   // 無法在匯出當下重新計算，故需快取「最近一次查詢」的結果供 CSV 匯出按鈕讀取。
   // Audit 分析（shadow/unused-addr/unused-svc/compliance）則不需要快取，因為
@@ -32,9 +42,9 @@ const App = (() => {
   const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const ms=t=>new Promise(r=>setTimeout(r,t));
   const pill=(t,c)=>`<span class="pill ${c}">${esc(t)}</span>`;
-  const nameMap={f:'fc-name',s:'sc-name',c:'cc-name',p:'pc-name',j:'jc-name',x:'xc-name',w:'wc-name',m:'mc-name',a:'ac-name',t:'tc-name',z:'zc-name',r:'rc-name',u:'uc-name'};
-  const chipMap={f:'fc-chip',s:'sc-chip',c:'cc-chip',p:'pc-chip',j:'jc-chip',x:'xc-chip',w:'wc-chip',m:'mc-chip',a:'ac-chip',t:'tc-chip',z:'zc-chip',r:'rc-chip',u:'uc-chip'};
-  const inpMap ={f:'fi',s:'si',c:'ci',p:'pi',j:'ji',x:'xi',w:'wi',m:'mi',a:'ai',t:'ti',z:'zi',r:'ri',u:'ui'};
+  const nameMap={f:'fc-name',s:'sc-name',c:'cc-name',p:'pc-name',j:'jc-name',x:'xc-name',w:'wc-name',m:'mc-name',a:'ac-name',t:'tc-name',z:'zc-name',r:'rc-name',u:'uc-name',g:'gc-name'};
+  const chipMap={f:'fc-chip',s:'sc-chip',c:'cc-chip',p:'pc-chip',j:'jc-chip',x:'xc-chip',w:'wc-chip',m:'mc-chip',a:'ac-chip',t:'tc-chip',z:'zc-chip',r:'rc-chip',u:'uc-chip',g:'gc-chip'};
+  const inpMap ={f:'fi',s:'si',c:'ci',p:'pi',j:'ji',x:'xi',w:'wi',m:'mi',a:'ai',t:'ti',z:'zi',r:'ri',u:'ui',g:'gi'};
 
   // 2026-07-17 新增：上傳廠牌特徵檢查。原本 10 個上傳欄位完全沒有內容檢查，貼錯廠牌會
   // 靜默解析出空/垃圾結果（analyze() 一律用「上傳到哪個欄位」寫死對應 parser，見下方
@@ -74,9 +84,13 @@ const App = (() => {
     // 已高，仍用 min:2 避免巧合誤判：config interface／option proto／firewall 專屬區塊
     // （zone/rule/redirect/forwarding）／package 標頭字樣，任兩者命中即可
     openwrt:    { p:[/^config\s+interface(\s|$)/m, /^\s*option\s+proto\s/m, /^config\s+(zone|rule|redirect|forwarding)(\s|$)/m, /^package\s+(network|firewall|dhcp)/m], min:2 },
+    // WatchGuard Firebox 匯出的扁平 XML（每種物件一個 -list 容器＋重複子節點，非 Palo Alto
+    // 那種深巢狀 <entry name="">），這幾個標籤名稱為 WatchGuard 特有、其餘 22 家皆不使用
+    // （官方社群 parser ins1gn1a/WatchGuard-Config-Parser 已查證），min:2 避免巧合誤判
+    watchguard: { p:[/<abs-policy-list/i, /<interface-list/i, /<address-group-list/i, /<alias-member-list/i], min:2 },
   };
   // sophos 簽章相對寬鬆，排最後，讓其他更具結構特徵的廠牌訊號優先判定
-  const FW_VENDOR_ORDER = ['fortigate','edgerouter','openwrt','paloalto','juniper','checkpoint','pfsense','sonicwall','mikrotik','ciscoasa','zyxel','sophos'];
+  const FW_VENDOR_ORDER = ['fortigate','edgerouter','openwrt','watchguard','paloalto','juniper','checkpoint','pfsense','sonicwall','mikrotik','ciscoasa','zyxel','sophos'];
   function detectFwVendor(text) {
     for (const id of FW_VENDOR_ORDER) {
       const { p, min } = FW_VENDOR_SIGS[id];
@@ -112,7 +126,7 @@ const App = (() => {
 
   function handleDrop(e,v){
     e.preventDefault();e.stopPropagation();
-    const cardMap={f:'fc',s:'sc',c:'cc',p:'pc',j:'jc',x:'xc',w:'wc',m:'mc',a:'ac',t:'tc',z:'zc',r:'rc',u:'uc'};
+    const cardMap={f:'fc',s:'sc',c:'cc',p:'pc',j:'jc',x:'xc',w:'wc',m:'mc',a:'ac',t:'tc',z:'zc',r:'rc',u:'uc',g:'gc'};
     $(cardMap[v]).classList.remove('drag-over');
     const f=e.dataTransfer.files[0]; if(!f)return;
     ST[v]=f; $(nameMap[v]).textContent=`${f.name} (${sz(f.size)})`; $(chipMap[v]).style.display='flex'; updBtn();
@@ -120,9 +134,9 @@ const App = (() => {
   window.handleDrop=handleDrop;
 
   function updBtn(){
-    const ok=ST.f||ST.s||ST.c||ST.p||ST.j||ST.x||ST.w||ST.m||ST.a||ST.t||ST.z||ST.r||ST.u;
+    const ok=ST.f||ST.s||ST.c||ST.p||ST.j||ST.x||ST.w||ST.m||ST.a||ST.t||ST.z||ST.r||ST.u||ST.g;
     $('btn-go').disabled=!ok;
-    $('analyze-hint').textContent=ok?tr('analyze.selected_prefix')+[ST.f?'FortiGate':'',ST.s?'Sophos':'',ST.c?'CheckPoint':'',ST.p?'PaloAlto':'',ST.j?'Juniper':'',ST.x?'pfSense':'',ST.w?'SonicWall':'',ST.m?'MikroTik':'',ST.a?'Cisco ASA':'',ST.t?'Cisco FTD':'',ST.z?'Zyxel':'',ST.r?'EdgeRouter':'',ST.u?'OpenWrt':''].filter(Boolean).join(' + '):tr('analyze.hint_none');
+    $('analyze-hint').textContent=ok?tr('analyze.selected_prefix')+[ST.f?'FortiGate':'',ST.s?'Sophos':'',ST.c?'CheckPoint':'',ST.p?'PaloAlto':'',ST.j?'Juniper':'',ST.x?'pfSense':'',ST.w?'SonicWall':'',ST.m?'MikroTik':'',ST.a?'Cisco ASA':'',ST.t?'Cisco FTD':'',ST.z?'Zyxel':'',ST.r?'EdgeRouter':'',ST.u?'OpenWrt':'',ST.g?'WatchGuard':''].filter(Boolean).join(' + '):tr('analyze.hint_none');
   }
   window.updBtn=updBtn;
 
@@ -145,6 +159,7 @@ const App = (() => {
     {key:'zyxel',label:'Zyxel USG/ATP (ZLD)',accept:'.txt,.conf,.cfg'},
     {key:'edgerouter',label:'EdgeRouter (EdgeOS)',accept:'.boot,.txt,.conf,.cfg'},
     {key:'openwrt',label:'OpenWrt (UCI)',accept:'.txt,.conf,.cfg'},
+    {key:'watchguard',label:'WatchGuard Firebox',accept:'.xml'},
   ];
   const FW_DIFF_PARSERS={
     fortigate:t=>FortigateParser.parse(t), sophos:t=>SophosParser.parse(t),
@@ -153,7 +168,7 @@ const App = (() => {
     sonicwall:t=>SonicWallParser.parse(t), mikrotik:t=>MikrotikParser.parse(t),
     ciscoasa:t=>CiscoASAParser.parse(t), ciscoftd:t=>CiscoFTDParser.parse(t),
     zyxel:t=>ZyxelParser.parse(t), edgerouter:t=>EdgeRouterParser.parse(t),
-    openwrt:t=>OpenWrtParser.parse(t),
+    openwrt:t=>OpenWrtParser.parse(t), watchguard:t=>WatchGuardParser.parse(t),
   };
   let DIFF_OLD_FILE=null, DIFF_NEW_FILE=null, DIFF_RESULT=null, _diffInited=false;
   function initDiffVendorSelect(){
@@ -221,7 +236,7 @@ const App = (() => {
       setStep(1);
       // 警告訊息集中收集，最後一次顯示（避免大檔案警告與廠牌不符警告互相覆蓋）
       const warnMsgs=[];
-      const totalSize = ['f','s','c','p','j','x','w','m','a','t','z','r','u'].reduce((s,k)=>s+(ST[k]?.size||0),0);
+      const totalSize = ['f','s','c','p','j','x','w','m','a','t','z','r','u','g'].reduce((s,k)=>s+(ST[k]?.size||0),0);
       if(totalSize > 5*1024*1024) {
         warnMsgs.push(tr('msg.large_file').replace('{size}', (totalSize/1024/1024).toFixed(1)));
       }
@@ -238,12 +253,13 @@ const App = (() => {
       if(ST.z)ST.raw.z=await readFile(ST.z);
       if(ST.r)ST.raw.r=await readFile(ST.r);
       if(ST.u)ST.raw.u=await readFile(ST.u);
+      if(ST.g)ST.raw.g=await readFile(ST.g);
       // 上傳廠牌特徵檢查：偵測結果為明確的「其他」已知廠牌時警告（只警告不阻擋，
       // 分析流程照常進行），unknown（未命中任何簽章）維持現狀不提示
-      const FW_SLOT_VENDOR={f:'fortigate',s:'sophos',c:'checkpoint',p:'paloalto',j:'juniper',x:'pfsense',w:'sonicwall',m:'mikrotik',a:'ciscoasa',t:'ciscoasa',z:'zyxel',r:'edgerouter',u:'openwrt'};
-      const FW_SLOT_LABEL={f:'FortiGate',s:'Sophos XG/XGS',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense/OPNsense',w:'SonicWall',m:'MikroTik RouterOS',a:'Cisco ASA',t:'Cisco Firepower/FTD',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',u:'OpenWrt (UCI)'};
-      const FW_DETECTED_LABEL={fortigate:'FortiGate',paloalto:'Palo Alto',juniper:'Juniper',checkpoint:'Check Point',pfsense:'pfSense/OPNsense',sonicwall:'SonicWall',mikrotik:'MikroTik RouterOS',ciscoasa:'Cisco ASA/FTD',sophos:'Sophos XG',zyxel:'Zyxel USG/ATP',edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)'};
-      ['f','s','c','p','j','x','w','m','a','t','z','r','u'].forEach(v=>{
+      const FW_SLOT_VENDOR={f:'fortigate',s:'sophos',c:'checkpoint',p:'paloalto',j:'juniper',x:'pfsense',w:'sonicwall',m:'mikrotik',a:'ciscoasa',t:'ciscoasa',z:'zyxel',r:'edgerouter',u:'openwrt',g:'watchguard'};
+      const FW_SLOT_LABEL={f:'FortiGate',s:'Sophos XG/XGS',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense/OPNsense',w:'SonicWall',m:'MikroTik RouterOS',a:'Cisco ASA',t:'Cisco Firepower/FTD',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',u:'OpenWrt (UCI)',g:'WatchGuard Firebox'};
+      const FW_DETECTED_LABEL={fortigate:'FortiGate',paloalto:'Palo Alto',juniper:'Juniper',checkpoint:'Check Point',pfsense:'pfSense/OPNsense',sonicwall:'SonicWall',mikrotik:'MikroTik RouterOS',ciscoasa:'Cisco ASA/FTD',sophos:'Sophos XG',zyxel:'Zyxel USG/ATP',edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',watchguard:'WatchGuard Firebox'};
+      ['f','s','c','p','j','x','w','m','a','t','z','r','u','g'].forEach(v=>{
         if(!ST.raw[v])return;
         const detected=detectFwVendor(ST.raw[v]);
         if(detected!=='unknown'&&detected!==FW_SLOT_VENDOR[v]){
@@ -283,6 +299,7 @@ const App = (() => {
           zyxel:      () => ZyxelParser.parse(text),
           edgerouter: () => EdgeRouterParser.parse(text),
           openwrt:    () => OpenWrtParser.parse(text),
+          watchguard: () => WatchGuardParser.parse(text),
         };
         const result = parsers[vendor]();
         await ms(0); // yield after parse
@@ -301,6 +318,7 @@ const App = (() => {
       if(ST.raw.z){parsedAll.push(await parseWithYield('zyxel',ST.raw.z));}
       if(ST.raw.r){parsedAll.push(await parseWithYield('edgerouter',ST.raw.r));}
       if(ST.raw.u){parsedAll.push(await parseWithYield('openwrt',ST.raw.u));}
+      if(ST.raw.g){parsedAll.push(await parseWithYield('watchguard',ST.raw.g));}
       // Audit/Query 快取：重新解析新檔案時必須清除，否則使用者若先前在舊檔案上
       // 開過 Query 分頁，切換到新檔案後直接按「查詢追蹤結果」CSV 匯出按鈕會拿到
       // 舊檔案的過期查詢結果（唯讀稽核發現的既有 bug）
@@ -763,6 +781,14 @@ function onParsed(){
         break;
       case 'vpn':
         data=d.vpn;
+        // 2026-08-26 新增：上傳的廠牌若命中 VPN_UNSUPPORTED（查證後確認查無語法佐證），
+        // 資料為空時顯示專屬警示文字，比照既有 WIFI_UNSUPPORTED 精神（區分「這廠牌沒設定
+        // VPN」與「本工具查證後確認不支援解析」），只影響顯示文字，不影響 d.vpn 本身仍是
+        // 安全的空陣列
+        if(!data.length && VPN_UNSUPPORTED.some(slot=>ST.raw[slot])){
+          $('sum-wrap').innerHTML='';$('tbl-wrap').innerHTML='<div class="nodata">'+tr('vpn.vendor_unsupported')+'</div>';
+          return;
+        }
         sumCards=sumC([{l:tr('sl.total'),v:data.length,c:'var(--accent)'},{l:'IPSec P1',v:data.filter(x=>x.type==='ipsec-p1').length,c:'var(--purple)'},{l:'IPSec P2',v:data.reduce((s,v)=>s+(v.phase2?v.phase2.length:0),0),c:'var(--purple)'},{l:'SSL-VPN',v:data.filter(x=>x.type==='ssl-vpn').length,c:'var(--green)'},{l:'SSL Portal',v:data.filter(x=>x.type==='ssl-portal').length,c:'var(--green)'},{l:'IKEv2',v:data.filter(x=>x.ikeVer==='2').length,c:'var(--orange)'}]);
         thead=`<tr><th>${tip('tip.ipsec_p1',tr('col.type'))}</th><th>${tr('col.name')}</th><th>${tr('col.remote_gw')}</th><th>${tr('col.if_name')}</th><th>IKE</th><th>${tr('col.auth')}</th><th>${tip('tip.weak_vpn',tr('col.enc_proposal'))}</th><th>${tr('col.dh_group')}</th><th>${tr('col.key_lifetime')}</th><th>${tr('col.nat_traverse')}</th><th>DPD</th><th>${tip('tip.ipsec_p2',tr('col.p2_count'))}</th><th>${tip('tip.status',tr('col.status'))}</th></tr>`;
         rowFn=r=>`<tr>
@@ -785,6 +811,11 @@ function onParsed(){
         break;
       case 'nat':
         data=d.nat;
+        // 2026-08-26 新增：同上方 vpn case 的 UNSUPPORTED 機制
+        if(!data.length && NAT_UNSUPPORTED.some(slot=>ST.raw[slot])){
+          $('sum-wrap').innerHTML='';$('tbl-wrap').innerHTML='<div class="nodata">'+tr('nat.vendor_unsupported')+'</div>';
+          return;
+        }
         sumCards=sumC([{l:tip('tip.nat',tr('sl.total')),v:data.length,c:'var(--accent)'},{l:tip('tip.vip','VIP/DNAT'),v:data.filter(x=>x.type==='vip').length,c:'var(--yellow)'},{l:tip('tip.ippool','IP Pool'),v:data.filter(x=>x.type==='ippool').length,c:'var(--orange)'},{l:tip('tip.vipgrp','VIP Group'),v:data.filter(x=>x.type==='vipgrp').length,c:'var(--text-dim)'},{l:'NAT66',v:data.filter(x=>x.type==='vip6'||x.type==='ippool6'||x.type==='vipgrp6').length,c:'var(--info)'}]);
         thead=`<tr><th>${tip('tip.nat',tr('col.type'))}</th><th>${tr('col.name')}</th><th>${tr('col.subtype')}</th><th>${tip('tip.vip',tr('col.ext_ip'))}</th><th>${tr('col.ext_if')}</th><th>${tr('col.map_ip')}</th><th>${tr('col.port_fwd')}</th><th>${tr('col.ext_port')}</th><th>${tr('col.map_port')}</th><th>${tr('col.protocol')}</th><th>${tip('tip.status',tr('col.status'))}</th><th>${tr('col.desc')}</th></tr>`;
         rowFn=r=>`<tr><td>${pill(r.type,'p-warn')}</td><td class="mono" style="color:var(--accent)">${esc(r.name)}</td><td style="color:var(--text-dim)">${esc(r.vipType||r.poolType||'-')}</td><td class="mono">${esc(r.extIp||r.startIp||'-')}</td><td style="color:var(--text-dim)">${esc(r.extIntf||r.srcIntf||'-')}</td><td class="mono">${esc(r.mapIp||r.endIp||'-')}</td><td>${esc(r.portFwd||'-')}</td><td class="mono">${esc(r.extPort||'-')}</td><td class="mono">${esc(r.mapPort||'-')}</td><td style="color:var(--text-dim)">${esc(r.proto||'-')}</td><td>${r.status==='disable'?pill(tr('wwan.pill_disable'),'p-deny'):pill(tr('wwan.pill_enable'),'p-allow')}</td><td style="color:var(--text-dim);font-size:11px">${esc(r.comment)}</td></tr>`;
@@ -1526,6 +1557,12 @@ function onParsed(){
       }
       case 'users':
         data=d.users;
+        // 2026-08-26 新增：同上方 vpn/nat case 的 UNSUPPORTED 機制
+        if(!data.length && USERS_UNSUPPORTED.some(slot=>ST.raw[slot])){
+          $('filter-type').style.display='none';
+          $('sum-wrap').innerHTML='';$('tbl-wrap').innerHTML='<div class="nodata">'+tr('users.vendor_unsupported')+'</div>';
+          return;
+        }
         $('filter-type').style.display='';
         buildUserTypeFilter(data);
         sumCards=sumC([{l:tr('sl.total'),v:data.length,c:'var(--accent)',sf:{t:'clear'}},{l:tr('user.admin'),v:data.filter(x=>x.type==='admin').length,c:'var(--red)',sf:{t:'type',v:'admin'}},{l:tr('user.local_users'),v:data.filter(x=>x.type==='local').length,c:'var(--green)',sf:{t:'type',v:'local'}},{l:tr('sl.group'),v:data.filter(x=>x.type==='group').length,c:'var(--purple)',sf:{t:'type',v:'group'}},{l:'LDAP',v:data.filter(x=>x.type==='ldap-server').length,c:'var(--yellow)',sf:{t:'type',v:'ldap-server'}},{l:'RADIUS',v:data.filter(x=>x.type==='radius-server').length,c:'var(--orange)',sf:{t:'type',v:'radius-server'}}]);
@@ -3159,7 +3196,7 @@ function startMatrixRain(){
     // 2026-07-30 修復既有缺口：原本清單只有 f/s/c/p/j/x 六家，SonicWall/MikroTik/Cisco ASA/
     // Cisco FTD（w/m/a/t）自新增以來從未被 resetAll() 清除過，「清除」按鈕對這 4 個上傳槽
     // 完全無效果（檔案/chip 殘留），一併補上並加入新增的 Zyxel（z）／EdgeRouter（r）／OpenWrt（u）
-    ['f','s','c','p','j','x','w','m','a','t','z','r','u'].forEach(v=>{ST[v]=null;ST.raw[v]='';const inp=$(inpMap[v]);if(inp)inp.value='';$(chipMap[v]).style.display='none';});
+    ['f','s','c','p','j','x','w','m','a','t','z','r','u','g'].forEach(v=>{ST[v]=null;ST.raw[v]='';const inp=$(inpMap[v]);if(inp)inp.value='';$(chipMap[v]).style.display='none';});
     $('nav-data-group').style.display='none';$('nav-tools-group').style.display='none';
     $('tb-actions').style.display='none';$('tb-title').textContent=tr('title');$('tb-meta').textContent='';
     ACTIVE_VDOM='__all__'; const bar=$('vdom-bar'); if(bar)bar.style.display='none';
