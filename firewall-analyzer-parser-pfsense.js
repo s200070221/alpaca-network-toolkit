@@ -94,15 +94,19 @@ const PfsenseParser = (() => {
   }
 
   // ── Device info ───────────────────────────────────────────────────────────
+  // OPNsense（官方 opnsense/core config.xml.sample 已查證：根標籤為 <opnsense> 而非
+  // <pfsense>）沿用同一個 parser，非獨立 vendor id；先前 model 欄位已有 OPNsense 偵測
+  // 分支，但 vendor 欄位寫死 'pfSense' 造成兩欄位矛盾，此處統一判斷依據
   function parseDeviceInfo(xml) {
     const sys = xv(xml, 'system');
+    const isOpnsense = xml.includes('opnsense') || xml.includes('OPNsense');
     return {
-      vendor:   'pfSense',
+      vendor:   isOpnsense ? 'OPNsense' : 'pfSense',
       hostname: xv(sys||xml,'hostname') || xv(xml,'hostname') || '-',
       firmware: xv(sys||xml,'version') || xv(xml,'version') ||
                 (xml.match(/pfSense[\s\-]+([\d\.]+)/i)||[])[1] || '-',
       model:    xv(sys||xml,'platform') || xv(xml,'platform') ||
-                (xml.includes('opnsense')||xml.includes('OPNsense') ? 'OPNsense' : 'pfSense'),
+                (isOpnsense ? 'OPNsense' : 'pfSense'),
       serial:   '-',
       vdom:     [], vdomNames:[], isMultiVdom: false,
     };
@@ -728,6 +732,25 @@ const PfsenseParser = (() => {
       const t=blk._inner;
       relays.push({name:'dhcrelay',iface:xv(t,'interface')||'-',serverIp:xv(t,'server')||'-',status:'enable',comment:''});
     });
+    // OPNsense DHCP：官方 opnsense/core config.xml.sample 已查證，較新版本用 <dnsmasq> 取代
+    // pfSense 的 <dhcpd>（ISC dhcpd），range 逐介面用同名 <dhcp_ranges> 區塊（非巢狀清單，
+    // 每個介面各自一個 sibling 區塊，比照既有 xblks() 慣例逐一收集）。additive，不影響上面
+    // 既有 <dhcpd> 邏輯；官方 sample 只確認 interface/start_addr/end_addr 三個欄位，
+    // gateway/dns/mask/domain 未查得對應標籤，不猜測維持 '-'
+    const dnsmasqBlks=xblks(xml,'dnsmasq');
+    if(dnsmasqBlks.length){
+      const dm=dnsmasqBlks[0]._inner||'';
+      if(dm.includes('<enable')){
+        xblks(dm,'dhcp_ranges').forEach((b,i)=>{
+          const inner=b._inner;
+          const iface=xv(inner,'interface')||`dnsmasq${i+1}`;
+          servers.push({name:iface+'_dhcp',iface,
+            startIp:xv(inner,'start_addr')||'-',endIp:xv(inner,'end_addr')||'-',
+            gateway:'-',mask:'-',dns1:'-',dns2:'-',domain:'-',
+            lease:'-',status:'enable',comment:'dnsmasq'});
+        });
+      }
+    }
     return {servers,relays};
   }
   // ── DNS ─────────────────────────────────────────────────────────────────
