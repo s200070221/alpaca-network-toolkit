@@ -2,6 +2,7 @@ let parsed=null, currentView='upload', sbMini=false;
 let sortCol=null, sortDir=1; // 1=asc -1=desc
 let lldpView='table'; // 'table' | 'topo' | 'multi'
 let portView='table'; // 'table' | 'heatmap'
+let diffMode='text'; // 'text' | 'structured'
 let _multiDevices=[]; // [{hostname, lldp:[]}] for cross-device topology
 
 // ════════════════════════════════════
@@ -599,6 +600,10 @@ function resetAll(){
 function renderView(view){
   const tc=document.getElementById('tab-content');
   if(view==='upload'){return;}
+  // 設定比較（diff）獨立於主要解析流程，不需要先上傳/解析成功才能使用，比照 nav-upload
+  // 在 !parsed 判斷式之前特別處理（switch_config_generator 早就有此功能，此為移植，
+  // 見 switch-generator-app.js 的 toggleDiffCard/performDiff/computeDiff）
+  if(view==='diff'){tc.innerHTML=renderDiffCard();return;}
   if(!parsed){tc.innerHTML='<div class="nodata">'+tr('msg.no_config')+'</div>';return;}
   switch(view){
     case'overview': tc.innerHTML=renderOverview();break;
@@ -3793,6 +3798,193 @@ function _setupVendorPersona() {
     }
   });
 }
+
+// ── 設定比較（diff，2026-08-24 移植自 switch_config_generator） ──────────────
+// switch_config_generator 早就有此功能（switch-generator-app.js 的 toggleDiffCard/
+// performDiff/computeDiff/computeDiffSimple/displayDiff），switch_analyzer 端從未有過，
+// 造成跨工具不對稱；本次逐字移植演算法本體，僅將 UI 掛載方式改為 renderView() 動態注入
+// tab-content（比照本檔案既有 renderXxx() 慣例），escapeHtml 改用本檔案既有的 esc()
+// diffMode（2026-08-26 新增）：文字/結構化為新增/取代並存，非取代——文字 diff 回答「哪些
+// 位元組變了」，結構化 diff 回答「設定語意上變了什麼」，兩者用途不同。UI toggle 比照既有
+// renderPorts()/portView 慣例，不發明新的 UI 模式
+function renderDiffCard(){
+  const btnStyle=active=>`padding:5px 14px;border:none;border-radius:6px;cursor:pointer;font-size:12px;background:${active?'var(--accent)':'var(--surface2)'};color:${active?'#fff':'var(--text-dim)'}`;
+  return `<div>
+    <h2 style="margin:0 0 16px">${tr('diff.title')}</h2>
+    <div style="display:flex;gap:6px;margin-bottom:12px">
+      <button onclick="diffMode='text';navGo('diff')" style="${btnStyle(diffMode==='text')}">${esc(tr('diff.mode_text'))}</button>
+      <button onclick="diffMode='structured';navGo('diff')" style="${btnStyle(diffMode==='structured')}">${esc(tr('diff.mode_structured'))}</button>
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px">
+        <label style="font-weight:600;font-size:12px;display:block;margin-bottom:6px">${esc(tr('diff.oldLabel'))}</label>
+        <input type="file" id="diff-old-file" accept=".txt,.cfg,.conf,.log" style="width:100%">
+      </div>
+      <div style="flex:1;min-width:200px">
+        <label style="font-weight:600;font-size:12px;display:block;margin-bottom:6px">${esc(tr('diff.newLabel'))}</label>
+        <input type="file" id="diff-new-file" accept=".txt,.cfg,.conf,.log" style="width:100%">
+      </div>
+      <button style="align-self:flex-end;background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:12px;cursor:pointer" onclick="performDiff()">${esc(tr('diff.runBtn'))}</button>
+    </div>
+    <div id="diff-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;max-height:520px;overflow-y:auto;font-family:Menlo,'Courier New',monospace;font-size:11px;line-height:1.5"></div>
+  </div>`;
+}
+function performDiff(){
+  const oldFile=document.getElementById('diff-old-file').files[0];
+  const newFile=document.getElementById('diff-new-file').files[0];
+  if(!oldFile||!newFile){alert(tr('diff.uploadBothAlert'));return;}
+  Promise.all([oldFile.text(),newFile.text()]).then(([oldText,newText])=>{
+    if(diffMode==='structured'){
+      const oldParsed=parseAny(oldText), newParsed=parseAny(newText); // parseAny() 自動偵測廠牌，無需下拉選單
+      displayStructuredDiff(computeStructuredDiff(oldParsed,newParsed));
+    }else{
+      const oldLines=oldText.split('\n');
+      const newLines=newText.split('\n');
+      displayDiff(computeDiff(oldLines,newLines));
+    }
+  });
+}
+function computeDiff(oldLines,newLines){
+  const n=oldLines.length,m=newLines.length;
+  if(n*m>4000000){
+    // 檔案過大（LCS DP table 記憶體/時間成本過高），退回簡易逐行比對，避免瀏覽器分頁卡死
+    return computeDiffSimple(oldLines,newLines);
+  }
+  const dp=Array.from({length:n+1},()=>new Int32Array(m+1));
+  for(let i=n-1;i>=0;i--){
+    for(let j=m-1;j>=0;j--){
+      dp[i][j]=oldLines[i]===newLines[j]?dp[i+1][j+1]+1:Math.max(dp[i+1][j],dp[i][j+1]);
+    }
+  }
+  const diff=[];
+  let i=0,j=0;
+  while(i<n&&j<m){
+    if(oldLines[i]===newLines[j]){diff.push({type:'same',content:oldLines[i]});i++;j++;}
+    else if(dp[i+1][j]>=dp[i][j+1]){diff.push({type:'del',content:oldLines[i]});i++;}
+    else{diff.push({type:'add',content:newLines[j]});j++;}
+  }
+  while(i<n){diff.push({type:'del',content:oldLines[i]});i++;}
+  while(j<m){diff.push({type:'add',content:newLines[j]});j++;}
+  return diff;
+}
+function computeDiffSimple(oldLines,newLines){
+  // 舊版逐 index 比對邏輯，僅作超大檔案 fallback（非真正 diff，只在檔案過大無法跑 LCS 時使用）
+  const diff=[];
+  const maxLen=Math.max(oldLines.length,newLines.length);
+  for(let i=0;i<maxLen;i++){
+    const old=oldLines[i]||'';
+    const newL=newLines[i]||'';
+    if(old===newL)diff.push({type:'same',content:old});
+    else if(!old)diff.push({type:'add',content:newL});
+    else if(!newL)diff.push({type:'del',content:old});
+    else{diff.push({type:'del',content:old});diff.push({type:'add',content:newL});}
+  }
+  return diff;
+}
+function displayDiff(diff){
+  const resultDiv=document.getElementById('diff-result');
+  if(!resultDiv)return;
+  resultDiv.style.display='block';
+  let html='';
+  let addCount=0,delCount=0;
+  diff.forEach(item=>{
+    if(item.type==='same'){
+      html+=`<div style="color:var(--text-dim)">${esc(item.content)}</div>`;
+    }else if(item.type==='add'){
+      html+=`<div style="color:var(--green);background:rgba(16,185,129,.1)">+ ${esc(item.content)}</div>`;
+      addCount++;
+    }else if(item.type==='del'){
+      html+=`<div style="color:var(--red);background:rgba(239,68,68,.1)">- ${esc(item.content)}</div>`;
+      delCount++;
+    }
+  });
+  const summary=`<div style="border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:8px;font-weight:600">
+    📊 ${esc(tr('diff.added'))} ${addCount} | ${esc(tr('diff.deleted'))} ${delCount} | ${esc(tr('diff.total'))} ${diff.length}
+  </div>`;
+  resultDiv.innerHTML=summary+html;
+}
+
+// 結構化 diff 渲染：不可逐字複製 firewall-analyzer-audit.js 的 buildDiffHtml/_buildDiffSection——
+// 本檔案的 pill(c,t) 參數順序是 class 在前（firewall 是 pill(t,c) 文字在前），且用 p-up/
+// p-down/p-warn（非 firewall 的 p-allow/p-deny）三色對應新增/刪除/變更，需依既有 helper 重寫
+function _diffLabel(item){
+  if(!item)return '-';
+  if(typeof item==='string')return item;
+  return item.name||item.id||item.pid||item.asn||item.port||item.area||
+    (item.interface&&item.vrid!==undefined?`${item.interface} vrid ${item.vrid}`:null)||
+    (item.dst?`${item.dst} → ${item.gw}`:null)||JSON.stringify(item);
+}
+function _buildNestedDiffTable(label,result){
+  if(!result)return '';
+  const total=result.added.length+result.removed.length+result.changed.length;
+  if(!total)return '';
+  let rows='';
+  result.added.forEach(item=>rows+=`<tr><td>${pill('up',tr('diff.status_added'))}</td><td class="mono">${esc(_diffLabel(item))}</td></tr>`);
+  result.removed.forEach(item=>rows+=`<tr><td>${pill('down',tr('diff.status_removed'))}</td><td class="mono">${esc(_diffLabel(item))}</td></tr>`);
+  result.changed.forEach(c=>rows+=`<tr><td>${pill('warn',tr('diff.status_changed'))}</td><td class="mono">${esc(_diffLabel(c.new||c.old))} <span style="color:var(--text-dim)">(${esc((c.diffFields||[]).join(', ')||'-')})</span></td></tr>`);
+  return `<div style="margin:4px 0 4px 12px;font-size:11px"><div style="color:var(--text-dim);margin-bottom:2px">${esc(label)}</div><table class="data-tbl" style="width:100%">${rows}</table></div>`;
+}
+function _buildStructuredDiffSection(titleKey,result,nestedFn){
+  const total=result.added.length+result.removed.length+result.changed.length;
+  let h=`<div style="margin-bottom:20px"><div style="font-weight:600;color:var(--accent);margin-bottom:8px">${esc(tr(titleKey))}</div>`;
+  if(!total)return h+`<div style="color:var(--green);font-size:12px">${esc(tr('diff.none_found'))}</div></div>`;
+  h+='<table class="data-tbl" style="width:100%"><tbody>';
+  result.added.forEach(item=>h+=`<tr><td style="width:70px">${pill('up',tr('diff.status_added'))}</td><td class="mono">${esc(_diffLabel(item))}</td><td>-</td></tr>`);
+  result.removed.forEach(item=>h+=`<tr><td style="width:70px">${pill('down',tr('diff.status_removed'))}</td><td class="mono">${esc(_diffLabel(item))}</td><td>-</td></tr>`);
+  result.changed.forEach(c=>{
+    h+=`<tr><td style="width:70px">${pill('warn',tr('diff.status_changed'))}</td><td class="mono">${esc(_diffLabel(c.new||c.old))}</td><td style="color:var(--text-dim);font-size:11px">${esc((c.diffFields||[]).join(', ')||'-')}</td></tr>`;
+    const nested=nestedFn?nestedFn(c):'';
+    if(nested)h+=`<tr><td></td><td colspan="2">${nested}</td></tr>`;
+  });
+  h+='</tbody></table></div>';
+  return h;
+}
+function displayStructuredDiff(result){
+  const resultDiv=document.getElementById('diff-result');
+  if(!resultDiv)return;
+  resultDiv.style.display='block';
+  let html='';
+  html+=_buildStructuredDiffSection('diff.section_vlans',result.vlans);
+  html+=_buildStructuredDiffSection('diff.section_interfaces',result.interfaces);
+  html+=_buildStructuredDiffSection('diff.section_acls',result.acls,c=>
+    _buildNestedDiffTable(tr('diff.section_acls')+' rules',c.ruleDiff)+_buildNestedDiffTable('appliedOn',c.appliedOnDiff));
+  html+=_buildStructuredDiffSection('diff.section_ospf',result.ospf,c=>{
+    let n=_buildNestedDiffTable('areas',c.areaDiff);
+    (c.areaDiff&&c.areaDiff.changed||[]).forEach(ac=>{n+=_buildNestedDiffTable('networks ('+ac.key+')',ac.networkDiff);});
+    return n+_buildNestedDiffTable('redistribute',c.redistributeDiff);
+  });
+  html+=_buildStructuredDiffSection('diff.section_bgp',result.bgp,c=>
+    _buildNestedDiffTable('peers',c.peerDiff)+_buildNestedDiffTable('networks',c.networkDiff)+_buildNestedDiffTable('networks6',c.network6Diff));
+  html+=_buildStructuredDiffSection('diff.section_routes',result.routes);
+  html+=_buildStructuredDiffSection('diff.section_rip',result.rip,c=>_buildNestedDiffTable('networks',c.networkDiff));
+  html+=_buildStructuredDiffSection('diff.section_vrrp',result.vrrp);
+  const stpTotal=result.stp.fieldDiff.length||result.stp.instances.added.length||result.stp.instances.removed.length||result.stp.instances.changed.length||result.stp.ports.added.length||result.stp.ports.removed.length||result.stp.ports.changed.length;
+  let stpHtml=`<div style="margin-bottom:20px"><div style="font-weight:600;color:var(--accent);margin-bottom:8px">${esc(tr('diff.section_stp'))}</div>`;
+  if(!stpTotal)stpHtml+=`<div style="color:var(--green);font-size:12px">${esc(tr('diff.none_found'))}</div>`;
+  else{
+    if(result.stp.fieldDiff.length)stpHtml+=`<div style="font-size:12px;margin-bottom:6px">${pill('warn',tr('diff.status_changed'))} ${esc(result.stp.fieldDiff.join(', '))}</div>`;
+    stpHtml+=_buildNestedDiffTable('instances',result.stp.instances);
+    stpHtml+=_buildNestedDiffTable('ports',result.stp.ports);
+  }
+  html+=stpHtml+'</div>';
+  resultDiv.innerHTML=html;
+}
+
+// ── 跨工具導覽（2026-08-24 新增）：6 工具互相之間、以及回到 hub 先前完全沒有連結，
+// 使用者只能靠瀏覽器上一頁。各工具各自複製一份自包含元件（比照本專案既有彩蛋/主題切換
+// 慣例，不硬拉共用 JS 檔），連結一律用相對檔名，與 index.html 的 TOOLS 陣列 href 逐字一致
+function toggleToolsNav(e){
+  if(e)e.stopPropagation();
+  const p=document.getElementById('tools-nav-panel');
+  if(!p)return;
+  p.style.display=(p.style.display==='none'||!p.style.display)?'block':'none';
+}
+document.addEventListener('click',function(e){
+  const p=document.getElementById('tools-nav-panel');
+  if(p&&p.style.display==='block'&&!p.contains(e.target)&&e.target.id!=='tools-nav-btn'){
+    p.style.display='none';
+  }
+});
 
 // 黑/白模式切換
 function setTheme(t){document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';localStorage.setItem('cw_theme',t);}

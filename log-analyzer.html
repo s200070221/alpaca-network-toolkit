@@ -118,8 +118,8 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
 </head>
 <body data-theme="dark">
 <header id="topbar">
-  <h1 id="app-title">Log 分析與去識別化工具</h1>
-  <div class="lang-bar" id="lang-bar"></div>
+  <h1 id="app-title" class="tb-title">Log 分析與去識別化工具</h1>
+  <div class="lang-bar lang-switcher" id="lang-bar"></div>
   <span class="lang-egg" id="egg-pirate">⚓</span>
   <span class="lang-egg" id="egg-leet">💾</span>
   <span class="lang-egg" id="egg-emoji">🌈</span>
@@ -130,6 +130,7 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
   <span class="lang-egg" id="egg-alpaca">🦙</span>
   <span class="lang-egg" id="egg-yanse">😮‍💨</span>
   <span class="lang-egg" id="egg-wuxia">⚔️</span>
+  <button id="theme-btn" onclick="toggleTheme()" title="切換明/暗模式" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;font-size:14px;padding:3px 8px;margin-left:6px;line-height:1">☀️</button>
   <button id="tools-nav-btn" onclick="toggleToolsNav(event)" title="切換工具" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;font-size:14px;padding:3px 8px;margin-left:6px;line-height:1">🧭</button>
   <div id="tools-nav-panel" style="display:none;position:fixed;top:44px;right:12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px;box-shadow:0 6px 20px rgba(0,0,0,.3);z-index:2000;min-width:170px">
     <span style="display:block;padding:6px 10px;border-radius:6px;color:var(--accent);font-size:12px;margin-bottom:2px;font-weight:600">✓ <span data-i18n="nav.tool_log">日誌分析</span></span>
@@ -3579,6 +3580,12 @@ renderAll();
     doAnalyze();
   } catch(e) {}
 })();
+
+// 主題切換（2026-08-25 新增，比照其餘 5 工具既有的 setTheme()/toggleTheme() 慣例搬過來，
+// 本工具先前完全沒有主題切換機制，CSS 已用 body[data-theme=...] 選擇器，零 CSS 改動即可相容）
+function setTheme(t){document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';localStorage.setItem('cw_theme',t);}
+function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
+(function(){const s=localStorage.getItem('cw_theme');const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
 </script>
 </body>
 </html>

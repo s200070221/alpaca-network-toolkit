@@ -173,15 +173,15 @@ input.valid,select.valid{border-color:var(--green)!important}
 </head>
 <body>
 
-<div class="header">
+<header class="header" id="topbar">
   <div class="logo">
     <div class="logo-icon">🛠️</div>
     <div class="logo-text">
-      <h1 data-i18n="title">交換器設定產生器</h1>
+      <h1 data-i18n="title" class="tb-title">交換器設定產生器</h1>
       <p data-i18n="sub">Pure JS · 零伺服器 · 單檔執行</p>
     </div>
   </div>
-  <div class="lang-bar" id="lang-bar">
+  <div class="lang-bar lang-switcher" id="lang-bar">
     <button class="lang-btn active" data-lang="zhTW" onclick="setLang('zhTW')">繁中</button>
     <button class="lang-btn" data-lang="en" onclick="setLang('en')">EN</button>
     <button class="lang-btn" data-lang="ja" onclick="setLang('ja')">日本語</button>
@@ -217,7 +217,7 @@ input.valid,select.valid{border-color:var(--green)!important}
       <a href="log-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_log">日誌分析</a>
     </div>
   </div>
-</div>
+</header>
 
 <div class="notice" data-i18n="notice.disclaimer">此功能匯出之設定檔僅供參考，請謹慎使用</div>
 
