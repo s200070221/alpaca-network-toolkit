@@ -254,9 +254,6 @@ function assemblePlanetConfig(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`hostname ${model.sysname||'Switch'}`];
   const vlanBlock=renderPlanetVLANs(model.vlans);
   if(vlanBlock)blocks.push(vlanBlock);
-  // ip forward-protocol udp bootps：DHCP relay 全域旗標，比照 Cisco option82 全域旗標既有慣例，
-  // 有任一 relay 設定時才輸出
-  if((model.dhcp||[]).some(d=>d.type==='relay'))blocks.push('ip forward-protocol udp bootps');
   if(model.interfaces&&model.interfaces.length)blocks.push(renderPlanetInterfaces(model.interfaces,model.lacp,model.security,model.dhcp,model.stp,model.acl));
   const lacpExtra=renderPlanetLACPExtra(model.lacp,model.interfaces);
   if(lacpExtra)blocks.push(lacpExtra);

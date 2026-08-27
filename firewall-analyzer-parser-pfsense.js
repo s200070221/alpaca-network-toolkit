@@ -686,10 +686,15 @@ const PfsenseParser = (() => {
     // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 source/destination 名稱反查
     // v4/v6 型別（見 _splitAddr() 定義處註解）
     const addresses = parseAddressObjectsOnly(xml);
+    // 2026-08-27 稽核修復：頂層 vendor 欄位先前寫死 'pfSense'，OPNsense 設定檔會與
+    // deviceInfo.vendor（已正確判斷為 'OPNsense'）矛盾——同一物件內兩個欄位各說各話，
+    // merge() 組合廠牌字串等任何改讀頂層 vendor 的既有邏輯都會被誤導成 pfSense。改為直接
+    // 沿用 deviceInfo.vendor，不重複判斷邏輯
+    const deviceInfo = parseDeviceInfo(xml);
 
     return {
-      vendor:     'pfSense',
-      deviceInfo: parseDeviceInfo(xml),
+      vendor:     deviceInfo.vendor,
+      deviceInfo,
       interfaces: parseInterfaces(xml),
       policies:   parsePolicies(xml, ifMap, buildAddrTypeMap(addresses)),
       routes:     parseRoutes(xml),

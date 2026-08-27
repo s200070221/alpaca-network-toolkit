@@ -397,12 +397,17 @@
     // 節點本身無角色欄位但本質即管理員帳號、Sophos accessLevel 可能是 admin/super-admin。
     // 刻意不用一律 type==='local' 的粗暴寫法——會誤觸 FortiGate SSL-VPN/portal 一般使用者
     // （accessLevel 固定 'user'）與 Sophos 一般權限使用者）
+    // 2026-08-27 稽核修復：parsed.vendor 精確比對 'PaloAlto' 在多廠牌合併分析時會失效——
+    // merge()（firewall-analyzer-app.js）把兩份設定檔的 vendor 串接成 "FortiGate + PaloAlto"
+    // 這類字串，精確比對從此恆為 false，PaloAlto 本機管理帳號的 2FA 缺口從此被靜默排除在
+    // 稽核範圍外（單一廠牌上傳不受影響，僅合併分析時失效）。改用 includes()，vendor 串接
+    // 語法固定用 " + " 分隔，不會有其他廠牌名稱意外包含 "PaloAlto" 子字串造成誤判
     const isPrivileged = u => u.status !== 'disable' && (
       u.type === 'admin' ||
       u.role === 'admin' ||
       (Array.isArray(u.roles) && u.roles.includes('admin')) ||
       u.accessLevel === 'admin' || u.accessLevel === 'super-admin' ||
-      (u.type === 'local' && parsed.vendor === 'PaloAlto')
+      (u.type === 'local' && (parsed.vendor || '').includes('PaloAlto'))
     );
     const admins = (parsed.users || []).filter(isPrivileged);
     const no2fa  = admins.filter(u => !u.twoFactor || u.twoFactor === 'disable');
