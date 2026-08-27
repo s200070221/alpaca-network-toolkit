@@ -1090,6 +1090,7 @@ function addQosRow(policy='',cls='',behavior='',action='police',rate='',burst=''
       <option value="priority" data-i18n="opt.qosPriority">Priority</option>
       <option value="shape" data-i18n="opt.qosShape">Shape</option>
       <option value="bandwidth" data-i18n="opt.qosBandwidth">Bandwidth</option>
+      <option value="drop" data-i18n="opt.qosDrop">Drop</option>
     </select></td>
     <td><input class="q-rate" value="${escAttr(rate)}" placeholder="1000000"></td>
     <td><input class="q-burst" value="${escAttr(burst)}" placeholder="10000"></td>
@@ -1175,7 +1176,7 @@ function updateModeOptions(){
   // 產生無法 round-trip 密碼）；Alcatel 中信心度、FortiSwitch/Netgear/EdgeSwitch/SONiC 完全
   // 零解析（EdgeSwitch/FortiSwitch/Netgear 已於 2026-08-23 補上 switch_analyzer 端解析，
   // generator 端尚未接線）留待後續評估，不開放
-  const USERS_CARD_VENDORS=['procurve','cisco','arista','ruijie','cisco_nxos','comware','dell-os10','brocade','aruba','juniper','extreme','routeros'];
+  const USERS_CARD_VENDORS=['procurve','cisco','arista','ruijie','cisco_nxos','comware','dell-os10','brocade','aruba','juniper','extreme','routeros','planet'];
   const usersCard=document.getElementById('users-card');
   if(usersCard)usersCard.style.display=USERS_CARD_VENDORS.includes(vendor)?'':'none';
   // SONiC L3 介面 IP 卡片僅 SONiC 適用（config_db.json 的 INTERFACE/VLAN_INTERFACE/
@@ -1857,12 +1858,9 @@ const VENDOR_UNSUPPORTED={
   // rip/vrrp/dhcpServer/dhcpRelay：SONiC 傳統模式僅單一 BGP instance、RIP v7 待查證，
   // 本輪範圍未涵蓋
   sonic:['rip','vrrp','dhcpServer','dhcpRelay'],
-  // Planet SGS-6341 系列：ACL／QoS／STP／DHCP Server／DHCP Relay 本輪未查得官方語法
-  // 佐證，不猜測；Security（802.1X port-control+MAC port-security）已查證官方語法
-  // 並完整實作 parser+render（見 switch-generator-planet.js 的 planetSecurityLines()），
-  // 不列入此清單；Users（本機帳號）同樣未查證，共用清單無對應 key 故不列出但表單本來
-  // 就不會顯示該廠牌的 Users 卡片（見下方 VENDOR_INCAPABLE 之外的既有隱藏機制）
-  planet:['acl','qos','stp','dhcpServer','dhcpRelay'],
+  // Planet SGS-6341 系列：ACL／QoS／STP／DHCP Server／DHCP Relay／Users 皆已於 2026-08-27
+  // 對外查證官方 SGS-6341 Series Command Guide 後完整實作 parser+render，無不支援項目
+  planet:[],
 };
 const VENDOR_FEATURE_LABEL={bgp:'BGP',rip:'RIP',vrrp:'VRRP',dhcpServer:'DHCP Server',dhcpRelay:'DHCP Relay',acl:'ACL',qos:'QoS',security:'Port Security/802.1X',stp:'STP',routes:'Static Routes'};
 
@@ -2733,7 +2731,7 @@ async function parseAndImport(){
   // 2026-08-26 新增 Extreme（parseExtremeXOSUsers() 回傳 {name,role,...}，欄位與其餘廠牌
   // 相容可共用此陣列）。parsed.users 已是各廠牌 parseXxx() 既有回傳物件的一部分，不需額外
   // 抽取；密碼欄位因雜湊值無法從 hasPwd/pwdType/role 等中繼資料還原，匯入後留空待使用者自行補上
-  if(['procurve','cisco','arista','ruijie','nxos','comware','dell-os10','brocade','aruba','juniper','extreme'].includes(vendor)){
+  if(['procurve','cisco','arista','ruijie','nxos','comware','dell-os10','brocade','aruba','juniper','extreme','planet'].includes(vendor)){
     (parsed.users||[]).forEach(u=>addUsersRow(u.name,u.role,''));
   }
   // RouterOS：parseRouterOSUsers() 回傳形狀是 {username,group,privilege}，欄位名與其餘廠牌
