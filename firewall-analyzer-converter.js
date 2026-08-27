@@ -2183,14 +2183,20 @@ const Converter = (() => {
   // FortiGate→FortiGate（wwan）、CiscoASA/FTD→CiscoASA/FTD（ha）、PaloAlto→PaloAlto（ha）、
   // Juniper→Juniper（ha）皆已補上真正輸出（見 toMikrotik()/toFortigate()/toCiscoASA()/
   // toPaloAlto()/toJuniper() 對應區塊），這些組合不再算「轉換會遺失」，其餘組合維持原判定不變
+  // 2026-08-27 稽核修復：以下五個判定式原本用 parsed.vendor 精確比對，但 doConvert()
+  // 選定特定 VDOM 時會把 vendor 改寫成 "FortiGate (VDOM: root)" 這類帶後綴字串（見
+  // firewall-analyzer-app.js 的 VDOM filter 區塊），精確比對從此恆為 false，使用者選了
+  // VDOM 再做 FortiGate→FortiGate 轉換會誤顯示「WWAN 資料會遺失」的假警告（實際 toFortigate()
+  // 早就有寫出 WWAN，非真的遺失）。改用 startsWith() 只認廠牌名稱前綴，不受 VDOM 後綴影響
   function getConversionLoss(parsed,targetVendor){
+    const vendor=parsed.vendor||'';
     return LOSS_FIELDS.filter(f=>{
       if(!hasAnyData(parsed[f.key]))return false;
-      if(parsed.vendor==='MikroTik'&&targetVendor==='mikrotik'&&['wlan','wwan','logservers','snmp'].includes(f.key))return false;
-      if(parsed.vendor==='FortiGate'&&targetVendor==='fortigate'&&f.key==='wwan')return false;
-      if((parsed.vendor==='Cisco ASA'||parsed.vendor==='Cisco FTD')&&(targetVendor==='ciscoasa'||targetVendor==='ciscoftd')&&f.key==='ha')return false;
-      if(parsed.vendor==='PaloAlto'&&targetVendor==='paloalto'&&f.key==='ha')return false;
-      if(parsed.vendor==='Juniper'&&targetVendor==='juniper'&&f.key==='ha')return false;
+      if(vendor.startsWith('MikroTik')&&targetVendor==='mikrotik'&&['wlan','wwan','logservers','snmp'].includes(f.key))return false;
+      if(vendor.startsWith('FortiGate')&&targetVendor==='fortigate'&&f.key==='wwan')return false;
+      if((vendor.startsWith('Cisco ASA')||vendor.startsWith('Cisco FTD'))&&(targetVendor==='ciscoasa'||targetVendor==='ciscoftd')&&f.key==='ha')return false;
+      if(vendor.startsWith('PaloAlto')&&targetVendor==='paloalto'&&f.key==='ha')return false;
+      if(vendor.startsWith('Juniper')&&targetVendor==='juniper'&&f.key==='ha')return false;
       return true;
     }).map(f=>f.label);
   }

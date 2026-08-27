@@ -2155,10 +2155,21 @@ function applyImportedMappings(parsed) {
   if (!parsed || typeof parsed !== 'object' || !parsed.mappings || typeof parsed.mappings !== 'object') {
     return { applied, skipped };
   }
-  // 記住這份種子（存整個 parsed，含 .mappings 外層，供 resetAnonState() 直接原樣重新傳入
-  // 本函式，維持呼叫介面一致），讓每次執行去識別化前清空 mappings 後都能重新套用，使匯入
-  // 在同一分頁內對多次「執行去識別化」持續生效
-  IMPORTED_SEED = parsed;
+  // 記住這份種子，讓每次執行去識別化前清空 mappings 後都能重新套用，使匯入在同一分頁內對
+  // 多次「執行去識別化」持續生效。2026-08-27 稽核修復：先前是 `IMPORTED_SEED = parsed`
+  // 整份直接取代，使用者若連續匯入兩份不同的對照表檔案，第二次匯入會讓 IMPORTED_SEED 整個
+  // 換成第二份，resetAnonState() 重新套用時第一份的內容就消失了——因為 anonymizeEvents()
+  // 一開始就呼叫 resetAnonState()，這不是「第二次執行才出事」的邊界情況，是匯入兩份後第一次
+  // 執行就會直接漏掉第一份。改為累加合併進 IMPORTED_SEED.mappings，同一原始值以先匯入者為準
+  // （與下面套用到即時 mappings 的 first-seen-wins 語意一致）
+  if (!IMPORTED_SEED) IMPORTED_SEED = { mappings: {} };
+  for (const cat of Object.keys(parsed.mappings)) {
+    const src = parsed.mappings[cat];
+    if (!src || typeof src !== 'object') continue;
+    if (!IMPORTED_SEED.mappings[cat]) IMPORTED_SEED.mappings[cat] = {};
+    const dst = IMPORTED_SEED.mappings[cat];
+    for (const k of Object.keys(src)) { if (!(k in dst)) dst[k] = src[k]; }
+  }
   for (const cat of Object.keys(parsed.mappings)) {
     if (!mappings[cat]) continue;
     const entries = parsed.mappings[cat];
