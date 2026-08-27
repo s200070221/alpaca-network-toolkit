@@ -1165,22 +1165,45 @@ function detectLateralMovement(events, opts) {
       if (!bySrc.has(e.fields.srcip)) bySrc.set(e.fields.srcip, []);
       bySrc.get(e.fields.srcip).push(e);
     });
+  // 2026-08-27 稽核修復：先前用 hosts.size===threshold 精確匹配，視窗內主機數一旦超過門檻
+  // 就不再觸發（也不再更新既有問題），橫向移動 3 台主機跟 30 台主機在畫面上長得一樣（count
+  // 永遠停在門檻值）。改為「同一波事件」episode 追蹤：視窗內主機數達門檻時開一筆問題並持續
+  // 就地更新 count/lastSeen/relatedHosts/relatedEvents 到目前為止看過的最大範圍，直到視窗
+  // 主機數掉回門檻以下才結束這一波；之後若再度達門檻，視為新的一波，開新的一筆問題（同一
+  // 來源在時間上分開的兩次橫向移動，仍分別各自成案，不會被合併成一筆）
   const issues = [];
   for (const [src, list] of bySrc) {
     const sorted = [...list].sort((a, b) => effectiveTime(a) - effectiveTime(b));
     let winStart = 0;
+    let episode = null;
     for (let i = 0; i < sorted.length; i++) {
       const ti = effectiveTime(sorted[i]);
       while (effectiveTime(sorted[winStart]) < ti - windowMs) winStart++;
       const windowEvents = sorted.slice(winStart, i + 1);
       const hosts = new Set(windowEvents.map(e => e.host));
-      if (hosts.size === threshold) {
-        issues.push({
-          category: 'lateralMovement', severityNorm: 'High', count: hosts.size,
-          firstSeen: windowEvents[0].timestamp || null, lastSeen: windowEvents[windowEvents.length - 1].timestamp || null,
-          sampleRaw: `${src} -> ${hosts.size} 個不同主機成功登入（EventID 4624）`,
-          relatedHosts: [src, ...hosts], relatedEvents: windowEvents, confidence: 'heuristic'
-        });
+      if (hosts.size >= threshold) {
+        if (!episode) {
+          episode = {
+            category: 'lateralMovement', severityNorm: 'High', count: hosts.size,
+            firstSeen: windowEvents[0].timestamp || null, lastSeen: windowEvents[windowEvents.length - 1].timestamp || null,
+            sampleRaw: `${src} -> ${hosts.size} 個不同主機成功登入（EventID 4624）`,
+            relatedHosts: [src, ...hosts], relatedEvents: windowEvents, confidence: 'heuristic'
+          };
+          issues.push(episode);
+        } else {
+          // lastSeen 每步都延伸（代表這一波事件持續到哪個時間點）；count/relatedHosts/
+          // relatedEvents 只在規模創新高時才更新代表快照，避免視窗尾端自然縮小（較舊事件
+          // 隨時間滑出視窗）反而把先前記錄到的較大規模覆蓋掉
+          episode.lastSeen = windowEvents[windowEvents.length - 1].timestamp || null;
+          if (hosts.size > episode.count) {
+            episode.count = hosts.size;
+            episode.sampleRaw = `${src} -> ${hosts.size} 個不同主機成功登入（EventID 4624）`;
+            episode.relatedHosts = [src, ...hosts];
+            episode.relatedEvents = windowEvents;
+          }
+        }
+      } else {
+        episode = null;
       }
     }
   }
@@ -1918,23 +1941,44 @@ function detectGeoVelocity(events, geoIndexes, opts) {
     if (!byActor.has(actor)) byActor.set(actor, []);
     hits.forEach(h => byActor.get(actor).push({ e, country: h.country, ip: h.ip }));
   });
+  // 2026-08-27 稽核修復：先前用 countries.size===2 精確匹配，比照 detectLateralMovement()
+  // 同一輪稽核發現的同款問題——視窗內國家數一旦超過 2 就不再觸發，同一 actor 短時間內出現
+  // 3、4 個國家跟剛好 2 個國家在畫面上長得一樣。改為同一波事件 episode 追蹤，持續就地更新
+  // count/geoCountries/lastSeen/relatedEvents 到目前為止看過的最大範圍，視窗國家數掉回 2
+  // 以下才結束這一波，之後再度達標視為新的一波
   const issues = [];
   for (const [actor, list] of byActor) {
     const sorted = [...list].sort((a, b) => effectiveTime(a.e) - effectiveTime(b.e));
     let winStart = 0;
+    let episode = null;
     for (let i = 0; i < sorted.length; i++) {
       const ti = effectiveTime(sorted[i].e);
       while (effectiveTime(sorted[winStart].e) < ti - windowMs) winStart++;
       const windowItems = sorted.slice(winStart, i + 1);
       const countries = new Set(windowItems.map(it => it.country));
-      if (countries.size === 2) {
-        issues.push({
-          category: 'geoVelocity', severityNorm: 'Medium', count: countries.size,
-          firstSeen: windowItems[0].e.timestamp || null, lastSeen: windowItems[windowItems.length - 1].e.timestamp || null,
-          sampleRaw: `${actor}：${windowMs / 60000} 分鐘內出現於 ${Array.from(countries).join(' / ')}`,
-          geoCountries: Array.from(countries),
-          relatedHosts: [actor], relatedEvents: windowItems.map(it => it.e), confidence: 'heuristic'
-        });
+      if (countries.size >= 2) {
+        if (!episode) {
+          episode = {
+            category: 'geoVelocity', severityNorm: 'Medium', count: countries.size,
+            firstSeen: windowItems[0].e.timestamp || null, lastSeen: windowItems[windowItems.length - 1].e.timestamp || null,
+            sampleRaw: `${actor}：${windowMs / 60000} 分鐘內出現於 ${Array.from(countries).join(' / ')}`,
+            geoCountries: Array.from(countries),
+            relatedHosts: [actor], relatedEvents: windowItems.map(it => it.e), confidence: 'heuristic'
+          };
+          issues.push(episode);
+        } else {
+          // lastSeen 每步都延伸；count/geoCountries/relatedEvents 只在國家數創新高時才更新
+          // 代表快照，理由同 detectLateralMovement() 上方註解
+          episode.lastSeen = windowItems[windowItems.length - 1].e.timestamp || null;
+          if (countries.size > episode.count) {
+            episode.count = countries.size;
+            episode.sampleRaw = `${actor}：${windowMs / 60000} 分鐘內出現於 ${Array.from(countries).join(' / ')}`;
+            episode.geoCountries = Array.from(countries);
+            episode.relatedEvents = windowItems.map(it => it.e);
+          }
+        }
+      } else {
+        episode = null;
       }
     }
   }
