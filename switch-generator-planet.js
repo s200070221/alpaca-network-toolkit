@@ -4,7 +4,11 @@
 // Interface(access/trunk/hybrid，hybrid 用 tag/untag 後綴語法)／OSPF（CIDR+wildcard
 // 皆支援）／BGP（network 恆為 CIDR）／靜態路由／LACP（port-channel + port-group N
 // mode active/passive/on）／VRRP（全域 "router vrrp N" 實例，非巢狀在 interface
-// 區塊內）／802.1X+MAC port-security。ACL/QoS/STP/DHCP/Users 本輪未查證不實作。
+// 區塊內）／802.1X+MAC port-security／ACL（numbered IP，100-199 標準/100-299 延伸）／
+// QoS（policy-map/class，含 drop 動作）／STP（含逐 MSTP instance priority）／DHCP
+// （server+relay，"network-address" 關鍵字）／Users（沿用 Cisco 語法）。
+// 明確排除：MAC ACL（1100-1199/mac-access-list extended）——官方文件雖有完整規則列語法，
+// 但欄位形狀與共用 ACL 表單模型不相容，需要獨立 schema，非本輪範圍。
 // 官方 SGS-6341 Series Command Guide 直接 fetch 逐字查證。
 
 // VLAN WORD 壓縮：與 Ruijie/Comware 慣用的逗號分隔不同，Planet 用分號分隔多筆、
@@ -71,7 +75,7 @@ function planetSecurityLines(sec){
   return lines;
 }
 
-function renderPlanetInterface(iface,lacpList,securityList){
+function renderPlanetInterface(iface,lacpList,securityList,dhcpList,stp,aclList){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(` description ${iface.desc}`);
   if(iface.type==='svi'){
@@ -94,12 +98,84 @@ function renderPlanetInterface(iface,lacpList,securityList){
     const sec=findSecurityForPort(securityList,iface.name);
     planetSecurityLines(sec).forEach(l=>lines.push(l));
   }
+  // DHCP Relay：`ip helper-address`，與 Cisco 語法逐字相同，沿用既有共用 findDhcpRelays()
+  findDhcpRelays(dhcpList,iface.name).forEach(d=>lines.push(` ip helper-address ${d.relayServer}`));
+  // STP 逐 port：`spanning-tree portfast [bpduguard]`（bpduguard 是 portfast 的旗標，非獨立
+  // 指令）／`spanning-tree rootguard`（無連字號），沿用既有共用 findStpForPort()
+  const sp=findStpForPort(stp,iface.name);
+  if(sp){
+    if(sp.portfast||sp.bpduguard)lines.push(sp.bpduguard?' spanning-tree portfast bpduguard':' spanning-tree portfast');
+    if(sp.guardRoot)lines.push(' spanning-tree rootguard');
+  }
+  // ACL 套用：`{ip|mac|mac-ip|ipv6} access-group <name> {in|out}`（官方 §47.15 已查證），
+  // 沿用既有共用 findAclApplications()；本輪僅支援 IP ACL 故固定輸出 "ip access-group"
+  findAclApplications(aclList,iface.name).forEach(ap=>lines.push(` ip access-group ${ap.name} ${ap.direction}`));
   if(iface.shutdown)lines.push(' shutdown');
   return lines.join('\n');
 }
-function renderPlanetInterfaces(ifaces,lacpList,securityList){
-  return (ifaces||[]).map(i=>renderPlanetInterface(i,lacpList,securityList)).join('\n!\n');
+function renderPlanetInterfaces(ifaces,lacpList,securityList,dhcpList,stp,aclList){
+  return (ifaces||[]).map(i=>renderPlanetInterface(i,lacpList,securityList,dhcpList,stp,aclList)).join('\n!\n');
 }
+
+// ACL：**不可重用 renderCiscoACL()**——該函式輸出 `ip access-list {standard|extended} NAME`
+// 具名容器語法，Planet 是扁平數字型 `access-list <num> {permit|deny} ...`，結構完全不同
+// （官方 §47.3/47.4 已查證）。目的端 token（any-destination/host-destination）與來源端
+// （any-source/host-source）對稱但關鍵字不同，來源端額外接受裸 "any"（官方文件自己的
+// Extended 範例即用 "any" 非 "any-source"，輸出仍固定用較明確的 "any-source"/"any-destination"
+// 寫法，不模仿範例的不一致寫法）。dstPort（d-port）有查得語法故一併輸出；precedence/tos/
+// time-range 共用表單無對應欄位不輸出（比照 Dell OS10 丟棄 pir 值的既有慣例）。
+function planetSrcToken(tok){
+  const t=(tok||'any').trim();
+  if(/^any$/i.test(t))return 'any-source';
+  const hm=/^host\s+(\S+)/i.exec(t);
+  if(hm)return `host-source ${hm[1]}`;
+  return t; // 假設已是「網段 反向遮罩」兩個 token，原樣輸出
+}
+function planetDstToken(tok){
+  const t=(tok||'any').trim();
+  if(/^any$/i.test(t))return 'any-destination';
+  const hm=/^host\s+(\S+)/i.exec(t);
+  if(hm)return `host-destination ${hm[1]}`;
+  return t;
+}
+function renderPlanetACLEntry(a){
+  return (a.rules||[]).map(r=>{
+    const action=r.action||'permit';
+    if(a.type==='standard')return `access-list ${a.name} ${action} ${planetSrcToken(r.src)}`;
+    const dport=r.dstPort?` d-port ${r.dstPort}`:'';
+    return `access-list ${a.name} ${action} ${r.protocol||'ip'} ${planetSrcToken(r.src)} ${planetDstToken(r.dst)}${dport}`;
+  }).join('\n');
+}
+function renderPlanetACL(list){return (list||[]).map(renderPlanetACLEntry).join('\n');}
+
+// STP：**不可重用 renderSpanningTreeGlobal()**——該函式對 id==='0'（Comware 既有的「全域
+// 優先權」sentinel 值）會誤判走 "spanning-tree vlan 0 priority" 分支（字串 '0' 在 JS 是
+// truthy），Planet 需要裸 "spanning-tree priority <p>"。比照 renderComwareSTP() 既有對
+// id==='0' 的特殊處理寫法：id==='0' 或空值→裸全域指令，其餘→逐 instance 指令。
+function renderPlanetSTP(stp){
+  if(!hasGlobalStpData(stp))return '';
+  const lines=[];
+  if(stp.mode)lines.push(`spanning-tree mode ${stp.mode}`);
+  (stp.instances||[]).forEach(i=>{
+    if(!i.priority)return;
+    if(!i.id||i.id==='0')lines.push(`spanning-tree priority ${i.priority}`);
+    else lines.push(`spanning-tree mst ${i.id} priority ${i.priority}`);
+  });
+  return lines.join('\n');
+}
+
+// DHCP Server：官方語法與 Cisco 幾乎相同，唯一差異是關鍵字 "network-address"（非 Cisco
+// 裸 "network"），與 parsePlanetDHCP() 對應。bootFile/nextServer/ntpServer 等 Cisco 擴充
+// 欄位本輪未查得 Planet 官方佐證，不猜測、不輸出。
+function renderPlanetDHCPPool(d){
+  const lines=[`ip dhcp pool ${d.name}`];
+  if(d.network)lines.push(` network-address ${d.network}`);
+  if(d.gateway)lines.push(` default-router ${d.gateway}`);
+  if(d.dns)lines.push(` dns-server ${d.dns}`);
+  if(d.lease)lines.push(` lease ${d.lease}`);
+  return lines.join('\n');
+}
+function renderPlanetDHCP(list){return (list||[]).filter(d=>d.type==='server').map(renderPlanetDHCPPool).join('\n!\n');}
 
 // LACP：聚合介面稱為 "port-channel N"（非 Ruijie 的 AggregatePort），成員埠語法
 // "port-group N mode {active|passive|on}"（on=靜態聚合，非 LACP 協商）
@@ -178,12 +254,22 @@ function assemblePlanetConfig(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`hostname ${model.sysname||'Switch'}`];
   const vlanBlock=renderPlanetVLANs(model.vlans);
   if(vlanBlock)blocks.push(vlanBlock);
-  if(model.interfaces&&model.interfaces.length)blocks.push(renderPlanetInterfaces(model.interfaces,model.lacp,model.security));
+  // ip forward-protocol udp bootps：DHCP relay 全域旗標，比照 Cisco option82 全域旗標既有慣例，
+  // 有任一 relay 設定時才輸出
+  if((model.dhcp||[]).some(d=>d.type==='relay'))blocks.push('ip forward-protocol udp bootps');
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderPlanetInterfaces(model.interfaces,model.lacp,model.security,model.dhcp,model.stp,model.acl));
   const lacpExtra=renderPlanetLACPExtra(model.lacp,model.interfaces);
   if(lacpExtra)blocks.push(lacpExtra);
+  const stpBlock=renderPlanetSTP(model.stp);
+  if(stpBlock)blocks.push(stpBlock);
   if(model.vrrp&&model.vrrp.length)blocks.push(renderPlanetVRRP(model.vrrp));
   if(model.ospf&&model.ospf.length)blocks.push(renderPlanetOSPF(model.ospf));
   if(model.routes&&model.routes.length)blocks.push(renderPlanetRoutes(model.routes));
   if(model.bgp&&model.bgp.length)blocks.push(renderPlanetBGPList(model.bgp));
+  if(model.dhcp&&model.dhcp.some(d=>d.type==='server'))blocks.push(renderPlanetDHCP(model.dhcp));
+  const usersBlock=renderCiscoUsers(model.users);
+  if(usersBlock)blocks.push(usersBlock);
+  if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
+  if(model.acl&&model.acl.length)blocks.push(renderPlanetACL(model.acl));
   return blocks.join('\n!\n')+'\n';
 }

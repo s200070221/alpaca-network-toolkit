@@ -4,8 +4,11 @@
 // Comware 式子模式（`vlan WORD` 進入子模式，WORD 可用 `;`/`-` 連寫多個 VLAN ID，
 // 不像 Cisco 逐一 `vlan N`/`name X`）；介面命名 `ethernet 1/0/5`（slot/port 格式，
 // ethernet 與數字之間有空格，與 Dell OS10 `ethernet1/1/1`〔無空格〕不同）。
-// 本輪明確不實作：ACL／QoS／STP／DHCP／Users（本機帳號）——查無官方語法佐證，
-// 不猜測，維持空陣列/預設值。
+// ACL（numbered IP，100-199 標準/100-299 延伸）／QoS（policy-map/class，含 drop 動作）／
+// STP（含逐 MSTP instance priority、bpduguard/rootguard 裸關鍵字）／DHCP（server+relay，
+// "network-address" 關鍵字）／Users（本機帳號，沿用 parseCiscoUsers()）皆已於 2026-08-27
+// 對外查證官方文件後補上。明確排除：MAC ACL（1100-1199/mac-access-list extended）——官方
+// 文件雖有完整規則列語法，但欄位形狀與共用 ACL 表單模型不相容，需要獨立 schema，非本輪範圍。
 function parsePlanetSysInfo(cfg){
   return{
     hostname:(cfg.match(/^hostname\s+(\S+)/m)||[])[1]||'unknown',
@@ -254,7 +257,110 @@ function parsePlanet(cfg){
   const ospf=parsePlanetOSPF(cfg);
   const bgp=parsePlanetBGP(cfg);
   const vrrp=parsePlanetVRRP(cfg,interfaces);
-  return{sys,irf:null,stack:null,vlans,interfaces,routes,vrfs:[],users:[],ospf,bgp,rip:[],vrrp,vxlan:null,vendor:'planet',breakouts:[]};
+  // Users：`username NAME [privilege N] [password {0|7} PWD]`（官方 SGS-6341 Command Guide
+  // 已查證），parseCiscoUsers() 本來就同時接受 secret/password 兩種關鍵字、0/7 密碼等級語意
+  // 與此完全吻合，Ruijie 已逐字重用同一函式，比照辦理不寫新解析邏輯。已知既有限制（非本輪
+  // 引入，Cisco/Ruijie 共用）：沒有明確 privilege 子句的帳號會被靜默略過。
+  const users=parseCiscoUsers(cfg);
+  return{sys,irf:null,stack:null,vlans,interfaces,routes,vrfs:[],users,ospf,bgp,rip:[],vrrp,vxlan:null,vendor:'planet',breakouts:[]};
+}
+
+// DHCP：官方語法與 Cisco 幾乎相同，唯一差異是 network 關鍵字為 "network-address"（非 Cisco
+// 裸 "network"）；刻意不併入既有 cisco||ruijie 共用分支，避免第三家的細微差異污染既有兩家。
+// default-router／dns-server／lease／relay（ip helper-address 逐介面掃描）皆與 Cisco 語法
+// 逐字相同，直接沿用相同寫法；bootFile/nextServer/ntpServer/option82 等 Cisco 擴充欄位本輪
+// 未查得 Planet 官方佐證，不猜測，維持共用 DHCP 資料形狀的基本欄位集合。
+function parsePlanetDHCP(cfg){
+  const pools=[];
+  const re=/ip dhcp pool\s+(\S+)\s*\n([\s\S]*?)(?=^ip dhcp pool|^interface|(?![\s\S]))/gm;
+  let m;
+  while((m=re.exec(cfg))!==null){
+    const name=m[1], body=m[2];
+    const network=(body.match(/network-address\s+([^\n]+)/)||[])[1]||'';
+    const gateway=(body.match(/default-router\s+([^\n]+)/)||[])[1]||'';
+    const dns=(body.match(/dns-server\s+([^\n]+)/)||[])[1]||'';
+    const lease=(body.match(/lease\s+([^\n]+)/)||[])[1]?.trim()||'';
+    pools.push({name,network:network.trim(),gateway:gateway.trim(),dns:dns.trim(),
+      range:'',excluded:'',lease,interface:'',type:'server'});
+  }
+  cfg.split(/^interface\s+/m).slice(1).forEach(blk=>{
+    const ifname=blk.split('\n')[0].trim();
+    const helpers=[...blk.matchAll(/^\s*ip helper-address\s+(\S+)/gm)].map(x=>x[1]);
+    helpers.forEach(srv=>pools.push({name:'relay:'+ifname,network:'',gateway:'',dns:'',
+      range:'',excluded:'',lease:'',interface:ifname,type:'relay',relayServer:srv}));
+  });
+  return pools;
+}
+
+// ACL：官方 SGS-6341 Command Guide 直接 fetch 逐字查證（§47.3/47.4/47.15）。Standard（100-199）
+// 與 Extended（100-299）共用同一個數字空間，號碼本身無法區分兩者（官方語法明載）；改依規則
+// 列開頭 token 判斷——Extended 第一個 token 必是協定關鍵字（icmp/igmp/tcp/udp/eigrp/gre/igrp/
+// ipinip/ip/ospf/純數字協定碼），Standard 直接接來源 token 無協定關鍵字。來源 token 為
+// any-source／host-source <ip>／<ip> <mask>；官方文件本身的 Extended 範例（§47.3 Example：
+// `access-list 110 deny icmp any any-destination`）用裸 "any"（非 "any-source"），故來源比對
+// 同時接受兩種寫法，比官方語法定義本身更寬鬆但更貼近實際可能出現的設定檔。目的端 token 為
+// any-destination／host-destination <ip>／<ip> <mask>，Standard ACL 無目的端。tcp/udp 的
+// d-port <N> 單一埠號有查得語法（§47.3），僅擷取此欄位；range 形式與 precedence/tos/
+// time-range 選項因共用 ACL 表單無對應欄位，解析時跳過不干擾位址判斷、不儲存。
+// 介面套用語法 `{ip|mac|mac-ip|ipv6} access-group <name> {in|out} [traffic-statistic]`
+// （§47.15，官方範例：`Switch(Config-If-Ethernet1/0/1)#ip access-group aaa in`）。
+// 明確排除本輪範圍：MAC ACL（1100-1199 數字型＋mac-access-list extended 具名型，§47.6/47.16/
+// 47.17）——官方文件本身雖有完整規則列語法（§47.16，來源/目的 MAC 位址＋offset/length/value
+// 最多 4 組 raw payload 比對），但欄位形狀與共用 ACL 表單模型（`{seq,action,protocol,src,dst,
+// dstPort,remark}`）完全不相容，需要獨立資料形狀（比照 RouterOS/Brocade QoS 既有的「專屬
+// schema」先例），非本輪範圍，留待後續評估是否值得為此新增專屬 UI。
+function _parseACLPlanet(cfg){
+  const acls=[]; const numG={};
+  const PROTO_RE=/^(icmp|igmp|tcp|udp|eigrp|gre|igrp|ipinip|ip|ospf|\d{1,3})$/i;
+  const srcTok=(parts,i)=>{
+    if(/^(any-source|any)$/i.test(parts[i]||''))return{val:'any',next:i+1};
+    if(/^host-source$/i.test(parts[i]||''))return{val:'host '+(parts[i+1]||''),next:i+2};
+    if(parts[i+1]&&/^\d{1,3}(\.\d{1,3}){3}$/.test(parts[i+1]))return{val:parts[i]+' '+parts[i+1],next:i+2};
+    return{val:parts[i]||'-',next:i+1};
+  };
+  const dstTok=(parts,i)=>{
+    if(/^any-destination$/i.test(parts[i]||''))return{val:'any',next:i+1};
+    if(/^host-destination$/i.test(parts[i]||''))return{val:'host '+(parts[i+1]||''),next:i+2};
+    if(parts[i+1]&&/^\d{1,3}(\.\d{1,3}){3}$/.test(parts[i+1]))return{val:parts[i]+' '+parts[i+1],next:i+2};
+    return{val:parts[i]||'-',next:i+1};
+  };
+  const re=/^access-list\s+(1\d\d|2\d\d)\s+(permit|deny)\s+(.*)/gm;
+  let m;
+  while((m=re.exec(cfg))!==null){
+    const num=m[1],action=m[2],rest=m[3].trim();
+    const parts=rest.split(/\s+/);
+    const isExtended=PROTO_RE.test(parts[0]||'');
+    let protocol='ip',src,dst='-',dstPort='';
+    if(isExtended){
+      protocol=parts[0].toLowerCase();
+      const s=srcTok(parts,1); src=s.val;
+      const d=dstTok(parts,s.next); dst=d.val;
+      const dpM=rest.match(/\bd-port\s+(\d+)\b/);
+      if(dpM)dstPort=dpM[1];
+    }else{
+      const s=srcTok(parts,0); src=s.val;
+    }
+    if(!numG[num]){
+      numG[num]={name:num,type:isExtended?'extended':'standard',aclType:'ip',ipVersion:'v4',vendor:'planet',rules:[],appliedOn:[]};
+      acls.push(numG[num]);
+    }else if(isExtended&&numG[num].type!=='extended'){
+      numG[num].type='extended'; // 官方語法允許同號碼混用兩種規則列，出現過一筆 extended 即整組標記
+    }
+    numG[num].rules.push({seq:'',action,protocol,src:(src||'-').trim(),dst:(dst||'-').trim(),dstPort,remark:''});
+  }
+  const ifBlocks=cfg.split(/(?=^interface\s+)/m);
+  for(const blk of ifBlocks){
+    const ifLine=blk.match(/^interface\s+(\S.*)/m);
+    if(!ifLine)continue;
+    const ifName=ifLine[1].trim();
+    const agRe=/^\s*(?:ip|mac|mac-ip|ipv6)\s+access-group\s+(\S+)\s+(in|out)\b/gim;
+    let am;
+    while((am=agRe.exec(blk))!==null){
+      const acl=acls.find(a=>a.name===am[1]);
+      if(acl)acl.appliedOn.push({interface:ifName,direction:am[2].toLowerCase()});
+    }
+  }
+  return acls;
 }
 
 // Security：802.1X（`dot1x port-control {auto|force-authorized|force-unauthorized}`／

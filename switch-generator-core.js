@@ -184,6 +184,9 @@ function renderPolicyMapQoS(list){
       else if(q.action==='priority')lines.push('  priority');
       else if(q.action==='shape')lines.push(`  shape average ${q.rate||'1000000'}`);
       else if(q.action==='bandwidth')lines.push(`  bandwidth ${q.rate||'1000'}`);
+      // drop：Cisco IOS 通用關鍵字（Planet 官方 SGS-6341 Command Guide 已查證同款語法），
+      // Cisco/Ruijie/Planet 三家共用此函式，一併受惠
+      else if(q.action==='drop')lines.push('  drop');
       if(q.burst)lines.push(`  burst ${q.burst}`);
     });
     blocks.push(lines.join('\n'));

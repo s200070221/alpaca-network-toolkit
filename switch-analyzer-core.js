@@ -454,6 +454,8 @@ function parseDHCP(cfg, vendor){
     // 原本猜測沿用了 Cisco 命名習慣
     const gRe=/^->\s*ip helper address\s+([\d.]+)(?:\s+vlan\s+(\d+))?/gm; let gr2;
     while((gr2=gRe.exec(cfg))!==null){const vl=gr2[2]||'';pools.push({name:'global'+(vl?'-vlan'+vl:''),network:'',range:'',gateway:'',dns:[],lease:'',excluded:'',interface:vl?'vlan'+vl:'all',type:'relay',relayServer:gr2[1],option82});}
+  }else if(vendor==='planet'){
+    pools.push(...parsePlanetDHCP(cfg));
   }
   return pools;
 }
@@ -747,10 +749,10 @@ function parseACL(cfg, vendor){
   // 有解析結果、實際語法未經驗證」的假象。2026-08-17 查證 IPv6 ACL 時意外發現此缺口，比照
   // 既有 Alcatel return [] 模式明確排除，避免虛假產出
   if(vendor==='procurve'||vendor==='edgeswitch') return [];
-  // Planet：本輪明確不實作 ACL（查無官方語法佐證，不猜測），比照既有 Alcatel/
-  // ProCurve/EdgeSwitch 模式明確排除，避免落入下面的 _parseACLCisco() fallback
-  // 產生「看似有解析結果、實際語法未經驗證」的假象
-  if(vendor==='planet') return [];
+  // Planet：官方 SGS-6341 Command Guide 已查證 numbered IP ACL 語法（100-199 標準／
+  // 100-299 延伸，共用數字空間），獨立函式處理，不落入 _parseACLCisco() fallback
+  // （語法結構完全不同，見 _parseACLPlanet() 開頭註解）
+  if(vendor==='planet') return _parseACLPlanet(cfg);
   // NX-OS：2026-07-22 對外查證官方 Cisco NX-OS Security Configuration Guide 後新增獨立
   // 分支——先前沿用 _parseACLCisco()（IOS-XE 語法），但真實 NX-OS 語法完全不同：容器是
   // 裸 "ip access-list NAME"（沒有 standard/extended 關鍵字），規則列是「序號在最前面、
@@ -1507,6 +1509,10 @@ function parseQoS(cfg, vendor){
         const po=poCirPir||/police\s+rate?[ \t]*(\d+(?:[ \t]+\S+)?)/i.exec(cb)||/police\s+(\d+(?:[ \t]+\S+)?)/i.exec(cb);
         if(po){action='police';rate=po[1].trim();}
         else if(/priority/i.test(cb)){action='priority';}
+        // Planet：官方 SGS-6341 Command Guide 已查證 policy-map class 子模式支援裸 "drop"
+        // 動作（本身是 Cisco IOS 通用關鍵字，非 Planet 專屬，對全廠牌皆有效無副作用風險）；
+        // 錨定整行避免誤吃 "exceed-action drop" 這類子句裡的 drop 字樣
+        else if(/^\s*drop\s*$/im.test(cb)){action='drop';}
         // Arista EOS：已查證新增 "shape kbps N" 格式（純新增 alternative，與 Cisco
         // "shape average N" 不同關鍵字）
         else if(/shape\s+kbps\s+(\d+)/i.exec(cb)){action='shape';rate=(/shape\s+kbps\s+(\d+)/i.exec(cb)||[])[1];}
@@ -1549,6 +1555,11 @@ function parseSTP(cfg, vendor){
   // Comware: stp instance N priority X
   const cwRe=/^stp instance (\d+) priority (\d+)/gm;
   while((m=cwRe.exec(cfg))!==null) stp.instances.push({id:m[1],vlan:'Instance '+m[1],priority:parseInt(m[2])});
+  // Planet: spanning-tree mst <instance-id> priority <bridge-priority>（關鍵字 "mst" 緊接
+  // instance-id，與 Comware "stp instance N priority P"／Cisco "spanning-tree vlan N priority P"
+  // 字面皆不同；官方 SGS-6341 Command Guide 已查證）
+  const plMstRe=/^spanning-tree mst (\d+) priority (\d+)/gm;
+  while((m=plMstRe.exec(cfg))!==null) stp.instances.push({id:m[1],vlan:'Instance '+m[1],priority:parseInt(m[2])});
   // Comware global priority (when no instance)
   if(!stp.instances.length){
     const cwG=/^stp priority (\d+)/m.exec(cfg);
@@ -1647,10 +1658,14 @@ function parseSTP(cfg, vendor){
     stp.ports.push({
       port:      ifLine[1].trim(),
       portfast:  /spanning-tree portfast|stp edged-port enable|port-type admin-edge|port-type edge|spantree portfast|edgeport/i.test(blk),
-      bpduguard: /spanning-tree bpduguard enable|stp bpdu-protection|spanning-tree bpdu-guard|bpduguard enable/i.test(blk),
+      // Planet：`spanning-tree portfast bpduguard`（bpduguard 是 portfast 指令本身的旗標，
+      // 非獨立指令、無 "enable" 字尾），與其餘廠牌寫法皆不同，官方 SGS-6341 Command Guide
+      // 已查證；全專案無其他廠牌用此裸關鍵字語法，直接加入 alternation 不需 vendor gate
+      bpduguard: /spanning-tree bpduguard enable|stp bpdu-protection|spanning-tree bpdu-guard|bpduguard enable|spanning-tree portfast[^\n]*bpduguard/i.test(blk),
       // 已查證官方 HPE Aruba Networking AOS-CX CLI Reference 後補上 "spanning-tree
-      // root-guard"（無反序、連字號寫法，與 Cisco 的 "spanning-tree guard root" 不同）
-      guardRoot: /spanning-tree guard root|stp root-protection|spanning-tree root-guard/i.test(blk),
+      // root-guard"（無反序、連字號寫法，與 Cisco 的 "spanning-tree guard root" 不同）；
+      // Planet 的 "spanning-tree rootguard"（無連字號單字）官方 SGS-6341 Command Guide 已查證
+      guardRoot: /spanning-tree guard root|stp root-protection|spanning-tree root-guard|spanning-tree rootguard\b/i.test(blk),
       cost:      costM?(costM[1]||costM[2]):null,
       priority:  prioM?(prioM[1]||prioM[2]):null
     });
