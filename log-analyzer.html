@@ -866,7 +866,17 @@ const KEYWORD_CATEGORIES = [
 // 實際判定結果落在 act/outcome/reason 等 extension 欄位（如 act=drop/deny/block、
 // reason="Malicious IP Match"），只看 Name/deviceProduct 會讓大多數事件誤判為 other；
 // Syslog 無此 extension 概念，僅 CEF 格式才額外檢查這些欄位
+// 2026-08-27 稽核修復：WEL 事件先前完全仰賴下方 KEYWORD_CATEGORIES 對 Status/SubStatus/
+// FailureReason 等欄位值做英文關鍵字比對，但真實 wevtutil/Event Viewer XML 匯出的這些欄位
+// 值是十六進位代碼（如 Status="0xc000006d"）或未展開的訊息表佔位符（如 FailureReason=
+// "%%2313"），根本不含 "fail"/"invalid" 這類英文字，導致最基本的「登入失敗」事件（4625）
+// 實測會分類成 other、完全漏判。改為先比對官方文件明載的標準 Windows Security 稽核
+// EventID，比照既有 PRIV_ESC_WINEVENT_IDS 慣例，命中就直接判定 authFail，不依賴欄位文字
+// 內容；4625=帳號登入失敗、4771=Kerberos 預先驗證失敗（網域控制站對應事件，環境常只記錄
+// 這個而非 4625），皆為 Microsoft 官方文件明載的標準事件 ID，非猜測
+const AUTH_FAIL_WINEVENT_IDS = new Set(['4625', '4771']);
 function classifyByKeyword(evt) {
+  if (evt.format === 'winevent' && evt.fields && AUTH_FAIL_WINEVENT_IDS.has(evt.fields.EventID)) return 'authFail';
   const parts = [evt.msg || '', evt.appName || ''];
   if (evt.format === 'cef' && evt.fields) {
     parts.push(evt.fields.act || '', evt.fields.outcome || '', evt.fields.reason || '', evt.fields.deviceAction || '');
