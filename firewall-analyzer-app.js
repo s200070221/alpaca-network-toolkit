@@ -3153,8 +3153,11 @@ function startMatrixRain(){
       n++;clearTimeout(t);
       t=setTimeout(()=>{n=0;},2500);
       if(n===3){
-        // 廠牌個性：n 不重置，繼續往 7 累積
-        const vendor=CONV_SRC_VENDOR||'';
+        // 廠牌個性：n 不重置，繼續往 7 累積。2026-08-27 新增：OPNsense 共用 pfsense 上傳欄位
+        // （CONV_SRC_VENDOR 只認上傳欄位不認實際廠牌），單靠 CONV_SRC_VENDOR 分不出兩者，
+        // 改用已解析出的 PARSED.vendor（OPNsense 設定檔會正確標示為 'OPNsense'）細分
+        let vendor=CONV_SRC_VENDOR||'';
+        if(vendor==='pfsense'&&PARSED&&PARSED.vendor==='OPNsense')vendor='opnsense';
         const msg=vendor?tr('egg.vendor_'+vendor):'';
         if(msg)showEggToast(msg,4500);
       }
