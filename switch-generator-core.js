@@ -194,6 +194,42 @@ function renderPolicyMapQoS(list){
   return blocks.join('\n!\n');
 }
 
+// class-map/match 條件比對（2026-08-28（續4）新增，Cisco/Ruijie/Planet 三家共用同一套
+// class-map/policy-map 語法，與上方 renderPolicyMapQoS() 相同的廠牌集合）：每一列是一條
+// match 條件，依 class-map name 分組（比照 groupQosByPolicy() 樣板），同一 class-map 底下
+// 可有多條 match（match-any 為 OR、match-all 為 AND，皆由使用者自行選擇，本工具不驗證邏輯
+// 合理性）。務必排在 assemble 組裝順序內 policy-map 之前——class-map 必須先於引用它的
+// policy-map 定義，且其收尾正則同時認 policy-map 邊界（見各廠牌 assemble 函式）。
+function groupClassMapMatches(list){
+  const map=new Map();
+  (list||[]).forEach(cm=>{
+    if(!map.has(cm.name))map.set(cm.name,{matchType:cm.matchType||'match-all',matches:[]});
+    map.get(cm.name).matches.push({type:cm.type,value:cm.value});
+  });
+  return map;
+}
+function renderClassMapQoS(list){
+  const blocks=[];
+  groupClassMapMatches(list).forEach((grp,name)=>{
+    const lines=[`class-map ${grp.matchType} ${name}`];
+    grp.matches.forEach(mt=>{
+      if(!mt.type||!mt.value)return;
+      if(mt.type==='ip-precedence')lines.push(` match ip precedence ${mt.value}`);
+      else lines.push(` match ${mt.type} ${mt.value}`);
+    });
+    blocks.push(lines.join('\n'));
+  });
+  return blocks.join('\n!\n');
+}
+
+// service-policy 介面套用（2026-08-28（續4）新增）：QoS policy-map 定義本身不會自動生效，
+// 真實裝置需要 service-policy input/output 把 policy-map 套用到介面上，比照 ACL 套用同一套
+// 內嵌進 interface 區塊的慣例（findAclApplications() 樣板），direction 字面值是 Cisco 標準的
+// input/output（非 ACL 的 in/out）
+function findQosApplications(qosApplyList,ifaceName){
+  return (qosApplyList||[]).filter(ap=>ap.interface===ifaceName).map(ap=>({policy:ap.policy,direction:ap.direction||'output'}));
+}
+
 // VRRP 設定實際上位於 SVI（Layer 3 VLAN interface）區塊內，同一顆 VLAN 可能有多個 VRID，
 // 故先依 vlanId 分組，每組各自輸出一個 SVI 區塊（含 IP 位址 + 底下所有 VRID 的 vrrp 指令）
 function groupVrrpByVlan(vrrpList){

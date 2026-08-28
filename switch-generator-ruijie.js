@@ -37,7 +37,7 @@ function ruijieSwitchportLines(iface){
   }
   return lines;
 }
-function renderRuijieInterface(iface,lacpList,dhcpList,aclList,securityList,stp){
+function renderRuijieInterface(iface,lacpList,dhcpList,aclList,securityList,stp,ospf6List,qosApplyList){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(` description ${iface.desc}`);
   const lg=findLacpGroup(lacpList,iface.name);
@@ -63,10 +63,15 @@ function renderRuijieInterface(iface,lacpList,dhcpList,aclList,securityList,stp)
     const modeWord=lg.mode==='passive'?'passive':'active';
     lines.push(` port-group ${lg.id} mode ${modeWord}`);
   }
+  // OSPFv3（2026-08-23 新增）：與 Cisco 共用同一份 ciscoOspf6IfaceLines()（switch-generator-
+  // cisco.js），反查 model.ospf6 輸出 "ipv6 ospf PID area AREA"
+  ciscoOspf6IfaceLines(ospf6List,iface.name).forEach(l=>lines.push(l));
   if(iface.jumbo&&iface.jumbo.enabled&&iface.jumbo.mtu)lines.push(` mtu ${iface.jumbo.mtu}`);
   if(iface.shutdown)lines.push(' shutdown');
   findDhcpRelays(dhcpList,iface.name).forEach(rel=>lines.push(` ip helper-address ${rel.relayServer}`));
   findAclApplications(aclList,iface.name).forEach(ap=>lines.push(` ip access-group ${ap.name} ${ap.direction}`));
+  // service-policy 介面套用（2026-08-28（續4）新增，見 findQosApplications() 註解）
+  findQosApplications(qosApplyList,iface.name).forEach(ap=>lines.push(` service-policy ${ap.direction} ${ap.policy}`));
   const sec=findSecurityForPort(securityList,iface.name);
   if(sec){
     if(sec.dot1x==='auth')lines.push(' dot1x port-control auto');
@@ -86,8 +91,8 @@ function renderRuijieInterface(iface,lacpList,dhcpList,aclList,securityList,stp)
   }
   return lines.join('\n');
 }
-function renderRuijieInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp){
-  return (ifaces||[]).map(i=>renderRuijieInterface(i,lacpList,dhcpList,aclList,securityList,stp)).join('\n!\n');
+function renderRuijieInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,ospf6List,qosApplyList){
+  return (ifaces||[]).map(i=>renderRuijieInterface(i,lacpList,dhcpList,aclList,securityList,stp,ospf6List,qosApplyList)).join('\n!\n');
 }
 
 // LACP：Ruijie 稱聚合介面為 AggregatePort（AP），成員埠語法是 "port-group N mode
@@ -164,7 +169,7 @@ function assembleRuijieConfig(model){
   const ruijieVrfNames=collectVrfNames(model.interfaces);
   if(ruijieVrfNames.length)blocks.push(ruijieVrfNames.map(n=>`ip vrf ${n}`).join('\n!\n'));
   const stackInfo=renderRuijieStack(model.stack);
-  if(model.interfaces&&model.interfaces.length)blocks.push(renderRuijieInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp));
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderRuijieInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.ospf6,model.qosApply));
   // DHCP Relay Option82：與 Cisco 共用同一套 "ip dhcp snooping information option" 全域旗標
   // （parseDHCP 的 cisco/ruijie 共用分支已確認此關鍵字），比照 Arista 既有寫法
   if((model.dhcp||[]).some(d=>d.type==='relay'&&d.option82))blocks.push('ip dhcp snooping information option');
@@ -179,10 +184,14 @@ function assembleRuijieConfig(model){
   // OSPF/BGP/RIP/靜態路由/ACL：已查證與 Cisco IOS 語法相符，直接重用對應 renderCiscoXxx，
   // 沿用既有慣例排在 blocks 陣列最後（區塊擷取正則只認得下一個同關鍵字區塊或字串結尾）
   if(model.ospf&&model.ospf.length)blocks.push(renderCiscoOSPF(model.ospf));
+  if(model.ospf6&&model.ospf6.length)blocks.push(renderCiscoOSPFv3(model.ospf6));
   if(model.rip&&model.rip.length)blocks.push(renderCiscoRIPList(model.rip));
   if(model.routes&&model.routes.length)blocks.push(renderCiscoRoutes(model.routes));
   if(model.bgp&&model.bgp.length)blocks.push(renderCiscoBGPList(model.bgp));
   if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
+  // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
+  // 不能顛倒（2026-08-28（續4）新增，語法比照 Cisco 未查得落差佐證，同下方 QoS 註解理由）
+  if(model.classMaps&&model.classMaps.length)blocks.push(renderClassMapQoS(model.classMaps));
   // QoS：RGOS 語法未查得與 Cisco 有落差佐證，重用共用的 Cisco-style policy-map render
   // （renderPolicyMapQoS，非 Arista 專屬的 renderAristaQoS，後者已查證的 EOS 差異
   // "type quality-of-service"/kbps 單位詞對 Ruijie 而言查無對應佐證，不應套用）；放最後

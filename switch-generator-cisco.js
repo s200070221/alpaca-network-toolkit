@@ -24,7 +24,19 @@ function ciscoSwitchportLines(iface){
   }
   return lines;
 }
-function renderCiscoInterface(iface,lacpList,dhcpList,aclList,securityList,stp){
+// OSPFv3（2026-08-23 新增，Cisco/Arista/Ruijie 共用）：官方 Cisco IPv6 Routing Protocols
+// Configuration Guide 確認真正的介面成員關係在介面視圖 "ipv6 ospf PID area AREA"，process
+// 層級的 "ipv6 router ospf PID" 區塊本身不巢狀 network 陳述式
+function ciscoOspf6IfaceLines(ospf6List,ifaceName){
+  const lines=[];
+  (ospf6List||[]).forEach(o=>{
+    (o.areas||[]).forEach(a=>{
+      if((a.interfaces||[]).includes(ifaceName))lines.push(` ipv6 ospf ${o.pid} area ${a.area}`);
+    });
+  });
+  return lines;
+}
+function renderCiscoInterface(iface,lacpList,dhcpList,aclList,securityList,stp,ospf6List,qosApplyList){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(` description ${iface.desc}`);
   // L3 欄位（ip/vrf，2026-07-27 補上）：parseCiscoInterfaces() 對 SVI／Loopback／routed
@@ -34,8 +46,12 @@ function renderCiscoInterface(iface,lacpList,dhcpList,aclList,securityList,stp){
   // vrf 欄位是解析器固定塞入的 'MGMT' 標記（非真實解析到的關鍵字），不在此處理範圍。
   // IPv6（試點 5 廠牌之一，標準 Cisco IOS 語法 `ipv6 address ADDR/PREFIXLEN`，不需遮罩換算）
   // 次要IP（Secondary IP，官方 IP Addressing Services Command Reference：`ip
-  // address A B secondary`，IPv4 專屬機制，僅取第一筆為 MVP 範圍）
-  const secLine=iface.secondaryIp&&!iface.secondaryIp.includes(':')?(()=>{const [sip,slen]=iface.secondaryIp.split('/');return sip&&slen?` ip address ${sip} ${maskFromCidr(slen)} secondary`:'';})():'';
+  // address A B secondary`，IPv4 專屬機制；2026-08-23 陣列化：parser 端 2026-08-17 已
+  // 從「僅取第一筆」擴充為完整陣列 secondaryIps，render 端同步逐筆輸出）
+  const secLines=(iface.secondaryIps||[]).filter(s=>!s.includes(':')).map(s=>{
+    const [sip,slen]=s.split('/');
+    return sip&&slen?` ip address ${sip} ${maskFromCidr(slen)} secondary`:'';
+  }).filter(Boolean);
   if(iface.type==='svi'){
     if(iface.vrf)lines.push(` ip vrf forwarding ${iface.vrf}`);
     if(iface.ip){
@@ -44,22 +60,25 @@ function renderCiscoInterface(iface,lacpList,dhcpList,aclList,securityList,stp){
       }else{
         const [ip,len]=iface.ip.split('/');
         lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
-        if(secLine)lines.push(secLine);
+        secLines.forEach(l=>lines.push(l));
       }
     }
   }else if(iface.type==='loopback'){
     if(iface.ip){
       lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
-      if(!iface.ip.includes(':')&&secLine)lines.push(secLine);
+      if(!iface.ip.includes(':'))secLines.forEach(l=>lines.push(l));
     }
   }else if(iface.type==='physical'&&iface.mode==='routed'){
     lines.push(' no switchport');
     if(iface.vrf)lines.push(` ip vrf forwarding ${iface.vrf}`);
     if(iface.ip){
       lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
-      if(!iface.ip.includes(':')&&secLine)lines.push(secLine);
+      if(!iface.ip.includes(':'))secLines.forEach(l=>lines.push(l));
     }
   }
+  // OSPFv3（2026-08-23 新增）：真正的介面成員關係看介面視圖的 "ipv6 ospf PID area AREA"
+  // 指令（比照 v4 network 陳述式在 process 層級的位置差異），須在此反查 model.ospf6
+  ciscoOspf6IfaceLines(ospf6List,iface.name).forEach(l=>lines.push(l));
   const lg=findLacpGroup(lacpList,iface.name);
   if(!lg)lines.push(...ciscoSwitchportLines(iface));
   if(lg){
@@ -70,6 +89,8 @@ function renderCiscoInterface(iface,lacpList,dhcpList,aclList,securityList,stp){
   if(iface.shutdown)lines.push(' shutdown');
   findDhcpRelays(dhcpList,iface.name).forEach(rel=>lines.push(` ip helper-address ${rel.relayServer}`));
   findAclApplications(aclList,iface.name).forEach(ap=>lines.push(` ip access-group ${ap.name} ${ap.direction}`));
+  // service-policy 介面套用（2026-08-28（續4）新增，見 findQosApplications() 註解）
+  findQosApplications(qosApplyList,iface.name).forEach(ap=>lines.push(` service-policy ${ap.direction} ${ap.policy}`));
   const sec=findSecurityForPort(securityList,iface.name);
   if(sec){
     if(sec.dot1x==='auth')lines.push(' dot1x pae authenticator');
@@ -97,7 +118,7 @@ function renderCiscoInterface(iface,lacpList,dhcpList,aclList,securityList,stp){
   }
   return lines.join('\n');
 }
-function renderCiscoInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp){return ifaces.map(i=>renderCiscoInterface(i,lacpList,dhcpList,aclList,securityList,stp)).join('\n!\n');}
+function renderCiscoInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,ospf6List,qosApplyList){return ifaces.map(i=>renderCiscoInterface(i,lacpList,dhcpList,aclList,securityList,stp,ospf6List,qosApplyList)).join('\n!\n');}
 
 function renderCiscoLACPExtra(lacpList,ifaces){
   const existingNames=new Set((ifaces||[]).map(i=>i.name));
@@ -125,7 +146,11 @@ function renderCiscoVRRPGroup(g){
     // 預設值是解析器內部使用的 'HSRP' 佔位字串（代表設定檔原本沒有這行），非真實版本號，
     // 只有解析到實際數字才輸出
     if(v.version&&/^\d+$/.test(v.version))lines.push(` standby ${v.vrid} version ${v.version}`);
-    lines.push(` standby ${v.vrid} ip ${v.vip}`);
+    if(v.vip)lines.push(` standby ${v.vrid} ip ${v.vip}`);
+    // IPv6（2026-08-23 新增）：官方語法 "standby N ipv6 ADDR"／"standby N ipv6 autoconfig"，
+    // 前提須先宣告 "standby version 2"（HSRP for IPv6 僅 v2 支援），本工具沿用既有慣例
+    // 只輸出欄位值，不驗證裝置端前提條件是否成立
+    if(v.vip6)lines.push(` standby ${v.vrid} ipv6 ${v.vip6}`);
     lines.push(` standby ${v.vrid} priority ${v.priority}`);
     if(v.preempt)lines.push(` standby ${v.vrid} preempt`);
     // trackIf（2026-07-27 補上）：parseVRRP(cfg,'cisco') 已解析 "standby N track IFACE"，
@@ -146,6 +171,15 @@ function renderCiscoOSPFProcess(o){
 }
 function renderCiscoOSPF(list){return (list||[]).map(renderCiscoOSPFProcess).join('\n!\n');}
 
+// OSPFv3（2026-08-23 新增，Cisco/Arista/Ruijie 共用）：process 層級只宣告 "ipv6 router
+// ospf PID"／router-id，真正的介面成員關係由 ciscoOspf6IfaceLines() 在逐介面 render 時輸出
+function renderCiscoOSPFv3Process(o){
+  const lines=[`ipv6 router ospf ${o.pid}`];
+  if(o.routerId)lines.push(` router-id ${o.routerId}`);
+  return lines.join('\n');
+}
+function renderCiscoOSPFv3(list){return (list||[]).map(renderCiscoOSPFv3Process).join('\n!\n');}
+
 function renderCiscoBGP(b){
   const lines=[`router bgp ${b.asn}`];
   if(b.routerId)lines.push(` bgp router-id ${b.routerId}`);
@@ -158,6 +192,14 @@ function renderCiscoBGP(b){
     const [ip,len]=n.split('/');
     lines.push(len?` network ${ip} mask ${maskFromCidr(len)}`:` network ${ip}`);
   });
+  // IPv6（2026-08-23 新增，Cisco/Arista/Ruijie 共用）：官方 Cisco BGP Configuration Guide
+  // 確認 network 巢狀在獨立的 address-family ipv6 [unicast] 子模式內，slash-CIDR 直接輸出
+  // （不需 mask 換算），子模式以官方 exit-address-family 關鍵字結尾
+  if(b.networks6&&b.networks6.length){
+    lines.push(' address-family ipv6');
+    b.networks6.forEach(n=>lines.push(`  network ${n}`));
+    lines.push(' exit-address-family');
+  }
   return lines.join('\n');
 }
 function renderCiscoBGPList(list){return (list||[]).map(renderCiscoBGP).join('\n!\n');}
@@ -186,6 +228,9 @@ function renderCiscoRoute(r){
   const [net,len]=r.dst.split('/');
   // vrf（2026-07-27 補上）：parseCiscoRoutes() 支援 "ip route vrf NAME ..." 語法，
   // render 端從未輸出過
+  // IPv6（2026-08-23 新增，Cisco/Arista/Ruijie 共用）：官方語法 "ipv6 route [vrf VRF]
+  // PREFIX/LEN NEXTHOP"，prefix/length 已是單一 slash-CIDR token，不需 mask 換算
+  if(r.dst.includes(':'))return `ipv6 route${r.vrf?' vrf '+r.vrf:''} ${r.dst} ${r.gw}`;
   return `ip route${r.vrf?' vrf '+r.vrf:''} ${net} ${maskFromCidr(len)} ${r.gw}`;
 }
 function renderCiscoRoutes(list){return (list||[]).map(renderCiscoRoute).join('\n!\n');}
@@ -263,7 +308,7 @@ function assembleCiscoConfig(model){
   // 已用 `ip vrf NAME` 建立，排在 Interfaces 之前輸出
   const ciscoVrfNames=collectVrfNames(model.interfaces);
   if(ciscoVrfNames.length)blocks.push(ciscoVrfNames.map(n=>`ip vrf ${n}`).join('\n!\n'));
-  if(model.interfaces&&model.interfaces.length)blocks.push(renderCiscoInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp));
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderCiscoInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.ospf6,model.qosApply));
   const ciscoLacpExtra=renderCiscoLACPExtra(model.lacp,model.interfaces);
   if(ciscoLacpExtra)blocks.push(ciscoLacpExtra);
   if(model.vrrp&&model.vrrp.length)blocks.push(renderCiscoVRRP(model.vrrp));
@@ -271,10 +316,14 @@ function assembleCiscoConfig(model){
   const stpBlockCi=renderSpanningTreeGlobal(model.stp);
   if(stpBlockCi)blocks.push(stpBlockCi);
   if(model.ospf&&model.ospf.length)blocks.push(renderCiscoOSPF(model.ospf));
+  if(model.ospf6&&model.ospf6.length)blocks.push(renderCiscoOSPFv3(model.ospf6));
   if(model.rip&&model.rip.length)blocks.push(renderCiscoRIPList(model.rip));
   if(model.routes&&model.routes.length)blocks.push(renderCiscoRoutes(model.routes));
   if(model.bgp&&model.bgp.length)blocks.push(renderCiscoBGPList(model.bgp));
   if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
+  // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
+  // 不能顛倒（2026-08-28（續4）新增）
+  if(model.classMaps&&model.classMaps.length)blocks.push(renderClassMapQoS(model.classMaps));
   // QoS 放最後（同一個原因：policy-map 區塊擷取正則只認得下一個 "policy-map " 或字串
   // 結尾，沒有其他終止字元，比照 ACL/BGP 慣例排在組裝順序最後）
   if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));

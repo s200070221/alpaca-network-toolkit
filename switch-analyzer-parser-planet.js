@@ -7,8 +7,11 @@
 // ACL（numbered IP，100-199 標準/100-299 延伸）／QoS（policy-map/class，含 drop 動作）／
 // STP（含逐 MSTP instance priority、bpduguard/rootguard 裸關鍵字）／DHCP（server+relay，
 // "network-address" 關鍵字）／Users（本機帳號，沿用 parseCiscoUsers()）皆已於 2026-08-27
-// 對外查證官方文件後補上。明確排除：MAC ACL（1100-1199/mac-access-list extended）——官方
-// 文件雖有完整規則列語法，但欄位形狀與共用 ACL 表單模型不相容，需要獨立 schema，非本輪範圍。
+// 對外查證官方文件後補上。**具名擴充 MAC ACL（`mac-access-list extended <name>`，§47.16/
+// 47.22）已於 2026-08-28（續4）對外查證新增**，見 `_parseMacACLPlanet()`；明確排除數字型
+// MAC ACL（標準 700-799／擴充 1100-1199，含最多 4 組 offset/length/value payload 比對，
+// §47.5/47.7）與 802.3/EthernetII tagged/untagged frame-type 關鍵字變體，欄位複雜度高、
+// real-world 使用率低，非本輪範圍。
 function parsePlanetSysInfo(cfg){
   return{
     hostname:(cfg.match(/^hostname\s+(\S+)/m)||[])[1]||'unknown',
@@ -262,7 +265,10 @@ function parsePlanet(cfg){
   // 與此完全吻合，Ruijie 已逐字重用同一函式，比照辦理不寫新解析邏輯。已知既有限制（非本輪
   // 引入，Cisco/Ruijie 共用）：沒有明確 privilege 子句的帳號會被靜默略過。
   const users=parseCiscoUsers(cfg);
-  return{sys,irf:null,stack:null,vlans,interfaces,routes,vrfs:[],users,ospf,bgp,rip:[],vrrp,vxlan:null,vendor:'planet',breakouts:[]};
+  // MAC ACL 為 Planet 專屬資料形狀（見 _parseMacACLPlanet() 註解），不進共用 ACL dispatcher，
+  // 比照 Brocade parseBrocade() 內嵌 qos:parseBrocadeQoS(cfg) 的既有慣例直接內嵌
+  const macAcl=_parseMacACLPlanet(cfg);
+  return{sys,irf:null,stack:null,vlans,interfaces,routes,vrfs:[],users,ospf,bgp,rip:[],vrrp,vxlan:null,vendor:'planet',breakouts:[],macAcl};
 }
 
 // DHCP：官方語法與 Cisco 幾乎相同，唯一差異是 network 關鍵字為 "network-address"（非 Cisco
@@ -304,11 +310,9 @@ function parsePlanetDHCP(cfg){
 // time-range 選項因共用 ACL 表單無對應欄位，解析時跳過不干擾位址判斷、不儲存。
 // 介面套用語法 `{ip|mac|mac-ip|ipv6} access-group <name> {in|out} [traffic-statistic]`
 // （§47.15，官方範例：`Switch(Config-If-Ethernet1/0/1)#ip access-group aaa in`）。
-// 明確排除本輪範圍：MAC ACL（1100-1199 數字型＋mac-access-list extended 具名型，§47.6/47.16/
-// 47.17）——官方文件本身雖有完整規則列語法（§47.16，來源/目的 MAC 位址＋offset/length/value
-// 最多 4 組 raw payload 比對），但欄位形狀與共用 ACL 表單模型（`{seq,action,protocol,src,dst,
-// dstPort,remark}`）完全不相容，需要獨立資料形狀（比照 RouterOS/Brocade QoS 既有的「專屬
-// schema」先例），非本輪範圍，留待後續評估是否值得為此新增專屬 UI。
+// MAC ACL（具名擴充 `mac-access-list extended`）欄位形狀與此處 IP ACL 表單模型
+// （`{seq,action,protocol,src,dst,dstPort,remark}`）不相容，改用獨立資料形狀（比照
+// RouterOS/Brocade QoS 既有的「專屬 schema」先例），見下方 `_parseMacACLPlanet()`。
 function _parseACLPlanet(cfg){
   const acls=[]; const numG={};
   const PROTO_RE=/^(icmp|igmp|tcp|udp|eigrp|gre|igrp|ipinip|ip|ospf|\d{1,3})$/i;
@@ -354,6 +358,57 @@ function _parseACLPlanet(cfg){
     if(!ifLine)continue;
     const ifName=ifLine[1].trim();
     const agRe=/^\s*(?:ip|mac|mac-ip|ipv6)\s+access-group\s+(\S+)\s+(in|out)\b/gim;
+    let am;
+    while((am=agRe.exec(blk))!==null){
+      const acl=acls.find(a=>a.name===am[1]);
+      if(acl)acl.appliedOn.push({interface:ifName,direction:am[2].toLowerCase()});
+    }
+  }
+  return acls;
+}
+
+// MAC ACL（具名擴充形式）：官方 SGS-6341 Command Guide 直接 fetch 逐字查證（§47.16/47.22/
+// 47.15）。建立語法 `mac-access-list extended <name>` 進入子模式，規則列（§47.22 官方文件
+// 列出多種巢狀選填組合，本輪僅取第一種——`cos`/`vlanid`/`ethertype` 依序選填、無 802.3/
+// EthernetII tagged/untagged frame-type 關鍵字變體，複雜度高且 real-world 使用率低，非本輪
+// 範圍）：`{deny|permit} {any-source-mac|host-source-mac <mac>|<mac> <mask>}
+// {any-destination-mac|host-destination-mac <mac>|<mac> <mask>} [cos <val>] [vlanid <vid>]
+// [ethertype <proto>]`。src/dst 正規化成與共用 IP ACL 表單一致的 `any`／`host <mac>`／
+// `<mac> <mask>` 通用 token（`_normPlanetMacToken()`），供產生器端同一個文字欄位輸入慣例
+// 使用。介面套用沿用 §47.15 `mac access-group <name> {in|out}`——`_parseACLPlanet()` 的
+// `agRe` 正則本來就已接受 `mac access-group`，但先前 `acls` 陣列只存 IP ACL，真實設定檔的
+// `mac access-group` 行會被靜默比對失敗（`acls.find()` 找不到同名 IP ACL），故另外在此
+// 獨立掃描一次介面區塊，不與 `_parseACLPlanet()` 共用比對結果。
+function _normPlanetMacToken(raw){
+  const t=(raw||'').trim();
+  if(/^any-(?:source|destination)-mac$/i.test(t))return 'any';
+  const hm=/^host-(?:source|destination)-mac\s+(\S+)/i.exec(t);
+  if(hm)return 'host '+hm[1];
+  return t; // 假設已是「MAC MASK」兩個 token，原樣輸出
+}
+function _parseMacACLPlanet(cfg){
+  const acls=[];
+  const macRe=/^mac-access-list\s+extended\s+(\S+)([\s\S]*?)(?=^mac-access-list\s+extended\s+|(?![\s\S]))/gm;
+  let m;
+  while((m=macRe.exec(cfg))!==null){
+    const name=m[1], body=m[2]||'';
+    const rules=[];
+    const ruleRe=/^\s*(permit|deny)\s+(any-source-mac|host-source-mac\s+\S+|\S+\s+\S+)\s+(any-destination-mac|host-destination-mac\s+\S+|\S+\s+\S+)(?:\s+cos\s+(\S+))?(?:\s+vlanid\s+(\S+))?(?:\s+ethertype\s+(\S+))?\s*$/gim;
+    let rm;
+    while((rm=ruleRe.exec(body))!==null){
+      rules.push({
+        action:rm[1].toLowerCase(), src:_normPlanetMacToken(rm[2]), dst:_normPlanetMacToken(rm[3]),
+        cos:rm[4]||'', vlanId:rm[5]||'', ethertype:rm[6]||''
+      });
+    }
+    acls.push({name,rules,appliedOn:[]});
+  }
+  const ifBlocks=cfg.split(/(?=^interface\s+)/m);
+  for(const blk of ifBlocks){
+    const ifLine=blk.match(/^interface\s+(\S.*)/m);
+    if(!ifLine)continue;
+    const ifName=ifLine[1].trim();
+    const agRe=/^\s*mac\s+access-group\s+(\S+)\s+(in|out)\b/gim;
     let am;
     while((am=agRe.exec(blk))!==null){
       const acl=acls.find(a=>a.name===am[1]);

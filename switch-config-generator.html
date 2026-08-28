@@ -632,6 +632,67 @@ end</pre>
     <button class="add-btn" data-i18n="btn.addRow" onclick="addQosRow()">+ 新增列</button>
   </div>
 
+  <div class="card" id="classmap-card">
+    <h2 data-i18n="sec.classMap">Class-map 比對條件設定</h2>
+    <table class="tbl">
+      <thead><tr>
+        <th data-i18n="th.cmapName">Class-map Name</th>
+        <th data-i18n="th.cmapMatchType">Match Type</th>
+        <th data-i18n="th.cmapCondType">Match Condition</th>
+        <th data-i18n="th.cmapValue">Value</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="classmap-body"></tbody>
+    </table>
+    <button class="add-btn" data-i18n="btn.addRow" onclick="addClassMapRow()">+ 新增列</button>
+  </div>
+
+  <div class="card" id="qos-apply-card">
+    <h2 data-i18n="sec.qosApply">QoS 套用設定</h2>
+    <table class="tbl">
+      <thead><tr>
+        <th data-i18n="th.qosPolicy">Policy</th>
+        <th data-i18n="th.aclApplyIface">Interface</th>
+        <th data-i18n="th.aclApplyDir">Direction</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="qos-apply-body"></tbody>
+    </table>
+    <button class="add-btn" data-i18n="btn.addRow" onclick="addQosApplyRow()">+ 新增列</button>
+  </div>
+
+  <div class="card" id="planet-mac-acl-card">
+    <h2 data-i18n="sec.macAcl">MAC ACL 規則設定</h2>
+    <table class="tbl">
+      <thead><tr>
+        <th data-i18n="th.aclName">ACL Name</th>
+        <th data-i18n="th.aclAction">Action</th>
+        <th data-i18n="th.aclSrc" data-tip="any / host AA:BB:CC:DD:EE:FF / MAC MASK 兩個 token">Source</th>
+        <th data-i18n="th.aclDst">Destination</th>
+        <th data-i18n="th.macAclCos">Cos</th>
+        <th data-i18n="th.macAclVlan">VLAN ID</th>
+        <th data-i18n="th.macAclEthertype">EtherType</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="planet-mac-acl-rule-body"></tbody>
+    </table>
+    <button class="add-btn" data-i18n="btn.addRow" onclick="addPlanetMacAclRuleRow()">+ 新增列</button>
+  </div>
+
+  <div class="card" id="planet-mac-acl-apply-card">
+    <h2 data-i18n="sec.macAclApply">MAC ACL 套用設定</h2>
+    <table class="tbl">
+      <thead><tr>
+        <th data-i18n="th.aclName">ACL Name</th>
+        <th data-i18n="th.aclApplyIface">Interface</th>
+        <th data-i18n="th.aclApplyDir">Direction</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="planet-mac-acl-apply-body"></tbody>
+    </table>
+    <button class="add-btn" data-i18n="btn.addRow" onclick="addPlanetMacAclApplyRow()">+ 新增列</button>
+  </div>
+
   <div class="card" id="security-card">
     <h2 data-i18n="sec.security">Port Security / 802.1X 設定</h2>
     <table class="tbl">
