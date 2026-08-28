@@ -75,7 +75,7 @@ function planetSecurityLines(sec){
   return lines;
 }
 
-function renderPlanetInterface(iface,lacpList,securityList,dhcpList,stp,aclList){
+function renderPlanetInterface(iface,lacpList,securityList,dhcpList,stp,aclList,macAclList,qosApplyList){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(` description ${iface.desc}`);
   if(iface.type==='svi'){
@@ -108,13 +108,19 @@ function renderPlanetInterface(iface,lacpList,securityList,dhcpList,stp,aclList)
     if(sp.guardRoot)lines.push(' spanning-tree rootguard');
   }
   // ACL 套用：`{ip|mac|mac-ip|ipv6} access-group <name> {in|out}`（官方 §47.15 已查證），
-  // 沿用既有共用 findAclApplications()；本輪僅支援 IP ACL 故固定輸出 "ip access-group"
+  // 沿用既有共用 findAclApplications()；IP ACL 固定輸出 "ip access-group"
   findAclApplications(aclList,iface.name).forEach(ap=>lines.push(` ip access-group ${ap.name} ${ap.direction}`));
+  // MAC ACL 套用（2026-08-28（續4）新增）：同一個 §47.15 access-group 指令族，換成
+  // "mac access-group"，appliedOn 形狀與 IP ACL 完全相同，直接沿用同一個 findAclApplications()
+  findAclApplications(macAclList,iface.name).forEach(ap=>lines.push(` mac access-group ${ap.name} ${ap.direction}`));
+  // service-policy 介面套用（2026-08-28（續4）新增，見 findQosApplications()/parseServicePolicy()
+  // 註解）：direction 字面值是 input/output，非 ACL 的 in/out
+  findQosApplications(qosApplyList,iface.name).forEach(ap=>lines.push(` service-policy ${ap.direction} ${ap.policy}`));
   if(iface.shutdown)lines.push(' shutdown');
   return lines.join('\n');
 }
-function renderPlanetInterfaces(ifaces,lacpList,securityList,dhcpList,stp,aclList){
-  return (ifaces||[]).map(i=>renderPlanetInterface(i,lacpList,securityList,dhcpList,stp,aclList)).join('\n!\n');
+function renderPlanetInterfaces(ifaces,lacpList,securityList,dhcpList,stp,aclList,macAclList,qosApplyList){
+  return (ifaces||[]).map(i=>renderPlanetInterface(i,lacpList,securityList,dhcpList,stp,aclList,macAclList,qosApplyList)).join('\n!\n');
 }
 
 // ACL：**不可重用 renderCiscoACL()**——該函式輸出 `ip access-list {standard|extended} NAME`
@@ -147,6 +153,42 @@ function renderPlanetACLEntry(a){
   }).join('\n');
 }
 function renderPlanetACL(list){return (list||[]).map(renderPlanetACLEntry).join('\n');}
+
+// MAC ACL（具名擴充形式，2026-08-28（續4）新增）：官方 §47.16/47.22 已查證，建立語法
+// `mac-access-list extended <name>` 進入子模式，逐條規則列輸出；src/dst 沿用與 IP ACL
+// 對稱的單一文字欄位慣例（`any`／`host X`／`X MASK`），對稱既有 planetSrcToken()/
+// planetDstToken() 但關鍵字換成 MAC 專屬版本。本輪僅支援 cos/vlanid/ethertype 依序選填
+// 比對，跳過 802.3/EthernetII frame-type 關鍵字變體（非本輪範圍，見 switch_analyzer 端
+// _parseMacACLPlanet() 註解）。務必排在 assemble 組裝順序最後——區塊擷取正則只認得下一個
+// "mac-access-list extended" 或字串結尾，比照既有 ACL/QoS 慣例。
+function planetSrcMacToken(tok){
+  const t=(tok||'any').trim();
+  if(/^any$/i.test(t))return 'any-source-mac';
+  const hm=/^host\s+(\S+)/i.exec(t);
+  if(hm)return `host-source-mac ${hm[1]}`;
+  return t; // 假設已是「MAC MASK」兩個 token，原樣輸出
+}
+function planetDstMacToken(tok){
+  const t=(tok||'any').trim();
+  if(/^any$/i.test(t))return 'any-destination-mac';
+  const hm=/^host\s+(\S+)/i.exec(t);
+  if(hm)return `host-destination-mac ${hm[1]}`;
+  return t;
+}
+function renderPlanetMacACLEntry(a){
+  return (a.rules||[]).map(r=>{
+    const action=r.action||'permit';
+    const extra=[];
+    if(r.cos)extra.push(`cos ${r.cos}`);
+    if(r.vlanId)extra.push(`vlanid ${r.vlanId}`);
+    if(r.ethertype)extra.push(`ethertype ${r.ethertype}`);
+    const extraStr=extra.length?' '+extra.join(' '):'';
+    return ` ${action} ${planetSrcMacToken(r.src)} ${planetDstMacToken(r.dst)}${extraStr}`;
+  }).join('\n');
+}
+function renderPlanetMacACL(list){
+  return (list||[]).map(a=>`mac-access-list extended ${a.name}\n${renderPlanetMacACLEntry(a)}`).join('\n!\n');
+}
 
 // STP：**不可重用 renderSpanningTreeGlobal()**——該函式對 id==='0'（Comware 既有的「全域
 // 優先權」sentinel 值）會誤判走 "spanning-tree vlan 0 priority" 分支（字串 '0' 在 JS 是
@@ -254,7 +296,7 @@ function assemblePlanetConfig(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`hostname ${model.sysname||'Switch'}`];
   const vlanBlock=renderPlanetVLANs(model.vlans);
   if(vlanBlock)blocks.push(vlanBlock);
-  if(model.interfaces&&model.interfaces.length)blocks.push(renderPlanetInterfaces(model.interfaces,model.lacp,model.security,model.dhcp,model.stp,model.acl));
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderPlanetInterfaces(model.interfaces,model.lacp,model.security,model.dhcp,model.stp,model.acl,model.planetMacAcl,model.qosApply));
   const lacpExtra=renderPlanetLACPExtra(model.lacp,model.interfaces);
   if(lacpExtra)blocks.push(lacpExtra);
   const stpBlock=renderPlanetSTP(model.stp);
@@ -266,7 +308,13 @@ function assemblePlanetConfig(model){
   if(model.dhcp&&model.dhcp.some(d=>d.type==='server'))blocks.push(renderPlanetDHCP(model.dhcp));
   const usersBlock=renderCiscoUsers(model.users);
   if(usersBlock)blocks.push(usersBlock);
+  // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
+  // 不能顛倒（2026-08-28（續4）新增）
+  if(model.classMaps&&model.classMaps.length)blocks.push(renderClassMapQoS(model.classMaps));
   if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
   if(model.acl&&model.acl.length)blocks.push(renderPlanetACL(model.acl));
+  // MAC ACL 務必放在組裝順序最後一塊——區塊擷取正則只認得下一個 "mac-access-list extended"
+  // 或字串結尾兩種收尾條件，不像 class-map 那樣額外認得 policy-map 邊界（2026-08-28（續4）新增）
+  if(model.planetMacAcl&&model.planetMacAcl.length)blocks.push(renderPlanetMacACL(model.planetMacAcl));
   return blocks.join('\n!\n')+'\n';
 }

@@ -1100,6 +1100,80 @@ function addQosRow(policy='',cls='',behavior='',action='police',rate='',burst=''
   applyI18n(tr);
 }
 
+// class-map/match（2026-08-28（續4）新增）：每一列是一條 match 條件，依 class-map name
+// 分組交給 groupClassMapMatches()/renderClassMapQoS() 處理，UI 端不預先分組（比照 qos-body
+// 扁平列慣例）
+function addClassMapRow(name='',matchType='match-any',condType='access-group',value=''){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="cm-name" value="${escAttr(name)}"></td>
+    <td><select class="cm-matchtype">
+      <option value="match-any" data-i18n="opt.cmapMatchAny">Match Any</option>
+      <option value="match-all" data-i18n="opt.cmapMatchAll">Match All</option>
+    </select></td>
+    <td><select class="cm-condtype">
+      <option value="access-group" data-i18n="opt.cmapAccessGroup">Access-group</option>
+      <option value="dscp" data-i18n="opt.cmapDscp">DSCP</option>
+      <option value="protocol" data-i18n="opt.cmapProtocol">Protocol</option>
+      <option value="ip-precedence" data-i18n="opt.cmapIpPrecedence">IP Precedence</option>
+      <option value="cos" data-i18n="opt.cmapCos">CoS</option>
+    </select></td>
+    <td><input class="cm-value" value="${escAttr(value)}"></td>
+    ${RM_BTN_TD}`;
+  tr.querySelector('.cm-matchtype').value=matchType;
+  tr.querySelector('.cm-condtype').value=condType;
+  document.getElementById('classmap-body').appendChild(tr);
+  applyI18n(tr);
+}
+
+// service-policy 介面套用（2026-08-28（續4）新增）：direction 字面值是 input/output
+// （非 ACL 套用表的 in/out），比照 addAclApplyRow() 樣板
+function addQosApplyRow(policy='',iface='',direction='output'){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="qa-policy" value="${escAttr(policy)}"></td>
+    <td><input class="qa-iface" value="${escAttr(iface)}"></td>
+    <td><select class="qa-dir">
+      <option value="input" data-i18n="opt.qosDirInput">Input</option>
+      <option value="output" data-i18n="opt.qosDirOutput">Output</option>
+    </select></td>
+    ${RM_BTN_TD}`;
+  tr.querySelector('.qa-dir').value=direction;
+  document.getElementById('qos-apply-body').appendChild(tr);
+  applyI18n(tr);
+}
+
+// Planet MAC ACL（具名擴充形式，2026-08-28（續4）新增）：src/dst 沿用與既有 IP ACL 相同的
+// 單一文字欄位慣例（any／host X／X MASK），比照 addAclRuleRow() 樣板
+function addPlanetMacAclRuleRow(name='',action='permit',src='any',dst='any',cos='',vlanId='',ethertype=''){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="pma-name" value="${escAttr(name)}"></td>
+    <td><select class="pma-action">
+      <option value="permit" data-i18n="opt.aclPermit">Permit</option>
+      <option value="deny" data-i18n="opt.aclDeny">Deny</option>
+    </select></td>
+    <td><input class="pma-src" value="${escAttr(src)}" placeholder="any / host AA:BB:CC:DD:EE:FF"></td>
+    <td><input class="pma-dst" value="${escAttr(dst)}"></td>
+    <td><input class="pma-cos" value="${escAttr(cos)}" placeholder="0-7"></td>
+    <td><input class="pma-vlanid" value="${escAttr(vlanId)}"></td>
+    <td><input class="pma-ethertype" value="${escAttr(ethertype)}" placeholder="0x0800"></td>
+    ${RM_BTN_TD}`;
+  tr.querySelector('.pma-action').value=action;
+  document.getElementById('planet-mac-acl-rule-body').appendChild(tr);
+  applyI18n(tr);
+}
+function addPlanetMacAclApplyRow(name='',iface='',direction='in'){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="pmaa-name" value="${escAttr(name)}"></td>
+    <td><input class="pmaa-iface" value="${escAttr(iface)}"></td>
+    <td><select class="pmaa-dir">
+      <option value="in" data-i18n="opt.aclIn">In</option>
+      <option value="out" data-i18n="opt.aclOut">Out</option>
+    </select></td>
+    ${RM_BTN_TD}`;
+  tr.querySelector('.pmaa-dir').value=direction;
+  document.getElementById('planet-mac-acl-apply-body').appendChild(tr);
+  applyI18n(tr);
+}
+
 function addSecurityRow(port='',dot1x='-',portSec=false,maxMac='',violation='',guestVlan=''){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input class="sec-port" value="${escAttr(port)}"></td>
@@ -1193,6 +1267,20 @@ function updateModeOptions(){
   document.getElementById('vpc-card').style.display=vendor==='cisco_nxos'?'':'none';
   // VXLAN 卡片僅 Comware/Aruba CX 適用（switch_analyzer parseVXLAN() 目前只支援這兩家）
   document.getElementById('vxlan-card').style.display=(vendor==='comware'||vendor==='aruba'||vendor==='cisco_nxos')?'':'none';
+  // class-map/match + service-policy 卡片（2026-08-28（續4）新增）：僅 Cisco/Ruijie/Planet
+  // 三家（與 renderPolicyMapQoS() 共用同一套 policy-map/class 語法者）適用，不比照既有
+  // #qos-card 的 VENDOR_INCAPABLE 廣義隱藏機制（那個機制涵蓋更多共用 parseQoS() 動作解析
+  // 但未必支援 class-map 的廠牌），改用獨立白名單，比照 #mlag-card/#vpc-card 單一/多廠牌慣例
+  const supportsClassMap=(vendor==='cisco'||vendor==='ruijie'||vendor==='planet');
+  const classMapCard=document.getElementById('classmap-card');
+  if(classMapCard)classMapCard.style.display=supportsClassMap?'':'none';
+  const qosApplyCard=document.getElementById('qos-apply-card');
+  if(qosApplyCard)qosApplyCard.style.display=supportsClassMap?'':'none';
+  // Planet MAC ACL 卡片（2026-08-28（續4）新增，官方 §47.16/47.22 已查證）：僅 Planet 適用
+  const planetMacAclCard=document.getElementById('planet-mac-acl-card');
+  if(planetMacAclCard)planetMacAclCard.style.display=vendor==='planet'?'':'none';
+  const planetMacAclApplyCard=document.getElementById('planet-mac-acl-apply-card');
+  if(planetMacAclApplyCard)planetMacAclApplyCard.style.display=vendor==='planet'?'':'none';
   // 廠牌裝置真的不支援的功能卡片直接隱藏（VENDOR_INCAPABLE，見該常數定義處的語意說明），
   // 避免使用者填根本用不到的欄位；只是本工具尚未查證語法的項目（VENDOR_UNSUPPORTED）
   // 維持卡片可見＋validateForm() 非阻擋性警告，不在此隱藏
@@ -1449,6 +1537,38 @@ function collectModel(){
     action:val(tr,'q-action'), rate:val(tr,'q-rate'), burst:val(tr,'q-burst'),
   })).filter(q=>q.policy&&q.cls);
 
+  // class-map/match（2026-08-28（續4）新增）：扁平列比照 qos 陣列慣例，分組留給
+  // renderClassMapQoS()/groupClassMapMatches() 處理，不在收集階段就分組
+  const classMaps=rowsOf('#classmap-body tr').map(tr=>({
+    name:val(tr,'cm-name'), matchType:val(tr,'cm-matchtype'), type:val(tr,'cm-condtype'), value:val(tr,'cm-value'),
+  })).filter(c=>c.name&&c.value);
+
+  // service-policy 介面套用（2026-08-28（續4）新增）：比照 aclApplyRows 樣板，direction
+  // 字面值是 input/output（非 ACL 的 in/out）
+  const qosApply=rowsOf('#qos-apply-body tr').map(tr=>({
+    policy:val(tr,'qa-policy'), interface:val(tr,'qa-iface'), direction:val(tr,'qa-dir'),
+  })).filter(q=>q.policy&&q.interface);
+
+  // Planet MAC ACL（具名擴充形式，2026-08-28（續4）新增）：規則表格＋套用表格分組成巢狀形狀，
+  // 比照上方共用 ACL 的 aclMap 分組慣例
+  const planetMacAclRuleRows=rowsOf('#planet-mac-acl-rule-body tr').map(tr=>({
+    name:val(tr,'pma-name'), action:val(tr,'pma-action'), src:val(tr,'pma-src'), dst:val(tr,'pma-dst'),
+    cos:val(tr,'pma-cos'), vlanId:val(tr,'pma-vlanid'), ethertype:val(tr,'pma-ethertype'),
+  })).filter(r=>r.name);
+  const planetMacAclApplyRows=rowsOf('#planet-mac-acl-apply-body tr').map(tr=>({
+    name:val(tr,'pmaa-name'), interface:val(tr,'pmaa-iface'), direction:val(tr,'pmaa-dir'),
+  })).filter(r=>r.name&&r.interface);
+  const planetMacAclMap=new Map();
+  planetMacAclRuleRows.forEach(r=>{
+    if(!planetMacAclMap.has(r.name))planetMacAclMap.set(r.name,{name:r.name,rules:[],appliedOn:[]});
+    planetMacAclMap.get(r.name).rules.push({action:r.action||'permit',src:r.src||'any',dst:r.dst||'any',cos:r.cos,vlanId:r.vlanId,ethertype:r.ethertype});
+  });
+  planetMacAclApplyRows.forEach(r=>{
+    if(!planetMacAclMap.has(r.name))planetMacAclMap.set(r.name,{name:r.name,rules:[],appliedOn:[]});
+    planetMacAclMap.get(r.name).appliedOn.push({interface:r.interface,direction:r.direction||'in'});
+  });
+  const planetMacAcl=Array.from(planetMacAclMap.values());
+
   const security=rowsOf('#security-body tr').map(tr=>({
     port:val(tr,'sec-port'), dot1x:val(tr,'sec-dot1x'), portSec:val(tr,'sec-portsec'),
     maxMac:val(tr,'sec-maxmac'), violation:val(tr,'sec-violation'), guestVlan:val(tr,'sec-guestvlan'),
@@ -1524,6 +1644,7 @@ function collectModel(){
     snmpTrapHost:document.getElementById('snmp-trap-host').value.trim(),
     syslogServer:document.getElementById('syslog-server').value.trim(),
     vlans, interfaces, ospf, bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos, stack, users, sonicL3Interfaces, sonicQos, sonicStpVlanIntf,
+    classMaps, qosApply, planetMacAcl,
   };
 }
 
@@ -1533,7 +1654,7 @@ function collectModel(){
 // 逐項呼叫 addXxxRow() 重建列。儲存的 model 就是 collectModel() 的完整輸出，故欄位
 // 名稱與此函式讀取的完全對稱，不需另外映射。
 function applyModelToForm(model){
-  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body'].forEach(id=>{
+  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body'].forEach(id=>{
     document.getElementById(id).innerHTML='';
   });
 
@@ -1636,6 +1757,14 @@ function applyModelToForm(model){
   });
 
   (model.qos||[]).forEach(q=>addQosRow(q.policy,q.cls,q.behavior,q.action,q.rate,q.burst));
+
+  // class-map/match + service-policy + Planet MAC ACL（2026-08-28（續4）新增）
+  (model.classMaps||[]).forEach(c=>addClassMapRow(c.name,c.matchType,c.type,c.value));
+  (model.qosApply||[]).forEach(q=>addQosApplyRow(q.policy,q.interface,q.direction));
+  (model.planetMacAcl||[]).forEach(a=>{
+    (a.rules||[]).forEach(r=>addPlanetMacAclRuleRow(a.name,r.action,r.src,r.dst,r.cos,r.vlanId,r.ethertype));
+    (a.appliedOn||[]).forEach(ap=>addPlanetMacAclApplyRow(a.name,ap.interface,ap.direction));
+  });
 
   (model.security||[]).forEach(s=>addSecurityRow(s.port,s.dot1x,!!s.portSec,s.maxMac,s.violation,s.guestVlan));
 
@@ -2466,7 +2595,7 @@ async function loadParserFunctions(){
   const extraStart=script.indexOf('function parseVRRP');
   const extraEnd=script.indexOf('function renderVRRP');
   const extraFnText=(extraStart>0&&extraEnd>extraStart)?script.slice(extraStart,extraEnd):'function parseVRRP(){return [];}\nfunction parseVXLAN(){return {vtep:"",vnis:[],evpn:[],tunnelMode:""};}';
-  const sandboxFn=new Function(pure+'\n'+extraFnText+'\nreturn { detectVendor:detectVendor, parseComware:parseComware, parseCisco:parseCisco, parseAruba:parseAruba, parseFortiSwitch:parseFortiSwitch, parseJuniper:parseJuniper, parseNXOS:parseNXOS, parseArista:parseArista, parseRuijie:parseRuijie, parseNetgear:parseNetgear, parseEdgeSwitch:parseEdgeSwitch, parseDellOS10:parseDellOS10, parseBrocade:parseBrocade, parseAlcatel:parseAlcatel, parseExtremeXOS:parseExtremeXOS, parseProCurve:parseProCurve, parseRouterOS:parseRouterOS, parseSONiC:parseSONiC, parsePlanet:parsePlanet, parseLACP:parseLACP, parseDHCP:parseDHCP, parseACL:parseACL, parseQoS:parseQoS, parseSecurity:parseSecurity, parseSTP:parseSTP, parseVRRP:parseVRRP };');
+  const sandboxFn=new Function(pure+'\n'+extraFnText+'\nreturn { detectVendor:detectVendor, parseComware:parseComware, parseCisco:parseCisco, parseAruba:parseAruba, parseFortiSwitch:parseFortiSwitch, parseJuniper:parseJuniper, parseNXOS:parseNXOS, parseArista:parseArista, parseRuijie:parseRuijie, parseNetgear:parseNetgear, parseEdgeSwitch:parseEdgeSwitch, parseDellOS10:parseDellOS10, parseBrocade:parseBrocade, parseAlcatel:parseAlcatel, parseExtremeXOS:parseExtremeXOS, parseProCurve:parseProCurve, parseRouterOS:parseRouterOS, parseSONiC:parseSONiC, parsePlanet:parsePlanet, parseLACP:parseLACP, parseDHCP:parseDHCP, parseACL:parseACL, parseQoS:parseQoS, parseSecurity:parseSecurity, parseSTP:parseSTP, parseVRRP:parseVRRP, parseClassMaps:parseClassMaps, parseServicePolicy:parseServicePolicy };');
   _parserFnsCache=sandboxFn();
   return _parserFnsCache;
 }
@@ -2525,7 +2654,7 @@ async function parseAndImport(){
 
   // 清空既有列（含 vrrp-body：匯入功能雖不映射 VRRP 資料，但仍須清掉畫面殘留的舊資料，
   // 避免使用者誤以為初始化 demo 列是這次匯入結果的一部分）
-  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body'].forEach(id=>{
+  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body'].forEach(id=>{
     document.getElementById(id).innerHTML='';
   });
 
@@ -2745,6 +2874,26 @@ async function parseAndImport(){
   // 欄位（parseQoS 對 Comware 只回傳 policy/cls/behavior），其餘欄位留空即可
   const qosList=fns?fns.parseQoS(text,vendor):[];
   (qosList||[]).forEach(q=>addQosRow(q.policy,q.cls,q.behavior||'',q.action==='-'?'police':(q.action||'police'),q.rate==='-'?'':(q.rate||''),q.burst==='-'?'':(q.burst||'')));
+
+  // class-map/match + service-policy（2026-08-28（續4）新增）：僅 cisco/ruijie/planet
+  // 三家已查證，比照上方 qosList 慣例直接呼叫通用純函式（非透過 parseAny() 的 vendor 判斷式，
+  // 這裡本來就是逐廠牌獨立呼叫慣例，見同檔案其餘 fns.parseXxx() 呼叫）
+  if(fns&&(vendor==='cisco'||vendor==='ruijie'||vendor==='planet')){
+    (fns.parseClassMaps(text)||[]).forEach(cm=>{
+      (cm.matches||[]).forEach(mt=>addClassMapRow(cm.name,cm.matchType,mt.type,mt.value));
+    });
+    (fns.parseServicePolicy(text)||[]).forEach(sp=>addQosApplyRow(sp.policy,sp.interface,sp.direction));
+  }
+
+  // Planet MAC ACL（具名擴充形式，2026-08-28（續4）新增）：_parseMacACLPlanet() 內嵌在
+  // parsePlanet() 自己的回傳物件，parsed.macAcl 早已是 planet 分支既有的 parsed 變數的一部分，
+  // 不需要額外呼叫 fns.xxx()
+  if(vendor==='planet'){
+    (parsed.macAcl||[]).forEach(a=>{
+      (a.rules||[]).forEach(r=>addPlanetMacAclRuleRow(a.name,r.action,r.src,r.dst,r.cos,r.vlanId,r.ethertype));
+      (a.appliedOn||[]).forEach(ap=>addPlanetMacAclApplyRow(a.name,ap.interface,ap.direction));
+    });
+  }
 
   // Port Security/802.1X：BasicParser 未涵蓋此欄位，只有完整版（fns）才映射
   const securityList=fns?fns.parseSecurity(text,vendor):[];

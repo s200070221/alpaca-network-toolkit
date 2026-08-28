@@ -1530,6 +1530,39 @@ function parseQoS(cfg, vendor){
   }
   return result;
 }
+// class-map/match 條件比對 + service-policy 介面套用：僅 Cisco/Ruijie/Planet 三家（與
+// renderPolicyMapQoS() 共用同一套 policy-map/class 語法的廠牌）沿用標準 Cisco IOS class-map
+// 語法（match access-group/dscp/protocol/ip precedence/cos，service-policy input/output），
+// 其餘廠牌明確不呼叫，非查證不足。獨立於 parseQoS() 之外（不共用回傳形狀，避免動到既有
+// policy-map/class 動作解析）；class-map 區塊收尾同時認 "class-map" 與 "policy-map" 兩種
+// 下一區塊關鍵字，因為產生器端組裝順序是 class-map 緊接在 policy-map 之前（class-map 必須
+// 先於被引用的 policy-map 定義）
+function parseClassMaps(cfg){
+  const maps=[];
+  const cmRe=/^class-map\s+(?:(match-any|match-all)\s+)?(\S+)([\s\S]*?)(?=^class-map\s+|^policy-map\s+|(?![\s\S]))/gm;
+  let m;
+  while((m=cmRe.exec(cfg))!==null){
+    const matchType=m[1]||'match-all', name=m[2], body=m[3]||'', matches=[];
+    let mm;
+    const mRe=/^\s*match\s+(access-group|dscp|protocol|cos)\s+(\S+)/gim;
+    while((mm=mRe.exec(body))!==null)matches.push({type:mm[1].toLowerCase(),value:mm[2]});
+    const pRe=/^\s*match\s+ip\s+precedence\s+(\S+)/gim;
+    while((mm=pRe.exec(body))!==null)matches.push({type:'ip-precedence',value:mm[1]});
+    maps.push({name,matchType,matches});
+  }
+  return maps;
+}
+function parseServicePolicy(cfg){
+  const apps=[];
+  cfg.split(/(?=^(?:interface|Interface)\s)/m).forEach(blk=>{
+    const ifLine=blk.match(/^(?:interface|Interface)\s+(\S.*)/m);
+    if(!ifLine)return;
+    const ifName=ifLine[1].trim();
+    let m; const spRe=/^\s*service-policy\s+(input|output)\s+(\S+)/gim;
+    while((m=spRe.exec(blk))!==null)apps.push({policy:m[2],interface:ifName,direction:m[1].toLowerCase()});
+  });
+  return apps;
+}
 function parseSTP(cfg, vendor){
   // SONiC（2026-08-08 新增）：整份設定檔是 JSON，與下方逐行正則機制完全不相容，獨立分流；
   // parseAny() 的 res.stp 也是呼叫這裡（透過 parseSONiC() 內部呼叫同一份 _parseSTPSONiC()），
@@ -2148,6 +2181,13 @@ function parseAny(cfg,forceVendor){
   // 模型）設定，RouterOS 的 qos 已在 parseRouterOS() 內用專屬形狀（simpleQueues/
   // queueTree）設定，三者皆不可被這裡的共用 Cisco-style policy-map dispatcher 覆蓋
   if(vendor!=='brocade'&&vendor!=='extreme'&&vendor!=='routeros'&&vendor!=='sonic')res.qos=parseQoS(cfg, vendor);
+  // class-map/match + service-policy：僅 cisco/ruijie/planet 三家已查證（見 parseClassMaps()/
+  // parseServicePolicy() 註解），其餘廠牌刻意不賦值（維持 undefined，非空陣列），避免暗示
+  // 未查證廠牌也支援
+  if(vendor==='cisco'||vendor==='ruijie'||vendor==='planet'){
+    res.classMaps=parseClassMaps(cfg);
+    res.servicePolicy=parseServicePolicy(cfg);
+  }
   return res;
 }
 
