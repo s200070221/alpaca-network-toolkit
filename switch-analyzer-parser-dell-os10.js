@@ -356,6 +356,46 @@ function parseDellOS10(cfg){
   return{sys,irf:null,stack,vlans,interfaces,routes,vrfs,users,ospf,ospf6,bgp,rip:[],vrrp,vxlan:null,vendor:'dell-os10',breakouts};
 }
 
+// class-map/match + service-policy（2026-08-28（續5）新增，範圍縮減版）：官方 SmartFabric
+// OS10 User Guide 系列頁面 + 社群討論串佐證（官方文件站台直接 fetch 遭 403 擋回，信心度
+// 低於本專案一貫「直接 fetch 官方 PDF/頁面逐字查證」標準，故本輪刻意縮減範圍）。官方文件
+// 揭露 policy-map 實際有 qos/queuing/network-qos 三種 type，service-policy 需要帶
+// "type <type>" 限定詞；本輪僅實作預設/最常用的 "qos" type（社群佐證省略 type 限定詞時
+// 會自動補上 "type qos"，故明確輸出不依賴預設值），queuing/network-qos 非本輪範圍。
+// class-map 標頭 "class-map type qos {match-any|match-all} NAME"（與 Arista 相同多一段
+// type 限定詞，但 service-policy 語序不同——Dell 是 "service-policy {input|output} type
+// qos NAME"，direction 在 type 之前，與 Arista 相反，見該廠牌 parser 對應註解）。match
+// 條件本輪僅確認 access-group／vlan／dscp 三種，protocol／cos／ip-precedence 未查得，
+// 非本輪範圍
+function parseDellOS10ClassMaps(cfg){
+  const maps=[];
+  const cmRe=/^class-map\s+type\s+qos\s+(match-any|match-all)\s+(\S+)([\s\S]*?)(?=^class-map\s+type\s+qos\s+|^policy-map\s+|(?![\s\S]))/gm;
+  let m;
+  while((m=cmRe.exec(cfg))!==null){
+    const matchType=m[1], name=m[2], body=m[3]||'', matches=[];
+    let mm;
+    const agRe=/^\s*match\s+ip\s+access-group\s+(\S+)/gim;
+    while((mm=agRe.exec(body))!==null)matches.push({type:'access-group',value:mm[1]});
+    const vlanRe=/^\s*match\s+vlan\s+(\S+)/gim;
+    while((mm=vlanRe.exec(body))!==null)matches.push({type:'vlan',value:mm[1]});
+    const dscpRe=/^\s*match\s+dscp\s+(\S+)/gim;
+    while((mm=dscpRe.exec(body))!==null)matches.push({type:'dscp',value:mm[1]});
+    maps.push({name,matchType,matches});
+  }
+  return maps;
+}
+function parseDellOS10ServicePolicy(cfg){
+  const apps=[];
+  cfg.split(/(?=^interface\s)/m).forEach(blk=>{
+    const ifLine=blk.match(/^interface\s+(\S.*)/m);
+    if(!ifLine)return;
+    const ifName=ifLine[1].trim();
+    let m; const spRe=/^\s*service-policy\s+(input|output)\s+type\s+qos\s+(\S+)/gim;
+    while((m=spRe.exec(blk))!==null)apps.push({policy:m[2],interface:ifName,direction:m[1].toLowerCase()});
+  });
+  return apps;
+}
+
 // ═ Juniper EX/QFX Parser ═
 // ════════════════════════════════════════════════════════════
 //  Juniper Networks EX/QFX/MX Switch Parser  v2

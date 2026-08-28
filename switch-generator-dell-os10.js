@@ -1,7 +1,14 @@
-function renderDellOS10VLANs(vlans,vrrpList,interfaces){
+function renderDellOS10VLANs(vlans,vrrpList,interfaces,ospf6){
   const vrrpByVlan=new Map(groupVrrpByVlan(vrrpList).map(g=>[String(g.vlanId),g]));
   const sviByVlan=new Map((interfaces||[]).filter(i=>i.type==='svi')
     .map(i=>[String((i.name.match(/(\d+)/)||[])[1]||''),i]));
+  // dellOspf6AreaOfIface（2026-08-23 新增）：interface 名稱 → {pid,area}，比照 Aruba CX
+  // areaOfIface6 寫法，只建立一次
+  const dellOspf6AreaOfIface={};
+  const proc6=ospf6&&ospf6[0];
+  ((proc6&&proc6.areas)||[]).forEach(a=>{
+    (a.interfaces||[]).forEach(ifname=>{ if(ifname)dellOspf6AreaOfIface[String(ifname)]={pid:proc6.pid,area:a.area}; });
+  });
   const ids=new Set([...(vlans||[]).map(v=>String(v.id)),...vrrpByVlan.keys(),...sviByVlan.keys()]);
   const blocks=[...ids].sort((a,b)=>parseInt(a)-parseInt(b)).map(id=>{
     const v=(vlans||[]).find(x=>String(x.id)===id);
@@ -12,13 +19,27 @@ function renderDellOS10VLANs(vlans,vrrpList,interfaces){
     const ip=(svi&&svi.ip)||(g&&g.ip)||'';
     // 官方 SmartFabric OS10 User Guide 確認 IPv6 語法 `ipv6 address ADDR/PREFIXLEN`
     if(ip)lines.push(` ${ip.includes(':')?'ipv6':'ip'} address ${ip}`);
-    // 次要IP（2026-08-12 新增）：官方 `ip address A/N secondary`，僅取第一筆為 MVP 範圍
-    if(svi&&svi.secondaryIp&&!svi.secondaryIp.includes(':'))lines.push(` ip address ${svi.secondaryIp} secondary`);
+    // 次要IP（2026-08-23 陣列化）：官方 `ip address A/N secondary`；parser 端 2026-08-17
+    // 已從「僅取第一筆」擴充為完整陣列 secondaryIps
+    (svi&&svi.secondaryIps||[]).filter(s=>!s.includes(':')).forEach(s=>lines.push(` ip address ${s} secondary`));
     if(svi&&svi.vrf)lines.push(` ip vrf forwarding ${svi.vrf}`);
+    // OSPFv3（2026-08-23 新增）：真正的 area 關聯在各自 interface 區塊內用
+    // "ipv6 ospf PID area AREA" 逐一指派
+    const aOf6=dellOspf6AreaOfIface&&dellOspf6AreaOfIface[`vlan${id}`];
+    if(aOf6)lines.push(` ipv6 ospf ${aOf6.pid} area ${aOf6.area}`);
     if(g)g.entries.forEach(e=>{
-      lines.push(` vrrp-group ${e.vrid}`);
-      lines.push(`  virtual-address ${e.vip}`);
-      lines.push(`  priority ${e.priority}`);
+      if(e.vip){
+        lines.push(` vrrp-group ${e.vrid}`);
+        lines.push(`  virtual-address ${e.vip}`);
+        lines.push(`  priority ${e.priority}`);
+      }
+      // IPv6（2026-08-23 新增）：獨立指令樹 "vrrp-ipv6-group N"（非同一 vrrp-group 底下的
+      // 欄位差異），與 IPv4 版本平行
+      if(e.vip6){
+        lines.push(` vrrp-ipv6-group ${e.vrid}`);
+        lines.push(`  virtual-address ${e.vip6}`);
+        lines.push(`  priority ${e.priority}`);
+      }
     });
     return lines.join('\n');
   });
@@ -44,7 +65,7 @@ function dellOS10SwitchportLines(iface){
   }
   return lines;
 }
-function renderDellOS10Interface(iface,lacpList,aclList,securityList,stp){
+function renderDellOS10Interface(iface,lacpList,aclList,securityList,stp,ospf6List,qosApplyList){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(` description ${iface.desc}`);
   // management 介面天生為 L3，vrf 固定為 MGMT（parseDellOS10Interfaces() 對此欄位是寫死
@@ -61,9 +82,17 @@ function renderDellOS10Interface(iface,lacpList,aclList,securityList,stp){
   // 官方 SmartFabric OS10 User Guide 確認 IPv6 語法 `ipv6 address ADDR/PREFIXLEN`，iface.ip
   // 本來就直接存完整 CIDR 字串輸出（無遮罩換算），只需依冒號判斷切換關鍵字
   if(iface.ip)lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
-  // 次要IP（2026-08-12 新增）：官方 `ip address A/N secondary`，僅取第一筆為 MVP 範圍
-  if(iface.secondaryIp&&!iface.secondaryIp.includes(':'))lines.push(` ip address ${iface.secondaryIp} secondary`);
+  // 次要IP（2026-08-23 陣列化）：官方 `ip address A/N secondary`；parser 端 2026-08-17
+  // 已從「僅取第一筆」擴充為完整陣列 secondaryIps
+  (iface.secondaryIps||[]).filter(s=>!s.includes(':')).forEach(s=>lines.push(` ip address ${s} secondary`));
   if(iface.vrf&&!isMgmt)lines.push(` ip vrf forwarding ${iface.vrf}`);
+  // OSPFv3（2026-08-23 新增）：真正的 area 關聯在各自 interface 區塊內用
+  // "ipv6 ospf PID area AREA" 逐一指派
+  (ospf6List||[]).forEach(o=>{
+    (o.areas||[]).forEach(a=>{
+      if((a.interfaces||[]).includes(iface.name))lines.push(` ipv6 ospf ${o.pid} area ${a.area}`);
+    });
+  });
   if(lg){
     const modeWord=lg.mode==='active'?'active':lg.mode==='passive'?'passive':'on';
     lines.push(` channel-group ${lg.id} mode ${modeWord}`);
@@ -72,6 +101,9 @@ function renderDellOS10Interface(iface,lacpList,aclList,securityList,stp){
   if(iface.shutdown)lines.push(' shutdown');
   // ACL 套用：已查證真實語法規則列帶 seq 前綴，套用指令 ip access-group 與 Cisco 相同不需改動
   findAclApplications(aclList,iface.name).forEach(ap=>lines.push(` ip access-group ${ap.name} ${ap.direction}`));
+  // service-policy 介面套用（2026-08-28（續5）新增，見 parseDellOS10ServicePolicy() 註解）：
+  // 官方語法多一段 "type qos" 限定詞在 direction 之後，與 Arista 語序相反
+  findQosApplications(qosApplyList,iface.name).forEach(ap=>lines.push(` service-policy ${ap.direction} type qos ${ap.policy}`));
   // Port Security-802.1X：已查證官方 SmartFabric OS10 User Guide 後修正——802.1X 改輸出
   // "dot1x port-control auto"（真實最小可用設定，非原本沿用 Cisco 的 dot1x pae
   // authenticator；全域 dot1x system-auth-control 因不影響本表單 round-trip 判斷、
@@ -102,7 +134,7 @@ function renderDellOS10Interface(iface,lacpList,aclList,securityList,stp){
   }
   return lines.join('\n');
 }
-function renderDellOS10Interfaces(ifaces,lacpList,aclList,securityList,stp){return ifaces.map(i=>renderDellOS10Interface(i,lacpList,aclList,securityList,stp)).join('\n!\n');}
+function renderDellOS10Interfaces(ifaces,lacpList,aclList,securityList,stp,ospf6List,qosApplyList){return ifaces.map(i=>renderDellOS10Interface(i,lacpList,aclList,securityList,stp,ospf6List,qosApplyList)).join('\n!\n');}
 
 function renderDellOS10LACPExtra(lacpList,ifaces){
   const existingNames=new Set((ifaces||[]).map(i=>i.name));
@@ -131,6 +163,16 @@ function renderDellOS10OSPFProcess(o){
 }
 function renderDellOS10OSPF(list){return (list||[]).map(renderDellOS10OSPFProcess).join('\n!\n');}
 
+// OSPFv3（2026-08-23 新增）：官方 SmartFabric OS10 User Guide 確認 `router ospfv3` 為
+// 獨立頂層指令（無 process-id 參數，與 IPv4 `router ospf <pid>` 不同），真正的 area 關聯
+// 改在 renderDellOS10Interface()／renderDellOS10VLANs() 用 `ipv6 ospf PID area AREA` 逐一輸出
+function renderDellOS10OSPFv3Process(o){
+  const lines=[`router ospfv3`];
+  if(o.routerId)lines.push(` router-id ${o.routerId}`);
+  return lines.join('\n');
+}
+function renderDellOS10OSPFv3(list){return (list||[]).map(renderDellOS10OSPFv3Process).join('\n!\n');}
+
 function renderDellOS10BGP(b){
   const lines=[`router bgp ${b.asn}`];
   if(b.routerId)lines.push(` bgp router-id ${b.routerId}`);
@@ -139,6 +181,13 @@ function renderDellOS10BGP(b){
     if(p.desc)lines.push(` neighbor ${p.ip} description ${p.desc}`);
   });
   (b.networks||[]).forEach(n=>lines.push(` network ${n}`));
+  // IPv6（2026-08-23 新增）：network 巢狀在獨立的 address-family ipv6 unicast 子模式內，
+  // 比照 Comware/Cisco/Aruba CX 已驗證過的慣例，exit-address-family 結尾
+  if(b.networks6&&b.networks6.length){
+    lines.push(' address-family ipv6 unicast');
+    b.networks6.forEach(n=>lines.push(`  network ${n}`));
+    lines.push(' exit-address-family');
+  }
   return lines.join('\n');
 }
 function renderDellOS10BGPList(list){return (list||[]).map(renderDellOS10BGP).join('\n!\n');}
@@ -185,12 +234,12 @@ function assembleDellOS10Config(model){
   // vrf 欄位巢狀在 renderDellOS10VLANs() 輸出的 interface vlanN 區塊內，故排在該區塊之前
   const dellVrfNames=collectVrfNames(model.interfaces);
   if(dellVrfNames.length)blocks.push(dellVrfNames.map(n=>`ip vrf ${n}`).join('\n!\n'));
-  const vlanBlock=renderDellOS10VLANs(model.vlans,model.vrrp,model.interfaces);
+  const vlanBlock=renderDellOS10VLANs(model.vlans,model.vrrp,model.interfaces,model.ospf6);
   if(vlanBlock)blocks.push(vlanBlock);
   // SVI（type:'svi'）已由 renderDellOS10VLANs() 合併輸出進 interface vlanN 區塊，
   // 這裡只處理其餘實體埠/Port-channel/management，避免同一個 vlanN 被輸出成兩個區塊
   const dellPhysicalIfaces=(model.interfaces||[]).filter(i=>i.type!=='svi');
-  if(dellPhysicalIfaces.length)blocks.push(renderDellOS10Interfaces(dellPhysicalIfaces,model.lacp,model.acl,model.security,model.stp));
+  if(dellPhysicalIfaces.length)blocks.push(renderDellOS10Interfaces(dellPhysicalIfaces,model.lacp,model.acl,model.security,model.stp,model.ospf6,model.qosApply));
   const dellLacpExtra=renderDellOS10LACPExtra(model.lacp,model.interfaces);
   if(dellLacpExtra)blocks.push(dellLacpExtra);
   if(model.dhcp&&model.dhcp.some(d=>d.type==='server'))blocks.push(renderDellOS10DHCP(model.dhcp));
@@ -199,6 +248,7 @@ function assembleDellOS10Config(model){
   const stpBlockDell=renderSpanningTreeGlobal(model.stp);
   if(stpBlockDell)blocks.push(stpBlockDell);
   if(model.ospf&&model.ospf.length)blocks.push(renderDellOS10OSPF(model.ospf));
+  if(model.ospf6&&model.ospf6.length)blocks.push(renderDellOS10OSPFv3(model.ospf6));
   if(model.routes&&model.routes.length)blocks.push(renderDellOS10Routes(model.routes));
   if(model.bgp&&model.bgp.length)blocks.push(renderDellOS10BGPList(model.bgp));
   // ACL：已查證官方 SmartFabric OS10 User Guide 後改用 renderDellOS10ACL()（規則列帶
@@ -206,6 +256,9 @@ function assembleDellOS10Config(model){
   // cir/pir、bandwidth percent，與 Cisco 裸數字寫法不同）。必須放在組裝順序最後——
   // 理由與 assembleCiscoConfig 相同：兩者的區塊擷取 regex 只認得下一個同關鍵字區塊或字串結尾
   if(model.acl&&model.acl.length)blocks.push(renderDellOS10ACL(model.acl));
+  // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
+  // 不能顛倒（2026-08-28（續5）新增）
+  if(model.classMaps&&model.classMaps.length)blocks.push(renderDellOS10ClassMapQoS(model.classMaps));
   if(model.qos&&model.qos.length)blocks.push(renderDellOS10QoS(model.qos));
   const dellUsersBlock=renderDellOS10Users(model.users);
   if(dellUsersBlock)blocks.push(dellUsersBlock);
@@ -238,6 +291,22 @@ function renderDellOS10ACLEntry(a){
 }
 function renderDellOS10ACL(list){return (list||[]).map(renderDellOS10ACLEntry).join('\n!\n');}
 
+// class-map/match（2026-08-28（續5）新增，範圍縮減版）：見 switch-analyzer-parser-dell-os10.js
+// 的 parseDellOS10ClassMaps() 對應註解——本輪僅支援 "qos" type（queuing/network-qos 非本輪
+// 範圍），match 條件僅 access-group／vlan／dscp 三種
+function renderDellOS10ClassMapQoS(list){
+  const blocks=[];
+  groupClassMapMatches(list).forEach((grp,name)=>{
+    const lines=[`class-map type qos ${grp.matchType} ${name}`];
+    grp.matches.forEach(mt=>{
+      if(mt.type==='access-group'&&mt.value)lines.push(` match ip access-group ${mt.value}`);
+      else if(mt.type==='vlan'&&mt.value)lines.push(` match vlan ${mt.value}`);
+      else if(mt.type==='dscp'&&mt.value)lines.push(` match dscp ${mt.value}`);
+    });
+    blocks.push(lines.join('\n'));
+  });
+  return blocks.join('\n!\n');
+}
 // QoS：已查證官方 SmartFabric OS10 User Guide 後新增，真實語法 police 帶 cir/pir 雙值
 // （committed+peak information rate，共用形狀僅有單一 rate 欄位，pir 沿用同一值，已知
 // 簡化）；bandwidth 為百分比制 "bandwidth percent N"，與 Cisco 裸數字寫法不同；比照
