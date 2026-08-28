@@ -1116,6 +1116,7 @@ function addClassMapRow(name='',matchType='match-any',condType='access-group',va
       <option value="protocol" data-i18n="opt.cmapProtocol">Protocol</option>
       <option value="ip-precedence" data-i18n="opt.cmapIpPrecedence">IP Precedence</option>
       <option value="cos" data-i18n="opt.cmapCos">CoS</option>
+      <option value="vlan" data-i18n="opt.cmapVlan">VLAN</option>
     </select></td>
     <td><input class="cm-value" value="${escAttr(value)}"></td>
     ${RM_BTN_TD}`;
@@ -1271,7 +1272,10 @@ function updateModeOptions(){
   // 三家（與 renderPolicyMapQoS() 共用同一套 policy-map/class 語法者）適用，不比照既有
   // #qos-card 的 VENDOR_INCAPABLE 廣義隱藏機制（那個機制涵蓋更多共用 parseQoS() 動作解析
   // 但未必支援 class-map 的廠牌），改用獨立白名單，比照 #mlag-card/#vpc-card 單一/多廠牌慣例
-  const supportsClassMap=(vendor==='cisco'||vendor==='ruijie'||vendor==='planet');
+  // 2026-08-28（續5）擴大：Arista/Dell OS10 各自有獨立的 class-map/service-policy 語法
+  // （多一段 "type qos" 限定詞，語序彼此相反），見 switch-generator-arista.js/
+  // switch-generator-dell-os10.js 的 renderXClassMapQoS() 對應註解
+  const supportsClassMap=(vendor==='cisco'||vendor==='ruijie'||vendor==='planet'||vendor==='arista'||vendor==='dell-os10');
   const classMapCard=document.getElementById('classmap-card');
   if(classMapCard)classMapCard.style.display=supportsClassMap?'':'none';
   const qosApplyCard=document.getElementById('qos-apply-card');
@@ -2595,7 +2599,7 @@ async function loadParserFunctions(){
   const extraStart=script.indexOf('function parseVRRP');
   const extraEnd=script.indexOf('function renderVRRP');
   const extraFnText=(extraStart>0&&extraEnd>extraStart)?script.slice(extraStart,extraEnd):'function parseVRRP(){return [];}\nfunction parseVXLAN(){return {vtep:"",vnis:[],evpn:[],tunnelMode:""};}';
-  const sandboxFn=new Function(pure+'\n'+extraFnText+'\nreturn { detectVendor:detectVendor, parseComware:parseComware, parseCisco:parseCisco, parseAruba:parseAruba, parseFortiSwitch:parseFortiSwitch, parseJuniper:parseJuniper, parseNXOS:parseNXOS, parseArista:parseArista, parseRuijie:parseRuijie, parseNetgear:parseNetgear, parseEdgeSwitch:parseEdgeSwitch, parseDellOS10:parseDellOS10, parseBrocade:parseBrocade, parseAlcatel:parseAlcatel, parseExtremeXOS:parseExtremeXOS, parseProCurve:parseProCurve, parseRouterOS:parseRouterOS, parseSONiC:parseSONiC, parsePlanet:parsePlanet, parseLACP:parseLACP, parseDHCP:parseDHCP, parseACL:parseACL, parseQoS:parseQoS, parseSecurity:parseSecurity, parseSTP:parseSTP, parseVRRP:parseVRRP, parseClassMaps:parseClassMaps, parseServicePolicy:parseServicePolicy };');
+  const sandboxFn=new Function(pure+'\n'+extraFnText+'\nreturn { detectVendor:detectVendor, parseComware:parseComware, parseCisco:parseCisco, parseAruba:parseAruba, parseFortiSwitch:parseFortiSwitch, parseJuniper:parseJuniper, parseNXOS:parseNXOS, parseArista:parseArista, parseRuijie:parseRuijie, parseNetgear:parseNetgear, parseEdgeSwitch:parseEdgeSwitch, parseDellOS10:parseDellOS10, parseBrocade:parseBrocade, parseAlcatel:parseAlcatel, parseExtremeXOS:parseExtremeXOS, parseProCurve:parseProCurve, parseRouterOS:parseRouterOS, parseSONiC:parseSONiC, parsePlanet:parsePlanet, parseLACP:parseLACP, parseDHCP:parseDHCP, parseACL:parseACL, parseQoS:parseQoS, parseSecurity:parseSecurity, parseSTP:parseSTP, parseVRRP:parseVRRP, parseClassMaps:parseClassMaps, parseServicePolicy:parseServicePolicy, parseAristaClassMaps:parseAristaClassMaps, parseAristaServicePolicy:parseAristaServicePolicy, parseDellOS10ClassMaps:parseDellOS10ClassMaps, parseDellOS10ServicePolicy:parseDellOS10ServicePolicy };');
   _parserFnsCache=sandboxFn();
   return _parserFnsCache;
 }
@@ -2883,6 +2887,20 @@ async function parseAndImport(){
       (cm.matches||[]).forEach(mt=>addClassMapRow(cm.name,cm.matchType,mt.type,mt.value));
     });
     (fns.parseServicePolicy(text)||[]).forEach(sp=>addQosApplyRow(sp.policy,sp.interface,sp.direction));
+  }
+  // Arista/Dell OS10（2026-08-28（續5）新增）：各自獨立的 class-map/service-policy 語法，
+  // 不能沿用上面的 fns.parseClassMaps()/fns.parseServicePolicy()（那組正則認不得 "type qos"）
+  else if(fns&&vendor==='arista'){
+    (fns.parseAristaClassMaps(text)||[]).forEach(cm=>{
+      (cm.matches||[]).forEach(mt=>addClassMapRow(cm.name,cm.matchType,mt.type,mt.value));
+    });
+    (fns.parseAristaServicePolicy(text)||[]).forEach(sp=>addQosApplyRow(sp.policy,sp.interface,sp.direction));
+  }
+  else if(fns&&vendor==='dell-os10'){
+    (fns.parseDellOS10ClassMaps(text)||[]).forEach(cm=>{
+      (cm.matches||[]).forEach(mt=>addClassMapRow(cm.name,cm.matchType,mt.type,mt.value));
+    });
+    (fns.parseDellOS10ServicePolicy(text)||[]).forEach(sp=>addQosApplyRow(sp.policy,sp.interface,sp.direction));
   }
 
   // Planet MAC ACL（具名擴充形式，2026-08-28（續4）新增）：_parseMacACLPlanet() 內嵌在

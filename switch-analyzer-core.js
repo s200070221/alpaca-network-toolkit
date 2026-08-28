@@ -2188,6 +2188,17 @@ function parseAny(cfg,forceVendor){
     res.classMaps=parseClassMaps(cfg);
     res.servicePolicy=parseServicePolicy(cfg);
   }
+  // Arista／Dell OS10（2026-08-28（續5）新增）：語法比 Cisco 家族多一段 "type qos" 限定詞，
+  // 見各自 parser 檔案內 parseAristaClassMaps()/parseDellOS10ClassMaps() 等對應註解，故獨立
+  // 分支，不與上方共用 parseClassMaps()/parseServicePolicy() 混用
+  else if(vendor==='arista'){
+    res.classMaps=parseAristaClassMaps(cfg);
+    res.servicePolicy=parseAristaServicePolicy(cfg);
+  }
+  else if(vendor==='dell-os10'){
+    res.classMaps=parseDellOS10ClassMaps(cfg);
+    res.servicePolicy=parseDellOS10ServicePolicy(cfg);
+  }
   return res;
 }
 

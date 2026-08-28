@@ -23,7 +23,7 @@ function aristaSwitchportLines(iface){
   }
   return lines;
 }
-function renderAristaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,breakouts){
+function renderAristaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,breakouts,ospf6List,qosApplyList){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(` description ${iface.desc}`);
   // Breakout：官方語法內嵌於母埠自己的 interface 區塊（比照 Comware/Aruba CX 既有慣例），
@@ -43,7 +43,11 @@ function renderAristaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,
   // secondaryIp（官方語法與 Cisco 相同 `ip address A B secondary`），但 renderAristaInterface()
   // 從未輸出過，比照 switch-generator-cisco.js:38 的 secLine 寫法補上；secondaryIp 一律是
   // CIDR 字串（不分介面類型），IPv6 無次要位址機制故排除
-  const secLine=iface.secondaryIp&&!iface.secondaryIp.includes(':')?(()=>{const [sip,slen]=iface.secondaryIp.split('/');return sip&&slen?` ip address ${sip} ${maskFromCidr(slen)} secondary`:'';})():'';
+  // 2026-08-23 陣列化：parser 端 2026-08-17 已從「僅取第一筆」擴充為完整陣列 secondaryIps
+  const secLines=(iface.secondaryIps||[]).filter(s=>!s.includes(':')).map(s=>{
+    const [sip,slen]=s.split('/');
+    return sip&&slen?` ip address ${sip} ${maskFromCidr(slen)} secondary`:'';
+  }).filter(Boolean);
   // IPv6（試點 5 廠牌之一，官方 EOS User Manual 確認 interface 模式下 `ipv6 address ADDR/PREFIXLEN`
   // 與 Cisco 語法一致，不需遮罩換算）
   if(iface.type==='svi'){
@@ -53,19 +57,22 @@ function renderAristaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,
       }else{
         const [ip,len]=iface.ip.split('/');
         lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
-        if(secLine)lines.push(secLine);
+        secLines.forEach(l=>lines.push(l));
       }
     }
   }else if(iface.type==='loopback'||isMgmt){
     if(iface.ip){
       lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
-      if(!iface.ip.includes(':')&&secLine)lines.push(secLine);
+      if(!iface.ip.includes(':'))secLines.forEach(l=>lines.push(l));
     }
   }else if(iface.mode==='routed'&&iface.ip){
     lines.push(' no switchport');
     lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
-    if(!iface.ip.includes(':')&&secLine)lines.push(secLine);
+    if(!iface.ip.includes(':'))secLines.forEach(l=>lines.push(l));
   }
+  // OSPFv3（2026-08-23 新增）：與 Cisco 共用同一份 ciscoOspf6IfaceLines()（switch-generator-
+  // cisco.js），反查 model.ospf6 輸出 "ipv6 ospf PID area AREA"
+  ciscoOspf6IfaceLines(ospf6List,iface.name).forEach(l=>lines.push(l));
   // vrf（2026-08-08 查證修正）：官方 EOS 4.23+ 語法為裸 "vrf NAME"（"vrf forwarding" 已廢棄），
   // parseCiscoInterfaces() 已同步改用 vendor 分流偵測；management 介面固定為 MGMT，是 parser
   // 端寫死賦值非反查而來，不存在對應真實指令
@@ -78,6 +85,9 @@ function renderAristaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,
   if(iface.shutdown)lines.push(' shutdown');
   findDhcpRelays(dhcpList,iface.name).forEach(rel=>lines.push(` ip helper-address ${rel.relayServer}`));
   findAclApplications(aclList,iface.name).forEach(ap=>lines.push(` ip access-group ${ap.name} ${ap.direction}`));
+  // service-policy 介面套用（2026-08-28（續5）新增，見 parseAristaServicePolicy() 註解）：
+  // 官方語法多一段 "type qos" 限定詞在 direction 之前，與 Dell OS10 語序相反
+  findQosApplications(qosApplyList,iface.name).forEach(ap=>lines.push(` service-policy type qos ${ap.direction} ${ap.policy}`));
   const sec=findSecurityForPort(securityList,iface.name);
   if(sec){
     if(sec.dot1x==='auth')lines.push(' dot1x pae authenticator');
@@ -99,7 +109,7 @@ function renderAristaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,
   }
   return lines.join('\n');
 }
-function renderAristaInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,breakouts){return (ifaces||[]).map(i=>renderAristaInterface(i,lacpList,dhcpList,aclList,securityList,stp,breakouts)).join('\n!\n');}
+function renderAristaInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,breakouts,ospf6List,qosApplyList){return (ifaces||[]).map(i=>renderAristaInterface(i,lacpList,dhcpList,aclList,securityList,stp,breakouts,ospf6List,qosApplyList)).join('\n!\n');}
 
 function renderAristaLACPExtra(lacpList,ifaces){
   const existingNames=new Set((ifaces||[]).map(i=>i.name));
@@ -138,7 +148,10 @@ function renderAristaVRRPGroup(g){
     lines.push(` ip address ${ip}/${len}`);
   }
   g.entries.forEach(v=>{
-    lines.push(` vrrp ${v.vrid} ipv4 ${v.vip}`);
+    if(v.vip)lines.push(` vrrp ${v.vrid} ipv4 ${v.vip}`);
+    // IPv6（2026-08-23 新增）：官方 Arista EOS User Manual 確認獨立的 "vrrp N ipv6 ADDR"
+    // 宣告，前提須先在某個 vrid 上宣告 "vrrp N ipv4 version 3"（本工具不驗證此前提）
+    if(v.vip6)lines.push(` vrrp ${v.vrid} ipv6 ${v.vip6}`);
     lines.push(` vrrp ${v.vrid} priority-level ${v.priority}`);
     if(v.preempt===false)lines.push(` no vrrp ${v.vrid} preempt`);
   });
@@ -158,7 +171,7 @@ function assembleAristaConfig(model){
   // vendor==='arista' 分流偵測裸 vrf 語法，round-trip 不再依賴 Cisco 式語法
   const aristaVrfNames=collectVrfNames(model.interfaces);
   if(aristaVrfNames.length)blocks.push(aristaVrfNames.map(n=>`vrf instance ${n}`).join('\n!\n'));
-  if(model.interfaces&&model.interfaces.length)blocks.push(renderAristaInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.breakouts));
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderAristaInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.breakouts,model.ospf6,model.qosApply));
   // DHCP Relay Option82（2026-07-24 新增解析，一直未接線）：真實語法是不含任何後綴參數的
   // 裸全域指令 "ip dhcp relay information option"（非逐介面），parser 端也是用行首錨點比對
   // 這一整行是否存在，故只要任一 relay 項目要求 option82，輸出一行全域指令即可
@@ -171,6 +184,7 @@ function assembleAristaConfig(model){
   const stpBlockAr=renderSpanningTreeGlobal(model.stp);
   if(stpBlockAr)blocks.push(stpBlockAr);
   if(model.ospf&&model.ospf.length)blocks.push(renderCiscoOSPF(model.ospf));
+  if(model.ospf6&&model.ospf6.length)blocks.push(renderCiscoOSPFv3(model.ospf6));
   if(model.rip&&model.rip.length)blocks.push(renderCiscoRIPList(model.rip));
   if(model.routes&&model.routes.length)blocks.push(renderCiscoRoutes(model.routes));
   if(model.bgp&&model.bgp.length)blocks.push(renderCiscoBGPList(model.bgp));
@@ -178,6 +192,9 @@ function assembleAristaConfig(model){
   // 不需改動。QoS 已查證確認不相符，改用 renderAristaQoS()。放最後：理由同
   // assembleCiscoConfig/assembleDellOS10Config（區塊擷取正則只認得下一個同關鍵字區塊或字串結尾）
   if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
+  // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
+  // 不能顛倒（2026-08-28（續5）新增）
+  if(model.classMaps&&model.classMaps.length)blocks.push(renderAristaClassMapQoS(model.classMaps));
   if(model.qos&&model.qos.length)blocks.push(renderAristaQoS(model.qos));
   // 本機帳號：與 Cisco IOS 共用同一套 parseCiscoUsers()/renderCiscoUsers()，語法相符
   const aristaUsersBlock=renderCiscoUsers(model.users);
@@ -187,6 +204,22 @@ function assembleAristaConfig(model){
   return blocks.join('\n!\n')+'\n';
 }
 
+// class-map/match（2026-08-28（續5）新增）：官方 EOS Quality of Service/Traffic Management
+// 文件確認語法比 Cisco 家族多一段 "type qos" 限定詞，見 switch-analyzer-parser-arista.js
+// 的 parseAristaClassMaps() 對應註解。本輪僅輸出已確認的 "match ip access-group" 這一種
+// match 條件，即使使用者在共用表單選了 dscp/protocol/cos/ip-precedence/vlan 也不輸出
+// （不臆測，官方逐字語法未查得）
+function renderAristaClassMapQoS(list){
+  const blocks=[];
+  groupClassMapMatches(list).forEach((grp,name)=>{
+    const lines=[`class-map type qos ${grp.matchType} ${name}`];
+    grp.matches.forEach(mt=>{
+      if(mt.type==='access-group'&&mt.value)lines.push(` match ip access-group ${mt.value}`);
+    });
+    blocks.push(lines.join('\n'));
+  });
+  return blocks.join('\n!\n');
+}
 // QoS：已查證官方 Arista EOS User Manual 後新增，真實語法 policy-map 標頭多一段
 // "type quality-of-service"，bandwidth/shape 動作多一個單位關鍵字 "kbps"（與 Cisco
 // 裸數字寫法不同）；police/priority 本輪未查證，維持沿用既有 Cisco 假設（不在本輪

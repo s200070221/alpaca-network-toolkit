@@ -84,6 +84,38 @@ function parseArista(cfg){
   return{sys,irf:null,stack:mlag,vlans,interfaces,routes,vrfs,users,ospf,ospf6,bgp,rip,rip6,vrrp,vxlan:null,breakouts,vendor:'arista'};
 }
 
+// class-map/match + service-policy（2026-08-28（續5）新增）：官方 EOS Quality of Service／
+// Traffic Management 文件直接 fetch 查證，語法比 Cisco 家族多一段 "type qos" 限定詞——
+// class-map 標頭為 "class-map type qos {match-any|match-all} NAME"（比照既有 policy-map
+// 已查證的 "type quality-of-service" 模式，見 renderAristaQoS() 對應註解），service-policy
+// 為 "service-policy type qos {input|output} NAME"（type 限定詞在 direction 之前，與 Dell
+// OS10 語序相反，見該廠牌 parser 對應註解）。match 條件本輪僅確認 "match ip access-group
+// NAME"（非 Cisco 裸 "match access-group N"），dscp/cos/protocol/ip-precedence 未查得官方
+// 逐字語法，非本輪範圍，不臆測
+function parseAristaClassMaps(cfg){
+  const maps=[];
+  const cmRe=/^class-map\s+type\s+qos\s+(match-any|match-all)\s+(\S+)([\s\S]*?)(?=^class-map\s+type\s+qos\s+|^policy-map\s+|(?![\s\S]))/gm;
+  let m;
+  while((m=cmRe.exec(cfg))!==null){
+    const matchType=m[1], name=m[2], body=m[3]||'', matches=[];
+    let mm; const agRe=/^\s*match\s+ip\s+access-group\s+(\S+)/gim;
+    while((mm=agRe.exec(body))!==null)matches.push({type:'access-group',value:mm[1]});
+    maps.push({name,matchType,matches});
+  }
+  return maps;
+}
+function parseAristaServicePolicy(cfg){
+  const apps=[];
+  cfg.split(/(?=^interface\s)/m).forEach(blk=>{
+    const ifLine=blk.match(/^interface\s+(\S.*)/m);
+    if(!ifLine)return;
+    const ifName=ifLine[1].trim();
+    let m; const spRe=/^\s*service-policy\s+type\s+qos\s+(input|output)\s+(\S+)/gim;
+    while((m=spRe.exec(blk))!==null)apps.push({policy:m[2],interface:ifName,direction:m[1].toLowerCase()});
+  });
+  return apps;
+}
+
 // ════════════════════════════════════════════════════
 //  RUIJIE (RGOS) PARSER
 // ════════════════════════════════════════════════════
