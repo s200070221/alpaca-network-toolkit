@@ -1007,6 +1007,12 @@ function _sendToAnalysisTool() {
   window.open(_anonChainTarget.href, '_blank');
 }
 const mappings = { ip:new Map(), hostname:new Map(), user:new Map(), ssid:new Map(), alias:new Map(), vdom:new Map(), mac:new Map() };
+// 匯入既有對照表的種子（比照 log_analyzer 對應的 IMPORTED_SEED，各自維護一份、不跨檔引用）：
+// 單檔模式本身不需要這個——resetAll() 不清 mappings，匯入一次全 session 持續生效。但
+// runBatch()（見該函式）為了讓批次內每個檔案有獨立的假值編號，會在處理每個檔案前重置
+// mappings/ctrs/stats/bucketSeen，這會把匯入的種子一併洗掉，導致跨工具一致性在批次模式下
+// 形同虛設；IMPORTED_SEED 保留一份累加合併後的種子，讓 runBatch() 能在每次重置後重新套用
+let IMPORTED_SEED = null;
 const ctrs = { n1:0, n2:0, n3:0, ip6:0, dev:0, usr:0, ssid:0, alias:0, vdom:0, mac:0 };
 // 各類別已見過的不重複來源 IP 集合，供偵測 ctrs.n1/n2/n3 回捲碰撞用（每類別 RFC5737
 // 輸出網段僅一個 /24，超過 254 個不同來源 IP 時計數器會回捲並與較早的位址碰撞；
@@ -1200,15 +1206,42 @@ function anonUser(name) {
 // 的原始值被分配到與匯入值相撞的假值。只套用「自己也認得」的類別，未知類別靜默略過
 // （不需要知道對方工具的類別集合，天然向前相容）。session 內已存在的原始值不覆蓋
 // （first-seen-wins），避免匯入打亂已經算出的結果。
+//
+// 拆成兩段（2026-08-28（續3）修復 runBatch() 洗掉匯入種子的問題）：本函式先把 parsed.mappings
+// 累加合併進 IMPORTED_SEED（同一原始值以先匯入者為準，容許使用者連續匯入多份不重疊的對照表），
+// 再呼叫 seedLiveMappingsFromImported() 把累加後的種子套用進 live mappings；runBatch() 逐檔
+// 重置 mappings 後，直接呼叫 seedLiveMappingsFromImported(IMPORTED_SEED) 即可重新套用，不需要
+// 重新走一次合併邏輯
 function applyImportedMappings(parsed) {
+  if (!parsed || typeof parsed !== 'object' || !parsed.mappings || typeof parsed.mappings !== 'object') {
+    return { applied: { ip: 0, hostname: 0, user: 0, mac: 0, ssid: 0, alias: 0, vdom: 0 }, skipped: 0 };
+  }
+  if (!IMPORTED_SEED) IMPORTED_SEED = { mappings: {} };
+  for (const cat of Object.keys(parsed.mappings)) {
+    const src = parsed.mappings[cat];
+    if (!src || typeof src !== 'object') continue;
+    if (!IMPORTED_SEED.mappings[cat]) IMPORTED_SEED.mappings[cat] = {};
+    const dst = IMPORTED_SEED.mappings[cat];
+    for (const k of Object.keys(src)) { if (!(k in dst)) dst[k] = src[k]; }
+  }
+  // 套用進 live mappings 時只處理「這次呼叫帶進來的」parsed.mappings，不是累加後的完整
+  // IMPORTED_SEED——single-file 模式下 live mappings 本來就不會被清空，之前呼叫已經套用過的
+  // 條目仍在，若這裡改成套用完整 IMPORTED_SEED 會讓每次呼叫重新命中舊條目的 first-seen-wins
+  // 判斷式，導致回傳的 applied/skipped 統計混入本次呼叫以外的資料。IMPORTED_SEED 本身仍持續
+  // 累加，供 runBatch() 逐檔重置後套用完整種子用
+  return seedLiveMappingsFromImported(parsed);
+}
+// 把 IMPORTED_SEED（或任何相同形狀的 { mappings } 物件）寫入 live mappings + 墊高 ctrs，
+// 即上面 applyImportedMappings() 原本的函式體，抽出來讓 runBatch() 逐檔重置後也能重新套用
+function seedLiveMappingsFromImported(seed) {
   const applied = { ip: 0, hostname: 0, user: 0, mac: 0, ssid: 0, alias: 0, vdom: 0 };
   let skipped = 0;
-  if (!parsed || typeof parsed !== 'object' || !parsed.mappings || typeof parsed.mappings !== 'object') {
+  if (!seed || typeof seed !== 'object' || !seed.mappings || typeof seed.mappings !== 'object') {
     return { applied, skipped };
   }
-  for (const cat of Object.keys(parsed.mappings)) {
+  for (const cat of Object.keys(seed.mappings)) {
     if (!mappings[cat]) continue; // 本工具不認得的類別，靜默略過
-    const entries = parsed.mappings[cat];
+    const entries = seed.mappings[cat];
     if (!entries || typeof entries !== 'object') continue;
     for (const original of Object.keys(entries)) {
       const mapped = entries[original];
@@ -3029,6 +3062,9 @@ async function runBatch() {
       Object.keys(ctrs).forEach(k => ctrs[k] = 0);
       Object.keys(stats).forEach(k => stats[k] = 0);
       Object.keys(bucketSeen).forEach(k => bucketSeen[k].clear());
+      // 2026-08-28（續3）修復：上面的重置會把使用者匯入的跨工具對照表種子一併洗掉，
+      // 若有 IMPORTED_SEED 需在此重新套用，讓批次模式下每個檔案仍套用同一組匯入假值
+      if (IMPORTED_SEED) seedLiveMappingsFromImported(IMPORTED_SEED);
       f.result = applyCustomRules(anonymize(f.text, f.vendor, opts));
       f.mapping = {
         ip: Object.fromEntries(mappings.ip),
