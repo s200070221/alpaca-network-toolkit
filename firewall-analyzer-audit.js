@@ -460,6 +460,28 @@
     f('snmpv3-weak', tr('audit.check_snmpv3_weak'), weakV3.length, weakV3.length ? 'medium' : 'low',
       weakV3.length ? weakV3.map(u => u.name).slice(0,8).join(', ') + (weakV3.length > 8 ? '…' : '') + tr('audit.rec_snmpv3_strong') : tr('audit.none'),
       ['NIST 800-53 IA-5', 'CIS v8 4.8']);
+    // 11. 過寬規則：來源/目的為超大範圍網段（2026-08-29 新增，使用者發想 5 項新功能第 3 項）。
+    // 上方第 1 項 any-any 檢查只用字面 all/any 文字比對，查證確認查無法命中字面 CIDR 寫法
+    // （如 0.0.0.0/0、10.0.0.0/8），是既有真實缺口而非與 any-any 重工。僅評估能解析出明確
+    // CIDR 前綴長度的來源/目的：欄位本身是字面 CIDR（如 MikroTik 慣例直接存 CIDR）、或具名
+    // address 物件且 type==='ipmask' 時查其 subnet 欄位；address group／巢狀 group／FQDN
+    // 物件因需遞迴展開且語意可能因物件成員而異，刻意不解析、不臆測，比照 any-any 檢查同樣
+    // 謹慎的範圍；僅處理 IPv4（IPv6 前綴語意不同，本輪不評估）
+    const addrByName = new Map((parsed.addresses || []).map(a => [a.name, a]));
+    const addrPrefixLen = val => {
+      if (!val) return null;
+      const literal = _extractLiteralCidrPrefixLen(val);
+      if (literal !== null) return literal;
+      const obj = addrByName.get(val);
+      return (obj && obj.type === 'ipmask' && obj.subnet) ? _extractLiteralCidrPrefixLen(obj.subnet) : null;
+    };
+    const isBroad = val => String(val || '').split(',').map(s => s.trim()).filter(Boolean)
+      .some(p => { const len = addrPrefixLen(p); return len !== null && len <= 8; });
+    const broadNetwork = policies.filter(p => p.action === 'accept' && p.status !== 'disable' &&
+      (isBroad(p.srcAddr) || isBroad(p.dstAddr)));
+    f('broad-network', tr('audit.check_broad_network'), broadNetwork.length, 'medium',
+      broadNetwork.length ? tr('audit.id_prefix') + broadNetwork.map(p => idLabel(p)).slice(0,10).join(', ') + (broadNetwork.length > 10 ? '…' : '') : tr('audit.none'),
+      ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 12.2']);
     return findings;
   }
 
@@ -668,6 +690,20 @@
     // T1: any-any accept
     const anyAny = policies.filter(p => p.action === 'accept' && /^(all|any)$/i.test((p.srcAddr||'').trim()) && /^(all|any)$/i.test((p.dstAddr||'').trim()));
     if (anyAny.length) { score -= anyAny.length * 20; issues.push({sev:'crit', label:tr('health.any_any'), count:anyAny.length}); }
+    // T1b: broad-network（2026-08-29 新增，比照 analyzeCompliance() 的 broad-network 檢查同一套
+    // 判斷邏輯，權重較 any-any 低——過寬網段風險低於完全開放，但仍值得扣分）
+    const healthAddrByName = new Map((parsed.addresses || []).map(a => [a.name, a]));
+    const healthAddrPrefixLen = val => {
+      if (!val) return null;
+      const literal = _extractLiteralCidrPrefixLen(val);
+      if (literal !== null) return literal;
+      const obj = healthAddrByName.get(val);
+      return (obj && obj.type === 'ipmask' && obj.subnet) ? _extractLiteralCidrPrefixLen(obj.subnet) : null;
+    };
+    const healthIsBroad = val => String(val || '').split(',').map(s => s.trim()).filter(Boolean)
+      .some(p => { const len = healthAddrPrefixLen(p); return len !== null && len <= 8; });
+    const broadNetwork = policies.filter(p => p.action === 'accept' && p.status !== 'disable' && (healthIsBroad(p.srcAddr) || healthIsBroad(p.dstAddr)));
+    if (broadNetwork.length) { score -= broadNetwork.length * 10; issues.push({sev:'warn', label:tr('health.broad_network'), count:broadNetwork.length}); }
     // T2: shadowed rules
     const shadowMap = buildShadowMap(policies);
     const shadowCount = Object.values(shadowMap).reduce((s, arr) => s + arr.length, 0);

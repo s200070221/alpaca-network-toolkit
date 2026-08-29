@@ -1217,6 +1217,20 @@ function addStpPortRow(port='',portfast=false,bpduguard=false,guardRoot=false,co
   document.getElementById('stp-port-body').appendChild(tr);
 }
 
+// class-map match 條件官方語法查證範圍（2026-08-29 新增，供 #classmap-scope-hint 提示文字使用）：
+// cisco/ruijie/planet 三家沿用共用 renderPolicyMapQoS() 家族已查證的五種條件；Arista 僅
+// access-group 有查得官方逐字語法（EOS User Manual）；Dell OS10 為 access-group/vlan/
+// dscp/cos 四種（SmartFabric OS10 User Guide 真實設定範例佐證，dscp 需帶 "ip" 前綴）
+const CLASSMAP_ALL_TYPES=['access-group','dscp','protocol','ip-precedence','cos','vlan'];
+const CLASSMAP_VENDOR_TYPES={
+  cisco:['access-group','dscp','protocol','ip-precedence','cos'],
+  ruijie:['access-group','dscp','protocol','ip-precedence','cos'],
+  planet:['access-group','dscp','protocol','ip-precedence','cos'],
+  arista:['access-group'],
+  'dell-os10':['access-group','vlan','dscp','cos']
+};
+const CLASSMAP_TYPE_I18N={'access-group':'opt.cmapAccessGroup',dscp:'opt.cmapDscp',protocol:'opt.cmapProtocol','ip-precedence':'opt.cmapIpPrecedence',cos:'opt.cmapCos',vlan:'opt.cmapVlan'};
+
 function updateModeOptions(){
   const vendor=document.getElementById('vendor').value;
   // Cisco IOS-XE 有兩種 breakout 模式（module 換位編號 / 後綴編號），需要額外欄位；其餘廠牌不需要
@@ -1280,6 +1294,24 @@ function updateModeOptions(){
   if(classMapCard)classMapCard.style.display=supportsClassMap?'':'none';
   const qosApplyCard=document.getElementById('qos-apply-card');
   if(qosApplyCard)qosApplyCard.style.display=supportsClassMap?'':'none';
+  // 2026-08-29 新增：class-map match 條件下拉是全廠牌共用（access-group/dscp/protocol/
+  // ip-precedence/cos/vlan 六選項），但 Arista/Dell OS10 只有部分條件查有官方逐字語法佐證
+  // （見 renderAristaClassMapQoS()/renderDellOS10ClassMapQoS() 對應註解），選了查無佐證的
+  // 條件會被靜默不輸出；改為在卡片內明確提示「目前不支援」，比靜默漏輸出更不會誤導使用者
+  const classMapScopeHint=document.getElementById('classmap-scope-hint');
+  if(classMapScopeHint){
+    if(supportsClassMap&&CLASSMAP_VENDOR_TYPES[vendor]){
+      const supportedTypes=CLASSMAP_VENDOR_TYPES[vendor];
+      const unsupportedTypes=CLASSMAP_ALL_TYPES.filter(t=>!supportedTypes.includes(t));
+      const supportedLabel=supportedTypes.map(t=>tr(CLASSMAP_TYPE_I18N[t])).join('/');
+      const unsupportedLabel=unsupportedTypes.map(t=>tr(CLASSMAP_TYPE_I18N[t])).join('/');
+      classMapScopeHint.textContent=tr('hint.classMapVendorScope').replace('{supported}',supportedLabel).replace('{unsupported}',unsupportedLabel);
+      classMapScopeHint.style.display='';
+    } else {
+      classMapScopeHint.textContent='';
+      classMapScopeHint.style.display='none';
+    }
+  }
   // Planet MAC ACL 卡片（2026-08-28（續4）新增，官方 §47.16/47.22 已查證）：僅 Planet 適用
   const planetMacAclCard=document.getElementById('planet-mac-acl-card');
   if(planetMacAclCard)planetMacAclCard.style.display=vendor==='planet'?'':'none';
@@ -3699,6 +3731,7 @@ function setLang(lang){
     deviceModelSel.value=savedModelValue;
   }
   updateAppliedModelNotice();
+  updateModeOptions(); // 重新翻譯 #classmap-scope-hint 等依語言即時組字串的提示文字
 }
 
 // ── theme ──────────────────────────────────────────────────────────

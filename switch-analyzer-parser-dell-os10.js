@@ -365,8 +365,10 @@ function parseDellOS10(cfg){
 // class-map 標頭 "class-map type qos {match-any|match-all} NAME"（與 Arista 相同多一段
 // type 限定詞，但 service-policy 語序不同——Dell 是 "service-policy {input|output} type
 // qos NAME"，direction 在 type 之前，與 Arista 相反，見該廠牌 parser 對應註解）。match
-// 條件本輪僅確認 access-group／vlan／dscp 三種，protocol／cos／ip-precedence 未查得，
-// 非本輪範圍
+// 條件本輪確認 access-group／vlan／dscp／cos 四種（2026-08-29 對外查證官方 Dell
+// SmartFabric OS10 User Guide 真實設定範例後修正：dscp 正確語法是 "match ip dscp N"，
+// 非先前版本誤植的裸 "match dscp N"；同批新增 cos "match cos N"），protocol／ip-precedence
+// 仍查無官方逐字語法佐證，非本輪範圍
 function parseDellOS10ClassMaps(cfg){
   const maps=[];
   const cmRe=/^class-map\s+type\s+qos\s+(match-any|match-all)\s+(\S+)([\s\S]*?)(?=^class-map\s+type\s+qos\s+|^policy-map\s+|(?![\s\S]))/gm;
@@ -378,8 +380,10 @@ function parseDellOS10ClassMaps(cfg){
     while((mm=agRe.exec(body))!==null)matches.push({type:'access-group',value:mm[1]});
     const vlanRe=/^\s*match\s+vlan\s+(\S+)/gim;
     while((mm=vlanRe.exec(body))!==null)matches.push({type:'vlan',value:mm[1]});
-    const dscpRe=/^\s*match\s+dscp\s+(\S+)/gim;
+    const dscpRe=/^\s*match\s+ip\s+dscp\s+(\S+)/gim;
     while((mm=dscpRe.exec(body))!==null)matches.push({type:'dscp',value:mm[1]});
+    const cosRe=/^\s*match\s+cos\s+(\S+)/gim;
+    while((mm=cosRe.exec(body))!==null)matches.push({type:'cos',value:mm[1]});
     maps.push({name,matchType,matches});
   }
   return maps;
