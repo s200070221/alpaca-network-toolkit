@@ -9,6 +9,36 @@ function _maskToInt(mask) {
   const bits = parseInt(mask);
   return bits === 0 ? 0 : (0xFFFFFFFF << (32-bits)) >>> 0;
 }
+// 2026-08-29 新增（使用者發想 5 項新功能第 3 項，過寬規則偵測用）：回傳遮罩的前綴長度
+// （0-32），支援 "/N" 數字字串與點分遮罩兩種格式；點分遮罩額外驗證是否為合法的連續前綴
+// （非任意位元組合，如 255.0.255.0 這種非連續遮罩回傳 null，避免誤判前綴長度）
+function _cidrPrefixLen(mask) {
+  if (mask == null) return null;
+  const m = String(mask).trim();
+  if (!m) return null;
+  if (m.includes('.')) {
+    const maskInt = _ipToInt(m);
+    if (maskInt === null) return null;
+    let bits = 0, v = maskInt >>> 0;
+    while (v) { bits += v & 1; v >>>= 1; }
+    const expected = bits === 0 ? 0 : (0xFFFFFFFF << (32 - bits)) >>> 0;
+    return expected === maskInt ? bits : null;
+  }
+  const n = parseInt(m, 10);
+  return (Number.isInteger(n) && n >= 0 && n <= 32) ? n : null;
+}
+// 從 srcAddr/dstAddr 欄位裡「本身就是字面 CIDR」的 token 解析前綴長度（如 MikroTik 的
+// "0.0.0.0/0"），非具名 address 物件參照；解析不出（含裸 IP 無遮罩，視為 /32 非過寬）
+// 或格式不符時回傳 null
+function _extractLiteralCidrPrefixLen(str) {
+  if (!str) return null;
+  const s = String(str).trim();
+  const m = s.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?:\s*\/\s*(\d{1,2})|\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}))?$/);
+  if (!m) return null;
+  if (m[2]) return _cidrPrefixLen(m[2]);
+  if (m[3]) return _cidrPrefixLen(m[3]);
+  return 32;
+}
 function _ipInSubnet(targetInt, subnetStr) {
   const s = subnetStr.replace('/', ' ').trim();
   const parts = s.split(/\s+/);

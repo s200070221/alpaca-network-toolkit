@@ -1714,6 +1714,14 @@ function analyzeSwitchAudit(parsed){
   f('snmp-weak', tr('audit.check_snmp_weak'), hasV1v2?snmp.communities.length:0, 'high',
     hasV1v2?snmp.communities.map(c=>c.name).slice(0,8).join(', ')+(snmp.communities.length>8?'…':'')+' '+tr('audit.rec_snmpv3_sw'):tr('audit.none'),
     ['ISO27001 A.8.24','NIST 800-53 IA-5','CIS v8 4.8']);
+  // 5b. SNMP community 名稱為業界公認預設弱名稱（public/private，2026-08-29 新增，使用者發想
+  // 5 項新功能第 4 項）：上方第 5 項「任何 v1/v2c community 存在即算 high」已涵蓋大方向，本項
+  // 細分出「使用未經任何客製化的預設名稱」這個信號更明確的子集合，risk 沿用同一等級（high），
+  // 與第 5 項並存、非取代——即使已改成自訂 community 名稱，第 5 項仍會提醒 v1/v2c 本身的風險
+  const defaultCommunityNames=(snmp&&snmp.communities?snmp.communities:[]).filter(c=>/^(public|private)$/i.test((c.name||'').trim()));
+  f('snmp-default-name', tr('audit.check_snmp_default_name'), defaultCommunityNames.length, 'high',
+    defaultCommunityNames.length?defaultCommunityNames.map(c=>c.name).slice(0,8).join(', ')+(defaultCommunityNames.length>8?'…':''):tr('audit.none'),
+    ['ISO27001 A.8.24','NIST 800-53 IA-5','CIS v8 4.8']);
   // 6. 管理介面允許 Telnet（2026-07-22 新增：13 廠牌逐一查證官方 CLI 文件後新增 parseMgmtAccess()，
   // 各廠牌「未設定時預設值」不同，已依查證結果分別處理，詳見 parseMgmtAccess() 註解）
   const mgmtAccess=parsed.mgmtAccess;

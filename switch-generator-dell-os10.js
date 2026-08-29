@@ -291,9 +291,10 @@ function renderDellOS10ACLEntry(a){
 }
 function renderDellOS10ACL(list){return (list||[]).map(renderDellOS10ACLEntry).join('\n!\n');}
 
-// class-map/match（2026-08-28（續5）新增，範圍縮減版）：見 switch-analyzer-parser-dell-os10.js
-// 的 parseDellOS10ClassMaps() 對應註解——本輪僅支援 "qos" type（queuing/network-qos 非本輪
-// 範圍），match 條件僅 access-group／vlan／dscp 三種
+// class-map/match（2026-08-28（續5）新增，2026-08-29 修正 dscp 語法＋新增 cos）：見
+// switch-analyzer-parser-dell-os10.js 的 parseDellOS10ClassMaps() 對應註解——本輪僅支援
+// "qos" type（queuing/network-qos 非本輪範圍），match 條件為 access-group／vlan／dscp／cos
+// 四種（dscp 官方正確語法是 "match ip dscp N"，先前版本誤植為裸 "match dscp N" 已修正）
 function renderDellOS10ClassMapQoS(list){
   const blocks=[];
   groupClassMapMatches(list).forEach((grp,name)=>{
@@ -301,7 +302,8 @@ function renderDellOS10ClassMapQoS(list){
     grp.matches.forEach(mt=>{
       if(mt.type==='access-group'&&mt.value)lines.push(` match ip access-group ${mt.value}`);
       else if(mt.type==='vlan'&&mt.value)lines.push(` match vlan ${mt.value}`);
-      else if(mt.type==='dscp'&&mt.value)lines.push(` match dscp ${mt.value}`);
+      else if(mt.type==='dscp'&&mt.value)lines.push(` match ip dscp ${mt.value}`);
+      else if(mt.type==='cos'&&mt.value)lines.push(` match cos ${mt.value}`);
     });
     blocks.push(lines.join('\n'));
   });
