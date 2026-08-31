@@ -2199,6 +2199,19 @@ function parseAny(cfg,forceVendor){
     res.classMaps=parseDellOS10ClassMaps(cfg);
     res.servicePolicy=parseDellOS10ServicePolicy(cfg);
   }
+  // Comware／NX-OS（2026-08-31 新增）：官方 H3C QoS Commands（Comware，`traffic
+  // classifier`/`if-match`/`qos apply policy`）與 Cisco NX-OS QoS Configuration Guide／
+  // Cisco Community 真實範例（NX-OS，`class-map type qos`/`service-policy type qos`）
+  // 兩者皆與 Cisco classic IOS 語法家族不同，各自獨立分支，詳見對應 parser 檔案內
+  // parseComwareClassMaps()/parseNxosClassMaps() 的查證來源註解
+  else if(vendor==='comware'){
+    res.classMaps=parseComwareClassMaps(cfg);
+    res.servicePolicy=parseComwareServicePolicy(cfg);
+  }
+  else if(vendor==='nxos'){
+    res.classMaps=parseNxosClassMaps(cfg);
+    res.servicePolicy=parseNxosServicePolicy(cfg);
+  }
   return res;
 }
 

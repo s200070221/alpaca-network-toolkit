@@ -210,6 +210,16 @@ function parseExtremeXOSRoutes(cfg){
     const dst=m[1]==='default'?'0.0.0.0/0':m[1],gw=m[2];
     routes.push({dst,gw,vrf:'',gwIsInterface:false});
   }
+  // IPv6 靜態路由（2026-08-31 新增）：官方 ExtremeXOS Command Reference 查證同一個
+  // "configure iproute add" 指令族支援 IPv6（"configure iproute add ipv6Netmask
+  // ipv6Gateway"），與 IPv4 版本共用容器動詞、僅參數為 IPv6 CIDR＋位址，獨立正則
+  // 避免與上方 IPv4 專用的點分字元類別衝突
+  const re6=/^configure iproute add\s+([0-9a-f:]+\/\d+|default)\s+([0-9a-f:]+)/gim;
+  while((m=re6.exec(cfg))!==null){
+    if(!m[2].includes(':'))continue; // 排除已被上面 IPv4 正則處理過的行
+    const dst=m[1]==='default'?'::/0':m[1],gw=m[2];
+    routes.push({dst,gw,vrf:'',gwIsInterface:false});
+  }
   return routes;
 }
 
@@ -261,7 +271,13 @@ function parseExtremeXOSBGP(cfg){
   const networks=[]; let nm;
   const nr=/^configure bgp add network\s+([\d./]+)/gim;
   while((nm=nr.exec(cfg))!==null)networks.push(nm[1]);
-  return peers.length?[{asn,routerId:rid,peers,networks}]:[];
+  // networks6（2026-08-31 新增）：官方 ExtremeXOS Command Reference 直接查證確認真實逐字
+  // 語法 "configure bgp add network address-family ipv6-unicast IPV6/PREFIXLEN"（IPv6 版本
+  // 額外多一段 address-family 限定詞，與 IPv4 裸版本不同，需獨立正則區分）
+  const networks6=[]; let nm6;
+  const nr6=/^configure bgp add network\s+address-family\s+ipv6-unicast\s+([0-9a-f:/]+)/gim;
+  while((nm6=nr6.exec(cfg))!==null)networks6.push(nm6[1]);
+  return peers.length?[{asn,routerId:rid,peers,networks,networks6}]:[];
 }
 
 function parseExtremeXOSVRRP(cfg){
@@ -282,7 +298,14 @@ function parseExtremeXOSVRRP(cfg){
     const vip=(vipM||[])[1]||'';
     const priority=(prioM||[])[1]||'100';
     const preempt=!dontPreM;
-    groups.push({vrid,interface:'vlan.'+vname,vip,priority,preempt,authMode:'',trackIf:'',trackReduced:'',version:'2'});
+    // vip6（2026-08-31 新增）：官方 ExtremeXOS「VRRP Address Support for IPv6」文件確認真實
+    // 逐字語法 "configure vrrp vlan NAME vrid N add virtual-link-local ADDR"——與 IPv4 版本
+    // 關鍵字不同（virtual-link-local，非 add ipaddress），且官方文件明載該位址必須落在
+    // FE80::/64 link-local 子網（非任意全域 IPv6 位址），屬本工具目前唯一一個 vip6 為
+    // link-local 位址的廠牌，非查證疏漏
+    const vip6M=cfg.match(new RegExp('^configure vrrp vlan\\s+"?'+e2+'"?\\s+vrid\\s+'+vrid+'\\s+add\\s+virtual-link-local\\s+(\\S+)','im'));
+    const vip6=(vip6M||[])[1]||'';
+    groups.push({vrid,interface:'vlan.'+vname,vip,vip6,priority,preempt,authMode:'',trackIf:'',trackReduced:'',version:'2'});
   }
   return groups;
 }

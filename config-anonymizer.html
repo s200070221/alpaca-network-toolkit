@@ -1969,9 +1969,13 @@ function anonMikroTik(text, opts) {
 // address-object 定義行本身（`address-object NAME VALUE`，VALUE 可能是單一 IP／範圍／
 // 子網），交由下方通用 replaceIPsInLine() 逐行掃描即可正確涵蓋，不需要額外的欄位級正則
 // （與 MikroTik 的 key=value 格式不同，Zyxel 是裸值不需要 key= 前綴比對）。
-// VPN PSK／管理者密碼：parser 端（firewall_analyzer ZyxelParser）並未解析這兩類欄位（查無
-// 足夠把握的完整語法佐證），比照專案既有原則「parser 沒解析的欄位不猜測遮蔽」，此函式亦
-// 不新增對應規則，避免猜錯欄位名稱導致遮蔽失敗但顯示「已處理」的錯誤安全感。
+// 管理者密碼／VPN PSK（2026-08-31 新增，官方 Zyxel 文件二次查證後推翻先前「不猜測」保留
+// 態度）：管理者密碼語法直接對應 CLAUDE.md 已記載的 Users 語法本身（`username NAME
+// [nopassword|password PW] user-type ...`，Zyxel Support Campus 官方 KB 逐字確認建立/
+// 修改管理員帳號的完整指令序列 `username <username> password <password> user-type
+// admin`）；VPN PSK 官方 Zyxel Support Campus 知識庫文章（批次設定多組 IPSec VPN 的
+// pre-shared key 教學）確認容器與關鍵字為 `isakmp policy <name>` 子模式內的裸
+// `keystring <value>`。與 OSPF/BGP 金鑰同樣錨定具體關鍵字，不泛用掃描。
 function anonZyxel(text, opts) {
   const lines = text.split('\n');
   const out = [];
@@ -1988,6 +1992,12 @@ function anonZyxel(text, opts) {
     if (ospfKeyR !== line) { stats.key++; line = ospfKeyR; }
     const bgpKeyR = line.replace(/^(\s*(?:\[no\]\s+)?neighbor\s+\S+\s+password\s+)\S+/, '$1REDACTED_KEY');
     if (bgpKeyR !== line) { stats.key++; line = bgpKeyR; }
+    // 管理者密碼（2026-08-31 新增）：`username NAME password PW user-type ...`
+    const pwR = line.replace(/^(\s*username\s+\S+\s+password\s+)\S+/, '$1REDACTED_PASSWORD');
+    if (pwR !== line) { stats.password++; line = pwR; }
+    // VPN PSK（2026-08-31 新增）：`isakmp policy NAME` 子模式內裸 `keystring VALUE`
+    const pskR = line.replace(/^(\s*keystring\s+)\S+$/, '$1REDACTED_PSK');
+    if (pskR !== line) { stats.key++; line = pskR; }
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
     out.push(line);
@@ -2001,9 +2011,16 @@ function anonZyxel(text, opts) {
 // 指令，故正則需容許前導空白）；firewall rule 的 source/destination address、NAT 的
 // address/inside-address/outside-address、static route 的 next-hop 皆為裸值 IP/CIDR，
 // 交由下方通用 replaceIPsInLine() 逐行掃描即可正確涵蓋，不需要額外的欄位級正則。
-// VPN(vpn ipsec)／DHCP Server 等欄位：parser 端（firewall_analyzer EdgeRouterParser）
-// 並未解析（查無足夠把握的完整語法佐證），比照專案既有原則「parser 沒解析的欄位不猜測
-// 遮蔽」，此函式亦不新增對應規則。
+// 管理者密碼／VPN PSK（2026-08-31 新增，官方文件二次查證後推翻先前「不猜測」保留態度）：
+// 管理者密碼官方 EdgeOS 文件確認即時輸入用 `authentication plaintext-password SECRET`，
+// 但 commit 後真實存進 config.boot／`show configuration` 的形式是雜湊過的
+// `encrypted-password $6$...`（VyOS/EdgeOS 同源機制，真實範例已交叉確認），兩種皆比照
+// 既有 md5-key/password 慣例錨定整行處理；VPN PSK 官方 EdgeOS 文件確認站對站 IPSec／
+// L2TP remote-access 皆共用同一關鍵字 `authentication pre-shared-secret SECRET`（巢狀在
+// `vpn ipsec site-to-site peer X` 或 `vpn l2tp remote-access ipsec-settings` 底下，但
+// config.boot 巢狀大括號格式下該行本身只剩裸關鍵字+值，比照本函式其餘規則的既有慣例
+// 直接錨定關鍵字，不需要追蹤父層區塊）。DHCP Server 等其餘欄位因 parser 端仍未解析，
+// 依既有原則維持不處理。
 function anonEdgeRouter(text, opts) {
   const lines = text.split('\n');
   const out = [];
@@ -2019,6 +2036,15 @@ function anonEdgeRouter(text, opts) {
     if (ospfKeyR !== line) { stats.key++; line = ospfKeyR; }
     const bgpKeyR = line.replace(/^(\s*password\s+)\S+$/, '$1REDACTED_KEY');
     if (bgpKeyR !== line) { stats.key++; line = bgpKeyR; }
+    // 管理者密碼（2026-08-31 新增）：真實 config.boot 存的是雜湊形式 `encrypted-password`；
+    // `plaintext-password` 為即時輸入指令形式，一併處理避免使用者貼上未 commit 的片段漏遮
+    const encPwR = line.replace(/^(\s*encrypted-password\s+)\S+$/, '$1REDACTED_HASH');
+    if (encPwR !== line) { stats.password++; line = encPwR; }
+    const plainPwR = line.replace(/^(\s*plaintext-password\s+)\S+$/, '$1REDACTED_PASSWORD');
+    if (plainPwR !== line) { stats.password++; line = plainPwR; }
+    // VPN PSK（2026-08-31 新增）：站對站 IPSec／L2TP remote-access 共用同一關鍵字
+    const pskR = line.replace(/^(\s*pre-shared-secret\s+)\S+$/, '$1REDACTED_PSK');
+    if (pskR !== line) { stats.key++; line = pskR; }
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
     out.push(line);

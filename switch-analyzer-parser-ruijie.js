@@ -34,6 +34,10 @@ function parseRuijieHybrid(blk){
 }
 function parseRuijieInterfaces(cfg){
   const ifaces=[];
+  // 官方 RG-S6120 Series RGOS Command Reference 第 7.4/7.5 節已查證：VRF 綁定語法與 Cisco
+  // classic IOS 相同（"ip vrf forwarding NAME"），CLAUDE.md 廠牌表格本身已記載此依據；此正則
+  // 直接沿用 switch-analyzer-parser-cisco.js 的 vrfRe 寫法，補上先前固定寫死空字串的缺口
+  const vrfRe=/ip vrf forwarding\s+(\S+)/;
   const blocks=cfg.split(/^interface\s+/m).slice(1);
   for(const blk of blocks){
     const lines=blk.split('\n');
@@ -49,7 +53,8 @@ function parseRuijieInterfaces(cfg){
       const ip=(body.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
       // 雙棧修復（2026-08-13 新增）：ip6 獨立無條件擷取，不再受 ip 是否已有值影響
       const ip6=(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
-      ifaces.push({name,type:'loopback',desc,ip,ip6,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      const vrf=(body.match(vrfRe)||[])[1]||'';
+      ifaces.push({name,type:'loopback',desc,ip,ip6,mode:'',vlans:'',nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     if(/^Vlan/i.test(name)){
@@ -57,9 +62,10 @@ function parseRuijieInterfaces(cfg){
       const ip=ipRaw[1]&&ipRaw[2]?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
       // 雙棧修復（2026-08-13 新增，同 Loopback）
       const ip6=(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
+      const vrf=(body.match(vrfRe)||[])[1]||'';
       // VRRP 由共用 parseVRRP(cfg,'ruijie') 在頂層統一解析（見 parseRuijie()），此處介面
       // 物件的 vrrp 欄位固定空陣列，比照多數非 Cisco/Comware 廠牌的既有慣例
-      ifaces.push({name,type:'svi',desc,ip,ip6,mode:'',vlans:'',nativeVlan:'',vrf:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+      ifaces.push({name,type:'svi',desc,ip,ip6,mode:'',vlans:'',nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
     // 實體埠與 AggregatePort 聚合介面共用同一段解析（AggregatePort 本身也是可設定
@@ -92,7 +98,8 @@ function parseRuijieInterfaces(cfg){
     const ip=(body.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
     // 雙棧修復（2026-08-13 新增，同 Loopback/VLAN）
     const ip6=(body.match(/^\s*ipv6 address\s+(\S+\/\d+)/m)||[])[1]||'';
-    ifaces.push({name,type:'physical',desc,mode,vlans:vlans.trim(),nativeVlan,vrf:'',ip,ip6,shutdown,member,hybrid,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+    const vrf=(body.match(vrfRe)||[])[1]||'';
+    ifaces.push({name,type:'physical',desc,mode,vlans:vlans.trim(),nativeVlan,vrf,ip,ip6,shutdown,member,hybrid,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
   }
   return ifaces;
 }

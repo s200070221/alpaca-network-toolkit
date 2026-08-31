@@ -66,10 +66,27 @@ function comwareL2Lines(iface){
     if(h.untagged&&h.untagged.length)lines.push(` port hybrid vlan ${h.untagged.join(' ')} untagged`);
     if(h.tagged&&h.tagged.length)lines.push(` port hybrid vlan ${h.tagged.join(' ')} tagged`);
     if(h.pvid)lines.push(` port hybrid pvid vlan ${h.pvid}`);
+    // QinQ／選擇性 VLAN 對應（2026-08-24 修復）：parseComwareHybrid()（switch-analyzer-parser-comware.js）
+    // 早就擷取 hasQinQ（`vlan-vpn enable`）與 vlanMaps（`vlan-mapping vlan X inner-vlan Y`），
+    // 但 render 端從未輸出過，匯入含 QinQ 的設定檔、編輯、重新匯出後會靜默遺失這兩項設定
+    if(h.hasQinQ)lines.push(' vlan-vpn enable');
+    (h.vlanMaps||[]).forEach(m=>lines.push(` vlan-mapping vlan ${m.outer} inner-vlan ${m.inner}`));
   }
   return lines;
 }
-function renderComwareInterface(iface,lacpList,aclList,securityList,stp,breakouts){
+// OSPFv3（2026-08-23 新增）：官方 H3C OSPFv3 手冊確認 area 在 "ospfv3 PID" 區塊內只是
+// 存在宣告，真正的介面成員關係要看介面視圖的 "ospfv3 PID area AREA" 指令，故須在逐介面
+// render 時反查 model.ospf6 是否有該介面被納入某個 area
+function comwareOspf6IfaceLines(ospf6List,ifaceName){
+  const lines=[];
+  (ospf6List||[]).forEach(o=>{
+    (o.areas||[]).forEach(a=>{
+      if((a.interfaces||[]).includes(ifaceName))lines.push(` ospfv3 ${o.pid} area ${a.area}`);
+    });
+  });
+  return lines;
+}
+function renderComwareInterface(iface,lacpList,aclList,securityList,stp,breakouts,ospf6List,qosApplyList){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(` description ${iface.desc}`);
   // Breakout：僅 FortyGigE→Ten-GigabitEthernet（4x10G）為已查證官方語法，其餘拆分比例不輸出
@@ -83,18 +100,22 @@ function renderComwareInterface(iface,lacpList,aclList,securityList,stp,breakout
   // IPv6（試點 5 廠牌之一，已查證官方 H3C IPv6 basics commands 文件：`ipv6 address ADDR/PREFIXLEN`，
   // 與 IPv4 CIDR 慣例一致的 slash 寫法；SVI/實體埠/Loopback 皆同一指令直出，不需遮罩換算）
   // 次要IP（Secondary IP，官方 H3C IP addressing commands 文件：`ip address A B
-  // sub`，僅 VLAN-interface／Loopback，不涵蓋一般物理埠；僅取第一筆為 MVP 範圍）
-  const secLine=iface.secondaryIp&&!iface.secondaryIp.includes(':')?(()=>{const [sip,slen]=iface.secondaryIp.split('/');return sip&&slen?` ip address ${sip} ${maskFromCidr(slen)} sub`:'';})():'';
+  // sub`，僅 VLAN-interface／Loopback，不涵蓋一般物理埠；2026-08-23 陣列化：parser 端
+  // 2026-08-17 已從「僅取第一筆」擴充為完整陣列 secondaryIps，render 端同步逐筆輸出）
+  const secLines=(iface.secondaryIps||[]).filter(s=>!s.includes(':')).map(s=>{
+    const [sip,slen]=s.split('/');
+    return sip&&slen?` ip address ${sip} ${maskFromCidr(slen)} sub`:'';
+  }).filter(Boolean);
   if(iface.ip){
     if(iface.ip.includes(':')){
       lines.push(` ipv6 address ${iface.ip}`);
     }else if(iface.type==='svi'){
       const [ip,len]=iface.ip.split('/');
       lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
-      if(secLine)lines.push(secLine);
+      secLines.forEach(l=>lines.push(l));
     }else{
       lines.push(` ip address ${iface.ip}`);
-      if(iface.type==='loopback'&&secLine)lines.push(secLine);
+      if(iface.type==='loopback')secLines.forEach(l=>lines.push(l));
     }
   }
   const lg=findLacpGroup(lacpList,iface.name);
@@ -109,9 +130,15 @@ function renderComwareInterface(iface,lacpList,aclList,securityList,stp,breakout
     if(lg.mode==='active')lines.push(' lacp mode active');
     else if(lg.mode==='passive')lines.push(' lacp mode passive');
   }
+  comwareOspf6IfaceLines(ospf6List,iface.name).forEach(l=>lines.push(l));
   if(iface.jumbo&&iface.jumbo.enabled&&iface.jumbo.mtu)lines.push(` jumboframe enable ${iface.jumbo.mtu}`);
   if(iface.shutdown)lines.push(' shutdown');
   findAclApplications(aclList,iface.name).forEach(ap=>lines.push(` packet-filter ${ap.name} ${ap.direction==='out'?'outbound':'inbound'}`));
+  // class-map/match 介面套用（2026-08-31 新增）：官方語法為 "qos apply policy NAME
+  // {inbound|outbound}"（非 Cisco 式 "service-policy"），見 parseComwareServicePolicy()
+  // 對應註解；findQosApplications() 內部方向欄位統一為 input/output，此處轉回 Comware
+  // 官方字面用詞
+  findQosApplications(qosApplyList,iface.name).forEach(ap=>lines.push(` qos apply policy ${ap.policy} ${ap.direction==='input'?'inbound':'outbound'}`));
   const sec=findSecurityForPort(securityList,iface.name);
   if(sec){
     // 2026-07-22 對外查證官方 H3C 802.1X 文件後修正：Comware 完全沒有 `dot1x pae`
@@ -153,7 +180,32 @@ function renderComwareInterface(iface,lacpList,aclList,securityList,stp,breakout
   lines.push('#');
   return lines.join('\n');
 }
-function renderComwareInterfaces(ifaces,lacpList,aclList,securityList,stp,breakouts){return ifaces.map(i=>renderComwareInterface(i,lacpList,aclList,securityList,stp,breakouts)).join('\n');}
+function renderComwareInterfaces(ifaces,lacpList,aclList,securityList,stp,breakouts,ospf6List,qosApplyList){return ifaces.map(i=>renderComwareInterface(i,lacpList,aclList,securityList,stp,breakouts,ospf6List,qosApplyList)).join('\n');}
+
+// class-map/match（2026-08-31 新增）：官方 H3C QoS Commands 手冊查證，語法家族與 Cisco
+// 完全不同，見 switch-analyzer-parser-comware.js 的 parseComwareClassMaps() 對應註解。
+// 容器語法為 "qos policy NAME" + 巢狀 "classifier NAME behavior NAME"，但本功能範圍僅需要
+// 輸出「分類器 + 比對條件」本身（traffic classifier/if-match），policy/classifier/behavior
+// 三段式關聯不在本功能範圍（沿用既有 parseQoS() comware 分支已支援的 {policy,cls,behavior}
+// 動作模型，避免重複定義同一個 qos policy 容器）。matchType 為內部統一命名
+// （match-any/match-all），輸出時轉回 Comware 官方 "or"/"and" 運算子字面值
+function renderComwareClassMapQoS(list){
+  const blocks=[];
+  groupClassMapMatches(list).forEach((grp,name)=>{
+    const op=grp.matchType==='match-any'?'or':'and';
+    const lines=[`traffic classifier ${name} operator ${op}`];
+    grp.matches.forEach(mt=>{
+      if(!mt.type||!mt.value)return;
+      if(mt.type==='access-group')lines.push(` if-match acl ${mt.value}`);
+      else if(mt.type==='dscp')lines.push(` if-match dscp ${mt.value}`);
+      else if(mt.type==='ip-precedence')lines.push(` if-match ip-precedence ${mt.value}`);
+      else if(mt.type==='protocol')lines.push(` if-match protocol ${mt.value}`);
+      else if(mt.type==='vlan')lines.push(` if-match customer-vlan-id ${mt.value}`);
+    });
+    blocks.push(lines.join('\n'));
+  });
+  return blocks.join('\n#\n');
+}
 
 function renderComwareLACPExtra(lacpList,ifaces){
   const existingNames=new Set((ifaces||[]).map(i=>i.name));
@@ -187,7 +239,10 @@ function renderComwareVRRPGroup(g){
     lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
   }
   g.entries.forEach(v=>{
-    lines.push(` vrrp vrid ${v.vrid} virtual-ip ${v.vip}`);
+    if(v.vip)lines.push(` vrrp vrid ${v.vrid} virtual-ip ${v.vip}`);
+    // IPv6（2026-08-23 新增）：官方 H3C VRRP commands 手冊確認 `vrrp ipv6 vrid N` 是與
+    // IPv4 `vrrp vrid N` 平行的獨立指令，非同一 vrid 底下的欄位差異
+    if(v.vip6)lines.push(` vrrp ipv6 vrid ${v.vrid} virtual-ip ${v.vip6}`);
     lines.push(` vrrp vrid ${v.vrid} priority ${v.priority}`);
     if(v.preempt)lines.push(` vrrp vrid ${v.vrid} preempt-mode`);
     // authentication-mode/track interface 2026-07-22 對外查證官方文件後新增（先前解析器已
@@ -216,6 +271,21 @@ function renderComwareOSPFProcess(o){
 }
 function renderComwareOSPF(list){return (list||[]).map(renderComwareOSPFProcess).join('\n');}
 
+// OSPFv3（2026-08-23 新增）：獨立頂層指令樹（非 "ospf N" 底下子模式），area 在此區塊內
+// 只是存在宣告（無巢狀 network 陳述式），真正的介面成員關係由 comwareOspf6IfaceLines()
+// 在逐介面 render 時輸出 "ospfv3 PID area AREA"
+function renderComwareOSPFv3Process(o){
+  // 注意：不同於 IPv4 renderComwareOSPFProcess，parseOSPFv3() 的頂層正則
+  // `/^ospfv3\s+(\d+)\s*\n(...)/` 要求 pid 後立刻換行，router-id 必須是獨立的縮排行，
+  // 不能像 v4 那樣同行輸出（v4 的 parseOSPF() 正則額外允許同行 router-id，v6 沒有這個容錯）
+  const lines=[`ospfv3 ${o.pid}`];
+  if(o.routerId)lines.push(` router-id ${o.routerId}`);
+  (o.areas||[]).forEach(a=>lines.push(` area ${a.area}`));
+  lines.push('#');
+  return lines.join('\n');
+}
+function renderComwareOSPFv3(list){return (list||[]).map(renderComwareOSPFv3Process).join('\n');}
+
 function renderComwareBGP(b){
   const lines=[`bgp ${b.asn}`];
   if(b.routerId)lines.push(` router-id ${b.routerId}`);
@@ -228,6 +298,17 @@ function renderComwareBGP(b){
     if(p.desc)lines.push(` peer ${p.ip} description ${p.desc}`);
   });
   (b.networks||[]).forEach(n=>lines.push(` network ${n}`));
+  // IPv6（2026-08-23 新增）：官方 H3C BGP Commands 手冊確認 network 巢狀在獨立的
+  // address-family ipv6 子模式內，語法為空格分隔的 "network ADDR PREFIXLEN"（非 slash-CIDR），
+  // 子模式以自己的一行 '#' 自我終結，比照本檔其餘 Comware 巢狀子模式慣例
+  if(b.networks6&&b.networks6.length){
+    lines.push(' address-family ipv6');
+    b.networks6.forEach(n=>{
+      const [addr,len]=n.split('/');
+      lines.push(`  network ${addr} ${len}`);
+    });
+    lines.push(' #');
+  }
   if(b.timers&&b.timers.keepalive&&b.timers.holdtime)lines.push(` timer keepalive ${b.timers.keepalive} hold ${b.timers.holdtime}`);
   lines.push('#');
   return lines.join('\n');
@@ -260,7 +341,10 @@ function renderComwareRoute(r){
   const [net,len]=r.dst.split('/');
   // vrf（2026-08-08 查證修正）：H3C 官方 Command Reference 確認 vpn-instance 子句緊接在
   // "ip route-static" 關鍵字之後（該路由所屬 VRF），並非結尾子句；parseRoutes() 已同步修正
-  return `ip route-static ${r.vrf?'vpn-instance '+r.vrf+' ':''}${net} ${len} ${r.gw}`;
+  // IPv6（2026-08-23 新增）：官方語法 "ipv6 route-static [vpn-instance NAME] ADDR PREFIXLEN
+  // NEXTHOP"，token 結構與 IPv4 版本相同，僅關鍵字換成 ipv6 route-static
+  const kw=r.dst.includes(':')?'ipv6 route-static':'ip route-static';
+  return `${kw} ${r.vrf?'vpn-instance '+r.vrf+' ':''}${net} ${len} ${r.gw}`;
 }
 function renderComwareRoutes(list){return (list||[]).map(renderComwareRoute).join('\n')+'\n#';}
 
@@ -385,13 +469,17 @@ function assembleComwareConfig(model){
   // 會被判定屬性不符而拒絕加入（見上方 comwareL2Lines() 說明）
   const lacpExtra=renderComwareLACPExtra(model.lacp,model.interfaces);
   if(lacpExtra)blocks.push(lacpExtra);
-  if(model.interfaces&&model.interfaces.length)blocks.push(renderComwareInterfaces(model.interfaces,model.lacp,model.acl,model.security,model.stp,model.breakouts));
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderComwareInterfaces(model.interfaces,model.lacp,model.acl,model.security,model.stp,model.breakouts,model.ospf6,model.qosApply));
   if(model.vrrp&&model.vrrp.length)blocks.push(renderComwareVRRP(model.vrrp));
   if(model.dhcp&&model.dhcp.length)blocks.push(renderComwareDHCP(model.dhcp));
+  // class-map(traffic classifier) 必須先於引用它的 qos policy 定義，比照 Cisco/Arista/
+  // Dell OS10 既有慣例（2026-08-31 新增）
+  if(model.classMaps&&model.classMaps.length)blocks.push(renderComwareClassMapQoS(model.classMaps));
   if(model.qos&&model.qos.length)blocks.push(renderComwareQoS(model.qos));
   const stpBlock1=renderComwareSTP(model.stp);
   if(stpBlock1)blocks.push(stpBlock1);
   if(model.ospf&&model.ospf.length)blocks.push(renderComwareOSPF(model.ospf));
+  if(model.ospf6&&model.ospf6.length)blocks.push(renderComwareOSPFv3(model.ospf6));
   if(model.rip&&model.rip.length)blocks.push(renderComwareRIPList(model.rip));
   if(model.routes&&model.routes.length)blocks.push(renderComwareRoutes(model.routes));
   const comwareVxlan=renderComwareVXLAN(model.vxlan);

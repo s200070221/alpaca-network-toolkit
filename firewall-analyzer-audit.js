@@ -717,6 +717,32 @@
     // T4: accept without log（欄位名稱是全小寫 logtraffic，非 logTraffic；判斷式比照 analyzeCompliance() 既有慣例）
     const noLog = policies.filter(p => p.action === 'accept' && (!p.logtraffic || p.logtraffic === 'disable' || p.logtraffic === 'utm'));
     if (noLog.length > 2) { score -= (noLog.length - 2) * 3; issues.push({sev:'warn', label:tr('health.no_log'), count:noLog.length}); }
+    // T5-T11：其餘 7 項合規檢查納入健康度評分（2026-08-31 新增）。先前只有上方 4 項（any-any／
+    // broad-network／disabled／no-log）會扣分，`analyzeCompliance()` 其餘 7 項發現完全不影響
+    // 分數，是探勘功能4「弱加密VPN/預設帳號偵測」時發現的真實缺口（該兩項本身早已存在，缺口
+    // 在於評分未涵蓋）。直接重用 `analyzeCompliance(parsed)` 已計算好的 findings，避免重新
+    // implement 一次 isPrivileged/WEAK regex 等複雜判斷邏輯（risk 分級沿用該函式既有的
+    // high/medium/low 標記，扣分權重比照既有 T1(-20,high)／T1b(-10,medium)／T4(-3) 的相對
+    // 級距：high 比照 broad-network 定為 -10／medium 定為 -5／low 定為 -3）
+    const complianceFindings = analyzeCompliance(parsed);
+    const HEALTH_WEIGHT = { high: 10, medium: 5, low: 3 };
+    const HEALTH_EXTRA_CHECKS = [
+      ['snmp-v1v2', 'health.snmp_weak'],
+      ['no-2fa', 'health.no_2fa'],
+      ['http-mgmt', 'health.http_mgmt'],
+      ['weak-vpn', 'health.weak_vpn'],
+      ['vpn-no-pfs', 'health.vpn_no_pfs'],
+      ['default-admin-name', 'health.default_admin'],
+      ['snmpv3-weak', 'health.snmpv3_weak'],
+    ];
+    HEALTH_EXTRA_CHECKS.forEach(([id, labelKey]) => {
+      const found = complianceFindings.find(f => f.id === id);
+      if (found && found.value > 0) {
+        const weight = HEALTH_WEIGHT[found.risk] || HEALTH_WEIGHT.low;
+        score -= found.value * weight;
+        issues.push({ sev: found.risk === 'high' ? 'crit' : found.risk === 'medium' ? 'warn' : 'info', label: tr(labelKey), count: found.value });
+      }
+    });
     score = Math.max(0, Math.min(100, score));
     const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
     const gradeColor = grade === 'A' ? 'var(--green)' : grade === 'B' ? 'var(--teal)' : grade === 'C' ? 'var(--yellow)' : grade === 'D' ? 'var(--orange)' : 'var(--red)';

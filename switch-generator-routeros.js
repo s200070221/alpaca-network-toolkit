@@ -97,7 +97,17 @@ function renderRouterOSUsers(users){
 
 function renderRouterOSRoutes(list){
   if(!list||!list.length)return '';
-  return ['/ip route',...list.map(r=>`add destination=${r.dst} gateway=${r.gw}`)].join('\n');
+  // IPv6 靜態路由（2026-08-31 新增）：官方 MikroTik Wiki「Manual:IPv6/Route」＋
+  // help.mikrotik.com 官方文件確認容器是獨立的 "/ipv6 route" 選單（非 "/ip route"），
+  // 指令本身結構相同（add dst-address=X gateway=Y），依 dst 是否含冒號分流輸出到
+  // 對應選單區塊；parseRouterOSRoutes() 本來就對 "add" 行做通用比對、無選單區分，
+  // 天生已可正確 round-trip 兩個區塊各自的路由，本輪只需修正 render 端輸出到正確選單
+  const v4=list.filter(r=>!r.dst.includes(':'));
+  const v6=list.filter(r=>r.dst.includes(':'));
+  const blocks=[];
+  if(v4.length)blocks.push(['/ip route',...v4.map(r=>`add destination=${r.dst} gateway=${r.gw}`)].join('\n'));
+  if(v6.length)blocks.push(['/ipv6 route',...v6.map(r=>`add dst-address=${r.dst} gateway=${r.gw}`)].join('\n'));
+  return blocks.join('\n');
 }
 
 function renderRouterOSOSPF(list){

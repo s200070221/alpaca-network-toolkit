@@ -273,10 +273,23 @@ function renderBrocadeVEBlocks(interfaces,vrrpList,ospfAreaVe,dhcpList,ripPorts,
     if(ripVeIds.has(vid))lines.push(' ip rip');
     findDhcpRelays(dhcpList,'ve'+vid).forEach(rel=>lines.push(` ip helper-address ${rel.relayServer}`));
     if(g)g.entries.forEach(e=>{
-      lines.push(` ip vrrp-extended vrid ${e.vrid}`);
-      if(e.vip)lines.push(`  ip ${e.vip}`);
-      if(e.priority)lines.push(`  priority ${e.priority}`);
-      lines.push('  activate');
+      if(e.vip){
+        lines.push(` ip vrrp-extended vrid ${e.vrid}`);
+        lines.push(`  ip ${e.vip}`);
+        if(e.priority)lines.push(`  priority ${e.priority}`);
+        lines.push('  activate');
+      }
+      // vip6（2026-08-31 新增）：官方 Ruckus FastIron「Enabling an IPv6 VRRP-Ev3 device」
+      // 頁面逐字查證，獨立指令族 "ipv6 vrrp-extended vrid N"，priority 關鍵字為
+      // "backup priority"（與 IPv4 版本裸 "priority" 不同），需要 "version 3" 宣告，
+      // VIP 用 "ipv6-address ADDR"（僅取第一筆為 MVP 範圍）
+      if(e.vip6){
+        lines.push(` ipv6 vrrp-extended vrid ${e.vrid}`);
+        if(e.priority)lines.push(`  backup priority ${e.priority}`);
+        lines.push('  version 3');
+        lines.push(`  ipv6-address ${e.vip6}`);
+        lines.push('  activate');
+      }
     });
     return lines.join('\n');
   }).join('\n!\n');
@@ -395,6 +408,9 @@ function assembleBrocadeConfig(model){
   // 正確性補上，不影響 round-trip；2026-08-06 修正：先前這行寫在 veBlock 之後，
   // 跟本段註解自己講的順序要求恰好相反，等於白寫
   if(model.vrrp&&model.vrrp.length)blocks.push('router vrrp-extended');
+  // vip6 全域啟用（2026-08-31 新增）：官方文件確認獨立於 IPv4 版本的
+  // "ipv6 router vrrp-extended"，非同一行/同一開關
+  if(model.vrrp&&model.vrrp.some(v=>v.vip6))blocks.push('ipv6 router vrrp-extended');
   const veBlock=renderBrocadeVEBlocks(model.interfaces,model.vrrp,ospfAreaVe,model.dhcp,ripPorts,ospfAreaVe6);
   if(veBlock)blocks.push(veBlock);
   // 實體埠：排除 svi/loopback 類型（已分別由 renderBrocadeVEBlocks()/renderBrocadeLoopbacks()

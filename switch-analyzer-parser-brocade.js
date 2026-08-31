@@ -448,6 +448,11 @@ function parseBrocadeBGP(cfg){
 
 function parseBrocadeVRRP(cfg){
   const groups=[]; const seen=new Set();
+  // vip6（2026-08-31 新增）：直接 fetch 官方 Ruckus FastIron Layer 3 Routing Configuration
+  // Guide「Enabling an IPv6 VRRP-Ev3 device」頁面逐字查證，IPv6 版本是獨立的
+  // "ipv6 vrrp-extended vrid N" 指令（非 IPv4 的 "ip vrrp-extended vrid N"，關鍵字前綴不同），
+  // VIP 用 "ipv6-address ADDR"（可能多筆，取第一筆為 MVP 範圍），需要 "version 3" 宣告
+  const vip6ByKey={};
   // Split on "interface ve N" blocks to find VRRP-E per-SVI
   const veBlocks=cfg.split(/^(?=interface\s+ve\s)/im);
   for(const blk of veBlocks.slice(1)){
@@ -456,25 +461,32 @@ function parseBrocadeVRRP(cfg){
     const iface='ve'+ifM[1];
     // Find "ip vrrp-extended vrid N" lines, then look ahead for sub-block lines
     const lines=blk.split(/\r?\n/);
-    let vrid=null, subLines=[];
+    let vrid=null, isV6=false, subLines=[];
     const flushVRRP=()=>{
       if(!vrid)return;
-      const key=iface+':'+vrid;
-      if(!seen.has(key)){
-        seen.add(key);
-        const sub=subLines.join('\n');
-        // VIP: "  ip X.X.X.X" (indented under vrid block)
-        const vipM=sub.match(/^\s+ip\s+([\d.]+)/m);
-        const vip=(vipM||[])[1]||'';
-        const prioM=sub.match(/^\s+priority\s+(\d+)/m);
-        const priority=(prioM||[])[1]||'100';
-        groups.push({vrid,interface:iface,vip,priority,preempt:true,authMode:'',trackIf:'',trackReduced:'',version:'2'});
+      const sub=subLines.join('\n');
+      if(isV6){
+        const vip6M=sub.match(/^\s+ipv6-address\s+(\S+)/m);
+        if(vip6M)vip6ByKey[iface+':'+vrid]=vip6M[1];
+      }else{
+        const key=iface+':'+vrid;
+        if(!seen.has(key)){
+          seen.add(key);
+          // VIP: "  ip X.X.X.X" (indented under vrid block)
+          const vipM=sub.match(/^\s+ip\s+([\d.]+)/m);
+          const vip=(vipM||[])[1]||'';
+          const prioM=sub.match(/^\s+priority\s+(\d+)/m);
+          const priority=(prioM||[])[1]||'100';
+          groups.push({vrid,interface:iface,vip,priority,preempt:true,authMode:'',trackIf:'',trackReduced:'',version:'2'});
+        }
       }
-      vrid=null; subLines=[];
+      vrid=null; isV6=false; subLines=[];
     };
     for(const line of lines){
       const vm=line.match(/^\s+ip vrrp(?:-extended)?\s+vrid\s+(\d+)/);
-      if(vm){flushVRRP(); vrid=vm[1]; subLines=[];}
+      const vm6=line.match(/^\s+ipv6 vrrp-extended\s+vrid\s+(\d+)/);
+      if(vm){flushVRRP(); vrid=vm[1]; isV6=false; subLines=[];}
+      else if(vm6){flushVRRP(); vrid=vm6[1]; isV6=true; subLines=[];}
       else if(vrid){
         // Collect indented sub-lines (deeper indent = part of vrid block)
         if(/^\s{2,}/.test(line)||line.trim()===''){subLines.push(line);}
@@ -483,6 +495,14 @@ function parseBrocadeVRRP(cfg){
     }
     flushVRRP();
   }
+  // 合併 vip6 進對應的既有 group（同一 interface+vrid 的雙棧宣告）；若該 vrid 只有
+  // IPv6 版本（無對應 IPv4 group），另建一筆僅含 vip6 的記錄
+  Object.keys(vip6ByKey).forEach(key=>{
+    const[iface,vrid]=key.split(':');
+    const g=groups.find(x=>x.interface===iface&&x.vrid===vrid);
+    if(g)g.vip6=vip6ByKey[key];
+    else groups.push({vrid,interface:iface,vip:'',vip6:vip6ByKey[key],priority:'100',preempt:true,authMode:'',trackIf:'',trackReduced:'',version:'2'});
+  });
   return groups;
 }
 
