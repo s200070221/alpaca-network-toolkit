@@ -73,7 +73,7 @@ function nxosSwitchportLines(iface){
   }
   return lines;
 }
-function renderNXOSInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vpc){
+function renderNXOSInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vpc,ospf6List,qosApplyList){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(` description ${iface.desc}`);
   const lacpGroup=lacpList?.find(l=>l.members?.some(m=>m===iface.name));
@@ -86,10 +86,18 @@ function renderNXOSInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vp
   if(iface.ip&&iface.ip!=='-'){
     if(iface.type!=='svi'&&!isLoopback)lines.push(' no switchport');
     lines.push(` ip address ${iface.ip}`);
-    // 次要IP（2026-08-12 新增）：官方 `ip address A/N secondary`，僅取第一筆為 MVP 範圍
-    if(iface.secondaryIp)lines.push(` ip address ${iface.secondaryIp} secondary`);
+    // 次要IP（2026-08-23 陣列化）：官方 `ip address A/N secondary`；parser 端 2026-08-17
+    // 已從「僅取第一筆」擴充為完整陣列 secondaryIps
+    (iface.secondaryIps||[]).filter(s=>!s.includes(':')).forEach(s=>lines.push(` ip address ${s} secondary`));
   }
   if(iface.vrf)lines.push(` vrf member ${iface.vrf}`);
+  // OSPFv3（2026-08-23 新增）：真正的 area 關聯在各自 interface 區塊內用
+  // "ipv6 router ospfv3 TAG area AREA" 逐一指派
+  (ospf6List||[]).forEach(o=>{
+    (o.areas||[]).forEach(a=>{
+      if((a.interfaces||[]).includes(iface.name))lines.push(` ipv6 router ospfv3 ${o.pid} area ${a.area}`);
+    });
+  });
   if(iface.mtu)lines.push(` mtu ${iface.mtu}`);
   if(iface.jumbo)lines.push(` mtu 9216`);
   if(iface.shutdown)lines.push(' shutdown');
@@ -136,9 +144,30 @@ function renderNXOSInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vp
     if(sp.cost)lines.push(` spanning-tree cost ${sp.cost}`);
     if(sp.priority)lines.push(` spanning-tree port-priority ${sp.priority}`);
   }
+  // class-map/match 介面套用（2026-08-31 新增）：官方查證語法比 IOS 多一段 "type qos"
+  // 限定詞，type 在 direction 之前，見 parseNxosServicePolicy() 對應註解
+  findQosApplications(qosApplyList,iface.name).forEach(ap=>lines.push(` service-policy type qos ${ap.direction} ${ap.policy}`));
   return lines.join('\n');
 }
-function renderNXOSInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,vpc){return ifaces.map(i=>renderNXOSInterface(i,lacpList,dhcpList,aclList,securityList,stp,vpc)).join('\n!\n');}
+function renderNXOSInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,vpc,ospf6List,qosApplyList){return ifaces.map(i=>renderNXOSInterface(i,lacpList,dhcpList,aclList,securityList,stp,vpc,ospf6List,qosApplyList)).join('\n!\n');}
+
+// class-map/match（2026-08-31 新增）：對外查證 Cisco Nexus QoS Configuration Guide＋Cisco
+// Community/NetCraftsmen 真實範例，見 switch-analyzer-parser-nxos.js 的 parseNxosClassMaps()
+// 對應註解。語法比 IOS 多一段 "type qos"，且 access-group 比對多一個 "name" 關鍵字。
+function renderNxosClassMapQoS(list){
+  const blocks=[];
+  groupClassMapMatches(list).forEach((grp,name)=>{
+    const lines=[`class-map type qos ${grp.matchType} ${name}`];
+    grp.matches.forEach(mt=>{
+      if(!mt.type||!mt.value)return;
+      if(mt.type==='access-group')lines.push(` match access-group name ${mt.value}`);
+      else if(mt.type==='dscp')lines.push(` match dscp ${mt.value}`);
+      else if(mt.type==='cos')lines.push(` match cos ${mt.value}`);
+    });
+    blocks.push(lines.join('\n'));
+  });
+  return blocks.join('\n!\n');
+}
 
 function renderNXOSLACPExtra(lacpList,ifaces){
   const existingNames=new Set((ifaces||[]).map(i=>i.name));
@@ -160,6 +189,8 @@ function renderNXOSRoute(r){
   // 2026-07-22 修正欄位名稱不符 bug：原本讀 r.destination/r.prefixLength/r.gateway，
   // 但共用路由模型（collectModel()/addRouteRow() 產生）是 {dst,gw}，三個欄位全部讀不到值，
   // 每條 NX-OS 靜態路由都會輸出成 "ip route undefined/undefined undefined"
+  // IPv6（2026-08-23 新增）：官方語法 "ipv6 route PREFIX/LEN NEXTHOP"，關鍵字換成 ipv6 route
+  if(r.dst.includes(':'))return `ipv6 route ${r.dst} ${r.gw}`;
   return `ip route ${r.dst} ${r.gw}`;
 }
 function renderNXOSRoutes(routes){return (routes||[]).map(renderNXOSRoute).join('\n');}
@@ -181,6 +212,12 @@ function renderNXOSBGPList(bgps){
     if(b.networks&&b.networks.length){
       lines.push(' address-family ipv4 unicast');
       b.networks.forEach(n=>lines.push(`  network ${n}`));
+    }
+    // IPv6（2026-08-23 新增）：network 巢狀在獨立的 address-family ipv6 unicast 子模式內，
+    // 與既有 IPv4 版本同一層級，比照 Comware/Cisco 已驗證過的慣例
+    if(b.networks6&&b.networks6.length){
+      lines.push(' address-family ipv6 unicast');
+      b.networks6.forEach(n=>lines.push(`  network ${n}`));
     }
     if(b.peers&&b.peers.length){
       b.peers.forEach(p=>{
@@ -204,6 +241,19 @@ function renderNXOSOSPF(ospfs){
   if(!ospfs||!ospfs.length)return '';
   const blocks=ospfs.map(o=>{
     const lines=[`router ospf ${o.processId||1}`];
+    if(o.routerId)lines.push(` router-id ${o.routerId}`);
+    return lines.join('\n');
+  });
+  return blocks.join('\n!\n');
+}
+
+// OSPFv3（2026-08-23 新增）：官方 NX-OS Unicast Routing Configuration Guide 確認獨立頂層
+// `router ospfv3 <tag>`，與 IPv4 baseline 逐介面指派結構完全平行，真正的 area 關聯改在
+// renderNXOSInterface() 用 `ipv6 router ospfv3 <tag> area <area>` 逐一輸出
+function renderNXOSOSPFv3(ospf6s){
+  if(!ospf6s||!ospf6s.length)return '';
+  const blocks=ospf6s.map(o=>{
+    const lines=[`router ospfv3 ${o.pid||1}`];
     if(o.routerId)lines.push(` router-id ${o.routerId}`);
     return lines.join('\n');
   });
@@ -239,7 +289,10 @@ function renderNXOSVRRPGroup(g){
     lines.push(`  hsrp ${v.vrid}`);
     if(v.preempt)lines.push(`    preempt`);
     lines.push(`    priority ${v.priority}`);
-    lines.push(`    ip ${v.vip}`);
+    if(v.vip)lines.push(`    ip ${v.vip}`);
+    // IPv6（2026-08-23 新增）：hsrp N 巢狀區塊內的 sibling 指令 "ipv6 ADDR"，前提須先在
+    // 介面上宣告 "standby version 2"（本工具不驗證此前提）
+    if(v.vip6)lines.push(`    ipv6 ${v.vip6}`);
   });
   return lines.join('\n');
 }
@@ -263,7 +316,7 @@ function assembleNXOSConfig(model){
   const blocks=[`! Cisco Nexus Operating System (NX-OS) Software`,`! ${tr('notice.disclaimer')}`];
   if(model.breakouts&&model.breakouts.some(b=>b.vendor==='cisco_nxos'))blocks.push(`! ${tr('notice.nxosBreakoutWarning')}`);
   const hasVpc=model.vpc&&model.vpc.domain;
-  if(model.ospf&&model.ospf.length)blocks.push('feature ospf');
+  if((model.ospf&&model.ospf.length)||(model.ospf6&&model.ospf6.length))blocks.push('feature ospf');
   if(model.bgp&&model.bgp.length)blocks.push('feature bgp');
   if(hasVpc)blocks.push('feature vpc');
   // VXLAN/EVPN：官方 NX-OS VXLAN Configuration Guide 確認 interface nve1／vn-segment 指令
@@ -306,7 +359,10 @@ function assembleNXOSConfig(model){
   // Configuring vPCs 文件），結構與已修復的 Comware Bridge-Aggregation 問題相同
   const nxosVpcBlock=renderNXOSVpc(model.vpc);
   if(nxosVpcBlock)blocks.push(nxosVpcBlock);
-  if(model.interfaces&&model.interfaces.length)blocks.push(renderNXOSInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.vpc));
+  // class-map(type qos) 必須先於引用它的 service-policy 定義，比照 Cisco/Arista/Dell OS10/
+  // Comware 既有慣例（2026-08-31 新增）
+  if(model.classMaps&&model.classMaps.length)blocks.push(renderNxosClassMapQoS(model.classMaps));
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderNXOSInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.vpc,model.ospf6,model.qosApply));
   const nxosLacpExtra=renderNXOSLACPExtra(model.lacp,model.interfaces);
   if(nxosLacpExtra)blocks.push(nxosLacpExtra);
   const nxosVxlanBlock=renderNXOSVXLAN(model.vxlan);
@@ -317,6 +373,7 @@ function assembleNXOSConfig(model){
   const stpBlockNx=renderSpanningTreeGlobal(model.stp);
   if(stpBlockNx)blocks.push(stpBlockNx);
   if(model.ospf&&model.ospf.length)blocks.push(renderNXOSOSPF(model.ospf));
+  if(model.ospf6&&model.ospf6.length)blocks.push(renderNXOSOSPFv3(model.ospf6));
   if(model.routes&&model.routes.length)blocks.push(renderNXOSRoutes(model.routes));
   if(model.bgp&&model.bgp.length)blocks.push(renderNXOSBGPList(model.bgp));
   // ACL 定義本身（規則清單）：2026-07-22 對外查證官方 NX-OS Security Configuration

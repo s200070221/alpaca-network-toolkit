@@ -248,6 +248,47 @@ function parseNXOS(cfg) {
   };
 }
 
+// class-map/match + service-policy（2026-08-31 新增）：對外查證 Cisco Nexus QoS
+// Configuration Guide（class-map type qos／service-policy type qos 容器語法）＋Cisco
+// Community 討論串與 NetCraftsmen 技術文章真實範例（`class-map type qos match-any
+// IN-VOICE` / `match access-group name QOS-VOICE`）交叉確認：NX-OS MQC 語法與 Cisco
+// classic IOS 同屬 class-map/policy-map/service-policy 家族，但比 IOS 多一段 "type qos"
+// 限定詞（與 Arista EOS 語序相同，type 在 direction 之前），且 access-group 比對多一個
+// "name" 關鍵字（"match access-group name NAME"，非 IOS 裸 "match access-group NAME"）。
+// 已查證支援的 match 條件：access-group／dscp／cos（cos 官方文件註明僅 ingress 方向
+// 有效，本身不影響本工具的靜態設定產生邏輯，不額外限制）；protocol／ip-precedence／vlan
+// 因未查得逐字語法佐證，非本輪範圍，不臆測。另需注意官方文件記載部分平台
+// "class-map type qos match-all" 實際不生效（一律視為 match-any）——此為裝置行為限制，
+// 非本工具解析錯誤，不在產生器端模擬此限制。
+function parseNxosClassMaps(cfg){
+  const maps=[];
+  const cmRe=/^class-map\s+type\s+qos\s+(match-any|match-all)\s+(\S+)([\s\S]*?)(?=^class-map\s+type\s+qos\s+|^policy-map\s+|(?![\s\S]))/gm;
+  let m;
+  while((m=cmRe.exec(cfg))!==null){
+    const matchType=m[1], name=m[2], body=m[3]||'', matches=[];
+    let mm;
+    const agRe=/^\s*match\s+access-group\s+name\s+(\S+)/gim;
+    while((mm=agRe.exec(body))!==null)matches.push({type:'access-group',value:mm[1]});
+    const dscpRe=/^\s*match\s+dscp\s+(\S+)/gim;
+    while((mm=dscpRe.exec(body))!==null)matches.push({type:'dscp',value:mm[1]});
+    const cosRe=/^\s*match\s+cos\s+(\S+)/gim;
+    while((mm=cosRe.exec(body))!==null)matches.push({type:'cos',value:mm[1]});
+    maps.push({name,matchType,matches});
+  }
+  return maps;
+}
+function parseNxosServicePolicy(cfg){
+  const apps=[];
+  cfg.split(/(?=^interface\s)/m).forEach(blk=>{
+    const ifLine=blk.match(/^interface\s+(\S.*)/m);
+    if(!ifLine)return;
+    const ifName=ifLine[1].trim();
+    let m; const spRe=/^\s*service-policy\s+type\s+qos\s+(input|output)\s+(\S+)/gim;
+    while((m=spRe.exec(blk))!==null)apps.push({policy:m[2],interface:ifName,direction:m[1].toLowerCase()});
+  });
+  return apps;
+}
+
 // ══════════════════════════════════════════════════════
 //  ARUBA PROCURVE / ARUBAOS-SWITCH PARSER
 // ══════════════════════════════════════════════════════

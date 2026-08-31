@@ -785,6 +785,13 @@ const Converter = (() => {
         const pfx=bits(i.mask);
         L.push(`set interface ${i.name} ipv4-address ${i.ip} mask-length ${pfx}`);
       }
+      // 次要IP（2026-08-31 新增）：官方 Gaia Administration Guide「Aliases」章節確認語法
+      // 為 `add interface NAME alias IP/PREFIXLEN`，與 parser 端 parseSecondaryIpsCheckpoint()
+      // 既有解析語法對稱
+      (i.secondaryIps||[]).forEach(s=>{
+        const spfx=bits(s.mask);
+        L.push(`add interface ${i.name} alias ${s.ip}/${spfx}`);
+      });
       if(i.desc&&i.desc!=='-') L.push(`set interface ${i.name} comments "${i.desc}"`);
       L.push(`set interface ${i.name} state ${i.status==='down'?'off':'on'}`);
     });

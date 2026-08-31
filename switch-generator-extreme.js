@@ -100,6 +100,11 @@ function renderExtremeVRRP(vrrpList,vlans){
     (g.entries||[]).forEach(e=>{
       lines.push(`create vrrp vlan ${vname} vrid ${e.vrid}`);
       if(e.vip)lines.push(`configure vrrp vlan ${vname} vrid ${e.vrid} add ${e.vip}`);
+      // vip6（2026-08-31 新增）：官方「VRRP Address Support for IPv6」文件確認關鍵字為
+      // "virtual-link-local"（非 IPv4 版本的裸 "add IP"），且官方明載該位址必須落在
+      // FE80::/64 link-local 子網，非任意全域 IPv6 位址——本工具不驗證使用者輸入是否
+      // 落在該子網範圍，僅忠實照官方語法輸出
+      if(e.vip6)lines.push(`configure vrrp vlan ${vname} vrid ${e.vrid} add virtual-link-local ${e.vip6}`);
       if(e.priority)lines.push(`configure vrrp vlan ${vname} vrid ${e.vrid} priority ${e.priority}`);
       if(e.preempt===false)lines.push(`configure vrrp vlan ${vname} vrid ${e.vrid} dont-preempt`);
     });
@@ -110,7 +115,10 @@ function renderExtremeVRRP(vrrpList,vlans){
 }
 
 function renderExtremeRoute(r){
-  const dst=r.dst==='0.0.0.0/0'?'default':r.dst;
+  // IPv6（2026-08-31 新增）：官方 ExtremeXOS Command Reference 確認同一個 "configure
+  // iproute add" 指令族天生支援 IPv6（"ipv6Netmask ipv6Gateway" 參數形式），與 IPv4
+  // 共用容器動詞，僅位址格式不同，"::/0" 比照 IPv4 "0.0.0.0/0" 同樣可用 "default" 字面值
+  const dst=(r.dst==='0.0.0.0/0'||r.dst==='::/0')?'default':r.dst;
   return `configure iproute add ${dst} ${r.gw}`;
 }
 function renderExtremeRoutes(list){return (list||[]).map(renderExtremeRoute).join('\n');}
@@ -140,6 +148,9 @@ function renderExtremeBGPList(list){
     const lines=[`configure bgp as-number ${b.asn}`];
     if(b.routerId)lines.push(`configure bgp routerid ${b.routerId}`);
     (b.networks||[]).forEach(n=>lines.push(`configure bgp add network ${n}`));
+    // networks6（2026-08-31 新增）：官方 ExtremeXOS Command Reference 直接查證確認真實
+    // 逐字語法多一段 "address-family ipv6-unicast" 限定詞，與 IPv4 裸版本不同關鍵字組合
+    (b.networks6||[]).forEach(n=>lines.push(`configure bgp add network address-family ipv6-unicast ${n}`));
     (b.peers||[]).forEach(p=>{
       lines.push(`create bgp neighbor ${p.ip} remote-AS-number ${p.as}`);
       if(p.desc)lines.push(`configure bgp neighbor ${p.ip} description "${p.desc}"`);

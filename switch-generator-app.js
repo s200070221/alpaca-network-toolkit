@@ -1000,7 +1000,7 @@ function addVsuMemberRow(id='',priority='',vslPorts=''){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input class="vsu-mem-id" value="${escAttr(id)}"></td>
     <td><input class="vsu-mem-priority" value="${escAttr(priority)}"></td>
-    <td><input class="vsu-mem-vsl" value="${escAttr(vslPorts)}" placeholder="TenGigabitEthernet 1/1"></td>
+    <td><input class="vsu-mem-vsl" value="${escAttr(vslPorts)}" placeholder="TenGigabitEthernet 1/1, TenGigabitEthernet 1/2"></td>
     ${RM_BTN_TD}`;
   document.getElementById('vsu-member-body').appendChild(tr);
   applyI18n(tr);
@@ -1227,7 +1227,15 @@ const CLASSMAP_VENDOR_TYPES={
   ruijie:['access-group','dscp','protocol','ip-precedence','cos'],
   planet:['access-group','dscp','protocol','ip-precedence','cos'],
   arista:['access-group'],
-  'dell-os10':['access-group','vlan','dscp','cos']
+  'dell-os10':['access-group','vlan','dscp','cos'],
+  // Comware（2026-08-31 新增）：官方 H3C QoS Commands 手冊已查證 if-match 支援
+  // acl/dscp/ip-precedence/protocol/customer-vlan-id，customer-dot1p/service-dot1p
+  // （802.1p，near-CoS）因命名歧義（該用哪一種變體）未查得足夠信心度，不比照臆測成 cos
+  comware:['access-group','dscp','protocol','ip-precedence','vlan'],
+  // NX-OS（2026-08-31 新增）：官方 Cisco Nexus QoS Configuration Guide＋Cisco Community/
+  // NetCraftsmen 真實範例已查證 access-group（多一個 name 關鍵字）/dscp/cos；
+  // protocol/ip-precedence/vlan 未查得逐字語法，不臆測
+  nxos:['access-group','dscp','cos']
 };
 const CLASSMAP_TYPE_I18N={'access-group':'opt.cmapAccessGroup',dscp:'opt.cmapDscp',protocol:'opt.cmapProtocol','ip-precedence':'opt.cmapIpPrecedence',cos:'opt.cmapCos',vlan:'opt.cmapVlan'};
 
@@ -1289,7 +1297,7 @@ function updateModeOptions(){
   // 2026-08-28（續5）擴大：Arista/Dell OS10 各自有獨立的 class-map/service-policy 語法
   // （多一段 "type qos" 限定詞，語序彼此相反），見 switch-generator-arista.js/
   // switch-generator-dell-os10.js 的 renderXClassMapQoS() 對應註解
-  const supportsClassMap=(vendor==='cisco'||vendor==='ruijie'||vendor==='planet'||vendor==='arista'||vendor==='dell-os10');
+  const supportsClassMap=(vendor==='cisco'||vendor==='ruijie'||vendor==='planet'||vendor==='arista'||vendor==='dell-os10'||vendor==='comware'||vendor==='nxos');
   const classMapCard=document.getElementById('classmap-card');
   if(classMapCard)classMapCard.style.display=supportsClassMap?'':'none';
   const qosApplyCard=document.getElementById('qos-apply-card');
@@ -1657,9 +1665,13 @@ function collectModel(){
   // 形狀 {domain,members:[{id,priority}],vsl:[{memberId,interfaces}]}——表單端 vslPorts
   // 用空白分隔字串輸入，讀取時比照 lacp.members 慣例 split 成陣列
   const vsuDomainEl=document.getElementById('vsu-domain');
+  // vsl 欄位改用逗號分隔（2026-08-31 修正）：先前用空白分隔會把 Ruijie 慣用的含空白介面
+  // 名稱（如 "GigabitEthernet 1/0/1"）誤切成兩截，輸出時產生兩行殘缺的
+  // "port-member interface" 指令；本次為新增匯入回填功能時發現，改用逗號分隔並允許
+  // 每個項目內部保留空白
   const vsuMembers=rowsOf('#vsu-member-body tr').map(tr=>({
     id:val(tr,'vsu-mem-id'), priority:val(tr,'vsu-mem-priority'),
-    vslPorts:val(tr,'vsu-mem-vsl').split(/\s+/).filter(Boolean),
+    vslPorts:val(tr,'vsu-mem-vsl').split(',').map(s=>s.trim()).filter(Boolean),
   })).filter(m=>m.id);
   const stack=vsuDomainEl?{domain:vsuDomainEl.value.trim(),members:vsuMembers}:null;
 
@@ -1837,7 +1849,8 @@ function applyModelToForm(model){
   if(vsuDomainEl&&model.stack){
     vsuDomainEl.value=model.stack.domain||'';
     document.getElementById('vsu-member-body').innerHTML='';
-    (model.stack.members||[]).forEach(m=>addVsuMemberRow(m.id,m.priority,(m.vslPorts||[]).join(' ')));
+    // 逗號分隔（2026-08-31 修正，同 collectModel() 對應說明）
+    (model.stack.members||[]).forEach(m=>addVsuMemberRow(m.id,m.priority,(m.vslPorts||[]).join(', ')));
   }
 
   // VXLAN（僅 Comware/Aruba CX 顯示，比照 MLAG/VPC 慣例——欄位一直存在於 DOM，只是卡片被隱藏）
@@ -2999,6 +3012,39 @@ async function parseAndImport(){
   if(vendor==='sonic'&&parsed.qos){
     (parsed.qos.schedulers||[]).forEach(s=>addSonicQosSchedRow(s.name,s.type,s.weight,s.meterType,s.cir,s.cbs,s.pir,s.pbs));
     (parsed.qos.apply||[]).forEach(a=>addSonicQosApplyRow(a.target,a.queue,a.scheduler));
+  }
+
+  // Stack/VSU/MLAG/VPC 回填（2026-08-31 新增，修復既有基礎缺口）：switch_analyzer 端
+  // parseRuijie()/parseArista()/parseNXOS() 早就把各自的堆疊技術（VSU/MLAG/VPC）解析進
+  // 統一的 `parsed.stack` 欄位（不同廠牌塞的物件形狀不同，見各自 parser 註解），但先前
+  // 匯入流程完全沒有讀取這個欄位、對應表單卡片永遠空白。三家分屬三個不同的表單卡片/
+  // model 欄位（`#vsu-domain`→VSU、`#mlag-domain`→MLAG、`#vpc-domain`→VPC），依 vendor
+  // 分流填入對應卡片，非共用同一組欄位。
+  if(vendor==='ruijie'&&parsed.stack&&parsed.stack.type==='VSU'){
+    const vsuDomainEl=document.getElementById('vsu-domain');
+    if(vsuDomainEl)vsuDomainEl.value=parsed.stack.domain||'';
+    (parsed.stack.members||[]).forEach(m=>{
+      const vslEntry=(parsed.stack.vsl||[]).find(v=>v.memberId===m.id);
+      addVsuMemberRow(m.id,m.priority,(vslEntry?.interfaces||[]).join(', '));
+    });
+  }else if(vendor==='arista'&&parsed.stack&&parsed.stack.domain){
+    // Arista 的 res.stack 本身就是 parseAristaMlag() 回傳的 MLAG 物件
+    // {domain,localIntf,peerAddr,peerLink}，非 members 清單
+    const mlagDomainEl=document.getElementById('mlag-domain');
+    if(mlagDomainEl){
+      mlagDomainEl.value=parsed.stack.domain||'';
+      document.getElementById('mlag-local-intf').value=parsed.stack.localIntf||'';
+      document.getElementById('mlag-peer-addr').value=parsed.stack.peerAddr||'';
+      document.getElementById('mlag-peer-link').value=parsed.stack.peerLink||'';
+    }
+  }else if(genVendor==='cisco_nxos'&&parsed.stack&&parsed.stack.type==='VPC'){
+    const vpcDomainEl=document.getElementById('vpc-domain');
+    if(vpcDomainEl){
+      vpcDomainEl.value=parsed.stack.domain||'';
+      document.getElementById('vpc-peer-keepalive').value=parsed.stack.peerKeepalive==='-'?'':(parsed.stack.peerKeepalive||'');
+      document.getElementById('vpc-peer-link').value=parsed.stack.peerLink==='-'?'':(parsed.stack.peerLink||'');
+      document.getElementById('vpc-peer-gateway').checked=!!parsed.stack.peerGateway;
+    }
   }
 
   generate(true);

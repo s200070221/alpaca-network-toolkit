@@ -71,6 +71,30 @@ const CheckpointParser = (() => {
   }
 
   // ─── Interfaces ───────────────────────────────────────────────────────────
+  // 次要IP（Secondary IP，2026-08-31 新增，二次查證推翻先前記載）：官方 Check Point Gaia
+  // Administration Guide「Aliases」章節（sc1.checkpoint.com R80.20/R80.30）直接 fetch 逐字
+  // 確認真實指令為 `add interface <NAME> alias <IPv4>/<PREFIXLEN>`（Linux IP-aliasing
+  // 機制，系統內部自動產生 eth1:1/eth1:2 等別名介面名稱，但設定檔文字本身只會出現對基礎
+  // 介面名稱的 `add interface` 一行，不會出現 `set interface eth1:1 ...` 這種巢狀命名）。
+  // 先前 2026-08-12 記載「查無任何佐證」係因當時搜尋只查到語意完全不同的 Proxy ARP `add`
+  // 指令，本輪換關鍵字重新查證後找到官方 Aliases 頁面確認此語法真實存在，予以推翻並實作。
+  function parseSecondaryIpsCheckpoint(text, name) {
+    const nameEsc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('^add\\s+interface\\s+' + nameEsc + '\\s+alias\\s+(\\S+)/(\\d+)', 'gim');
+    const list = [];
+    let am;
+    while ((am = re.exec(text)) !== null) {
+      const ml = parseInt(am[2]);
+      let maskDot = '-';
+      if (!isNaN(ml)) {
+        const n = (0xFFFFFFFF << (32 - ml)) >>> 0;
+        maskDot = [(n>>>24)&0xFF,(n>>>16)&0xFF,(n>>>8)&0xFF,n&0xFF].join('.');
+      }
+      list.push({ ip: am[1], mask: maskDot });
+    }
+    return list;
+  }
+
   function parseInterfaces(text) {
     const ifaces = [];
 
@@ -105,6 +129,7 @@ const CheckpointParser = (() => {
         alias:   clishVal(text, `interface ${name} alias`) || '-',
         ip:      ipv4 || '-',
         mask:    maskDot,
+        secondaryIps: parseSecondaryIpsCheckpoint(text, name),
         type,
         vlanId,
         vdom:    '-',

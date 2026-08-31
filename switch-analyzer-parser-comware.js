@@ -871,6 +871,51 @@ function parseComware(cfg){
   return{sys,irf,vlans,interfaces,routes,vrfs,users,ospf,ospf6,bgp,rip,rip6,vrrp,vxlan};
 }
 
+// class-map/match + service-policy（2026-08-31 新增）：直接 fetch 官方 H3C QoS Commands
+// 手冊（h3c.com support 站台，S7500E-XS 系列 QoS Commands 頁面）逐字查證，Comware 語法
+// 家族與 Cisco class-map/policy-map 完全不同——分類器（class-map 對應概念）叫
+// "traffic classifier"，比對條件叫 "if-match"，容器叫 "qos policy"（非 policy-map），
+// 介面套用叫 "qos apply policy"（非 service-policy）。已查證 if-match 支援的條件：
+// acl（access-group）／dscp／ip-precedence／protocol／customer-vlan-id（vlan）；
+// customer-dot1p/service-dot1p（802.1p，near-CoS 但非同一關鍵字，命名歧義未查證该用哪一種
+// 變體，不比照其餘廠牌臆測成 cos 選項，本輪不支援）。traffic classifier 預設運算子為
+// "and"（未寫 operator 時），對應共用 matchType 欄位語意上等同 match-all；"or" 對應
+// match-any（僅為內部資料模型統一命名，非 Comware 官方字面用詞）。
+function parseComwareClassMaps(cfg){
+  const maps=[];
+  const cmRe=/^traffic classifier\s+(\S+)(?:\s+operator\s+(and|or))?\s*\n([\s\S]*?)(?=^traffic classifier\s+|^traffic behavior\s+|^qos policy\s+|(?![\s\S]))/gm;
+  let m;
+  while((m=cmRe.exec(cfg))!==null){
+    const name=m[1], op=(m[2]||'and').toLowerCase(), body=m[3]||'';
+    const matchType=op==='or'?'match-any':'match-all';
+    const matches=[];
+    let mm;
+    const aclRe=/^\s*if-match\s+acl\s+(?:ipv6\s+)?(?:name\s+)?(\S+)/gim;
+    while((mm=aclRe.exec(body))!==null)matches.push({type:'access-group',value:mm[1]});
+    const dscpRe=/^\s*if-match\s+dscp\s+(\S+)/gim;
+    while((mm=dscpRe.exec(body))!==null)matches.push({type:'dscp',value:mm[1]});
+    const precRe=/^\s*if-match\s+ip-precedence\s+(\S+)/gim;
+    while((mm=precRe.exec(body))!==null)matches.push({type:'ip-precedence',value:mm[1]});
+    const protoRe=/^\s*if-match\s+protocol\s+(\S+)/gim;
+    while((mm=protoRe.exec(body))!==null)matches.push({type:'protocol',value:mm[1]});
+    const vlanRe=/^\s*if-match\s+customer-vlan-id\s+(\S+)/gim;
+    while((mm=vlanRe.exec(body))!==null)matches.push({type:'vlan',value:mm[1]});
+    maps.push({name,matchType,matches});
+  }
+  return maps;
+}
+function parseComwareServicePolicy(cfg){
+  const apps=[];
+  cfg.split(/(?=^interface\s)/m).forEach(blk=>{
+    const ifLine=blk.match(/^interface\s+(\S.*)/m);
+    if(!ifLine)return;
+    const ifName=ifLine[1].trim();
+    let m; const spRe=/^\s*qos apply policy\s+(\S+)\s+(inbound|outbound)/gim;
+    while((m=spRe.exec(blk))!==null)apps.push({policy:m[1],interface:ifName,direction:m[2].toLowerCase()==='inbound'?'input':'output'});
+  });
+  return apps;
+}
+
 // ═ Cisco IOS/IOS-XE Parser ═
 // ════════════════════════════════════════════════════════════
 //  Cisco IOS / IOS-XE Switch Parser
