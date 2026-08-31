@@ -226,8 +226,23 @@ function renderDellOS10BreakoutBlock(breakouts){
   return blocks.join('\n!\n');
 }
 
+// VLT 設定（2026-09-01 新增）：官方 Dell SmartFabric OS10 User Guide 確認 `vlt-domain N`
+// 區塊內巢狀 `priority N` + `unit-id N` + `peer-link X`；switch_analyzer 端
+// parseDellOS10Stack() 目前只解析單一 vlt-domain 區塊（非 matchAll），真實 VLT 兩端各自
+// 一份設定檔、各自只宣告自己的 unit-id，故此處也只需輸出一個區塊即可對應
+function renderDellOS10VLT(vlt){
+  if(!vlt||!vlt.domain)return '';
+  const lines=[`vlt-domain ${vlt.domain}`];
+  if(vlt.priority)lines.push(`  priority ${vlt.priority}`);
+  if(vlt.unitId)lines.push(`  unit-id ${vlt.unitId}`);
+  if(vlt.peerLink)lines.push(`  peer-link ${vlt.peerLink}`);
+  return lines.join('\n');
+}
+
 function assembleDellOS10Config(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`hostname ${model.sysname||'Switch'}`];
+  const dellVltBlock=renderDellOS10VLT(model.dellVlt);
+  if(dellVltBlock)blocks.push(dellVltBlock);
   const breakoutBlockDell=renderDellOS10BreakoutBlock(model.breakouts);
   if(breakoutBlockDell)blocks.push(breakoutBlockDell);
   // VRF：官方文件確認 `ip vrf forwarding NAME` 要求該 VRF 已用 `ip vrf NAME` 建立；SVI 的

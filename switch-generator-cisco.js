@@ -295,8 +295,24 @@ function renderCiscoBreakoutBlock(breakouts){
   return lines.join('\n');
 }
 
+// StackWise 堆疊（2026-09-01 新增）：官方 Cisco IOS-XE 標準語法，逐 member `switch N
+// provision MODEL` + `switch N priority N`；`switch N role active|standby` 刻意不輸出——
+// switch_analyzer 端 parseCiscoStack() 在找不到顯式 role 陳述時會依 priority 降冪自動推導
+// role（見該函式第 23-26 行），省略此行不影響 round-trip 正確性，且避免額外一組表單欄位
+function renderCiscoStack(stack){
+  const lines=[];
+  (stack&&stack.members||[]).forEach(m=>{
+    if(!m.id)return;
+    if(m.model)lines.push(`switch ${m.id} provision ${m.model}`);
+    if(m.priority)lines.push(`switch ${m.id} priority ${m.priority}`);
+  });
+  return lines.join('\n');
+}
+
 function assembleCiscoConfig(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`hostname ${model.sysname||'Switch'}`];
+  const ciscoStackBlock=renderCiscoStack(model.ciscoStack);
+  if(ciscoStackBlock)blocks.push(ciscoStackBlock);
   // DHCP Relay option82（2026-07-27 補上）：parseDHCP() cisco 分支解析的是全域指令
   // "ip dhcp snooping information option"（非逐 interface），套用到全部 relay 條目，
   // 先前 render 端全檔案完全沒有任何輸出路徑
