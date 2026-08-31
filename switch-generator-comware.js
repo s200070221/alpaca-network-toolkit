@@ -451,8 +451,31 @@ function renderComwareQoS(list){
   return blocks.join('\n');
 }
 
+// IRF 堆疊（2026-09-01 新增）：官方 H3C IRF Configuration 手冊確認語法為 `irf domain N`
+// （全域，選填，未設定時裝置預設為 1）+ 逐 member `irf member N priority P`；若該 member
+// 有填寫連結埠（comwareIrf.members[].ports），額外輸出 `irf-port {id}/1` 區塊（member 自己
+// 的第一個 IRF-Port 編號，MVP 範圍僅支援每個 member 一個 IRF-Port，與既有 VSU 卡片
+// 「一個 member 一組連結埠」的簡化慣例一致）+ 巢狀 `port group interface X`。
+function renderComwareIRF(irf){
+  if(!irf||!irf.domain||!(irf.members||[]).length)return '';
+  const lines=[`irf domain ${irf.domain}`];
+  (irf.members||[]).forEach(m=>{
+    if(m.id&&m.priority)lines.push(`irf member ${m.id} priority ${m.priority}`);
+  });
+  lines.push('#');
+  (irf.members||[]).forEach(m=>{
+    if(!(m.ports||[]).length)return;
+    lines.push(`irf-port ${m.id}/1`);
+    m.ports.forEach(p=>lines.push(`port group interface ${p}`));
+    lines.push('#');
+  });
+  return lines.join('\n');
+}
+
 function assembleComwareConfig(model){
   const blocks=[`# ${tr('notice.disclaimer')}`,`sysname ${model.sysname||'Switch'}`,'#'];
+  const comwareIrfBlock=renderComwareIRF(model.comwareIrf);
+  if(comwareIrfBlock)blocks.push(comwareIrfBlock);
   // 802.1X 官方語法要求系統視圖也要啟用一次（裸 `dot1x`），非只在 interface 視圖內宣告
   // 即可生效；見 renderComwareInterface() 內對應說明
   if((model.security||[]).some(s=>s.dot1x==='auth'||s.dot1x==='supp'))blocks.push('dot1x','#');

@@ -60,7 +60,10 @@ function renderAlcatelLACPGroup(l){
 function renderAlcatelLACP(list){return (list||[]).map(renderAlcatelLACPGroup).join('\n!\n');}
 
 // 靜態路由：AOS 需要 dotted mask（非 CIDR），model.routes[].dst 為 CIDR 字串需轉換
+// IPv6（2026-08-23 新增）：官方語法 "ipv6 static-route PREFIX/LEN gateway ADDR"，
+// prefix/length 已是單一 slash-CIDR token，不需 mask 換算
 function renderAlcatelRoute(r){
+  if(r.dst.includes(':'))return `ipv6 static-route ${r.dst} gateway ${r.gw}`;
   const [net,len]=r.dst.split('/');
   return `ip route ${net} ${maskFromCidr(len)} ${r.gw}`;
 }
@@ -76,6 +79,22 @@ function renderAlcatelOSPFGlobal(list){
       });
     });
     lines.push('ip ospf admin-state enable');
+    return lines.join('\n');
+  }).join('\n!\n');
+}
+
+// OSPFv3（2026-08-23 新增）：官方 OmniSwitch CLI Reference Guide 確認完整指令家族
+// `ipv6 ospf admin-state`／`ipv6 ospf area X`（獨立宣告，與 IPv4 不同——v4 沒有裸 area
+// 宣告，area 純粹靠 interface 行引用）／`ipv6 ospf interface "X" area Y`
+function renderAlcatelOSPFv3Global(list){
+  return (list||[]).map(o=>{
+    const lines=[];
+    if(o.routerId)lines.push(`ipv6 ospf router-id ${o.routerId}`);
+    (o.areas||[]).forEach(a=>{
+      lines.push(`ipv6 ospf area ${a.area}`);
+      (a.interfaces||[]).forEach(ifname=>{ if(ifname)lines.push(`ipv6 ospf interface "${ifname}" area ${a.area}`); });
+    });
+    lines.push('ipv6 ospf admin-state enable');
     return lines.join('\n');
   }).join('\n!\n');
 }
@@ -172,8 +191,21 @@ function renderAlcatelDHCP(list){
   return ['-> ip helper per-vlan-only',...relays.map(renderAlcatelDHCPRelay)].join('\n');
 }
 
+// Stack 堆疊（2026-09-01 新增）：官方 Alcatel-Lucent OmniSwitch 文件確認持久化格式
+// `stacking slot N priority P`（boot.cfg 寫法，非互動式 `stack set slot N`）——選用此格式
+// 因為它才是真正「存進設定檔」的形式，且同時帶有 priority 資訊（互動式格式無 priority 概念）
+function renderAlcatelStack(stack){
+  const lines=[];
+  (stack&&stack.members||[]).forEach(m=>{
+    if(m.id&&m.priority)lines.push(`stacking slot ${m.id} priority ${m.priority}`);
+  });
+  return lines.join('\n');
+}
+
 function assembleAlcatelConfig(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`system name ${model.sysname||'Switch'}`];
+  const alcatelStackBlock=renderAlcatelStack(model.alcatelStack);
+  if(alcatelStackBlock)blocks.push(alcatelStackBlock);
   const vlanBlockAl=renderAlcatelVLANs(model.vlans,model.interfaces);
   if(vlanBlockAl)blocks.push(vlanBlockAl);
   const ifExtrasAl=renderAlcatelInterfaceExtras(model.interfaces);
@@ -184,6 +216,7 @@ function assembleAlcatelConfig(model){
   if(lacpBlockAl)blocks.push(lacpBlockAl);
   if(model.routes&&model.routes.length)blocks.push(renderAlcatelRoutes(model.routes));
   if(model.ospf&&model.ospf.length)blocks.push(renderAlcatelOSPFGlobal(model.ospf));
+  if(model.ospf6&&model.ospf6.length)blocks.push(renderAlcatelOSPFv3Global(model.ospf6));
   if(model.bgp&&model.bgp.length)blocks.push(renderAlcatelBGPList(model.bgp));
   const dhcpBlockAl=renderAlcatelDHCP(model.dhcp);
   if(dhcpBlockAl)blocks.push(dhcpBlockAl);

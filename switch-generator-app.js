@@ -1006,6 +1006,53 @@ function addVsuMemberRow(id='',priority='',vslPorts=''){
   applyI18n(tr);
 }
 
+// Stack/IRF/VSF 精選 6 家（2026-09-01 新增）：比照 addVsuMemberRow() 樣板，ports 欄位一律
+// 逗號分隔（比照 2026-08-31 修正過的 vsu-mem-vsl 慣例，避免含空白的介面名稱被誤切）
+function addComwareIrfMemberRow(id='',priority='',ports=''){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="cwirf-mem-id" value="${escAttr(id)}"></td>
+    <td><input class="cwirf-mem-priority" value="${escAttr(priority)}"></td>
+    <td><input class="cwirf-mem-ports" value="${escAttr(ports)}" placeholder="Ten-GigabitEthernet1/0/1, Ten-GigabitEthernet1/0/2"></td>
+    ${RM_BTN_TD}`;
+  document.getElementById('comware-irf-member-body').appendChild(tr);
+  applyI18n(tr);
+}
+function addCiscoStackMemberRow(id='',model='',priority=''){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="cistk-mem-id" value="${escAttr(id)}"></td>
+    <td><input class="cistk-mem-model" value="${escAttr(model)}" placeholder="WS-C3850-24T"></td>
+    <td><input class="cistk-mem-priority" value="${escAttr(priority)}"></td>
+    ${RM_BTN_TD}`;
+  document.getElementById('cisco-stack-member-body').appendChild(tr);
+  applyI18n(tr);
+}
+function addBrocadeStackMemberRow(id='',model='',priority=''){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="brstk-mem-id" value="${escAttr(id)}"></td>
+    <td><input class="brstk-mem-model" value="${escAttr(model)}" placeholder="ICX7250-24"></td>
+    <td><input class="brstk-mem-priority" value="${escAttr(priority)}"></td>
+    ${RM_BTN_TD}`;
+  document.getElementById('brocade-stack-member-body').appendChild(tr);
+  applyI18n(tr);
+}
+function addAlcatelStackMemberRow(id='',priority=''){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="alstk-mem-id" value="${escAttr(id)}"></td>
+    <td><input class="alstk-mem-priority" value="${escAttr(priority)}"></td>
+    ${RM_BTN_TD}`;
+  document.getElementById('alcatel-stack-member-body').appendChild(tr);
+  applyI18n(tr);
+}
+function addArubaVsfMemberRow(id='',model='',priority=''){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="arvsf-mem-id" value="${escAttr(id)}"></td>
+    <td><input class="arvsf-mem-model" value="${escAttr(model)}" placeholder="JL256A"></td>
+    <td><input class="arvsf-mem-priority" value="${escAttr(priority)}"></td>
+    ${RM_BTN_TD}`;
+  document.getElementById('aruba-vsf-member-body').appendChild(tr);
+  applyI18n(tr);
+}
+
 function addVrrpRow(vlanId='',ip='',vrid='',vip='',priority='100',preempt=false,authMode='',authKey='',trackIf='',trackReduced=''){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input class="vr-vlan" value="${escAttr(vlanId)}"></td><td><input class="vr-ip" value="${escAttr(ip)}" placeholder="192.168.10.1/24"></td><td><input class="vr-id" value="${escAttr(vrid)}"></td><td><input class="vr-vip" value="${escAttr(vip)}"></td><td><input class="vr-priority" value="${escAttr(priority)}"></td><td style="text-align:center"><input type="checkbox" class="vr-preempt"></td>
@@ -1288,6 +1335,13 @@ function updateModeOptions(){
   document.getElementById('mlag-card').style.display=vendor==='arista'?'':'none';
   // VPC 卡片僅 Cisco NX-OS 適用，比照 MLAG 慣例
   document.getElementById('vpc-card').style.display=vendor==='cisco_nxos'?'':'none';
+  // Stack/IRF/VSF 精選 6 家（2026-09-01 新增），比照 MLAG/VPC/VSU 單一廠牌顯示慣例
+  document.getElementById('comware-irf-card').style.display=vendor==='comware'?'':'none';
+  document.getElementById('cisco-stack-card').style.display=vendor==='cisco'?'':'none';
+  document.getElementById('brocade-stack-card').style.display=vendor==='brocade'?'':'none';
+  document.getElementById('alcatel-stack-card').style.display=vendor==='alcatel'?'':'none';
+  document.getElementById('aruba-vsf-card').style.display=vendor==='aruba'?'':'none';
+  document.getElementById('dell-vlt-card').style.display=vendor==='dell-os10'?'':'none';
   // VXLAN 卡片僅 Comware/Aruba CX 適用（switch_analyzer parseVXLAN() 目前只支援這兩家）
   document.getElementById('vxlan-card').style.display=(vendor==='comware'||vendor==='aruba'||vendor==='cisco_nxos')?'':'none';
   // class-map/match + service-policy 卡片（2026-08-28（續4）新增）：僅 Cisco/Ruijie/Planet
@@ -1675,6 +1729,33 @@ function collectModel(){
   })).filter(m=>m.id);
   const stack=vsuDomainEl?{domain:vsuDomainEl.value.trim(),members:vsuMembers}:null;
 
+  // Stack/IRF/VSF 精選 6 家（2026-09-01 新增）：Ruijie 已佔用全域 model.stack，其餘 6 家
+  // 各自使用獨立頂層欄位，比照 VPC/MLAG「單一物件、elementExists?{...}:null」既有模式
+  const cwIrfDomainEl=document.getElementById('comware-irf-domain');
+  const comwareIrf=cwIrfDomainEl?{domain:cwIrfDomainEl.value.trim(),members:rowsOf('#comware-irf-member-body tr').map(tr=>({
+    id:val(tr,'cwirf-mem-id'), priority:val(tr,'cwirf-mem-priority'),
+    ports:val(tr,'cwirf-mem-ports').split(',').map(s=>s.trim()).filter(Boolean),
+  })).filter(m=>m.id)}:null;
+  const ciscoStack={members:rowsOf('#cisco-stack-member-body tr').map(tr=>({
+    id:val(tr,'cistk-mem-id'), model:val(tr,'cistk-mem-model'), priority:val(tr,'cistk-mem-priority'),
+  })).filter(m=>m.id)};
+  const brocadeStack={members:rowsOf('#brocade-stack-member-body tr').map(tr=>({
+    id:val(tr,'brstk-mem-id'), model:val(tr,'brstk-mem-model'), priority:val(tr,'brstk-mem-priority'),
+  })).filter(m=>m.id)};
+  const alcatelStack={members:rowsOf('#alcatel-stack-member-body tr').map(tr=>({
+    id:val(tr,'alstk-mem-id'), priority:val(tr,'alstk-mem-priority'),
+  })).filter(m=>m.id)};
+  const arubaVsf={members:rowsOf('#aruba-vsf-member-body tr').map(tr=>({
+    id:val(tr,'arvsf-mem-id'), model:val(tr,'arvsf-mem-model'), priority:val(tr,'arvsf-mem-priority'),
+  })).filter(m=>m.id)};
+  const dellVltDomainEl=document.getElementById('dell-vlt-domain');
+  const dellVlt=dellVltDomainEl&&dellVltDomainEl.value.trim()?{
+    domain:dellVltDomainEl.value.trim(),
+    priority:document.getElementById('dell-vlt-priority').value.trim(),
+    unitId:document.getElementById('dell-vlt-unit-id').value.trim(),
+    peerLink:document.getElementById('dell-vlt-peer-link').value.trim(),
+  }:null;
+
   // VXLAN：僅 Comware/Aruba CX 使用，單一設定物件（非清單），欄位命名對齊 switch_analyzer
   // parseVXLAN() 既有回傳形狀 {vtep, vnis:[{vni,vlan,name,peers,rd,rtImport,rtExport,gw}]}
   const vxlanVtepEl=document.getElementById('vxlan-vtep');
@@ -1693,6 +1774,7 @@ function collectModel(){
     syslogServer:document.getElementById('syslog-server').value.trim(),
     vlans, interfaces, ospf, bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos, stack, users, sonicL3Interfaces, sonicQos, sonicStpVlanIntf,
     classMaps, qosApply, planetMacAcl,
+    comwareIrf, ciscoStack, brocadeStack, alcatelStack, arubaVsf, dellVlt,
   };
 }
 
@@ -1702,7 +1784,7 @@ function collectModel(){
 // 逐項呼叫 addXxxRow() 重建列。儲存的 model 就是 collectModel() 的完整輸出，故欄位
 // 名稱與此函式讀取的完全對稱，不需另外映射。
 function applyModelToForm(model){
-  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body'].forEach(id=>{
+  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body','comware-irf-member-body','cisco-stack-member-body','brocade-stack-member-body','alcatel-stack-member-body','aruba-vsf-member-body'].forEach(id=>{
     document.getElementById(id).innerHTML='';
   });
 
@@ -1851,6 +1933,37 @@ function applyModelToForm(model){
     document.getElementById('vsu-member-body').innerHTML='';
     // 逗號分隔（2026-08-31 修正，同 collectModel() 對應說明）
     (model.stack.members||[]).forEach(m=>addVsuMemberRow(m.id,m.priority,(m.vslPorts||[]).join(', ')));
+  }
+
+  // Stack/IRF/VSF 精選 6 家（2026-09-01 新增），比照 VSU/VPC 慣例——欄位一直存在於 DOM，只是卡片被隱藏
+  const cwIrfDomainEl=document.getElementById('comware-irf-domain');
+  if(cwIrfDomainEl&&model.comwareIrf){
+    cwIrfDomainEl.value=model.comwareIrf.domain||'';
+    document.getElementById('comware-irf-member-body').innerHTML='';
+    (model.comwareIrf.members||[]).forEach(m=>addComwareIrfMemberRow(m.id,m.priority,(m.ports||[]).join(', ')));
+  }
+  if(model.ciscoStack){
+    document.getElementById('cisco-stack-member-body').innerHTML='';
+    (model.ciscoStack.members||[]).forEach(m=>addCiscoStackMemberRow(m.id,m.model,m.priority));
+  }
+  if(model.brocadeStack){
+    document.getElementById('brocade-stack-member-body').innerHTML='';
+    (model.brocadeStack.members||[]).forEach(m=>addBrocadeStackMemberRow(m.id,m.model,m.priority));
+  }
+  if(model.alcatelStack){
+    document.getElementById('alcatel-stack-member-body').innerHTML='';
+    (model.alcatelStack.members||[]).forEach(m=>addAlcatelStackMemberRow(m.id,m.priority));
+  }
+  if(model.arubaVsf){
+    document.getElementById('aruba-vsf-member-body').innerHTML='';
+    (model.arubaVsf.members||[]).forEach(m=>addArubaVsfMemberRow(m.id,m.model,m.priority));
+  }
+  const dellVltDomainEl=document.getElementById('dell-vlt-domain');
+  if(dellVltDomainEl&&model.dellVlt){
+    dellVltDomainEl.value=model.dellVlt.domain||'';
+    document.getElementById('dell-vlt-priority').value=model.dellVlt.priority||'';
+    document.getElementById('dell-vlt-unit-id').value=model.dellVlt.unitId||'';
+    document.getElementById('dell-vlt-peer-link').value=model.dellVlt.peerLink||'';
   }
 
   // VXLAN（僅 Comware/Aruba CX 顯示，比照 MLAG/VPC 慣例——欄位一直存在於 DOM，只是卡片被隱藏）
@@ -2703,7 +2816,7 @@ async function parseAndImport(){
 
   // 清空既有列（含 vrrp-body：匯入功能雖不映射 VRRP 資料，但仍須清掉畫面殘留的舊資料，
   // 避免使用者誤以為初始化 demo 列是這次匯入結果的一部分）
-  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body'].forEach(id=>{
+  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body','comware-irf-member-body','cisco-stack-member-body','brocade-stack-member-body','alcatel-stack-member-body','aruba-vsf-member-body'].forEach(id=>{
     document.getElementById(id).innerHTML='';
   });
 
@@ -3044,6 +3157,33 @@ async function parseAndImport(){
       document.getElementById('vpc-peer-keepalive').value=parsed.stack.peerKeepalive==='-'?'':(parsed.stack.peerKeepalive||'');
       document.getElementById('vpc-peer-link').value=parsed.stack.peerLink==='-'?'':(parsed.stack.peerLink||'');
       document.getElementById('vpc-peer-gateway').checked=!!parsed.stack.peerGateway;
+    }
+  }else if(vendor==='comware'&&parsed.irf&&parsed.irf.domain){
+    // Comware 的完整 parseComware() 把 IRF 放在獨立的 `parsed.irf` 欄位（非 `parsed.stack`），
+    // 與其餘 5 家不同，見 switch-analyzer-parser-comware.js:855
+    const cwIrfDomainEl=document.getElementById('comware-irf-domain');
+    if(cwIrfDomainEl){
+      cwIrfDomainEl.value=parsed.irf.domain||'';
+      (parsed.irf.members||[]).forEach(m=>{
+        const link=(parsed.irf.links||[]).find(l=>l.fromMember===m.id);
+        addComwareIrfMemberRow(m.id,m.priority,(link?.ports||[]).join(', '));
+      });
+    }
+  }else if(vendor==='cisco'&&parsed.stack&&parsed.stack.type==='StackWise'){
+    (parsed.stack.members||[]).forEach(m=>addCiscoStackMemberRow(m.id,m.model,m.priority));
+  }else if(vendor==='brocade'&&parsed.stack&&parsed.stack.type==='ICX-Stack'){
+    (parsed.stack.members||[]).forEach(m=>addBrocadeStackMemberRow(m.id,m.model,m.priority));
+  }else if(vendor==='alcatel'&&parsed.stack&&parsed.stack.type==='Stack'){
+    (parsed.stack.members||[]).forEach(m=>addAlcatelStackMemberRow(m.id,m.priority));
+  }else if(vendor==='aruba'&&parsed.stack&&parsed.stack.type==='VSF'){
+    (parsed.stack.members||[]).forEach(m=>addArubaVsfMemberRow(m.id,m.model,m.priority));
+  }else if(vendor==='dell-os10'&&parsed.stack&&parsed.stack.type==='VLT'){
+    const dellVltDomainEl=document.getElementById('dell-vlt-domain');
+    if(dellVltDomainEl){
+      dellVltDomainEl.value=parsed.stack.domain||'';
+      document.getElementById('dell-vlt-priority').value=parsed.stack.members?.[0]?.priority||'';
+      document.getElementById('dell-vlt-unit-id').value=parsed.stack.members?.[0]?.id||'';
+      document.getElementById('dell-vlt-peer-link').value=parsed.stack.peerLink||'';
     }
   }
 

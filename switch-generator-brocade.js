@@ -379,8 +379,26 @@ function renderBrocadeDHCPSnooping(dhcpList,vlans){
   return ids.map(id=>`ip dhcp snooping vlan ${id}`).join('\n');
 }
 
+// ICX-Stack 堆疊（2026-09-01 新增）：官方 Ruckus/Brocade FastIron Stacking 文件確認 `stack
+// unit N` 區塊內巢狀 `module 0 MODEL`（模組編號固定 0，單顆交換器僅一個模組槽位的常見機型）
+// + `priority N`；links 刻意不輸出——switch_analyzer 端 parseBrocadeStack() links 恆固定
+// 空陣列（官方查無宣告拓撲鏈路的指令，見該函式註解），非本輪省略
+function renderBrocadeStack(stack){
+  const blocks=[];
+  (stack&&stack.members||[]).forEach(m=>{
+    if(!m.id)return;
+    const lines=[`stack unit ${m.id}`];
+    if(m.model)lines.push(` module 0 ${m.model}`);
+    if(m.priority)lines.push(` priority ${m.priority}`);
+    blocks.push(lines.join('\n'));
+  });
+  return blocks.join('\n!\n');
+}
+
 function assembleBrocadeConfig(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`hostname ${model.sysname||'Switch'}`];
+  const brocadeStackBlock=renderBrocadeStack(model.brocadeStack);
+  if(brocadeStackBlock)blocks.push(brocadeStackBlock);
   if(model.breakouts&&model.breakouts.some(b=>b.vendor==='brocade'))blocks.push(`! ${tr('notice.brocadeBreakoutWarning')}`);
   const brocadeBreakoutBlock=renderBrocadeBreakoutBlock(model.breakouts);
   if(brocadeBreakoutBlock)blocks.push(brocadeBreakoutBlock);

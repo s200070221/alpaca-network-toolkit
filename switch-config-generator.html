@@ -807,6 +807,95 @@ end</pre>
     <button class="add-btn" data-i18n="btn.addRow" onclick="addVsuMemberRow()">+ 新增列</button>
   </div>
 
+  <div class="card" id="comware-irf-card" style="display:none">
+    <h2 data-i18n="sec.comwareIrf">IRF 堆疊設定（僅 Comware）</h2>
+    <div class="row">
+      <label data-i18n="lbl.stackDomain">Domain ID</label>
+      <input id="comware-irf-domain" placeholder="1">
+    </div>
+    <table class="tbl" style="margin-top:10px">
+      <thead><tr>
+        <th data-i18n="th.stackId">Switch ID</th>
+        <th data-i18n="th.stackPriority">Priority</th>
+        <th data-i18n="th.irfPorts" data-tip="IRF-Port 成員埠，多個埠以逗號分隔">IRF Ports</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="comware-irf-member-body"></tbody>
+    </table>
+    <button class="add-btn" data-i18n="btn.addRow" onclick="addComwareIrfMemberRow()">+ 新增列</button>
+  </div>
+
+  <div class="card" id="cisco-stack-card" style="display:none">
+    <h2 data-i18n="sec.ciscoStack">StackWise 堆疊設定（僅 Cisco IOS-XE）</h2>
+    <table class="tbl" style="margin-top:10px">
+      <thead><tr>
+        <th data-i18n="th.stackId">Switch ID</th>
+        <th data-i18n="th.stackModel">Model</th>
+        <th data-i18n="th.stackPriority">Priority</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="cisco-stack-member-body"></tbody>
+    </table>
+    <button class="add-btn" data-i18n="btn.addRow" onclick="addCiscoStackMemberRow()">+ 新增列</button>
+  </div>
+
+  <div class="card" id="brocade-stack-card" style="display:none">
+    <h2 data-i18n="sec.brocadeStack">ICX Stack 堆疊設定（僅 Brocade／Ruckus）</h2>
+    <table class="tbl" style="margin-top:10px">
+      <thead><tr>
+        <th data-i18n="th.stackId">Switch ID</th>
+        <th data-i18n="th.stackModel">Model</th>
+        <th data-i18n="th.stackPriority">Priority</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="brocade-stack-member-body"></tbody>
+    </table>
+    <button class="add-btn" data-i18n="btn.addRow" onclick="addBrocadeStackMemberRow()">+ 新增列</button>
+  </div>
+
+  <div class="card" id="alcatel-stack-card" style="display:none">
+    <h2 data-i18n="sec.alcatelStack">Stack 堆疊設定（僅 Alcatel OmniSwitch）</h2>
+    <table class="tbl" style="margin-top:10px">
+      <thead><tr>
+        <th data-i18n="th.stackId">Switch ID</th>
+        <th data-i18n="th.stackPriority">Priority</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="alcatel-stack-member-body"></tbody>
+    </table>
+    <button class="add-btn" data-i18n="btn.addRow" onclick="addAlcatelStackMemberRow()">+ 新增列</button>
+  </div>
+
+  <div class="card" id="aruba-vsf-card" style="display:none">
+    <h2 data-i18n="sec.arubaVsf">VSF 堆疊設定（僅 Aruba CX）</h2>
+    <table class="tbl" style="margin-top:10px">
+      <thead><tr>
+        <th data-i18n="th.stackId">Switch ID</th>
+        <th data-i18n="th.stackModel">Model</th>
+        <th data-i18n="th.stackPriority">Priority</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="aruba-vsf-member-body"></tbody>
+    </table>
+    <button class="add-btn" data-i18n="btn.addRow" onclick="addArubaVsfMemberRow()">+ 新增列</button>
+  </div>
+
+  <div class="card" id="dell-vlt-card" style="display:none">
+    <h2 data-i18n="sec.dellVlt">VLT 設定（僅 Dell OS10）</h2>
+    <div class="row">
+      <label data-i18n="lbl.vltDomain">Domain ID</label>
+      <input id="dell-vlt-domain" placeholder="1">
+      <label data-i18n="lbl.vltPriority">Priority</label>
+      <input id="dell-vlt-priority" placeholder="150">
+    </div>
+    <div class="row">
+      <label data-i18n="lbl.vltUnitId">Unit ID</label>
+      <input id="dell-vlt-unit-id" placeholder="0">
+      <label data-i18n="lbl.vltPeerLink">Peer Link</label>
+      <input id="dell-vlt-peer-link" placeholder="port-channel100">
+    </div>
+  </div>
+
   <div class="card" id="vxlan-card" style="display:none">
     <h2 data-i18n="sec.vxlan">VXLAN 設定（Comware / Aruba CX）</h2>
     <div class="row">

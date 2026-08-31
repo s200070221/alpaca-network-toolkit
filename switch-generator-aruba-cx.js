@@ -31,7 +31,7 @@ function arubaVlanLines(iface){
   }
   return lines;
 }
-function renderArubaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,breakouts,areaOfIface){
+function renderArubaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,breakouts,areaOfIface,areaOfIface6){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(`    description ${iface.desc}`);
   const bk=findBreakoutForPort(breakouts,iface.name);
@@ -48,23 +48,28 @@ function renderArubaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,b
   // 次要IP（Secondary IP，官方 AOS-CX IP Services Guide／CLI 文件：`ip address
   // ADDR/PREFIX secondary`，Layer 3 interface（含 VLAN SVI）皆適用；僅取第一筆為
   // MVP 範圍，本來就是直出 CIDR 不需遮罩換算）
-  const secLine=iface.secondaryIp&&!iface.secondaryIp.includes(':')?`    ip address ${iface.secondaryIp} secondary`:'';
+  // 2026-08-23 陣列化：parser 端 2026-08-17 已從「僅取第一筆」擴充為完整陣列 secondaryIps
+  const secLines=(iface.secondaryIps||[]).filter(s=>!s.includes(':')).map(s=>`    ip address ${s} secondary`);
   if(iface.type==='svi'||iface.type==='loopback'){
     if(iface.ip){
       lines.push(`    ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
-      if(!iface.ip.includes(':')&&secLine)lines.push(secLine);
+      if(!iface.ip.includes(':'))secLines.forEach(l=>lines.push(l));
     }
   }else{
     // 實體埠（含未標示 type 的手動輸入資料，預設視為實體埠）
     if(iface.mode==='routed'&&iface.ip){
       lines.push('    routing');
       lines.push(`    ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
-      if(!iface.ip.includes(':')&&secLine)lines.push(secLine);
+      if(!iface.ip.includes(':'))secLines.forEach(l=>lines.push(l));
     }else if(iface.mode==='trunk'||iface.mode==='access'){
       lines.push('    no routing');
     }
   }
   if(iface.vrf)lines.push(`    vrf attach ${iface.vrf}`);
+  // OSPFv3（2026-08-23 新增）：真正的 area/介面關聯在各自 interface 區塊內用
+  // "ipv6 ospfv3 PID area AREA" 逐一指派，比照既有 IPv4 areaOfIface 查詢表模式
+  const aOf6=areaOfIface6&&areaOfIface6[iface.name];
+  if(aOf6)lines.push(`    ipv6 ospfv3 ${aOf6.pid} area ${aOf6.area}`);
   const lg=findLacpGroup(lacpList,iface.name);
   // vlan trunk/access（class-two 屬性）：官方 LAG Configuration Guidelines 明講，port 加入
   // LAG 時該 port 上原本的 non-default 設定（含 VLAN）會被自動移除，故 member 實體介面不再
@@ -102,7 +107,7 @@ function renderArubaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,b
   }
   return lines.join('\n');
 }
-function renderArubaInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,breakouts,ospf){
+function renderArubaInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,breakouts,ospf,ospf6){
   // areaOfIface：interface 名稱 → {pid,area}，比照 renderProCurveVLANs() 的 areaOfVlan 寫法
   // 只建立一次，避免每個介面都重新掃描一次 model.ospf
   const areaOfIface={};
@@ -110,7 +115,13 @@ function renderArubaInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp
   ((proc&&proc.areas)||[]).forEach(a=>{
     (a.networks||[]).forEach(n=>{ if(n.network)areaOfIface[String(n.network)]={pid:proc.pid,area:a.area}; });
   });
-  return ifaces.map(i=>renderArubaInterface(i,lacpList,dhcpList,aclList,securityList,stp,breakouts,areaOfIface)).join('\n!\n');
+  // areaOfIface6（2026-08-23 新增）：同上，但 ospf6 的 areas[].interfaces 本來就是介面名稱陣列
+  const areaOfIface6={};
+  const proc6=ospf6&&ospf6[0];
+  ((proc6&&proc6.areas)||[]).forEach(a=>{
+    (a.interfaces||[]).forEach(ifname=>{ if(ifname)areaOfIface6[String(ifname)]={pid:proc6.pid,area:a.area}; });
+  });
+  return ifaces.map(i=>renderArubaInterface(i,lacpList,dhcpList,aclList,securityList,stp,breakouts,areaOfIface,areaOfIface6)).join('\n!\n');
 }
 
 // Port Security/802.1X（Aruba CX）：已查證官方 HPE Aruba Networking AOS-CX CLI
@@ -173,6 +184,17 @@ function renderArubaOSPFProcess(o){
 }
 function renderArubaOSPF(list){return (list||[]).map(renderArubaOSPFProcess).join('\n!\n');}
 
+// OSPFv3（2026-08-23 新增）：官方 Aruba CX IP Routing Guide 確認 `router ospfv3 <pid>` +
+// bare `area X` 宣告，與 IPv4 `router ospf` 結構完全平行；真正的介面關聯改在
+// renderArubaInterface() 用 `ipv6 ospfv3 <pid> area <area>` 逐一輸出
+function renderArubaOSPFv3Process(o){
+  const lines=[`router ospfv3 ${o.pid}`];
+  if(o.routerId)lines.push(`    router-id ${o.routerId}`);
+  (o.areas||[]).forEach(a=>lines.push(`    area ${a.area}`));
+  return lines.join('\n');
+}
+function renderArubaOSPFv3(list){return (list||[]).map(renderArubaOSPFv3Process).join('\n!\n');}
+
 function renderArubaBGP(b){
   const lines=[`bgp ${b.asn}`];
   if(b.routerId)lines.push(`    router-id ${b.routerId}`);
@@ -181,6 +203,13 @@ function renderArubaBGP(b){
     if(p.desc)lines.push(`    neighbor ${p.ip} description ${p.desc}`);
   });
   (b.networks||[]).forEach(n=>lines.push(`    network ${n}`));
+  // IPv6（2026-08-23 新增）：官方語法同 Cisco/Comware 慣例，network 巢狀在獨立的
+  // address-family ipv6 [unicast] 子模式內，slash-CIDR 直接輸出，exit-address-family 結尾
+  if(b.networks6&&b.networks6.length){
+    lines.push('    address-family ipv6');
+    b.networks6.forEach(n=>lines.push(`        network ${n}`));
+    lines.push('    exit-address-family');
+  }
   return lines.join('\n');
 }
 function renderArubaBGPList(list){return (list||[]).map(renderArubaBGP).join('\n!\n');}
@@ -194,7 +223,9 @@ function renderArubaRIP(r){
 }
 function renderArubaRIPList(list){return (list||[]).map(renderArubaRIP).join('\n!\n');}
 
-function renderArubaRoute(r){return `ip route ${r.dst} ${r.gw}`;}
+// IPv6（2026-08-23 新增）：官方語法 "ipv6 route DST/PREFIX {GW|IFACE}"，關鍵字換成
+// ipv6 route，其餘 token 結構相同
+function renderArubaRoute(r){return `${r.dst.includes(':')?'ipv6':'ip'} route ${r.dst} ${r.gw}`;}
 function renderArubaRoutes(list){return (list||[]).map(renderArubaRoute).join('\n!\n');}
 
 // DHCP server pool；relay（ip helper-address）內嵌進 renderArubaInterface，不在此輸出
@@ -217,8 +248,26 @@ function renderArubaACLEntry(a){
 }
 function renderArubaACL(list){return (list||[]).map(renderArubaACLEntry).join('\n!\n');}
 
+// VSF 堆疊（2026-09-01 新增）：官方 AOS-CX 文件確認縮排子模式語法——全域裸 `vsf` 一行進入
+// 子模式，逐 member `member N` 區塊內巢狀 `type MODEL` + `priority N`；links 刻意不輸出
+// （官方語法為 `link N` 巢狀 `member N PORT`，需額外一組表單欄位且與本 MVP 範圍不成比例，
+// 比照 Cisco StackWise/Brocade ICX-Stack 同樣排除拓撲鏈路的既有慣例）
+function renderArubaVSF(stack){
+  if(!stack||!(stack.members||[]).length)return '';
+  const lines=['vsf'];
+  stack.members.forEach(m=>{
+    if(!m.id)return;
+    lines.push(`    member ${m.id}`);
+    if(m.model)lines.push(`        type ${m.model}`);
+    if(m.priority)lines.push(`        priority ${m.priority}`);
+  });
+  return lines.join('\n');
+}
+
 function assembleArubaConfig(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`hostname ${model.sysname||'Switch'}`];
+  const arubaVsfBlock=renderArubaVSF(model.arubaVsf);
+  if(arubaVsfBlock)blocks.push(arubaVsfBlock);
   if(model.vlans&&model.vlans.length)blocks.push(renderArubaVLANs(model.vlans,model.vxlan&&model.vxlan.vnis));
   // VRF：官方文件確認 `vrf attach NAME` 要求該 VRF 已用裸 `vrf NAME` 建立，排在
   // Interfaces 之前輸出
@@ -228,7 +277,8 @@ function assembleArubaConfig(model){
   // OSPF：官方文件將「先啟用 OSPF、指派 area」列為建議步驟順序，早於「指派介面到 area」，
   // 排在 Interfaces（內嵌逐介面 `ip ospf <pid> area <area>`）之前輸出
   if(model.ospf&&model.ospf.length)blocks.push(renderArubaOSPF(model.ospf));
-  if(model.interfaces&&model.interfaces.length)blocks.push(renderArubaInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.breakouts,model.ospf));
+  if(model.ospf6&&model.ospf6.length)blocks.push(renderArubaOSPFv3(model.ospf6));
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderArubaInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.breakouts,model.ospf,model.ospf6));
   const arubaLacpExtra=renderArubaLACPExtra(model.lacp,model.interfaces);
   if(arubaLacpExtra)blocks.push(arubaLacpExtra);
   const arSecBlock=renderArubaCXSecurity(model.security);
