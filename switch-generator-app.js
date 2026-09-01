@@ -2288,6 +2288,13 @@ function validateForm(){
         warnings.push(`⚠️ ${tr('val.native_vlan_not_in_list').replace('{name}',iface.name).replace('{vlan}',iface.nativeVlan)}`);
       }
     }
+    // Access VLAN 懸空引用檢查（2026-09-01 新增，lint／自我檢查功能1）：僅檢查 accessVlan
+    // 這個單一 VLAN ID 欄位（格式明確、無歧義）；trunkVlans 因各廠牌 add/except/remove/all
+    // 等累加式語法差異大、逗號分隔亦可能是範圍寫法，貿然解析容易誤判，比照既有 nativeVlan
+    // 檢查同樣要求 model.vlans.length>0 才檢查（避免使用者尚未建立 VLAN 表格時整批誤報）
+    if(iface.mode==='access'&&iface.accessVlan&&/^\d+$/.test(iface.accessVlan)&&!vlanIds.has(iface.accessVlan)&&model.vlans.length>0){
+      warnings.push(`⚠️ ${tr('val.access_vlan_not_in_list').replace('{name}',iface.name).replace('{vlan}',iface.accessVlan)}`);
+    }
 
     // Hybrid 港口檢查（僅 Comware／Ruijie／Planet 支援）
     if(iface.mode==='hybrid'&&model.vendor!=='comware'&&model.vendor!=='ruijie'&&model.vendor!=='planet'){
@@ -2373,6 +2380,15 @@ function validateForm(){
   // Comware：member port 屬性不一致／已啟用安全性功能會導致實機無法加入聚合組，
   // 非阻擋性提示（見 comwareLacpAttrWarnings() 說明）
   comwareLacpAttrWarnings(model).forEach(w=>warnings.push(w));
+  // LACP 成員埠重複加入不同群組檢查（2026-09-01 新增，lint／自我檢查功能1）：同一實體埠
+  // 名稱不可能同時屬於兩個不同的聚合群組，vendor-agnostic（純比對 model.lacp[].members 字串）
+  {
+    const portToGroups={};
+    model.lacp.forEach(lag=>{(lag.members||[]).forEach(m=>{(portToGroups[m]=portToGroups[m]||[]).push(lag.id);});});
+    Object.entries(portToGroups).filter(([,groups])=>new Set(groups).size>1).forEach(([port,groups])=>{
+      warnings.push(`⚠️ ${tr('val.lacp_port_reused').replace('{port}',port).replace('{groups}',[...new Set(groups)].join(', '))}`);
+    });
+  }
 
   // 8. VRRP 驗證
   model.vrrp.forEach((v,i)=>{
@@ -2392,7 +2408,23 @@ function validateForm(){
       errors.push(`⚠️ VRRP ${i+1}：${tr('val.invalid').replace('{item}',tr('val.field_priority'))} (1-254)`);
       markInvalid(vrrpRows[i]?.querySelector('.vr-priority'));
     }
+    // VIP 與自身 SVI IP 相同檢查（2026-09-01 新增，lint／自我檢查功能1）：虛擬IP本應與介面
+    // 自己的實體IP不同，兩者相同是明顯設定錯誤（v.ip 為 CIDR 格式，僅取位址部分比對）
+    if(v.ip&&isValidCIDR(v.ip)&&isValidIPv4(v.vip)&&v.ip.split('/')[0]===v.vip){
+      warnings.push(`⚠️ ${tr('val.vrrp_vip_eq_ip').replace('{n}',i+1).replace('{ip}',v.vip)}`);
+    }
   });
+  // IP 位址碰撞檢查（2026-09-01 新增，lint／自我檢查功能1）：跨 VRRP 群組比對 VIP 是否重複
+  // 使用——表單目前唯一天生跨廠牌共通、格式明確的「已指派 IP」欄位就是 VRRP 的 vip/ip
+  // （多數廠牌 Interface 表格本身無 IP 輸入欄位，見 CLAUDE.md「常用機種預設 Interface 清單」
+  // 段落上方說明），故本輪範圍聚焦於 VRRP 這組欄位，不臆測其餘欄位的 IP 語意
+  {
+    const vipToIdx={};
+    model.vrrp.forEach((v,i)=>{if(isValidIPv4(v.vip)){(vipToIdx[v.vip]=vipToIdx[v.vip]||[]).push(i+1);}});
+    Object.entries(vipToIdx).filter(([,idxs])=>idxs.length>1).forEach(([vip,idxs])=>{
+      warnings.push(`⚠️ ${tr('val.dup_ip').replace('{ip}',vip).replace('{items}','VRRP '+idxs.join(', '))}`);
+    });
+  }
 
   // 9. ACL 驗證：src/dst 語意上可為 any／host X.X.X.X／IP+wildcard mask／CIDR，
   // 格式較自由（render 函式直接原文輸出，不做轉換），故僅在明顯不是上述任一種
@@ -3318,6 +3350,42 @@ function showBulkTemplate(){
   alert(tr('msg.bulkTemplate'));
 }
 
+// 正規 CSV 單行解析（2026-09-01 新增，取代原本陽春的 line.split(',')）：支援雙引號欄位
+// 與逸出雙引號（""→"），欄位內含逗號/引號時不會被誤切。不支援跨行欄位（多行 quoted field），
+// 本工具批次匯入一列對應一台裝置，跨行欄位不符合既有 CSV 格式假設，故不處理。
+function parseCSVLine(line){
+  const out=[];
+  let cur='',inQuotes=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(inQuotes){
+      if(ch==='"'){
+        if(line[i+1]==='"'){cur+='"';i++;}
+        else inQuotes=false;
+      }else cur+=ch;
+    }else{
+      if(ch==='"')inQuotes=true;
+      else if(ch===','){out.push(cur);cur='';}
+      else cur+=ch;
+    }
+  }
+  out.push(cur);
+  return out.map(s=>s.trim());
+}
+
+// 批次 CSV 可覆寫欄位（2026-09-01 擴充，lint／自我檢查功能2）：除既有 vendor/hostname 外，
+// 新增 vlanId／vlanName（覆寫 VLAN 表格第一列）與 ifaceDesc（覆寫 Interface 表格第一列的
+// 描述欄位）。**刻意不支援 mgmtIp／mgmtMask**——探勘確認多數廠牌的 Interface 表格本身無
+// IP 輸入欄位（僅 VRRP 卡片的 SVI IP、SONiC 專屬 L3 介面卡片有 IP 概念，見 CLAUDE.md
+// 「常用機種預設 Interface 清單」段落說明的既有架構限制），並非本輪查證疏漏，貿然加入
+// 一個實際上寫不進任何表單欄位的「假欄位」會誤導使用者以為功能存在卻默默失效。
+function downloadBulkSampleCSV(){
+  const sample='devicename,vendor,hostname,vlanId,vlanName,ifaceDesc\n'
+    +'SW-SITE-A,cisco,SW-SITE-A-01,10,Site-A-Mgmt,Uplink-to-Core\n'
+    +'SW-SITE-B,comware,SW-SITE-B-01,20,Site-B-Mgmt,Uplink-to-Core\n';
+  downloadFile(sample,'bulk-template.csv','text/csv');
+}
+
 function processBulkCSV(){
   const file=document.getElementById('bulk-csv-file').files[0];
   if(!file){
@@ -3332,13 +3400,17 @@ function processBulkCSV(){
       return;
     }
 
-    const headers=lines[0].split(',').map(h=>h.trim().toLowerCase());
+    const headers=parseCSVLine(lines[0]).map(h=>h.trim().toLowerCase());
     const required=['devicename','vendor','hostname'];
     const hasRequired=required.every(r=>headers.includes(r));
     if(!hasRequired){
       alert(tr('msg.bulkMissingColumns').replace('{cols}',required.join(', ')));
       return;
     }
+    // 選填覆寫欄位：CSV 表頭有出現才覆寫，未出現的欄位維持表單原值；不認得的表頭一律忽略
+    // （不臆測欄位對應，見 downloadBulkSampleCSV() 上方註解說明可用欄位範圍）
+    const hasVlanOverride=headers.includes('vlanid')||headers.includes('vlanname');
+    const hasIfaceDescOverride=headers.includes('ifacedesc');
 
     window.bulkConfigs={};
     const results=[];
@@ -3353,6 +3425,13 @@ function processBulkCSV(){
     const originalVendor=document.getElementById('vendor').value;
     const originalHostname=document.getElementById('hostname').value;
     const originalModeValues=rowsOf('#iface-body tr').map(tr=>tr.querySelector('.i-mode')?.value);
+    // vlanId/vlanName/ifaceDesc 覆寫僅作用於表格第一列（比照 vendor/hostname 單一表單欄位的
+    // 覆寫慣例），快照供事後復原
+    const vlanRow0=rowsOf('#vlan-body tr')[0];
+    const ifaceRow0=rowsOf('#iface-body tr')[0];
+    const originalVlanId=vlanRow0?.querySelector('.v-id')?.value;
+    const originalVlanName=vlanRow0?.querySelector('.v-name')?.value;
+    const originalIfaceDesc=ifaceRow0?.querySelector('.i-desc')?.value;
 
     progressDiv.innerHTML=`<div style="color:var(--accent);font-weight:600">${tr('msg.bulkProgress').replace('{current}','0').replace('{total}',lines.length-1)}</div>`;
     listDiv.innerHTML='';
@@ -3360,7 +3439,7 @@ function processBulkCSV(){
     for(let i=1;i<lines.length;i++){
       if(!lines[i].trim())continue;
 
-      const values=lines[i].split(',').map(v=>v.trim());
+      const values=parseCSVLine(lines[i]);
       const row={};
       headers.forEach((h,idx)=>{
         row[h]=values[idx]||'';
@@ -3380,6 +3459,15 @@ function processBulkCSV(){
 
         // 觸發廠牌變更（更新模式選項等）
         updateModeOptions();
+
+        // 選填欄位覆寫（僅 CSV 表頭有出現的欄位才覆寫，套用到表格第一列）
+        if(hasVlanOverride&&vlanRow0){
+          if(row.vlanid)vlanRow0.querySelector('.v-id').value=row.vlanid;
+          if(row.vlanname)vlanRow0.querySelector('.v-name').value=row.vlanname;
+        }
+        if(hasIfaceDescOverride&&ifaceRow0&&row.ifacedesc){
+          ifaceRow0.querySelector('.i-desc').value=row.ifacedesc;
+        }
 
         // 產生配置
         const model=collectModel();
@@ -3430,6 +3518,11 @@ function processBulkCSV(){
       const sel=tr.querySelector('.i-mode');
       if(sel&&originalModeValues[idx]!==undefined)sel.value=originalModeValues[idx];
     });
+    if(vlanRow0){
+      if(originalVlanId!==undefined)vlanRow0.querySelector('.v-id').value=originalVlanId;
+      if(originalVlanName!==undefined)vlanRow0.querySelector('.v-name').value=originalVlanName;
+    }
+    if(ifaceRow0&&originalIfaceDesc!==undefined)ifaceRow0.querySelector('.i-desc').value=originalIfaceDesc;
 
     // 顯示結果
     progressDiv.innerHTML=`<div style="color:var(--green);font-weight:600">${tr('msg.bulkDone').replace('{count}',Object.keys(window.bulkConfigs).length)}</div>`;

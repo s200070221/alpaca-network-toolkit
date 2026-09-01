@@ -39,7 +39,10 @@
 
   // ── 新舊設定檔結構化比對（單一設備）────────────────────────────
   // 通用 key-based 陣列比對：回傳新增/刪除/變更三類，changed 附上實際變更的欄位清單
-  function diffArrayByKey(oldArr, newArr, keyFn, compareFields) {
+  // excludeFields（選填，2026-09-01 新增，功能4 HA 降噪模式用）：從 compareFields 中排除
+  // 指定欄位再比對，不影響 added/removed 判斷（僅影響 changed 的欄位差異偵測）
+  function diffArrayByKey(oldArr, newArr, keyFn, compareFields, excludeFields) {
+    const fields = excludeFields && excludeFields.length ? compareFields.filter(f => !excludeFields.includes(f)) : compareFields;
     const oldMap = new Map((oldArr || []).map(o => [keyFn(o), o]));
     const newMap = new Map((newArr || []).map(n => [keyFn(n), n]));
     const added = [...newMap.keys()].filter(k => !oldMap.has(k)).map(k => newMap.get(k));
@@ -48,7 +51,7 @@
     for (const [k, oldItem] of oldMap) {
       if (!newMap.has(k)) continue;
       const newItem = newMap.get(k);
-      const diffFields = compareFields.filter(f => String(oldItem[f] ?? '') !== String(newItem[f] ?? ''));
+      const diffFields = fields.filter(f => String(oldItem[f] ?? '') !== String(newItem[f] ?? ''));
       if (diffFields.length) changed.push({ key: k, old: oldItem, new: newItem, diffFields });
     }
     return { added, removed, changed };
@@ -62,9 +65,10 @@
     const u = p.utm || {};
     return { ...p, 'utm.av': u.av, 'utm.webfilter': u.webfilter, 'utm.ips': u.ips, 'utm.appctrl': u.appctrl };
   }
-  function diffPolicies(oldArr, newArr) {
+  function diffPolicies(oldArr, newArr, excludeFields) {
     const keyFn = p => (p._vdom ? p._vdom + '/' : '') + p.id;
-    const fields = [..._POLICY_COMPARE_FIELDS, 'utm.av', 'utm.webfilter', 'utm.ips', 'utm.appctrl'];
+    const allFields = [..._POLICY_COMPARE_FIELDS, 'utm.av', 'utm.webfilter', 'utm.ips', 'utm.appctrl'];
+    const fields = excludeFields && excludeFields.length ? allFields.filter(f => !excludeFields.includes(f)) : allFields;
     const result = diffArrayByKey((oldArr || []).map(_flattenUtm), (newArr || []).map(_flattenUtm), keyFn, fields);
     const stillAdded = [];
     for (const a of result.added) {
@@ -81,27 +85,43 @@
   }
 
   const _ADDRESS_COMPARE_FIELDS = ['type','subnet','fqdn','startIp','endIp','wildcard','iface','color','comment','members'];
-  function diffAddresses(oldArr, newArr) {
-    return diffArrayByKey(oldArr, newArr, a => (a._vdom ? a._vdom + '/' : '') + a.name, _ADDRESS_COMPARE_FIELDS);
+  function diffAddresses(oldArr, newArr, excludeFields) {
+    return diffArrayByKey(oldArr, newArr, a => (a._vdom ? a._vdom + '/' : '') + a.name, _ADDRESS_COMPARE_FIELDS, excludeFields);
   }
 
   const _SERVICE_COMPARE_FIELDS = ['proto','tcpPorts','udpPorts','icmpType','icmpCode','comment','color','members'];
-  function diffServices(oldArr, newArr) {
-    return diffArrayByKey(oldArr, newArr, s => (s._vdom ? s._vdom + '/' : '') + s.name, _SERVICE_COMPARE_FIELDS);
+  function diffServices(oldArr, newArr, excludeFields) {
+    return diffArrayByKey(oldArr, newArr, s => (s._vdom ? s._vdom + '/' : '') + s.name, _SERVICE_COMPARE_FIELDS, excludeFields);
   }
 
   const _ROUTE_COMPARE_FIELDS = ['distance','priority','weight','comment','status','blackhole','vrf'];
-  function diffRoutes(oldArr, newArr) {
+  function diffRoutes(oldArr, newArr, excludeFields) {
     const keyFn = r => (r._vdom ? r._vdom + '/' : '') + r.dst + '|' + r.device + '|' + r.gateway;
-    return diffArrayByKey(oldArr, newArr, keyFn, _ROUTE_COMPARE_FIELDS);
+    return diffArrayByKey(oldArr, newArr, keyFn, _ROUTE_COMPARE_FIELDS, excludeFields);
   }
 
-  function diffConfigs(oldParsed, newParsed) {
+  // NAT 比對（2026-09-01 新增，功能4：HA 主備比對＋功能5 相關擴充）：欄位依 FortiGate
+  // VIP/ippool 既有 parseNAT() 回傳形狀（其餘 vendor 若未輸出對應欄位則該欄位恆為
+  // undefined，diffArrayByKey 的 String(undefined??'')==='' 兩邊相等不會誤判為變更）。
+  // key 用 (vdom/)type/name 避免同名不同 type（如 vip 與 ippool 剛好同名）互相覆蓋。
+  const _NAT_COMPARE_FIELDS = ['vipType','poolType','extIp','extIntf','mapIp','portFwd','extPort','mapPort','proto','startIp','endIp','status','comment','members'];
+  function diffNAT(oldArr, newArr, excludeFields) {
+    const keyFn = n => (n._vdom ? n._vdom + '/' : '') + n.type + '/' + n.name;
+    return diffArrayByKey(oldArr, newArr, keyFn, _NAT_COMPARE_FIELDS, excludeFields);
+  }
+
+  // haMode（2026-09-01 新增，功能4）：HA 主備正常應完全同步，此模式僅排除常見的裝置別
+  // 註記（comment/comments）欄位差異，其餘欄位若仍有差異即代表兩台設定不同步——刻意只做
+  // 這一個範圍明確、低風險的過濾，不臆測其他「裝置專屬」欄位有哪些
+  const _HA_MODE_EXCLUDE_FIELDS = ['comment', 'comments'];
+  function diffConfigs(oldParsed, newParsed, opts) {
+    const excludeFields = opts && opts.haMode ? _HA_MODE_EXCLUDE_FIELDS : undefined;
     return {
-      policies: diffPolicies(oldParsed.policies, newParsed.policies),
-      addresses: diffAddresses(oldParsed.addresses, newParsed.addresses),
-      services: diffServices(oldParsed.services, newParsed.services),
-      routes: diffRoutes(oldParsed.routes, newParsed.routes),
+      policies: diffPolicies(oldParsed.policies, newParsed.policies, excludeFields),
+      addresses: diffAddresses(oldParsed.addresses, newParsed.addresses, excludeFields),
+      services: diffServices(oldParsed.services, newParsed.services, excludeFields),
+      routes: diffRoutes(oldParsed.routes, newParsed.routes, excludeFields),
+      nat: diffNAT(oldParsed.nat, newParsed.nat, excludeFields),
     };
   }
 
@@ -303,6 +323,50 @@
       !usedSvc.has(s.name)
     );
     return { unusedAddrs, unusedSvcs };
+  }
+
+  // ── NAT 規則健檢（2026-09-01 新增，功能5）─────────────────────
+  // 重複 extIP／port 衝突偵測：原本是 firewall-analyzer-app.js 內的 UI-only 函式
+  // （無測試覆蓋），本輪搬到這裡形式化＋補測試，邏輯完全不變。純粹依欄位形狀運作
+  // （type==='vip' + extIp/portFwd/extPort/proto），非寫死 vendor 判斷——FortiGate／
+  // EdgeRouter／OpenWrt／MikroTik 四家 NAT parser 皆輸出此形狀，故本來就會自然套用到
+  // 這四家，非本輪新增查證範圍。
+  function analyzeNAT(nat) {
+    const warnings = [];
+    const vips = (nat || []).filter(n => n.type === 'vip');
+    const ipMap = {};
+    vips.filter(v => v.portFwd === 'disable' || !v.portFwd).forEach(v => {
+      if (v.extIp && v.extIp !== '-') { (ipMap[v.extIp] = ipMap[v.extIp] || []).push(v.name); }
+    });
+    Object.entries(ipMap).filter(([, names]) => names.length > 1).forEach(([ip, names]) => warnings.push({ type: 'dup_ip', msg: `${tr('nat.dup_ip')}: ${ip}`, detail: names.join(', ') }));
+    const portMap = {};
+    vips.filter(v => v.portFwd === 'enable').forEach(v => {
+      const k = `${v.extIp}:${v.extPort}:${v.proto || 'tcp'}`;
+      if (v.extIp && v.extIp !== '-' && v.extPort && v.extPort !== '-') { (portMap[k] = portMap[k] || []).push(v.name); }
+    });
+    Object.entries(portMap).filter(([, names]) => names.length > 1).forEach(([k, names]) => warnings.push({ type: 'port_conflict', msg: `${tr('nat.port_conflict')}: ${k}`, detail: names.join(', ') }));
+    return warnings;
+  }
+
+  // 孤兒 NAT 物件：具名可被 policy 引用的 NAT 物件（vip/ippool/vipgrp）從未被任何 policy 的
+  // srcAddr/dstAddr 引用。**明確排除 Cisco ASA／SonicWall**——這兩家的 NAT 是自我完備規則
+  // （ASA 甚至沒有 .name 欄位、SonicWall 規則不透過 policy 引用生效），對它們做「是否被
+  // 引用」判斷沒有意義，會導致每筆都被誤判為孤兒；比照本專案既有 NAT_UNSUPPORTED／
+  // VENDOR_INCAPABLE 白名單慣例明確排除、不猜測。
+  const ORPHAN_NAT_EXCLUDED_VENDORS = new Set(['ciscoasa', 'sonicwall']);
+  const ORPHAN_NAT_TYPES = new Set(['vip', 'ippool', 'vipgrp']);
+  function analyzeOrphanNAT(parsed) {
+    if (ORPHAN_NAT_EXCLUDED_VENDORS.has(parsed.vendor)) return [];
+    const nat = parsed.nat || [];
+    if (!nat.length) return [];
+    const usedAddr = new Set();
+    for (const p of (parsed.policies || [])) {
+      [p.srcAddr, p.dstAddr].forEach(str => {
+        if (!str || str === '-') return;
+        str.split(/[,"\s]+/).forEach(n => { const t = n.trim(); if (t) usedAddr.add(t); });
+      });
+    }
+    return nat.filter(n => ORPHAN_NAT_TYPES.has(n.type) && n.name && !usedAddr.has(n.name));
   }
 
   // 相鄰規則合併建議：偵測「相鄰（consecutive，中間不能夾其他規則）」且除了
@@ -674,12 +738,14 @@
       <button class="btn btn-ghost btn-sm" onclick="doExport('csv-diff-addresses')">⬇ CSV: ${esc(tr('diff.title_addresses'))}</button>
       <button class="btn btn-ghost btn-sm" onclick="doExport('csv-diff-services')">⬇ CSV: ${esc(tr('diff.title_services'))}</button>
       <button class="btn btn-ghost btn-sm" onclick="doExport('csv-diff-routes')">⬇ CSV: ${esc(tr('diff.title_routes'))}</button>
+      <button class="btn btn-ghost btn-sm" onclick="doExport('csv-diff-nat')">⬇ CSV: ${esc(tr('diff.title_nat'))}</button>
     </div>`;
     return bar
       + _buildDiffSection('diff.title_policies', diffResult.policies)
       + _buildDiffSection('diff.title_addresses', diffResult.addresses)
       + _buildDiffSection('diff.title_services', diffResult.services)
-      + _buildDiffSection('diff.title_routes', diffResult.routes);
+      + _buildDiffSection('diff.title_routes', diffResult.routes)
+      + _buildDiffSection('diff.title_nat', diffResult.nat);
   }
 
   // ── 健康度評估 ─────────────────────────────────────────────────
@@ -743,6 +809,17 @@
         issues.push({ sev: found.risk === 'high' ? 'crit' : found.risk === 'medium' ? 'warn' : 'info', label: tr(labelKey), count: found.value });
       }
     });
+    // T12-T14：NAT 規則健檢納入健康度評分（2026-09-01 新增，功能5）。dup_ip／port_conflict
+    // 沿用既有 T1b(broad-network,-10,medium) 同一相對級距的 medium 權重（-5）；孤兒 NAT 屬於
+    // 「設定衛生」而非直接安全風險，權重比照既有 T3(disabled,-2)／HEALTH_WEIGHT.low(-3) 級距
+    // 定為 low(-3)，且刻意不對 Cisco ASA／SonicWall 執行（見 analyzeOrphanNAT() 排除清單）。
+    const natWarns = analyzeNAT(parsed.nat);
+    const natDupIp = natWarns.filter(w => w.type === 'dup_ip').length;
+    if (natDupIp) { score -= natDupIp * HEALTH_WEIGHT.medium; issues.push({ sev: 'warn', label: tr('health.nat_dup_ip'), count: natDupIp }); }
+    const natPortConflict = natWarns.filter(w => w.type === 'port_conflict').length;
+    if (natPortConflict) { score -= natPortConflict * HEALTH_WEIGHT.medium; issues.push({ sev: 'warn', label: tr('health.nat_port_conflict'), count: natPortConflict }); }
+    const orphanNatCount = analyzeOrphanNAT(parsed).length;
+    if (orphanNatCount) { score -= orphanNatCount * HEALTH_WEIGHT.low; issues.push({ sev: 'info', label: tr('health.nat_orphan'), count: orphanNatCount }); }
     score = Math.max(0, Math.min(100, score));
     const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
     const gradeColor = grade === 'A' ? 'var(--green)' : grade === 'B' ? 'var(--teal)' : grade === 'C' ? 'var(--yellow)' : grade === 'D' ? 'var(--orange)' : 'var(--red)';
