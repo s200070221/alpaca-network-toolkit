@@ -1101,6 +1101,7 @@ end</pre>
       <label style="font-weight:600;font-size:12px;flex-basis:100%;margin-bottom:8px" data-i18n="lbl.bulkUpload">上傳 CSV 檔案（含設備列表）</label>
       <input type="file" id="bulk-csv-file" accept=".csv" style="flex:1">
       <button class="act-btn" onclick="showBulkTemplate()" data-i18n="btn.bulkTemplate">📋 查看格式</button>
+      <button class="act-btn" onclick="downloadBulkSampleCSV()" data-i18n="btn.bulkSampleCsv">⬇️ 下載範例 CSV</button>
       <button class="act-btn" onclick="processBulkCSV()" data-i18n="btn.bulkStart">開始批量產生</button>
     </div>
     <div id="bulk-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;max-height:300px;overflow-y:auto">

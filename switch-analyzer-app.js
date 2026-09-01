@@ -1744,6 +1744,50 @@ function analyzeSwitchAudit(parsed){
     ['ISO27001 A.8.20','NIST 800-53 IA-3','CIS v8 4.4']);
   return findings;
 }
+// 設定健康度評分（比照 firewall_analyzer computeFirewallHealth() 同一套權重與 A-F 門檻，
+// 見 firewall-analyzer-audit.js。switch 的 finding.check 本身已是 tr() 過的人類可讀標籤，
+// 直接重用當 issue label，不需要像 firewall 那樣另建一組 health.* 專屬措辭 key）
+function computeSwitchHealth(parsed){
+  const findings=analyzeSwitchAudit(parsed);
+  let score=100;
+  const issues=[];
+  const WEIGHT={high:10,medium:5,low:3};
+  const SEV={high:'crit',medium:'warn',low:'info'};
+  findings.forEach(f=>{
+    if(f.value>0){
+      score-=f.value*(WEIGHT[f.risk]||WEIGHT.low);
+      issues.push({sev:SEV[f.risk]||'info',label:f.check,count:f.value});
+    }
+  });
+  score=Math.max(0,Math.min(100,score));
+  const grade=score>=90?'A':score>=75?'B':score>=60?'C':score>=40?'D':'F';
+  const gradeColor=grade==='A'?'var(--green)':grade==='B'?'var(--teal)':grade==='C'?'var(--yellow)':grade==='D'?'var(--orange)':'var(--red)';
+  return {score,grade,gradeColor,issues};
+}
+function _doSwitchHealthCheck(){
+  if(!parsed)return;
+  const btn=document.getElementById('sw-health-btn');
+  if(btn)btn.textContent=tr('health.recheck');
+  const res=computeSwitchHealth(parsed);
+  const sevColors={crit:'var(--red)',warn:'var(--yellow)',info:'var(--accent)'};
+  const sevIcon={crit:'🔴',warn:'🟡',info:'🔵'};
+  let h=`<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
+    <div style="font-size:48px;font-weight:700;color:${res.gradeColor};line-height:1">${res.grade}</div>
+    <div><div style="font-size:13px;color:var(--text-dim)">${tr('health.title')}</div>
+    <div style="font-size:20px;font-weight:600;color:${res.gradeColor}">${res.score} / 100</div></div>
+  </div>`;
+  if(!res.issues.length){
+    h+=`<div style="color:var(--green);font-size:13px">${tr('health.ok')}</div>`;
+  }else{
+    h+=res.issues.map(i=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border-left:3px solid ${sevColors[i.sev]||'var(--border)'}">
+      <span style="font-size:14px">${sevIcon[i.sev]||''}</span>
+      <span style="font-size:13px;color:var(--text)">${esc(i.label)}</span>
+      <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}</span>
+    </div>`).join('');
+  }
+  const el=document.getElementById('sw-health-result');
+  if(el)el.innerHTML=h;
+}
 function renderAudit(){
   const findings=analyzeSwitchAudit(parsed);
   const hi=findings.filter(f=>f.risk==='high').length;
@@ -1772,7 +1816,11 @@ function renderAudit(){
   const {html}=renderTable(hdrs,fmtRows,null);
   return `<div style="font-size:13px;font-weight:600;color:var(--purple);margin-bottom:6px">${tr('audit.sw_title')}</div>`
     +cards+disclaimer
-    +`<div style="overflow-x:auto"><div class="tbl-wrap">${html}</div></div>`;
+    +`<div style="overflow-x:auto"><div class="tbl-wrap">${html}</div></div>`
+    +`<div id="sw-health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
+        <button id="sw-health-btn" onclick="_doSwitchHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
+        <div id="sw-health-result" style="margin-top:12px"></div>
+       </div>`;
 }
 function exportAuditCSV(){
   if(!parsed){alert(tr('msg.no_config'));return;}

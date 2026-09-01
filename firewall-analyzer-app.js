@@ -217,7 +217,8 @@ const App = (() => {
       const [oldText,newText]=await Promise.all([readFile(DIFF_OLD_FILE),readFile(DIFF_NEW_FILE)]);
       const oldParsed=FW_DIFF_PARSERS[vendor](oldText);
       const newParsed=FW_DIFF_PARSERS[vendor](newText);
-      DIFF_RESULT=diffConfigs(oldParsed,newParsed);
+      const haMode=!!document.getElementById('diff-ha-mode')?.checked;
+      DIFF_RESULT=diffConfigs(oldParsed,newParsed,{haMode});
       $('diff-result').innerHTML=buildDiffHtml(DIFF_RESULT);
     }catch(e){
       DIFF_RESULT=null;
@@ -657,24 +658,9 @@ function onParsed(){
     var ac=document.getElementById('alpaca-corner'); if(ac) ac.setAttribute('title', tr('egg.alpaca_title'));
   };
 
-  function analyzeNAT(nat) {
-    const warnings = [];
-    const vips = (nat||[]).filter(n=>n.type==='vip');
-    // Duplicate extIp (no port forwarding)
-    const ipMap = {};
-    vips.filter(v=>v.portFwd==='disable'||!v.portFwd).forEach(v=>{
-      if(v.extIp&&v.extIp!=='-'){(ipMap[v.extIp]=ipMap[v.extIp]||[]).push(v.name);}
-    });
-    Object.entries(ipMap).filter(([,names])=>names.length>1).forEach(([ip,names])=>warnings.push({type:'dup_ip',msg:`${tr('nat.dup_ip')}: ${ip}`,detail:names.join(', ')}));
-    // Port conflict (port forwarding)
-    const portMap = {};
-    vips.filter(v=>v.portFwd==='enable').forEach(v=>{
-      const k=`${v.extIp}:${v.extPort}:${v.proto||'tcp'}`;
-      if(v.extIp&&v.extIp!=='-'&&v.extPort&&v.extPort!=='-'){(portMap[k]=portMap[k]||[]).push(v.name);}
-    });
-    Object.entries(portMap).filter(([,names])=>names.length>1).forEach(([k,names])=>warnings.push({type:'port_conflict',msg:`${tr('nat.port_conflict')}: ${k}`,detail:names.join(', ')}));
-    return warnings;
-  }
+  // analyzeNAT()（重複 extIP／port 衝突）／analyzeOrphanNAT()（孤兒 NAT 物件）已於
+  // 2026-09-01 搬到 firewall-analyzer-audit.js（比照該檔案「無 DOM 依賴函式歸到 audit.js」
+  // 既有慣例，audit.js 載入順序在 app.js 之前，此處直接呼叫其全域宣告的版本）。
 
   // ── Section renderer ──────────────────────────────────────────
   const SEC_LABELS={interfaces:()=>tr('sec.interfaces'),policies:()=>tr('sec.policies'),routes:()=>tr('sec.routes'),vpn:()=>tr('sec.vpn'),nat:()=>tr('sec.nat'),addresses:()=>tr('sec.addresses'),services:()=>tr('sec.services'),schedules:()=>tr('sec.schedules'),users:()=>tr('sec.users'),audit:()=>tr('nav.audit'),query:()=>tr('nav.query'),fortiswitch:()=>tr('nav.fortiswitch')};
@@ -820,7 +806,9 @@ function onParsed(){
         thead=`<tr><th>${tip('tip.nat',tr('col.type'))}</th><th>${tr('col.name')}</th><th>${tr('col.subtype')}</th><th>${tip('tip.vip',tr('col.ext_ip'))}</th><th>${tr('col.ext_if')}</th><th>${tr('col.map_ip')}</th><th>${tr('col.port_fwd')}</th><th>${tr('col.ext_port')}</th><th>${tr('col.map_port')}</th><th>${tr('col.protocol')}</th><th>${tip('tip.status',tr('col.status'))}</th><th>${tr('col.desc')}</th></tr>`;
         rowFn=r=>`<tr><td>${pill(r.type,'p-warn')}</td><td class="mono" style="color:var(--accent)">${esc(r.name)}</td><td style="color:var(--text-dim)">${esc(r.vipType||r.poolType||'-')}</td><td class="mono">${esc(r.extIp||r.startIp||'-')}</td><td style="color:var(--text-dim)">${esc(r.extIntf||r.srcIntf||'-')}</td><td class="mono">${esc(r.mapIp||r.endIp||'-')}</td><td>${esc(r.portFwd||'-')}</td><td class="mono">${esc(r.extPort||'-')}</td><td class="mono">${esc(r.mapPort||'-')}</td><td style="color:var(--text-dim)">${esc(r.proto||'-')}</td><td>${r.status==='disable'?pill(tr('wwan.pill_disable'),'p-deny'):pill(tr('wwan.pill_enable'),'p-allow')}</td><td style="color:var(--text-dim);font-size:11px">${esc(r.comment)}</td></tr>`;
         {const _natWarns=analyzeNAT(d.nat);
-        if(_natWarns.length>0)_extraHtml=`<div style="margin-top:16px;padding:10px 14px;background:rgba(234,88,12,.08);border-left:3px solid var(--orange);border-radius:6px"><div style="font-size:12px;font-weight:600;color:var(--orange);margin-bottom:6px">⚠ ${tr('nat.analysis_title')}</div>${_natWarns.map(w=>`<div style="font-size:12px;color:var(--text);margin-top:4px"><span style="color:var(--orange);font-weight:600">${esc(w.msg)}</span> — ${esc(w.detail)}</div>`).join('')}</div>`;}
+        if(_natWarns.length>0)_extraHtml+=`<div style="margin-top:16px;padding:10px 14px;background:rgba(234,88,12,.08);border-left:3px solid var(--orange);border-radius:6px"><div style="font-size:12px;font-weight:600;color:var(--orange);margin-bottom:6px">⚠ ${tr('nat.analysis_title')}</div>${_natWarns.map(w=>`<div style="font-size:12px;color:var(--text);margin-top:4px"><span style="color:var(--orange);font-weight:600">${esc(w.msg)}</span> — ${esc(w.detail)}</div>`).join('')}</div>`;
+        const _orphanNat=analyzeOrphanNAT(d);
+        if(_orphanNat.length>0)_extraHtml+=`<div style="margin-top:16px;padding:10px 14px;background:rgba(96,165,250,.08);border-left:3px solid var(--info);border-radius:6px"><div style="font-size:12px;font-weight:600;color:var(--info);margin-bottom:6px">ℹ ${tr('nat.orphan_title')}</div>${_orphanNat.map(o=>`<div style="font-size:12px;color:var(--text);margin-top:4px"><span style="color:var(--info);font-weight:600">${esc(o.name)}</span> (${esc(o.type)})</div>`).join('')}</div>`;}
         break;
       case 'addresses':
         data=d.addresses;
