@@ -353,15 +353,20 @@
   // （ASA 甚至沒有 .name 欄位、SonicWall 規則不透過 policy 引用生效），對它們做「是否被
   // 引用」判斷沒有意義，會導致每筆都被誤判為孤兒；比照本專案既有 NAT_UNSUPPORTED／
   // VENDOR_INCAPABLE 白名單慣例明確排除、不猜測。
-  const ORPHAN_NAT_EXCLUDED_VENDORS = new Set(['ciscoasa', 'sonicwall']);
+  // 排除比對改用不分大小寫的子字串（比照既有 no-2fa 的 .includes('PaloAlto') 修法），因為
+  // parsed.vendor 實際值是 'Cisco ASA'／'SonicWall'（含空格/駝峰），且 merge() 合併多廠牌分析
+  // 時會在後面加後綴，精確比對／小寫字面值比對兩者皆會恆為 false 導致排除清單完全失效。
+  const ORPHAN_NAT_EXCLUDED_VENDOR_RE = /cisco\s*asa|sonicwall/i;
   const ORPHAN_NAT_TYPES = new Set(['vip', 'ippool', 'vipgrp']);
   function analyzeOrphanNAT(parsed) {
-    if (ORPHAN_NAT_EXCLUDED_VENDORS.has(parsed.vendor)) return [];
+    if (ORPHAN_NAT_EXCLUDED_VENDOR_RE.test(parsed.vendor || '')) return [];
     const nat = parsed.nat || [];
     if (!nat.length) return [];
     const usedAddr = new Set();
     for (const p of (parsed.policies || [])) {
-      [p.srcAddr, p.dstAddr].forEach(str => {
+      // poolname 是 ippool（SNAT／來源位址轉換）的引用欄位，與 vip 用的 srcAddr/dstAddr 不同，
+      // 遺漏這欄會讓所有正常在用的 ippool 被誤判為孤兒（outbound SNAT 用 IP Pool 是常見設定）。
+      [p.srcAddr, p.dstAddr, p.poolname].forEach(str => {
         if (!str || str === '-') return;
         str.split(/[,"\s]+/).forEach(n => { const t = n.trim(); if (t) usedAddr.add(t); });
       });
@@ -541,7 +546,7 @@
     };
     const isBroad = val => String(val || '').split(',').map(s => s.trim()).filter(Boolean)
       .some(p => { const len = addrPrefixLen(p); return len !== null && len <= 8; });
-    const broadNetwork = policies.filter(p => p.action === 'accept' && p.status !== 'disable' &&
+    const broadNetwork = policies.filter(p => p.action === 'accept' && p.status !== 'disable' && p.status !== 'Disable' &&
       (isBroad(p.srcAddr) || isBroad(p.dstAddr)));
     f('broad-network', tr('audit.check_broad_network'), broadNetwork.length, 'medium',
       broadNetwork.length ? tr('audit.id_prefix') + broadNetwork.map(p => idLabel(p)).slice(0,10).join(', ') + (broadNetwork.length > 10 ? '…' : '') : tr('audit.none'),
@@ -768,7 +773,7 @@
     };
     const healthIsBroad = val => String(val || '').split(',').map(s => s.trim()).filter(Boolean)
       .some(p => { const len = healthAddrPrefixLen(p); return len !== null && len <= 8; });
-    const broadNetwork = policies.filter(p => p.action === 'accept' && p.status !== 'disable' && (healthIsBroad(p.srcAddr) || healthIsBroad(p.dstAddr)));
+    const broadNetwork = policies.filter(p => p.action === 'accept' && p.status !== 'disable' && p.status !== 'Disable' && (healthIsBroad(p.srcAddr) || healthIsBroad(p.dstAddr)));
     if (broadNetwork.length) { score -= broadNetwork.length * 10; issues.push({sev:'warn', label:tr('health.broad_network'), count:broadNetwork.length}); }
     // T2: shadowed rules
     const shadowMap = buildShadowMap(policies);

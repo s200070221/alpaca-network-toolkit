@@ -1282,7 +1282,10 @@ const CLASSMAP_VENDOR_TYPES={
   // NX-OS（2026-08-31 新增）：官方 Cisco Nexus QoS Configuration Guide＋Cisco Community/
   // NetCraftsmen 真實範例已查證 access-group（多一個 name 關鍵字）/dscp/cos；
   // protocol/ip-precedence/vlan 未查得逐字語法，不臆測
-  nxos:['access-group','dscp','cos']
+  // key 務必用產生器下拉選單值 'cisco_nxos'（非 switch_analyzer/parseAndImport() 那邊用的
+  // 'nxos'，兩套命名不同，見 line 2819-2822 既有註解），否則 updateModeOptions() 讀
+  // CLASSMAP_VENDOR_TYPES[vendor] 永遠查不到、hint 文字永遠空白（2026-09-02 審查發現）
+  'cisco_nxos':['access-group','dscp','cos']
 };
 const CLASSMAP_TYPE_I18N={'access-group':'opt.cmapAccessGroup',dscp:'opt.cmapDscp',protocol:'opt.cmapProtocol','ip-precedence':'opt.cmapIpPrecedence',cos:'opt.cmapCos',vlan:'opt.cmapVlan'};
 
@@ -1351,7 +1354,7 @@ function updateModeOptions(){
   // 2026-08-28（續5）擴大：Arista/Dell OS10 各自有獨立的 class-map/service-policy 語法
   // （多一段 "type qos" 限定詞，語序彼此相反），見 switch-generator-arista.js/
   // switch-generator-dell-os10.js 的 renderXClassMapQoS() 對應註解
-  const supportsClassMap=(vendor==='cisco'||vendor==='ruijie'||vendor==='planet'||vendor==='arista'||vendor==='dell-os10'||vendor==='comware'||vendor==='nxos');
+  const supportsClassMap=(vendor==='cisco'||vendor==='ruijie'||vendor==='planet'||vendor==='arista'||vendor==='dell-os10'||vendor==='comware'||vendor==='cisco_nxos');
   const classMapCard=document.getElementById('classmap-card');
   if(classMapCard)classMapCard.style.display=supportsClassMap?'':'none';
   const qosApplyCard=document.getElementById('qos-apply-card');
@@ -3460,13 +3463,16 @@ function processBulkCSV(){
         // 觸發廠牌變更（更新模式選項等）
         updateModeOptions();
 
-        // 選填欄位覆寫（僅 CSV 表頭有出現的欄位才覆寫，套用到表格第一列）
+        // 選填欄位覆寫（僅 CSV 表頭有出現的欄位才覆寫，套用到表格第一列）。每列開始前先重置
+        // 回原始表單快照值，再套用該列自己的覆寫——否則某一列的儲存格留空（沿用原表單值的
+        // 正常用法）時，DOM 欄位會維持「前一列」寫入的值而非原始值，導致覆寫外溢到後續列
+        // （2026-09-02 審查發現）
         if(hasVlanOverride&&vlanRow0){
-          if(row.vlanid)vlanRow0.querySelector('.v-id').value=row.vlanid;
-          if(row.vlanname)vlanRow0.querySelector('.v-name').value=row.vlanname;
+          vlanRow0.querySelector('.v-id').value=row.vlanid||originalVlanId||'';
+          vlanRow0.querySelector('.v-name').value=row.vlanname||originalVlanName||'';
         }
-        if(hasIfaceDescOverride&&ifaceRow0&&row.ifacedesc){
-          ifaceRow0.querySelector('.i-desc').value=row.ifacedesc;
+        if(hasIfaceDescOverride&&ifaceRow0){
+          ifaceRow0.querySelector('.i-desc').value=row.ifacedesc||originalIfaceDesc||'';
         }
 
         // 產生配置

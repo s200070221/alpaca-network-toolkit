@@ -457,8 +457,12 @@ function renderComwareQoS(list){
 // 的第一個 IRF-Port 編號，MVP 範圍僅支援每個 member 一個 IRF-Port，與既有 VSU 卡片
 // 「一個 member 一組連結埠」的簡化慣例一致）+ 巢狀 `port group interface X`。
 function renderComwareIRF(irf){
-  if(!irf||!irf.domain||!(irf.members||[]).length)return '';
-  const lines=[`irf domain ${irf.domain}`];
+  // domain 官方語法本身是選填（未設定時裝置預設為 1，見表單 placeholder），與「完全沒有
+  // IRF 設定」是兩回事——守門條件只看 members 是否有資料，domain 留空時省略該行即可，
+  // 不能連 irf member 這幾行也一起砍掉（2026-09-02 審查發現的既有 bug）。
+  if(!irf||!(irf.members||[]).length)return '';
+  const lines=[];
+  if(irf.domain)lines.push(`irf domain ${irf.domain}`);
   (irf.members||[]).forEach(m=>{
     if(m.id&&m.priority)lines.push(`irf member ${m.id} priority ${m.priority}`);
   });

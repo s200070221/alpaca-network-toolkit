@@ -1539,7 +1539,13 @@ function parseQoS(cfg, vendor){
 // 先於被引用的 policy-map 定義）
 function parseClassMaps(cfg){
   const maps=[];
-  const cmRe=/^class-map\s+(?:(match-any|match-all)\s+)?(\S+)([\s\S]*?)(?=^class-map\s+|^policy-map\s+|(?![\s\S]))/gm;
+  // (?!type\s) 排除 "class-map type X ..."（如 Catalyst CoPP 常見的
+  // "class-map type control-plane match-any NAME"）——這是與本函式鎖定的一般 QoS
+  // class-map 完全不同的語意/用途，先前沒有這道守衛時 (\S+) 會把緊接在 class-map 後面的
+  // 字面 "type" 誤判成 class-map 名稱，match-any/match-all／真正名稱／match 條件全部錯位
+  // 解析（2026-09-02 審查發現；Arista/Dell OS10/NX-OS 各自獨立的 class-map parser 本來就
+  // 要求字面完全相符的 "type qos"，不受此問題影響）
+  const cmRe=/^class-map\s+(?!type\s)(?:(match-any|match-all)\s+)?(\S+)([\s\S]*?)(?=^class-map\s+|^policy-map\s+|(?![\s\S]))/gm;
   let m;
   while((m=cmRe.exec(cfg))!==null){
     const matchType=m[1]||'match-all', name=m[2], body=m[3]||'', matches=[];

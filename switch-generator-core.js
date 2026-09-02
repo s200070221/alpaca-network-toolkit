@@ -212,10 +212,15 @@ function renderClassMapQoS(list){
   const blocks=[];
   groupClassMapMatches(list).forEach((grp,name)=>{
     const lines=[`class-map ${grp.matchType} ${name}`];
+    // 白名單限定 access-group/dscp/protocol/cos + ip-precedence（與 switch_analyzer 的
+    // parseClassMaps() 正則 /match\s+(access-group|dscp|protocol|cos)/ 完全對稱），不能用
+    // 通用 else 把任意 condType（如 UI 下拉選單裡本廠牌未查證的 vlan）原樣輸出成 CLI 指令——
+    // 那樣會生造出從未查證過的語法，且 round-trip 讀回時會被解析器規則吃掉（2026-09-02 審查
+    // 發現：Cisco/Ruijie/Planet 選了 vlan 會產生 `match vlan N` 這行未查證語法）
     grp.matches.forEach(mt=>{
       if(!mt.type||!mt.value)return;
       if(mt.type==='ip-precedence')lines.push(` match ip precedence ${mt.value}`);
-      else lines.push(` match ${mt.type} ${mt.value}`);
+      else if(['access-group','dscp','protocol','cos'].includes(mt.type))lines.push(` match ${mt.type} ${mt.value}`);
     });
     blocks.push(lines.join('\n'));
   });
