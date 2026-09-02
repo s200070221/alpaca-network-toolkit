@@ -3211,8 +3211,13 @@ function spanText(ms) {
 const CAT_KEY_MAP = { authFail:'cat.authFail', denyBlock:'cat.denyBlock', attack:'cat.attack', scanFlood:'cat.scanFlood', exceedThreshold:'cat.exceedThreshold', other:'cat.other', possibleScan:'cat.possibleScan', knownIOC:'cat.knownIOC', volumeAnomaly:'cat.volumeAnomaly', geoRisk:'cat.geoRisk', geoIPRisk:'cat.geoIPRisk', beaconing:'cat.beaconing', lateralMovement:'cat.lateralMovement', privEsc:'cat.privEsc', geoVelocity:'cat.geoVelocity', asnRisk:'cat.asnRisk', acctLockout:'cat.acctLockout', pwReset:'cat.pwReset', groupRemoved:'cat.groupRemoved', acctStatusChange:'cat.acctStatusChange', auditCleared:'cat.auditCleared', persistence:'cat.persistence', kerberoasting:'cat.kerberoasting', specialPrivLogon:'cat.specialPrivLogon', explicitCredLogon:'cat.explicitCredLogon', acctDeleted:'cat.acctDeleted', auditPolicyChanged:'cat.auditPolicyChanged', auditLogFull:'cat.auditLogFull', adminShareAccess:'cat.adminShareAccess', processCreate:'cat.processCreate', asnVelocity:'cat.asnVelocity', sysmonNetConn:'cat.sysmonNetConn', sysmonFileCreate:'cat.sysmonFileCreate', sysmonDnsQuery:'cat.sysmonDnsQuery', sysmonProcessCreate:'cat.sysmonProcessCreate' };
 // MITRE ATT&CK 技術編號參考標籤（2026-09-01 新增，純靜態查表，不新增偵測邏輯）：只對業界已有
 // 明確 established 對應的分類標註，語意含糊或屬於「風險標記」而非「技術行為」的分類（如
-// geoRisk/knownIOC/volumeAnomaly/processCreate 等）刻意留空，不臆測湊數。僅供參考，非事件的
+// knownIOC/volumeAnomaly/processCreate 等）刻意留空，不臆測湊數（geoRisk/geoIPRisk/asnRisk
+// 例外，這三個雖是風險標記但語意明確對應 T1078，故仍標註，見下方）。僅供參考，非事件的
 // 最終定性判斷——同一 EventID 組合在真實環境也可能對應多種技術，見 mitre.disclaimer 提示文字。
+// 注意：key 必須是 buildIssueList() 實際會產生的 issue category（見 CAT_KEY_MAP），純標籤分類
+// （classifyByKeyword() 專用、從未進 issues 陣列的 specialPrivLogon/explicitCredLogon/
+// sysmonNetConn/sysmonFileCreate/sysmonDnsQuery，見 line 2456 附近說明）刻意不收錄，收錄了也
+// 永遠查不到對應的 is.category，是查無意義的死碼。
 const MITRE_MAP = {
   authFail:'T1110', acctLockout:'T1110',
   kerberoasting:'T1558.003',
@@ -3225,7 +3230,6 @@ const MITRE_MAP = {
   persistence:'T1053.005',
   beaconing:'T1071',
   possibleScan:'T1595',
-  specialPrivLogon:'T1078', explicitCredLogon:'T1078',
   geoVelocity:'T1078', asnVelocity:'T1078', geoRisk:'T1078', geoIPRisk:'T1078', asnRisk:'T1078',
 };
 // 事件清單「疑似問題」欄位用的簡短判定標籤，與問題清單既有的 cat.* 分類標籤分開維護，

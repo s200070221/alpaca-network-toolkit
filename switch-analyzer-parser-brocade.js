@@ -453,6 +453,10 @@ function parseBrocadeVRRP(cfg){
   // "ipv6 vrrp-extended vrid N" 指令（非 IPv4 的 "ip vrrp-extended vrid N"，關鍵字前綴不同），
   // VIP 用 "ipv6-address ADDR"（可能多筆，取第一筆為 MVP 範圍），需要 "version 3" 宣告
   const vip6ByKey={};
+  // IPv6 版本的優先權關鍵字是 "backup priority N"（非 IPv4 版本的裸 "priority N"，CLAUDE.md
+  // 已記載此差異），先前只解析 vip6 沒解析 priority，只有 IPv6 宣告、無對應 IPv4 vrid 時會
+  // 靜默寫死成預設值 100，使用者實際設定的優先權遺失（2026-09-02 審查發現）
+  const vip6PriorityByKey={};
   // Split on "interface ve N" blocks to find VRRP-E per-SVI
   const veBlocks=cfg.split(/^(?=interface\s+ve\s)/im);
   for(const blk of veBlocks.slice(1)){
@@ -468,6 +472,8 @@ function parseBrocadeVRRP(cfg){
       if(isV6){
         const vip6M=sub.match(/^\s+ipv6-address\s+(\S+)/m);
         if(vip6M)vip6ByKey[iface+':'+vrid]=vip6M[1];
+        const prio6M=sub.match(/^\s+backup priority\s+(\d+)/m);
+        if(prio6M)vip6PriorityByKey[iface+':'+vrid]=prio6M[1];
       }else{
         const key=iface+':'+vrid;
         if(!seen.has(key)){
@@ -501,7 +507,7 @@ function parseBrocadeVRRP(cfg){
     const[iface,vrid]=key.split(':');
     const g=groups.find(x=>x.interface===iface&&x.vrid===vrid);
     if(g)g.vip6=vip6ByKey[key];
-    else groups.push({vrid,interface:iface,vip:'',vip6:vip6ByKey[key],priority:'100',preempt:true,authMode:'',trackIf:'',trackReduced:'',version:'2'});
+    else groups.push({vrid,interface:iface,vip:'',vip6:vip6ByKey[key],priority:vip6PriorityByKey[key]||'100',preempt:true,authMode:'',trackIf:'',trackReduced:'',version:'2'});
   });
   return groups;
 }

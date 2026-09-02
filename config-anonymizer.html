@@ -1008,10 +1008,12 @@ function _sendToAnalysisTool() {
 }
 const mappings = { ip:new Map(), hostname:new Map(), user:new Map(), ssid:new Map(), alias:new Map(), vdom:new Map(), mac:new Map() };
 // 匯入既有對照表的種子（比照 log_analyzer 對應的 IMPORTED_SEED，各自維護一份、不跨檔引用）：
-// 單檔模式本身不需要這個——resetAll() 不清 mappings，匯入一次全 session 持續生效。但
-// runBatch()（見該函式）為了讓批次內每個檔案有獨立的假值編號，會在處理每個檔案前重置
-// mappings/ctrs/stats/bucketSeen，這會把匯入的種子一併洗掉，導致跨工具一致性在批次模式下
-// 形同虛設；IMPORTED_SEED 保留一份累加合併後的種子，讓 runBatch() 能在每次重置後重新套用
+// 單檔模式的真正執行入口是 anonymize()（非 resetAll()——resetAll() 是「重置」按鈕，本身確實
+// 不清 mappings，但每次按「開始去識別化」都會呼叫 anonymize()，該函式開頭本來就會清空
+// mappings/ctrs/stats/bucketSeen，這點與 runBatch() 逐檔重置是同一類問題，故 anonymize() 與
+// runBatch() 皆需在重置後呼叫 seedLiveMappingsFromImported(IMPORTED_SEED) 重新套用；否則使用者
+// 匯入對照表後第一次按「開始去識別化」，剛匯入的假值就會被洗掉、改產生一組全新的假值，跨工具
+// 一致性功能形同虛設（2026-09-02 審查發現的既有缺口，此前只修好了 runBatch() 那一條路徑）
 let IMPORTED_SEED = null;
 const ctrs = { n1:0, n2:0, n3:0, ip6:0, dev:0, usr:0, ssid:0, alias:0, vdom:0, mac:0 };
 // 各類別已見過的不重複來源 IP 集合，供偵測 ctrs.n1/n2/n3 回捲碰撞用（每類別 RFC5737
@@ -2692,6 +2694,10 @@ function anonymize(text, vendor, opts) {
   // 254 位址回捲警告用的追蹤集合，先前只有 runBatch() 逐檔重置，單檔案流程（本函式）
   // 從未重置過，導致同一 session 內連續處理多份互不相關的檔案時警告會跨檔案累積誤報
   Object.keys(bucketSeen).forEach(k => bucketSeen[k].clear());
+  // 比照 runBatch() 的既有修復：重置後若有已匯入的跨工具對照表種子，須重新套用進 live
+  // mappings，否則每次執行去識別化都會把剛匯入的假值洗掉、改產生全新假值（見上方 IMPORTED_SEED
+  // 宣告處的說明）。
+  if (IMPORTED_SEED) seedLiveMappingsFromImported(IMPORTED_SEED);
 
   const fn = VENDOR_FNS[vendor] || anonGeneric;
   return fn(text, opts);
