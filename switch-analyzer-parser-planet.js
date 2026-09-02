@@ -388,7 +388,11 @@ function _normPlanetMacToken(raw){
 }
 function _parseMacACLPlanet(cfg){
   const acls=[];
-  const macRe=/^mac-access-list\s+extended\s+(\S+)([\s\S]*?)(?=^mac-access-list\s+extended\s+|(?![\s\S]))/gm;
+  // 收尾邊界比照 parseClassMaps() 等同批新增函式的既有慣例，額外納入其餘 Planet 已支援區塊
+  // 的起始關鍵字（interface/class-map/policy-map/access-list），避免 MAC ACL 不是檔案最後
+  // 一段、後面接的也不是另一個 mac-access-list extended 時 body 過度延伸吃到後續區塊文字
+  // （2026-09-02 審查發現的理論邊界，防禦性補強，非已知會誤判的真實案例）
+  const macRe=/^mac-access-list\s+extended\s+(\S+)([\s\S]*?)(?=^mac-access-list\s+extended\s+|^interface\s+|^class-map\s+|^policy-map\s+|^access-list\s+|(?![\s\S]))/gm;
   let m;
   while((m=macRe.exec(cfg))!==null){
     const name=m[1], body=m[2]||'';
