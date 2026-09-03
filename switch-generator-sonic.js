@@ -64,7 +64,9 @@ function assembleSONiCConfig(model){
     if(!r.dst||!r.gw)return;
     const entry={nexthop:r.gw};
     if(r.metric)entry.distance=String(r.metric); // 表單欄位語意是 metric，SONiC 真實鍵名是 distance
-    db.STATIC_ROUTE[`default|${r.dst}`]=entry;
+    // parseSONiC() 明確有解析 vrf 欄位（複合鍵 "vrf-name|prefix"），先前一律寫死 "default"，
+    // 完全忽略 r.vrf，VRF 靜態路由匯出後 VRF 資訊悄悄消失（2026-09-02 全功能審查發現）
+    db.STATIC_ROUTE[`${r.vrf||'default'}|${r.dst}`]=entry;
   });
 
   // ACL_TABLE / ACL_RULE（2026-08-08 對外查證新增，原排除項目：官方文件＋真實範例確認欄位
@@ -79,7 +81,10 @@ function assembleSONiCConfig(model){
     db.ACL_TABLE[a.name]={policy_desc:a.name,type:'L3',ports:(a.appliedOn||[]).map(ap=>ap.interface).filter(Boolean)};
     (a.rules||[]).forEach((r,idx)=>{
       if(r.action!=='permit'&&r.action!=='deny')return;
-      const entry={PRIORITY:parseInt(r.seq,10)||(9999-idx),PACKET_ACTION:r.action==='deny'?'DROP':'FORWARD',IP_TYPE:'IP'};
+      // r.seq==='0' 時 parseInt 算出數字 0，0 是 falsy，先前 || 會轉而採用 fallback 值，使用者
+      // 明確指定的 seq=0 被靜默覆寫成完全不同的優先權數字（2026-09-02 全功能審查發現）
+      const seqNum=parseInt(r.seq,10);
+      const entry={PRIORITY:Number.isNaN(seqNum)?(9999-idx):seqNum,PACKET_ACTION:r.action==='deny'?'DROP':'FORWARD',IP_TYPE:'IP'};
       const proto=SONIC_IP_PROTO[(r.protocol||'').toLowerCase()];
       if(proto)entry.IP_PROTOCOL=proto;
       const src=sonicAclAddr(r.src); if(src)entry.SRC_IP=src;

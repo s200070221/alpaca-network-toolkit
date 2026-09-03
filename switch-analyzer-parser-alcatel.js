@@ -280,9 +280,17 @@ function parseAlcatelBGP(cfg){
   // Guide「Configuring Local Routes (Networks)」章節確認：`-> ip bgp network <ip> <mask>`
   // （點分遮罩格式非 CIDR，比照其餘 Alcatel BGP 指令需要 -> 前綴）
   const networks=[]; let nm;
-  const nr=/^->\s*ip bgp network\s+([\d.]+)\s+([\d.]+)/gm;
+  // 官方語法要求同一筆 network 輸出兩行才會生效："-> ip bgp network A B" +
+  // "-> ip bgp network A B admin-state enable"，先前正則沒有行尾錨點，第二行同樣符合這個
+  // 正則（多餘的 admin-state enable 文字被忽略），導致同一筆 network 被收集兩次；補上
+  // \s*$ 錨定僅匹配純 network 宣告行（2026-09-02 全功能審查發現）
+  const nr=/^->\s*ip bgp network\s+([\d.]+)\s+([\d.]+)\s*$/gm;
   while((nm=nr.exec(cfg))!==null)networks.push(nm[1]+'/'+cidrFromMask(nm[2]));
-  return peers.length?[{asn,routerId:rid,peers,networks}]:[];
+  // 函式一開始已用 asn 是否存在判斷「這份設定檔有沒有啟用 BGP」，先前回傳時又用
+  // peers.length 當第二道門檻，只設定 ASN/router-id/redistribute networks、但沒有設定任何
+  // neighbor 的合法 BGP 用法（純作 redistribute）會讓整段 BGP 資訊被靜默丟棄成 []
+  // （2026-09-02 全功能審查發現）
+  return[{asn,routerId:rid,peers,networks}];
 }
 
 // 已查證 Alcatel-Lucent OmniSwitch AOS 官方 CLI Reference Manual（透過 ManualsLib

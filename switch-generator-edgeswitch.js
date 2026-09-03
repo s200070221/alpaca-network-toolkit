@@ -45,7 +45,9 @@ function renderEdgeSwitchLACPExtra(lacpList,ifaces){
     // 2026-08-09 查證官方 KB 逐字指令稿修正：addport 一律輸出在 LAG 自己的區塊內、
     // 每個成員一行，而非先前誤植在各成員埠自己的區塊內
     const refIface=(l.members||[]).map(m=>(ifaces||[]).find(i=>i.name===m)).find(Boolean);
-    const lines=[`interface lag ${gid}`,...edgeSwitchVlanLines(refIface)];
+    // gid 含 "/" 代表官方 KB 範例本身示範的 unit/slot/port 原始位址格式，與 "lag N" 別名平行、
+    // 互斥，原始位址不帶 "lag" 關鍵字（2026-09-02 全功能審查發現，比照 Netgear 同源修復）
+    const lines=[gid.includes('/')?`interface ${gid}`:`interface lag ${gid}`,...edgeSwitchVlanLines(refIface)];
     (l.members||[]).forEach(mem=>lines.push(` addport ${mem}`));
     if(l.mode==='static')lines.push(' port-channel static');
     blocks.push(lines.join('\n'));
@@ -57,6 +59,18 @@ function renderEdgeSwitchLACPExtra(lacpList,ifaces){
   return blocks.join('\n!\n');
 }
 
+// 本機帳號（2026-08-23 新增）：官方 EdgeSwitch Command Reference Manual 逐字確認的單行語法；
+// 與 Netgear renderNetgearUsers() 邏輯完全相同，但比照本檔既有慣例（LACP 已獨立複製）
+// 不共用函式
+function renderEdgeSwitchUsers(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  return list.map(u=>{
+    const m=/^level-(\d+)$/.exec(u.role||'');
+    const level=m?m[1]:'15';
+    return `username ${u.name} password ${u.password} level ${level}`;
+  }).join('\n');
+}
 function assembleEdgeSwitchConfig(model){
   // 真實 EdgeSwitch "show running-config" 表頭固定含 "!Current Configuration:"（與 Netgear
   // 同源 ICOS 共用），switch_analyzer 的 detectVendor() 靠內文含 "vlan participation
@@ -73,6 +87,8 @@ function assembleEdgeSwitchConfig(model){
   if(model.interfaces&&model.interfaces.length)blocks.push(renderEdgeSwitchInterfaces(model.interfaces,model.lacp));
   const lacpExtra=renderEdgeSwitchLACPExtra(model.lacp,model.interfaces);
   if(lacpExtra)blocks.push(lacpExtra);
+  const usersBlockEs=renderEdgeSwitchUsers(model.users);
+  if(usersBlockEs)blocks.push(usersBlockEs);
   return blocks.join('\n!\n')+'\n';
 }
 

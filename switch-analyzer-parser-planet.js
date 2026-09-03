@@ -75,10 +75,19 @@ function parsePlanetHybrid(blk){
 function parsePlanetInterfaces(cfg){
   const ifaces=[];
   const blocks=cfg.split(/^interface\s+/m).slice(1);
+  // Planet 語法沒有 Comware 的 "#" 或 Ruijie 的 "!" 那種逐區塊獨立終止字元，interface 區塊
+  // 彼此緊接相連；split(/^interface\s+/m) 天生就能正確定界「非最後一個」區塊（下一個
+  // "interface " 出現處即是邊界），但「檔案中最後一次出現的區塊」沒有下一個 interface 可以
+  // 自然定界，body 會一路延伸吃進後續不相干區塊（如 DHCP pool 自己的 description），誤植進
+  // 本介面的欄位值——用其餘 Planet 已支援的頂層區塊關鍵字當收尾邊界（2026-09-02 全功能審查
+  // 發現，用合成情境重現：最後一個介面沒設 desc，後面接 DHCP pool）
+  const planetIfaceBoundaryRe=/^(?:vlan\s|router\s|ip route\s|ip dhcp pool\s|access-list\s|mac-access-list\s|class-map\s|policy-map\s|spanning-tree|username\s)/m;
   for(const blk of blocks){
     const lines=blk.split('\n');
     const name=lines[0].trim();
-    const body=lines.slice(1).join('\n');
+    let body=lines.slice(1).join('\n');
+    const boundaryM=body.match(planetIfaceBoundaryRe);
+    if(boundaryM)body=body.slice(0,boundaryM.index);
     const desc=(body.match(/^\s*description\s+(.+)/m)||[])[1]?.trim()||'';
     const shutdown=/^\s*shutdown\s*$/m.test(body)&&!/no shutdown/.test(body);
 

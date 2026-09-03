@@ -9,6 +9,19 @@
 // （典型案例：ACL 規則重排）的設定檔會顯示大量無意義的新增/刪除雜訊。本檔案提供以 parseAny()
 // 解析後的結構化模型為基礎的比對，用 key 比對取代位置比對，天生不受陣列順序影響。
 
+// 陣列型欄位（如 vlans[].ipSubnets 是物件陣列、interfaces[].secondaryIps 是字串陣列）不能直接
+// String() 比較——JS 對物件陣列的 toString() 一律是 "[object Object],..."（內容不同也永遠相等，
+// 真實變更會被吃掉），對字串陣列則是逗號拼接（單純重排順序、內容不變也會判定不同，違反本檔案
+// 「重排不算變更」的設計初衷）。改用「每個元素各自 JSON.stringify 後排序再比較」，同時修正這兩
+// 種相反方向的錯誤，且對純量欄位（非陣列）行為完全不變（2026-09-02 全功能審查發現）。
+function _fieldsEqual(a, b) {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const sa = (Array.isArray(a) ? a : []).map(x => JSON.stringify(x)).sort();
+    const sb = (Array.isArray(b) ? b : []).map(x => JSON.stringify(x)).sort();
+    return JSON.stringify(sa) === JSON.stringify(sb);
+  }
+  return String(a ?? '') === String(b ?? '');
+}
 // diffArrayByKey — 逐字搬自 firewall-analyzer-audit.js（通用 Map 比對，vendor/domain 無關）
 function diffArrayByKey(oldArr, newArr, keyFn, compareFields) {
   const oldMap = new Map((oldArr || []).map(o => [keyFn(o), o]));
@@ -19,7 +32,7 @@ function diffArrayByKey(oldArr, newArr, keyFn, compareFields) {
   for (const [k, oldItem] of oldMap) {
     if (!newMap.has(k)) continue;
     const newItem = newMap.get(k);
-    const diffFields = compareFields.filter(f => String(oldItem[f] ?? '') !== String(newItem[f] ?? ''));
+    const diffFields = compareFields.filter(f => !_fieldsEqual(oldItem[f], newItem[f]));
     if (diffFields.length) changed.push({ key: k, old: oldItem, new: newItem, diffFields });
   }
   return { added, removed, changed };

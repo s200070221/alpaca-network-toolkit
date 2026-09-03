@@ -151,8 +151,12 @@ function parseExtremeXOSInterfaces(cfg){
   while((m=loRe.exec(cfg))!==null)
     ifaces.push({name:'loopback0',type:'loopback',desc:'',mode:'',vlans:'',nativeVlan:'',vrf:'',ip:m[1],shutdown:false,member:'1',hybrid:null,vrrp:[]});
 
-  // SVIs — from both "configure vlan NAME ipaddress" and "configure NAME ipaddress"
-  const ipRe=/^configure(?:\s+vlan)?\s+"?([A-Za-z][A-Za-z0-9_\-]*)"?\s+ipaddress\s+([\d.]+)\s+([\d.]+)/gm;
+  // SVIs — from both "configure vlan NAME ipaddress" and "configure NAME ipaddress"。VLAN
+  // 名稱擷取字元類別先前要求第一個字元是英文字母，但 EXOS VLAN 名稱單純是字串，管理者常直接
+  // 拿 VLAN ID 當名稱（如 "100"），純數字名稱會完全比對不到、導致 SVI 從 Interfaces 消失
+  // （2026-09-02 全功能審查發現）；改用與同檔案 createRe 一致的 [^"\s]+，false positive 靠
+  // 既有的 stacking/ospf/vrrp/bgp 排除清單把關
+  const ipRe=/^configure(?:\s+vlan)?\s+"?([^"\s]+)"?\s+ipaddress\s+([\d.]+)\s+([\d.]+)/gm;
   while((m=ipRe.exec(cfg))!==null){
     const name=m[1].replace(/"/g,'');
     if(['stacking','ospf','vrrp','bgp'].includes(name.toLowerCase()))continue;
@@ -193,9 +197,14 @@ function parseExtremeXOSLACP(cfg){
     const master=m[1].trim();
     const groupStr=m[2].split(/algorithm|lacp/)[0].trim();
     const members=exosExpandPortsV2(groupStr);
+    // 官方語法：enable sharing ... 這行本身若不含 lacp 關鍵字，代表純靜態聚合（不跑 LACP
+    // 協定），連帶不會有 configure sharing ... lacp activity-mode 這行。先前 fallback
+    // 一律預設成 'active'，沒檢查原始行是否真的有 lacp 關鍵字，導致純靜態聚合被永遠誤判成
+    // Active LACP（2026-09-02 全功能審查發現）。
+    const hasLacpKeyword=/\blacp\b/i.test(m[2]);
     // Mode from configure sharing
     const modeM=cfg.match(new RegExp('^configure sharing\\s+'+master.replace(/[.:]/g,'\\$&')+'\\s+lacp\\s+activity-mode\\s+(\\S+)','m'));
-    const modeRaw=(modeM||[])[1]||'active';
+    const modeRaw=(modeM||[])[1]||(hasLacpKeyword?'active':'static');
     const mode=modeRaw==='active'?'Active':modeRaw==='passive'?'Passive':'Static';
     lacp.push({name:'lag'+master.replace(/:/g,'-'),mode,members,desc:''});
   }
@@ -320,8 +329,12 @@ function parseExtremeXOSUsers(cfg){
     const{pwdType,pwdWeak}=exosPwdType(hash);
     users.push({name,role,service:'ssh/console',hasPwd:true,pwdType,pwdWeak});
   }
-  // Format B: create account ROLE NAME encrypted "HASH"  (name unquoted before encrypted)
-  const reB=/^create account\s+(\w+)\s+(\S+)\s+encrypted\s+"?([^"\s]+)"?/gm;
+  // Format B: create account ROLE NAME encrypted "HASH"  (name unquoted before encrypted)。
+  // 名稱擷取字元類別先前是 \S+（含雙引號字元），對 Format A 的帶引號名稱那一行也會再次
+  // 匹配一次，抓出含字面雙引號的假帳號（如 "alice" 而非 alice），seen 去重比對因此失敗
+  // （2026-09-02 全功能審查發現）；改用 [^"\s]+ 排除雙引號字元，第一個字元遇到 " 就直接
+  // 比對失敗，正確跳過已被 Format A 消耗的帶引號設定行
+  const reB=/^create account\s+(\w+)\s+([^"\s]+)\s+encrypted\s+"?([^"\s]+)"?/gm;
   while((m=reB.exec(cfg))!==null){
     const role=m[1],name=m[2],hash=m[3];
     if(name==='encrypted')continue; // skip if name was accidentally 'encrypted'
@@ -474,10 +487,19 @@ function parseExtremeXOSStack(cfg){
 // policy-map/class 語意完全不同，不沿用共用 parseQoS() 的 {policy,cls,action,rate,burst}
 // 形狀，改用專屬新形狀（比照 Brocade parseBrocadeQoS() 前例）
 function parseExtremeQoS(cfg){
-  const profiles=[];
+  const profileMap={};
   let m;
+  // minbw/maxbw 官方語法皆為選填，管理者可分兩行個別下達（先設 minbw、之後再設 maxbw），
+  // 先前逐 match 直接 push 會把同一個 QPn 拆成兩筆各自欄位不全的物件而非合併；改用與同函式
+  // 既有 portMap 合併模式一致的寫法，依 name 為 key 逐行合併欄位（2026-09-02 全功能審查發現）
   const cpRe=/^configure qosprofile\s+(QP\d)\s+(?:minbw\s+(\d+)\s*)?(?:maxbw\s+(\d+)\s*)?/gm;
-  while((m=cpRe.exec(cfg))!==null){ if(m[2]||m[3]) profiles.push({name:m[1],minbw:m[2]||'',maxbw:m[3]||''}); }
+  while((m=cpRe.exec(cfg))!==null){
+    if(!m[2]&&!m[3])continue;
+    if(!profileMap[m[1]])profileMap[m[1]]={name:m[1],minbw:'',maxbw:''};
+    if(m[2])profileMap[m[1]].minbw=m[2];
+    if(m[3])profileMap[m[1]].maxbw=m[3];
+  }
+  const profiles=Object.values(profileMap);
   const dscpMap=[];
   const dsRe=/^configure diffserv examination code-point\s+(\d+)\s+qosprofile\s+(QP\d)/gm;
   while((m=dsRe.exec(cfg))!==null) dscpMap.push({codePoint:m[1],profile:m[2]});

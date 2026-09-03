@@ -31,6 +31,11 @@ function parseRouterOSInterfaces(cfg){
   let m;
   while((m=re.exec(cfg))!==null){
     const type=m[1];
+    // /interface bridge（VLAN filtering 用的軟體橋接器物件）與 /interface bonding（LACP，
+    // 本來就該完全交給 parseRouterOSLACP() 處理，見上方 applyRouterOSVlanMembership() 註解
+    // 明載的既有設計意圖）不是實體/邏輯埠，先前這裡沒有排除，會被誤收進 intfs 當成一般介面，
+    // 與 renderRouterOSBridge()/parseRouterOSLACP() 各自的輸出撞名（2026-09-02 審查發現）
+    if(type==='bridge'||type==='bonding')continue;
     const lines=m[2].split('\n');
     for(let i=0;i<lines.length;i++){
       const addM=lines[i].match(/add\s+name=([^\s]+)(?:.*?speed=(\d+(?:\w+)?)?)?/);
@@ -362,8 +367,11 @@ function parseRouterOSUsers(cfg){
   const users=[];
   let inUser=false;
   for(const line of cfg.split('\n')){
-    if(/^\/user\b/.test(line)){inUser=true;continue;}
-    if(/^\//.test(line)&&!/^\/user/.test(line))inUser=false;
+    // "/user group"（自訂權限群組定義選單）與 "/user"（實際帳號選單）都以 "/user" 開頭，
+    // 先前的 \b word-boundary 判斷式無法區分兩者，"/user group add name=X ..." 也會被當成
+    // 使用者帳號解析；改為精確比對僅 "/user" 本身（不含子選單），2026-09-02 審查發現
+    if(/^\/user\s*$/.test(line)){inUser=true;continue;}
+    if(/^\//.test(line)&&!/^\/user\s*$/.test(line))inUser=false;
     if(!inUser)continue;
     const nm=line.match(/add\s+name=([^\s]+)/);
     const gm=line.match(/group=([^\s]+)/);

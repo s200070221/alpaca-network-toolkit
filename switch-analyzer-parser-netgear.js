@@ -108,7 +108,11 @@ function parseNetgearRoutes(cfg){
     let gw='',gwIsInterface=false;
     if(m[3]){gw='vlan '+m[3];gwIsInterface=true;}
     else if(m[4]){gw=m[4];gwIsInterface=true;}
-    else if(m[5]){gw=m[5];gwIsInterface=(m[5]==='Null0');}
+    // Null0 與一般 nexthop IP 同屬這個分支（regex 裡兩者都不在 "interface" 關鍵字之後），
+    // 官方語法 Null0 本身不帶 "interface" 前綴，與 unit/slot/port｜vlan 那個分支平行、互斥；
+    // 先前誤把 Null0 標成 gwIsInterface=true，產生器端會多插入不存在的 "interface" 關鍵字，
+    // 匯出 "ip route ... interface Null0" 這種真機會拒絕的無效語法（2026-09-02 審查發現）
+    else if(m[5]){gw=m[5];gwIsInterface=false;}
     if(dst&&gw)routes.push({dst,gw,vrf:'',gwIsInterface});
   }
   return routes;
@@ -135,6 +139,20 @@ function parseNetgearOSPF(cfg){
   return processes;
 }
 
+// 本機帳號（2026-08-23 新增）：Netgear M4300／EdgeSwitch 同源 ICOS，語法比照官方
+// Ubiquiti EdgeSwitch Command Reference Manual 逐字確認的單行語法
+// "username NAME password PASSWORD level N"（N=1 唯讀／15 讀寫）；Netgear 官方 PDF 因
+// WebFetch 無法解析二進位內容，改用社群文件交叉印證同一語法，中信心度。role 比照 Cisco
+// 既有 'privilege-N' 慣例，用合成字串 'level-N' 存純數字層級
+function parseNetgearUsers(cfg){
+  const users=[];
+  const re=/^username\s+(\S+)\s+password\s+(\S+)\s+level\s+(\d+)/gm;
+  let m;
+  while((m=re.exec(cfg))!==null){
+    users.push({name:m[1],role:'level-'+m[3],service:'ssh/console',hasPwd:true,pwdType:'set',pwdWeak:false});
+  }
+  return users;
+}
 function parseNetgear(cfg){
   const sys=parseNetgearSysInfo(cfg);
   const vlans=parseNetgearVLANs(cfg);
@@ -143,7 +161,7 @@ function parseNetgear(cfg){
   const ospf=parseNetgearOSPF(cfg);
   const rip=parseCiscoRIP(cfg); // bare "router rip"，語法與 Cisco 相同可直接重用
   const vrrp=parseVRRP(cfg,'netgear');
-  return{sys,irf:null,stack:null,vlans,interfaces,routes,vrfs:[],users:[],ospf,bgp:[],rip,vrrp,vxlan:null,vendor:'netgear',breakouts:[]};
+  return{sys,irf:null,stack:null,vlans,interfaces,routes,vrfs:[],users:parseNetgearUsers(cfg),ospf,bgp:[],rip,vrrp,vxlan:null,vendor:'netgear',breakouts:[]};
 }
 
 // ═ Ubiquiti EdgeSwitch (舊款 ES-XX／EdgeSwitch X 系列，Broadcom ICOS) Parser ═

@@ -261,6 +261,10 @@ function renderBrocadeVEBlocks(interfaces,vrrpList,ospfAreaVe,dhcpList,ripPorts,
       if(ip.includes(':'))lines.push(` ipv6 address ${ip}`);
       else{ const[ipAddr,len]=ip.split('/'); lines.push(` ip address ${ipAddr} ${maskFromCidr(len)}`); }
     }
+    // 雙棧修復：parseBrocadeInterfaces() 早已把 IPv6 獨立無條件存進 iface.ip6（不受 ip 欄位
+    // 是否已有值影響），但這裡先前只讀單一 ip 欄位，同時有 IPv4+IPv6 時 ip 固定被 IPv4 佔用，
+    // iface.ip6 整個檔案零命中，IPv6 位址從未被輸出（2026-09-02 全功能審查發現）
+    if(iface&&iface.ip6&&iface.ip6!==ip)lines.push(` ipv6 address ${iface.ip6}`);
     // 次要IP（2026-08-23 陣列化）：官方 `ip address A B secondary`；parser 端 2026-08-17
     // 已從「僅取第一筆」擴充為完整陣列 secondaryIps
     (iface&&iface.secondaryIps||[]).filter(s=>!s.includes(':')).forEach(s=>{

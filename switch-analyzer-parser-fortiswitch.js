@@ -139,8 +139,11 @@ function parseFortiVLANs(cfg){
 }
 
 function parseFortiStack(cfg){
-  // FortiSwitch uses MCLAG for stacking-like behavior
-  const isMCLAG=cfg.includes('set mclag-icl enable') || cfg.includes('config switch trunk');
+  // FortiSwitch uses MCLAG for stacking-like behavior。"config switch trunk" 是任何 LACP
+  // 聚合（含最普通的上聯 port-channel）都會出現的區塊標頭，不是 MCLAG 專屬，先前只要設定檔
+  // 有任何 LACP trunk（非常見）就會被誤判為「已堆疊」，UI 上顯示一台完全獨立的交換器已堆疊
+  // （2026-09-02 全功能審查發現）；只用 mclag-icl 這個真正 MCLAG 專屬的關鍵字判斷
+  const isMCLAG=cfg.includes('set mclag-icl enable');
   if(!isMCLAG)return null;
   const members=[];
   // In standalone/manual MCLAG, we often see hostname or serial
@@ -318,6 +321,27 @@ function parseFortiSwitchBreakout(cfg){
   return breakouts;
 }
 
+// 本機帳號（2026-08-23 新增）：官方 FortiSwitchOS Administration Guide 確認巢狀
+// `config system admin` / `edit "NAME"` / `set accprofile "PROFILE"` / `set password ...`
+// 結構，比照本檔既有 config/edit/set/next/end 區塊擷取慣例（見 parseFortiVLANs()）。真實
+// 匯出檔（show/get）的密碼欄位固定帶 `ENC` 前綴（已加密標記，Fortinet Community 技術文章
+// 確認），明文只會出現在互動輸入當下、不會出現在匯出的設定檔文字裡
+function parseFortiSwitchUsers(cfg){
+  const users=[];
+  const block=(cfg.match(/^config system admin\n([\s\S]*?)^end/m)||[])[1]||'';
+  const editRe=/edit\s+"?([^"\n]+?)"?\n([\s\S]*?)(?=^[ \t]*next|^end)/gm;
+  let m;
+  while((m=editRe.exec(block))!==null){
+    const name=m[1].trim(), body=m[2];
+    const role=(body.match(/set accprofile\s+"?([^"\n]+?)"?\s*$/m)||[])[1]||'';
+    const pwdM=body.match(/set password\s+(ENC\s+)?(\S+)/);
+    const hasPwd=!!pwdM;
+    const pwdType=hasPwd?(pwdM[1]?'enc':'set'):'';
+    const pwdWeak=hasPwd&&!pwdM[1];
+    users.push({name,role,service:'ssh/https',hasPwd,pwdType,pwdWeak});
+  }
+  return users;
+}
 function parseFortiSwitch(cfg){
   const sys=parseFortiSysInfo(cfg);
   const stack=parseFortiStack(cfg);
@@ -336,7 +360,7 @@ function parseFortiSwitch(cfg){
   const dhcpFt=parseDHCP(cfg,'fortiswitch');
   return {
     sys, irf:null, stack, vlans, interfaces,
-    routes, vrfs:[], users:[],
+    routes, vrfs:[], users:parseFortiSwitchUsers(cfg),
     ospf:routing.ospf, ospf6:routing.ospf6, bgp:routing.bgp, rip:routing.rip, rip6:routing.rip6,
     lacp:lacpFt, dhcp:dhcpFt,
     vrrp:interfaces.flatMap(i=>(i.vrrp||[]).map(v=>({interface:i.name, ...v}))),

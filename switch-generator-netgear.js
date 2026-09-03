@@ -53,7 +53,11 @@ function renderNetgearLACPExtra(lacpList,ifaces){
     // addport 一律輸出在 LAG 自己的區塊內、每個成員一行，而非先前誤植在各成員埠自己的
     // 區塊內；member port 若尚未在 model.interfaces 有自己的顯式區塊，仍補一個空區塊
     // 確保該埠存在，但不再輸出 addport
-    const lines=[`interface lag ${gid}`,...netgearSwitchportLines(refIface)];
+    // gid 含 "/" 代表官方 KB 範例本身示範的 unit/slot/port 原始位址格式（如 "0/2"），與
+    // "lag N" 別名是平行、互斥的兩種定址方式，原始位址本身不帶 "lag" 關鍵字（2026-09-02
+    // 全功能審查發現：先前無條件輸出 "interface lag {gid}"，官方範例格式會產生真機無效
+    // 語法 "interface lag 0/2"）
+    const lines=[gid.includes('/')?`interface ${gid}`:`interface lag ${gid}`,...netgearSwitchportLines(refIface)];
     (l.members||[]).forEach(mem=>lines.push(` addport ${mem}`));
     if(l.mode==='static')lines.push(' port-channel static');
     blocks.push(lines.join('\n'));
@@ -108,6 +112,18 @@ function renderNetgearRoute(r){
 }
 function renderNetgearRoutes(list){return (list||[]).map(renderNetgearRoute).join('\n');}
 
+// 本機帳號（2026-08-23 新增）：switch_analyzer 的 parseNetgearUsers() 對應官方 EdgeSwitch
+// Command Reference Manual 逐字確認的單行語法（Netgear 同源 ICOS，中信心度）；role 若是
+// 'level-N' 合成字串則還原成數字層級，否則預設 15（讀寫）
+function renderNetgearUsers(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  return list.map(u=>{
+    const m=/^level-(\d+)$/.exec(u.role||'');
+    const level=m?m[1]:'15';
+    return `username ${u.name} password ${u.password} level ${level}`;
+  }).join('\n');
+}
 function assembleNetgearConfig(model){
   // 真實 M4300 "show running-config" 表頭固定含 "!Current Configuration:"，switch_analyzer
   // 的 detectVendor() 以此表頭 + 內文含 "NETGEAR"/"M4300" 字樣組合判定，缺這兩行會導致
@@ -136,6 +152,8 @@ function assembleNetgearConfig(model){
   if(model.routes&&model.routes.length)blocks.push(renderNetgearRoutes(model.routes));
   const stpBlockNg=renderSpanningTreeGlobal(model.stp);
   if(stpBlockNg)blocks.push(stpBlockNg);
+  const usersBlockNg=renderNetgearUsers(model.users);
+  if(usersBlockNg)blocks.push(usersBlockNg);
   return blocks.join('\n!\n')+'\n';
 }
 

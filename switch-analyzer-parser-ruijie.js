@@ -5,6 +5,25 @@ function parseRuijieSysInfo(cfg){
     platform:'',
   };
 }
+// Ruijie 產生器端 compressVlanList() 把 hybrid untagged/tagged VLAN 清單壓縮輸出成
+// 「逗號分隔＋連字號範圍」格式（如 "5-7,10,12-15"），但解析端先前只用 split(/\s+/)（純空白
+// 切割），完全不認得逗號與連字號範圍，會把整段壓縮字串誤當成單一 VLAN token（2026-09-02
+// 全功能審查發現）；比照 switch-analyzer-parser-planet.js 既有的 expandPlanetVlanWord() 寫法
+function expandRuijieHybridVlanWord(word){
+  const ids=[];
+  (word||'').split(/[,\s]+/).forEach(part=>{
+    part=part.trim();
+    if(!part)return;
+    const rangeM=part.match(/^(\d+)-(\d+)$/);
+    if(rangeM){
+      const from=parseInt(rangeM[1],10),to=parseInt(rangeM[2],10);
+      for(let i=from;i<=to;i++)ids.push(String(i));
+    }else if(/^\d+$/.test(part)){
+      ids.push(part);
+    }
+  });
+  return ids;
+}
 function parseRuijieHybrid(blk){
   // 官方語法：switchport hybrid native vlan N（PVID）／switchport hybrid allowed vlan
   // [[add] {tagged|untagged}] X-Y ／ switchport hybrid allowed vlan remove X-Y（"add" 為可省略
@@ -20,9 +39,9 @@ function parseRuijieHybrid(blk){
   while((m=opRe.exec(blk))!==null){
     if(m[1]){
       const target=m[1]==='tagged'?tagged:untagged;
-      m[2].trim().split(/\s+/).forEach(v=>target.add(v));
+      expandRuijieHybridVlanWord(m[2]).forEach(v=>target.add(v));
     }else if(m[3]){
-      m[4].trim().split(/\s+/).forEach(v=>{tagged.delete(v);untagged.delete(v);});
+      expandRuijieHybridVlanWord(m[4]).forEach(v=>{tagged.delete(v);untagged.delete(v);});
     }
   }
   return{
@@ -42,7 +61,13 @@ function parseRuijieInterfaces(cfg){
   for(const blk of blocks){
     const lines=blk.split('\n');
     const name=lines[0].trim();
-    const body=lines.slice(1).join('\n');
+    let body=lines.slice(1).join('\n');
+    // 每個 interface 區塊在 Ruijie（Cisco-like）語法中都以獨立一行 "!" 終止；split 對「檔案中
+    // 最後一次出現的區塊」沒有下一個 "interface " 可以自然定界，body 會一路延伸吃進後續
+    // 不相干區塊（如 ip vrf 自己的 description），誤植進本介面的欄位值（2026-09-02 全功能
+    // 審查發現）
+    const bangIdx=body.search(/\n!\s*(\n|$)/);
+    if(bangIdx!==-1)body=body.slice(0,bangIdx);
     const desc=(body.match(/^\s*description\s+(.+)/m)||[])[1]?.trim()||'';
     const shutdown=/^\s*shutdown\s*$/m.test(body)&&!/no shutdown/.test(body);
     // Ruijie 介面命名可能含空白（如 "GigabitEthernet 0/1"），先去除空白再取 member 編號

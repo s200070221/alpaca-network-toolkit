@@ -16,7 +16,9 @@ function parseAristaSysInfo(cfg){
 }
 function parseAristaVLANs(cfg){
   const vlans=[],seen=new Set();
-  const re=/^vlan\s+([\d,\-]+)\s*\n([\s\S]*?)(?=^vlan\s|^interface\s|^router\s|^spanning-tree\b|^ip\s+routing|^!\s*$)/gm;
+  // (?![\s\S]) 補上字串結尾 fallback（CLAUDE.md 已知 regex 陷阱），理由與修法比照
+  // switch-analyzer-parser-cisco.js 同一輪修復（2026-09-02 全功能審查發現）
+  const re=/^vlan\s+([\d,\-]+)\s*\n([\s\S]*?)(?=^vlan\s|^interface\s|^router\s|^spanning-tree\b|^ip\s+routing|^!\s*$|(?![\s\S]))/gm;
   let m;
   while((m=re.exec(cfg))!==null){
     const ids=_expandVlanRange(m[1]);
