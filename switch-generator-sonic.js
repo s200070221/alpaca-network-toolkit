@@ -78,7 +78,12 @@ function assembleSONiCConfig(model){
   db.ACL_RULE={};
   (model.acl||[]).forEach(a=>{
     if(!a.name)return;
-    db.ACL_TABLE[a.name]={policy_desc:a.name,type:'L3',ports:(a.appliedOn||[]).map(ap=>ap.interface).filter(Boolean)};
+    // stage（2026-09-03 對外查證官方 SONiC ACL High-Level Design 文件確認新增）：官方欄位是
+    // 表格層級的 "ingress"／"egress"（未設定時預設 ingress，非逐 port），先前完全忽略
+    // ap.direction，使用者若在 UI 選了 out 方向會被靜默略過，一律輸出成預設的 ingress
+    const tbl={policy_desc:a.name,type:'L3',ports:(a.appliedOn||[]).map(ap=>ap.interface).filter(Boolean)};
+    if((a.appliedOn||[]).some(ap=>ap.direction==='out'))tbl.stage='egress';
+    db.ACL_TABLE[a.name]=tbl;
     (a.rules||[]).forEach((r,idx)=>{
       if(r.action!=='permit'&&r.action!=='deny')return;
       // r.seq==='0' 時 parseInt 算出數字 0，0 是 falsy，先前 || 會轉而採用 fallback 值，使用者

@@ -88,7 +88,9 @@ function renderCiscoInterface(iface,lacpList,dhcpList,aclList,securityList,stp,o
   if(iface.jumbo&&iface.jumbo.enabled&&iface.jumbo.mtu)lines.push(` mtu ${iface.jumbo.mtu}`);
   if(iface.shutdown)lines.push(' shutdown');
   findDhcpRelays(dhcpList,iface.name).forEach(rel=>lines.push(` ip helper-address ${rel.relayServer}`));
-  findAclApplications(aclList,iface.name).forEach(ap=>lines.push(` ip access-group ${ap.name} ${ap.direction}`));
+  // ipv6 traffic-filter（2026-09-03 新增，Cisco/Arista 官方關鍵字，與 IPv4 的
+  // ip access-group 不同字面），比對 _parseACLCisco() 的 ag6Re 分支
+  findAclApplications(aclList,iface.name).forEach(ap=>lines.push(ap.ipVersion==='v6'?` ipv6 traffic-filter ${ap.name} ${ap.direction}`:` ip access-group ${ap.name} ${ap.direction}`));
   // service-policy 介面套用（2026-08-28（續4）新增，見 findQosApplications() 註解）
   findQosApplications(qosApplyList,iface.name).forEach(ap=>lines.push(` service-policy ${ap.direction} ${ap.policy}`));
   const sec=findSecurityForPort(securityList,iface.name);
@@ -259,11 +261,15 @@ function renderCiscoDHCP(list){return (list||[]).filter(d=>d.type==='server').ma
 // 會被整段吃進 ACL 的 body 裡，故比照 assembleXXXConfig 既有的 BGP「放最後」慣例，
 // ACL 一定要放在組裝順序的最後一項
 function renderCiscoACLEntry(a){
-  const lines=[`ip access-list ${a.type||'extended'} ${a.name}`];
+  // IPv6 ACL（2026-09-03 新增，修復 switch_analyzer 早已支援解析、產生器端從未正確輸出的
+  // round-trip 缺口）：官方語法是裸 "ipv6 access-list NAME"（不含 standard/extended 關鍵字，
+  // 與 IPv4 版本不同），比對 switch-analyzer-core.js 的 _parseACLCisco() acl6Re 分支
+  const isV6=a.ipVersion==='v6';
+  const lines=[isV6?`ipv6 access-list ${a.name}`:`ip access-list ${a.type||'extended'} ${a.name}`];
   (a.rules||[]).forEach(r=>{
     let line=` ${r.action||'permit'}`;
-    if(a.type==='standard')line+=` ${r.src||'any'}`;
-    else line+=` ${r.protocol||'ip'} ${r.src||'any'} ${r.dst||'any'}${r.dstPort?' eq '+r.dstPort:''}`;
+    if(!isV6&&a.type==='standard')line+=` ${r.src||'any'}`;
+    else line+=` ${r.protocol||(isV6?'ipv6':'ip')} ${r.src||'any'} ${r.dst||'any'}${r.dstPort?' eq '+r.dstPort:''}`;
     lines.push(line);
     if(r.remark)lines.push(` remark ${r.remark}`);
   });

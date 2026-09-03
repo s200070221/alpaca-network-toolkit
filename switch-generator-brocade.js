@@ -281,6 +281,10 @@ function renderBrocadeVEBlocks(interfaces,vrrpList,ospfAreaVe,dhcpList,ripPorts,
         lines.push(` ip vrrp-extended vrid ${e.vrid}`);
         lines.push(`  ip ${e.vip}`);
         if(e.priority)lines.push(`  priority ${e.priority}`);
+        // non-preempt-mode（2026-09-03 對外查證官方 Ruckus FastIron Command Reference
+        // 「non-preempt-mode (VRRP)」頁確認）：獨立指令，預設值本身就是 preempt 啟用，
+        // 出現才代表停用，preempt===true（預設）時不輸出
+        if(e.preempt===false)lines.push('  non-preempt-mode');
         lines.push('  activate');
       }
       // vip6（2026-08-31 新增）：官方 Ruckus FastIron「Enabling an IPv6 VRRP-Ev3 device」
@@ -292,6 +296,7 @@ function renderBrocadeVEBlocks(interfaces,vrrpList,ospfAreaVe,dhcpList,ripPorts,
         if(e.priority)lines.push(`  backup priority ${e.priority}`);
         lines.push('  version 3');
         lines.push(`  ipv6-address ${e.vip6}`);
+        if(e.preempt===false)lines.push('  non-preempt-mode');
         lines.push('  activate');
       }
     });
@@ -361,7 +366,11 @@ function renderBrocadeDHCPPool(d){
     if(start&&end)lines.push(` range ${start} ${end}`);
   }
   if(d.gateway)lines.push(` default-router ${d.gateway}`);
-  if(d.dns)lines.push(` dns-server ${d.dns}`);
+  // parseBrocadeDHCP() 回傳的 dns 欄位是陣列，直接插值陣列會用 JS 預設的逗號拼接（官方語法
+  // 要求空格分隔），表單→collectModel() 這條路徑本來就會先轉成字串所以不受影響，但直接餵
+  // parser 原始輸出（陣列）呼叫本函式時會產生錯誤語法；比照 switch-generator-app.js 既有的
+  // Array.isArray() 防呆寫法統一處理兩種輸入型別（2026-09-03 審查發現，低風險但零成本修復）
+  if(d.dns){const dnsStr=Array.isArray(d.dns)?d.dns.join(' '):d.dns;if(dnsStr)lines.push(` dns-server ${dnsStr}`);}
   if(d.excluded)lines.push(` excluded-address ${d.excluded}`);
   if(d.bootFile)lines.push(` option 67 ascii ${d.bootFile}`);
   if(d.nextServer)lines.push(` option 150 ip ${d.nextServer}`);
