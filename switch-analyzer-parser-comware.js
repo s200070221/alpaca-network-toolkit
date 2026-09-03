@@ -89,13 +89,27 @@ function collectImpliedVLANs(vlans, interfaces){
   return implied;
 }
 
+// H3C 官方 vlan-id-list 語法允許用 "to" 表示範圍（如 "2 to 4 6 to 8"），先前字元類別
+// [\d ]+ 只接受數字與空白，遇到 "to" 會讓整個正則完全比對失敗（連前面能匹配的部分都因為
+// 無法到達結尾的 untagged/tagged 字面值而整體落空），VLAN 清單靜默清空為空陣列
+// （2026-09-02 全功能審查發現）；比照同檔案 collectImpliedVLANs() 既有處理 iface.vlans
+// 的 "to"→"-" 轉換+展開邏輯
+function expandComwareHybridVlanList(str){
+  const ids=[];
+  const raw=(str||'').replace(/\s+to\s+/gi,'-').trim().split(/[,\s]+/);
+  for(const tok of raw){
+    if(tok.includes('-')){const [a,b]=tok.split('-').map(Number);if(!isNaN(a)&&!isNaN(b))for(let i=a;i<=b;i++)ids.push(String(i));}
+    else if(/^\d+$/.test(tok))ids.push(tok);
+  }
+  return ids;
+}
 function parseHybrid(blk){
   const pvid=(blk.match(/port hybrid pvid vlan\s+(\d+)/)||[])[1]||'';
   const untagged=[],tagged=[]; let m;
-  const ur=/port hybrid vlan\s+([\d ]+)\s+untagged/g;
-  while((m=ur.exec(blk))!==null)untagged.push(...m[1].trim().split(/\s+/));
-  const tr=/port hybrid vlan\s+([\d ]+)\s+tagged/g;
-  while((m=tr.exec(blk))!==null)tagged.push(...m[1].trim().split(/\s+/));
+  const ur=/port hybrid vlan\s+([\d ]+(?:to[\d\s]+)*)\s+untagged/g;
+  while((m=ur.exec(blk))!==null)untagged.push(...expandComwareHybridVlanList(m[1]));
+  const tr=/port hybrid vlan\s+([\d ]+(?:to[\d\s]+)*)\s+tagged/g;
+  while((m=tr.exec(blk))!==null)tagged.push(...expandComwareHybridVlanList(m[1]));
   const hasIPSub=/ip subscriber-vlan/.test(blk);
   const vlanMaps=[]; const vmr=/vlan-mapping vlan\s+(\d+)\s+inner-vlan\s+(\d+)/g;
   while((m=vmr.exec(blk))!==null)vlanMaps.push({outer:m[1],inner:m[2]});
@@ -115,7 +129,14 @@ function parseInterfaces(cfg){
   for(const blk of raw.slice(1)){
     const lines=blk.split('\n');
     const name=lines[0].trim();
-    const body=lines.slice(1).join('\n');
+    let body=lines.slice(1).join('\n');
+    // 每個 interface 區塊在 Comware 語法中都以獨立一行 "#" 終止；naive split('\ninterface ')
+    // 對「檔案中最後一次出現的區塊」沒有下一個 "interface " 可以自然定界，body 會一路延伸
+    // 吃進後續不相干區塊（如 ip vpn-instance 自己的 description），誤植進本介面的欄位值
+    // （2026-09-02 全功能審查發現，用真實 comware_test.cfg 的 GigabitEthernet1/0/6 重現：
+    // 該介面本身無 description，卻被 30 行之後的 ip vpn-instance VRF-MGMT 污染）
+    const hashIdx=body.search(/\n#\s*(\n|$)/);
+    if(hashIdx!==-1)body=body.slice(0,hashIdx);
     merged[name]=merged[name]?merged[name]+'\n'+body:body;
   }
 
@@ -749,8 +770,13 @@ function parseRIPng(cfg){
 // ── BGP Parser (Comware) ─────────────────────────────────────
 function parseBGP(cfg){
   const bgpList=[]; let m;
-  // Match "bgp ASN" top-level blocks
-  const re=/^bgp\s+(\d+)\n((?:(?!^(?:bgp\s+\d|router\s|interface\s|ip\s+route|vlan\s)\b)[^\n]*\n)*)/gm;
+  // Match "bgp ASN" top-level blocks。先前的排除清單式逐行負向前瞻收尾沒有處理 Comware
+  // 自己的 "#" 區塊終止字元，若 bgp 區塊後面接的是排除清單沒列到的其他區塊（如本例的
+  // dhcp server ip-pool），body 會一路吃到下一個排除清單關鍵字才停，把後面不相干的區塊
+  // 內容誤植進 bgp networks（2026-09-02 全功能審查發現，用真實 comware_test.cfg 重現）；
+  // 改用與同檔案 parseRIP() 完全一致的寫法——非貪婪 [\s\S]*? 搭配尾端 lookahead 找「最近」
+  // 的邊界，而非先前那種「逐行負向前瞻 repetition」在多個 "#" 之間可能貪婪跳過的寫法
+  const re=/^bgp\s+(\d+)\n([\s\S]*?)(?=^bgp\s+\d|^router\s|^interface\s|^ip\s+route|^vlan\s|\n#\s*\n|(?![\s\S]))/gm;
   while((m=re.exec(cfg))!==null){
     const asn=m[1], body=m[2];
     const rid=(body.match(/router-id\s+(\S+)/)||[])[1]||'';

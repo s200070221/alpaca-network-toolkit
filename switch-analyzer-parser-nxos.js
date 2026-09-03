@@ -40,6 +40,10 @@ function parseNXOS(cfg) {
       const mMode=b.match(/^\s+switchport mode\s+(\S+)/m);
       const mAccess=b.match(/^\s+switchport access vlan\s+(\d+)/m);
       const mTrunk=b.match(/^\s+switchport trunk allowed vlan\s+(.+)/m);
+      // Native VLAN：與 Cisco IOS-XE 家族同款語法 "switchport trunk native vlan N"（NX-OS 官方
+      // 語法沿用同一套 switchport 指令族），先前完全沒有解析，即使產生器端有輸出這行，匯入既有
+      // 設定檔時也讀不回來（2026-09-02 全功能審查發現）
+      const mNative=b.match(/^\s+switchport trunk native vlan\s+(\d+)/m);
       const mIp=b.match(/^\s+ip address\s+(\S+)\/(\d+)/m);
       const mVrf=b.match(/^\s+vrf member\s+(\S+)/m);
       const ip=mIp?`${mIp[1]}/${mIp[2]}`:'-';
@@ -66,7 +70,7 @@ function parseNXOS(cfg) {
       // 而非這裡的 status 字串，原本沒有這個欄位導致該欄一律顯示成 enabled、down 篩選對 NX-OS 永遠篩不到
       const memberMatch=name.match(/^Ethernet(\d+)\//i);
       const member=memberMatch?memberMatch[1]:'1';
-      ifaces.push({ name, desc, status:shut?'disabled':'connected', shutdown:shut, member, mode:mMode?mMode[1]:'', ip, ip6, secondaryIps, vlan, vrf:mVrf?mVrf[1]:'', type, breakoutChild, breakoutParent, breakoutMode:'' });
+      ifaces.push({ name, desc, status:shut?'disabled':'connected', shutdown:shut, member, mode:mMode?mMode[1]:'', ip, ip6, secondaryIps, vlan, nativeVlan:mNative?mNative[1]:'', vrf:mVrf?mVrf[1]:'', type, breakoutChild, breakoutParent, breakoutMode:'' });
     }
     return ifaces;
   }

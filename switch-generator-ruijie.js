@@ -43,7 +43,12 @@ function renderRuijieInterface(iface,lacpList,dhcpList,aclList,securityList,stp,
   const lg=findLacpGroup(lacpList,iface.name);
   if(!lg)lines.push(...ruijieSwitchportLines(iface));
   const isMgmt=/^Management/i.test(iface.name);
+  // ip vrf forwarding 須在 ip address 之前宣告（與 Cisco classic IOS 語法相同，官方行為：
+  // 對介面執行 ip vrf forwarding 會立刻清空既有 IP 位址），比照 switch-generator-cisco.js/
+  // -comware.js 既有寫法排在各分支自己的 IP 輸出之前，先前排在所有分支之後會讓真實裝置套用
+  // 設定時把剛設好的 IP 清空（2026-09-02 全功能審查發現）
   if(iface.type==='svi'){
+    if(iface.vrf&&!isMgmt)lines.push(` ip vrf forwarding ${iface.vrf}`);
     if(iface.ip){
       if(iface.ip.includes(':')){
         lines.push(` ipv6 address ${iface.ip}`);
@@ -53,12 +58,13 @@ function renderRuijieInterface(iface,lacpList,dhcpList,aclList,securityList,stp,
       }
     }
   }else if(iface.type==='loopback'||isMgmt){
+    if(iface.vrf&&!isMgmt)lines.push(` ip vrf forwarding ${iface.vrf}`);
     if(iface.ip)lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
   }else if(iface.mode==='routed'&&iface.ip){
     lines.push(' no switchport');
+    if(iface.vrf&&!isMgmt)lines.push(` ip vrf forwarding ${iface.vrf}`);
     lines.push(` ${iface.ip.includes(':')?'ipv6':'ip'} address ${iface.ip}`);
   }
-  if(iface.vrf&&!isMgmt)lines.push(` ip vrf forwarding ${iface.vrf}`);
   if(lg){
     const modeWord=lg.mode==='passive'?'passive':'active';
     lines.push(` port-group ${lg.id} mode ${modeWord}`);

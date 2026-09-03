@@ -166,7 +166,10 @@ function parseArubaInterfaces(cfg){
     }
     const vsfInfo=parseArubaVSF(cfg);
     const vsfPorts=new Set((vsfInfo?.links||[]).flatMap(l=>l.ports||[]));
-    const isVSF=vsfPorts.has(name)||/^\d+\/1\/5[12]$/.test(name);
+    // 埠號 X/1/51、X/1/52 是許多機型的出廠 VSF 堆疊埠命名慣例，但此 fallback 猜測先前沒有
+    // 「這台設備到底有沒有開 VSF」的前提保護，任何介面只要名稱剛好撞到就會被誤判成
+    // type:'stack'，即使完全沒有 vsf 區塊、當一般 uplink 用（2026-09-02 全功能審查發現）
+    const isVSF=vsfPorts.has(name)||(!!vsfInfo&&/^\d+\/1\/5[12]$/.test(name));
     // Breakout: 母埠 interface 區塊內 `split [count] [speed] [confirm]` 啟用（官方語法已查證）
     const splitMatch=blk.match(/^\s*split(?:\s+(\d+))?(?:\s+(\S+))?\s*(?:confirm)?\s*$/mi);
     const breakoutMode=splitMatch?`${splitMatch[1]||'4'}x${(splitMatch[2]||'10G').replace(/g$/i,'G')}`:'';
@@ -186,7 +189,16 @@ function parseArubaRoutes(cfg){
     let dst=parts[0],gw='',vrf='';
     if(parts.length>=2&&parts[parts.length-2]==='vrf'){vrf=parts[parts.length-1];parts.splice(-2,2);}
     if(parts.length===2)gw=parts[1];
-    else if(parts.length===3){if(parts[1].match(/\d+\.\d+\.\d+\.\d+/)){dst=parts[0]+'/'+cidrFromMask(parts[1]);gw=parts[2];}else gw=parts[1];}
+    // 官方 AOS-CX 語法本身是 CIDR-only："ip route <prefix>/<len> <next-hop> [<distance>]"，
+    // 3 token 未必是 ProCurve 式「dest mask gateway」——若 dst 本身已含 "/"（CIDR），代表使用者
+    // 接了選填的管理距離參數，parts[1] 才是真正的 gateway，parts[2] 是 distance，不能再用
+    // parts[1]「長得像不像點分十進位」去猜測格式（真正的 gateway IP 當然長得像點分十進位，
+    // 會被誤判成遮罩，整筆路由資料損毀，2026-09-02 全功能審查發現）
+    else if(parts.length===3){
+      if(dst.includes('/'))gw=parts[1];
+      else if(parts[1].match(/\d+\.\d+\.\d+\.\d+/)){dst=parts[0]+'/'+cidrFromMask(parts[1]);gw=parts[2];}
+      else gw=parts[1];
+    }
     const gwIsInterface=gw&&!gw.match(/^\d+\.\d+\.\d+\.\d+/);
     if(dst&&gw)routes.push({dst,gw,vrf,gwIsInterface});
   }
@@ -250,7 +262,11 @@ function parseArubaOSPF(cfg){
   // 靜默漏解析；統一補上結尾換行字元避免此邊界情況
   if(!cfg.endsWith('\n'))cfg=cfg+'\n';
   const processes=[]; let m;
-  const re=/^router ospf\s+(\d+)\n((?:(?!^(?:router|bgp|interface|vlan|ip\s+route|user)\b)[^\n]*\n)*)/gm;
+  // OSPFv3（parseArubaOSPFv3()）已支援 "router ospfv3 <pid> vrf <name>"，但 IPv4 版本先前漏了
+  // 同樣的選填 vrf 群組——AOS-CX 官方語法本身支援 "router ospf <pid> vrf <name>"，正則要求
+  // pid 後面緊接換行字元，只要設定檔帶 vrf 修飾，整段 process 就完全比對不到（不是漏欄位，
+  // 是整個 process 憑空消失，2026-09-02 全功能審查發現）
+  const re=/^router ospf\s+(\d+)(?:\s+vrf\s+\S+)?\n((?:(?!^(?:router|bgp|interface|vlan|ip\s+route|user)\b)[^\n]*\n)*)/gm;
   while((m=re.exec(cfg))!==null){
     const pid=m[1],body=m[2];
     const rid=(body.match(/router-id\s+(\S+)/)||[])[1]||'';

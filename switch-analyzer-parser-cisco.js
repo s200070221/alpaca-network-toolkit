@@ -39,7 +39,11 @@ function parseCiscoStack(cfg){
 function parseCiscoVLANs(cfg){
   const vlans=[];
   // VLAN database format: "vlan N" block with optional "name X"
-  const re=/^vlan\s+(\d+)\s*\n([\s\S]*?)(?=^vlan\s|^!)/gm;
+  // (?![\s\S]) 補上字串結尾 fallback（CLAUDE.md 已知 regex 陷阱）：VLAN 區塊若是檔案（或
+  // 產生器輸出）最後一段，先前的 lookahead 永遠找不到終止符，導致整條正則完全比對失敗、
+  // name 完全抓不到（2026-09-02 全功能審查發現，含 round-trip 失敗：assembleCiscoConfig()
+  // 只含 hostname+VLAN 時產出的合法設定檔重新解析會遺失 VLAN 名稱）
+  const re=/^vlan\s+(\d+)\s*\n([\s\S]*?)(?=^vlan\s|^!|(?![\s\S]))/gm;
   let m;
   while((m=re.exec(cfg))!==null){
     const id=m[1],body=m[2]||'';

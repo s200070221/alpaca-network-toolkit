@@ -2844,8 +2844,9 @@ async function parseAndImport(){
   else if(vendor==='planet')parsed=api.parsePlanet(text);
   else{
     parsed=api.parseNXOS(text);
-    // parseNXOS() 的 interface 物件形狀跟其餘廠牌不同（vlan 為單數欄位、無 nativeVlan/hybrid），
-    // 正規化成其餘廠牌慣用的 vlans 欄位，讓下方共用的 interface 回填邏輯可以直接沿用不需另開分支
+    // parseNXOS() 的 interface 物件形狀跟其餘廠牌不同（vlan 為單數欄位、無 hybrid；nativeVlan
+    // 2026-09-02 已補上解析，欄位命名與其餘廠牌一致不需正規化），把 vlan 正規化成其餘廠牌慣用
+    // 的 vlans 欄位，讓下方共用的 interface 回填邏輯可以直接沿用不需另開分支
     (parsed.interfaces||[]).forEach(i=>{ i.vlans=i.vlan||''; });
   }
 
@@ -3000,7 +3001,13 @@ async function parseAndImport(){
   const lacpBypass=vendor==='juniper'||vendor==='brocade'||vendor==='alcatel'||vendor==='extreme'||vendor==='procurve'||vendor==='routeros';
   const lacpList=fns?(lacpBypass?(parsed.lacp||[]):fns.parseLACP(text,vendor)):[]; // BasicParser 不含 LACP
   (lacpList||[]).forEach(l=>{
-    const gid=(l.name.match(/\d+/)||[])[0]||'';
+    // Netgear/EdgeSwitch 官方 KB 範例本身示範用「unit/slot/port 原始位址」（如 "0/2"）定址
+    // LAG（與純數字 "lag N" 別名平行、互斥），這種名稱含兩個數字，先前一律用非 global 的
+    // /\d+/ 只抓第一個數字，把 slot/port 資訊整個丟掉（"0/2"→"0"）；含 "/" 時改為完整保留
+    // 名稱，其餘廠牌（Port-channel N／Bridge-Aggregation N 等）名稱不含 "/"，不受影響
+    // （2026-09-02 全功能審查發現，需搭配 switch-generator-netgear.js/-edgeswitch.js 的
+    // render 端修復一起看：兩者已改為依 gid 是否含 "/" 決定要不要輸出 "lag " 前綴）
+    const gid=l.name.includes('/')?l.name:(l.name.match(/\d+/)||[])[0]||'';
     const modeLower=(l.mode||'').toLowerCase();
     const mode=modeLower==='active'||modeLower==='lacp-active'?'active':modeLower==='passive'||modeLower==='lacp-passive'?'passive':'static';
     // ProCurve 的 parseTrunk() members 是原始逗號/連字號字串（如 "25-26"），非其餘廠牌慣用的
@@ -3094,6 +3101,22 @@ async function parseAndImport(){
       (cm.matches||[]).forEach(mt=>addClassMapRow(cm.name,cm.matchType,mt.type,mt.value));
     });
     (fns.parseDellOS10ServicePolicy(text)||[]).forEach(sp=>addQosApplyRow(sp.policy,sp.interface,sp.direction));
+  }
+  // NX-OS/Comware（2026-08-31 新增，各自獨立 class-map/service-policy 語法）：render/parse 與
+  // UI 卡片白名單（supportsClassMap/CLASSMAP_VENDOR_TYPES）皆早已支援，但此匯入回填分流先前
+  // 漏了這兩家，使用者上傳已有 class-map/service-policy 的真實 NX-OS/Comware 設定檔，表單卡片
+  // 永遠是空的，重新產生時這段資料就會消失（2026-09-02 全功能審查發現）
+  else if(fns&&vendor==='nxos'){
+    (fns.parseNxosClassMaps(text)||[]).forEach(cm=>{
+      (cm.matches||[]).forEach(mt=>addClassMapRow(cm.name,cm.matchType,mt.type,mt.value));
+    });
+    (fns.parseNxosServicePolicy(text)||[]).forEach(sp=>addQosApplyRow(sp.policy,sp.interface,sp.direction));
+  }
+  else if(fns&&vendor==='comware'){
+    (fns.parseComwareClassMaps(text)||[]).forEach(cm=>{
+      (cm.matches||[]).forEach(mt=>addClassMapRow(cm.name,cm.matchType,mt.type,mt.value));
+    });
+    (fns.parseComwareServicePolicy(text)||[]).forEach(sp=>addQosApplyRow(sp.policy,sp.interface,sp.direction));
   }
 
   // Planet MAC ACL（具名擴充形式，2026-08-28（續4）新增）：_parseMacACLPlanet() 內嵌在
@@ -3389,6 +3412,13 @@ function downloadBulkSampleCSV(){
   downloadFile(sample,'bulk-template.csv','text/csv');
 }
 
+// 產生器 <select id="vendor"> 的合法值清單（見 switch-config-generator.html 廠牌下拉選單），
+// 與 switch_analyzer detectVendor() 用的 'nxos' 不同（NX-OS 在此清單用 'cisco_nxos'）。
+// processBulkCSV() 直接把 CSV 的 row.vendor 字串寫進這個 <select>.value，若字串對不上任何
+// <option> 會讓 selectedIndex=-1、.value 讀回空字串，後續 collectModel().vendor==='' 沒有任何
+// 分支match，會靜默落到最後的 else 分支輸出 Comware 格式（但畫面卻顯示「成功」），使用者完全
+// 不會發現輸出的其實是錯誤廠牌的設定文字（2026-09-02 全功能審查發現）
+const BULK_CSV_VALID_VENDORS=['comware','fortiswitch','aruba','cisco','cisco_nxos','juniper','dell-os10','arista','brocade','alcatel','extreme','procurve','routeros','ruijie','netgear','edgeswitch','sonic','planet'];
 function processBulkCSV(){
   const file=document.getElementById('bulk-csv-file').files[0];
   if(!file){
@@ -3450,6 +3480,10 @@ function processBulkCSV(){
 
       if(!row.devicename||!row.vendor||!row.hostname){
         results.push({name:row.devicename,status:tr('msg.bulkMissingFields'),color:'var(--red)'});
+        continue;
+      }
+      if(!BULK_CSV_VALID_VENDORS.includes(row.vendor)){
+        results.push({name:row.devicename,status:tr('msg.bulkInvalidVendor').replace('{vendor}',row.vendor),color:'var(--red)'});
         continue;
       }
 

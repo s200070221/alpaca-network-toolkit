@@ -225,7 +225,9 @@ function renderArubaRIPList(list){return (list||[]).map(renderArubaRIP).join('\n
 
 // IPv6（2026-08-23 新增）：官方語法 "ipv6 route DST/PREFIX {GW|IFACE}"，關鍵字換成
 // ipv6 route，其餘 token 結構相同
-function renderArubaRoute(r){return `${r.dst.includes(':')?'ipv6':'ip'} route ${r.dst} ${r.gw}`;}
+// parseArubaRoutes() 明確有解析 vrf 欄位（"ip/ipv6 route ... vrf NAME" 尾端後綴），先前 render
+// 端完全沒用到，任何 VRF 靜態路由匯出後都會變成全域路由（2026-09-02 全功能審查發現）
+function renderArubaRoute(r){const base=`${r.dst.includes(':')?'ipv6':'ip'} route ${r.dst} ${r.gw}`;return r.vrf?`${base} vrf ${r.vrf}`:base;}
 function renderArubaRoutes(list){return (list||[]).map(renderArubaRoute).join('\n!\n');}
 
 // DHCP server pool；relay（ip helper-address）內嵌進 renderArubaInterface，不在此輸出

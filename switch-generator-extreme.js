@@ -81,6 +81,13 @@ function renderExtremeLACPGroup(l){
   const members=(l.members||[]).filter(Boolean);
   if(!members.length)return '';
   const master=members[0];
+  // mode==='static'（表單/匯入回填的欄位值一律正規化為小寫 active/passive/static，見
+  // switch-generator-app.js parseAndImport() 的 modeLower 正規化）代表純靜態聚合，不應輸出
+  // lacp 關鍵字與 activity-mode 行，否則會把使用者選擇的靜態聚合強制改造成真 LACP
+  // （2026-09-02 全功能審查發現，與 switch-analyzer-parser-extreme.js 的解析端修復對稱）
+  if(l.mode==='static'){
+    return `enable sharing ${master} grouping ${members.join(',')} algorithm address-based L2`;
+  }
   const lines=[`enable sharing ${master} grouping ${members.join(',')} algorithm address-based L2 lacp`];
   lines.push(`configure sharing ${master} lacp activity-mode ${l.mode==='passive'?'passive':'active'}`);
   return lines.join('\n');

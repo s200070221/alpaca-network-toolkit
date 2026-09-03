@@ -46,9 +46,16 @@ function parseProCurve(cfg) {
   function parseInterfaces() {
     const ifaces=[];
     for (const b of cfg.split(/^(?=interface\s)/m)) {
-      const mIf=b.match(/^interface\s+(\S+)/);
-      if (!mIf) continue;
-      const name=mIf[1];
+      // ArubaOS-Switch 真實語法宣告 Loopback 是 "interface loopback 0"（廠牌與數字間有空格，
+      // parseOSPFv3()／下方 parseOSPF() 自己也是這樣認定並正確組出 'loopback'+編號），一般
+      // \S+ 擷取遇到空格就停，會把 name 截斷成純字串 "loopback"（編號完全遺失、不在 mIf[1]
+      // 之外的任何地方），多顆 Loopback（loopback0/loopback1...）全部產生無法區分的重複列，
+      // 且連帶讓 renderProCurveInterface() 用 iface.name 比對 ospf6 area 指派時永遠比對不到
+      // （2026-09-02 全功能審查發現，比照 switch-analyzer-parser-aruba-cx.js 既有的正規化寫法）
+      const mLoop=b.match(/^interface\s+loopback\s+(\d+)/i);
+      const mIf=mLoop?null:b.match(/^interface\s+(\S+)/);
+      if (!mLoop&&!mIf) continue;
+      const name=mLoop?'loopback'+mLoop[1]:mIf[1];
       const mName=b.match(/^\s+name\s+"?([^"\n]+)"?/m);
       const desc=mName?mName[1].trim():'';
       const disabled=/^\s+disable/m.test(b);

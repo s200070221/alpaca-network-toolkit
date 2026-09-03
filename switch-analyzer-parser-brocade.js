@@ -15,6 +15,12 @@ function parseBrocadeSysInfo(cfg){
 }
 
 function parseBrocadeStack(cfg){
+  // 區塊擷取正則要求每一行都要有結尾換行字元才會被收進 body（CLAUDE.md 已知 regex 陷阱的
+  // 隱蔽變體：不是缺 (?![\s\S]) fallback，是 (?:[ \t][^\n]*\n)* 這個重複群組本身逐行都要求
+  // 結尾 \n），若該區塊是檔案最後一段、檔案本身無結尾換行，最後一行（如 priority）會靜默
+  // 遺失（2026-09-02 全功能審查發現，同一 pattern 也出現在下方 parseBrocadeOSPF()/
+  // parseBrocadeBGP()/parseBrocadeRIP()，比照 parseArubaOSPF() 既有修法補上結尾換行正規化）
+  if(!cfg.endsWith('\n'))cfg=cfg+'\n';
   // "stack unit N" blocks indicate stacking
   if(!/^stack unit\s+\d+/m.test(cfg))return null;
   const members=[]; const seen=new Set(); let m;
@@ -335,6 +341,10 @@ function parseBrocadeRoutes(cfg){
 // 資料形狀比照既有 parseJuniperOSPF 的 area-is-interface 慣例，areas[].networks 內
 // 每筆改放 `{network:介面名稱, wildcard:'', type:'interface'}`。
 function parseBrocadeOSPF(cfg){
+  // 結尾換行正規化，理由與修法比照 parseBrocadeStack() 同一輪修復（2026-09-02 全功能審查
+  // 發現）：檔案最後一段若無結尾換行，`router ospf` 這行本身緊接的換行符號都可能缺失，
+  // gate 判斷式 ospfM 直接整體比對失敗，OSPF 全部消失（不只掉最後一行）
+  if(!cfg.endsWith('\n'))cfg=cfg+'\n';
   const ospfM=cfg.match(/^router ospf\s*\r?\n((?:[ \t][^\n]*\n)*)/m);
   if(!ospfM)return[];
   const rid=(cfg.match(/^ip router-id\s+([\d.]+)/m)||[])[1]||'';
@@ -419,6 +429,10 @@ function parseBrocadeRIPng(cfg){
 // `local-as N` 設定 ASN；router-id 同樣是全域 `ip router-id A.B.C.D`（與 OSPF 共用），
 // 不巢狀在 router bgp 區塊內。
 function parseBrocadeBGP(cfg){
+  // 結尾換行正規化，理由與修法比照 parseBrocadeStack()/parseBrocadeOSPF() 同一輪修復
+  // （2026-09-02 全功能審查發現）：asn 抓不到時直接 return []，body 捕捉失敗會讓整個 BGP
+  // 設定消失，非僅遺失最後一行
+  if(!cfg.endsWith('\n'))cfg=cfg+'\n';
   const bgpM=cfg.match(/^router bgp\s*\r?\n((?:[ \t][^\n]*\n)*)/m);
   if(!bgpM)return[];
   const body=bgpM[1];
@@ -601,6 +615,10 @@ function parseBrocadeDHCP(cfg){
 // 獨立宣告的 `ip rip`（v2，預設）或 `ip rip v1-only`，兩者完全分離，跟 OSPF/BGP
 // 先前修過的「逐介面才是真正生效位置」同一類既有錯誤。
 function parseBrocadeRIP(cfg){
+  // 結尾換行正規化，理由與修法比照同一輪修復（2026-09-02 全功能審查發現）：RIP 區段本身
+  // 不像 BGP 有 asn 門檻會整段消失，但若 body 最後一行（如 distance）剛好是檔案最後一行，
+  // 該欄位會被靜默遺失
+  if(!cfg.endsWith('\n'))cfg=cfg+'\n';
   const ripM=cfg.match(/^router rip\s*\r?\n((?:[ \t][^\n]*\n)*)/m);
   if(!ripM)return[];
   const body=ripM[1];

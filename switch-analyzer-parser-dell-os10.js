@@ -131,7 +131,11 @@ function parseDellOS10Interfaces(cfg){
       ifaces.push({name,type:'svi',desc,ip,ip6,secondaryIps,mode:'',vlans:'',nativeVlan:'',vrf,shutdown,member:'1',hybrid:null,vrrp:vrrpList,breakoutChild:false,breakoutParent:'',breakoutMode:''});
       continue;
     }
-    // Port-channel
+    // Port-channel（先前是下方一般實體埠邏輯的簡化重複版，只處理 trunk allowed vlan，
+    // 完全沒處理 access vlan／trunk native vlan，兩邊解析結果不對稱：generator 端
+    // renderDellOS10LACPExtra()/dellOS10SwitchportLines() 對 Port-channel 本來就正確支援
+    // access/trunk-native 輸出，round-trip 匯入回來時卻讀不到，2026-09-02 全功能審查發現。
+    // 改為直接重用下方一般實體埠已有的完整邏輯，不再維護一份不同步的簡化複製）
     if(/^[Pp]ort-[Cc]hannel/i.test(name)){
       const noRouting=/no switchport/.test(body);
       if(noRouting){
@@ -140,9 +144,19 @@ function parseDellOS10Interfaces(cfg){
         const secondaryIps=parseDellSecondaryIPs(body);
         ifaces.push({name,type:'physical',desc,mode:'routed',vlans:'',nativeVlan:'',vrf:'',ip,ip6,secondaryIps,shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       }else{
-        const mode=(body.match(/switchport mode\s+(\S+)/)||[])[1]||'';
-        const vlans=(body.match(/switchport trunk allowed vlan\s+([^\n]+)/)||[])[1]?.trim()||'';
-        ifaces.push({name,type:'physical',desc,mode,vlans,nativeVlan:'',vrf:'',ip:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
+        const modeM=body.match(/switchport mode\s+(\S+)/);
+        let mode='',vlans='',nativeVlan='';
+        if(modeM){
+          if(modeM[1]==='trunk'){
+            mode='trunk';
+            vlans=(body.match(/switchport trunk allowed vlan\s+([^\n]+)/)||[])[1]?.trim()||'all';
+            nativeVlan=(body.match(/switchport trunk native vlan\s+(\d+)/)||[])[1]||'1';
+          }else if(modeM[1]==='access'){
+            mode='access';
+            vlans=(body.match(/switchport access vlan\s+(\d+)/)||[])[1]||'1';
+          }else{mode=modeM[1];}
+        }
+        ifaces.push({name,type:'physical',desc,mode,vlans,nativeVlan,vrf:'',ip:'',shutdown,member:'1',hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:''});
       }
       continue;
     }
@@ -212,7 +226,9 @@ function parseDellOS10Routes(cfg){
 
 function parseDellOS10VRFs(cfg){
   const vrfs=[];let m;
-  const re=/^ip vrf\s+(\S+)\s*\n([\s\S]*?)(?=^[^\s])/gm;
+  // (?![\s\S]) 補上字串結尾 fallback（CLAUDE.md 已知 regex 陷阱），VRF 若是檔案最後一段
+  // 先前 lookahead 永遠找不到 "^[^\s]" 終止符，整個 VRF 完全解析不到（2026-09-02 審查發現）
+  const re=/^ip vrf\s+(\S+)\s*\n([\s\S]*?)(?=^[^\s]|(?![\s\S]))/gm;
   while((m=re.exec(cfg))!==null){
     const name=m[1],body=m[2];
     const rd=(body.match(/rd\s+(\S+)/)||[])[1]||'';
@@ -286,16 +302,24 @@ function parseDellOS10OSPFv3(cfg){
   // 區塊內容，會導致最後一個 interface 的關聯指派靜默漏解析；統一補上結尾換行字元
   if(!cfg.endsWith('\n'))cfg=cfg+'\n';
   const processes=[];let m;
-  const re=/^router ospfv3(?:\s+vrf\s+\S+)?([\s\S]*?)(?=^router\s|^interface\s|^ip\s|^!\s*$|(?![\s\S]))/gm;
+  // vrf 名稱改為捕獲群組（原本是 non-capturing），下方逐介面掃描才能依 VRF 過濾，避免
+  // 多個 VRF 各自的 OSPFv3 process 互相污染彼此的 area/介面對應（2026-09-02 全功能審查
+  // 發現：先前內層 ifRe 對整份 cfg 全域掃描、不限定範圍，每個 process 都會拿到「合併了
+  // 所有 VRF 介面」的完全相同 areas 資料）
+  const re=/^router ospfv3(?:\s+vrf\s+(\S+))?([\s\S]*?)(?=^router\s|^interface\s|^ip\s|^!\s*$|(?![\s\S]))/gm;
   while((m=re.exec(cfg))!==null){
-    const body=m[1];
+    const vrfName=m[1]||'';
+    const body=m[2];
     const pid='1';
     const rid=(body.match(/router-id\s+(\S+)/)||[])[1]||'';
     const areaMap=new Map();
     const ifRe=/^interface\s+([^\n]+)\n((?:(?!^(?:interface|router|ip\s)\b)[^\n]*\n)*)/gm; let ifm;
     while((ifm=ifRe.exec(cfg))!==null){
       const ifName=ifm[1].trim();
-      const aim=ifm[2].match(/ipv6 ospf\s+\S+\s+area\s+([\d.]+)/);
+      const ifBody=ifm[2];
+      const ifVrf=(ifBody.match(/ip vrf forwarding\s+(\S+)/)||[])[1]||'';
+      if(ifVrf!==vrfName)continue;
+      const aim=ifBody.match(/ipv6 ospf\s+\S+\s+area\s+([\d.]+)/);
       if(!aim)continue;
       const area=aim[1];
       if(!areaMap.has(area))areaMap.set(area,{area,interfaces:[]});

@@ -65,7 +65,9 @@ function renderRouterOSBridge(stp){
   const priority=stp&&stp.instances&&stp.instances[0]&&stp.instances[0].priority;
   let line=`add name=${ROUTEROS_BRIDGE}`;
   if(mode)line+=` protocol-mode=${mode}`;
-  if(priority)line+=` priority=0x${parseInt(priority,10).toString(16)}`;
+  // priority=0 是合法值（且是最高優先權，常見於刻意指定 root bridge 的場景），先前用
+  // if(priority) 判斷式把數字 0 當成 falsy 略過，整個 priority 參數消失（2026-09-02 審查發現）
+  if(priority!==undefined&&priority!==null&&priority!=='')line+=` priority=0x${parseInt(priority,10).toString(16)}`;
   return `/interface bridge\n${line}`;
 }
 
