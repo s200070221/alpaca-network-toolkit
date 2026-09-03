@@ -62,7 +62,10 @@ function findDhcpRelays(dhcpList,ifaceName){
 // 自己的 interface 區塊，理由同上（Cisco parser 不合併同名 interface 區塊）。
 function findAclApplications(aclList,ifaceName){
   const out=[];
-  (aclList||[]).forEach(a=>(a.appliedOn||[]).forEach(ap=>{if(ap.interface===ifaceName)out.push({name:a.name,direction:ap.direction||'in'});}));
+  // ipVersion 一併帶出（2026-09-03 新增），供 Cisco/Arista/NX-OS 介面套用行切換
+  // ip access-group（v4）/ipv6 traffic-filter/ipv6 port traffic-filter（v6）關鍵字；
+  // 其餘廠牌沿用既有呼叫方式（不解構此欄位）不受影響
+  (aclList||[]).forEach(a=>(a.appliedOn||[]).forEach(ap=>{if(ap.interface===ifaceName)out.push({name:a.name,direction:ap.direction||'in',ipVersion:a.ipVersion||'v4'});}));
   return out;
 }
 

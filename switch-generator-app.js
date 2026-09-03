@@ -1089,12 +1089,16 @@ function addDhcpRelayRow(iface='',server=''){
   document.getElementById('dhcp-relay-body').appendChild(tr2);
 }
 
-function addAclRuleRow(name='',type='extended',seq='',action='permit',protocol='ip',src='any',dst='any',dstPort='',remark=''){
+function addAclRuleRow(name='',type='extended',seq='',action='permit',protocol='ip',src='any',dst='any',dstPort='',remark='',ipVersion='v4'){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input class="ar-name" value="${escAttr(name)}"></td>
     <td><select class="ar-type">
       <option value="extended" data-i18n="opt.aclExtended">Extended/Advanced</option>
       <option value="standard" data-i18n="opt.aclStandard">Standard/Basic</option>
+    </select></td>
+    <td><select class="ar-ipver">
+      <option value="v4" data-i18n="opt.aclIpv4">IPv4</option>
+      <option value="v6" data-i18n="opt.aclIpv6">IPv6</option>
     </select></td>
     <td><input class="ar-seq" value="${escAttr(seq)}" placeholder="10"></td>
     <td><select class="ar-action">
@@ -1108,6 +1112,7 @@ function addAclRuleRow(name='',type='extended',seq='',action='permit',protocol='
     <td><input class="ar-remark" value="${escAttr(remark)}"></td>
     ${RM_BTN_TD}`;
   tr.querySelector('.ar-type').value=type;
+  tr.querySelector('.ar-ipver').value=ipVersion;
   tr.querySelector('.ar-action').value=action;
   document.getElementById('acl-rule-body').appendChild(tr);
   applyI18n(tr);
@@ -1615,7 +1620,7 @@ function collectModel(){
   // ACL：規則表格 + 套用表格各自獨立 UI，依 ACL Name 分組成 switch_analyzer parseACL
   // 既有的巢狀形狀（{name,type,rules:[],appliedOn:[]}），比照 OSPF area 分組慣例
   const aclRuleRows=rowsOf('#acl-rule-body tr').map(tr=>({
-    name:val(tr,'ar-name'), type:val(tr,'ar-type'), seq:val(tr,'ar-seq'), action:val(tr,'ar-action'),
+    name:val(tr,'ar-name'), type:val(tr,'ar-type'), ipVersion:val(tr,'ar-ipver'), seq:val(tr,'ar-seq'), action:val(tr,'ar-action'),
     protocol:val(tr,'ar-protocol'), src:val(tr,'ar-src'), dst:val(tr,'ar-dst'),
     dstPort:val(tr,'ar-dstport'), remark:val(tr,'ar-remark'),
   })).filter(r=>r.name);
@@ -1623,12 +1628,15 @@ function collectModel(){
     name:val(tr,'aa-name'), interface:val(tr,'aa-iface'), direction:val(tr,'aa-dir'),
   })).filter(r=>r.name&&r.interface);
   const aclMap=new Map();
+  // ipVersion（2026-09-03 新增，修復 Cisco/Arista/NX-OS 產生器端 IPv6 ACL 從未正確輸出的
+  // round-trip 缺口）：僅該三家依此欄位切換 ip/ipv6 access-list 語法，其餘廠牌忽略不受影響；
+  // aclType 為 switch_analyzer parseACL() 既有欄位名稱（'ip'/'ipv6'），供介面套用比對用
   aclRuleRows.forEach(r=>{
-    if(!aclMap.has(r.name))aclMap.set(r.name,{name:r.name,type:r.type||'extended',rules:[],appliedOn:[]});
+    if(!aclMap.has(r.name)){const iv=r.ipVersion==='v6'?'v6':'v4';aclMap.set(r.name,{name:r.name,type:r.type||'extended',ipVersion:iv,aclType:iv==='v6'?'ipv6':'ip',rules:[],appliedOn:[]});}
     aclMap.get(r.name).rules.push({seq:r.seq,action:r.action||'permit',protocol:r.protocol||'ip',src:r.src||'any',dst:r.dst||'any',dstPort:r.dstPort,remark:r.remark});
   });
   aclApplyRows.forEach(r=>{
-    if(!aclMap.has(r.name))aclMap.set(r.name,{name:r.name,type:'extended',rules:[],appliedOn:[]});
+    if(!aclMap.has(r.name))aclMap.set(r.name,{name:r.name,type:'extended',ipVersion:'v4',aclType:'ip',rules:[],appliedOn:[]});
     aclMap.get(r.name).appliedOn.push({interface:r.interface,direction:r.direction||'in'});
   });
   const acl=Array.from(aclMap.values());
@@ -1885,7 +1893,7 @@ function applyModelToForm(model){
   });
 
   (model.acl||[]).forEach(a=>{
-    (a.rules||[]).forEach(r=>addAclRuleRow(a.name,a.type||'extended',r.seq,r.action,r.protocol,r.src,r.dst,r.dstPort,r.remark));
+    (a.rules||[]).forEach(r=>addAclRuleRow(a.name,a.type||'extended',r.seq,r.action,r.protocol,r.src,r.dst,r.dstPort,r.remark,a.ipVersion||'v4'));
     (a.appliedOn||[]).forEach(ap=>addAclApplyRow(a.name,ap.interface,ap.direction));
   });
 
@@ -3045,7 +3053,7 @@ async function parseAndImport(){
         if(lastRow)lastRow.querySelector('.ar-remark').value=r.remark;
         return;
       }
-      addAclRuleRow(a.name,formType,r.seq,r.action,r.protocol,r.src,r.dst,r.dstPort,r.remark);
+      addAclRuleRow(a.name,formType,r.seq,r.action,r.protocol,r.src,r.dst,r.dstPort,r.remark,a.ipVersion||'v4');
       const rows=rowsOf('#acl-rule-body tr'); lastRow=rows[rows.length-1];
     });
     (a.appliedOn||[]).forEach(ap=>addAclApplyRow(a.name,ap.interface,ap.direction));

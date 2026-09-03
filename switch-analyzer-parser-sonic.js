@@ -24,8 +24,13 @@ function _parseACLSONiC(cfg){
   const acls=[];
   Object.entries(db.ACL_TABLE||{}).forEach(([name,t])=>{
     const ipVersion=t&&t.type==='L3V6'?'v6':t&&t.type==='L3'?'v4':'';
+    // 官方 SONiC ACL High-Level Design 文件確認 direction 是表格層級的 "stage" 屬性
+    // （"ingress"／"egress"，未設定時預設 ingress），非逐 port——先前硬編碼每個 port 的
+    // direction 為 'in'，忽略 stage 欄位，使用者若透過真實裝置匯出檔案帶 stage:"egress"，
+    // 會被靜默誤判成 ingress（2026-09-03 對外查證後修復）
+    const direction=t&&t.stage==='egress'?'out':'in';
     acls.push({name,type:'extended',ipVersion,vendor:'sonic',rules:[],
-      appliedOn:((t&&t.ports)||[]).map(p=>({interface:p,direction:'in'}))});
+      appliedOn:((t&&t.ports)||[]).map(p=>({interface:p,direction}))});
   });
   Object.entries(db.ACL_RULE||{}).forEach(([key,val])=>{
     const pipeIdx=key.indexOf('|');

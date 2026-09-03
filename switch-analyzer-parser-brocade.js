@@ -471,6 +471,7 @@ function parseBrocadeVRRP(cfg){
   // 已記載此差異），先前只解析 vip6 沒解析 priority，只有 IPv6 宣告、無對應 IPv4 vrid 時會
   // 靜默寫死成預設值 100，使用者實際設定的優先權遺失（2026-09-02 審查發現）
   const vip6PriorityByKey={};
+  const vip6PreemptByKey={};
   // Split on "interface ve N" blocks to find VRRP-E per-SVI
   const veBlocks=cfg.split(/^(?=interface\s+ve\s)/im);
   for(const blk of veBlocks.slice(1)){
@@ -483,11 +484,17 @@ function parseBrocadeVRRP(cfg){
     const flushVRRP=()=>{
       if(!vrid)return;
       const sub=subLines.join('\n');
+      // preempt（2026-09-03 對外查證官方 Ruckus FastIron Command Reference「non-preempt-mode
+      // (VRRP)」頁確認）：獨立指令 non-preempt-mode（VRID interface configuration mode 內），
+      // 預設值本身就是 preempt 啟用，出現此行才代表停用；先前無條件寫死 true，設定檔內若真的
+      // 有 non-preempt-mode 也會被忽略
+      const nonPreempt=/^\s+non-preempt-mode\s*$/m.test(sub);
       if(isV6){
         const vip6M=sub.match(/^\s+ipv6-address\s+(\S+)/m);
         if(vip6M)vip6ByKey[iface+':'+vrid]=vip6M[1];
         const prio6M=sub.match(/^\s+backup priority\s+(\d+)/m);
         if(prio6M)vip6PriorityByKey[iface+':'+vrid]=prio6M[1];
+        if(nonPreempt)vip6PreemptByKey[iface+':'+vrid]=false;
       }else{
         const key=iface+':'+vrid;
         if(!seen.has(key)){
@@ -497,7 +504,7 @@ function parseBrocadeVRRP(cfg){
           const vip=(vipM||[])[1]||'';
           const prioM=sub.match(/^\s+priority\s+(\d+)/m);
           const priority=(prioM||[])[1]||'100';
-          groups.push({vrid,interface:iface,vip,priority,preempt:true,authMode:'',trackIf:'',trackReduced:'',version:'2'});
+          groups.push({vrid,interface:iface,vip,priority,preempt:!nonPreempt,authMode:'',trackIf:'',trackReduced:'',version:'2'});
         }
       }
       vrid=null; isV6=false; subLines=[];
@@ -521,7 +528,7 @@ function parseBrocadeVRRP(cfg){
     const[iface,vrid]=key.split(':');
     const g=groups.find(x=>x.interface===iface&&x.vrid===vrid);
     if(g)g.vip6=vip6ByKey[key];
-    else groups.push({vrid,interface:iface,vip:'',vip6:vip6ByKey[key],priority:vip6PriorityByKey[key]||'100',preempt:true,authMode:'',trackIf:'',trackReduced:'',version:'2'});
+    else groups.push({vrid,interface:iface,vip:'',vip6:vip6ByKey[key],priority:vip6PriorityByKey[key]||'100',preempt:vip6PreemptByKey[key]!==undefined?vip6PreemptByKey[key]:true,authMode:'',trackIf:'',trackReduced:'',version:'2'});
   });
   return groups;
 }

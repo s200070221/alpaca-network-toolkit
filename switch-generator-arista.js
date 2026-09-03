@@ -84,7 +84,9 @@ function renderAristaInterface(iface,lacpList,dhcpList,aclList,securityList,stp,
   if(iface.jumbo&&iface.jumbo.enabled&&iface.jumbo.mtu)lines.push(` mtu ${iface.jumbo.mtu}`);
   if(iface.shutdown)lines.push(' shutdown');
   findDhcpRelays(dhcpList,iface.name).forEach(rel=>lines.push(` ip helper-address ${rel.relayServer}`));
-  findAclApplications(aclList,iface.name).forEach(ap=>lines.push(` ip access-group ${ap.name} ${ap.direction}`));
+  // ipv6 traffic-filter（2026-09-03 新增，Arista 與 Cisco IOS-XE 共用同一套官方關鍵字，
+  // 與 IPv4 的 ip access-group 不同字面），比對 _parseACLCisco() 的 ag6Re 分支
+  findAclApplications(aclList,iface.name).forEach(ap=>lines.push(ap.ipVersion==='v6'?` ipv6 traffic-filter ${ap.name} ${ap.direction}`:` ip access-group ${ap.name} ${ap.direction}`));
   // service-policy 介面套用（2026-08-28（續5）新增，見 parseAristaServicePolicy() 註解）：
   // 官方語法多一段 "type qos" 限定詞在 direction 之前，與 Dell OS10 語序相反
   findQosApplications(qosApplyList,iface.name).forEach(ap=>lines.push(` service-policy type qos ${ap.direction} ${ap.policy}`));

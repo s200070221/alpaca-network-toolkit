@@ -128,7 +128,10 @@ function renderNXOSInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vp
   // ACL 套用／Port Security-802.1X／STP 逐 port：NX-OS 與 Cisco IOS 共用同一套 Cisco-style
   // 通用解析分支（parseACL/parseSecurity/parseSTP 對 nxos 走的正是這條），語法與
   // renderDellOS10Interface 完全相同，直接沿用同一套內嵌邏輯與輸出行
-  findAclApplications(aclList,iface.name).forEach(ap=>lines.push(` ip access-group ${ap.name} ${ap.direction}`));
+  // ipv6 port traffic-filter（2026-09-03 新增，NX-OS 官方關鍵字，與 IPv4 的
+  // ip access-group 不同字面、也與 Cisco IOS-XE 的 ipv6 traffic-filter 不同），比對
+  // _parseACLNXOS() 的 ag6Re 分支
+  findAclApplications(aclList,iface.name).forEach(ap=>lines.push(ap.ipVersion==='v6'?` ipv6 port traffic-filter ${ap.name} ${ap.direction}`:` ip access-group ${ap.name} ${ap.direction}`));
   const sec=findSecurityForPort(securityList,iface.name);
   if(sec){
     if(sec.dot1x==='auth')lines.push(' dot1x pae authenticator');
@@ -402,10 +405,13 @@ function renderNXOSUsers(users){
   return list.map(u=>`username ${u.name} password 0 ${u.password} role ${u.role||'network-admin'}`).join('\n');
 }
 function renderNXOSACLEntry(a){
-  const lines=[`ip access-list ${a.name}`];
+  // IPv6 ACL（2026-09-03 新增）：官方語法同樣是裸 "ipv6 access-list NAME"（無 standard/
+  // extended 關鍵字），規則列格式與 IPv4 版本相同，比對 _parseACLNXOS() 的 acl6Re 分支
+  const isV6=a.ipVersion==='v6';
+  const lines=[isV6?`ipv6 access-list ${a.name}`:`ip access-list ${a.name}`];
   (a.rules||[]).forEach((r,idx)=>{
     const seq=r.seq||String((idx+1)*10);
-    lines.push(` ${seq} ${r.action||'permit'} ${r.protocol||'ip'} ${r.src||'any'} ${r.dst||'any'}${r.dstPort?' eq '+r.dstPort:''}`);
+    lines.push(` ${seq} ${r.action||'permit'} ${r.protocol||(isV6?'ipv6':'ip')} ${r.src||'any'} ${r.dst||'any'}${r.dstPort?' eq '+r.dstPort:''}`);
   });
   return lines.join('\n');
 }

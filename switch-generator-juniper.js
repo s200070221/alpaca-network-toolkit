@@ -54,7 +54,11 @@ function juniperFamilyEthernetSwitchingLines(iface){
   lines.push('            family ethernet-switching {');
   lines.push(`                interface-mode ${iface.mode};`);
   if(iface.mode==='trunk'){
-    if(iface.trunkVlans)lines.push(`                vlan { members [ ${iface.trunkVlans.trim().split(/\s+/).join(' ')} ]; }`);
+    // 共用 trunkVlans 欄位跨廠牌慣例不一致（本工具其餘多數廠牌是逗號分隔或原樣傳遞），先前
+    // 只用 split(/\s+/) 拆解，使用者若輸入逗號分隔（與多數其餘廠牌一致的輸入習慣）會被當成
+    // 整段單一 token、產生無效的 "members [ 10,20,30 ]" 語法；改為同時接受逗號與空白分隔，
+    // 對兩種輸入慣例皆能產生正確的 Junos "members [ 10 20 30 ]" 語法（2026-09-03 審查發現）
+    if(iface.trunkVlans)lines.push(`                vlan { members [ ${iface.trunkVlans.trim().split(/[,\s]+/).filter(Boolean).join(' ')} ]; }`);
     if(iface.nativeVlan)lines.push(`                native-vlan-id ${iface.nativeVlan};`);
   }else{
     if(iface.accessVlan)lines.push(`                vlan { members [ ${iface.accessVlan} ]; }`);
@@ -78,7 +82,10 @@ function renderJuniperInterface(iface,lacpList){
     lines.push('        }');
   }
   if(!lg)lines.push(...juniperFamilyEthernetSwitchingLines(iface));
-  if(iface.mode==='routed'&&iface.ip){
+  // Loopback（2026-08-23 修復）：parseJuniperInterfaces() 對 Loopback 物件回傳 type:'loopback'、
+  // mode:''（永遠不是 'routed'），先前條件只認 mode==='routed' 導致 Loopback 的 IP 從未輸出，
+  // 即使 parser 早就解析出來；加上 type==='loopback' 分支即可，與 parser 端欄位形狀對齊
+  if((iface.mode==='routed'||iface.type==='loopback')&&iface.ip){
     // ip（2026-07-27 補上）：parseJuniperInterfaces() 對 routed 實體埠／AE 有解析
     // "address A.B.C.D/N;"（掃描整個介面 body，不限定巢狀層級），render 端從未輸出過。
     // vrf 不在此處輸出——真實 Junos VRF 綁定語法方向是反過來的
@@ -88,10 +95,10 @@ function renderJuniperInterface(iface,lacpList){
     lines.push('        unit 0 {');
     lines.push(`            family ${fam} {`);
     lines.push(`                address ${iface.ip};`);
-    // 次要IP（2026-08-12 新增）：Junos 無 secondary 關鍵字，同一 family inet {} 區塊內
-    // 再宣告一筆 address statement 即為附加位址，比照本專案 firewall_analyzer Juniper SRX
-    // 既有慣例；僅取第一筆次要IP為 MVP 範圍
-    if(iface.secondaryIp&&(iface.secondaryIp.includes(':')===iface.ip.includes(':')))lines.push(`                address ${iface.secondaryIp};`);
+    // 次要IP（2026-08-23 陣列化）：Junos 無 secondary 關鍵字，同一 family inet {} 區塊內
+    // 再宣告 address statement 即為附加位址；parser 端 2026-08-17 已把 secondaryIps 從
+    // 「僅取第一筆」擴充為完整陣列（classifyJunosAddrs()），render 端同步改成逐筆輸出
+    (iface.secondaryIps||[]).filter(s=>s.includes(':')===iface.ip.includes(':')).forEach(s=>lines.push(`                address ${s};`));
     lines.push('            }');
     lines.push('        }');
   }
@@ -115,8 +122,8 @@ function renderJuniperIRB(svis){
       const fam=i.ip.includes(':')?'inet6':'inet';
       lines.push(`            family ${fam} {`);
       lines.push(`                address ${i.ip};`);
-      // 次要IP（2026-08-12 新增）：同 routed 實體埠，附加式機制在同一 family 區塊內再加一筆
-      if(i.secondaryIp&&(i.secondaryIp.includes(':')===i.ip.includes(':')))lines.push(`                address ${i.secondaryIp};`);
+      // 次要IP（2026-08-23 陣列化）：同 routed 實體埠，附加式機制在同一 family 區塊內逐筆再加
+      (i.secondaryIps||[]).filter(s=>s.includes(':')===i.ip.includes(':')).forEach(s=>lines.push(`                address ${s};`));
       lines.push('            }');
     }
     lines.push('        }');
@@ -163,7 +170,15 @@ function renderJuniperRoutes(routes){
   // （見 renderJuniperRoutingInstances()），否則會被錯誤攤平成全域路由
   const globalRoutes=(routes||[]).filter(r=>!r.vrf);
   if(!globalRoutes.length)return '';
-  return '    static {\n'+globalRoutes.map(r=>`        route ${r.dst} next-hop ${r.gw};`).join('\n')+'\n    }';
+  // IPv6（2026-08-23 新增）：parseJuniperStaticRoutes() 對 IPv6 路由巢狀多一層
+  // routing-options { rib inet6.0 { static { ... } } }，比 IPv4 版本多包一層 rib inet6.0{}；
+  // dst/gw 皆為格式中立字串，含冒號即 IPv6，與其餘廠牌 `.includes(':')` 判斷慣例一致
+  const v4=globalRoutes.filter(r=>!r.dst.includes(':'));
+  const v6=globalRoutes.filter(r=>r.dst.includes(':'));
+  const parts=[];
+  if(v4.length)parts.push('    static {\n'+v4.map(r=>`        route ${r.dst} next-hop ${r.gw};`).join('\n')+'\n    }');
+  if(v6.length)parts.push('    rib inet6.0 {\n        static {\n'+v6.map(r=>`            route ${r.dst} next-hop ${r.gw};`).join('\n')+'\n        }\n    }');
+  return parts.join('\n');
 }
 
 // routing-instances{}：VRF 介面綁定（interface X;）與該 VRF 範圍內的靜態路由合併進同一個
@@ -185,10 +200,24 @@ function renderJuniperRoutingInstances(ifaces,routes){
     });
     const vrfRoutes=(routes||[]).filter(r=>r.vrf===vrf);
     if(vrfRoutes.length){
+      // IPv6（2026-08-23 新增）：VRF 範圍內的 IPv6 路由同樣巢狀多一層 rib inet6.0{}，
+      // parser 端 parseJuniperStaticRoutes() 在 routing-instances{NAME{routing-options{}}}
+      // 內用同一個字面字串 'rib inet6.0' 擷取（非 <instance>.inet6.0 命名），render 端照抄
+      const vrf4=vrfRoutes.filter(r=>!r.dst.includes(':'));
+      const vrf6=vrfRoutes.filter(r=>r.dst.includes(':'));
       lines.push('        routing-options {');
-      lines.push('            static {');
-      vrfRoutes.forEach(r=>lines.push(`                route ${r.dst} next-hop ${r.gw};`));
-      lines.push('            }');
+      if(vrf4.length){
+        lines.push('            static {');
+        vrf4.forEach(r=>lines.push(`                route ${r.dst} next-hop ${r.gw};`));
+        lines.push('            }');
+      }
+      if(vrf6.length){
+        lines.push('            rib inet6.0 {');
+        lines.push('                static {');
+        vrf6.forEach(r=>lines.push(`                    route ${r.dst} next-hop ${r.gw};`));
+        lines.push('                }');
+        lines.push('            }');
+      }
       lines.push('        }');
     }
     lines.push('    }');
@@ -271,6 +300,24 @@ function renderJuniperOSPFBlock(ospfList){
     (o.areas||[]).forEach(a=>{
       lines.push(`        area ${a.area} {`);
       (a.networks||[]).forEach(n=>{ if(n.network)lines.push(`            interface ${n.network};`); });
+      lines.push('        }');
+    });
+  });
+  lines.push('    }');
+  return lines.join('\n');
+}
+
+// OSPFv3（2026-08-23 新增）：與 IPv4 protocols{ospf{}} 結構完全平行，僅頂層關鍵字換成
+// `ospf3`；官方 Junos OSPF User Guide 確認 `protocols ospf3 { area X { interface Y; } }`。
+// model.ospf6[].areas[].interfaces 為介面名稱字串陣列（非 `.networks[].network`），
+// 與 parseJuniperOSPFv3() 回傳形狀一致，不需要 wildcard/type 欄位
+function renderJuniperOSPF6Block(ospf6List){
+  if(!ospf6List||!ospf6List.length)return '';
+  const lines=['    ospf3 {'];
+  ospf6List.forEach(o=>{
+    (o.areas||[]).forEach(a=>{
+      lines.push(`        area ${a.area} {`);
+      (a.interfaces||[]).forEach(ifname=>{ if(ifname)lines.push(`            interface ${ifname};`); });
       lines.push('        }');
     });
   });
@@ -401,6 +448,8 @@ function assembleJuniperConfig(model){
   const protoLines=[];
   const ospfBlock=renderJuniperOSPFBlock(model.ospf);
   if(ospfBlock)protoLines.push(ospfBlock);
+  const ospf6Block=renderJuniperOSPF6Block(model.ospf6);
+  if(ospf6Block)protoLines.push(ospf6Block);
   const bgpBlock=renderJuniperBGPBlock(model.bgp);
   if(bgpBlock)protoLines.push(bgpBlock);
   if(protoLines.length)parts.push('protocols {\n'+protoLines.join('\n')+'\n}');
