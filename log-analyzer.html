@@ -331,11 +331,19 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
 // 本工具把 Very-High 併入 Critical，避免共用尺度多出一級
 function normCEFSeverity(sevRaw) {
   const n = Number(sevRaw);
-  if (Number.isNaN(n)) return 'Info';
-  if (n >= 9) return 'Critical';
-  if (n >= 7) return 'High';
-  if (n >= 4) return 'Medium';
-  if (n >= 0) return 'Low';
+  if (!Number.isNaN(n)) {
+    if (n >= 9) return 'Critical';
+    if (n >= 7) return 'High';
+    if (n >= 4) return 'Medium';
+    if (n >= 0) return 'Low';
+  }
+  // CEF 官方 spec 的 Severity 欄位同時允許數字（0-10）與文字詞彙（如 High/Medium/Low/
+  // Very-High）兩種合法寫法，先前只做 Number() 轉換，文字型一律 NaN 直接退回 Info，
+  // 真實使用文字型 severity 的來源會被系統性降級成最低關注度（2026-09 全功能審查發現）；
+  // 沿用下方 SEV_WORD_MAP 既有詞彙表（於本函式之後宣告，但函式呼叫時機在整份 script
+  // 執行完畢之後，const 已完成初始化，可安全參照）
+  const s = String(sevRaw || '');
+  for (const w of SEV_WORD_MAP) { if (w.re.test(s)) return w.level; }
   return 'Info';
 }
 // Syslog Severity（RFC5424/3164 共用 PRI 拆出的 0-7，0=Emergency...7=Debug）→ 共用 5 級
@@ -414,7 +422,12 @@ function splitUnescaped(str, sep, maxSplits) {
   return parts;
 }
 function unescapeCEF(s) {
-  return s.replace(/\\\|/g, '|').replace(/\\=/g, '=').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
+  // 四條規則鏈式呼叫（先前依序 \| → \= → \n → \\）在「跳脫反斜線後緊接字面 n」的組合
+  // （官方跳脫後應為 \\ + n，例如路徑 C:\notes.txt 跳脫成 C:\\notes.txt）會被 \n 規則
+  // 提前吃掉第二個反斜線+n 誤判成換行，導致 \\ 規則已找不到完整雙反斜線可正確還原
+  // （2026-09 全功能審查發現）；改用單一 pass 掃描，四種二字元跳脫序列一次性正確消耗，
+  // 不會互相污染
+  return s.replace(/\\\\|\\\||\\=|\\n/g, m => m === '\\\\' ? '\\' : m === '\\|' ? '|' : m === '\\=' ? '=' : '\n');
 }
 function parseCEFExtension(ext) {
   // key=value 空白分隔，value 可延伸到下一個 "key=" 出現前；用「找出所有 key= 起始位置」的
@@ -443,6 +456,34 @@ function extractCEFTimestamp(fields) {
   }
   const d = new Date(raw);
   return isNaN(d.getTime()) ? null : d;
+}
+// LEEF 官方規格提供 devTimeFormat extension 欄位讓發送端明確標示 devTime 的日期格式
+// （devTime 本身沒有固定格式），先前完全未讀取這個欄位，一律丟給 new Date() 用瀏覽器
+// 預設寬鬆解析猜測，曖昧的數字格式（如 05/03/2026）會被誤判成錯誤的月/日順序，緊湊格式
+// （如 20260305100000）甚至直接解析失敗回傳 null（2026-09 全功能審查發現）。支援常見
+// SimpleDateFormat 樣式 token（yyyy/MM/dd/HH/mm/ss/SSS），依 devTimeFormat 標示的位置
+// 精確切出每個欄位再組成日期，無法比對時退回既有 new Date() 行為（不猜測、寧可用原本
+// 已知的降級路徑）
+const LEEF_DATE_TOKEN_RE = /y{2,4}|M{1,2}|d{1,2}|H{1,2}|m{1,2}|s{1,2}|S{1,3}/g;
+function parseLEEFDevTime(devTime, devTimeFormat) {
+  if (!devTime) return null;
+  if (!devTimeFormat) return extractCEFTimestamp({ rt: devTime });
+  let pattern = '', lastIndex = 0, tm;
+  const tokens = [];
+  LEEF_DATE_TOKEN_RE.lastIndex = 0;
+  while ((tm = LEEF_DATE_TOKEN_RE.exec(devTimeFormat))) {
+    pattern += devTimeFormat.slice(lastIndex, tm.index).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    tokens.push(tm[0][0]);
+    pattern += `(\\d{${tm[0].length}})`;
+    lastIndex = tm.index + tm[0].length;
+  }
+  pattern += devTimeFormat.slice(lastIndex).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = tokens.length ? devTime.match(new RegExp('^' + pattern)) : null;
+  if (!m) return extractCEFTimestamp({ rt: devTime });
+  const vals = {};
+  tokens.forEach((t, i) => { vals[t] = Number(m[i + 1]); });
+  const d = new Date(vals.y || 1970, (vals.M || 1) - 1, vals.d || 1, vals.H || 0, vals.m || 0, vals.s || 0, vals.S || 0);
+  return isNaN(d.getTime()) ? extractCEFTimestamp({ rt: devTime }) : d;
 }
 function parseCEFLine(line, lineNo) {
   let body = line;
@@ -526,7 +567,7 @@ function parseLEEFLine(line, lineNo) {
   return {
     format: 'leef', raw: line, lineNo,
     version, vendor, product, productVersion, eventId, delimiterRaw,
-    timestamp: extractCEFTimestamp({ rt: fields.devTime }), timestampRaw: fields.devTime || '',
+    timestamp: parseLEEFDevTime(fields.devTime, fields.devTimeFormat), timestampRaw: fields.devTime || '',
     host: '',
     severityRaw: fields.sev, severityNorm: normCEFSeverity(fields.sev),
     facility: null, facilityAuth: false,
@@ -567,9 +608,21 @@ function parseStructuredData(sd) {
   const blockRe = /\[([^\s\]]+)((?:\s+[^\s=]+="(?:[^"\\]|\\.)*")*)\]/g;
   let m;
   while ((m = blockRe.exec(sd))) {
+    const sdId = m[1];
     const paramRe = /([^\s=]+)="((?:[^"\\]|\\.)*)"/g;
     let p;
-    while ((p = paramRe.exec(m[2]))) fields[p[1]] = p[2].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    while ((p = paramRe.exec(m[2]))) {
+      const val = p[2].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      // 多個 SD-ELEMENT 若含相同 SD-PARAM 名稱（RFC5424 官方範例本身就示範這種命名慣例），
+      // 後解析的元素先前會直接覆寫前面同名欄位、資料靜默遺失。改為第一次出現保留原鍵名
+      // （維持既有下游消費端讀取慣例，不影響最常見的單一 SD-ELEMENT 情境），後續同名 key
+      // 改存進 SD-ID 命名空間鍵，資料不再遺失（2026-09 全功能審查發現）
+      if (Object.prototype.hasOwnProperty.call(fields, p[1])) {
+        fields[`${sdId}.${p[1]}`] = val;
+      } else {
+        fields[p[1]] = val;
+      }
+    }
   }
   return fields;
 }
@@ -601,13 +654,16 @@ function parseRFC3164Line(line, lineNo) {
   const priNum = hasPri ? Number(pri) : null;
   const facility = hasPri ? Math.floor(priNum / 8) : null;
   const severityRaw = hasPri ? priNum % 8 : null;
-  const tagMatch = rest.match(/^([\w./-]+(?:\[\d+\])?):\s*([\s\S]*)$/);
-  const appName = tagMatch ? tagMatch[1].replace(/\[\d+\]$/, '') : '';
-  const msg = tagMatch ? tagMatch[2] : rest;
+  const tagMatch = rest.match(/^([\w./-]+)(?:\[(\d+)\])?:\s*([\s\S]*)$/);
+  // PID 先前被正則擷取後直接捨棄，procid 一律寫死空字串，與 RFC5424/ASA 事件的 schema
+  // 不一致，下游若依賴 procid 做行為者關聯會少一個可用訊號（2026-09 全功能審查發現）
+  const appName = tagMatch ? tagMatch[1] : '';
+  const procid = tagMatch && tagMatch[2] ? tagMatch[2] : '';
+  const msg = tagMatch ? tagMatch[3] : rest;
   return {
     format: 'rfc3164', raw: line, lineNo,
     timestamp: parseSyslogTimestamp(ts, 'bsd'), timestampRaw: ts,
-    host, appName, procid: '', msgid: '',
+    host, appName, procid, msgid: '',
     severityRaw, severityNorm: hasPri ? normSyslogSeverity(severityRaw) : 'Info',
     facility, facilityAuth: hasPri && (facility === 4 || facility === 10),
     msg, fields: {}
@@ -967,29 +1023,47 @@ function detectFrequencyIssues(events, opts) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(e);
   });
+  // episode 追蹤（比照 detectLateralMovement() 既有修法）：先前用 windowCount===threshold
+  // 精確匹配，視窗內計數一旦超過門檻就不再觸發也不再更新，長時間/高密度的持續攻擊會被凍結
+  // 在「恰好等於門檻值」那一刻的快照，count/lastSeen/relatedEvents 從此不再更新，嚴重低估
+  // 規模（2026-09 全功能審查發現）。改為達門檻時開案，之後持續就地更新到目前為止看過的
+  // 最大範圍，直到視窗計數掉回門檻以下才結束這一波
   const issues = [];
   for (const [key, list] of groups) {
     const sorted = [...list].sort((a, b) => effectiveTime(a) - effectiveTime(b));
     let winStart = 0;
+    let episode = null;
     for (let i = 0; i < sorted.length; i++) {
       const ti = effectiveTime(sorted[i]);
       while (effectiveTime(sorted[winStart]) < ti - windowMs) winStart++;
       const windowCount = i - winStart + 1;
-      if (windowCount === threshold) {
+      if (windowCount >= threshold) {
         const [host, category] = key.split('|');
         const windowEvents = sorted.slice(winStart, i + 1);
-        issues.push({
-          category: `freq:${category}`,
-          severityNorm: category === 'authFail' ? 'Critical' : 'High',
-          count: windowCount,
-          firstSeen: windowEvents[0].timestamp || null,
-          lastSeen: windowEvents[windowEvents.length - 1].timestamp || null,
-          sampleRaw: windowEvents[windowEvents.length - 1].raw,
-          relatedHosts: [host],
-          relatedEvents: windowEvents,
-          confidence: 'confirmed',
-          windowMs, threshold
-        });
+        if (!episode) {
+          episode = {
+            category: `freq:${category}`,
+            severityNorm: category === 'authFail' ? 'Critical' : 'High',
+            count: windowCount,
+            firstSeen: windowEvents[0].timestamp || null,
+            lastSeen: windowEvents[windowEvents.length - 1].timestamp || null,
+            sampleRaw: windowEvents[windowEvents.length - 1].raw,
+            relatedHosts: [host],
+            relatedEvents: windowEvents,
+            confidence: 'confirmed',
+            windowMs, threshold
+          };
+          issues.push(episode);
+        } else {
+          episode.lastSeen = windowEvents[windowEvents.length - 1].timestamp || null;
+          if (windowCount > episode.count) {
+            episode.count = windowCount;
+            episode.sampleRaw = windowEvents[windowEvents.length - 1].raw;
+            episode.relatedEvents = windowEvents;
+          }
+        }
+      } else {
+        episode = null;
       }
     }
   }
@@ -1143,6 +1217,11 @@ function detectScanHeuristicSyslog(events, opts) {
   const threshold = (opts && opts.threshold) || 5;
   const byHost = new Map();
   events.filter(e => e.format !== 'cef').forEach(e => {
+    // JSON／RFC5424 等格式缺 host 欄位時 parser 預設值是空字串 ''，若不排除會讓多筆彼此
+    // 無關、只是剛好都沒帶 host 的事件被聚合進同一個 '' bucket，各自訊息裡的 IP 被合併計數
+    // 誤判成同一來源的掃描（比照同檔案 detectBeaconing() 的 e.host||null 既有防呆手法，
+    // 2026-09 全功能審查發現）
+    if (!e.host) return;
     const ips = extractIPsFromText(e.msg);
     if (!ips.length) return;
     if (!byHost.has(e.host)) byHost.set(e.host, { ips: new Set(), events: [] });
@@ -1511,12 +1590,29 @@ function detectGeoRiskEvents(events, riskCountries) {
 // [5] 威脅情資本機比對（僅本機靜態清單，不連網）
 // ============================================================
 // IP/CIDR 欄位名稱判斷準則，CSV 表頭與 JSON key 共用同一套規則；Spamhaus DROP 系列 JSON 匯出
-// 用的欄位名稱是 "cidr" 非 "ip"/"addr"，故需涵蓋 cidr/network 而不只 ip/addr
-const IP_FIELD_RE = /ip|addr|cidr|network/i;
+// 用的欄位名稱是 "cidr" 非 "ip"/"addr"，故需涵蓋 cidr/network 而不只 ip/addr。
+// 先前用無邊界的子字串比對（/ip|addr|cidr|network/i），"zip"／"equipment"／"recipient"／
+// "principal" 等常見英文欄名都含字面 "ip" 子字串會被誤判命中，導致真正的 ip/domain 欄位
+// 反而未被選中（誤判順序在前的欄位優先命中）（2026-09 全功能審查發現）。改用依大小寫轉換／
+// 分隔符號切出的欄位「token」做精確比對，只有整個 token 等於已知詞彙、或以已知前綴+ip 組成
+// 複合詞（如 srcip/dstip 這類威脅情資清單常見縮寫）才視為命中
+function _fieldTokens(key) {
+  return String(key).replace(/([a-z0-9])([A-Z])/g, '$1_$2').split(/[^A-Za-z0-9]+/).map(t => t.toLowerCase()).filter(Boolean);
+}
+const IP_FIELD_TOKENS = new Set(['ip', 'addr', 'address', 'cidr', 'network']);
+const IP_FIELD_PREFIX_WORDS = new Set(['src', 'dst', 'source', 'destination', 'remote', 'local', 'client', 'server', 'attacker', 'victim', 'host', 'device']);
+function isIPFieldName(key) {
+  return _fieldTokens(key).some(t => {
+    if (IP_FIELD_TOKENS.has(t)) return true;
+    return t.length > 2 && t.endsWith('ip') && IP_FIELD_PREFIX_WORDS.has(t.slice(0, -2));
+  });
+}
+// 相容既有呼叫端字面使用 IP_FIELD_RE.test(...) 的寫法
+const IP_FIELD_RE = { test: isIPFieldName };
 
 function extractIPFieldFromObj(obj) {
   if (!obj || typeof obj !== 'object') return null;
-  const key = Object.keys(obj).find(k => IP_FIELD_RE.test(k));
+  const key = Object.keys(obj).find(k => isIPFieldName(k));
   if (!key) return null;
   const v = obj[key];
   return (typeof v === 'string' || typeof v === 'number') ? String(v) : null;
@@ -1525,11 +1621,15 @@ function extractIPFieldFromObj(obj) {
 // 2026-08-20 新增：威脅情資 domain 型清單支援（僅 exact match，不做萬用字元/子網域比對——
 // 子網域比對規則因情資清單格式而異，查無統一標準，比照專案「不猜測」慣例先做最小可用版本）。
 // DOMAIN_FIELD_RE 判斷準則同 IP_FIELD_RE，僅在 IP 欄位找不到時才 fallback 嘗試，避免誤把
-// 同時含 ip 與 domain 兩欄的清單錯誤解讀成 domain 清單
-const DOMAIN_FIELD_RE = /domain|fqdn|hostname/i;
+// 同時含 ip 與 domain 兩欄的清單錯誤解讀成 domain 清單；同樣改用 token 精確比對（2026-09 全功能審查修復）
+const DOMAIN_FIELD_TOKENS = new Set(['domain', 'fqdn', 'hostname']);
+function isDomainFieldName(key) {
+  return _fieldTokens(key).some(t => DOMAIN_FIELD_TOKENS.has(t));
+}
+const DOMAIN_FIELD_RE = { test: isDomainFieldName };
 function extractDomainFieldFromObj(obj) {
   if (!obj || typeof obj !== 'object') return null;
-  const key = Object.keys(obj).find(k => DOMAIN_FIELD_RE.test(k));
+  const key = Object.keys(obj).find(k => isDomainFieldName(k));
   if (!key) return null;
   const v = obj[key];
   return (typeof v === 'string' || typeof v === 'number') ? String(v) : null;
@@ -1547,19 +1647,39 @@ function parseJSONOrNDJSON(text) {
   if (!trimmed) return { arr: null, singleObj: null };
   const lines = trimmed.split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length > 1) {
+    // 先前要求「每一行都必須合法 JSON」（allValid），只要有一行壞掉（如下載中斷、單筆記錄
+    // 損毀）就整份退回下方的 JSON.parse(trimmed) 嘗試，該嘗試對非單一合法 JSON 文件的
+    // NDJSON 文字必定失敗，最終連前面原本合法的每一行資料都一併靜默遺失。改為逐行
+    // try/catch、壞行單獨跳過（比照同檔案 parseAsnDropList() 既有慣例），只計入解析成功
+    // 且為物件的行；至少半數行成功才視為 NDJSON，比例過低代表這其實是分行排版過的單一
+        // JSON 文件（pretty-print），仍退回下方整段解析路徑，避免把縮排片段誤判成多筆小物件
+    // （2026-09 全功能審查發現）
     const objs = [];
-    let allValid = true;
     for (const l of lines) {
-      try { objs.push(JSON.parse(l)); } catch (e) { allValid = false; break; }
+      try { const parsed = JSON.parse(l); if (parsed && typeof parsed === 'object') objs.push(parsed); } catch (e) { /* 壞行跳過 */ }
     }
-    if (allValid && objs.length) return { arr: objs, singleObj: null };
+    if (objs.length && objs.length >= lines.length / 2) return { arr: objs, singleObj: null };
   }
   try {
     const data = JSON.parse(trimmed);
     if (Array.isArray(data)) return { arr: data, singleObj: null };
     if (data && typeof data === 'object') {
-      const arrKey = Object.keys(data).find(k => Array.isArray(data[k]));
-      if (arrKey) return { arr: data[arrKey], singleObj: null };
+      const arrKeys = Object.keys(data).filter(k => Array.isArray(data[k]));
+      if (arrKeys.length) {
+        // 物件內有多個陣列鍵時（常見威脅情資 API 回應形狀：metadata 陣列排在真正資料陣列
+        // 之前），先前無條件取第一個陣列鍵，真正資料常因此被忽略。優先挑選「陣列元素本身
+        // 是物件且含 IP/domain 特徵欄位」的鍵，其次挑選常見資料陣列命名慣例，皆無命中才
+        // 維持原本「第一個陣列鍵」的 fallback 行為（2026-09 全功能審查發現）
+        const COMMON_DATA_KEYS = new Set(['data', 'list', 'results', 'entries', 'items']);
+        let arrKey = arrKeys.find(k => {
+          const first = data[k][0];
+          return first && typeof first === 'object' && !Array.isArray(first) &&
+            Object.keys(first).some(fk => isIPFieldName(fk) || isDomainFieldName(fk));
+        });
+        if (!arrKey) arrKey = arrKeys.find(k => COMMON_DATA_KEYS.has(k.toLowerCase()));
+        if (!arrKey) arrKey = arrKeys[0];
+        return { arr: data[arrKey], singleObj: null };
+      }
       return { arr: null, singleObj: data };
     }
   } catch (e) { /* 非 JSON，交給呼叫端 fallback 邏輯處理 */ }
@@ -1964,12 +2084,19 @@ async function buildIntelIndex(intelList, onProgress) {
   if (hasBroadCidr) console.warn(`[log_analyzer] 情資清單「${intelList.name}」含異常寬鬆的 CIDR（前綴 ≤ 8，IPv6 則 ≤ 32），若用於安全清單會讓比對全面失效`);
   return { name: intelList.name, exact, cidrByPrefix, cidr6ByPrefix, count: exact.size + cidrCount + cidr6Count, hasBroadCidr, countries: Array.from(countrySet).sort() };
 }
+// CIDR 桶依前綴長度由大到小（最具體優先）排序後才查詢——先前直接依 Map 插入順序（即該
+// 前綴長度在清單中首次出現的順序）逐一嘗試，命中第一個就回傳，非「最長前綴匹配」。階層式
+// 委派的清單（如 ISP 大區塊內再切出客戶專屬子區塊）會依清單列順序而非何者更具體決定命中
+// 結果，同一份資料調換兩行順序就會給出不同答案（2026-09 全功能審查發現）。前綴長度種類
+// 數量有限（IPv4 最多 33 種、IPv6 最多 129 種），每次查詢排序的額外開銷可忽略
 function intelLookup(index, ip) {
   if (index.exact.has(ip)) return index.exact.get(ip);
   if (ip.includes(':')) {
     const ip6Int = ipv6ToBigInt(ip);
     if (ip6Int === null) return null;
-    for (const [bits, bucket] of index.cidr6ByPrefix) {
+    const bitsList6 = [...index.cidr6ByPrefix.keys()].sort((a, b) => b - a);
+    for (const bits of bitsList6) {
+      const bucket = index.cidr6ByPrefix.get(bits);
       const hit = bucket.get((ip6Int & ipv6MaskForBits(bits)).toString(36)); // key 格式須與 buildIntelIndex() 一致（字串非 BigInt，見上方效能修復註解）
       if (hit) return hit;
     }
@@ -1977,7 +2104,9 @@ function intelLookup(index, ip) {
   }
   const ipInt = ipToInt(ip);
   if (ipInt === null) return null;
-  for (const [bits, bucket] of index.cidrByPrefix) {
+  const bitsList = [...index.cidrByPrefix.keys()].sort((a, b) => b - a);
+  for (const bits of bitsList) {
+    const bucket = index.cidrByPrefix.get(bits);
     const mask = bits === 0 ? 0 : (bits >= 32 ? 0xFFFFFFFF : (~((1 << (32 - bits)) - 1)) >>> 0);
     const hit = bucket.get((ipInt & mask) >>> 0);
     if (hit) return hit;
@@ -2835,6 +2964,12 @@ function anonymizeEvent(evt, opts) {
     if (clone.fields.msg) clone.fields.msg = replaceMACsInLine(replaceIPsInLine(clone.fields.msg, opts));
     if (clone.fields.logdesc) clone.fields.logdesc = replaceMACsInLine(replaceIPsInLine(clone.fields.logdesc, opts));
     if (clone.host) clone.host = anonHostname(clone.host);
+    // clone.host 來自 fields.devname（見 parseFortiGateLine），先前只更新了 clone.host 這個
+    // 獨立副本，從未回寫進 clone.fields.devname——rebuildFortiGateLine() 是依 fields 原樣
+    // 重建整行文字，devname 從未被排除或替換，導致下載/匯出的去識別化 log 檔案裡 FortiGate
+    // 裝置真實主機名稱仍以明碼保留，即便畫面顯示的 host 欄位看起來已是假值（2026-09 全功能
+    // 審查發現；比照下方 winevent 分支 clone.fields.Computer 回寫既有正確寫法）
+    if (clone.fields.devname) clone.fields.devname = clone.host;
     clone.msg = replaceMACsInLine(replaceIPsInLine(clone.msg || '', opts));
     clone.raw = rebuildFortiGateLine(clone);
   } else if (evt.format === 'json') {
@@ -4156,10 +4291,14 @@ function exportLogReport(mode) {
       catLabel = tr('cat.freqLabel') + tr(CAT_KEY_MAP[is.category.slice(5)] || 'cat.other');
     } else {
       catLabel = tr(CAT_KEY_MAP[is.category] || 'cat.other');
+      // is.intelSource（使用者自訂的情資清單名稱）在此已跳脫過一次，外層樣板不可再包一次
+      // esc()，否則含 &/</>/" 的名稱會被雙重跳脫顯示成亂碼實體字串（如 &amp;amp;T）
+      // （2026-09 全功能審查發現，比照 renderIssues() 既有正確寫法：catLabel 組好後不再
+      // 額外 esc()）
       if (is.category === 'knownIOC' && is.intelSource) catLabel += ` (${esc(is.intelSource)})`;
     }
     return `<tr>
-      <td>${esc(catLabel)}</td>
+      <td>${catLabel}</td>
       <td><span class="badge" style="background:${REPORT_SEV_COLOR[is.severityNorm]}">${esc(tr(SEV_KEY_MAP[is.severityNorm]))}</span></td>
       <td>${is.count}</td>
       <td>${esc(tr('conf.' + is.confidence))}</td>

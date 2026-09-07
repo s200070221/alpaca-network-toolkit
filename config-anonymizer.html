@@ -2686,6 +2686,13 @@ const VENDOR_FNS = {
 };
 
 function anonymize(text, vendor, opts) {
+  // CRLF 正規化：全部廠牌函式皆以 text.split('\n') 逐行處理，大量機敏欄位遮蔽正則是緊貼
+  // 字串結尾錨點 $ 的寫法（如 \S+$／.+$），CRLF 換行殘留的尾端 \r 會讓這些正則完全不命中，
+  // 導致密碼／PSK／SNMP community／SNMPv3 privacy 密碼等明碼原樣留在「去識別化後」的輸出中，
+  // 且 checkResidual() 逐行比對關鍵字也偵測不到（因外洩內容本身不含關鍵字，關鍵字在區塊開頭
+  // 另一行），使用者會誤以為輸出已完全乾淨（2026-09 全功能審查發現，比照本專案 switch/firewall
+  // 系列工具既有的 CRLF 正規化慣例）
+  text = (text || '').replace(/\r\n/g, '\n');
   // Reset state
   mappings.ip.clear(); mappings.hostname.clear(); mappings.user.clear(); mappings.ssid.clear(); mappings.alias.clear(); mappings.vdom.clear(); mappings.mac.clear();
   anonOutputIPs.clear();
