@@ -122,8 +122,14 @@ const CiscoASAParser = (() => {
       if (o.type !== 'group') return;
       const frags = (o.members || '').split(/\s*,\s*/).filter(Boolean);
       const types = new Set();
+      // ASA 合法語法允許巢狀 group（network-object object-group NAME），先前只認得
+      // "object "（結尾帶空格）前綴，"object-group NAME" 這種字面字串因第7個字元是 "-"
+      // 比對不到，會落入 else 分支直接用 f.includes(':') 判斷整段 "object-group NAME"
+      // 字串（天生不含冒號），永遠誤判為 v4，導致巢狀群組內真正是 IPv6 的內容從未被
+      // 遞迴反查（2026-09 全功能審查發現）
       frags.forEach(f => {
-        if (f.startsWith('object ')) types.add(map.get(f.slice(7)) || 'v4');
+        const mRef = f.match(/^object(?:-group)?\s+(.+)$/);
+        if (mRef) types.add(map.get(mRef[1]) || 'v4');
         else types.add(f.includes(':') ? 'v6' : 'v4');
       });
       map.set(o.name, types.size > 1 ? 'mixed' : (types.values().next().value || 'v4'));
@@ -205,6 +211,10 @@ const CiscoASAParser = (() => {
         const mL=line.match(/^\s+lifetime\s+(\d+)/); if(mL)curP1.lt=mL[1];
       }
     }
+    // 收尾防呆：若 crypto isakmp policy 區塊剛好是檔案最後一段（沒有任何後續非縮排行觸發
+    // inP1=false 分支），bestP1 會停留在函式開頭的預設值、curP1 蒐集到的真實設定值被丟棄
+    // （2026-09 全功能審查發現，比照本專案既有「區塊收尾依賴下一行」風險模式的標準修法）
+    if (inP1) bestP1 = {auth:curP1.auth||'psk',enc:curP1.enc||'-',hash:curP1.hash||'-',dhgrp:curP1.grp||'-',lifetime:curP1.lt||'86400'};
 
     // Parse global isakmp settings
     let natTraversal = '-', dpd = '-';

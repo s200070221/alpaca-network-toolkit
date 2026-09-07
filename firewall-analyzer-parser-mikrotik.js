@@ -51,11 +51,33 @@ const MikrotikParser = (() => {
     return result;
   }
 
+  // 合併 RouterOS /export 輸出常見的行尾反斜線換行（終端機寬度有限時，長規則的
+  // comment/address-list 等欄位會被截斷到下一行，行尾為 "\" 且延續行通常有縮排）；
+  // 合併後才能讓下方的 add/set 判斷式與 parseLine() 收到完整的邏輯行（2026-09 全功能審查發現）
+  function joinWrappedLines(text) {
+    const rawLines = text.split(/\r?\n/);
+    const out = [];
+    let buf = null;
+    for (const rawLine of rawLines) {
+      const m = rawLine.match(/^([\s\S]*?)\\\s*$/);
+      if (m) {
+        buf = (buf === null ? m[1] : buf + m[1].replace(/^\s+/, ' '));
+      } else if (buf !== null) {
+        out.push(buf + rawLine.replace(/^\s+/, ' '));
+        buf = null;
+      } else {
+        out.push(rawLine);
+      }
+    }
+    if (buf !== null) out.push(buf);
+    return out.join('\n');
+  }
+
   // Split the full export text into sections keyed by '/section/path'
   function splitSections(text) {
     const sections = {};
     let currentSection = null;
-    for (const rawLine of text.split(/\r?\n/)) {
+    for (const rawLine of joinWrappedLines(text).split(/\r?\n/)) {
       const line = rawLine.trimEnd();
       if (/^\/[\w\-]/.test(line.trim())) {
         // New section header — normalise to lowercase trimmed
@@ -90,10 +112,18 @@ const MikrotikParser = (() => {
   function parseInterfaces(sections) {
     const ifaces = {};
 
+    // /interface 底下有些子選單是「成員/歸屬清單」而非真正的介面定義本身（該 add 列本身
+    // 沒有代表物件自身的 name= 欄位，只是引用既有介面），誤當成介面定義會產生假介面列或
+    // 用錯誤的 type 覆寫既有介面（2026-09 全功能審查發現）：
+    // - /interface list：WAN/LAN 等分類清單「名稱」，不是介面
+    // - /interface list member：介面 → list 的歸屬關係
+    // - /interface bridge port：介面 → bridge 的成員關係
+    const IFACE_MEMBERSHIP_SECTIONS = new Set(['list', 'list member', 'bridge port']);
     // Collect all known interfaces from /interface* sections
     for (const [sec, lines] of Object.entries(sections)) {
       if (!sec.startsWith('/interface')) continue;
       const type = sec.replace('/interface', '').trim() || 'physical';
+      if (IFACE_MEMBERSHIP_SECTIONS.has(type)) continue;
       lines.forEach(line => {
         const p = parseLine(line);
         const name = p['name'] || p['interface'] || '';
@@ -133,7 +163,8 @@ const MikrotikParser = (() => {
       };
 
       const [ip, prefix] = addr.split('/');
-      const prefixN = parseInt(prefix) || 24;
+      const prefixParsed = parseInt(prefix);
+      const prefixN = (prefix === undefined || prefix === '' || isNaN(prefixParsed)) ? 24 : prefixParsed;
       // Convert prefix to mask
       const maskN = prefixN === 0 ? 0 : (0xFFFFFFFF << (32 - prefixN)) >>> 0;
       const mask = [(maskN>>>24)&0xFF,(maskN>>>16)&0xFF,(maskN>>>8)&0xFF,maskN&0xFF].join('.');
@@ -194,9 +225,12 @@ const MikrotikParser = (() => {
       // If single member: create address entry; else create group
       if (l.members.length === 1) {
         const addr = l.members[0];
+        // FQDN 判斷需排在「含連字號視為 IP range」之前——連字號在真實主機名稱中很常見
+        // （如 my-server.example.com），IP range 本身不可能含字母，故先判字母再判連字號
+        // 才能避免誤判（2026-09 全功能審查發現）
         const type = addr.includes('/') ? 'ipmask'
-                   : addr.includes('-') ? 'iprange'
-                   : addr.match(/[a-zA-Z]/) ? 'fqdn' : 'ipmask';
+                   : addr.match(/[a-zA-Z]/) ? 'fqdn'
+                   : addr.includes('-') ? 'iprange' : 'ipmask';
         const [startIp, endIp] = addr.includes('-') ? addr.split('-') : ['-','-'];
         out.push({
           category: 'address', name: l.name, type,
@@ -209,8 +243,8 @@ const MikrotikParser = (() => {
         // multiple entries = group
         l.members.forEach((addr, idx) => {
           const type = addr.includes('/') ? 'ipmask'
-                     : addr.includes('-') ? 'iprange'
-                     : addr.match(/[a-zA-Z]/) ? 'fqdn' : 'ipmask';
+                     : addr.match(/[a-zA-Z]/) ? 'fqdn'
+                     : addr.includes('-') ? 'iprange' : 'ipmask';
           out.push({
             category: 'address', name: `${l.name}_${idx+1}`,
             type, subnet: type==='ipmask'?addr:'-',
@@ -627,6 +661,26 @@ const MikrotikParser = (() => {
   // Returns true if text looks like a MikroTik /export file
 
   // ── DHCP Server & Relay ──────────────────────────────────────────────────
+  function _ip2int(ip) {
+    const parts = (ip||'').trim().split('.').map(Number);
+    if (parts.length !== 4 || parts.some(n=>isNaN(n)||n<0||n>255)) return null;
+    return ((parts[0]<<24)>>>0) + (parts[1]<<16) + (parts[2]<<8) + parts[3];
+  }
+  // 依 pool 的起始 IP 落在哪個 network CIDR 範圍內來配對，而非無條件取第一筆
+  // network（原本每台 dhcp-server 都會顯示同一筆網段的 gateway/dns，2026-09 全功能審查發現）
+  function _findDhcpNet(nets, startIp) {
+    const ipInt = _ip2int(startIp);
+    if (ipInt === null) return null;
+    for (const cidr of Object.keys(nets)) {
+      const [netIp, bitsStr] = cidr.split('/');
+      const bits = parseInt(bitsStr, 10);
+      const netInt = _ip2int(netIp);
+      if (netInt === null || isNaN(bits)) continue;
+      const mask = bits === 0 ? 0 : (0xFFFFFFFF << (32-bits)) >>> 0;
+      if ((ipInt & mask) === (netInt & mask)) return nets[cidr];
+    }
+    return null;
+  }
   function parseDhcp(sections) {
     const servers=[], relays=[];
     const pools={};
@@ -641,7 +695,7 @@ const MikrotikParser = (() => {
       const name=p['name']||`dhcp-${servers.length+1}`;
       const pool=p['address-pool']||'-';
       const ranges=(pools[pool]||'').split('-');
-      const netInfo=Object.values(nets)[0]||{gateway:'-',domain:'-',dns:'-'};
+      const netInfo=_findDhcpNet(nets, ranges[0]) || Object.values(nets)[0] || {gateway:'-',domain:'-',dns:'-'};
       const dnsArr=netInfo.dns.split(',');
       servers.push({name,iface:p['interface']||'-',
         startIp:ranges[0]?.trim()||'-',endIp:ranges[1]?.trim()||'-',

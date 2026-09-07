@@ -112,6 +112,22 @@ const PaloAltoParser = (() => {
   }
 
   // ─── Interfaces ───────────────────────────────────────────────────────────
+  // 依「member 清單」/「單一 ip-address 標籤」/「自我封閉 <entry name="X/Y"/> 清單（官方
+  // PAN-OS 文件：一個 L3 介面可有多筆 IPv4/IPv6 位址）」/「單筆 entry」四種格式優先序
+  // 取出完整 IP 清單。先前只有實體乙太介面（本函式的 ethernet 分支）套用了完整四種格式，
+  // Loopback／VLAN／乙太子介面（units）三處仍只認舊式 member 清單格式，真實 PAN-OS 匯出檔
+  // 本來就是自我封閉 entry 格式，這三處 IP 會 100% 解析成空白（2026-09 全功能審查發現）
+  function getActiveIpList(body) {
+    const ipList = xlist(body, 'ip');
+    if (ipList.length) return ipList;
+    const ipFromTag = xv(xv(body, 'ip'), 'ip-address') || '';
+    if (ipFromTag) return [ipFromTag];
+    const ipEntryAll = [...xv(body, 'ip').matchAll(/<entry\s+name="([\d.]+\/\d+)"/g)].map(m => m[1]);
+    if (ipEntryAll.length) return ipEntryAll;
+    const ipEntryM = body.match(/<ip>\s*<entry\s+name="([\d.]+\/\d+)"/);
+    return ipEntryM ? [ipEntryM[1]] : [];
+  }
+
   function parseInterfaces(text) {
     const ifaces = [];
 
@@ -126,21 +142,10 @@ const PaloAltoParser = (() => {
       xentriesTop(ethContainer).forEach(eth => {
         const name = eth._name || xname(eth);
         const layer3 = xv(eth._inner, 'layer3');
-        // Try <member> in <ip>, <ip-address> tag, or <entry name="IP/prefix"/> format
-        const ipList = xlist(layer3 || eth._inner, 'ip');
-        const ipFromTag = xv(xv(layer3||eth._inner,'ip'),'ip-address') || '';
-        // Format: <ip><entry name="192.168.1.1/24"/></ip> — IP as entry name。官方 PAN-OS
-        // 文件確認一個 L3 介面可有多筆 <entry name="X"/>（「A single Layer 3 interface
-        // supports multiple static IPv4 and static IPv6 addresses」）；entry 為 self-closing
-        // 標籤，xva()/xlist() 認得的是 <tag>...</tag> 配對格式抓不到，故直接對 <ip> 區塊
-        // 內容做全域 name 屬性擷取，取得完整清單（官方 PAN-OS 文件確認一個 L3 介面可有
-        // 多筆位址，2026-08-17 從「僅取第一筆次要IP」擴大為完整收集全部次要IP）
-        const ipEntryAll = [...xv(layer3||eth._inner,'ip').matchAll(/<entry\s+name="([\d.]+\/\d+)"/g)].map(m=>m[1]);
-        // Format: <ip><entry name="192.168.1.1/24"/></ip> — IP as entry name
-        const ipEntryM = (layer3||eth._inner).match(/<ip>\s*<entry\s+name="([\d.]+\/\d+)"/);
         // 主要/次要IP 一律取自同一個來源清單（依既有優先序挑出第一個有命中的來源），
-        // 避免混用不同 XML 格式變體的清單造成資料錯置
-        const activeIpList = ipList.length ? ipList : (ipFromTag ? [ipFromTag] : (ipEntryAll.length ? ipEntryAll : (ipEntryM ? [ipEntryM[1]] : [])));
+        // 避免混用不同 XML 格式變體的清單造成資料錯置（官方 PAN-OS 文件確認一個 L3 介面
+        // 可有多筆位址，2026-08-17 從「僅取第一筆次要IP」擴大為完整收集全部次要IP）
+        const activeIpList = getActiveIpList(layer3 || eth._inner);
         const ipRaw = activeIpList[0] || '';
         const ip = ipRaw;
         const [ipAddr, prefix] = ip ? ip.split('/') : ['-', '-'];
@@ -169,10 +174,16 @@ const PaloAltoParser = (() => {
           interface: '-', gateway: '-',
         });
 
-        // Sub-interfaces
-        xblks(eth._inner, 'units').forEach(sub => {
-          const sname = xname(sub) || `${name}.${xv(sub._inner,'tag')}`;
-          const sipRaw = xlist(sub._inner, 'ip')[0] || xv(xv(sub._inner,'ip'),'ip-address') || '';
+        // Sub-interfaces：<units> 容器內通常有多筆 <entry name="ethX/Y.VLAN">，先前把整個
+        // <units>...</units> 容器當成「一筆子介面」處理，xname(sub)/xlist(sub._inner,'ip')
+        // 只會抓到容器內第一個 entry 的資料，導致同一實體埠底下的多個 VLAN 子介面（trunk
+        // 埠切多個 L3 子介面為業界常見設定）只有第一個會被解析出來，其餘靜默遺失
+        // （2026-09 全功能審查發現，改用 xentriesTop() 逐一取出容器內每一筆 entry）
+        xblks(eth._inner, 'units').forEach(unitsBlk => {
+        xentriesTop(unitsBlk._inner).forEach(sub => {
+          const sname = sub._name || xname(sub) || `${name}.${xv(sub._inner,'tag')}`;
+          const subActiveIps = getActiveIpList(sub._inner);
+          const sipRaw = subActiveIps[0] || '';
           const sip = sipRaw;
           const [sipAddr, spfx] = sip ? sip.split('/') : ['-','-'];
           ifaces.push({
@@ -188,12 +199,13 @@ const PaloAltoParser = (() => {
             interface: name, gateway:'-',
           });
         });
+        });
       });
 
       // Loopback
       xblks(xv(text,'interface')||text, 'loopback').forEach(lo => {
         const name = xname(lo);
-        const ip = xlist(lo._inner,'ip')[0]||'';
+        const ip = getActiveIpList(lo._inner)[0]||'';
         const [ipA, pfx] = ip.split('/');
         ifaces.push({
           name, alias:'-', ip:ipA||'-', mask:pfx?prefixToMask(parseInt(pfx)):'-',
@@ -220,7 +232,7 @@ const PaloAltoParser = (() => {
       xblks(xv(text,'interface')||text, 'vlan').forEach(vl => {
         const name = xname(vl);
         if (!name || ifaces.find(i=>i.name===name)) return;
-        const ip = xlist(vl._inner,'ip')[0]||'';
+        const ip = getActiveIpList(vl._inner)[0]||'';
         const [ipA, pfx] = ip.split('/');
         ifaces.push({
           name, alias:xv(vl._inner,'comment')||'-',
@@ -903,7 +915,15 @@ const PaloAltoParser = (() => {
           type, name,
           vipType: dstTr ? 'static-nat' : '-',
           poolType: dynSrc ? 'overload' : statSrc ? 'static' : '-',
-          extIp:   xv(dstTr||inner,'translated-address') || xlist(inner,'destination')[0] || '-',
+          // extIp（外部/公開位址）：DNAT（有 destination-translation）時應取自規則比對條件的
+          // destination（真正的外部IP），而非 destination-translation 的 translated-address
+          // （那是「轉換後的內部伺服器位址」，對應下面的 mapIp）——先前兩者共用同一個
+          // translated-address 來源，導致 DNAT 規則的 extIp===mapIp 且外部IP完全消失；
+          // 純 SNAT（無 destination-translation）維持原行為，extIp 取自 source-translation
+          // 的 translated-address（此時 xv(inner,'translated-address') 不會誤取到 destination-
+          // translation 內容，因為該區塊在此分支下本來就不存在）（2026-09 全功能審查發現，
+          // 僅影響 XML 格式；同函式下方 "set" 格式分支本來就是對的）
+          extIp:   dstTr ? (xlist(inner,'destination')[0] || '-') : (xv(inner,'translated-address') || '-'),
           extIntf: xlist(inner,'to')[0] || '-',
           mapIp:   xv(dstTr||inner,'translated-address') || xv(dynSrc||inner,'translated-address') || '-',
           startIp: xv(dynSrc||inner,'translated-address') || '-',
@@ -1092,9 +1112,21 @@ const PaloAltoParser = (() => {
           policies: vsPolicies, addresses: vsAddresses,
           services: vsServices, schedules: vsSchedules,
           nat: vsNat,
+          // vpn/users 是 PAN-OS network-scoped／device-level 共用資料（非逐 vsys 各自宣告），
+          // 直接放整份共用陣列即可；先前完全缺漏這兩個欄位，doConvert() 的 VDOM 過濾轉換
+          // 功能對所有廠牌一律讀 vd.vpn/vd.users（FortiGate 的對應實作已補上，PaloAlto 漏了），
+          // 導致選定 vsys 轉換時 converter.js 對 undefined 呼叫 .filter() 直接拋錯
+          // （2026-09 全功能審查發現）
+          vpn, users,
           // Tag interfaces belonging to this vsys
           interfaces: interfaces.filter(i => i._vdom === vsName || (!isMultiVsys && i._vdom === 'vsys1')),
-          routes: routes.filter(r => !r._vsys || r._vsys === vsName),
+          // routes 為裝置全域共用（PAN-OS 沒有簡單的 virtual-router↔vsys 直接對應標籤可供
+          // parseRoutes() 標記歸屬，需額外交叉比對 <import><network><virtual-router> 才能
+          // 準確歸屬，工程量與風險皆不成比例），非單一 vsys 專屬；先前寫的 `r._vsys` 過濾條件
+          // 因 parseRoutes() 從未設定過這個屬性而恆為 true（形同虛設，每個 vsys 都會拿到
+          // 全部路由），改為明確直接使用完整清單，避免誤導成「已依 vsys 過濾」
+          // （2026-09 全功能審查發現）
+          routes,
         });
       });
     }

@@ -628,7 +628,7 @@ const FortigateParser = (() => {
     parseEdits(vgl6).forEach(e => {
       const t = e.text;
       nats.push({ type: 'vipgrp6', name: e.name, members: gvs(t, 'member') || '-',
-        extIntf: '-', comment: gv(t, 'comments') || '-', _vdom: vdomName });
+        extIntf: gv(t, 'interface') || '-', comment: gv(t, 'comments') || '-', _vdom: vdomName });
     });
     return nats;
   }
@@ -995,7 +995,10 @@ const FortigateParser = (() => {
         gateway:  gv(t,'gateway')    || '-',
         gateway6: gv(t,'gateway6')   || '-',
         priority: parseInt(gv(t,'priority')||'0')  || 0,
-        weight:   parseInt(gv(t,'weight')  ||'1')  || 1,
+        // 官方 FortiOS "config system sdwan / config members / set weight" 合法範圍
+        // 0-255 且預設值就是 0；先前對 parseInt() 結果再套一次 ||1，把使用者明確設定（或沿用
+        // 預設）的合法值 0 強制改寫成 1（2026-09 全功能審查發現）
+        weight:   (()=>{const w=parseInt(gv(t,'weight')||'0');return isNaN(w)?0:w;})(),
         cost:     parseInt(gv(t,'cost')    ||'0')  || 0,
         linkCost: parseInt(gv(t,'link-cost')||'0') || 0,
         linkStatus: gv(t,'link-status') || 'online',
@@ -1219,8 +1222,12 @@ const FortigateParser = (() => {
       : [];
     // SD-WAN: in single-VDOM mode parse from globalLineArr; in multi-VDOM merge from perVdom
     const globalSdwan = !isMultiVdom ? parseSdwan(globalLineArr, 'root') : null;
-    const globalDhcp  = !isMultiVdom ? parseDhcp(globalLineArr, 'root')  : null;
-    const globalDns   = !isMultiVdom ? parseDns(globalLineArr, 'root')   : null;
+    // DHCP/DNS：多 VDOM 匯出檔常見把這兩項放在 config global（比照上方 interfaces 註解說明的
+    // 同一種匯出慣例差異），先前 multi-vdom 模式下完全不解析 globalLineArr、只從各 VDOM 自己
+    // 的 lines 找，若使用者的匯出檔把 DHCP/DNS 放在 config global，會整段靜默遺失
+    // （2026-09 全功能審查發現，比照 interfaces 既有作法補上兩邊都解析後合併）
+    const globalDhcp  = parseDhcp(globalLineArr, 'root');
+    const globalDns   = parseDns(globalLineArr, 'root');
     const globalSnmp  = parseSnmp(globalLineArr, 'root');
     const globalHa    = parseHa(globalLineArr, 'root');
     const globalLog   = parseLogServers(globalLineArr, 'root');
@@ -1279,8 +1286,8 @@ const FortigateParser = (() => {
       ipsSensors: perVdom.flatMap(v => v.ipsSensors),
       users:     [...globalUsers, ...perVdom.flatMap(v => v.users)],
       sdwan:     isMultiVdom ? mergeSdwan(perVdom) : globalSdwan,
-      dhcp:      isMultiVdom ? mergeDhcp(perVdom)  : globalDhcp,
-      dns:       isMultiVdom ? mergeDns(perVdom)   : globalDns,
+      dhcp:      isMultiVdom ? mergeDhcp([{dhcp:globalDhcp}, ...perVdom]) : globalDhcp,
+      dns:       isMultiVdom ? mergeDns([{dns:globalDns}, ...perVdom])   : globalDns,
       // SNMP: device-global only (config system snmp is in 'config global', never per-VDOM)
       snmp:      globalSnmp,
       // HA: device-global only (config system ha is in 'config global', never per-VDOM)

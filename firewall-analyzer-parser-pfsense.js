@@ -43,8 +43,9 @@ const PfsenseParser = (() => {
     return new RegExp(`<${tag}(?:\\s[^>]*)?/?>`, 'i').test(xml);
   }
   function prefixToMask(bits) {
-    if (!bits || isNaN(bits)) return '255.255.255.0';
-    const n = (0xFFFFFFFF << (32 - parseInt(bits))) >>> 0;
+    if (bits === null || bits === undefined || bits === '' || isNaN(bits)) return '255.255.255.0';
+    const bitsN = parseInt(bits);
+    const n = bitsN === 0 ? 0 : (0xFFFFFFFF << (32 - bitsN)) >>> 0;
     return [(n>>>24)&0xFF,(n>>>16)&0xFF,(n>>>8)&0xFF,n&0xFF].join('.');
   }
   function subnetToIp(sub) {
@@ -311,14 +312,18 @@ const PfsenseParser = (() => {
         // Address alias
         const addrs = addr.split(/\s+/).filter(Boolean);
         if (addrs.length === 1) {
-          const isRange = addrs[0].includes('-');
-          const isNet   = addrs[0].includes('/');
+          // pfSense "host" 型別別名允許值直接是可解析的 FQDN（非僅 IP），連字號在真實主機名稱
+          // 很常見（如 my-vpn-server.duckdns.org），需先判斷是否為 FQDN 再判斷連字號/斜線，
+          // 否則會被誤判成 IP range 或不完整的 ipmask（2026-09 全功能審查發現）
+          const isFqdn  = type === 'host' && /[a-zA-Z]/.test(addrs[0]);
+          const isRange = !isFqdn && addrs[0].includes('-');
+          const isNet   = !isFqdn && addrs[0].includes('/');
           objs.push({
-            category: 'address', name, type: isRange?'iprange':isNet?'ipmask':'ipmask',
-            subnet:   isNet ? addrs[0] : isRange ? '-' : `${addrs[0]}/32`,
-            fqdn:     type==='url'||type==='urltable' ? addrs[0] : '-',
-            startIp:  isRange ? addrs[0].split('-')[0] : addrs[0].split('/')[0],
-            endIp:    isRange ? addrs[0].split('-')[1]||'-' : '-',
+            category: 'address', name, type: isFqdn?'fqdn':isRange?'iprange':isNet?'ipmask':'ipmask',
+            subnet:   isFqdn ? '-' : isNet ? addrs[0] : isRange ? '-' : `${addrs[0]}/32`,
+            fqdn:     isFqdn||type==='url'||type==='urltable' ? addrs[0] : '-',
+            startIp:  isFqdn ? '-' : isRange ? addrs[0].split('-')[0] : addrs[0].split('/')[0],
+            endIp:    isFqdn ? '-' : isRange ? addrs[0].split('-')[1]||'-' : '-',
             wildcard: '-', iface: '-', color: '0',
             comment:  descr || '-', members: '-', _vdom: 'global',
           });

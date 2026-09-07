@@ -239,7 +239,11 @@ function buildAddrTypeMap(addressObjects) {
   });
   (addressObjects || []).forEach(o => {
     if (o.category !== 'address-group' && o.category !== 'address-group6') return;
-    const memberTypes = new Set((o.members || '').split(/\s*,\s*/).filter(Boolean).map(m => map.get(m) || 'v4'));
+    // 部分廠牌（如 WatchGuard 的 alias-member-list）允許成員直接是「字面 IP/CIDR 值本身」
+    // 而非引用其他具名物件，此時 map.get(m) 查無此鍵，先前一律預設 'v4'，若該字面值其實是
+    // IPv6 位址會被誤判（2026-09 全功能審查發現）；查無名稱對應時，改用字面值本身是否含 ":"
+    // 判斷（與同檔案既有的字面 IP 判斷慣例一致），查無名稱且不含 ":" 才維持預設 v4
+    const memberTypes = new Set((o.members || '').split(/\s*,\s*/).filter(Boolean).map(m => map.get(m) || (m.includes(':') ? 'v6' : 'v4')));
     map.set(o.name, memberTypes.size > 1 ? 'mixed' : (memberTypes.values().next().value || 'v4'));
   });
   return map;

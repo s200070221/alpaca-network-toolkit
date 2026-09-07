@@ -127,6 +127,30 @@ function parseFortigateWifi(text) {
     if (!m) return [];
     return m[1].trim().replace(/^"|"$/g, '').split(/\s+/).map(s => s.replace(/^"|"$/g,'').trim()).filter(Boolean);
   }
+  // 逐行掃描＋depth 計數抽取 config radio-N 區塊（比照同檔案 getSection()/parseEdits() 既有
+  // depth-tracking 手法），取代原本依賴「end 前面剛好縮排4格」的正則收尾——真實 FortiGate
+  // 匯出檔巢狀層級縮排常見是 8 格（wtp-profile→edit→config radio-N），並非固定4格，
+  // 原正則在真實縮排下會整段漏解析甚至完全解析不到（2026-09 全功能審查發現）
+  function extractRadioBlocks(text) {
+    const lines = text.split('\n');
+    const blocks = [];
+    let cur = null, depth = 0;
+    for (const line of lines) {
+      const t = line.trim();
+      const m = depth === 0 ? t.match(/^config radio-(\d+)$/) : null;
+      if (m && !cur) { cur = { id: m[1], body: '' }; depth = 1; continue; }
+      if (cur) {
+        if (t.startsWith('config ')) depth++;
+        if (t === 'end') {
+          depth--;
+          if (depth === 0) { blocks.push(cur); cur = null; continue; }
+        }
+        cur.body += line + '\n';
+      }
+    }
+    if (cur) blocks.push(cur);
+    return blocks;
+  }
   function hasKey(body, key) {
     return new RegExp(`^\\s*set ${key}\\s`, 'im').test(body);
   }
@@ -180,10 +204,8 @@ function parseFortigateWifi(text) {
       const widsProf  = gv(b, 'wids-profile');
       const country   = gv(b, 'country');
       const radios = [];
-      const radioRe = /config radio-(\d+)([\s\S]*?)(?=config radio-\d+|^    end)/gm;
-      let rm;
-      while ((rm = radioRe.exec(b)) !== null) {
-        const rBody = rm[2];
+      extractRadioBlocks(b).forEach(rm => {
+        const rBody = rm.body;
         const band = gv(rBody, 'band');
         const mode = gv(rBody, 'mode');
         const channel = gv(rBody, 'channel');
@@ -195,8 +217,8 @@ function parseFortigateWifi(text) {
           const v = gv(rBody, `vap${i}`);
           if (v !== '-') vapRefs.push(v);
         }
-        radios.push({ id: parseInt(rm[1]), band, mode, channel, txPower, dtim, beacon, vaps: vapRefs });
-      }
+        radios.push({ id: parseInt(rm.id), band, mode, channel, txPower, dtim, beacon, vaps: vapRefs });
+      });
       const has5G  = radios.some(r => r.band && r.band.includes('5G'));
       const has2G  = radios.some(r => r.band && (r.band.includes('2G') || r.band.includes('2.4')));
       const hasAX  = radios.some(r => r.band && r.band.includes('ax'));
