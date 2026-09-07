@@ -779,8 +779,10 @@ const TOOLS = [
     icon:  '📜',
     href:  'log-analyzer.html',
     // 2026-08-09 稽核修復：原本只列 3 種格式，log_analyzer 已陸續新增 LEEF／FortiGate 原生
-    // key=value／JSON/NDJSON 三種格式支援（見其自身 import.hint 說明），此清單先前未同步更新
-    vendors: ['CEF (Common Event Format)','Syslog RFC3164','Syslog RFC5424','LEEF (Log Event Extended Format)','FortiGate (native key=value)','JSON/NDJSON'],
+    // key=value／JSON/NDJSON 三種格式支援（見其自身 import.hint 說明），此清單先前未同步更新。
+    // 2026-09 全功能審查發現：log_analyzer 另已支援 Windows Event Log（wevtutil XML 匯出）／
+    // Sysmon（沿用同一套 WinEvent parser），此清單同樣先前未同步補上
+    vendors: ['CEF (Common Event Format)','Syslog RFC3164','Syslog RFC5424','LEEF (Log Event Extended Format)','FortiGate (native key=value)','JSON/NDJSON','Windows Event Log','Sysmon'],
     features: ['log.f1','log.f2','log.f3','log.f4'],
     experimental: true,
   },
@@ -1023,10 +1025,10 @@ document.getElementById('logo-btn').addEventListener('click', () => {
 // 2026-08-09 稽核修復：新增 z/r/u/sonic 對應 detectTool() 新補的訊號規則，缺這幾項會讓
 // `detected.vendor ? VENDOR_NAMES[detected.vendor] : null` 對這些 vendor code 求值出
 // undefined（非 null），下游模板可能把字面 "undefined" 顯示在畫面上
-const VENDOR_NAMES = {f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',u:'OpenWrt (UCI)',sonic:'SONiC',
+const VENDOR_NAMES = {f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',u:'OpenWrt (UCI)',sonic:'SONiC',g:'WatchGuard Firebox',
   // 2026-08-19 新增：log_analyzer 拖放偵測的格式標籤（非廠牌，沿用同一份對照表顯示於拖放
   // 提示 chip），key 與 detectTool() 回傳的 vendor 字串一致
-  rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log'};
+  rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log'};
 let _dropPending = null;
 // 快速連續拖放/選檔的競態防呆：每次啟動新的 FileReader 讀取時遞增，onload 觸發時比對
 // 是否仍是最新一次讀取的世代號，避免較舊、讀取較慢（如檔案較大）的結果晚於較新的讀取
@@ -1054,6 +1056,11 @@ function detectTool(text) {
       } catch(e) { /* 非合法 JSON，繼續往下走既有文字 CLI 判斷鏈 */ }
     }
   }
+  // 2026-09 全功能審查發現：log_analyzer 已支援 Windows Event Log（wevtutil XML 匯出，
+  // parseWinEventLogEvents() 判斷簽章），但這份獨立維護的拖放偵測規則從未同步補上，訊號
+  // 逐字沿用該處判斷式；用完整 text 而非截斷到 8000 字元的 t，比照上方 SONiC 判斷式既有
+  // 慣例（xmlns 屬性雖通常在檔案很前面，但避免真實大型匯出檔邊界情況漏判）
+  if (/<Event[\s>][\s\S]*?xmlns=["']http:\/\/schemas\.microsoft\.com\/win\/2004\/08\/events\/event["']/.test(text)) return {idx:4, vendor:'winevent'};
   // 2026-08-19 新增：log_analyzer 接上拖放派送（先前唯一沒接上此機制的工具）。log 格式
   // 判斷必須排在所有設定檔判斷式之前——RFC3164 syslog 訊息內文常含 "Interface
   // GigabitEthernet..." 這類交換器泛用 fallback（下方 idx:1 區塊）會誤判的字串，ASA
@@ -1094,6 +1101,12 @@ function detectTool(text) {
     var hits=0; for (var i=0;i<sigs.length;i++) if (sigs[i].test(t)) hits++;
     return hits>=2;
   })())                                                                       return {idx:0, vendor:'s'};
+  // WatchGuard Firebox（config.xml 匯出）：firewall_analyzer 已支援解析（vendor code 'g'，
+  // 見 firewall-analyzer-parser-watchguard.js 的 detect()），但這份獨立維護的簡化偵測規則
+  // 從未同步補上，拖放 WatchGuard 設定檔會判定「無法自動識別」，即使彩蛋人格文案
+  // egg.vendor_watchguard 早已存在。訊號逐字移植自該廠牌 parser 自己的 detect() 三重特徵
+  // 組合（2026-09 全功能審查發現）
+  if (/<abs-policy-list/i.test(t) && /<interface-list/i.test(t) && /<address-group-list/i.test(t)) return {idx:0, vendor:'g'};
   if (/<SonicWALL/i.test(t))                                                 return {idx:0, vendor:'w'};
   if (/pfctl\b|set filterip/i.test(t))                                       return {idx:0, vendor:'x'};
   // 2026-08-09 稽核修復：Zyxel／EdgeRouter／OpenWrt 三家 firewall_analyzer／config_anonymizer
@@ -1162,6 +1175,13 @@ function detectTool(text) {
   // 就在所有 idx:0 判斷式之後才會走到，真正的 FortiGate 匯出檔會被前面的判斷式先攔截 return。
   if (/^config system global/m.test(t) || /^config switch physical-port/m.test(t) || /^config router ospf/m.test(t)) return {idx:1, vendor:null};
   if (/^vsf\s*$/m.test(t) || /vlan trunk allowed/.test(t) || /vlan trunk native/.test(t) || /vlan access\s+\d/.test(t) || /vrf attach\s/.test(t)) return {idx:1, vendor:null};
+  // Planet Technology SGS-6341 系列：switch_analyzer 已支援解析（見 switch-analyzer-core.js
+  // detectVendor()），但這份獨立維護的簡化偵測規則從未同步補上。訊號逐字移植自該處三重弱訊號
+  // 組合（hostname + "ethernet 1/0/5" 命名〔ethernet 與 slot/port 間有空格，與 Dell OS10
+  // 無空格版本不同〕+ switchport mode），且必須排在下方 Ruijie 判斷式之前——Ruijie 判斷式含
+  // 通用的 "switchport mode hybrid" 弱訊號，會提前攔截含 hybrid 介面的 Planet 設定檔
+  // （2026-09 全功能審查發現，比照原始碼同一個踩坑教訓）
+  if (/^hostname\s+\S+/m.test(t) && /^interface\s+ethernet\s+\d+\/\d+\/\d+/m.test(t) && /^\s*switchport mode\s+(trunk|access|hybrid)/m.test(t)) return {idx:1, vendor:null};
   if (/^interface\s+AggregatePort\s*\d+/im.test(t) || /switchport mode hybrid/m.test(t) || /^switch virtual domain\s+\d+/m.test(t) || /\bRGOS\b/i.test(t) || /^rldp\b/im.test(t) || /^nfpp\s*$/im.test(t)) return {idx:1, vendor:null};
   // 2026-08-09 稽核修復：此廣義 fallback 規則（僅認泛用關鍵字，不掛廠牌徽章）原本排在
   // NX-OS／ProCurve／Comware 等專屬判斷式之前，若一份 NX-OS 或 ProCurve 設定檔恰好在前
