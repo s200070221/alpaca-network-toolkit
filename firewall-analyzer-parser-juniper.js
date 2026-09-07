@@ -198,6 +198,14 @@ const JuniperParser = (() => {
               ifaceZoneMap[ifv] = zoneName;
               ifaceZoneMap[ifname] = zoneName;
             });
+            // 真實 SRX 設定檔常見巢狀寫法 interfaces{ge-0/0/1.0{host-inbound-traffic{...}}}，
+            // 此時介面名稱會被 readBlock() 解析成 _children 的 key（因後面接 {），而非 _values
+            // 的純值，故需一併收進對映表（2026-09 全功能審查發現）
+            Object.keys(ifNode._children || {}).forEach(ifv => {
+              const ifname = ifv.split('.')[0];
+              ifaceZoneMap[ifv] = zoneName;
+              ifaceZoneMap[ifname] = zoneName;
+            });
           }
         });
       }
@@ -737,8 +745,8 @@ const JuniperParser = (() => {
         Object.entries(rnode._children).forEach(([rrkey,rrnode]) => {
           if (!rrkey.startsWith('rule ')) return;
           const rname = rrkey.replace('rule ','');
-          const thenNode = path(rrnode,['then','source-nat']);
-          const poolName = thenNode ? val(thenNode,'pool')||'-' : '-';
+          const thenNode = path(rrnode,['then','source-nat','pool']);
+          const poolName = thenNode ? val(thenNode,'pool-name')||'-' : '-';
           nats.push({ type:'ippool', name:`${rsName}-${rname}`,
             poolType:'overload', startIp: poolName, endIp:'-',
             srcIntf:val(rnode,'from zone')||val(rnode,'from interface')||'-',
@@ -762,7 +770,7 @@ const JuniperParser = (() => {
             vipType:'static-nat',
             extIp:   matchNode ? val(matchNode,'destination-address')||'-':'-',
             extIntf: val(rnode,'from interface')||'-',
-            mapIp:   thenNode ? val(thenNode,'pool')||'-' : '-',
+            mapIp:   thenNode ? val(thenNode,'pool-name')||'-' : '-',
             portFwd: 'disable', extPort:'-', mapPort:'-', proto:'-',
             comment:`Destination NAT ruleset: ${rsName}`, status:'enable' });
         });

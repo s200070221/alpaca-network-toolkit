@@ -295,7 +295,9 @@ const SonicWallParser = (() => {
       const iface   = gv(el,'Interface') || gv(el,'InboundInterface') || '-';
       const enabled = bool(gv(el,'Enabled') || gv(el,'Enable') || 'true');
       const comment = gv(el,'Comment') || gv(el,'Note') || '';
-      const isDnat  = tranDst && tranDst !== '-' && tranDst !== origDst;
+      // "Original" 是 SonicWall 匯出檔的保留字，代表「維持原目的位址不轉換」（純 SNAT 規則），
+      // 非真正的目的位址轉換值，需排除在 isDnat 判斷之外（2026-09 全功能審查發現）
+      const isDnat  = tranDst && tranDst !== '-' && !/^original$/i.test(tranDst) && tranDst !== origDst;
       out.push({
         type: isDnat ? 'vip' : 'ippool',
         name, vipType: 'static', poolType: 'overload',
@@ -523,8 +525,11 @@ const SonicWallParser = (() => {
       result.members.push({
         id: String(idx+1), iface, zone: 'WAN',
         gateway: gw, gateway6: '-',
-        priority: parseInt(gv(el,'Priority')||String(idx+1))||idx+1,
-        weight:   parseInt(gv(el,'Weight') ||'1')||1,
+        // 先前對 parseInt() 結果再套一次 ||fallback，會把使用者明確設定的合法值 0 強制改寫成
+        // fallback 值（priority 變成 idx+1、weight 變成 1），2026-09 全功能審查發現，比照
+        // FortiGate 同款修法：先看原始字串是否存在，只有真的沒有該欄位才用 fallback
+        priority: (v=>v!==''?parseInt(v):idx+1)(gv(el,'Priority')||''),
+        weight:   (v=>v!==''?parseInt(v):1)(gv(el,'Weight')||''),
         cost: 0, spillover: 0, volumeRatio: 1,
         status: bool(gv(el,'Enabled')||'true') ? 'enable' : 'disable',
         comment: gv(el,'Comment') || '',

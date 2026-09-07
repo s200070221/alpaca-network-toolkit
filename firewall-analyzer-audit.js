@@ -261,7 +261,12 @@
   ]);
 
   function analyzeUnusedObjects(parsed) {
-    const BUILTINS = new Set(VENDOR_BUILTINS.get(parsed.vendor) || _COMMON_BUILTINS);
+    // merge()（跨檔案比對合併）會把 vendor 字串併成 "A + B" 這種形式，Map.get() 精確比對
+    // 會查無結果、fallback 成只有 all/any/none 的 _COMMON_BUILTINS，導致合併分析時單一廠牌的
+    // 出廠內建物件（如 FortiGate 的 INTERNET/SSLVPN_TUNNEL_ADDR1）全被誤判為「未使用」
+    // （2026-09 全功能審查發現，比照同檔案 no-2fa/analyzeOrphanNAT 已採用的子字串比對慣例）
+    const _vendorEntry = [...VENDOR_BUILTINS.entries()].find(([v]) => (parsed.vendor || '').includes(v));
+    const BUILTINS = new Set(_vendorEntry ? _vendorEntry[1] : _COMMON_BUILTINS);
     // type 為系統自動管理，不需出現在 policy 中即算「已使用」
     const AUTO_TYPES = new Set(['interface-subnet','dynamic','wildcard-fqdn','geography']);
 
@@ -438,19 +443,24 @@
     // 多 VDOM 時以 VDOM/ID 顯示，避免各 VDOM 重複的 ID 混淆
     const isMultiVdom = policies.some(p => p._vdom !== undefined && p._vdom !== null);
     const idLabel = p => (isMultiVdom && p._vdom) ? `${p._vdom}/${p.id}` : p.id;
+    // 部分廠牌 parser（如 Sophos）未正規化的原始值會是大寫開頭的 'Disable'，若逐處各自寫
+    // p.status!=='disable' 這種精確小寫比對會漏判——broad-network 檢查先前已比照補上
+    // p.status!=='Disable'，但同函式更早、更核心的 any-any／disabled-pol 兩項當時漏補，
+    // 一次性改用大小寫不敏感寫法徹底修掉這個 pattern（2026-09 全功能審查發現）
+    const _isDisabledStatus = p => /^disable$/i.test(p.status || '');
     // 1. any-to-any 允許規則
-    const anyAny = policies.filter(p => p.action === 'accept' && p.status !== 'disable' &&
+    const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) &&
       /\b(all|any)\b/i.test(p.srcAddr||'') && /\b(all|any)\b/i.test(p.dstAddr||'') && /\b(all|any|ALL)\b/i.test(p.service||''));
     f('any-any', tr('audit.check_any_any'), anyAny.length, 'high',
       anyAny.length ? tr('audit.id_prefix') + anyAny.map(p => idLabel(p)).slice(0,10).join(', ') + (anyAny.length > 10 ? '…' : '') : tr('audit.none'),
       ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 12.2']);
     // 2. 停用規則數量
-    const disabled = policies.filter(p => p.status === 'disable');
+    const disabled = policies.filter(p => _isDisabledStatus(p));
     f('disabled-pol', tr('audit.check_disabled'), disabled.length, 'medium',
       disabled.length ? `${disabled.length}` + tr('audit.rec_disabled') : tr('audit.none'),
       ['ISO27001 A.8.9', 'PCI-DSS 4.0 1.2.7', 'NIST 800-53 CM-7', 'CIS v8 4.1']);
     // 3. 無日誌的允許規則
-    const noLog = policies.filter(p => p.action === 'accept' && p.status !== 'disable' &&
+    const noLog = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) &&
       (!p.logtraffic || p.logtraffic === 'disable' || p.logtraffic === 'utm'));
     f('no-log', tr('audit.check_no_log'), noLog.length, 'medium',
       noLog.length ? `${noLog.length}` + tr('audit.rec_log') : tr('audit.all_logged'),
@@ -758,8 +768,9 @@
     const policies = parsed.policies || [];
     let score = 100;
     const issues = [];
-    // T1: any-any accept
-    const anyAny = policies.filter(p => p.action === 'accept' && /^(all|any)$/i.test((p.srcAddr||'').trim()) && /^(all|any)$/i.test((p.dstAddr||'').trim()));
+    // T1: any-any accept（需排除已停用規則，比照下方 T1b/broad-network 既有慣例；
+    // 先前漏了這道防呆，已停用的 any-any/no-log 規則從未真正生效卻仍被扣分，2026-09 全功能審查發現）
+    const anyAny = policies.filter(p => p.action === 'accept' && p.status !== 'disable' && p.status !== 'Disable' && /^(all|any)$/i.test((p.srcAddr||'').trim()) && /^(all|any)$/i.test((p.dstAddr||'').trim()));
     if (anyAny.length) { score -= anyAny.length * 20; issues.push({sev:'crit', label:tr('health.any_any'), count:anyAny.length}); }
     // T1b: broad-network（2026-08-29 新增，比照 analyzeCompliance() 的 broad-network 檢查同一套
     // 判斷邏輯，權重較 any-any 低——過寬網段風險低於完全開放，但仍值得扣分）
@@ -785,8 +796,9 @@
     // T3: disabled rules（欄位值一律是 'disable'，非 'disabled'，見 _runPolicyQuery()/各 assemble 函式既有慣例）
     const disabled = policies.filter(p => p.status === 'disable' || p.enabled === false || p.enabled === 'disable');
     if (disabled.length > 3) { score -= (disabled.length - 3) * 2; issues.push({sev:'info', label:tr('health.disabled'), count:disabled.length}); }
-    // T4: accept without log（欄位名稱是全小寫 logtraffic，非 logTraffic；判斷式比照 analyzeCompliance() 既有慣例）
-    const noLog = policies.filter(p => p.action === 'accept' && (!p.logtraffic || p.logtraffic === 'disable' || p.logtraffic === 'utm'));
+    // T4: accept without log（欄位名稱是全小寫 logtraffic，非 logTraffic；判斷式比照 analyzeCompliance() 既有慣例，
+    // 同樣需排除已停用規則，原因同 T1，2026-09 全功能審查發現）
+    const noLog = policies.filter(p => p.action === 'accept' && p.status !== 'disable' && p.status !== 'Disable' && (!p.logtraffic || p.logtraffic === 'disable' || p.logtraffic === 'utm'));
     if (noLog.length > 2) { score -= (noLog.length - 2) * 3; issues.push({sev:'warn', label:tr('health.no_log'), count:noLog.length}); }
     // T5-T11：其餘 7 項合規檢查納入健康度評分（2026-08-31 新增）。先前只有上方 4 項（any-any／
     // broad-network／disabled／no-log）會扣分，`analyzeCompliance()` 其餘 7 項發現完全不影響

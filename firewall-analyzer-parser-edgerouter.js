@@ -133,12 +133,28 @@ const EdgeRouterParser = (() => {
     Object.entries(eths).forEach(([key, node]) => {
       const name = key.replace(/^ethernet\s+/, '');
       const fw = child(node, 'firewall');
-      if (!fw) return;
-      ['in', 'out', 'local'].forEach(dir => {
-        const rn = val(child(fw, dir), 'name');
-        if (!rn) return;
-        bind[rn] = bind[rn] || [];
-        bind[rn].push(name);
+      if (fw) {
+        ['in', 'out', 'local'].forEach(dir => {
+          const rn = val(child(fw, dir), 'name');
+          if (!rn) return;
+          bind[rn] = bind[rn] || [];
+          bind[rn].push(name);
+        });
+      }
+      // EdgeRouter 允許把 firewall 直接綁在 VLAN sub-interface（vif）上，而非只綁在
+      // 實體介面本身，先前只掃 ethernet.*.firewall 會漏掉這種綁定，導致對應規則的
+      // srcIntf 一律顯示 '-'（2026-09 全功能審查發現）
+      const vifs = childrenPrefixed(node, 'vif');
+      Object.entries(vifs).forEach(([vkey, vnode]) => {
+        const vlanId = vkey.replace(/^vif\s+/, '');
+        const vfw = child(vnode, 'firewall');
+        if (!vfw) return;
+        ['in', 'out', 'local'].forEach(dir => {
+          const rn = val(child(vfw, dir), 'name');
+          if (!rn) return;
+          bind[rn] = bind[rn] || [];
+          bind[rn].push(`${name}.${vlanId}`);
+        });
       });
     });
     return bind;
@@ -181,10 +197,12 @@ const EdgeRouterParser = (() => {
         const vaddr = val(vnode, 'address');
         const [vip, vmask] = vaddr && vaddr.includes('/') ? cidrSplit(vaddr) : ['-', '-'];
         const vdesc = val(vnode, 'description') || '';
+        const vfw = child(vnode, 'firewall');
+        const vBoundRulesets = vfw ? ['in', 'out', 'local'].map(d => val(child(vfw, d), 'name')).filter(Boolean) : [];
         out.push({
           name: `${name}.${vlanId}`, ip: vip, mask: vmask, secondaryIps: [], type: 'physical', vlanId, alias: `${name}.${vlanId}`,
           desc: vdesc, status: hasFlag(vnode, 'disable') ? 'down' : 'up',
-          mtu: '-', speed: '-', mode: vaddr ? 'static' : 'dhcp', vdom: '-', role: inferRole(vdesc, []), allowaccess: '-',
+          mtu: '-', speed: '-', mode: vaddr ? 'static' : 'dhcp', vdom: '-', role: inferRole(vdesc, vBoundRulesets), allowaccess: '-',
         });
       });
     });

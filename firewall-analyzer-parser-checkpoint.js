@@ -107,8 +107,8 @@ const CheckpointParser = (() => {
     ifNames.forEach(name => {
       const ipv4  = clishVal(text, `interface ${name} ipv4-address`);
       const mask  = clishVal(text, `interface ${name} mask-length`);
-      const state = clishVal(text, `interface ${name} state`) ||
-                    clishVal(text, `interface ${name} link-speed`) ? 'up' : 'up';
+      // 官方 Gaia clish 語法：set interface ethX state on|off；查無宣告時預設視為 up
+      const state = clishVal(text, `interface ${name} state`) === 'off' ? 'down' : 'up';
       const mtu   = clishVal(text, `interface ${name} mtu`) || '1500';
       const comm  = clishVal(text, `interface ${name} comments`) || '-';
       const vlanId= name.match(/\.\d+$/) ? name.split('.').pop() : '-';
@@ -221,7 +221,7 @@ const CheckpointParser = (() => {
 
     // Parse rulebases_5_0.fws / policy.W format
     // Format: :rules ( :(0) ( :src (...) :dst (...) :services (...) :action (...) ) )
-    const ruleBaseRe = /:\((\d+)\)\s*\(([\s\S]*?)(?=:\(\d+\)\s*\(|:properties|\)$)/g;
+    const ruleBaseRe = /:\((\d+)\)\s*\(([\s\S]*?)(?=:\(\d+\)\s*\(|:properties|(?![\s\S]))/g;
     while ((m = ruleBaseRe.exec(text)) !== null) {
       const n = m[1], body = m[2];
       if (!body.includes(':src') && !body.includes(':dst')) continue;

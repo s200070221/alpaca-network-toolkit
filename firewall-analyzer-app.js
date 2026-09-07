@@ -548,7 +548,13 @@ function onParsed(){
         (d.interfaces||[]).some(i=>i.type==='wwan'||i.type==='lte'||/^(wwan|modem\d?)$/i.test(i.name))
       );
       wwanNav.style.display=hasWwan?'':'none';
-      if(hasWwan){const el=$('nc-wwan');if(el)el.textContent=(ww.profiles?.length)||(ww.lteInterfaces?.length)||(ww.lteModem?'1':'0');}
+      // 與 case 'wwan' 的計數公式（1339行附近）保持一致，先前漏了 has5G 分支，僅有 5G Modem
+      // 設定（無 profiles/lteInterfaces/lteModem）時側邊欄徽章會顯示 "0"（2026-09 全功能審查發現）
+      if(hasWwan){
+        const m5g=ww.modem5G; const has5G=m5g&&(m5g.modem1||m5g.modem2);
+        const el=$('nc-wwan');
+        if(el)el.textContent=(ww.profiles?.length)||(ww.lteInterfaces?.length)||(has5G?(m5g.modem1?1:0)+(m5g.modem2?1:0):(ww.lteModem?'1':'0'));
+      }
       showEc('ec-wwan-profiles', (ww?.profiles?.length||0)>0);
       showEc('ec-wwan-lte-iface', (ww?.lteInterfaces?.length||0)>0);
       showEc('ec-wwan-apn-profiles', (ww?.apnProfiles?.length||0)>0);
@@ -572,10 +578,15 @@ function onParsed(){
     if (auditNav) {
       auditNav.style.display = '';
       try {
+        // 與 case 'audit' 的 tbl-cnt 用同一套算法（原本漏算 analyzeDenyBlocking()／
+        // analyzeMergeSuggestions()，會讓側邊欄徽章顯示綠色「0」但實際打開稽核頁卻有紅色
+        // 警示，2026-09 全功能審查發現）
         const _sh = analyzeRuleShadowing(d.policies || []);
+        const _db = analyzeDenyBlocking(d.policies || []);
+        const _mg = analyzeMergeSuggestions(d.policies || []);
         const _un = analyzeUnusedObjects(d);
         const _co = analyzeCompliance(d);
-        const total = _sh.length + _un.unusedAddrs.length + _un.unusedSvcs.length +
+        const total = _sh.length + _db.length + _mg.length + _un.unusedAddrs.length + _un.unusedSvcs.length +
                       _co.filter(f => f.risk === 'high' || f.risk === 'medium').length;
         const nc = $('nc-audit');
         if (nc) { nc.textContent = total; nc.style.color = total > 0 ? 'var(--red)' : 'var(--green)'; }
@@ -643,7 +654,11 @@ function onParsed(){
     $('filter-action').style.display='none';$('filter-type').style.display='none';
     // Fix: WiFi section 不套用 VDOM 篩選，隱藏 VDOM bar；其他 section 依需要顯示
     const bar = $('vdom-bar');
-    const noVdomBar = section === 'sdwan' || section === 'dns' || section === 'snmp' || section === 'log' || section === 'audit' || section === 'query';
+    // sdwan/log 兩個分頁的渲染邏輯其實有對子表格呼叫 filterByVdom()（members/healthChecks/
+    // services、syslog/fortianalyzer/netflow/logForward），若把 VDOM 篩選列隱藏，使用者會在
+    // 不知情的情況下看到被篩選過的資料、也無法切換回「全部」，先前把這兩頁跟真正不套用篩選的
+    // dns/snmp/audit/query 混在同一份白名單裡是不一致的（2026-09 全功能審查發現）
+    const noVdomBar = section === 'dns' || section === 'snmp' || section === 'audit' || section === 'query';
     if (bar) bar.style.display = noVdomBar ? 'none' : (PARSED?._isMultiVdom && (PARSED?._vdomNames||[]).length > 1 ? 'flex' : 'none');
     renderSection(section);
   }
@@ -683,7 +698,12 @@ function onParsed(){
         const _reverseShadow = {};
         Object.entries(_shadowMap).forEach(([earlyId, sids]) => sids.forEach(sid => { if(!_reverseShadow[sid]) _reverseShadow[sid]=earlyId; }));
         const _activeCount = data.filter(p => p.status !== 'disable').length;
-        let _evalOrder = 0;
+        // 評估順序需依「完整規則清單」(data，本次 renderSection('policies') 呼叫時的全量資料)
+        // 預先算好、依 id 查表，而非用單一遞增變數——rowFn 之後會被 applyFilters()/_sortBy()/
+        // _applyColFilter() 在不重新進入這個 case 的情況下重複呼叫，若沿用同一個遞增變數，
+        // 每次篩選/排序後的子集合都會接著先前的計數繼續累加，而非重新從 1 開始（2026-09 全功能審查發現）
+        const _evalOrderMap = new Map();
+        { let _eo = 0; data.forEach(p => { if (p.status !== 'disable') { _eo++; _evalOrderMap.set(p.id, _eo); } }); }
         const _schedMap = detectExpiredSchedules(d.schedules);
         sumCards=sumC([{l:tip('tip.policy',tr('sl.total')),v:data.length,c:'var(--accent)',sf:{t:'clear'}},{l:tr('sl.allow'),v:data.filter(x=>x.action==='accept').length,c:'var(--green)',sf:{t:'action',v:'accept'}},{l:tr('sl.deny'),v:data.filter(x=>x.action!=='accept').length,c:'var(--red)',sf:{t:'action',v:'deny'}},{l:tip('tip.nat',tr('sl.nat_on')),v:data.filter(x=>x.nat==='enable').length,c:'var(--yellow)'},{l:tip('tip.status',tr('sl.disabled')),v:data.filter(x=>x.status==='disable').length,c:'var(--text-dim)'},{l:tr('sl.utm'),v:data.filter(x=>x.utm&&(x.utm.av!=='-'||x.utm.ips!=='-'||x.utm.webfilter!=='-')).length,c:'var(--purple)'}]);
         thead=`<tr><th>${tip('tip.eval_order',tr('col.eval_order'))}</th><th>ID</th><th>${tr('col.name')}</th><th>${tr('col.src_intf')}</th><th>${tr('col.dst_intf')}</th><th>${tip('tip.srcaddr',tr('col.src_addr'))}</th><th>${tr('policy.src_addr_v4')}</th><th>${tr('policy.src_addr_v6')}</th><th>${tip('tip.dstaddr',tr('col.dst_addr'))}</th><th>${tr('policy.dst_addr_v4')}</th><th>${tr('policy.dst_addr_v6')}</th><th>${tr('col.service')}</th><th>${tip('tip.schedule',tr('col.schedule'))}</th><th>${tip('tip.action',tr('col.action'))}</th><th>${tip('tip.nat','NAT')}</th><th>${tr('col.user')}</th><th>AV</th><th>Web</th><th>IPS</th><th>App-ID</th><th>${tip('tip.logtraffic',tr('col.log'))}</th><th>${tip('tip.status',tr('col.status'))}</th><th>${tip('tip.shadowed_count',tr('col.shadow_count'))}</th><th>${tr('col.desc')}</th></tr>`;
@@ -699,9 +719,8 @@ function onParsed(){
             });
             return `<td class="mono">${parts.join(', ')}</td>`;
           };
-          // 計算評估順序（僅啟用規則）
-          if (r.status !== 'disable') _evalOrder++;
-          const evalOrderDisplay = r.status === 'disable' ? '-' : String(_evalOrder);
+          // 評估順序（僅啟用規則）：依 id 查預先算好的表，篩選/排序後重繪不會累加錯誤
+          const evalOrderDisplay = r.status === 'disable' ? '-' : String(_evalOrderMap.get(r.id) ?? '-');
           // NAT cell
           const natTd = r.nat === 'enable'
             ? `<td><span class="nat-badge pill p-warn" onclick="showNatById('${r.id}')" title="${tr('nat.view_tip')}">🔀 NAT</span></td>`
@@ -1213,13 +1232,13 @@ function onParsed(){
           html+='<div style="overflow-x:auto;margin-bottom:20px"><table><thead><tr>';
           ['Collector IP','Port',tr('log.col_timeout'),tr('col.status')||'Status'].forEach(h=>html+=`<th>${h}</th>`);
           html+='</tr></thead><tbody>';
-          lg.netflow.forEach(n=>{ html+=`<tr><td class="mono" style="color:var(--purple)">${esc(n.collector)}</td><td class="mono">${esc(n.port||'2055')}</td><td class="mono" style="color:var(--text-dim)">${esc(n.activeTimeout||'60')}</td><td>${n.status==='enable'?pill(tr('wwan.pill_enable'),'p-allow'):pill(tr('wwan.pill_disable'),'p-deny')}</td></tr>`; });
+          filterByVdom(lg.netflow).forEach(n=>{ html+=`<tr><td class="mono" style="color:var(--purple)">${esc(n.collector)}</td><td class="mono">${esc(n.port||'2055')}</td><td class="mono" style="color:var(--text-dim)">${esc(n.activeTimeout||'60')}</td><td>${n.status==='enable'?pill(tr('wwan.pill_enable'),'p-allow'):pill(tr('wwan.pill_disable'),'p-deny')}</td></tr>`; });
           html+='</tbody></table></div>';
         }
         if(lg.logForward.length){
           html+='<div style="font-size:12px;font-weight:600;color:var(--info);margin-bottom:8px">🔀 Log Forwarding Profile</div>';
           html+='<div style="overflow-x:auto"><table><thead><tr><th>'+tr('col.name')+'</th><th>'+tr('popup.col_type')+'</th><th>'+tr('log.col_target')+'</th></tr></thead><tbody>';
-          lg.logForward.forEach(lf=>{ html+=`<tr><td class="mono">${esc(lf.name)}</td><td style="color:var(--text-dim)">${esc(lf.type||'-')}</td><td class="mono" style="color:var(--text-dim)">${esc(lf.target||'-')}</td></tr>`; });
+          filterByVdom(lg.logForward).forEach(lf=>{ html+=`<tr><td class="mono">${esc(lf.name)}</td><td style="color:var(--text-dim)">${esc(lf.type||'-')}</td><td class="mono" style="color:var(--text-dim)">${esc(lf.target||'-')}</td></tr>`; });
           html+='</tbody></table></div>';
         }
         $('tbl-wrap').innerHTML=html;
@@ -1306,7 +1325,7 @@ function onParsed(){
         if(ww.lteInterfaces?.length){
           html+=`<div style="margin-top:20px;font-size:12px;font-weight:600;color:var(--accent);margin-bottom:8px">📱 ${tr('wwan.lte_iface')}</div>`;
           html+=`<table><thead><tr><th>${tr('col.name')}</th><th>${tr('wwan.col_apn_profile')}</th><th>${tr('wwan.col_roaming')}</th><th>${tr('col.status')}</th><th>${tr('wwan.col_note')}</th></tr></thead><tbody>`;
-          ww.lteInterfaces.forEach(i=>{
+          filterByVdom(ww.lteInterfaces).forEach(i=>{
             html+=`<tr>
               <td class="mono" style="color:var(--accent)">${esc(i.name)}</td>
               <td class="mono">${esc(i.apnProfile)}</td>
@@ -1321,7 +1340,7 @@ function onParsed(){
         if(ww.apnProfiles?.length){
           html+=`<div style="margin-top:16px;font-size:12px;font-weight:600;color:var(--yellow);margin-bottom:8px">📋 ${tr('wwan.lte_apn_profile')}</div>`;
           html+=`<table><thead><tr><th>${tr('wwan.col_apn_name')}</th><th>APN</th><th>${tr('wwan.col_auth')}</th><th>${tr('wwan.col_user')}</th><th>${tr('wwan.col_password')}</th><th>${tr('wwan.col_ip_type')}</th><th>${tr('wwan.col_distance')}</th></tr></thead><tbody>`;
-          ww.apnProfiles.forEach(p=>{
+          filterByVdom(ww.apnProfiles).forEach(p=>{
             html+=`<tr>
               <td class="mono" style="color:var(--accent)">${esc(p.name)}</td>
               <td class="mono">${esc(p.apn)}</td>
@@ -1360,7 +1379,7 @@ function onParsed(){
           html+='<div style="overflow-x:auto"><table><thead><tr>';
           [tr('col.name'),'SSID',tr('col.wifi_band'),tr('col.mode'),tr('col.wifi_freq'),tr('col.wifi_chan_width'),tr('col.wifi_country'),tr('col.wifi_sec_profile'),tr('col.wifi_auth'),tr('col.wifi_key'),tr('col.status'),tr('col.desc')].forEach(h=>html+=`<th>${h}</th>`);
           html+='</tr></thead><tbody>';
-          wl.interfaces.forEach(i=>{
+          filterByVdom(wl.interfaces).forEach(i=>{
             const authColor=i.authTypes==='none'||i.authTypes==='-'?'var(--red)':'var(--green)';
             html+=`<tr>
               <td class="mono" style="color:var(--accent)">${esc(i.name)}</td>
@@ -1382,7 +1401,7 @@ function onParsed(){
         if(wl.capsmanConfigs.length){
           html+=`<div style="margin-top:20px;font-size:12px;font-weight:600;color:var(--yellow);margin-bottom:8px">🗂 ${tr('wifi.capsman_title')}（${wl.capsmanConfigs.length}${tr('unit.count')}）</div>`;
           html+=`<table><thead><tr><th>${tr('wifi.config_name')}</th><th>SSID</th><th>${tr('col.wifi_band')}</th><th>${tr('col.wifi_auth')}</th><th>${tr('col.wifi_key')}</th></tr></thead><tbody>`;
-          wl.capsmanConfigs.forEach(c=>{
+          filterByVdom(wl.capsmanConfigs).forEach(c=>{
             html+=`<tr>
               <td class="mono" style="color:var(--accent)">${esc(c.name)}</td>
               <td style="font-weight:600">${esc(c.ssid)}</td>
@@ -1917,7 +1936,14 @@ function onParsed(){
     vendors.forEach(src=>{
       vendors.filter(dst=>dst!==src).forEach(dst=>{
         const _vmap={fortigate:'f',sophos:'s',checkpoint:'c',paloalto:'p',juniper:'j',pfsense:'x',sonicwall:'w',mikrotik:'m',ciscoasa:'a',ciscoftd:'t'}; const hasSrc=ST.raw[_vmap[src]||'f'];
-        const active=PARSED&&(CONV_SRC_VENDOR===src||(PARSED.vendor||'').toLowerCase().includes(src.slice(0,4)));
+        // ciscoasa/ciscoftd 兩者 slice(0,4) 皆為 "cisc"，若 PARSED.vendor 含 "Cisco" 字樣會
+        // 讓兩個按鈕同時被誤判為 active（2026-09 全功能審查發現，僅影響外觀高亮，不影響實際轉換）
+        const _vLower=(PARSED?.vendor||'').toLowerCase();
+        const active=PARSED&&(CONV_SRC_VENDOR===src||(
+          src==='ciscoasa'?_vLower.includes('asa'):
+          src==='ciscoftd'?_vLower.includes('ftd'):
+          _vLower.includes(src.slice(0,4))
+        ));
         html+=`<button class="conv-btn ${active?'conv-btn-active':''}" onclick="doConvert('${src}','${dst}')" ${(!PARSED||!hasSrc)?'disabled':''}>
           <span class="conv-vendor conv-${src}">${vendorNames[src]}</span>
           <span class="conv-arrow">→</span>
@@ -2442,7 +2468,11 @@ function onParsed(){
     // 2026-08-09 稽核修復：比照同專案其餘 esc() 定義補上雙引號跳脫，統一一致（此處目前用法
     // 皆在文字內容而非屬性語境，非立即可利用，但避免未來新增用法時被誤用於屬性內）
     const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-    const hl = s => { const r = esc(s); const qi = r.toLowerCase().indexOf(q.toLowerCase()); if(qi<0)return r; return r.slice(0,qi)+'<mark style="background:rgba(0,212,255,.25);border-radius:2px;padding:0 2px">'+r.slice(qi,qi+q.length)+'</mark>'+r.slice(qi+q.length); };
+    // 先在「原始字串」上找比對位置，三段各自 esc() 之後才組合，不能對已跳脫過的字串再搜尋一次
+    // ——原本的寫法會把 "&" 跳脫成 "&amp;" 後才 indexOf()，若欄位內容本身含 &/</>/" 就會在跳脫後
+    // 的字串裡找到錯位或落在實體字元中間的比對，導致畫面顯示的 <mark> 位置跑掉甚至破版
+    // （2026-09 全功能審查發現）
+    const hl = s => { const str = String(s); const qi = str.toLowerCase().indexOf(q.toLowerCase()); if(qi<0)return esc(str); return esc(str.slice(0,qi))+'<mark style="background:rgba(0,212,255,.25);border-radius:2px;padding:0 2px">'+esc(str.slice(qi,qi+q.length))+'</mark>'+esc(str.slice(qi+q.length)); };
     return results.map(({sec, label, count, rows}) => {
       const keys = Object.keys(rows[0]||{}).filter(k=>!['phase2','comment','_shadow'].includes(k)).slice(0,6);
       const rowsHtml = rows.map(r => `<tr>${keys.map(k=>`<td>${hl(r[k])}</td>`).join('')}</tr>`).join('');

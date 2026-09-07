@@ -1119,8 +1119,15 @@ const Converter = (() => {
       L.push(`${I(2)}security-zone ${z} {`);
       L.push(`${I(3)}host-inbound-traffic { system-services { ping; ssh; } }`);
       if(zIfs.length){L.push(`${I(3)}interfaces {`); zIfs.forEach(ii=>L.push(`${I(4)}${ii};`)); L.push(`${I(3)}}`);}
-      // address book
-      const zA=parsed.addresses.filter(a=>a.category==='address'&&(mapZone(a._vdom||a.vdom||'','juniper')===z||(!a._vdom||a._vdom==='global')));
+      // address book：_vdom/vsys 是來源廠牌（FortiGate VDOM／PaloAlto vsys）的內部管理域
+      // 概念，跟 Juniper zone（trust/untrust/dmz）完全是兩回事，mapZone(a._vdom,'juniper')
+      // 對 'root'/'vsys1' 這類單一VDOM/vsys預設值無法命中任何真正的 zone 名稱，導致這裡
+      // 的過濾條件對每個 zone 恆為空集合——FortiGate/PaloAlto 是本工具最主流的兩個來源
+      // （皆預設單一VDOM/vsys），只要用了具名位址物件，轉出的 Junos 設定的 address-book
+      // 就會完全缺漏、policy 卻仍引用其名稱，commit 必定失敗。改為比照 Check Point 來源
+      // （原本 _vdom 恆為空字串）既有行為，全部位址物件複製進每個 zone 的 address-book，
+      // 不再嘗試用 _vdom/vsys 猜測 zone 歸屬（2026-09 全功能審查發現）
+      const zA=parsed.addresses.filter(a=>a.category==='address');
       const zG=z==='trust'?parsed.addresses.filter(a=>a.category==='address-group'):[];
       if(zA.length||zG.length){
         L.push(`${I(3)}address-book {`);
@@ -2225,6 +2232,15 @@ const Converter = (() => {
     if(targetVendor==='mikrotik'){
       const noIp=ifs.filter(i=>!i.ip||i.ip==='-'||i.ip==='DHCP').length;
       if(noIp) notes.push(`${noIp} 個無 IP 位址的介面未輸出於 /ip address（RouterOS 此區塊僅列出已指派 IP 的介面）`);
+    }
+    // MikroTik／SonicWall／Zyxel／EdgeRouter／OpenWrt 五個目標的 to*() 函式目前不會攤平
+    // parsed.addresses/parsed.services 成對應廠牌的位址/服務物件，規則裡引用的具名物件
+    // （非字面 IP/協定）會被原樣當成字面值輸出，在目標裝置上要嘛是不合法語法、要嘛（服務
+    // 物件的情況）靜默降級為不限協定/連接埠的全通規則，且無其他機制提示使用者
+    // （2026-09 全功能審查發現；完整攤平為結構化物件屬於功能擴充，非本輪範圍，先加上明確警語）
+    if(['mikrotik','sonicwall','zyxel','edgerouter','openwrt'].includes(targetVendor)){
+      const hasNamedObj=(parsed.addresses&&parsed.addresses.length)||(parsed.services&&parsed.services.length);
+      if(hasNamedObj) notes.push('規則中引用的具名位址/服務物件（非字面 IP/連接埠）本轉換器不會攤平成目標格式對應的物件定義，輸出後該欄位會是不合法語法或（服務物件的情況）靜默降級為不限協定/連接埠的全通規則，請人工核對每條規則的來源/目的/服務欄位並改用目標裝置實際支援的表示方式');
     }
     if(ifs.some(i=>i.type==='vlan')) notes.push('VLAN 子介面語法為近似對應，實機匯入前請人工確認子介面設定是否完整');
     if(targetVendor==='sonicwall') notes.push('SonicWall 僅支援 SonicOS 6.2 之前版本的 XML 匯入格式（6.2+ 已停用 XML 匯出），本輸出僅適用於舊版韌體裝置');

@@ -112,7 +112,10 @@ const OpenWrtParser = (() => {
   }
   function prefixToMask(bits) {
     if (bits === null || bits === undefined || isNaN(bits)) return '255.255.255.0';
-    const n = (0xFFFFFFFF << (32 - parseInt(bits))) >>> 0;
+    const bitsN = parseInt(bits);
+    // JS 的 << 位移量會對 32 取模，bits=0 時 "32-0=32" 會變成 no-op（右邊不變），
+    // 需特別處理 /0 才能正確得出 0.0.0.0（2026-09 全功能審查發現）
+    const n = bitsN === 0 ? 0 : (0xFFFFFFFF << (32 - bitsN)) >>> 0;
     return [(n>>>24)&0xFF,(n>>>16)&0xFF,(n>>>8)&0xFF,n&0xFF].join('.');
   }
 

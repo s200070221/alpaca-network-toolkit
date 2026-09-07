@@ -423,7 +423,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       `<tr>
         <td><span class="badge" style="background:#0f2027;color:#38bdf8">${esc(a.category)}</span></td>
         <td>${esc(a.name)}</td><td>${esc(a.type)}</td>
-        <td>${esc(a.subnet||a.startIp+' ~ '+a.endIp||a.fqdn||'-')}</td>
+        <td>${esc(a.subnet||(a.startIp&&a.endIp?a.startIp+' ~ '+a.endIp:'')||a.fqdn||'-')}</td>
         <td>${esc(a.members||'-')}</td><td>${esc(a.comment)}</td>
       </tr>`).join('');
 
