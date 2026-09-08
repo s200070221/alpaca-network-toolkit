@@ -323,6 +323,7 @@ input.valid,select.valid{border-color:var(--green)!important}
       <thead><tr>
         <th data-i18n="th.vlanId">VLAN ID</th>
         <th data-i18n="th.vlanName">名稱</th>
+        <th data-i18n="th.vlanIp" data-tip="選填。13 家廠牌（Cisco/Comware/Juniper/Aruba CX/Dell OS10/NX-OS/Brocade/Alcatel/Netgear/Ruijie/Arista/Planet/FortiSwitch）會依廠牌命名慣例自動產生對應的 SVI 介面（如 Cisco 的 interface Vlan10）；ProCurve/Extreme 直接輸出在 VLAN 本身；SONiC 請改用下方「SONiC L3 介面 IP」卡片；EdgeSwitch/RouterOS 不支援此欄位">IP (CIDR)</th>
         <th></th>
       </tr></thead>
       <tbody id="vlan-body"></tbody>

@@ -4,7 +4,8 @@
 // parseFortiRouting/parseCisco*/parseArubaXXX/parseRoutes/parseLACP/parseVRRP 輸出形狀）:
 // {
 //   vendor: 'comware'|'fortiswitch'|'aruba'|'cisco', sysname,
-//   vlans:[{id,name}],
+//   vlans:[{id,name,ip /* 選填，CIDR，該 VLAN 的 routed IP；13 家廠牌透過 withSviInterfaces()
+//     於產生設定前動態合成對應的 SVI 介面物件，ProCurve/Extreme 則直接讀這個欄位本身 */}],
 //   interfaces:[{name,desc,mode,accessVlan,trunkVlans,nativeVlan,hybrid:{pvid,untagged,tagged},shutdown}],
 //   ospf:[{pid,routerId,areas:[{area,type,networks:[{network,wildcard}]}],redistributes}],
 //   bgp:[{asn,routerId,peers:[{ip,as,desc}],networks:[]}],
@@ -247,5 +248,46 @@ function groupVrrpByVlan(vrrpList){
     map.get(v.vlanId).entries.push(v);
   });
   return Array.from(map.values());
+}
+
+// VLAN IP（2026-09-08 新增）：ProCurve/Extreme 的 render 本來就直接讀 VLAN 物件自己的
+// v.ip（非獨立介面），但其餘 13 家廠牌把 VLAN 的 L3 IP 建模成獨立的 SVI 介面物件（如 Cisco
+// interface Vlan10、Comware Vlan-interface10、Juniper irb.10），render/parser 早已支援、
+// 唯獨 UI 端只能透過直接建構 model（測試）或匯入既有設定檔產生，表單本身無法建立。
+// key 用 <select id="vendor"> 的實際 value（非各廠牌檔名 slug）——Aruba CX 是 'aruba' 非
+// 'aruba-cx'，NX-OS 是 'cisco_nxos' 非 'nxos'。SONiC 已有自己專屬的 sonicL3Interfaces 卡片
+// （資料形狀通用 {name,cidr}，本函式的設計參考範本）；EdgeSwitch（VLAN Routing 邏輯介面 ID
+// 由裝置動態配置產生，無法靜態預測，CLAUDE.md 已記載既有架構限制）與 RouterOS（render/parser
+// 完全無對應程式碼，需另外開發）刻意不在此白名單內。
+const SVI_NAME_FORMATTERS = {
+  cisco: id => `Vlan${id}`, cisco_nxos: id => `Vlan${id}`,
+  arista: id => `Vlan${id}`, ruijie: id => `Vlan${id}`,
+  comware: id => `Vlan-interface${id}`, juniper: id => `irb.${id}`,
+  aruba: id => `vlan${id}`, 'dell-os10': id => `vlan${id}`,
+  brocade: id => `ve${id}`, alcatel: id => `VLAN${id}`,
+  netgear: id => `vlan ${id}`, planet: id => `vlan ${id}`,
+  fortiswitch: id => `vlan${id}`,
+};
+// EPHEMERAL 轉換：只在即將呼叫 assembleXConfig() 產生設定文字的當下合成，不寫回
+// collectModel() 的持久化結果——避免這批合成物件被存進範本 localStorage，或讓
+// applyModelToForm() 反向回填時多出使用者從未新增過的介面列。固定帶上 type:'svi' + vlans
+// （VLAN ID 綁定，Alcatel/FortiSwitch 的 render 需要，其餘廠牌忽略無妨）即可覆蓋全部 13 家
+// 既有 render 分支的觸發條件。
+//
+// 與既有 VRRP 卡片的互斥處理：12/13 家（除 Juniper 不支援 VRRP）的 render 對「VRRP 已綁定的
+// VLAN」是靠 groupVrrpByVlan()（見上方）另外獨立輸出一個 `interface VlanN` 區塊（含 VRRP
+// 自己的 vrrp[].ip 欄位，語意上早就是「這個 VLAN 的 SVI IP」），與這裡合成的介面物件是兩條
+// 完全獨立的路徑、彼此不知道對方存在。若同一顆 VLAN 兩邊都有值，會產生兩個重複的
+// `interface VlanN` 區塊（2026-09-08 瀏覽器手動驗證時發現）。既有 vrrp[].ip 語意上已涵蓋
+// 這顆 VLAN 的 IP，故此函式刻意跳過任何已有 VRRP 條目的 VLAN ID，避免重複輸出。
+function withSviInterfaces(model){
+  const fmt=SVI_NAME_FORMATTERS[model&&model.vendor];
+  if(!fmt)return model;
+  const vrrpVlanIds=new Set((model.vrrp||[]).map(v=>String(v.vlanId)));
+  const svis=(model.vlans||[]).filter(v=>v.ip&&!vrrpVlanIds.has(String(v.id))).map(v=>({
+    name:fmt(v.id), type:'svi', ip:v.ip, vlans:String(v.id),
+  }));
+  if(!svis.length)return model;
+  return {...model, interfaces:[...(model.interfaces||[]), ...svis]};
 }
 

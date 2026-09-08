@@ -22,10 +22,29 @@ const RM_BTN_TD='<td><button class="rm-btn" onclick="this.closest(\'tr\').remove
 // addXxxRow() 函式使用，只跳脫雙引號本身（這些欄位都是塞進 value="..." 屬性，非
 // innerHTML 內容本身，不需要跳脫 &/</>）
 const escAttr=v=>String(v==null?'':v).replace(/"/g,'&quot;');
-function addVlanRow(id='',name=''){
+function addVlanRow(id='',name='',ip=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="v-id" value="${escAttr(id)}"></td><td><input class="v-name" value="${escAttr(name)}"></td>${RM_BTN_TD}`;
+  tr.innerHTML=`<td><input class="v-id" value="${escAttr(id)}"></td><td><input class="v-name" value="${escAttr(name)}"></td><td><input class="v-ip" value="${escAttr(ip)}" placeholder="10.0.0.1/24"></td>${RM_BTN_TD}`;
   document.getElementById('vlan-body').appendChild(tr);
+  updateVlanIpAvailability(tr);
+}
+
+// VLAN IP（withSviInterfaces()／switch-generator-core.js）不支援的 3 家廠牌：SONiC 已有自己
+// 專屬的「SONiC L3 介面 IP」卡片；EdgeSwitch 因裝置架構限制（VLAN Routing 邏輯介面 ID 由裝置
+// 動態配置產生，無法靜態預測，CLAUDE.md 已記載既有限制）；RouterOS 尚未開發對應 render/parser。
+// 停用該欄位＋提示原因，避免使用者填了看似有效卻被靜默忽略。tr 省略時套用到全部既有列
+// （vendor 切換時呼叫），指定 tr 時只處理剛新增的那一列（addVlanRow() 呼叫時）。
+const SVI_UNSUPPORTED_HINT_KEY={sonic:'hint.vlanIpUnsupportedSonic',edgeswitch:'hint.vlanIpUnsupportedEdgeswitch',routeros:'hint.vlanIpUnsupportedRouteros'};
+function updateVlanIpAvailability(vlanTr){
+  const vendor=document.getElementById('vendor').value;
+  const hintKey=SVI_UNSUPPORTED_HINT_KEY[vendor];
+  const rows=vlanTr?[vlanTr]:rowsOf('#vlan-body tr');
+  rows.forEach(row=>{
+    const el=row.querySelector('.v-ip');
+    if(!el)return;
+    el.disabled=!!hintKey;
+    el.title=hintKey?tr(hintKey):'';
+  });
 }
 
 function addIfaceRow(name='',mode='access',speed='1G',poeMode='none',fortilinkDiscovery='',qosPriority='',trustDscp=false){
@@ -563,6 +582,9 @@ const DEVICE_MODELS={
     {value:'aruba2530-24g',label:'Aruba 2530-24G (J9776A)',ports:[
       {prefix:'',from:1,to:24,speed:'1G'},
       {prefix:'',from:25,to:28,speed:'1G'}],poe:false},
+    {value:'aruba2930f-24g',label:'Aruba 2930F-24G-4SFP+ (JL258A)',ports:[
+      {prefix:'',from:1,to:24,speed:'1G'},
+      {prefix:'',from:25,to:28,speed:'10G'}],poe:true},
     {value:'aruba2930f-48g',label:'Aruba 2930F-48G-4SFP+ (JL256A)',ports:[
       {prefix:'',from:1,to:48,speed:'1G'},
       {prefix:'',from:49,to:52,speed:'10G'}],poe:true},
@@ -1296,6 +1318,9 @@ const CLASSMAP_TYPE_I18N={'access-group':'opt.cmapAccessGroup',dscp:'opt.cmapDsc
 
 function updateModeOptions(){
   const vendor=document.getElementById('vendor').value;
+  // VLAN IP 欄位（withSviInterfaces()）：SONiC/EdgeSwitch/RouterOS 三家不支援，vendor 切換時
+  // 重新評估全部既有 VLAN 列的停用狀態＋提示文字
+  updateVlanIpAvailability();
   // Cisco IOS-XE 有兩種 breakout 模式（module 換位編號 / 後綴編號），需要額外欄位；其餘廠牌不需要
   const isCiscoIosXe=vendor==='cisco';
   document.getElementById('breakout-ios-xe-scheme').style.display=isCiscoIosXe?'inline-block':'none';
@@ -1436,7 +1461,7 @@ function updateModeOptions(){
 }
 
 function collectModel(){
-  const vlans=rowsOf('#vlan-body tr').map(tr=>({id:val(tr,'v-id'),name:val(tr,'v-name')})).filter(v=>v.id);
+  const vlans=rowsOf('#vlan-body tr').map(tr=>({id:val(tr,'v-id'),name:val(tr,'v-name'),ip:val(tr,'v-ip')})).filter(v=>v.id);
 
   const interfaces=rowsOf('#iface-body tr').map(tr=>({
     name:val(tr,'i-name'), desc:val(tr,'i-desc'), mode:val(tr,'i-mode'),
@@ -1805,7 +1830,7 @@ function applyModelToForm(model){
   document.getElementById('snmp-trap-host').value=model.snmpTrapHost||'';
   document.getElementById('syslog-server').value=model.syslogServer||'';
 
-  (model.vlans||[]).forEach(v=>addVlanRow(v.id,v.name));
+  (model.vlans||[]).forEach(v=>addVlanRow(v.id,v.name,v.ip));
 
   const brocadeQosPortMap=new Map(((model.brocadeQos&&model.brocadeQos.ports)||[]).map(p=>[p.port,p]));
   (model.interfaces||[]).forEach(i=>{
@@ -2275,6 +2300,12 @@ function validateForm(){
     }else{
       vlanIds.add(v.id);
     }
+    // VLAN IP（選填，13 家廠牌透過 withSviInterfaces() 合成 SVI 介面；ProCurve/Extreme 直接讀
+    // 這個欄位本身，見 switch-generator-core.js）：非空時才檢查 CIDR 格式，不要求必填
+    if(v.ip&&!isValidCIDR(v.ip)){
+      errors.push(`⚠️ VLAN ${i+1}：${tr('val.invalid').replace('{item}','IP (CIDR)')}`);
+      markInvalid(vlanRows[i]?.querySelector('.v-ip'));
+    }
   });
 
   // 3. Interface 驗證
@@ -2583,7 +2614,9 @@ function generate(fromImport=false){
   showValidationResults(validation,fromImport);
   if(!validation.valid)return;
 
-  const model=validation.model;
+  // withSviInterfaces()：13 家廠牌把 VLAN 的 L3 IP 建模成獨立 SVI 介面，這裡才依 vlans[].ip
+  // 動態合成對應介面物件，不寫回 validation.model 本身（ephemeral，見 switch-generator-core.js）
+  const model=withSviInterfaces(validation.model);
   let cfg;
   if(model.vendor==='fortiswitch')cfg=assembleFortiSwitchConfig(model);
   else if(model.vendor==='aruba')cfg=assembleArubaConfig(model);
@@ -2868,7 +2901,23 @@ async function parseAndImport(){
   updateModeOptions();
   document.getElementById('hostname').value=parsed.sys?.hostname||'';
 
-  (parsed.vlans||[]).forEach(v=>addVlanRow(v.id,v.name));
+  (parsed.vlans||[]).forEach(v=>addVlanRow(v.id,v.name,v.ip));
+
+  // VLAN IP 回填（2026-09-08 新增，withSviInterfaces()／switch-generator-core.js 的反向邏輯）：
+  // switch_analyzer 的 parser 早就把這批介面解析成 type:'svi'，但下面 Interface 表格的回填
+  // 迴圈只認 trunk/access/hybrid，會把這筆資料靜默丟棄。用萬用正則從介面名稱反抽 VLAN ID
+  // （13 家命名慣例的數字都能這樣抽出，如 Vlan10/Vlan-interface10/irb.10/ve10/"vlan 10"），
+  // 找到對應 VLAN 列就填入其 IP，找不到（真實設定檔上 SVI 早於 VLAN 宣告等罕見情境）則補一列。
+  if(SVI_NAME_FORMATTERS[genVendor]){
+    (parsed.interfaces||[]).forEach(i=>{
+      if(i.type!=='svi'||!i.ip)return;
+      const vid=(i.name.match(/\d+/)||[])[0];
+      if(!vid)return;
+      const existingRow=rowsOf('#vlan-body tr').find(row=>val(row,'v-id')===vid);
+      if(existingRow)existingRow.querySelector('.v-ip').value=i.ip;
+      else addVlanRow(vid,'',i.ip);
+    });
+  }
 
   (parsed.interfaces||[]).forEach(i=>{
     if(!['trunk','access','hybrid'].includes(i.mode))return; // SVI/loopback/routed 不在本工具 Interface 表單範圍內
@@ -3517,8 +3566,8 @@ function processBulkCSV(){
           ifaceRow0.querySelector('.i-desc').value=row.ifacedesc||originalIfaceDesc||'';
         }
 
-        // 產生配置
-        const model=collectModel();
+        // 產生配置（withSviInterfaces() 說明見 generate()）
+        const model=withSviInterfaces(collectModel());
         let cfg;
         if(model.vendor==='fortiswitch')cfg=assembleFortiSwitchConfig(model);
         else if(model.vendor==='aruba')cfg=assembleArubaConfig(model);
