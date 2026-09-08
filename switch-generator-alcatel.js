@@ -3,7 +3,7 @@ function renderAlcatelVLANs(vlans,interfaces){
   (interfaces||[]).forEach(iface=>{
     if(!iface.name)return;
     if(iface.mode==='trunk'){
-      (iface.trunkVlans||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(vid=>{
+      (iface.trunkVlans||'').split(/[,\s]+/).map(s=>s.trim()).filter(Boolean).forEach(vid=>{
         if(!taggedMap[vid])taggedMap[vid]=[];
         taggedMap[vid].push(iface.name);
       });

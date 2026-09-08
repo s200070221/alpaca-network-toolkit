@@ -15,7 +15,7 @@ function renderRouterOSVLANs(vlans,interfaces,lacpList){
   });
   effective.forEach(iface=>{
     if(iface.mode==='trunk'){
-      (iface.trunkVlans||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(vid=>{
+      (iface.trunkVlans||'').split(/[,\s]+/).map(s=>s.trim()).filter(Boolean).forEach(vid=>{
         (taggedMap[vid]=taggedMap[vid]||[]).push(iface.name);
       });
     }else if(iface.mode==='access'&&iface.accessVlan){

@@ -1,9 +1,9 @@
-function renderProCurveVLANs(vlans,interfaces,ospf,dhcp){
+function renderProCurveVLANs(vlans,interfaces,ospf,dhcp,ospf6){
   const taggedMap={},untaggedMap={};
   (interfaces||[]).forEach(iface=>{
     if(!iface.name)return;
     if(iface.mode==='trunk'){
-      (iface.trunkVlans||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(vid=>{
+      (iface.trunkVlans||'').split(/[,\s]+/).map(s=>s.trim()).filter(Boolean).forEach(vid=>{
         if(!taggedMap[vid])taggedMap[vid]=[];
         taggedMap[vid].push(iface.name);
       });
@@ -15,6 +15,14 @@ function renderProCurveVLANs(vlans,interfaces,ospf,dhcp){
   const areaOfVlan={};
   ((ospf&&ospf[0]&&ospf[0].areas)||[]).forEach(a=>{
     (a.networks||[]).forEach(n=>{ if(n.network)areaOfVlan[String(n.network)]=a.area; });
+  });
+  // OSPFv3（2026-08-23 新增）：areas[].interfaces 是 "vlanN"/"loopbackN" 前綴字串陣列
+  const areaOfVlan6={};
+  ((ospf6&&ospf6[0]&&ospf6[0].areas)||[]).forEach(a=>{
+    (a.interfaces||[]).forEach(ifname=>{
+      const m=/^vlan(\d+)$/i.exec(String(ifname||''));
+      if(m)areaOfVlan6[m[1]]=a.area;
+    });
   });
   const helperOfVlan={};
   (dhcp||[]).filter(d=>d.type==='relay'&&d.interface&&d.relayServer).forEach(d=>{
@@ -36,13 +44,15 @@ function renderProCurveVLANs(vlans,interfaces,ospf,dhcp){
       const [vip,vmask]=v.ip.split('/');
       if(vip&&vmask)lines.push(`   ip address ${vip} ${vmask}`);
     }
-    // 次要IP（2026-08-12 新增）：ProCurve 無 secondary 關鍵字，同一 VLAN 底下再宣告一行
-    // ip address（不同子網）即為次要位址，僅取第一筆為 MVP 範圍
-    if(v.secondaryIp){
-      const [sip,smask]=v.secondaryIp.split('/');
+    // 次要IP（2026-08-23 陣列化）：ProCurve 無 secondary 關鍵字，同一 VLAN 底下再宣告一行
+    // ip address（不同子網）即為次要位址；parser 端 2026-08-17 已從「僅取第一筆」擴充為
+    // 完整陣列 secondaryIps（官方上限 7 筆）
+    (v.secondaryIps||[]).forEach(s=>{
+      const [sip,smask]=s.split('/');
       if(sip&&smask)lines.push(`   ip address ${sip} ${smask}`);
-    }
+    });
     if(areaOfVlan[String(v.id)])lines.push(`   ip ospf area ${areaOfVlan[String(v.id)]}`);
+    if(areaOfVlan6[String(v.id)])lines.push(`   ipv6 ospf3 area ${areaOfVlan6[String(v.id)]}`);
     (helperOfVlan[String(v.id)]||[]).forEach(ip=>lines.push(`   ip helper-address ${ip}`));
     lines.push('   exit');
     return lines.join('\n');
@@ -54,14 +64,23 @@ function renderProCurveDHCPOption82(dhcp){
   return (dhcp||[]).some(d=>d.type==='relay'&&d.option82)?'dhcp-relay option 82':'';
 }
 
-function renderProCurveInterface(iface){
+function renderProCurveInterface(iface,ospf6){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(`   name "${iface.desc}"`);
   if(iface.shutdown)lines.push('   disable');
+  // OSPFv3（2026-08-23 新增）：parseOSPFv3() 對 Loopback 的 area 綁定是獨立區塊
+  // "interface loopback N { ipv6 ospf3 area X }"，與 VLAN 的巢狀位置相同但來源不同
+  if(/^loopback/i.test(iface.name)){
+    const areaOfLo6={};
+    ((ospf6&&ospf6[0]&&ospf6[0].areas)||[]).forEach(a=>{
+      (a.interfaces||[]).forEach(ifname=>{ if(String(ifname||'').toLowerCase()===iface.name.toLowerCase())areaOfLo6[iface.name]=a.area; });
+    });
+    if(areaOfLo6[iface.name])lines.push(`   ipv6 ospf3 area ${areaOfLo6[iface.name]}`);
+  }
   lines.push('   exit');
   return lines.join('\n');
 }
-function renderProCurveInterfaces(ifaces){return (ifaces||[]).map(renderProCurveInterface).join('\n');}
+function renderProCurveInterfaces(ifaces,ospf6){return (ifaces||[]).map(i=>renderProCurveInterface(i,ospf6)).join('\n');}
 
 // 真實語法第三個 token 只有 lacp/trunk 兩種字面值（parseTrunk() 對應把 lacp 收斂回
 // 'Active'、trunk 收斂回 'Static'），故 UI 的 active/passive 兩種 mode 在輸出端
@@ -94,6 +113,14 @@ function renderProCurveOSPFGlobal(list){
   return lines.join('\n');
 }
 
+// OSPFv3（2026-08-23 新增）：官方 arubanetworking.hpe.com AOS-S IPv6 文件確認需先
+// `ipv6 unicast-routing` 再 `router ospf3 enable`（注意廠牌用字是 ospf3 非 ospfv3），
+// area 指派完全逐 VLAN/Loopback（已由 renderProCurveVLANs()/renderProCurveInterface() 處理）
+function renderProCurveOSPFv3Global(list){
+  if(!list||!list.length)return '';
+  return 'ipv6 unicast-routing\nrouter ospf3 enable';
+}
+
 // 本機帳號：switch_analyzer 的 parseUsers()（ProCurve 分支）支援兩種真實並存語法，
 // 產生器一律輸出新式 AAA 語法（group 欄位可接受任意名稱，彈性優於舊式語法僅能是
 // operator/manager 字面值，且仍可被 parseUsers() 的 reAAA 正則完整往返解析）。
@@ -109,11 +136,13 @@ function assembleProCurveConfig(model){
   // VLAN 區塊（內嵌逐 VLAN `ip ospf area`）之前輸出
   const ospfBlockPC=renderProCurveOSPFGlobal(model.ospf);
   if(ospfBlockPC)blocks.push(ospfBlockPC);
-  const vlanBlock=renderProCurveVLANs(model.vlans,model.interfaces,model.ospf,model.dhcp);
+  const ospf6BlockPC=renderProCurveOSPFv3Global(model.ospf6);
+  if(ospf6BlockPC)blocks.push(ospf6BlockPC);
+  const vlanBlock=renderProCurveVLANs(model.vlans,model.interfaces,model.ospf,model.dhcp,model.ospf6);
   if(vlanBlock)blocks.push(vlanBlock);
   const lacpBlock=renderProCurveLACP(model.lacp);
   if(lacpBlock)blocks.push(lacpBlock);
-  if(model.interfaces&&model.interfaces.length)blocks.push(renderProCurveInterfaces(model.interfaces));
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderProCurveInterfaces(model.interfaces,model.ospf6));
   if(model.routes&&model.routes.length)blocks.push(renderProCurveRoutes(model.routes));
   const dhcpOpt82BlockPC=renderProCurveDHCPOption82(model.dhcp);
   if(dhcpOpt82BlockPC)blocks.push(dhcpOpt82BlockPC);

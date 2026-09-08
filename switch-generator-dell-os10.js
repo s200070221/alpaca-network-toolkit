@@ -57,7 +57,7 @@ function dellOS10SwitchportLines(iface){
   if(!iface)return lines;
   if(iface.mode==='trunk'){
     lines.push(' switchport mode trunk');
-    if(iface.trunkVlans)lines.push(` switchport trunk allowed vlan ${iface.trunkVlans}`);
+    if(iface.trunkVlans)lines.push(` switchport trunk allowed vlan ${iface.trunkVlans.trim().split(/[,\s]+/).filter(Boolean).join(',')}`);
     if(iface.nativeVlan)lines.push(` switchport trunk native vlan ${iface.nativeVlan}`);
   }else if(iface.mode==='access'){
     lines.push(' switchport mode access');
