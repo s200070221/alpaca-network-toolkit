@@ -129,18 +129,14 @@ function inferSpeedFromName(name,vendor){
   return best?best.speed:'1G';
 }
 
+// 2026-09-08 修復（使用者回報「會跑版」）：原本表頭依全表格 hasAccess/hasTrunk/hasHybrid
+// 決定顯示哪些欄位，但每一列的儲存格卻只依「自己的」mode 顯示對應欄位——access/trunk 模式
+// 混用（幾乎是任何真實交換器的常態：一般埠 access、上聯埠 trunk）時，各列可見儲存格數量不
+// 一致，標準 HTML table 是依位置索引對齊欄位，導致整張表格跑版。修正為呼叫
+// updateIfaceRowDisplay() 時直接觸發整張表格重新評估（委派給 updateIfaceTableDisplay()），
+// 讓每一列的儲存格顯示狀態一律比照表頭（全表格層級），該列自己 mode 用不到的欄位改用
+// disabled 呈現（保留原本「不相關欄位灰階不可編輯」的視覺提示），而非結構性隱藏
 function updateIfaceRowDisplay(modeSelector){
-  const tr=modeSelector.closest('tr');
-  const mode=modeSelector.value;
-  const cells=tr.querySelectorAll('td');
-  cells.forEach(cell=>{
-    cell.classList.remove('show');
-    if((mode==='access' && cell.classList.contains('col-access'))||
-       (mode==='trunk' && cell.classList.contains('col-trunk'))||
-       (mode==='hybrid' && cell.classList.contains('col-hybrid'))){
-      cell.classList.add('show');
-    }
-  });
   updateIfaceTableDisplay();
 }
 
@@ -159,6 +155,21 @@ function updateIfaceTableDisplay(){
        (hasHybrid && th.classList.contains('col-hybrid'))){
       th.classList.add('show');
     }
+  });
+  rows.forEach(tr=>{
+    const mode=tr.querySelector('.i-mode').value;
+    tr.querySelectorAll('td').forEach(cell=>{
+      const isAccess=cell.classList.contains('col-access');
+      const isTrunk=cell.classList.contains('col-trunk');
+      const isHybrid=cell.classList.contains('col-hybrid');
+      if(!isAccess&&!isTrunk&&!isHybrid)return;
+      cell.classList.remove('show');
+      if((hasAccess&&isAccess)||(hasTrunk&&isTrunk)||(hasHybrid&&isHybrid)){
+        cell.classList.add('show');
+      }
+      const applicable=(isAccess&&mode==='access')||(isTrunk&&mode==='trunk')||(isHybrid&&mode==='hybrid');
+      cell.querySelectorAll('input').forEach(el=>{ el.disabled=!applicable; });
+    });
   });
 }
 
