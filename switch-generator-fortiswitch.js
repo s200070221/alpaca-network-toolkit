@@ -29,7 +29,7 @@ function renderFortiSwitchInterfaces(ifaces,securityList,stp){
     swLines.push(`    edit "${i.name}"`);
     if(i.mode==='trunk'){
       if(i.nativeVlan)swLines.push(`        set native-vlan ${i.nativeVlan}`);
-      if(i.trunkVlans)swLines.push(`        set allowed-vlans ${i.trunkVlans.trim().split(/\s+/).filter(Boolean).join(',')}`);
+      if(i.trunkVlans)swLines.push(`        set allowed-vlans ${i.trunkVlans.trim().split(/[,\s]+/).filter(Boolean).join(',')}`);
     }else if(i.mode==='access'){
       if(i.accessVlan){
         swLines.push(`        set native-vlan ${i.accessVlan}`);
@@ -100,6 +100,35 @@ function renderFortiSwitchOSPF(list){
   return lines.join('\n');
 }
 
+// OSPFv3（2026-08-23 新增）：官方 FortiGate/FortiOS 文件確認 `config router ospf6` 巢狀
+// `config area`（僅存在宣告）＋`config ospf6-interface`（逐介面 set interface/set area），
+// 與 IPv4 baseline 用 `config network` 掛 `set area` 結構不同
+function renderFortiSwitchOSPFv3(list){
+  const o=(list||[])[0];
+  if(!o)return '';
+  const lines=['config router ospf6'];
+  if(o.routerId)lines.push(`    set router-id ${o.routerId}`);
+  if(o.areas&&o.areas.length){
+    lines.push('    config area');
+    o.areas.forEach(a=>{lines.push(`        edit ${a.area}`);lines.push('        next');});
+    lines.push('    end');
+    lines.push('    config ospf6-interface');
+    let n=1;
+    o.areas.forEach(a=>{
+      (a.interfaces||[]).forEach(ifname=>{
+        if(!ifname)return;
+        lines.push(`        edit "${ifname}${n++}"`);
+        lines.push(`            set interface "${ifname}"`);
+        lines.push(`            set area ${a.area}`);
+        lines.push('        next');
+      });
+    });
+    lines.push('    end');
+  }
+  lines.push('end');
+  return lines.join('\n');
+}
+
 function renderFortiSwitchBGP(list){
   const b=(list||[])[0];
   if(!b)return '';
@@ -141,9 +170,8 @@ function renderFortiSwitchRIP(list){
   return lines.join('\n');
 }
 
-function renderFortiSwitchRoutes(list){
-  if(!list||!list.length)return '';
-  const lines=['config router static'];
+function renderFortiSwitchRoutesBlock(kw,list){
+  const lines=[`config router ${kw}`];
   list.forEach((r,idx)=>{
     lines.push(`    edit ${idx+1}`);
     lines.push(`        set dst ${r.dst}`);
@@ -155,6 +183,17 @@ function renderFortiSwitchRoutes(list){
   });
   lines.push('end');
   return lines.join('\n');
+}
+// IPv6（2026-08-23 新增）：官方語法 "config router static6"，欄位仍是 set dst/set
+// gateway（非 dst6/gateway6），與 IPv4 版本是獨立的頂層區塊，非同一區塊內混合輸出
+function renderFortiSwitchRoutes(list){
+  if(!list||!list.length)return '';
+  const v4=list.filter(r=>!r.dst.includes(':'));
+  const v6=list.filter(r=>r.dst.includes(':'));
+  const parts=[];
+  if(v4.length)parts.push(renderFortiSwitchRoutesBlock('static',v4));
+  if(v6.length)parts.push(renderFortiSwitchRoutesBlock('static6',v6));
+  return parts.join('\n');
 }
 
 function renderFortiSwitchLACP(list){
@@ -186,7 +225,7 @@ function renderFortiSwitchL3Interfaces(ifaces,vrrpList,dhcpList){
   // "config system interface"，switch_analyzer 對此區塊只用非 global 的 .match()）
   (ifaces||[]).forEach(i=>{
     if(!i.ip)return;
-    groups.set(i.name,{ifname:i.name,vlanId:i.vlans||'',ip:i.ip,secondaryIp:i.secondaryIp||'',vrrpEntries:[],relayServers:[],option82:false});
+    groups.set(i.name,{ifname:i.name,vlanId:i.vlans||'',ip:i.ip,secondaryIps:i.secondaryIps||[],vrrpEntries:[],relayServers:[],option82:false});
   });
   groupVrrpByVlan(vrrpList).forEach(g=>{
     const ifname='vlan'+g.vlanId;
@@ -220,17 +259,20 @@ function renderFortiSwitchL3Interfaces(ifaces,vrrpList,dhcpList){
         const [ip,len]=g.ip.split('/');
         lines.push(`        set ip ${ip} ${maskFromCidr(len)}`);
         // 次要IP（Secondary IP，官方 FortiSwitchOS Administration Guide／CLI Reference：
-        // `set secondary-IP enable` + 巢狀 `config secondaryip`；僅取第一筆為 MVP 範圍）
-        if(g.secondaryIp&&!g.secondaryIp.includes(':')){
-          const [sip,slen]=g.secondaryIp.split('/');
-          if(sip&&slen){
-            lines.push('        set secondary-IP enable');
-            lines.push('        config secondaryip');
-            lines.push('            edit 1');
+        // `set secondary-IP enable` + 巢狀 `config secondaryip`；2026-08-23 陣列化：parser
+        // 端 2026-08-17 已從「僅取第一筆」擴充為完整陣列 secondaryIps，逐筆輸出編號 edit）
+        const secIps=(g.secondaryIps||[]).filter(s=>!s.includes(':'));
+        if(secIps.length){
+          lines.push('        set secondary-IP enable');
+          lines.push('        config secondaryip');
+          secIps.forEach((s,idx)=>{
+            const [sip,slen]=s.split('/');
+            if(!sip||!slen)return;
+            lines.push(`            edit ${idx+1}`);
             lines.push(`                set ip ${sip} ${maskFromCidr(slen)}`);
             lines.push('            next');
-            lines.push('        end');
-          }
+          });
+          lines.push('        end');
         }
       }
     }
@@ -241,14 +283,28 @@ function renderFortiSwitchL3Interfaces(ifaces,vrrpList,dhcpList){
       // "set dhcp-relay-option82 enable"，render 端從未輸出過
       if(g.option82)lines.push('        set dhcp-relay-option82 enable');
     }
-    if(g.vrrpEntries.length){
+    if(g.vrrpEntries.length&&g.vrrpEntries.some(v=>v.vip)){
       lines.push('        config vrrp');
-      g.vrrpEntries.forEach(v=>{
+      g.vrrpEntries.filter(v=>v.vip).forEach(v=>{
         lines.push(`            edit ${v.vrid}`);
         lines.push(`                set vrip ${v.vip}`);
         lines.push(`                set priority ${v.priority}`);
         lines.push('            next');
       });
+      lines.push('        end');
+    }
+    // IPv6（2026-08-23 新增）：官方文件確認巢狀 config ipv6 { config vrrp6 { edit N;
+    // set priority; set vrip6; } } 結構，與既有 IPv4 config vrrp 平行但獨立區塊
+    if(g.vrrpEntries.length&&g.vrrpEntries.some(v=>v.vip6)){
+      lines.push('        config ipv6');
+      lines.push('            config vrrp6');
+      g.vrrpEntries.filter(v=>v.vip6).forEach(v=>{
+        lines.push(`                edit ${v.vrid}`);
+        lines.push(`                    set vrip6 ${v.vip6}`);
+        lines.push(`                    set priority ${v.priority}`);
+        lines.push('                next');
+      });
+      lines.push('            end');
       lines.push('        end');
     }
     lines.push('    next');
@@ -334,6 +390,22 @@ function renderFortiSwitchPhyModeBlock(breakouts){
   return lines.join('\n');
 }
 
+// 本機帳號（2026-08-23 新增）：switch_analyzer 的 parseFortiSwitchUsers() 對應官方
+// `config system admin` 巢狀區塊；密碼欄位固定輸出 `ENC` 前綴比照真實匯出檔慣例
+// （使用者自行貼上已產生的加密字串，非本工具運算雜湊）
+function renderFortiSwitchUsers(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  const lines=['config system admin'];
+  list.forEach(u=>{
+    lines.push(`    edit "${u.name}"`);
+    lines.push(`        set accprofile "${u.role||'super_admin'}"`);
+    lines.push(`        set password ENC ${u.password}`);
+    lines.push('    next');
+  });
+  lines.push('end');
+  return lines.join('\n');
+}
 function assembleFortiSwitchConfig(model){
   const blocks=[`# ${tr('notice.disclaimer')}`,'config system global',`    set hostname "${model.sysname||'Switch'}"`,'end'];
   const phyModeBlock=renderFortiSwitchPhyModeBlock(model.breakouts);
@@ -352,6 +424,8 @@ function assembleFortiSwitchConfig(model){
   if(aclBlock)blocks.push(aclBlock);
   const ospfBlock=renderFortiSwitchOSPF(model.ospf);
   if(ospfBlock)blocks.push(ospfBlock);
+  const ospf6Block=renderFortiSwitchOSPFv3(model.ospf6);
+  if(ospf6Block)blocks.push(ospf6Block);
   const ripBlock=renderFortiSwitchRIP(model.rip);
   if(ripBlock)blocks.push(ripBlock);
   const routesBlock=renderFortiSwitchRoutes(model.routes);
@@ -366,6 +440,8 @@ function assembleFortiSwitchConfig(model){
   // 需要全新表單欄位才能正確支援，本輪先移除捏造輸出不臆測，留待未來規劃
   const stpBlockFo=renderFortiSwitchSTP(model.stp);
   if(stpBlockFo)blocks.push(stpBlockFo);
+  const usersBlockFo=renderFortiSwitchUsers(model.users);
+  if(usersBlockFo)blocks.push(usersBlockFo);
   return blocks.join('\n');
 }
 

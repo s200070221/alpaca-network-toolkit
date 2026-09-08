@@ -23,7 +23,7 @@ function ruijieSwitchportLines(iface){
     // 官方真實輸出常見用 "only" 關鍵字整批宣告完整清單（2026-07-29 使用者提供真實風格
     // 範例確認：switchport trunk allowed vlan only X,Y），比照 analyzer 端
     // parseRuijieInterfaces() 偏好判斷邏輯（only/all/裸清單優先），確保 round-trip 不失真
-    if(iface.trunkVlans)lines.push(` switchport trunk allowed vlan only ${iface.trunkVlans}`);
+    if(iface.trunkVlans)lines.push(` switchport trunk allowed vlan only ${iface.trunkVlans.trim().split(/[,\s]+/).filter(Boolean).join(',')}`);
     if(iface.nativeVlan)lines.push(` switchport trunk native vlan ${iface.nativeVlan}`);
   }else if(iface.mode==='access'){
     lines.push(' switchport mode access');

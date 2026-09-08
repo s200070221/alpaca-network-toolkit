@@ -5,7 +5,7 @@ function edgeSwitchVlanLines(iface){
     lines.push(` vlan participation include ${iface.accessVlan}`);
     lines.push(` vlan pvid ${iface.accessVlan}`);
   }else if(iface.mode==='trunk'&&iface.trunkVlans){
-    const tagged=iface.trunkVlans.split(',').map(v=>v.trim()).filter(Boolean);
+    const tagged=iface.trunkVlans.split(/[,\s]+/).map(v=>v.trim()).filter(Boolean);
     tagged.forEach(v=>{
       lines.push(` vlan participation include ${v}`);
       lines.push(` vlan tagging ${v}`);

@@ -27,7 +27,7 @@ function computeExtremeVlanPortMap(vlans,interfaces){
   (interfaces||[]).forEach(iface=>{
     if(!iface.name)return;
     if(iface.mode==='trunk'){
-      (iface.trunkVlans||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(vid=>{
+      (iface.trunkVlans||'').split(/[,\s]+/).map(s=>s.trim()).filter(Boolean).forEach(vid=>{
         const vname=idToName[vid]; if(!vname)return;
         if(!taggedMap[vname])taggedMap[vname]=[];
         taggedMap[vname].push(iface.name);

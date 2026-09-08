@@ -25,7 +25,7 @@ function arubaVlanLines(iface){
   if(!iface)return lines;
   if(iface.mode==='trunk'){
     if(iface.nativeVlan)lines.push(`    vlan trunk native ${iface.nativeVlan}`);
-    if(iface.trunkVlans)lines.push(`    vlan trunk allowed ${iface.trunkVlans}`);
+    if(iface.trunkVlans)lines.push(`    vlan trunk allowed ${iface.trunkVlans.trim().split(/[,\s]+/).filter(Boolean).join(',')}`);
   }else if(iface.mode==='access'){
     if(iface.accessVlan)lines.push(`    vlan access ${iface.accessVlan}`);
   }

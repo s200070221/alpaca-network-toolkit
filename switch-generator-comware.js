@@ -53,7 +53,9 @@ function comwareL2Lines(iface){
   if(!iface)return lines;
   if(iface.mode==='trunk'){
     lines.push(' port link-type trunk');
-    if(iface.trunkVlans)lines.push(` port trunk permit vlan ${iface.trunkVlans}`);
+    // 官方 H3C Comware vlan-id-list 語法本身以空白分隔（支援 "to" 範圍），非 Cisco 式逗號，
+    // 故此廠牌雖同屬「輸入端同時接受逗號/空白」的正規化群組，輸出端須維持空白 join（2026-09-08 修正）
+    if(iface.trunkVlans)lines.push(` port trunk permit vlan ${iface.trunkVlans.trim().split(/[,\s]+/).filter(Boolean).join(' ')}`);
     // 2026-07-22 對外查證官方 H3C 文件後修正：`port trunk native-vlan` 不存在，
     // 真實關鍵字是 `port trunk pvid vlan`
     if(iface.nativeVlan)lines.push(` port trunk pvid vlan ${iface.nativeVlan}`);

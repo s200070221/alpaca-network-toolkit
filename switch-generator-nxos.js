@@ -66,7 +66,7 @@ function nxosSwitchportLines(iface){
   if(!iface)return lines;
   if(iface.mode==='trunk'){
     lines.push(' switchport mode trunk');
-    if(iface.trunkVlans)lines.push(` switchport trunk allowed vlan ${iface.trunkVlans}`);
+    if(iface.trunkVlans)lines.push(` switchport trunk allowed vlan ${iface.trunkVlans.trim().split(/[,\s]+/).filter(Boolean).join(',')}`);
     // 官方語法與 Cisco IOS-XE 家族相同的 "switchport trunk native vlan N"，共用表單本身就有
     // Native VLAN 欄位，先前完全沒有輸出這一行，使用者填的值被靜默丟棄（2026-09-02 全功能
     // 審查發現，已同步在 switch-analyzer-parser-nxos.js 補上對稱的解析）

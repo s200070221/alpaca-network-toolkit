@@ -15,7 +15,7 @@ function assembleSONiCConfig(model){
     if(iface.mode==='access'&&iface.accessVlan){
       db.VLAN_MEMBER[`Vlan${iface.accessVlan}|${ownerName}`]={tagging_mode:'untagged'};
     }else if(iface.mode==='trunk'){
-      (iface.trunkVlans||'').trim().split(/\s+/).filter(Boolean).forEach(vid=>{
+      (iface.trunkVlans||'').trim().split(/[,\s]+/).filter(Boolean).forEach(vid=>{
         db.VLAN_MEMBER[`Vlan${vid}|${ownerName}`]={tagging_mode:'tagged'};
       });
       if(iface.nativeVlan)db.VLAN_MEMBER[`Vlan${iface.nativeVlan}|${ownerName}`]={tagging_mode:'untagged'};
