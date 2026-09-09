@@ -250,15 +250,19 @@ function groupVrrpByVlan(vrrpList){
   return Array.from(map.values());
 }
 
-// VLAN IP（2026-09-08 新增）：ProCurve/Extreme 的 render 本來就直接讀 VLAN 物件自己的
-// v.ip（非獨立介面），但其餘 13 家廠牌把 VLAN 的 L3 IP 建模成獨立的 SVI 介面物件（如 Cisco
-// interface Vlan10、Comware Vlan-interface10、Juniper irb.10），render/parser 早已支援、
-// 唯獨 UI 端只能透過直接建構 model（測試）或匯入既有設定檔產生，表單本身無法建立。
+// VLAN IP（2026-09-08 新增，2026-09-09 補上 RouterOS）：ProCurve/Extreme 的 render 本來就
+// 直接讀 VLAN 物件自己的 v.ip（非獨立介面），但其餘 14 家廠牌把 VLAN 的 L3 IP 建模成獨立的
+// SVI 介面物件（如 Cisco interface Vlan10、Comware Vlan-interface10、Juniper irb.10、
+// RouterOS /interface vlan），render/parser 早已支援、唯獨 UI 端只能透過直接建構 model
+// （測試）或匯入既有設定檔產生，表單本身無法建立。
 // key 用 <select id="vendor"> 的實際 value（非各廠牌檔名 slug）——Aruba CX 是 'aruba' 非
 // 'aruba-cx'，NX-OS 是 'cisco_nxos' 非 'nxos'。SONiC 已有自己專屬的 sonicL3Interfaces 卡片
 // （資料形狀通用 {name,cidr}，本函式的設計參考範本）；EdgeSwitch（VLAN Routing 邏輯介面 ID
-// 由裝置動態配置產生，無法靜態預測，CLAUDE.md 已記載既有架構限制）與 RouterOS（render/parser
-// 完全無對應程式碼，需另外開發）刻意不在此白名單內。
+// 由裝置動態配置產生，無法靜態預測，CLAUDE.md 已記載既有架構限制）刻意不在此白名單內。
+// RouterOS 的 /interface vlan 需要 bridge VLAN filtering table 已存在的橋接器（固定
+// bridge1）當掛載對象，語法與其餘廠牌不同（詳見 switch-generator-routeros.js
+// renderRouterOSVlanInterfaces()／switch-analyzer-parser-routeros.js
+// _parseRouterOSVlanInterfaces()）。
 const SVI_NAME_FORMATTERS = {
   cisco: id => `Vlan${id}`, cisco_nxos: id => `Vlan${id}`,
   arista: id => `Vlan${id}`, ruijie: id => `Vlan${id}`,
@@ -266,7 +270,7 @@ const SVI_NAME_FORMATTERS = {
   aruba: id => `vlan${id}`, 'dell-os10': id => `vlan${id}`,
   brocade: id => `ve${id}`, alcatel: id => `VLAN${id}`,
   netgear: id => `vlan ${id}`, planet: id => `vlan ${id}`,
-  fortiswitch: id => `vlan${id}`,
+  fortiswitch: id => `vlan${id}`, routeros: id => `vlan${id}`,
 };
 // EPHEMERAL 轉換：只在即將呼叫 assembleXConfig() 產生設定文字的當下合成，不寫回
 // collectModel() 的持久化結果——避免這批合成物件被存進範本 localStorage，或讓

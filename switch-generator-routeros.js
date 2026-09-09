@@ -36,21 +36,43 @@ function renderRouterOSVLANs(vlans,interfaces,lacpList){
   return lines.length>1?lines.join('\n'):'';
 }
 
+// VLAN L3 IP（SVI，2026-09-09 新增）：官方 MikroTik 慣例——bridge VLAN filtering
+//（renderRouterOSVLANs()）僅處理 L2 tagging，要讓某顆 VLAN 有可路由的閘道 IP，需另外在
+// 該 bridge 之上建立具名 `/interface vlan`（`interface=<bridge> vlan-id=N name=X`），
+// 再對這個介面宣告 `/ip address`。與既有 VRRP VIP（renderRouterOSVRRP()）各自獨立輸出
+// 一段 `/ip address` 區塊，不合併成同一段——parser 端 _parseVRRPRouterOS() 已同步改用
+// _routerOSCollectAddLines() 可跨多段收集，兩段區塊在 round-trip 時都能正確讀回，不需要
+// 在 render 端手動協調合併
+function renderRouterOSVlanInterfaces(interfaces){
+  const svis=(interfaces||[]).filter(i=>i.type==='svi'&&i.ip&&i.vlans);
+  if(!svis.length)return '';
+  const vlanLines=svis.map(i=>`add interface=${ROUTEROS_BRIDGE} name=${i.name} vlan-id=${i.vlans}`);
+  const addrLines=svis.map(i=>`add address=${i.ip} interface=${i.name}`);
+  return ['/interface vlan',...vlanLines,'','/ip address',...addrLines].join('\n');
+}
+
+// type==='svi' 排除（2026-09-09 新增 VLAN IP 功能時發現）：withSviInterfaces() 合成的 SVI
+// 介面物件會附加進 model.interfaces，但這裡是宣告「實體乙太埠」的區塊，SVI 是掛在 bridge
+// 之上的獨立虛擬介面（renderRouterOSVlanInterfaces() 已自己輸出 /interface vlan 建立它），
+// 不應該被誤當成 /interface ethernet 的一員重複宣告
 function renderRouterOSInterfaceDeclarations(ifaces){
-  if(!ifaces||!ifaces.length)return '';
+  const list=(ifaces||[]).filter(i=>i.type!=='svi');
+  if(!list.length)return '';
   const lines=['/interface ethernet'];
-  ifaces.forEach(i=>{ if(i.name)lines.push(`add name=${i.name}`); });
+  list.forEach(i=>{ if(i.name)lines.push(`add name=${i.name}`); });
   return lines.join('\n');
 }
 
 // lacpList（2026-08-08 新增，資料模型修正）：官方文件（Bonding／Bridging and Switching）
 // 確認實體介面若已是 bonding slave，不可再直接加入 bridge 當 port，否則 bond 介面在不同
 // port 上收到相同 MAC 會造成衝突；正確作法是只把 bond 介面本身加入 bridge，故此處排除
-// 屬於任一 LACP 群組成員的實體介面，改為每個 LACP 群組輸出一行 bond 介面本身的 member
+// 屬於任一 LACP 群組成員的實體介面，改為每個 LACP 群組輸出一行 bond 介面本身的 member。
+// type==='svi' 同樣排除（見 renderRouterOSInterfaceDeclarations() 註解）——VLAN 的 SVI 介面
+// 是掛載在 bridge 之上，不是 bridge 的 member port
 function renderRouterOSBridgeMembers(ifaces,lacpList){
   const memberNames=new Set();
   (lacpList||[]).forEach(l=>(l.members||[]).forEach(m=>memberNames.add(m)));
-  const names=(ifaces||[]).filter(i=>i.name&&!memberNames.has(i.name)).map(i=>i.name);
+  const names=(ifaces||[]).filter(i=>i.type!=='svi'&&i.name&&!memberNames.has(i.name)).map(i=>i.name);
   (lacpList||[]).forEach(l=>{ if((l.members||[]).length)names.push(`bond${l.id}`); });
   if(!names.length)return '';
   const lines=['/interface bridge member'];
@@ -359,6 +381,8 @@ function assembleRouterOSConfig(model){
   if(memberBlock)blocks.push(memberBlock);
   const vlanBlock=renderRouterOSVLANs(model.vlans,model.interfaces,model.lacp);
   if(vlanBlock)blocks.push(vlanBlock);
+  const vlanIpBlock=renderRouterOSVlanInterfaces(model.interfaces);
+  if(vlanIpBlock)blocks.push(vlanIpBlock);
   const routeBlock=renderRouterOSRoutes(model.routes);
   if(routeBlock)blocks.push(routeBlock);
   const ospfBlock=renderRouterOSOSPF(model.ospf);
