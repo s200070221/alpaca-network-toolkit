@@ -321,31 +321,44 @@ function parseAlcatelVRRP(cfg){
   return groups;
 }
 
+// 2026-09-09 對外查證官方 OmniSwitch AOS Release 8 CLI Reference Guide（2024-07，
+// Release 8.9R1，"user" 指令章節第 41-59~41-64 頁）後整段重寫：先前的 Format A
+// （`role X` 關鍵字）與 Format B（`user add NAME\n...profile Y\nexit` 區塊式）皆查無
+// 官方依據。真實語法為 `user username {password password|password-prompt} [expiration
+// ...] [read-only|read-write [families...|domains...|all|none|all-except [...]|
+// macsec]] [no snmp|no auth|sha|md5|...] [console-only ...] [priv-password ...|
+// prompt-priv-password]`，官方範例：`-> user techpubs password writer_pass
+// read-write all`。MIB 物件 aaauReadRight/aaauWriteRight（無 role 欄位）證實 Alcatel
+// 的權限模型是「read-only/read-write 二元權限＋選填 command family/domain 清單」，
+// 與本專案其餘廠牌慣用的 role/profile 字串模型不同；密碼緊接在 password 關鍵字後是
+// 單一 token，並無 cleartext/hash 型別關鍵字（先前版本查無依據的猜測）
 function parseAlcatelUsers(cfg){
   const users=[]; const seen=new Set(); let m;
-  const reA=/^->\s*user\s+(\S+)\s+password\s+(\S+)(.*)/gm;
+  const reA=/^->\s*user\s+(\S+)\s+password\s+(\S+)([^\n]*)/gm;
+  const stopKw=/^(no|sha|md5|console-only|priv-password|prompt-priv-password|expiration)$/;
   while((m=reA.exec(cfg))!==null){
     const name=m[1]; if(seen.has(name))continue; seen.add(name);
-    let rawPwd=m[2],rest=(m[3]||'').trim(),pwdHash=rawPwd;
-    if(rawPwd==='cleartext'){const pts=rest.split(/\s+/);pwdHash=pts[0]||'';rest=pts.slice(1).join(' ');}
-    const role=(rest.match(/\brole\s+(\S+)/)||[])[1]||'';
-    let pwdType='',pwdWeak=false;
-    if(rawPwd==='cleartext'){pwdType='cleartext';pwdWeak=true;}
-    else if(pwdHash.startsWith('$2y$')||pwdHash.startsWith('$2b$')){pwdType='bcrypt';pwdWeak=false;}
-    else if(pwdHash.startsWith('$1$')){pwdType='md5';pwdWeak=true;}
-    else if(pwdHash.startsWith('$6$')){pwdType='sha512';pwdWeak=false;}
-    else{pwdType='hash';pwdWeak=false;}
+    const pwd=m[2];
+    const rest=(m[3]||'').trim();
+    // read-only/read-write 之後可再接 family/domain 清單，原樣併入 role 欄位（純展示
+    // 字串，本工具 Users 稽核表格本來就把 role 當文字顯示非嚴格列舉值，沿用 Extreme/
+    // RouterOS 既有慣例）；查無 read-only/read-write 時 role 留空，對應官方文件「未
+    // 指定時套用預設帳號權限」的語意，非解析失敗
+    const privM=rest.match(/\b(read-only|read-write)\b/);
+    let role='';
+    if(privM){
+      const tokens=rest.slice(privM.index+privM[0].length).trim().split(/\s+/).filter(Boolean);
+      const extra=[];
+      for(const t of tokens){ if(stopKw.test(t))break; extra.push(t); }
+      role=[privM[1],...extra].join(' ');
+    }
+    let pwdType,pwdWeak;
+    if(pwd.startsWith('$2y$')||pwd.startsWith('$2b$')){pwdType='bcrypt';pwdWeak=false;}
+    else if(pwd.startsWith('$6$')){pwdType='sha512';pwdWeak=false;}
+    else if(pwd.startsWith('$5$')){pwdType='sha256';pwdWeak=false;}
+    else if(pwd.startsWith('$1$')){pwdType='md5';pwdWeak=true;}
+    else{pwdType='plaintext';pwdWeak=true;}
     users.push({name,role,service:'console/ssh',hasPwd:true,pwdType,pwdWeak});
-  }
-  const blockRe=/^user add\s+(\S+)\n([\s\S]*?)^exit/gm;
-  while((m=blockRe.exec(cfg))!==null){
-    const name=m[1]; if(seen.has(name))continue; seen.add(name);
-    const body=m[2];
-    const pwd=(body.match(/^\s*password\s+(\S+)/m)||[])[1]||'';
-    const role=(body.match(/^\s*profile\s+(\S+)/m)||[])[1]||'';
-    const pwdWeak=!pwd.startsWith('$');
-    const pwdType=pwd.startsWith('$6$')?'sha512':pwd.startsWith('$2y$')?'bcrypt':pwd.startsWith('$1$')?'md5':pwdWeak?'plaintext':'hash';
-    users.push({name,role,service:'console/ssh',hasPwd:!!pwd,pwdType,pwdWeak});
   }
   return users;
 }

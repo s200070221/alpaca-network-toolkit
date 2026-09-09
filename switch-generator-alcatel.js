@@ -202,6 +202,22 @@ function renderAlcatelStack(stack){
   return lines.join('\n');
 }
 
+// 本機帳號（Users，2026-09-09 新增）：對外查證官方 OmniSwitch AOS Release 8 CLI
+// Reference Guide 後發現 Alcatel 的權限模型與其餘廠牌不同——沒有 role/profile 概念，
+// 是 read-only/read-write 二元權限（可選填 command family/domain 清單細分），MIB 物件
+// aaauReadRight/aaauWriteRight 也證實無 role 欄位。官方範例：`-> user techpubs
+// password writer_pass read-write all`。本工具通用 Users 卡片的「Role/Group」欄位
+// 借用來承載這個 read-only/read-write（＋選填 family/domain）字串，非真的角色名稱，
+// 比照 renderExtremeUsers()/renderRouterOSUsers() 既有的「值驗證＋不符時 fallback」慣例
+function renderAlcatelUsers(users){
+  const list=(users||[]).filter(u=>u.name&&u.password);
+  if(!list.length)return '';
+  return list.map(u=>{
+    const priv=/^(read-only|read-write)\b/.test(u.role||'')?u.role:'read-write';
+    return `-> user ${u.name} password ${u.password} ${priv}`;
+  }).join('\n');
+}
+
 function assembleAlcatelConfig(model){
   const blocks=[`! ${tr('notice.disclaimer')}`,`system name ${model.sysname||'Switch'}`];
   const alcatelStackBlock=renderAlcatelStack(model.alcatelStack);
@@ -220,6 +236,8 @@ function assembleAlcatelConfig(model){
   if(model.bgp&&model.bgp.length)blocks.push(renderAlcatelBGPList(model.bgp));
   const dhcpBlockAl=renderAlcatelDHCP(model.dhcp);
   if(dhcpBlockAl)blocks.push(dhcpBlockAl);
+  const usersBlockAl=renderAlcatelUsers(model.users);
+  if(usersBlockAl)blocks.push(usersBlockAl);
   if(model.snmpTrapHost)blocks.push(`-> snmp station ${model.snmpTrapHost} "public" v2c enable`);
   return blocks.join('\n!\n')+'\n';
 }
