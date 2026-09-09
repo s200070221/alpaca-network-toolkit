@@ -34,8 +34,10 @@ function parseRouterOSInterfaces(cfg){
     // /interface bridge（VLAN filtering 用的軟體橋接器物件）與 /interface bonding（LACP，
     // 本來就該完全交給 parseRouterOSLACP() 處理，見上方 applyRouterOSVlanMembership() 註解
     // 明載的既有設計意圖）不是實體/邏輯埠，先前這裡沒有排除，會被誤收進 intfs 當成一般介面，
-    // 與 renderRouterOSBridge()/parseRouterOSLACP() 各自的輸出撞名（2026-09-02 審查發現）
-    if(type==='bridge'||type==='bonding')continue;
+    // 與 renderRouterOSBridge()/parseRouterOSLACP() 各自的輸出撞名（2026-09-02 審查發現）。
+    // /interface vlan（2026-09-09 新增 VLAN IP 功能時一併排除）：沒有 speed= 等實體埠屬性，
+    // 交給 _parseRouterOSVlanInterfaces() 專責解析，避免在這裡被當成一般介面收進形狀錯誤的物件
+    if(type==='bridge'||type==='bonding'||type==='vlan')continue;
     const lines=m[2].split('\n');
     for(let i=0;i<lines.length;i++){
       const addM=lines[i].match(/add\s+name=([^\s]+)(?:.*?speed=(\d+(?:\w+)?)?)?/);
@@ -412,13 +414,27 @@ function parseRouterOSRIP(cfg){
 // Cisco/Aruba/NX-OS 等既有分支慣例），但走 `parseRouterOS()` 自己回傳物件直接設定——
 // 通用 dispatcher 沒有 routeros 分支，`parseAndImport()` 的 `vrrpBypass` 清單早已預先
 // 納入 'routeros'（改讀 parsed.vrrp），只是先前 vrrp 欄位本身尚未真正解析（固定回傳 []）
+// 收集同一種區塊在檔案中「所有」出現位置的 add 行（例如 /ip address 除了原本給 VRRP VIP
+// 用，2026-09-09 新增 VLAN IP 功能後會再輸出一段獨立的 /ip address 給 VLAN SVI 用）。原本
+// 各處呼叫端都用非 global 的 cfg.match() 只抓「第一個」同名區塊，若同一份設定檔含兩段以上
+// 同名區塊，後面的區塊會被靜默漏解析——這是本專案「已知需長期留意的 regex 陷阱」同一類問題
+// 的新實例，改用 global 掃描收集全部區塊的 add 行；對既有只有單一區塊的情境（VRRP 原本的
+// 用法）行為完全不變，只在多區塊情境下修正遺漏
+function _routerOSCollectAddLines(cfg,headerSrc){
+  const re=new RegExp('^'+headerSrc+'\\s*\\n([\\s\\S]*?)(?=^\\/|(?![\\s\\S]))','gm');
+  const lines=[];
+  let m;
+  while((m=re.exec(cfg))!==null){
+    m[1].split('\n').filter(l=>/^\s*add\s/.test(l)).forEach(l=>lines.push(l));
+  }
+  return lines;
+}
 function _parseVRRPRouterOS(cfg){
   const groups=[];
   const block=cfg.match(/^\/interface\s+vrrp\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
   if(!block)return groups;
-  const addrBlock=cfg.match(/^\/ip\s+address\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
   const vipByVrrpIface={};
-  (addrBlock?addrBlock[1].split('\n'):[]).filter(l=>/^add\s/.test(l)).forEach(l=>{
+  _routerOSCollectAddLines(cfg,'\\/ip\\s+address').forEach(l=>{
     const ifaceM=l.match(/\binterface=(vrrp\d+)/);
     if(!ifaceM)return;
     const addrM=l.match(/\baddress=([^\s\/]+)/);
@@ -426,9 +442,8 @@ function _parseVRRPRouterOS(cfg){
   });
   // IPv6（2026-08-17 新增，官方 MikroTik VRRP 文件確認 `v3-protocol=ipv6` 旗標區分
   // IPv6 執行個體，VIP 改由 `/ipv6 address` 宣告，與既有 `/ip address` 反查機制對稱）
-  const addr6Block=cfg.match(/^\/ipv6\s+address\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
   const vipByVrrpIface6={};
-  (addr6Block?addr6Block[1].split('\n'):[]).filter(l=>/^add\s/.test(l)).forEach(l=>{
+  _routerOSCollectAddLines(cfg,'\\/ipv6\\s+address').forEach(l=>{
     const ifaceM=l.match(/\binterface=(vrrp\d+)/);
     if(!ifaceM)return;
     const addrM=l.match(/\baddress=([^\s\/]+)/);
@@ -451,6 +466,29 @@ function _parseVRRPRouterOS(cfg){
   });
   return groups;
 }
+// VLAN IP（SVI，2026-09-09 新增）：獨立於 bridge VLAN filtering table（parseRouterOSVLANs()，
+// 只處理 L2 tagging）之外，官方 MikroTik 慣例是另外在該 bridge 之上建立具名的
+// `/interface vlan add interface=<bridge> vlan-id=N name=X`，再對這個介面宣告
+// `/ip address`，才能讓這顆 VLAN 有可路由的閘道 IP。回傳形狀比照 parseRouterOSInterfaces()
+// 既有物件補齊 UI 表格會讀到的欄位，避免顯示 undefined
+function _parseRouterOSVlanInterfaces(cfg){
+  const block=cfg.match(/^\/interface\s+vlan\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
+  const vlanIfaces=(block?block[1].split('\n'):[]).filter(l=>/^\s*add\s/.test(l)).map(l=>({
+    name:(l.match(/\bname=(\S+)/)||[])[1]||'',
+    vid:(l.match(/\bvlan-id=(\d+)/)||[])[1]||'',
+  })).filter(v=>v.name);
+  if(!vlanIfaces.length)return[];
+  const ipByIface={};
+  _routerOSCollectAddLines(cfg,'\\/ip\\s+address').forEach(l=>{
+    const ifaceM=l.match(/\binterface=(\S+)/);
+    const addrM=l.match(/\baddress=(\S+)/);
+    if(ifaceM&&addrM)ipByIface[ifaceM[1]]=addrM[1];
+  });
+  return vlanIfaces.filter(v=>ipByIface[v.name]).map(v=>({
+    name:v.name,status:'up',speed:'-',portType:'vlan',description:'',
+    mode:'',vlans:v.vid,type:'svi',ip:ipByIface[v.name],
+  }));
+}
 function parseRouterOS(cfg){
   const sys=parseRouterOSSysInfo(cfg);
   const rosVlans=parseRouterOSVLANs(cfg), rosInterfaces=parseRouterOSInterfaces(cfg);
@@ -459,7 +497,7 @@ function parseRouterOS(cfg){
   return{
     sys,irf:null,stack:null,
     vlans:rosVlans,
-    interfaces:rosInterfaces,
+    interfaces:[...rosInterfaces,..._parseRouterOSVlanInterfaces(cfg)],
     lacp:rosLacp,
     routes:parseRouterOSRoutes(cfg),vrfs:[],
     users:parseRouterOSUsers(cfg),

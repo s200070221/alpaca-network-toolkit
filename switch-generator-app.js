@@ -29,12 +29,15 @@ function addVlanRow(id='',name='',ip=''){
   updateVlanIpAvailability(tr);
 }
 
-// VLAN IP（withSviInterfaces()／switch-generator-core.js）不支援的 3 家廠牌：SONiC 已有自己
+// VLAN IP（withSviInterfaces()／switch-generator-core.js）不支援的 2 家廠牌：SONiC 已有自己
 // 專屬的「SONiC L3 介面 IP」卡片；EdgeSwitch 因裝置架構限制（VLAN Routing 邏輯介面 ID 由裝置
-// 動態配置產生，無法靜態預測，CLAUDE.md 已記載既有限制）；RouterOS 尚未開發對應 render/parser。
+// 動態配置產生，無法靜態預測，CLAUDE.md 已記載既有限制）。RouterOS 已於 2026-09-09 補上對應
+// render/parser（見 SVI_NAME_FORMATTERS.routeros），移出此白名單；對應的
+// hint.vlanIpUnsupportedRouteros i18n key 保留不用（跨 12 語言刪除單一 key 風險/效益不成比例，
+// 比照本專案既有慣例留著不動，check_i18n.py 只抓缺漏不抓多餘不受影響）。
 // 停用該欄位＋提示原因，避免使用者填了看似有效卻被靜默忽略。tr 省略時套用到全部既有列
 // （vendor 切換時呼叫），指定 tr 時只處理剛新增的那一列（addVlanRow() 呼叫時）。
-const SVI_UNSUPPORTED_HINT_KEY={sonic:'hint.vlanIpUnsupportedSonic',edgeswitch:'hint.vlanIpUnsupportedEdgeswitch',routeros:'hint.vlanIpUnsupportedRouteros'};
+const SVI_UNSUPPORTED_HINT_KEY={sonic:'hint.vlanIpUnsupportedSonic',edgeswitch:'hint.vlanIpUnsupportedEdgeswitch'};
 function updateVlanIpAvailability(vlanTr){
   const vendor=document.getElementById('vendor').value;
   const hintKey=SVI_UNSUPPORTED_HINT_KEY[vendor];
