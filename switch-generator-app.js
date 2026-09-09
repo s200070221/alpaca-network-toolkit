@@ -1367,7 +1367,7 @@ function updateModeOptions(){
   // 產生無法 round-trip 密碼）；Alcatel 中信心度、FortiSwitch/Netgear/EdgeSwitch/SONiC 完全
   // 零解析（EdgeSwitch/FortiSwitch/Netgear 已於 2026-08-23 補上 switch_analyzer 端解析，
   // generator 端尚未接線）留待後續評估，不開放
-  const USERS_CARD_VENDORS=['procurve','cisco','arista','ruijie','cisco_nxos','comware','dell-os10','brocade','aruba','juniper','extreme','routeros','planet'];
+  const USERS_CARD_VENDORS=['procurve','cisco','arista','ruijie','cisco_nxos','comware','dell-os10','brocade','aruba','juniper','extreme','routeros','planet','alcatel'];
   const usersCard=document.getElementById('users-card');
   if(usersCard)usersCard.style.display=USERS_CARD_VENDORS.includes(vendor)?'':'none';
   // SONiC L3 介面 IP 卡片僅 SONiC 適用（config_db.json 的 INTERFACE/VLAN_INTERFACE/
