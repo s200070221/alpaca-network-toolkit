@@ -426,6 +426,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="zyxel">Zyxel USG/ATP (ZLD)</option>
                 <option value="edgerouter">EdgeRouter (EdgeOS)</option>
                 <option value="openwrt">OpenWrt (UCI)</option>
+                <option value="watchguard">WatchGuard Firebox</option>
               </optgroup>
               <optgroup id="optgrp-sw" label="交換器">
                 <option value="comware">HPE Comware</option>
@@ -439,6 +440,11 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="alcatel">Alcatel OmniSwitch</option>
                 <option value="brocade">Brocade FastIron / ICX</option>
                 <option value="fortiswitch">FortiSwitch</option>
+                <option value="planet">Planet Technology</option>
+                <option value="ruijie">Ruijie (RGOS)</option>
+                <option value="netgear">Netgear M4300 (ICOS)</option>
+                <option value="edgeswitch">Ubiquiti EdgeSwitch</option>
+                <option value="sonic">SONiC (config_db.json)</option>
               </optgroup>
               <option value="unknown" data-i18n="upload.vendor_unknown">通用（未知廠牌）</option>
             </select>
@@ -446,7 +452,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
           <button class="anon-btn" id="anon-btn" onclick="event.stopPropagation();runAnonymize()"><span data-i18n="btn.anonymize">開始去識別化</span></button>
           <div class="upload-hint" data-i18n="upload.hint">密碼 / 金鑰欄位強制替換，選項不可關閉</div>
         </div>
-        <input type="file" id="file-input" style="display:none" accept=".txt,.conf,.cfg,.log,.xml,.exp,text/plain" onchange="onFileSelect(event)">
+        <input type="file" id="file-input" style="display:none" accept=".txt,.conf,.cfg,.log,.xml,.exp,.json,text/plain" onchange="onFileSelect(event)">
       </div>
 
       <!-- Preview View -->
@@ -1068,15 +1074,30 @@ const VENDOR_SIGS = {
   edgerouter:  { p:[/ethernet\s+eth\d+\s*\{/m, /default-action\s+(drop|accept)/m, /outbound-interface\s+\S+/m, /address-group\s+\S+\s*\{/m, /UBNT|EdgeRouter|EdgeOS|EdgeMax/i], min:2 },
   // 務必與 firewall_analyzer 的 FW_VENDOR_SIGS.openwrt 保持一致（2026-08-01 新增）。UCI
   // stanza 格式與其餘 22 家皆不同語法家族，本身辨識度已高，仍用 min:2 避免巧合誤判
-  openwrt:     { p:[/^config\s+interface(\s|$)/m, /^\s*option\s+proto\s/m, /^config\s+(zone|rule|redirect|forwarding)(\s|$)/m, /^package\s+(network|firewall|dhcp)/m], min:2 }
+  openwrt:     { p:[/^config\s+interface(\s|$)/m, /^\s*option\s+proto\s/m, /^config\s+(zone|rule|redirect|forwarding)(\s|$)/m, /^package\s+(network|firewall|dhcp)/m], min:2 },
+  // 務必與 switch_analyzer 的 detectVendor() 保持一致（2026-09-09 新增）。planet 務必排在
+  // ruijie 之前——ruijie 簽章含通用的 switchport mode hybrid 弱訊號，若排在 planet 之後，
+  // 含 hybrid 介面的 Planet 設定檔會被 ruijie 判斷式提前攔截誤判（switch_analyzer 自己已
+  // 踩過這個坑並記載在 detectVendor() 註解中）
+  planet:      { p:[/^hostname\s+\S+/m, /^interface\s+ethernet\s+\d+\/\d+\/\d+/m, /^\s*switchport mode\s+(trunk|access|hybrid)/m], min:3 },
+  ruijie:      { p:[/^interface\s+AggregatePort\s*\d+/im, /switchport mode hybrid/m, /^switch virtual domain\s+\d+/m, /\bRGOS\b/i, /^rldp\b/im, /^nfpp\s*$/im], min:1 },
+  // netgear/edgeswitch 共用 Broadcom ICOS 表頭 !Current Configuration:，靠品牌字串/
+  // edgeswitch 原生 vlan participation 語法互相排除，min:2 避免任一方單靠共用表頭誤判
+  netgear:     { p:[/^!Current Configuration:/m, /(NETGEAR|M4300)/i], min:2 },
+  edgeswitch:  { p:[/^!Current Configuration:/m, /UBNT|EdgeSwitch|^\s*vlan participation (?:include|exclude|auto)/im], min:2 },
+  // SONiC 是本檔案唯一 JSON 格式來源，與其餘 28 家語法家族完全不重疊，零碰撞風險
+  sonic:       { p:[/"DEVICE_METADATA"\s*:/, /"PORTCHANNEL_MEMBER"\s*:/], min:1 },
+  // WatchGuard Firebox config.xml，簽章與 firewall_analyzer 的 WatchGuardParser.detect() 保持一致
+  watchguard:  { p:[/<abs-policy-list/, /<interface-list/, /<address-group-list/], min:3 }
 };
 // sophos／aruba_cx 兩家的簽章相對寬鬆（各自僅需命中 2 個訊號，且其中一個訊號是單純字面
 // "Sophos"/"Aruba" 文字比對），故刻意排在最後——讓其他更具結構特徵的廠牌訊號優先判定，
 // 只有在都沒命中時才輪到這兩家，降低誤判機率
 const VENDOR_ORDER = [
   'cisco_nxos','fortiswitch','fortigate','comware','paloalto','edgerouter','openwrt','juniper',
-  'checkpoint','pfsense','sonicwall','mikrotik','arista',
-  'extreme','alcatel','brocade','procurve','dell_os10','ciscoasa','cisco_ios',
+  'checkpoint','pfsense','sonicwall','watchguard','mikrotik','arista',
+  'extreme','alcatel','brocade','procurve','dell_os10','planet','ruijie','netgear','edgeswitch','sonic',
+  'ciscoasa','cisco_ios',
   'zyxel','sophos','aruba_cx'
 ];
 const VENDOR_LABELS = {
@@ -1087,7 +1108,10 @@ const VENDOR_LABELS = {
   arista:'Arista EOS',aruba_cx:'Aruba CX',procurve:'Aruba ProCurve',
   dell_os10:'Dell OS10',extreme:'Extreme XOS',alcatel:'Alcatel OmniSwitch',
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
-  edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',unknown:''
+  edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',
+  planet:'Planet Technology',ruijie:'Ruijie (RGOS)',netgear:'Netgear M4300 (ICOS)',
+  edgeswitch:'Ubiquiti EdgeSwitch',sonic:'SONiC (config_db.json)',watchguard:'WatchGuard Firebox',
+  unknown:''
 };
 
 function detectVendor(text) {
@@ -2673,6 +2697,194 @@ function anonProCurve(text, opts) {
   }).join('\n');
 }
 
+// ---- Planet Technology (SGS-6341 系列) ----
+// hostname／帳號密碼皆沿用 Cisco 語法（switch_analyzer parsePlanetUsers 本身就是直接呼叫
+// parseCiscoUsers()，非另開一套），SNMP community 落在 switch_analyzer 的通用 else 分支、
+// 語法與其餘廠牌相同。無 VRRP 認證欄位佐證（資料形狀雖有 authKey 欄位但 parser 從未填值）、
+// 無 VLAN 命名語法，皆不猜測不實作
+function anonPlanet(text, opts) {
+  return text.split('\n').map(line => {
+    if (opts.hostname) {
+      line = line.replace(/^(hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'sw', opts));
+    }
+    if (opts.user) {
+      line = line.replace(/^(username\s+)(\S+)(\s+(?:privilege\s+\d+\s+)?(?:secret|password)\s+(?:\d+\s+)?)(\S+)/, (m, p, n, mid) => p + anonUser(n) + mid + 'REDACTED_HASH');
+    } else {
+      const uR = line.replace(/^(username\s+\S+\s+(?:privilege\s+\d+\s+)?(?:secret|password)\s+(?:\d+\s+)?)(\S+)/, '$1REDACTED_HASH');
+      if (uR !== line) { stats.password++; line = uR; }
+    }
+    const comR = line.replace(/^(\s*snmp-server\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
+    if (comR !== line) { stats.community++; line = comR; }
+    line = replaceDescLine(line, opts);
+    if (opts.ip) line = replaceIPsInLine(line, opts);
+    if (opts.mac) line = replaceMACsInLine(line, opts);
+    return line;
+  }).join('\n');
+}
+
+// ---- Ruijie (RGOS) ----
+// hostname／帳號密碼／SNMP community 與 Planet 相同（同樣沿用 Cisco 語法），額外補 BGP
+// neighbor password 與 OSPF message-digest-key——switch_analyzer 的 parseRoutingAuth()
+// 確認 Ruijie 走 Cisco 認證分支，語法逐字相同（非猜測）。VRRP 無認證欄位佐證，不實作
+function anonRuijie(text, opts) {
+  return text.split('\n').map(line => {
+    if (opts.hostname) {
+      line = line.replace(/^(hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'sw', opts));
+    }
+    if (opts.user) {
+      line = line.replace(/^(username\s+)(\S+)(\s+(?:privilege\s+\d+\s+)?(?:secret|password)\s+(?:\d+\s+)?)(\S+)/, (m, p, n, mid) => p + anonUser(n) + mid + 'REDACTED_HASH');
+    } else {
+      const uR = line.replace(/^(username\s+\S+\s+(?:privilege\s+\d+\s+)?(?:secret|password)\s+(?:\d+\s+)?)(\S+)/, '$1REDACTED_HASH');
+      if (uR !== line) { stats.password++; line = uR; }
+    }
+    const comR = line.replace(/^(\s*snmp-server\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
+    if (comR !== line) { stats.community++; line = comR; }
+    const bgpR = line.replace(/^(\s+neighbor\s+\S+\s+password\s+(?:\d+\s+)?)(\S+)/, '$1REDACTED_PASSWORD');
+    if (bgpR !== line) { stats.password++; line = bgpR; }
+    const ospfKeyR = line.replace(/^(\s*ip\s+ospf\s+message-digest-key\s+\d+\s+md5\s+)(\S+)/, '$1REDACTED_KEY');
+    if (ospfKeyR !== line) { stats.key++; line = ospfKeyR; }
+    line = replaceDescLine(line, opts);
+    if (opts.ip) line = replaceIPsInLine(line, opts);
+    if (opts.mac) line = replaceMACsInLine(line, opts);
+    return line;
+  }).join('\n');
+}
+
+// ---- Netgear M4300 (ICOS) ----
+// hostname 用 snmp-server sysname（非 hostname 關鍵字）；帳號密碼為 Broadcom ICOS 專屬單行
+// 語法 username NAME password PASSWORD level N（與 Cisco 家族不同，關鍵字不在行首無法沿用
+// 既有 replace 鏈，尾端 level N 需保留不可被吃掉）；VRRP 認證 authentication simple KEY 為
+// switch_analyzer 已解析的真實欄位（rec.authKey），非猜測
+function anonNetgear(text, opts) {
+  return text.split('\n').map(line => {
+    if (opts.hostname) {
+      line = line.replace(/^(snmp-server\s+sysname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'sw', opts));
+    }
+    if (opts.user) {
+      line = line.replace(/^(username\s+)(\S+)(\s+password\s+)(\S+)(\s+level\s+\d+)/, (m, p, n, mid, h, lvl) => p + anonUser(n) + mid + 'REDACTED_HASH' + lvl);
+    } else {
+      const uR = line.replace(/^(username\s+\S+\s+password\s+)(\S+)(\s+level\s+\d+)/, '$1REDACTED_HASH$3');
+      if (uR !== line) { stats.password++; line = uR; }
+    }
+    const comR = line.replace(/^(\s*snmp-server\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
+    if (comR !== line) { stats.community++; line = comR; }
+    const vrrpKeyR = line.replace(/^(\s*authentication\s+simple\s+)(\S+)/, '$1REDACTED_KEY');
+    if (vrrpKeyR !== line) { stats.key++; line = vrrpKeyR; }
+    line = replaceDescLine(line, opts);
+    if (opts.ip) line = replaceIPsInLine(line, opts);
+    if (opts.mac) line = replaceMACsInLine(line, opts);
+    return line;
+  }).join('\n');
+}
+
+// ---- Ubiquiti EdgeSwitch (ICOS) ----
+// 與 Netgear 同源 Broadcom ICOS，hostname／帳號密碼語法逐字相同；EdgeSwitch 無 L3/VRRP
+// 支援（switch_analyzer parser 硬編碼 vrrp:[]，裝置架構限制——VLAN Routing 邏輯介面 ID 由
+// 裝置動態配置，非查證不足），故不比照 Netgear 加 VRRP 認證欄位
+function anonEdgeSwitch(text, opts) {
+  return text.split('\n').map(line => {
+    if (opts.hostname) {
+      line = line.replace(/^(snmp-server\s+sysname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'sw', opts));
+    }
+    if (opts.user) {
+      line = line.replace(/^(username\s+)(\S+)(\s+password\s+)(\S+)(\s+level\s+\d+)/, (m, p, n, mid, h, lvl) => p + anonUser(n) + mid + 'REDACTED_HASH' + lvl);
+    } else {
+      const uR = line.replace(/^(username\s+\S+\s+password\s+)(\S+)(\s+level\s+\d+)/, '$1REDACTED_HASH$3');
+      if (uR !== line) { stats.password++; line = uR; }
+    }
+    const comR = line.replace(/^(\s*snmp-server\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
+    if (comR !== line) { stats.community++; line = comR; }
+    line = replaceDescLine(line, opts);
+    if (opts.ip) line = replaceIPsInLine(line, opts);
+    if (opts.mac) line = replaceMACsInLine(line, opts);
+    return line;
+  }).join('\n');
+}
+
+// ---- WatchGuard Firebox (config.xml) ----
+// XML tag-based，比照 anonPfSense/anonSophosXML 模板（逐行處理＋開關 context 旗標，非真正
+// DOM 解析）。firewall_analyzer 的 WatchGuardParser 多輪關鍵字搜尋查無任何 password/secret/
+// psk/snmp 標籤佐證（非查證不足，是這份 XML 格式本身沒有這些欄位），故本函式不做任何
+// REDACTED_HASH/KEY/COMMUNITY 類替換，只處理 IP／描述／物件名稱。<name> 只在
+// address-group/alias/abs-policy 區塊內才視為識別性物件名稱重新命名，介面自身的 <name>
+// （如 eth0，非識別性）刻意不受影響。opts.comments 沿用既有 checkbox 語意
+// （title="含 alias、description、remark"），與 FortiGate 對 anonAlias() 的既有用法一致
+function anonWatchGuard(text, opts) {
+  const IP_TAGS = ['ip', 'default-gateway', 'gateway-ip', 'host-ip-addr', 'ip-network-addr', 'start-ip-addr', 'end-ip-addr', 'dest-address'];
+  let ctx = null; // 'addrgrp' | 'alias' | 'policy' | null
+  return text.split('\n').map(line => {
+    if (/<address-group>/.test(line)) ctx = 'addrgrp';
+    else if (/<alias>/.test(line)) ctx = 'alias';
+    else if (/<abs-policy>/.test(line)) ctx = 'policy';
+    else if (/<\/(?:address-group|alias|abs-policy)>/.test(line)) ctx = null;
+
+    if (opts.comments && ctx && /<name>/.test(line)) {
+      line = line.replace(/(<name>)([^<]+)(<\/name>)/, (m, o, n, c) => o + anonAlias(n) + c);
+    }
+    if (opts.comments) {
+      const dR = line.replace(/(<description>)([^<]+)(<\/description>)/, '$1REDACTED_COMMENT$3');
+      if (dR !== line) { stats.comment++; line = dR; }
+    }
+    if (opts.ip) {
+      for (const tag of IP_TAGS) {
+        line = line.replace(new RegExp(`(<${tag}>)([^<]+)(</${tag}>)`), (m, o, v, c) =>
+          (isValidIPv4(v) && classifyIP(v) !== 'skip') ? o + anonIP(v, opts) + c : m);
+      }
+    }
+    if (opts.mac) line = replaceMACsInLine(line, opts);
+    return line;
+  }).join('\n');
+}
+
+// ---- SONiC (config_db.json) ----
+// JSON tree-walk，本檔案其餘 28 家皆是逐行文字保留式替換，SONiC 是唯一 JSON 格式來源，
+// 沒有其他做法可行，故 JSON.stringify(db,null,2) 會重新格式化整份輸出（縮排/欄位順序可能
+// 與原始檔案不同，僅保證內容正確性，不保留原始文字格式，是刻意的架構差異非疏漏）。
+// 無帳號密碼可遮蔽（架構排除：帳號走 Linux useradd，非宣告式設定檔範圍，非查無語法）；
+// SNMP_COMMUNITY 的 community 字串是物件 key 本身，非一般 value，需整個重新 keying；
+// ACL_TABLE/ACL_RULE 的表名/規則名同樣是 JSON key，改鍵名複雜度與風險不成比例，
+// 比照專案「不過度工程」原則不處理，記錄為已知限制
+function anonSonic(text, opts) {
+  let db;
+  try { db = JSON.parse(text); } catch (e) { return anonGeneric(text, opts); }
+
+  if (opts.hostname && db.DEVICE_METADATA && db.DEVICE_METADATA.localhost && db.DEVICE_METADATA.localhost.hostname) {
+    db.DEVICE_METADATA.localhost.hostname = anonHostname(db.DEVICE_METADATA.localhost.hostname, 'sw', opts);
+  }
+  const rekey = (obj, fn) => obj ? Object.fromEntries(Object.entries(obj).map(([k, v]) => [fn(k), v])) : obj;
+  if (opts.ip) {
+    for (const t of ['INTERFACE', 'VLAN_INTERFACE', 'PORTCHANNEL_INTERFACE', 'STATIC_ROUTE']) {
+      if (db[t]) db[t] = rekey(db[t], k => replaceIPsInLine(k, opts));
+    }
+    if (db.STATIC_ROUTE) for (const rec of Object.values(db.STATIC_ROUTE)) {
+      if (rec.nexthop) rec.nexthop = replaceIPsInLine(String(rec.nexthop), opts);
+    }
+    if (db.BGP_NEIGHBOR) {
+      for (const rec of Object.values(db.BGP_NEIGHBOR)) if (rec.local_addr) rec.local_addr = replaceIPsInLine(String(rec.local_addr), opts);
+      db.BGP_NEIGHBOR = rekey(db.BGP_NEIGHBOR, k => replaceIPsInLine(k, opts));
+    }
+    if (db.SYSLOG_SERVER) {
+      db.SYSLOG_SERVER = rekey(db.SYSLOG_SERVER, k => replaceIPsInLine(k, opts));
+      for (const rec of Object.values(db.SYSLOG_SERVER)) if (rec.source) rec.source = replaceIPsInLine(rec.source, opts);
+    }
+    if (db.ACL_RULE) for (const rec of Object.values(db.ACL_RULE)) {
+      for (const f of ['SRC_IP', 'DST_IP', 'SRC_IPV6', 'DST_IPV6']) if (rec[f]) rec[f] = replaceIPsInLine(rec[f], opts);
+    }
+  }
+  if (opts.comments && db.BGP_NEIGHBOR) {
+    for (const rec of Object.values(db.BGP_NEIGHBOR)) if (rec.name) rec.name = anonAlias(rec.name);
+  }
+  if (db.SNMP_COMMUNITY) {
+    const renamed = {};
+    let i = 0;
+    for (const meta of Object.values(db.SNMP_COMMUNITY)) { i++; stats.community++; renamed[`REDACTED_COMMUNITY_${i}`] = meta; }
+    db.SNMP_COMMUNITY = renamed;
+  }
+  let out = JSON.stringify(db, null, 2);
+  if (opts.mac) out = replaceMACsInLine(out, opts);
+  return out;
+}
+
 const VENDOR_FNS = {
   fortigate: anonFortiGate, fortiswitch: anonFortiSwitch,
   sophos: anonSophos, checkpoint: anonCheckPoint, paloalto: anonPaloAlto,
@@ -2682,7 +2894,10 @@ const VENDOR_FNS = {
   procurve: anonProCurve,
   dell_os10: anonDellOS10, extreme: anonExtreme, alcatel: anonAlcatel,
   brocade: anonBrocade, ciscoasa: anonCiscoASA, zyxel: anonZyxel,
-  edgerouter: anonEdgeRouter, openwrt: anonOpenWrt, unknown: anonGeneric
+  edgerouter: anonEdgeRouter, openwrt: anonOpenWrt,
+  planet: anonPlanet, ruijie: anonRuijie, netgear: anonNetgear,
+  edgeswitch: anonEdgeSwitch, sonic: anonSonic, watchguard: anonWatchGuard,
+  unknown: anonGeneric
 };
 
 function anonymize(text, vendor, opts) {
