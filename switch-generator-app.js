@@ -22,6 +22,10 @@ const RM_BTN_TD='<td><button class="rm-btn" onclick="this.closest(\'tr\').remove
 // addXxxRow() 函式使用，只跳脫雙引號本身（這些欄位都是塞進 value="..." 屬性，非
 // innerHTML 內容本身，不需要跳脫 &/</>）
 const escAttr=v=>String(v==null?'':v).replace(/"/g,'&quot;');
+// 2026-09 資安審查修復：escAttr() 只跳脫雙引號，設計上只給 value="..." 這類屬性用（屬性內容不會
+// 被當 HTML 解析）；文字節點（如驗證訊息、批次匯入結果清單這類直接塞進 innerHTML 的內容）需要
+// 完整跳脫 &/</>/" 才不會被 < 提前開新標籤，兩者用途不同不可互換，此為文字節點專用版本
+const esc=v=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 function addVlanRow(id='',name='',ip=''){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input class="v-id" value="${escAttr(id)}"></td><td><input class="v-name" value="${escAttr(name)}"></td><td><input class="v-ip" value="${escAttr(ip)}" placeholder="10.0.0.1/24"></td>${RM_BTN_TD}`;
@@ -2605,14 +2609,17 @@ function showValidationResults(results,fromImport=false){
     html+=`<div class="validation-item error"><div class="msg">⚠️ ${tr('val.errorsFound').replace('{n}',results.errors.length)}</div></div>`;
   }
 
+  // 2026-09 資安審查修復：err/warn 內容可能內嵌匯入設定檔的原始欄位值（如 ACL src/dst），
+  // 未跳脫直接塞進 innerHTML 構成儲存型 XSS；此處是全部驗證訊息唯一的渲染出口，一次修復涵蓋
+  // validateForm() 內所有組字串的地方，不需逐一修改
   results.errors.forEach(err=>{
-    html+=`<div class="validation-item error"><div class="msg">${err}</div></div>`;
+    html+=`<div class="validation-item error"><div class="msg">${esc(err)}</div></div>`;
   });
 
   if(results.warnings.length>0){
     html+=`<div class="validation-item warning"><div class="msg">💡 ${tr('val.tipsCount').replace('{n}',results.warnings.length)}</div></div>`;
     results.warnings.forEach(warn=>{
-      html+=`<div class="validation-item warning"><div class="msg" style="font-size:10px">${warn}</div></div>`;
+      html+=`<div class="validation-item warning"><div class="msg" style="font-size:10px">${esc(warn)}</div></div>`;
     });
   }
 
@@ -3637,11 +3644,21 @@ function processBulkCSV(){
 
     // 顯示結果
     progressDiv.innerHTML=`<div style="color:var(--green);font-weight:600">${tr('msg.bulkDone').replace('{count}',Object.keys(window.bulkConfigs).length)}</div>`;
-    listDiv.innerHTML=results.map(r=>`<div style="color:${r.color}">${r.name}: ${r.status}</div>`).join('');
+    // 2026-09 資安審查修復：r.name/r.status 內嵌 CSV 匯入的 devicename/hostname/vendor，
+    // 未跳脫直接塞進 innerHTML 構成儲存型 XSS（r.color 為固定列舉值，非使用者輸入，不需跳脫）
+    listDiv.innerHTML=results.map(r=>`<div style="color:${r.color}">${esc(r.name)}: ${esc(r.status)}</div>`).join('');
     document.getElementById('bulk-result').style.display='block';
   });
 }
 
+// 2026-09 資安審查修復：CSV 儲存格若以 =/+/-/@ 開頭，Excel/Sheets 開啟時會當成公式執行
+// （devicename 來自使用者上傳的批次 CSV，非本工具自己產生的可信內容）；補上開頭字元中和——
+// 命中時前綴一個單引號強制視為純文字，Excel 顯示時會自動隱藏這個前綴單引號。
+function csvCell(v){
+  let s=String(v==null?'':v);
+  if(/^[=+\-@\t\r]/.test(s))s="'"+s;
+  return `"${s.replace(/"/g,'""')}"`;
+}
 function downloadBulkZip(){
   if(Object.keys(window.bulkConfigs).length===0){
     alert(tr('msg.bulkNothingToDownload'));
@@ -3657,7 +3674,7 @@ function downloadBulkZip(){
   manifest+=tr('msg.bulkManifestHeader')+'\n';
   Object.entries(window.bulkConfigs).forEach(([name,cfg])=>{
     const lineCount=cfg.split('\n').length;
-    manifest+=`${name}.txt,${lineCount}\n`;
+    manifest+=`${csvCell(name+'.txt')},${lineCount}\n`;
   });
 
   // 使用純 JavaScript 建立 ZIP（未壓縮格式，相容所有解壓工具）
@@ -4375,17 +4392,27 @@ generate();
 // 程式碼，使用者從 network_analyzer 拖放檔案後手動選擇本工具，內容會被靜默丟棄、只看到空白表單
 // （2026-07-26 全工具再稽核發現並修復）。本工具沒有像其餘三工具那樣的「view」切換機制，
 // 匯入卡片本來就常駐頁面上，故只需帶入 #import-text 並呼叫既有的 parseAndImport()
+// 2026-09 資安審查修復：JSON 解析失敗／已過期的 key 一律清除（不論是否為本工具負責消費），讓
+// 任一工具頁面被開啟都能順手清掉整個交接命名空間裡的殘留，縮小放棄交接流程後明碼機敏內容殘留的
+// 曝險窗口；本工具非匿名化轉送鏈的目標（見 config_anonymizer 的 `TOOL_HREFS`），故不消費
+// `_netAnalyzer_anonThenOpen`/`_netAnalyzer_anonResult`，僅在過期時順手清掉。
 (function(){
-  var _p = localStorage.getItem('_netAnalyzer_pending');
-  if (!_p) return;
-  try {
-    var d = JSON.parse(_p);
-    if (Date.now() - d.ts > 10000) { localStorage.removeItem('_netAnalyzer_pending'); return; }
-    localStorage.removeItem('_netAnalyzer_pending');
-    var ta = document.getElementById('import-text');
-    if (ta) ta.value = d.text;
-    var fnameEl = document.getElementById('import-config-file-name');
-    if (fnameEl && d.name) fnameEl.textContent = d.name;
-    parseAndImport();
-  } catch(e) {}
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000};
+  var ownData = null;
+  Object.keys(TTL).forEach(function(k){
+    var raw = localStorage.getItem(k);
+    if (!raw) return;
+    try {
+      var d = JSON.parse(raw);
+      if (Date.now() - d.ts > TTL[k]) { localStorage.removeItem(k); return; }
+      if (k === '_netAnalyzer_pending') ownData = d;
+    } catch(e) { localStorage.removeItem(k); }
+  });
+  if (!ownData) return;
+  localStorage.removeItem('_netAnalyzer_pending');
+  var ta = document.getElementById('import-text');
+  if (ta) ta.value = ownData.text;
+  var fnameEl = document.getElementById('import-config-file-name');
+  if (fnameEl && ownData.name) fnameEl.textContent = ownData.name;
+  parseAndImport();
 })();

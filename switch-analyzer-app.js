@@ -1516,8 +1516,16 @@ function renderLLDP(){
   return toggleHtml+mkTbar('search-inp',null,'exportLLDPCSV')+
     `<div class="tbl-wrap">${html}</div><div class="tbl-foot"><span>${count} / ${nbrs.length} ${tr('unit.count')}</span></div>`;
 }
+// 2026-09 \u8CC7\u5B89\u5BE9\u67E5\u4FEE\u5FA9\uFF1A\u5132\u5B58\u683C\u82E5\u4EE5 =/+/-/@ \u958B\u982D\uFF0CExcel/Sheets \u958B\u555F\u6642\u6703\u7576\u6210\u516C\u5F0F\u57F7\u884C\uFF08\u5982\u4ECB\u9762
+// \u63CF\u8FF0/VLAN \u540D\u7A31\u525B\u597D\u662F\u9019\u985E\u5B57\u4E32\uFF09\uFF0C\u55AE\u7D14\u8DF3\u812B\u96D9\u5F15\u865F\u7121\u6CD5\u9632\u7BC4\uFF1B\u88DC\u4E0A\u958B\u982D\u5B57\u5143\u4E2D\u548C\u2014\u2014\u547D\u4E2D\u6642\u524D\u7DB4\u4E00\u500B
+// \u55AE\u5F15\u865F\u5F37\u5236\u8996\u70BA\u7D14\u6587\u5B57\uFF0CExcel \u986F\u793A\u6642\u6703\u81EA\u52D5\u96B1\u85CF\u9019\u500B\u524D\u7DB4\u55AE\u5F15\u865F\u3002
+function csvCell(c){
+  let s=String(c||'');
+  if(/^[=+\-@\t\r]/.test(s))s="'"+s;
+  return `"${s.replace(/"/g,'""')}"`;
+}
 function dlCSV(rows,hdrs,fn){
-  const lines=[hdrs.join(','),...rows.map(r=>r.map(c=>`"${String(c||'').replace(/"/g,'""')}"`).join(','))];
+  const lines=[hdrs.join(','),...rows.map(r=>r.map(csvCell).join(','))];
   const b=new Blob(['\uFEFF'+lines.join('\n')],{type:'text/csv;charset=utf-8;'});
   const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);
 }
@@ -3707,21 +3715,33 @@ function exportQoSCSV(){
 
 setLang('zhTW');
 
+// 2026-09 資安審查修復：JSON 解析失敗／已過期的 key 一律清除（不論是否為本工具負責消費），讓
+// 任一工具頁面被開啟都能順手清掉整個交接命名空間裡的殘留，縮小放棄交接流程後明碼機敏內容殘留的
+// 曝險窗口；本工具除了 hub 直接轉送的 `_netAnalyzer_pending` 外，也負責消費 config_anonymizer
+// 匿名化完成後轉送的獨立 key `_netAnalyzer_anonResult`（原本兩者共用 `_netAnalyzer_pending`，
+// 有搶寫/誤讀風險，已拆開）。
 (function(){
-  var _p = localStorage.getItem('_netAnalyzer_pending');
-  if (!_p) return;
-  try {
-    var d = JSON.parse(_p);
-    if (Date.now() - d.ts > 10000) { localStorage.removeItem('_netAnalyzer_pending'); return; }
-    localStorage.removeItem('_netAnalyzer_pending');
-    var pa = document.getElementById('paste-area');
-    if (pa) pa.value = d.text;
-    var chip = document.getElementById('file-chip');
-    var fname = document.getElementById('fname');
-    if (chip) chip.style.display = '';
-    if (fname) fname.textContent = d.name;
-    doAnalyze();
-  } catch(e) {}
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000};
+  var parsed = {};
+  Object.keys(TTL).forEach(function(k){
+    var raw = localStorage.getItem(k);
+    if (!raw) return;
+    try {
+      var d = JSON.parse(raw);
+      if (Date.now() - d.ts > TTL[k]) { localStorage.removeItem(k); return; }
+      parsed[k] = d;
+    } catch(e) { localStorage.removeItem(k); }
+  });
+  var d = parsed['_netAnalyzer_pending'] || parsed['_netAnalyzer_anonResult'];
+  if (!d) return;
+  localStorage.removeItem(parsed['_netAnalyzer_pending'] ? '_netAnalyzer_pending' : '_netAnalyzer_anonResult');
+  var pa = document.getElementById('paste-area');
+  if (pa) pa.value = d.text;
+  var chip = document.getElementById('file-chip');
+  var fname = document.getElementById('fname');
+  if (chip) chip.style.display = '';
+  if (fname) fname.textContent = d.name;
+  doAnalyze();
 })();
 
 // 名詞解釋 tooltip

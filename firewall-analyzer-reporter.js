@@ -6,8 +6,16 @@
 const Reporter = (() => {
 
   // ─── CSV ──────────────────────────────────────────────────────────────────
+  // 2026-09 資安審查修復：儲存格若以 =/+/-/@ 開頭，Excel/Sheets 開啟時會當成公式執行（如規則
+  // 備註/物件名稱剛好是這類字串），單純跳脫雙引號無法防範；補上開頭字元中和——命中時前綴一個
+  // 單引號強制視為純文字，Excel 顯示時會自動隱藏這個前綴單引號。這是全部 exportCSV() 分支
+  // 唯一的格式化出口，改這一行即涵蓋所有 section。
   function toCSV(rows, headers) {
-    const q = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+    const q = v => {
+      let s = String(v == null ? '' : v);
+      if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+      return `"${s.replace(/"/g, '""')}"`;
+    };
     return [headers, ...rows].map(row => row.map(q).join(',')).join('\r\n');
   }
 

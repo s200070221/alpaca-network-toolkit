@@ -608,9 +608,11 @@ function onParsed(){
     const names = parsed?._vdomNames || [];
     if (!parsed?._isMultiVdom || names.length <= 1) { bar.style.display='none'; return; }
     bar.style.display='flex';
+    // 2026-09 資安審查修復：VDOM/vsys 名稱來自上傳設定檔原始文字，未跳脫就塞進 innerHTML 與內嵌
+    // onclick（HTML 跳脫也擋不住單引號斷開 JS 字串），構成儲存型 XSS；比照同檔 1628 行既有的
+    // VDOM 下拉選單正確先例，屬性與文字皆包 esc()，並移除內嵌 onclick 改用事件代理（見下方）
     bar.innerHTML = ['__all__',...names].map(n=>
-      `<button class="vdom-btn ${n==='__all__'?'active':''}" data-vdom="${n}"
-        onclick="setVdom('${n}')">${n==='__all__'?(parsed?.vendor==='PaloAlto'?tr('conv.all_vsys_btn'):tr('conv.all_vdom_btn')):n}</button>`
+      `<button class="vdom-btn ${n==='__all__'?'active':''}" data-vdom="${esc(n)}">${n==='__all__'?(parsed?.vendor==='PaloAlto'?tr('conv.all_vsys_btn'):tr('conv.all_vdom_btn')):esc(n)}</button>`
     ).join('') + `<span class="vdom-label">${names.length}${tr('unit.count')} ${parsed?.vendor==="PaloAlto"?"vsys":"VDOM"}</span>`;
     // Also update conv VDOM selector
     buildConvVdomSelector(parsed);
@@ -622,6 +624,12 @@ function onParsed(){
     document.querySelectorAll('.vdom-btn').forEach(b=>b.classList.toggle('active', b.dataset.vdom===vdom));
     if (CURRENT_SECTION) showSection(CURRENT_SECTION);
   };
+  // 2026-09 資安審查修復：#vdom-bar 是頁面既有靜態元素，內容由 buildVdomBar() 反覆重繪，掛一次
+  // 事件代理即可涵蓋所有未來重繪，取代原本每個按鈕各自內嵌 onclick="setVdom('${n}')" 的寫法
+  $('vdom-bar')?.addEventListener('click', e => {
+    const btn = e.target.closest('.vdom-btn');
+    if (btn) setVdom(btn.dataset.vdom);
+  });
 
   function filterByVdom(data) {
     if (ACTIVE_VDOM === '__all__' || !data.length) return data;
@@ -1923,8 +1931,9 @@ function onParsed(){
       return;
     }
     sel.style.display = '';
+    // 2026-09 資安審查修復：VDOM 名稱未跳脫即塞進 <option value="...">，見 buildVdomBar() 同批修復
     sel.innerHTML = `<option value="__all__">${tr('conv.all_vdom_merge')}</option>`
-      + names.map(n=>`<option value="${n}">${tr('conv.single_vdom_prefix')}${n}</option>`).join('');
+      + names.map(n=>`<option value="${esc(n)}">${tr('conv.single_vdom_prefix')}${esc(n)}</option>`).join('');
   }
 
   function updateConvButtons(){
