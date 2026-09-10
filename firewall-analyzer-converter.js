@@ -1769,13 +1769,16 @@ const Converter = (() => {
       // range 三型態皆為已查證的 address-object 官方語法涵蓋範圍），命中則沿用該物件
       // 原本的名稱＋真實值，而非把物件「名稱」本身誤當成物件「內容」寫入（先前寫法對任何
       // 引用具名物件的規則都會產生 `address-object ADDR_N <物件名稱字串>` 這種不合法語法）。
-      // fqdn／address-group 因查無官方語法佐證，比照既有「不猜測」原則維持原本行為
-      // （原樣當字面值處理，非本輪劣化）。
-      const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===first&&(a.type==='ipmask'||a.type==='iprange'));
+      // address-group 因查無官方語法佐證，比照既有「不猜測」原則維持原本行為（原樣當字面值
+      // 處理，非本輪劣化）。2026-09-10（續）擴大：fqdn 型別已查證——ZyxelParser 的型別判斷式
+      // 本身（val.includes('/')?'ipmask':/[a-zA-Z]/.test(val)?'fqdn':...）證實 address-object
+      // 語法就是唯一的位址物件指令，FQDN 只是 value 恰好是網域名稱字串，非獨立語法，故一併攤平。
+      const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===first&&(a.type==='ipmask'||a.type==='iprange'||a.type==='fqdn'));
       const name=obj?obj.name:`ADDR_${addrSeq++}`;
       let value=first;
       if(obj){
         if(obj.type==='iprange') value=`${obj.startIp}-${obj.endIp}`;
+        else if(obj.type==='fqdn') value=obj.fqdn;
         else { const c=addrCidr(obj); value=c.endsWith('/32')?c.slice(0,-3):c; }
       }
       addrNames[first]=name;
@@ -2324,15 +2327,30 @@ const Converter = (() => {
       // 本身無具名服務物件概念（parsed.services 對 MikroTik 來源本來就是從規則反推合成的展示
       // 用資料，非裝置真正語法），命中具名物件時直接解析成字面 protocol/port，不嘗試發明不存在
       // 的語法；查無法解析（找不到具名物件、且格式本身也不像已知字面值）時維持既有行為原樣輸出。
-      const neededLists=new Map();
+      // 2026-09-10（續）擴大：address-group／FQDN 攤平。RouterOS 的「具名位址清單」本來就是
+      // /ip firewall address-list 用同一個 list= 名稱重複 add 多筆 address= 組成（單一成員時
+      // MikrotikParser 判成 category:'address'，多筆成員時判成 category:'address-group'，見該
+      // parser 的 parseAddressObjects()——兩者是同一種底層機制、只是成員數量不同，故 address-group
+      // 攤平不需新查證，直接沿用相同的 list 輸出手法，逐一輸出全部成員）；FQDN 同理——parser 的
+      // 型別判斷式本身（addr.match(/[a-zA-Z]/)?'fqdn':...）就證明 address-list 的 address= 值
+      // 接受網域名稱字面值，非本輪臆測
+      const neededLists=new Map(); // name -> array of literal values
       const isLiteralAddr=v=>/^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/.test(v)||/^[0-9a-f:]+:[0-9a-f:]*(\/\d{1,3})?$/i.test(v);
       function addrRef(val){
         const tok=sl(val)[0];
         if(!tok||/^(any|all|-)$/i.test(tok))return null;
         if(isLiteralAddr(tok))return{list:false,value:tok};
-        const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===tok&&(a.type==='ipmask'||a.type==='iprange'));
+        const obj=(parsed.addresses||[]).find(a=>a.name===tok&&(a.category==='address'||a.category==='address-group'));
         if(!obj)return{list:false,value:tok};
-        if(!neededLists.has(obj.name))neededLists.set(obj.name,obj.type==='iprange'?`${obj.startIp}-${obj.endIp}`:addrCidr(obj));
+        if(!neededLists.has(obj.name)){
+          let members;
+          if(obj.category==='address-group') members=sl(obj.members);
+          else if(obj.type==='iprange') members=[`${obj.startIp}-${obj.endIp}`];
+          else if(obj.type==='fqdn') members=[obj.fqdn];
+          else members=[addrCidr(obj)];
+          if(!members.length)return{list:false,value:tok};
+          neededLists.set(obj.name,members);
+        }
         return{list:true,value:obj.name};
       }
       function svcLiteral(val){
@@ -2367,7 +2385,7 @@ const Converter = (() => {
       });
       if(neededLists.size){
         L.push('/ip firewall address-list');
-        neededLists.forEach((value,name)=>L.push(`add list=${name} address=${value}`));
+        neededLists.forEach((members,name)=>members.forEach(v=>L.push(`add list=${name} address=${v}`)));
         L.push('');
       }
       L.push('/ip firewall filter');
@@ -2450,11 +2468,33 @@ const Converter = (() => {
       if(noIp) notes.push(`${noIp} 個無 IP 位址的介面未輸出於 /ip address（RouterOS 此區塊僅列出已指派 IP 的介面）`);
     }
     // 2026-09-10：MikroTik／Zyxel／EdgeRouter／OpenWrt 四個目標的具名「單一位址物件」與
-    // 「單一服務物件」已攤平成目標格式對應的定義（見各自 to*() 函式），不再需要警語；
-    // SonicWall 已完整攤平（含群組）移出本清單。仍未攤平的是「位址群組／FQDN 位址物件／
-    // 服務群組」——這幾類目標裝置無查證過的物件語法（或結構不相容），規則若引用這類物件，
-    // 輸出欄位會是不合法語法或遺漏，維持警語提醒人工核對
-    if(['mikrotik','zyxel','edgerouter','openwrt'].includes(targetVendor)){
+    // 「單一服務物件」已攤平成目標格式對應的定義（見各自 to*() 函式），SonicWall 已完整攤平
+    // （含群組）移出本清單。2026-09-10（續）：MikroTik 的位址群組／FQDN 已對稱既有 address-list
+    // 機制一併攤平（RouterOS 原生用同一個 list 名稱掛多筆 address= 表示群組，非新查證）；
+    // EdgeRouter 的位址群組其實一開始就已攤平（僅 FQDN 因官方查證確認不支援維持排除）；Zyxel
+    // 的 FQDN 已對稱 address-object 語法一併攤平（僅 address-group 因查無官方語法佐證維持排除）。
+    // 故四家「仍未攤平」的殘餘情境已不再是同一組條件，逐廠牌精準判斷，避免對已攤平的部分
+    // 誤報警語、也避免對真正仍缺的部分漏報
+    if(targetVendor==='mikrotik'){
+      // 位址群組／FQDN 本輪已攤平；RouterOS 無服務物件概念，服務群組無法對應仍未攤平
+      if((parsed.services||[]).some(s=>s.category==='group')) notes.push('服務群組（parsed.services 的 group 類別）本轉換器不會攤平——RouterOS 無具名服務物件概念，規則若引用服務群組，輸出的 protocol/dst-port 欄位會遺漏，請人工核對並改用字面 protocol/port 表示');
+    }
+    if(targetVendor==='edgerouter'){
+      // 位址群組（address-group/network-group）已攤平；FQDN 因官方查證確認 EdgeOS 原生不支援
+      // （需第三方腳本注入變通，非官方語法）與服務群組（既有 parseAddrOrPort() 單子鍵限制，
+      // 見 toEdgeRouter() 內註解）仍未攤平
+      const hasFqdnOrSvcGroup=(parsed.addresses||[]).some(a=>a.type==='fqdn')||(parsed.services||[]).some(s=>s.category==='group');
+      if(hasFqdnOrSvcGroup) notes.push('FQDN 位址物件／服務群組本轉換器不會攤平——EdgeOS 原生 address-group 不支援 FQDN 成員（僅支援字面 IP/CIDR），service 亦無法與位址 group 共存於同一個 destination{} 區塊，請人工核對並改用目標裝置實際支援的表示方式（位址群組已可正確攤平，不受此提示影響）');
+    }
+    if(targetVendor==='zyxel'){
+      // FQDN 本輪已攤平（與 address-object 同一語法）；address-group／service-group 因查無
+      // 官方逐字語法佐證仍未攤平
+      const hasGroup=(parsed.addresses||[]).some(a=>a.category==='address-group')||(parsed.services||[]).some(s=>s.category==='group');
+      if(hasGroup) notes.push('位址群組／服務群組本轉換器不會攤平（官方 ZLD CLI Reference Guide 雖有對應章節，但本輪查無足夠信心度的逐字語法可供實作），規則若引用這類物件，輸出欄位會是不合法語法或遺漏，請人工核對（單一位址/服務物件含 FQDN 已可正確攤平，不受此提示影響）');
+    }
+    if(targetVendor==='openwrt'){
+      // 三類皆仍未攤平：OpenWrt UCI 的具名物件語法（config ipset）本輪查證到規則引用機制
+      // 存在，但靜態成員寫入方式信心度不足，比照專案「不猜測」原則維持排除
       const hasGroupOrFqdn=(parsed.addresses||[]).some(a=>a.category==='address-group'||a.type==='fqdn')
         ||(parsed.services||[]).some(s=>s.category==='group');
       if(hasGroupOrFqdn) notes.push('位址群組／FQDN 位址物件／服務群組本轉換器不會攤平成目標格式對應的定義，規則若引用這類物件，輸出欄位會是不合法語法或遺漏，請人工核對並改用目標裝置實際支援的表示方式（單一位址/服務物件已可正確攤平，不受此提示影響）');
