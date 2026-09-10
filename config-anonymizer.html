@@ -1005,12 +1005,16 @@ function _onLangChange() {
 // （批次流程與單檔案流程共用同一份全域 mappings 物件，批次跑完會把它覆蓋成最後一筆資料）
 const STATE = { original:'', anonymized:'', filename:'', vendor:null, mappings:null };
 let _anonChainTarget = null; // {href} — set when opened from network_analyzer "anonymize & analyze"
+// 2026-09 資安審查修復：改寫入獨立 key `_netAnalyzer_anonResult`（原本沿用 `_netAnalyzer_pending`
+// 會與 hub 直接轉送寫入的同一把 key 搶寫，接收端可能誤把 raw 內容當成已匿名化內容載入）；並在
+// window.open() 被彈出視窗攔截（回傳 null）時立刻清掉剛寫入的 key，避免已匿名化內容無限期殘留。
 function _sendToAnalysisTool() {
   if (!STATE.anonymized || !_anonChainTarget) return;
-  localStorage.setItem('_netAnalyzer_pending', JSON.stringify({
+  localStorage.setItem('_netAnalyzer_anonResult', JSON.stringify({
     name: STATE.filename || 'anonymized.txt', text: STATE.anonymized, ts: Date.now(), vendor: null
   }));
-  window.open(_anonChainTarget.href, '_blank');
+  const w = window.open(_anonChainTarget.href, '_blank');
+  if (!w) localStorage.removeItem('_netAnalyzer_anonResult');
 }
 const mappings = { ip:new Map(), hostname:new Map(), user:new Map(), ssid:new Map(), alias:new Map(), vdom:new Map(), mac:new Map() };
 // 匯入既有對照表的種子（比照 log_analyzer 對應的 IMPORTED_SEED，各自維護一份、不跨檔引用）：
@@ -3670,39 +3674,48 @@ document.addEventListener('DOMContentLoaded', () => {
     if(_rq>=3){_rq=0;showEggToast(tr('egg.rage_quit'));}
   });
 })();
+  // 2026-09 資安審查修復：JSON 解析失敗／已過期的 key 一律清除（不論是否為本工具負責消費的
+  // key），讓任一工具頁面被開啟都能順手清掉整個交接命名空間裡的殘留，縮小放棄交接流程（如彈出
+  // 視窗被攔截、使用者關掉分頁）後明碼機敏內容殘留的曝險窗口；本工具負責消費 `_netAnalyzer_pending`
+  // （hub 直接轉送）與 `_netAnalyzer_anonThenOpen`（hub 要求先匿名化再轉送）兩把 key，但本工具自己
+  // 「匿名化完成後轉送給下一個工具」改寫入獨立 key `_netAnalyzer_anonResult`（見 _sendToAnalysisTool()），
+  // 不再沿用 `_netAnalyzer_pending`，避免與 hub 直接轉送的寫入互相搶寫/誤讀（故此處不消費該 key）。
   (function(){
-    var _p = localStorage.getItem('_netAnalyzer_pending');
-    if (!_p) return;
-    try {
-      var d = JSON.parse(_p);
-      if (Date.now() - d.ts > 10000) { localStorage.removeItem('_netAnalyzer_pending'); return; }
+    var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000};
+    var parsed = {};
+    Object.keys(TTL).forEach(function(k){
+      var raw = localStorage.getItem(k);
+      if (!raw) return;
+      try {
+        var d = JSON.parse(raw);
+        if (Date.now() - d.ts > TTL[k]) { localStorage.removeItem(k); return; }
+        parsed[k] = d;
+      } catch(e) { localStorage.removeItem(k); }
+    });
+    if (parsed['_netAnalyzer_pending']) {
       localStorage.removeItem('_netAnalyzer_pending');
+      var d = parsed['_netAnalyzer_pending'];
       var pa = document.getElementById('paste-input');
       if (pa) pa.value = d.text;
       STATE.original = d.text;
       STATE.filename = d.name;
       var lbl = document.getElementById('file-name-label');
       if (lbl) { lbl.textContent = d.name; lbl.style.display = ''; }
-    } catch(e) {}
-  })();
-  (function(){
-    var _a = localStorage.getItem('_netAnalyzer_anonThenOpen');
-    if (!_a) return;
-    try {
-      var d = JSON.parse(_a);
-      if (Date.now() - d.ts > 30000) { localStorage.removeItem('_netAnalyzer_anonThenOpen'); return; }
+    }
+    if (parsed['_netAnalyzer_anonThenOpen']) {
       localStorage.removeItem('_netAnalyzer_anonThenOpen');
-      var pa = document.getElementById('paste-input');
-      if (pa) pa.value = d.text;
-      STATE.original = d.text;
-      STATE.filename = d.name;
+      var d2 = parsed['_netAnalyzer_anonThenOpen'];
+      var pa2 = document.getElementById('paste-input');
+      if (pa2) pa2.value = d2.text;
+      STATE.original = d2.text;
+      STATE.filename = d2.name;
       var TOOL_HREFS = ['firewall-analyzer-fixed.html', 'switch-config-parser.html'];
-      _anonChainTarget = { href: TOOL_HREFS[d.toolIdx] || TOOL_HREFS[0] };
-      var lbl = document.getElementById('file-name-label');
-      if (lbl) { lbl.textContent = d.name; lbl.style.display = ''; }
+      _anonChainTarget = { href: TOOL_HREFS[d2.toolIdx] || TOOL_HREFS[0] };
+      var lbl2 = document.getElementById('file-name-label');
+      if (lbl2) { lbl2.textContent = d2.name; lbl2.style.display = ''; }
       // Auto-run anonymization
       setTimeout(function() { var btn = document.getElementById('anon-btn'); if (btn) btn.click(); }, 300);
-    } catch(e) {}
+    }
   })();
   (function(){
     var _t = document.createElement('div');

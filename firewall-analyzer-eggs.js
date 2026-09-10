@@ -7,15 +7,28 @@
 // Console banner、明暗主題切換。
 // ════════════════════════════════════════════════════════════════════════
 
+// 2026-09 資安審查修復：JSON 解析失敗／已過期的 key 一律清除（不論是否為本工具負責消費），讓
+// 任一工具頁面被開啟都能順手清掉整個交接命名空間裡的殘留，縮小放棄交接流程後明碼機敏內容殘留的
+// 曝險窗口；本工具除了 hub 直接轉送的 `_netAnalyzer_pending` 外，也負責消費 config_anonymizer
+// 匿名化完成後轉送的獨立 key `_netAnalyzer_anonResult`（原本兩者共用 `_netAnalyzer_pending`，
+// 有搶寫/誤讀風險，已拆開）。
 (function(){
-  var _p = localStorage.getItem('_netAnalyzer_pending');
-  if (!_p) return;
-  try {
-    var d = JSON.parse(_p);
-    if (Date.now() - d.ts > 10000) { localStorage.removeItem('_netAnalyzer_pending'); return; }
-    localStorage.removeItem('_netAnalyzer_pending');
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000};
+  var parsed = {};
+  Object.keys(TTL).forEach(function(k){
+    var raw = localStorage.getItem(k);
+    if (!raw) return;
+    try {
+      var d = JSON.parse(raw);
+      if (Date.now() - d.ts > TTL[k]) { localStorage.removeItem(k); return; }
+      parsed[k] = d;
+    } catch(e) { localStorage.removeItem(k); }
+  });
+  var d = parsed['_netAnalyzer_pending'] || parsed['_netAnalyzer_anonResult'];
+  if (d) {
+    localStorage.removeItem(parsed['_netAnalyzer_pending'] ? '_netAnalyzer_pending' : '_netAnalyzer_anonResult');
     if (window._loadFromPending) window._loadFromPending(d.text, d.vendor || 'f');
-  } catch(e) {}
+  }
 })();
 
 // 初始化語言
@@ -140,6 +153,20 @@ console.log('%c FW Analyzer v4.0  ·  羊駝驅動的防火牆解析工具 🦙'
 console.log('%c 彩蛋提示 → 盾牌 ×5 | Konami Code ↑↑↓↓←→←→BA | tb-meta ×7 | 點羊駝','color:#64748b;font-family:monospace;font-size:10px');
 
 // 黑/白模式切換
+// ── 跨工具導覽（2026-08-24 新增）：見 switch_analyzer 同名函式註解
+function toggleToolsNav(e){
+  if(e)e.stopPropagation();
+  const p=document.getElementById('tools-nav-panel');
+  if(!p)return;
+  p.style.display=(p.style.display==='none'||!p.style.display)?'block':'none';
+}
+document.addEventListener('click',function(e){
+  const p=document.getElementById('tools-nav-panel');
+  if(p&&p.style.display==='block'&&!p.contains(e.target)&&e.target.id!=='tools-nav-btn'){
+    p.style.display='none';
+  }
+});
+
 function setTheme(t){document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';localStorage.setItem('cw_theme',t);}
 function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
 (function(){const s=localStorage.getItem('cw_theme');const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();

@@ -4475,6 +4475,15 @@ function importMappingFile(file) {
   reader.readAsText(file, 'UTF-8');
 }
 function onMappingImportSelect(e) { if (e.target.files[0]) importMappingFile(e.target.files[0]); }
+// 2026-09 資安審查修復：CSV 儲存格若以 =/+/-/@ 開頭，Excel/Sheets 開啟時會當成公式執行
+// （如日誌內容/主機名剛好是 `=cmd|'/c calc'!A1` 這類字串），單純跳脫雙引號無法防範；補上開頭
+// 字元中和——命中時前綴一個單引號強制視為純文字，Excel 顯示時會自動隱藏這個前綴單引號。
+// doExportCSV()/doExportEventsCSV() 共用同一顆函式。
+function csvCell(v) {
+  let s = String(v == null ? '' : v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return `"${s.replace(/"/g, '""')}"`;
+}
 function doExportCSV() {
   // 2026-09-10 新增 mitre 欄位：比照 renderIssues()/exportLogReport() 的 MITRE_MAP 查表邏輯，
   // freq: 前綴分類需先去除前綴才查得到；CSV 為純文字沒有徽章的必要，查無對應時留空字串，
@@ -4484,7 +4493,7 @@ function doExportCSV() {
     const baseCat = is.category.startsWith('freq:') ? is.category.slice(5) : is.category;
     rows.push([is.category, is.severityNorm, is.count, is.confidence, getIssueIntelSources(is).join(','), formatIssueBasis(is), fmtTime(is.firstSeen), fmtTime(is.lastSeen), (is.sampleRaw || '').replace(/[\r\n]+/g, ' '), MITRE_MAP[baseCat] || '']);
   });
-  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const csv = rows.map(r => r.map(csvCell).join(',')).join('\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = 'log_issues.csv'; a.click();
@@ -4506,7 +4515,7 @@ function doExportEventsCSV() {
     rows.push([tr(SEV_KEY_MAP[e.severityNorm]), fmtTime(e.timestamp), e.host, e.format,
       tr(CAT_KEY_MAP[e.category] || 'cat.other'), notes, tuple.src, tuple.dst, tuple.port, tuple.proto, urlDisplay, e.msg]);
   });
-  const csv = rows.map(r => r.map(v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const csv = rows.map(r => r.map(csvCell).join(',')).join('\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = 'log_events.csv'; a.click();
@@ -4745,17 +4754,27 @@ renderAll();
 
 // 2026-08-19 新增：接上 network_analyzer 拖放派送機制（比照 switch_analyzer/firewall_
 // analyzer/config_anonymizer/switch_config_generator 既有各自獨立實作的慣例，非共用函式）
+// 2026-09 資安審查修復：JSON 解析失敗／已過期的 key 一律清除（不論是否為本工具負責消費），讓
+// 任一工具頁面被開啟都能順手清掉整個交接命名空間裡的殘留，縮小放棄交接流程後明碼機敏內容殘留的
+// 曝險窗口；本工具非匿名化轉送鏈的目標，故不消費 `_netAnalyzer_anonThenOpen`/`_netAnalyzer_anonResult`，
+// 僅在過期時順手清掉。
 (function(){
-  var _p = localStorage.getItem('_netAnalyzer_pending');
-  if (!_p) return;
-  try {
-    var d = JSON.parse(_p);
-    if (Date.now() - d.ts > 10000) { localStorage.removeItem('_netAnalyzer_pending'); return; }
-    localStorage.removeItem('_netAnalyzer_pending');
-    var pa = document.getElementById('paste-area');
-    if (pa) pa.value = d.text;
-    doAnalyze();
-  } catch(e) {}
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000};
+  var ownData = null;
+  Object.keys(TTL).forEach(function(k){
+    var raw = localStorage.getItem(k);
+    if (!raw) return;
+    try {
+      var d = JSON.parse(raw);
+      if (Date.now() - d.ts > TTL[k]) { localStorage.removeItem(k); return; }
+      if (k === '_netAnalyzer_pending') ownData = d;
+    } catch(e) { localStorage.removeItem(k); }
+  });
+  if (!ownData) return;
+  localStorage.removeItem('_netAnalyzer_pending');
+  var pa = document.getElementById('paste-area');
+  if (pa) pa.value = ownData.text;
+  doAnalyze();
 })();
 
 // 主題切換（2026-08-25 新增，比照其餘 5 工具既有的 setTheme()/toggleTheme() 慣例搬過來，
