@@ -1635,6 +1635,73 @@ const Converter = (() => {
       L.push('  </NATPolicies>');
     }
 
+    // 2026-09-10 新增：規則的 <Source>/<Destination>/<Service> 引用的具名物件先前從未被輸出
+    // 成對應的 <AddressObject>/<ServiceObject>，目標裝置匯入時會判定引用不存在的物件。
+    // SonicWallParser.parseAddressObjects()/parseServiceObjects() 用 qsa() 全文件掃描，不要求
+    // 特定父容器，故物件可放在規則區塊之前任意位置；比照 toJuniper()/toCheckpoint() 既有攤平
+    // 模式——規則欄位本身完全不動，只額外輸出物件定義本體
+    const addrObjs = (parsed.addresses||[]).filter(a=>a.category==='address');
+    const addrGrps = (parsed.addresses||[]).filter(a=>a.category==='address-group');
+    if(addrObjs.length) {
+      L.push('  <AddressObjects>');
+      addrObjs.forEach(a=>{
+        L.push('    <AddressObject>');
+        L.push(`      <Name>${esc(a.name)}</Name>`);
+        if(a.type==='iprange') {
+          L.push('      <Type>Range</Type>');
+          L.push(`      <StartIP>${esc(a.startIp)}</StartIP>`);
+          L.push(`      <EndIP>${esc(a.endIp)}</EndIP>`);
+        } else if(a.type==='fqdn') {
+          L.push('      <Type>FQDN</Type>');
+          L.push(`      <FQDN>${esc(a.fqdn)}</FQDN>`);
+        } else {
+          const sub = addrCidr(a);
+          const [ip,pfx] = sub.split('/');
+          L.push('      <Type>Network</Type>');
+          L.push(`      <IPAddress>${esc(ip)}</IPAddress>`);
+          L.push(`      <SubnetMask>${esc(maskOf(pfx))}</SubnetMask>`);
+        }
+        L.push('    </AddressObject>');
+      });
+      L.push('  </AddressObjects>');
+    }
+    if(addrGrps.length) {
+      L.push('  <AddressGroups>');
+      addrGrps.forEach(g=>{
+        L.push('    <AddressGroup>');
+        L.push(`      <Name>${esc(g.name)}</Name>`);
+        sl(g.members).forEach(m=>L.push(`      <Member>${esc(m)}</Member>`));
+        L.push('    </AddressGroup>');
+      });
+      L.push('  </AddressGroups>');
+    }
+    const svcObjs = (parsed.services||[]).filter(s=>s.category==='service');
+    const svcGrps = (parsed.services||[]).filter(s=>s.category==='group');
+    if(svcObjs.length) {
+      L.push('  <ServiceObjects>');
+      svcObjs.forEach(s=>{
+        const proto=(s.proto||'TCP').toUpperCase();
+        L.push('    <ServiceObject>');
+        L.push(`      <Name>${esc(s.name)}</Name>`);
+        L.push(`      <Protocol>${esc(proto)}</Protocol>`);
+        if(proto.includes('TCP')&&s.tcpPorts&&s.tcpPorts!=='-') L.push(`      <Port>${esc(s.tcpPorts)}</Port>`);
+        if(proto.includes('UDP')&&s.udpPorts&&s.udpPorts!=='-') L.push(`      <UdpPort>${esc(s.udpPorts)}</UdpPort>`);
+        if(proto==='ICMP'&&s.icmpType&&s.icmpType!=='-') L.push(`      <Port>${esc(s.icmpType)}</Port>`);
+        L.push('    </ServiceObject>');
+      });
+      L.push('  </ServiceObjects>');
+    }
+    if(svcGrps.length) {
+      L.push('  <ServiceGroups>');
+      svcGrps.forEach(g=>{
+        L.push('    <ServiceGroup>');
+        L.push(`      <Name>${esc(g.name)}</Name>`);
+        sl(g.members).forEach(m=>L.push(`      <Member>${esc(m)}</Member>`));
+        L.push('    </ServiceGroup>');
+      });
+      L.push('  </ServiceGroups>');
+    }
+
     if(parsed.policies.length) {
       // 2026-08-09 修正：改用 SonicWallParser 註明「主要（已驗證）」的標籤 <Rule>，原本用
       // 的 <AccessRule> 是該 parser 自己標註「未證實對應版本」的欄位命名容錯別名
@@ -1698,22 +1765,51 @@ const Converter = (() => {
       if(!val||/^(any|all|-)$/i.test(val))return null;
       const first=sl(val)[0]||val;
       if(addrNames[first])return addrNames[first];
-      const name=`ADDR_${addrSeq++}`;
+      // 2026-09-10 修正：先查 first 是否命中 parsed.addresses 裡的具名物件（host/subnet/
+      // range 三型態皆為已查證的 address-object 官方語法涵蓋範圍），命中則沿用該物件
+      // 原本的名稱＋真實值，而非把物件「名稱」本身誤當成物件「內容」寫入（先前寫法對任何
+      // 引用具名物件的規則都會產生 `address-object ADDR_N <物件名稱字串>` 這種不合法語法）。
+      // fqdn／address-group 因查無官方語法佐證，比照既有「不猜測」原則維持原本行為
+      // （原樣當字面值處理，非本輪劣化）。
+      const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===first&&(a.type==='ipmask'||a.type==='iprange'));
+      const name=obj?obj.name:`ADDR_${addrSeq++}`;
+      let value=first;
+      if(obj){
+        if(obj.type==='iprange') value=`${obj.startIp}-${obj.endIp}`;
+        else { const c=addrCidr(obj); value=c.endsWith('/32')?c.slice(0,-3):c; }
+      }
       addrNames[first]=name;
-      addrObjLines.push(`address-object ${name} ${first}`);
+      addrObjLines.push(`address-object ${name} ${value}`);
       return name;
     }
     function svcObjFor(val){
       if(!val||/^(any|all|-)$/i.test(val))return null;
       const svc=sl(val)[0]||val;
-      const m=svc.match(/^(tcp|udp)\/(\d+)$/i);
-      if(!m)return null;
-      const key=svc.toLowerCase();
-      if(svcNames[key])return svcNames[key];
-      const name=`SVC_${svcSeq++}`;
-      svcNames[key]=name;
-      svcObjLines.push(`service-object ${name} ${m[1].toLowerCase()} eq ${m[2]}`);
-      return name;
+      const litM=svc.match(/^(tcp|udp)\/(\d+)$/i);
+      if(litM){
+        const key=svc.toLowerCase();
+        if(svcNames[key])return svcNames[key];
+        const name=`SVC_${svcSeq++}`;
+        svcNames[key]=name;
+        svcObjLines.push(`service-object ${name} ${litM[1].toLowerCase()} eq ${litM[2]}`);
+        return name;
+      }
+      // 2026-09-10 新增：非字面 tcp/port 格式時，查 svc 是否命中 parsed.services 具名物件——
+      // 僅支援單一 tcp/udp port（`service-object <name> {tcp|udp} eq <port>` 已查證語法），
+      // 多埠/range/icmp 查無逐字語法佐證不處理（回傳 null，該規則的 service 行維持既有
+      // 「查無法解析時省略」行為，非本輪引入的新缺口）
+      const obj=(parsed.services||[]).find(s=>s.category==='service'&&s.name===svc);
+      if(!obj)return null;
+      if(svcNames[svc])return svcNames[svc];
+      const proto=(obj.proto||'TCP').toLowerCase();
+      if(!proto.includes('tcp')&&!proto.includes('udp'))return null;
+      const p2=proto.includes('udp')&&!proto.includes('tcp')?'udp':'tcp';
+      const portField=p2==='udp'?obj.udpPorts:obj.tcpPorts;
+      const firstPort=(portField&&portField!=='-'?portField:(p2==='udp'?obj.tcpPorts:obj.udpPorts)||'').split(/[,-]/)[0].trim();
+      if(!firstPort)return null;
+      svcNames[svc]=obj.name;
+      svcObjLines.push(`service-object ${obj.name} ${p2} eq ${firstPort}`);
+      return obj.name;
     }
     const ruleBlocks=[];
     parsed.policies.forEach((p,idx)=>{
@@ -1768,31 +1864,87 @@ const Converter = (() => {
 
     const rules=parsed.policies||[];
     if(rules.length){
-      L.push('firewall {');
-      L.push('    name CONVERTED_IN {');
-      L.push('        default-action drop');
+      // 2026-09-10 新增：具名位址物件攤平。EdgeOS 的 source/destination 子區塊要引用「具名
+      // 物件」須用 `group { address-group NAME; }` 取代裸 `address NAME;`，與 parseAddrOrPort()
+      // 既有解析邏輯對稱。EdgeRouterParser.parseAddressObjects() 本身只有 address-group/
+      // network-group（無單一 address 物件概念），故任何具名位址物件（不論來源廠牌是單一
+      // address 還是 group）一律合成一個 address-group（單一物件即 1 個成員）；iprange/fqdn
+      // 類型因無官方 group 成員語法佐證不處理，維持原樣當字面值輸出（不劣化）。
+      // 服務物件刻意不比照位址做 port-group 攤平：parseAddrOrPort() 對 destination 節點的
+      // group{} 只認單一子鍵（address-group／network-group／port-group 互斥, 且 port 值固定
+      // 讀取 node 自己的 `port` 葉節點、不會從 group{port-group} 反查回來），與位址 group 無法
+      // 在同一個 destination{} 內共存，勉強塞入會讓 round-trip 讀出錯誤的位址值；改為直接把
+      // 具名服務物件解析成字面 protocol/port（與 MikroTik／OpenWrt 服務端處理方式一致）。
+      const neededAddrGroups=new Map();
+      const literalAddrRe=/^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$|^[0-9a-f:]+:[0-9a-f:]*(\/\d{1,3})?$/i;
+      function addrGroupRef(val){
+        if(!val||/^(any|-)$/i.test(val)||literalAddrRe.test(val))return null;
+        const obj=(parsed.addresses||[]).find(a=>a.name===val&&(a.category==='address'||a.category==='address-group')&&a.type!=='fqdn');
+        if(!obj)return null;
+        if(!neededAddrGroups.has(obj.name)){
+          const members=obj.category==='address-group'?sl(obj.members):(obj.type==='iprange'?null:[addrCidr(obj)]);
+          if(!members)return null;
+          neededAddrGroups.set(obj.name,members);
+        }
+        return obj.name;
+      }
+      function svcLiteral(val){
+        if(!val||val.includes('/'))return null; // 已是 "proto/port" 字面格式，交給既有邏輯處理
+        const obj=(parsed.services||[]).find(s=>s.category==='service'&&s.name===val);
+        if(!obj)return null;
+        const ports=obj.tcpPorts!=='-'&&obj.tcpPorts?obj.tcpPorts:(obj.udpPorts!=='-'?obj.udpPorts:'');
+        const protoRaw=(obj.proto||'').toLowerCase();
+        const proto=protoRaw.includes('icmp')?'icmp':(protoRaw.includes('udp')&&!protoRaw.includes('tcp'))?'udp':(protoRaw.includes('tcp')?'tcp':'');
+        return{proto,port:ports&&ports!=='-'?ports:''};
+      }
+      const ruleBlocks=[];
       rules.forEach((p,idx)=>{
         const num=(idx+1)*10;
-        const [svcProto,svcPort]=(p.service&&p.service.includes('/'))?p.service.split('/'):[p.service||'all',''];
-        L.push(`        rule ${num} {`);
-        L.push(`            action ${p.action==='accept'?'accept':'drop'}`);
-        if(p.comments)L.push(`            description "${p.comments.replace(/"/g,"'")}"`);
-        if(svcProto&&!/^(any|all)$/i.test(svcProto))L.push(`            protocol ${svcProto}`);
-        if(p.srcAddr&&!/^(any|-)$/.test(p.srcAddr)){
-          L.push('            source {');
-          L.push(`                address ${p.srcAddr}`);
-          L.push('            }');
+        const named=svcLiteral(p.service);
+        const [litProto,litPort]=(p.service&&p.service.includes('/'))?p.service.split('/'):[p.service||'all',''];
+        const svcProto=named?named.proto:litProto, svcPort=named?named.port:litPort;
+        const lines=[`        rule ${num} {`];
+        lines.push(`            action ${p.action==='accept'?'accept':'drop'}`);
+        if(p.comments)lines.push(`            description "${p.comments.replace(/"/g,"'")}"`);
+        if(svcProto&&!/^(any|all)$/i.test(svcProto))lines.push(`            protocol ${svcProto}`);
+        const srcGroup=p.srcAddr?addrGroupRef(p.srcAddr):null;
+        if(srcGroup){
+          lines.push('            source {');
+          lines.push('                group {');
+          lines.push(`                    address-group ${srcGroup}`);
+          lines.push('                }');
+          lines.push('            }');
+        } else if(p.srcAddr&&!/^(any|-)$/.test(p.srcAddr)){
+          lines.push('            source {');
+          lines.push(`                address ${p.srcAddr}`);
+          lines.push('            }');
         }
-        if((p.dstAddr&&!/^(any|-)$/.test(p.dstAddr))||svcPort){
-          L.push('            destination {');
-          if(p.dstAddr&&!/^(any|-)$/.test(p.dstAddr))L.push(`                address ${p.dstAddr}`);
-          if(svcPort)L.push(`                port ${svcPort}`);
-          L.push('            }');
+        const dstGroup=p.dstAddr?addrGroupRef(p.dstAddr):null;
+        if(dstGroup||(p.dstAddr&&!/^(any|-)$/.test(p.dstAddr))||svcPort){
+          lines.push('            destination {');
+          if(dstGroup) { lines.push('                group {'); lines.push(`                    address-group ${dstGroup}`); lines.push('                }'); }
+          else if(p.dstAddr&&!/^(any|-)$/.test(p.dstAddr)) lines.push(`                address ${p.dstAddr}`);
+          if(svcPort)lines.push(`                port ${svcPort}`);
+          lines.push('            }');
         }
-        if(p.logtraffic==='all')L.push('            log enable');
-        if(p.status==='disable')L.push('            disable');
-        L.push('        }');
+        if(p.logtraffic==='all')lines.push('            log enable');
+        if(p.status==='disable')lines.push('            disable');
+        lines.push('        }');
+        ruleBlocks.push(lines.join('\n'));
       });
+      L.push('firewall {');
+      if(neededAddrGroups.size){
+        L.push('    group {');
+        neededAddrGroups.forEach((members,name)=>{
+          L.push(`        address-group ${name} {`);
+          members.forEach(mem=>L.push(`            address ${mem}`));
+          L.push('        }');
+        });
+        L.push('    }');
+      }
+      L.push('    name CONVERTED_IN {');
+      L.push('        default-action drop');
+      L.push(...ruleBlocks);
       L.push('    }');
       L.push('}');
     }
@@ -1910,16 +2062,40 @@ const Converter = (() => {
       L.push(`\toption forward 'REJECT'`);
       L.push('');
     });
+    // 2026-09-10 新增：具名位址/服務物件攤平。OpenWrtParser 本身查無任何具名物件語法佐證
+    // （`config ipset` 與規則完整引用語法未查證，見本檔案開頭既有註解），UCI 的 src_ip/
+    // dest_ip/proto/dest_port 選項本來就只接受字面值，故唯一可行修法是把具名物件解析成
+    // 字面 IP/CIDR/range 與 protocol/port 直接內嵌，而非嘗試發明 UCI 未查證過的具名物件語法；
+    // address-group／service-group 因同樣查無佐證維持現狀不處理（不劣化，非本輪新缺口）。
+    const owLiteralAddrRe=/^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$|^[0-9a-f:]+:[0-9a-f:]*(\/\d{1,3})?$/i;
+    function owAddrLiteral(val){
+      if(!val||/^(any|-)$/i.test(val)||owLiteralAddrRe.test(val))return val;
+      const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===val&&a.type!=='fqdn');
+      if(!obj)return val;
+      return obj.type==='iprange'?`${obj.startIp}-${obj.endIp}`:addrCidr(obj);
+    }
+    function owSvcLiteral(val){
+      if(!val||val.includes('/'))return null;
+      const obj=(parsed.services||[]).find(s=>s.category==='service'&&s.name===val);
+      if(!obj)return null;
+      const port=obj.tcpPorts!=='-'&&obj.tcpPorts?obj.tcpPorts:(obj.udpPorts!=='-'?obj.udpPorts:'');
+      const protoRaw=(obj.proto||'').toLowerCase();
+      const proto=protoRaw.includes('icmp')?'icmp':(protoRaw.includes('udp')&&!protoRaw.includes('tcp'))?'udp':(protoRaw.includes('tcp')?'tcp':'');
+      return{proto,port:port&&port!=='-'?port:''};
+    }
     (parsed.policies||[]).forEach(p=>{
       L.push(`config rule`);
       if(p.name)L.push(`\toption name '${p.name}'`);
       if(p.srcIntf&&p.srcIntf!=='any')L.push(`\toption src '${p.srcIntf}'`);
       if(p.dstIntf&&p.dstIntf!=='any')L.push(`\toption dest '${p.dstIntf}'`);
-      const [svcProto,svcPort]=(p.service&&p.service.includes('/'))?p.service.split('/'):[p.service||'any',''];
+      const named=owSvcLiteral(p.service);
+      const [litProto,litPort]=(p.service&&p.service.includes('/'))?p.service.split('/'):[p.service||'any',''];
+      const svcProto=named?named.proto:litProto, svcPort=named?named.port:litPort;
       if(svcProto&&!/^(any|all)$/i.test(svcProto))L.push(`\toption proto '${svcProto}'`);
       if(svcPort)L.push(`\toption dest_port '${svcPort}'`);
-      if(p.srcAddr&&!/^(any|-)$/.test(p.srcAddr))L.push(`\toption src_ip '${p.srcAddr}'`);
-      if(p.dstAddr&&!/^(any|-)$/.test(p.dstAddr))L.push(`\toption dest_ip '${p.dstAddr}'`);
+      const srcVal=owAddrLiteral(p.srcAddr), dstVal=owAddrLiteral(p.dstAddr);
+      if(srcVal&&!/^(any|-)$/.test(srcVal))L.push(`\toption src_ip '${srcVal}'`);
+      if(dstVal&&!/^(any|-)$/.test(dstVal))L.push(`\toption dest_ip '${dstVal}'`);
       L.push(`\toption target '${p.action==='accept'?'ACCEPT':'REJECT'}'`);
       if(p.status==='disable')L.push(`\toption enabled '0'`);
       L.push('');
@@ -2141,21 +2317,61 @@ const Converter = (() => {
     }
 
     if(parsed.policies.length) {
-      L.push('/ip firewall filter');
+      // 2026-09-10 新增：具名位址/服務物件攤平。RouterOS `src-address=`/`dst-address=` 僅接受
+      // 字面 IP/CIDR，真正引用「具名物件」需改用 `src-address-list=`/`dst-address-list=` 指向
+      // 一個 `/ip firewall address-list`（MikrotikParser 對稱讀回 `@<list名稱>`，見該檔案
+      // parseLine() 的 src/dst-address-list 分支，屬既有機制非本輪新增）。service 因 RouterOS
+      // 本身無具名服務物件概念（parsed.services 對 MikroTik 來源本來就是從規則反推合成的展示
+      // 用資料，非裝置真正語法），命中具名物件時直接解析成字面 protocol/port，不嘗試發明不存在
+      // 的語法；查無法解析（找不到具名物件、且格式本身也不像已知字面值）時維持既有行為原樣輸出。
+      const neededLists=new Map();
+      const isLiteralAddr=v=>/^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/.test(v)||/^[0-9a-f:]+:[0-9a-f:]*(\/\d{1,3})?$/i.test(v);
+      function addrRef(val){
+        const tok=sl(val)[0];
+        if(!tok||/^(any|all|-)$/i.test(tok))return null;
+        if(isLiteralAddr(tok))return{list:false,value:tok};
+        const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===tok&&(a.type==='ipmask'||a.type==='iprange'));
+        if(!obj)return{list:false,value:tok};
+        if(!neededLists.has(obj.name))neededLists.set(obj.name,obj.type==='iprange'?`${obj.startIp}-${obj.endIp}`:addrCidr(obj));
+        return{list:true,value:obj.name};
+      }
+      function svcLiteral(val){
+        const tok=sl(val)[0]||'';
+        const obj=(parsed.services||[]).find(s=>s.category==='service'&&s.name===tok);
+        if(!obj)return null;
+        const proto=(obj.proto||'TCP').toLowerCase();
+        const p2=proto.includes('icmp')?'icmp':(proto.includes('udp')&&!proto.includes('tcp'))?'udp':'tcp';
+        const portField=p2==='udp'?obj.udpPorts:obj.tcpPorts;
+        const port=(portField&&portField!=='-')?portField:(p2==='udp'?obj.tcpPorts:obj.udpPorts);
+        return{proto:p2,port:(port&&port!=='-')?String(port).split(/[,-]/)[0].trim():''};
+      }
+      const ruleLines=[];
       parsed.policies.forEach(p=>{
-        const svc=(sl(p.service)[0]||'').toLowerCase();
-        const proto=/udp/.test(svc)?'udp':/icmp/.test(svc)?'icmp':/tcp|^\d/.test(svc)?'tcp':'';
         let line=`add chain=forward action=${mapAction(p.action,'mikrotik')}`;
-        const srcAddr=sl(p.srcAddr)[0], dstAddr=sl(p.dstAddr)[0];
-        if(srcAddr&&!/^(any|all|-)$/i.test(srcAddr)) line+=` src-address=${srcAddr}`;
-        if(dstAddr&&!/^(any|all|-)$/i.test(dstAddr)) line+=` dst-address=${dstAddr}`;
+        const src=addrRef(p.srcAddr), dst=addrRef(p.dstAddr);
+        if(src) line+= src.list?` src-address-list=${src.value}`:` src-address=${src.value}`;
+        if(dst) line+= dst.list?` dst-address-list=${dst.value}`:` dst-address=${dst.value}`;
+        const named=svcLiteral(p.service);
+        let proto='', port='';
+        if(named){ proto=named.proto; port=named.port; }
+        else {
+          const svc=(sl(p.service)[0]||'').toLowerCase();
+          proto=/udp/.test(svc)?'udp':/icmp/.test(svc)?'icmp':/tcp|^\d/.test(svc)?'tcp':'';
+          port=(svc.match(/(\d+)$/)||[])[1]||'';
+        }
         if(proto) line+=` protocol=${proto}`;
-        const portM=svc.match(/(\d+)$/);
-        if(proto&&proto!=='icmp'&&portM) line+=` dst-port=${portM[1]}`;
+        if(proto&&proto!=='icmp'&&port) line+=` dst-port=${port}`;
         line+=` comment="${p.name}"`;
         if(p.status==='disable') line+=' disabled=yes';
-        L.push(line);
+        ruleLines.push(line);
       });
+      if(neededLists.size){
+        L.push('/ip firewall address-list');
+        neededLists.forEach((value,name)=>L.push(`add list=${name} address=${value}`));
+        L.push('');
+      }
+      L.push('/ip firewall filter');
+      L.push(...ruleLines);
       L.push('');
     }
 
@@ -2233,14 +2449,15 @@ const Converter = (() => {
       const noIp=ifs.filter(i=>!i.ip||i.ip==='-'||i.ip==='DHCP').length;
       if(noIp) notes.push(`${noIp} 個無 IP 位址的介面未輸出於 /ip address（RouterOS 此區塊僅列出已指派 IP 的介面）`);
     }
-    // MikroTik／SonicWall／Zyxel／EdgeRouter／OpenWrt 五個目標的 to*() 函式目前不會攤平
-    // parsed.addresses/parsed.services 成對應廠牌的位址/服務物件，規則裡引用的具名物件
-    // （非字面 IP/協定）會被原樣當成字面值輸出，在目標裝置上要嘛是不合法語法、要嘛（服務
-    // 物件的情況）靜默降級為不限協定/連接埠的全通規則，且無其他機制提示使用者
-    // （2026-09 全功能審查發現；完整攤平為結構化物件屬於功能擴充，非本輪範圍，先加上明確警語）
-    if(['mikrotik','sonicwall','zyxel','edgerouter','openwrt'].includes(targetVendor)){
-      const hasNamedObj=(parsed.addresses&&parsed.addresses.length)||(parsed.services&&parsed.services.length);
-      if(hasNamedObj) notes.push('規則中引用的具名位址/服務物件（非字面 IP/連接埠）本轉換器不會攤平成目標格式對應的物件定義，輸出後該欄位會是不合法語法或（服務物件的情況）靜默降級為不限協定/連接埠的全通規則，請人工核對每條規則的來源/目的/服務欄位並改用目標裝置實際支援的表示方式');
+    // 2026-09-10：MikroTik／Zyxel／EdgeRouter／OpenWrt 四個目標的具名「單一位址物件」與
+    // 「單一服務物件」已攤平成目標格式對應的定義（見各自 to*() 函式），不再需要警語；
+    // SonicWall 已完整攤平（含群組）移出本清單。仍未攤平的是「位址群組／FQDN 位址物件／
+    // 服務群組」——這幾類目標裝置無查證過的物件語法（或結構不相容），規則若引用這類物件，
+    // 輸出欄位會是不合法語法或遺漏，維持警語提醒人工核對
+    if(['mikrotik','zyxel','edgerouter','openwrt'].includes(targetVendor)){
+      const hasGroupOrFqdn=(parsed.addresses||[]).some(a=>a.category==='address-group'||a.type==='fqdn')
+        ||(parsed.services||[]).some(s=>s.category==='group');
+      if(hasGroupOrFqdn) notes.push('位址群組／FQDN 位址物件／服務群組本轉換器不會攤平成目標格式對應的定義，規則若引用這類物件，輸出欄位會是不合法語法或遺漏，請人工核對並改用目標裝置實際支援的表示方式（單一位址/服務物件已可正確攤平，不受此提示影響）');
     }
     if(ifs.some(i=>i.type==='vlan')) notes.push('VLAN 子介面語法為近似對應，實機匯入前請人工確認子介面設定是否完整');
     if(targetVendor==='sonicwall') notes.push('SonicWall 僅支援 SonicOS 6.2 之前版本的 XML 匯入格式（6.2+ 已停用 XML 匯出），本輸出僅適用於舊版韌體裝置');
