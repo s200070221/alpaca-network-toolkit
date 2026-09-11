@@ -148,6 +148,46 @@ function startMatrixRain(){
   });
 })();
 
+// 彩蛋：分析完成後觸發條件型彩蛋（2026-09 從 firewall-analyzer-app.js 搬移，純函式只吃
+// parsed 參數+tr()/showEggToast()，不碰 DOM/PARSED 閉包狀態，零 closure 風險；呼叫端
+// app.js 內 `checkAnalyzeEggs(PARSED)` 靠全域作用域鏈找到這裡的定義，不需要改呼叫寫法）
+function checkAnalyzeEggs(p) {
+  // 彩蛋2：特殊 hostname
+  const h = (p.deviceInfo?.hostname || '').toLowerCase();
+  const SPECIAL_HN = {
+    skynet:tr('egg.skynet'), hal9000:tr('egg.hal9000'), hal9:tr('egg.hal9000'),
+    jarvis:tr('egg.jarvis'), gandalf:tr('egg.gandalf'), skywalker:tr('egg.skywalker'),
+    ollama:tr('egg.ollama'), alpaca:tr('egg.ollama'),
+    matrix:tr('egg.matrix'), neo:tr('egg.matrix'), morpheus:tr('egg.matrix'),
+    enterprise:tr('egg.enterprise'), ncc1701:tr('egg.enterprise'),
+    mordor:tr('egg.mordor'), sauron:tr('egg.mordor'),
+    deathstar:tr('egg.deathstar'), vader:tr('egg.deathstar'),
+    terminator:tr('egg.terminator'), t800:tr('egg.terminator'), t1000:tr('egg.terminator'),
+    shodan:tr('egg.shodan'),
+    marvin:tr('egg.marvin'), zaphod:tr('egg.marvin'),
+    wintermute:tr('egg.wintermute'),
+    ultron:tr('egg.ultron'), viki:tr('egg.ultron'),
+    tardis:tr('egg.tardis'), timelord:tr('egg.tardis'),
+  };
+  for(const [k,v] of Object.entries(SPECIAL_HN)) {
+    if(h.includes(k)) { setTimeout(() => showEggToast(v), 1200); break; }
+  }
+  // 彩蛋3：深夜工程師模式
+  const hr = new Date().getHours();
+  if(hr >= 0 && hr < 5) setTimeout(() => showEggToast(tr('egg.late_night')), 2000);
+  // 彩蛋4a：全部規則均為拒絕
+  if(p.policies.length > 0 && p.policies.every(x => x.action !== 'accept')) {
+    setTimeout(() => showEggToast(tr('egg.fortress')), 1500);
+  }
+  // 彩蛋4b：偵測到萬用 accept 規則
+  const wildcard = p.policies.some(x => {
+    if(x.action !== 'accept') return false;
+    const isAll = v => v === 'all' || (Array.isArray(v) && v.some(a => a === 'all'));
+    return isAll(x.srcAddr || x.srcaddr) && isAll(x.dstAddr || x.dstaddr);
+  });
+  if(wildcard) setTimeout(() => showEggToast(tr('egg.wildcard')), 1800);
+}
+
 // Console 彩蛋
 console.log('%c FW Analyzer v4.0  ·  羊駝驅動的防火牆解析工具 🦙','color:#00c8f0;font-family:monospace;font-size:13px;font-weight:bold');
 console.log('%c 彩蛋提示 → 盾牌 ×5 | Konami Code ↑↑↓↓←→←→BA | tb-meta ×7 | 點羊駝','color:#64748b;font-family:monospace;font-size:10px');
