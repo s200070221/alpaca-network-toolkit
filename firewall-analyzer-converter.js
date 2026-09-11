@@ -8,9 +8,18 @@ const Converter = (() => {
 
   // ── Shared utilities ──────────────────────────────────────────────────────
   const esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  // 供 CLI 純文字設定檔輸出使用（與供 XML 用的 esc() 不同）：換行/CR 一律清除（避免注入整行
+  // 新指令，L.push()+join('\n') 的行導向組裝方式下任何內嵌換行都等同插入新指令行），引號字元
+  // 換成不會提早結束字串的字元（多數廠牌 CLI 語法本身不支援跳脫，沿用既有 toJuniper()/
+  // toEdgeRouter() description 欄位已驗證過的做法：雙引號換單引號）
+  const qstr = s => String(s==null?'':s).replace(/[\r\n]/g,'').replace(/"/g,"'");
   const sl  = str => (!str||str==='-'||/^(any|all)$/i.test(str.trim()))?[]:str.split(/,\s*/).map(s=>s.trim()).filter(Boolean);
   const now = () => new Date().toISOString().slice(0,19).replace('T',' ');
-  const hdr = (f,t,h) => `Converted from ${f} to ${t} | Source: ${h} | ${now()}`;
+  // h（hostname）來自來源設定檔解析結果，是唯一不可信的參數；這裡輸出成單行註解文字
+  // （## / # / <!-- --> / : 等各廠牌註解語法包裹），若含內嵌換行會直接斷開註解、讓下一段
+  // 文字變成可執行的新指令行，故換行/CR 一律清除（f/t 為程式內固定字面值或 parser 自訂的
+  // 廠牌代碼，非來源設定檔原始文字，不需要同樣處理）
+  const hdr = (f,t,h) => `Converted from ${f} to ${t} | Source: ${String(h==null?'':h).replace(/[\r\n]/g,'')} | ${now()}`;
 
   function bits(mask) {
     if (!mask||mask==='-') return 32;
@@ -169,7 +178,7 @@ const Converter = (() => {
     L.push(`## ${hdr(parsed.vendor||'?','FortiGate 7.4',d.hostname)}`);
     L.push('');
     L.push('config system global');
-    L.push(`    set hostname "${d.hostname}"`);
+    L.push(`    set hostname "${qstr(d.hostname)}"`);
     L.push('end');
     L.push('');
 
@@ -195,11 +204,11 @@ const Converter = (() => {
     if(admins.length) {
       L.push('config system admin');
       admins.forEach(u=>{
-        L.push(`    edit "${u.name}"`);
+        L.push(`    edit "${qstr(u.name)}"`);
         const prof=u.accessLevel==='read-only'?'prof_readonly':'prof_admin';
-        L.push(`        set accprofile "${prof}"`);
+        L.push(`        set accprofile "${qstr(prof)}"`);
         L.push('        set vdom "root"');
-        if(u.email&&u.email!=='-') L.push(`        set email-to "${u.email}"`);
+        if(u.email&&u.email!=='-') L.push(`        set email-to "${qstr(u.email)}"`);
         if(u.twoFactor&&u.twoFactor!=='disable') L.push(`        set two-factor fortitoken`);
         L.push('    next');
       });
@@ -211,9 +220,9 @@ const Converter = (() => {
     if(lusers.length) {
       L.push('config user local');
       lusers.forEach(u=>{
-        L.push(`    edit "${u.name}"`);
+        L.push(`    edit "${qstr(u.name)}"`);
         L.push(`        set type password`);
-        if(u.email&&u.email!=='-') L.push(`        set email-to "${u.email}"`);
+        if(u.email&&u.email!=='-') L.push(`        set email-to "${qstr(u.email)}"`);
         if(u.twoFactor&&u.twoFactor!=='disable') L.push(`        set two-factor fortitoken`);
         L.push('    next');
       });
@@ -223,11 +232,11 @@ const Converter = (() => {
     // LDAP
     parsed.users.filter(u=>u.type==='ldap-server').forEach((u,i)=>{
       if(i===0) L.push('config user ldap');
-      L.push(`    edit "${u.name}"`);
-      L.push(`        set server "${u.server||'-'}"`);
+      L.push(`    edit "${qstr(u.name)}"`);
+      L.push(`        set server "${qstr(u.server||'-')}"`);
       L.push(`        set port ${u.port||389}`);
-      if(u.dn&&u.dn!=='-') L.push(`        set dn "${u.dn}"`);
-      if(u.bindDn&&u.bindDn!=='-') { L.push(`        set bind-type regular`); L.push(`        set username "${u.bindDn}"`); }
+      if(u.dn&&u.dn!=='-') L.push(`        set dn "${qstr(u.dn)}"`);
+      if(u.bindDn&&u.bindDn!=='-') { L.push(`        set bind-type regular`); L.push(`        set username "${qstr(u.bindDn)}"`); }
       L.push('    next');
       if(i===parsed.users.filter(u=>u.type==='ldap-server').length-1) { L.push('end'); L.push(''); }
     });
@@ -235,8 +244,8 @@ const Converter = (() => {
     // RADIUS
     parsed.users.filter(u=>u.type==='radius-server').forEach((u,i)=>{
       if(i===0) L.push('config user radius');
-      L.push(`    edit "${u.name}"`);
-      L.push(`        set server "${u.server||'-'}"`);
+      L.push(`    edit "${qstr(u.name)}"`);
+      L.push(`        set server "${qstr(u.server||'-')}"`);
       L.push(`        set auth-port ${u.port||1812}`);
       L.push('    next');
       if(i===parsed.users.filter(u=>u.type==='radius-server').length-1) { L.push('end'); L.push(''); }
@@ -247,10 +256,10 @@ const Converter = (() => {
     if(grps.length) {
       L.push('config user group');
       grps.forEach(g=>{
-        L.push(`    edit "${g.name}"`);
+        L.push(`    edit "${qstr(g.name)}"`);
         L.push(`        set group-type ${g.groupType==='access'?'firewall':g.groupType||'firewall'}`);
         if(g.members&&g.members!=='-') {
-          const mems=sl(g.members).map(m=>`"${m}"`).join(' ');
+          const mems=sl(g.members).map(m=>`"${qstr(m)}"`).join(' ');
           L.push(`        set member ${mems}`);
         }
         L.push('    next');
@@ -262,7 +271,7 @@ const Converter = (() => {
     if(parsed.interfaces.length) {
       L.push('config system interface');
       parsed.interfaces.forEach(i=>{
-        L.push(`    edit "${i.name}"`);
+        L.push(`    edit "${qstr(i.name)}"`);
         L.push(`        set vdom "root"`);
         if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP') L.push(`        set ip ${i.ip} ${i.mask&&i.mask!=='-'?i.mask:'255.255.255.0'}`);
         // 次要IP（2026-08-18 補上輸出端，官方 FortiOS CLI Reference 巢狀 config secondaryip／
@@ -276,10 +285,10 @@ const Converter = (() => {
           });
           L.push('        end');
         }
-        if(i.type==='vlan') { L.push(`        set type vlan`); if(i.vlanId&&i.vlanId!=='-') L.push(`        set vlanid ${i.vlanId}`); if(i.interface&&i.interface!=='-') L.push(`        set interface "${i.interface}"`); }
+        if(i.type==='vlan') { L.push(`        set type vlan`); if(i.vlanId&&i.vlanId!=='-') L.push(`        set vlanid ${i.vlanId}`); if(i.interface&&i.interface!=='-') L.push(`        set interface "${qstr(i.interface)}"`); }
         else L.push(`        set type ${i.type||'physical'}`);
-        if(i.alias&&i.alias!=='-') L.push(`        set alias "${i.alias}"`);
-        if(i.desc&&i.desc!=='-'&&i.desc!==i.alias) L.push(`        set description "${i.desc}"`);
+        if(i.alias&&i.alias!=='-') L.push(`        set alias "${qstr(i.alias)}"`);
+        if(i.desc&&i.desc!=='-'&&i.desc!==i.alias) L.push(`        set description "${qstr(i.desc)}"`);
         if(i.mtu&&i.mtu!=='1500') L.push(`        set mtu ${i.mtu}`);
         const role=i.role||'Unknown';
         if(role==='WAN') L.push(`        set role wan`);
@@ -296,15 +305,15 @@ const Converter = (() => {
     if(addrs.length) {
       L.push('config firewall address');
       addrs.forEach(a=>{
-        L.push(`    edit "${a.name}"`);
-        if(a.type==='fqdn') { L.push('        set type fqdn'); L.push(`        set fqdn "${a.fqdn}"`); }
+        L.push(`    edit "${qstr(a.name)}"`);
+        if(a.type==='fqdn') { L.push('        set type fqdn'); L.push(`        set fqdn "${qstr(a.fqdn)}"`); }
         else if(a.type==='iprange') { L.push('        set type iprange'); L.push(`        set start-ip ${a.startIp}`); L.push(`        set end-ip ${a.endIp}`); }
         else {
           const sub=a.subnet||(a.ip&&a.mask?`${a.ip} ${a.mask}`:a.ip?`${a.ip} 255.255.255.255`:'0.0.0.0 0.0.0.0');
           const subFmt=sub.includes('/')?sub.replace('/',` ${maskOf(sub.split('/')[1])}`):sub;
           L.push(`        set type ipmask`); L.push(`        set subnet ${subFmt}`);
         }
-        if(a.comment&&a.comment!=='-') L.push(`        set comment "${a.comment}"`);
+        if(a.comment&&a.comment!=='-') L.push(`        set comment "${qstr(a.comment)}"`);
         L.push('    next');
       });
       L.push('end'); L.push('');
@@ -315,8 +324,8 @@ const Converter = (() => {
     if(agrps.length) {
       L.push('config firewall addrgrp');
       agrps.forEach(g=>{
-        L.push(`    edit "${g.name}"`);
-        const mems=sl(g.members).map(m=>`"${m}"`).join(' ');
+        L.push(`    edit "${qstr(g.name)}"`);
+        const mems=sl(g.members).map(m=>`"${qstr(m)}"`).join(' ');
         if(mems) L.push(`        set member ${mems}`);
         L.push('    next');
       });
@@ -328,11 +337,11 @@ const Converter = (() => {
     if(csvcs.length) {
       L.push('config firewall service custom');
       csvcs.forEach(s=>{
-        L.push(`    edit "${s.name}"`);
+        L.push(`    edit "${qstr(s.name)}"`);
         const p=(s.proto||'TCP').toUpperCase();
         if(p.includes('ICMP')) { L.push('        set protocol ICMP'); if(s.icmpType&&s.icmpType!=='-') L.push(`        set icmptype ${s.icmpType}`); }
         else { L.push('        set protocol TCP/UDP'); if(s.tcpPorts&&s.tcpPorts!=='-') L.push(`        set tcp-portrange ${s.tcpPorts}`); if(s.udpPorts&&s.udpPorts!=='-') L.push(`        set udp-portrange ${s.udpPorts}`); }
-        if(s.comment&&s.comment!=='-') L.push(`        set comment "${s.comment}"`);
+        if(s.comment&&s.comment!=='-') L.push(`        set comment "${qstr(s.comment)}"`);
         L.push('    next');
       });
       L.push('end'); L.push('');
@@ -342,8 +351,8 @@ const Converter = (() => {
     if(sgrps.length) {
       L.push('config firewall service group');
       sgrps.forEach(g=>{
-        L.push(`    edit "${g.name}"`);
-        const mems=sl(g.members).map(m=>`"${m}"`).join(' ');
+        L.push(`    edit "${qstr(g.name)}"`);
+        const mems=sl(g.members).map(m=>`"${qstr(m)}"`).join(' ');
         if(mems) L.push(`        set member ${mems}`);
         L.push('    next');
       });
@@ -354,7 +363,7 @@ const Converter = (() => {
     const rscheds=parsed.schedules.filter(s=>s.type==='recurring');
     if(rscheds.length) {
       L.push('config firewall schedule recurring');
-      rscheds.forEach(s=>{ L.push(`    edit "${s.name}"`); if(s.day&&s.day!=='-') L.push(`        set day ${s.day}`); if(s.start) L.push(`        set start ${s.start}`); if(s.end) L.push(`        set end ${s.end}`); L.push('    next'); });
+      rscheds.forEach(s=>{ L.push(`    edit "${qstr(s.name)}"`); if(s.day&&s.day!=='-') L.push(`        set day ${s.day}`); if(s.start) L.push(`        set start ${s.start}`); if(s.end) L.push(`        set end ${s.end}`); L.push('    next'); });
       L.push('end'); L.push('');
     }
 
@@ -367,7 +376,7 @@ const Converter = (() => {
         const dst=r.dst.includes('/')?r.dst.replace('/',` ${maskOf(r.dst.split('/')[1])}`):r.dst;
         L.push(`        set dst ${dst}`);
         if(r.gateway&&r.gateway!=='-'&&r.gateway!=='blackhole') L.push(`        set gateway ${r.gateway}`);
-        if(r.device&&r.device!=='-') L.push(`        set device "${r.device}"`);
+        if(r.device&&r.device!=='-') L.push(`        set device "${qstr(r.device)}"`);
         if(r.blackhole==='enable') L.push('        set blackhole enable');
         if(r.distance&&r.distance!=='-') L.push(`        set distance ${r.distance}`);
         L.push('    next');
@@ -384,7 +393,7 @@ const Converter = (() => {
         L.push(`    edit ${i+1}`);
         L.push(`        set dst ${r.dst}`);
         if(r.gateway&&r.gateway!=='-'&&r.gateway!=='blackhole') L.push(`        set gateway ${r.gateway}`);
-        if(r.device&&r.device!=='-') L.push(`        set device "${r.device}"`);
+        if(r.device&&r.device!=='-') L.push(`        set device "${qstr(r.device)}"`);
         if(r.blackhole==='enable') L.push('        set blackhole enable');
         if(r.distance&&r.distance!=='-') L.push(`        set distance ${r.distance}`);
         L.push('    next');
@@ -404,7 +413,7 @@ const Converter = (() => {
     const ippools=parsed.nat.filter(n=>n.type==='ippool');
     if(ippools.length) {
       L.push('config firewall ippool');
-      ippools.forEach(n=>{ L.push(`    edit "${n.name}"`); L.push(`        set type ${n.poolType||'overload'}`); if(n.startIp&&n.startIp!=='-') { L.push(`        set startip ${n.startIp}`); L.push(`        set endip ${n.endIp&&n.endIp!=='-'?n.endIp:n.startIp}`); } L.push('    next'); });
+      ippools.forEach(n=>{ L.push(`    edit "${qstr(n.name)}"`); L.push(`        set type ${n.poolType||'overload'}`); if(n.startIp&&n.startIp!=='-') { L.push(`        set startip ${n.startIp}`); L.push(`        set endip ${n.endIp&&n.endIp!=='-'?n.endIp:n.startIp}`); } L.push('    next'); });
       L.push('end'); L.push('');
     }
 
@@ -412,7 +421,7 @@ const Converter = (() => {
     const vips=parsed.nat.filter(n=>n.type==='vip');
     if(vips.length) {
       L.push('config firewall vip');
-      vips.forEach(n=>{ L.push(`    edit "${n.name}"`); if(n.extIp&&n.extIp!=='-') L.push(`        set extip ${n.extIp}`); if(n.extIntf&&n.extIntf!=='-') L.push(`        set extintf "${n.extIntf}"`); if(n.mapIp&&n.mapIp!=='-') L.push(`        set mappedip ${n.mapIp}`); if(n.portFwd==='enable') { L.push('        set portforward enable'); if(n.extPort) L.push(`        set extport ${n.extPort}`); if(n.mapPort) L.push(`        set mappedport ${n.mapPort}`); if(n.proto) L.push(`        set protocol ${n.proto}`); } L.push('    next'); });
+      vips.forEach(n=>{ L.push(`    edit "${qstr(n.name)}"`); if(n.extIp&&n.extIp!=='-') L.push(`        set extip ${n.extIp}`); if(n.extIntf&&n.extIntf!=='-') L.push(`        set extintf "${qstr(n.extIntf)}"`); if(n.mapIp&&n.mapIp!=='-') L.push(`        set mappedip ${n.mapIp}`); if(n.portFwd==='enable') { L.push('        set portforward enable'); if(n.extPort) L.push(`        set extport ${n.extPort}`); if(n.mapPort) L.push(`        set mappedport ${n.mapPort}`); if(n.proto) L.push(`        set protocol ${n.proto}`); } L.push('    next'); });
       L.push('end'); L.push('');
     }
 
@@ -421,7 +430,7 @@ const Converter = (() => {
     const vipgrps=parsed.nat.filter(n=>n.type==='vipgrp');
     if(vipgrps.length) {
       L.push('config firewall vipgrp');
-      vipgrps.forEach(n=>{ L.push(`    edit "${n.name}"`); if(n.extIntf&&n.extIntf!=='-') L.push(`        set interface "${n.extIntf}"`); const ms=sl(n.members); if(ms.length) L.push(`        set member ${ms.map(m=>`"${m}"`).join(' ')}`); if(n.comment&&n.comment!=='-') L.push(`        set comments "${n.comment}"`); L.push('    next'); });
+      vipgrps.forEach(n=>{ L.push(`    edit "${qstr(n.name)}"`); if(n.extIntf&&n.extIntf!=='-') L.push(`        set interface "${qstr(n.extIntf)}"`); const ms=sl(n.members); if(ms.length) L.push(`        set member ${ms.map(m=>`"${qstr(m)}"`).join(' ')}`); if(n.comment&&n.comment!=='-') L.push(`        set comments "${qstr(n.comment)}"`); L.push('    next'); });
       L.push('end'); L.push('');
     }
 
@@ -429,19 +438,19 @@ const Converter = (() => {
     const ippools6=parsed.nat.filter(n=>n.type==='ippool6');
     if(ippools6.length) {
       L.push('config firewall ippool6');
-      ippools6.forEach(n=>{ L.push(`    edit "${n.name}"`); if(n.startIp&&n.startIp!=='-') { L.push(`        set startip ${n.startIp}`); L.push(`        set endip ${n.endIp&&n.endIp!=='-'?n.endIp:n.startIp}`); } L.push('    next'); });
+      ippools6.forEach(n=>{ L.push(`    edit "${qstr(n.name)}"`); if(n.startIp&&n.startIp!=='-') { L.push(`        set startip ${n.startIp}`); L.push(`        set endip ${n.endIp&&n.endIp!=='-'?n.endIp:n.startIp}`); } L.push('    next'); });
       L.push('end'); L.push('');
     }
     const vips6=parsed.nat.filter(n=>n.type==='vip6');
     if(vips6.length) {
       L.push('config firewall vip6');
-      vips6.forEach(n=>{ L.push(`    edit "${n.name}"`); if(n.extIp&&n.extIp!=='-') L.push(`        set extip ${n.extIp}`); if(n.extIntf&&n.extIntf!=='-') L.push(`        set extintf "${n.extIntf}"`); if(n.mapIp&&n.mapIp!=='-') L.push(`        set mappedip ${n.mapIp}`); if(n.portFwd==='enable') { L.push('        set portforward enable'); if(n.extPort) L.push(`        set extport ${n.extPort}`); if(n.mapPort) L.push(`        set mappedport ${n.mapPort}`); if(n.proto) L.push(`        set protocol ${n.proto}`); } L.push('    next'); });
+      vips6.forEach(n=>{ L.push(`    edit "${qstr(n.name)}"`); if(n.extIp&&n.extIp!=='-') L.push(`        set extip ${n.extIp}`); if(n.extIntf&&n.extIntf!=='-') L.push(`        set extintf "${qstr(n.extIntf)}"`); if(n.mapIp&&n.mapIp!=='-') L.push(`        set mappedip ${n.mapIp}`); if(n.portFwd==='enable') { L.push('        set portforward enable'); if(n.extPort) L.push(`        set extport ${n.extPort}`); if(n.mapPort) L.push(`        set mappedport ${n.mapPort}`); if(n.proto) L.push(`        set protocol ${n.proto}`); } L.push('    next'); });
       L.push('end'); L.push('');
     }
     const vipgrps6=parsed.nat.filter(n=>n.type==='vipgrp6');
     if(vipgrps6.length) {
       L.push('config firewall vipgrp6');
-      vipgrps6.forEach(n=>{ L.push(`    edit "${n.name}"`); const ms=sl(n.members); if(ms.length) L.push(`        set member ${ms.map(m=>`"${m}"`).join(' ')}`); if(n.comment&&n.comment!=='-') L.push(`        set comments "${n.comment}"`); L.push('    next'); });
+      vipgrps6.forEach(n=>{ L.push(`    edit "${qstr(n.name)}"`); const ms=sl(n.members); if(ms.length) L.push(`        set member ${ms.map(m=>`"${qstr(m)}"`).join(' ')}`); if(n.comment&&n.comment!=='-') L.push(`        set comments "${qstr(n.comment)}"`); L.push('    next'); });
       L.push('end'); L.push('');
     }
 
@@ -451,8 +460,8 @@ const Converter = (() => {
       L.push('config vpn ipsec phase1-interface');
       ivpns.forEach(v=>{
         const [e,h]=splitProp(v.proposal);
-        L.push(`    edit "${v.name}"`);
-        L.push(`        set interface "${v.iface||'port1'}"`);
+        L.push(`    edit "${qstr(v.name)}"`);
+        L.push(`        set interface "${qstr(v.iface||'port1')}"`);
         L.push(`        set ike-version ${v.ikeVer||'1'}`);
         if(v.remote&&v.remote!=='-') L.push(`        set remote-gw ${v.remote}`);
         L.push(`        set authmethod ${v.authMethod==='psk'?'psk':'signature'}`);
@@ -468,8 +477,8 @@ const Converter = (() => {
       ivpns.forEach(v=>{
         (v.phase2||[]).forEach((p2,pi)=>{
           const [pe,ph]=splitProp(p2.proposal||v.proposal);
-          L.push(`    edit "${p2.name||v.name+'-P2-'+pi}"`);
-          L.push(`        set phase1name "${v.name}"`);
+          L.push(`    edit "${qstr(p2.name||v.name+'-P2-'+pi)}"`);
+          L.push(`        set phase1name "${qstr(v.name)}"`);
           L.push(`        set proposal ${normEnc(pe,'fortigate')}-${normHash(ph,'fortigate')}`);
           L.push(`        set pfs ${p2.pfs==='enable'?'enable':'disable'}`);
           if(p2.dhgrp&&p2.dhgrp!=='-') L.push(`        set dhgrp ${normDH(p2.dhgrp,'fortigate')}`);
@@ -486,9 +495,9 @@ const Converter = (() => {
     const sslvpn=parsed.vpn.find(v=>v.type==='ssl-vpn');
     if(sslvpn) {
       L.push('config vpn ssl settings');
-      if(sslvpn.iface&&sslvpn.iface!=='-') L.push(`    set source-interface "${sslvpn.iface}"`);
+      if(sslvpn.iface&&sslvpn.iface!=='-') L.push(`    set source-interface "${qstr(sslvpn.iface)}"`);
       L.push(`    set port ${sslvpn.port||443}`);
-      if(sslvpn.ipPool&&sslvpn.ipPool!=='-') L.push(`    set tunnel-ip-pools "${sslvpn.ipPool}"`);
+      if(sslvpn.ipPool&&sslvpn.ipPool!=='-') L.push(`    set tunnel-ip-pools "${qstr(sslvpn.ipPool)}"`);
       if(sslvpn.dns1&&sslvpn.dns1!=='-') L.push(`    set dns-server1 ${sslvpn.dns1}`);
       L.push('end'); L.push('');
     }
@@ -498,24 +507,24 @@ const Converter = (() => {
       L.push('config firewall policy');
       parsed.policies.forEach((p,idx)=>{
         L.push(`    edit ${idx+1}`);
-        if(p.name) L.push(`        set name "${p.name}"`);
+        if(p.name) L.push(`        set name "${qstr(p.name)}"`);
         const si=p.srcIntf&&p.srcIntf!=='-'?p.srcIntf:'any';
         const di=p.dstIntf&&p.dstIntf!=='-'?p.dstIntf:'any';
-        L.push(`        set srcintf "${si}"`);
-        L.push(`        set dstintf "${di}"`);
-        const sa=sl(p.srcAddr).map(a=>`"${a}"`).join(' ')||'"all"';
-        const da=sl(p.dstAddr).map(a=>`"${a}"`).join(' ')||'"all"';
+        L.push(`        set srcintf "${qstr(si)}"`);
+        L.push(`        set dstintf "${qstr(di)}"`);
+        const sa=sl(p.srcAddr).map(a=>`"${qstr(a)}"`).join(' ')||'"all"';
+        const da=sl(p.dstAddr).map(a=>`"${qstr(a)}"`).join(' ')||'"all"';
         L.push(`        set srcaddr ${sa}`);
         L.push(`        set dstaddr ${da}`);
-        const sv=sl(p.service).map(s=>`"${s}"`).join(' ')||'"ALL"';
+        const sv=sl(p.service).map(s=>`"${qstr(s)}"`).join(' ')||'"ALL"';
         L.push(`        set service ${sv}`);
-        L.push(`        set schedule "${p.schedule||'always'}"`);
+        L.push(`        set schedule "${qstr(p.schedule||'always')}"`);
         L.push(`        set action ${mapAction(p.action,'fortigate')}`);
         if(p.nat==='enable') L.push('        set nat enable');
         if(p.logtraffic&&p.logtraffic!=='disable') L.push(`        set logtraffic ${p.logtraffic}`);
         if(p.status==='disable') L.push('        set status disable');
-        if(p.comments&&p.comments!=='-') L.push(`        set comments "${p.comments}"`);
-        if(p.utm) { if(p.utm.av&&p.utm.av!=='-') L.push(`        set av-profile "${p.utm.av}"`); if(p.utm.webfilter&&p.utm.webfilter!=='-') L.push(`        set webfilter-profile "${p.utm.webfilter}"`); if(p.utm.ips&&p.utm.ips!=='-') L.push(`        set ips-sensor "${p.utm.ips}"`); }
+        if(p.comments&&p.comments!=='-') L.push(`        set comments "${qstr(p.comments)}"`);
+        if(p.utm) { if(p.utm.av&&p.utm.av!=='-') L.push(`        set av-profile "${qstr(p.utm.av)}"`); if(p.utm.webfilter&&p.utm.webfilter!=='-') L.push(`        set webfilter-profile "${qstr(p.utm.webfilter)}"`); if(p.utm.ips&&p.utm.ips!=='-') L.push(`        set ips-sensor "${qstr(p.utm.ips)}"`); }
         L.push('    next');
       });
       L.push('end');
@@ -531,10 +540,10 @@ const Converter = (() => {
       if(profiles.length){
         L.push(''); L.push('config wireless-controller wwan-profile');
         profiles.forEach(p=>{
-          L.push(`    edit "${p.name}"`);
-          if(p.apn&&p.apn!=='-')L.push(`        set apn "${p.apn}"`);
+          L.push(`    edit "${qstr(p.name)}"`);
+          if(p.apn&&p.apn!=='-')L.push(`        set apn "${qstr(p.apn)}"`);
           if(p.authType&&p.authType!=='-')L.push(`        set auth-type ${p.authType}`);
-          if(p.username&&p.username!=='-')L.push(`        set username "${p.username}"`);
+          if(p.username&&p.username!=='-')L.push(`        set username "${qstr(p.username)}"`);
           if(p.passwd&&p.passwd!=='-')L.push(`        set passwd ${p.passwd==='enc'?'ENC PLACEHOLDER':'PLACEHOLDER'}`);
           if(p.modemId&&p.modemId!=='-')L.push(`        set modem-id ${p.modemId}`);
           if(p.simPin==='set')L.push('        set sim-pin PLACEHOLDER');
@@ -774,7 +783,7 @@ const Converter = (() => {
   function toCheckpoint(parsed) {
     const L=[], d=parsed.deviceInfo;
     L.push(`# ${hdr(parsed.vendor||'?','Check Point R81.20 Gaia',d.hostname)}`);
-    L.push(`set hostname "${d.hostname}"`);
+    L.push(`set hostname "${qstr(d.hostname)}"`);
     L.push('');
     // Interfaces
     // 2026-07-24 修復：原本整個介面輸出包在 "if(i.ip...)" 底下，沒有 IP 的介面（如僅作為
@@ -792,7 +801,7 @@ const Converter = (() => {
         const spfx=bits(s.mask);
         L.push(`add interface ${i.name} alias ${s.ip}/${spfx}`);
       });
-      if(i.desc&&i.desc!=='-') L.push(`set interface ${i.name} comments "${i.desc}"`);
+      if(i.desc&&i.desc!=='-') L.push(`set interface ${i.name} comments "${qstr(i.desc)}"`);
       L.push(`set interface ${i.name} state ${i.status==='down'?'off':'on'}`);
     });
     L.push('');
@@ -809,28 +818,28 @@ const Converter = (() => {
     L.push('');
     // Address objects
     parsed.addresses.filter(a=>a.category==='address').forEach(a=>{
-      if(a.type==='fqdn') L.push(`set network-object fqdn "${a.name}" fqdn ${a.fqdn}`);
-      else if(a.type==='iprange') L.push(`set network-object ip-range "${a.name}" first-ip ${a.startIp} last-ip ${a.endIp}`);
+      if(a.type==='fqdn') L.push(`set network-object fqdn "${qstr(a.name)}" fqdn ${a.fqdn}`);
+      else if(a.type==='iprange') L.push(`set network-object ip-range "${qstr(a.name)}" first-ip ${a.startIp} last-ip ${a.endIp}`);
       else {
         const sub=a.subnet||(a.ip?a.ip+'/32':'0.0.0.0/0');
         const ip=sub.split(/[\/\s]/)[0]; const sfx=sub.includes('/')?sub.split('/')[1]:bits(sub.split(' ')[1]||'255.255.255.255');
-        if(sfx==='32'||!sub.includes('/')) L.push(`set network-object host "${a.name}" ipaddr ${ip}`);
-        else L.push(`set network-object network "${a.name}" ipaddr ${ip} mask-length ${sfx}`);
+        if(sfx==='32'||!sub.includes('/')) L.push(`set network-object host "${qstr(a.name)}" ipaddr ${ip}`);
+        else L.push(`set network-object network "${qstr(a.name)}" ipaddr ${ip} mask-length ${sfx}`);
       }
     });
-    parsed.addresses.filter(a=>a.category==='address-group').forEach(g=>{ sl(g.members).forEach(m=>L.push(`set network-object group "${g.name}" add "${m}"`)); });
+    parsed.addresses.filter(a=>a.category==='address-group').forEach(g=>{ sl(g.members).forEach(m=>L.push(`set network-object group "${qstr(g.name)}" add "${qstr(m)}"`)); });
     L.push('');
     // Services
     parsed.services.filter(s=>s.category==='custom').forEach(s=>{
       const p=(s.proto||'TCP').toLowerCase();
-      if(p.includes('icmp')) L.push(`set service icmp "${s.name}" type ${s.icmpType||'0'}`);
-      else if(p.includes('udp')) { const port=s.udpPorts!=='-'?s.udpPorts:s.tcpPorts; L.push(`set service udp "${s.name}" port ${port||'0'}`); }
-      else { L.push(`set service tcp "${s.name}" port ${s.tcpPorts||'0'}`); }
+      if(p.includes('icmp')) L.push(`set service icmp "${qstr(s.name)}" type ${s.icmpType||'0'}`);
+      else if(p.includes('udp')) { const port=s.udpPorts!=='-'?s.udpPorts:s.tcpPorts; L.push(`set service udp "${qstr(s.name)}" port ${port||'0'}`); }
+      else { L.push(`set service tcp "${qstr(s.name)}" port ${s.tcpPorts||'0'}`); }
     });
-    parsed.services.filter(s=>s.category==='group').forEach(g=>{ sl(g.members).forEach(m=>L.push(`set service group "${g.name}" add "${m}"`)); });
+    parsed.services.filter(s=>s.category==='group').forEach(g=>{ sl(g.members).forEach(m=>L.push(`set service group "${qstr(g.name)}" add "${qstr(m)}"`)); });
     L.push('');
     // Schedules
-    parsed.schedules.forEach(s=>{ L.push(`set time "${s.name}" type ${s.type||'recurring'}`); if(s.start) L.push(`set time "${s.name}" start ${s.start}`); if(s.end) L.push(`set time "${s.name}" end ${s.end}`); });
+    parsed.schedules.forEach(s=>{ L.push(`set time "${qstr(s.name)}" type ${s.type||'recurring'}`); if(s.start) L.push(`set time "${qstr(s.name)}" start ${s.start}`); if(s.end) L.push(`set time "${qstr(s.name)}" end ${s.end}`); });
     // 2026-08-09 查證：規則庫（access-policy）／NAT／VPN site-to-site community 在真實 Check
     // Point Gaia clish 官方 `set` 指令清單（sc1.checkpoint.com Gaia Admin Guide）查無對應指令，
     // 這幾類物件在真實裝置只能透過 SmartConsole 或 Management API 管理，clish 僅管
@@ -844,8 +853,8 @@ const Converter = (() => {
     if(sslvpn) { L.push(''); L.push('set mobile-access on'); L.push(`set mobile-access port ${sslvpn.port||443}`); if(sslvpn.iface) L.push(`set mobile-access interface ${sslvpn.iface}`); }
     L.push('');
     // Users
-    parsed.users.filter(u=>u.type==='admin'||u.type==='local').forEach(u=>{ L.push(`set user "${u.name}" password-hash PLACEHOLDER`); if(u.email&&u.email!=='-') L.push(`set user "${u.name}" email "${u.email}"`); });
-    parsed.users.filter(u=>u.type==='ldap-server').forEach(u=>{ L.push(`set ldap-account-unit "${u.name}" server ${u.server}`); L.push(`set ldap-account-unit "${u.name}" port ${u.port||389}`); if(u.dn&&u.dn!=='-') L.push(`set ldap-account-unit "${u.name}" base-dn "${u.dn}"`); });
+    parsed.users.filter(u=>u.type==='admin'||u.type==='local').forEach(u=>{ L.push(`set user "${qstr(u.name)}" password-hash PLACEHOLDER`); if(u.email&&u.email!=='-') L.push(`set user "${qstr(u.name)}" email "${qstr(u.email)}"`); });
+    parsed.users.filter(u=>u.type==='ldap-server').forEach(u=>{ L.push(`set ldap-account-unit "${qstr(u.name)}" server ${u.server}`); L.push(`set ldap-account-unit "${qstr(u.name)}" port ${u.port||389}`); if(u.dn&&u.dn!=='-') L.push(`set ldap-account-unit "${qstr(u.name)}" base-dn "${qstr(u.dn)}"`); });
     L.push('');
     L.push('# 規則庫（Access Policy）／NAT／VPN site-to-site community 需透過 SmartConsole 或');
     L.push('# Management API 管理，非 Gaia clish 可設定範圍，本工具不產生對應指令。');
@@ -1056,7 +1065,7 @@ const Converter = (() => {
       Object.entries(grp).forEach(([base,units])=>{
         const f=units[0];
         L.push(`${I(1)}${base} {`);
-        if(f.desc&&f.desc!=='-') L.push(`${I(2)}description "${f.desc}";`);
+        if(f.desc&&f.desc!=='-') L.push(`${I(2)}description "${qstr(f.desc)}";`);
         if(f.mtu&&f.mtu!=='1500') L.push(`${I(2)}mtu ${f.mtu};`);
         if(f.status==='down') L.push(`${I(2)}disable;`);
         units.forEach(u2=>{
@@ -2195,8 +2204,8 @@ const Converter = (() => {
       L.push('/ip firewall nat');
       const nz=(v,fb)=>(v&&v!=='-')?v:fb;
       parsed.nat.forEach(n=>{
-        if(n.type==='vip'||n.type==='static') L.push(`add chain=dstnat dst-address=${nz(n.extIp,'0.0.0.0')} action=dst-nat to-addresses=${nz(n.mapIp,'0.0.0.0')} comment="${n.name}"`);
-        else L.push(`add chain=srcnat out-interface=${nz(n.srcIntf,nz(n.extIntf,'ether1'))} action=masquerade comment="${n.name}"`);
+        if(n.type==='vip'||n.type==='static') L.push(`add chain=dstnat dst-address=${nz(n.extIp,'0.0.0.0')} action=dst-nat to-addresses=${nz(n.mapIp,'0.0.0.0')} comment="${qstr(n.name)}"`);
+        else L.push(`add chain=srcnat out-interface=${nz(n.srcIntf,nz(n.extIntf,'ether1'))} action=masquerade comment="${qstr(n.name)}"`);
       });
       L.push('');
     }
@@ -2230,7 +2239,7 @@ const Converter = (() => {
           if(w.country&&w.country!=='-')line+=` country=${w.country}`;
           if(w.secProfile&&w.secProfile!=='default')line+=` security-profile=${w.secProfile}`;
           if(w.disabled==='yes')line+=' disabled=yes';
-          if(w.comment&&w.comment!=='-')line+=` comment="${w.comment}"`;
+          if(w.comment&&w.comment!=='-')line+=` comment="${qstr(w.comment)}"`;
           L.push(line);
         });
         L.push('');

@@ -1,5 +1,8 @@
 function rowsOf(sel){return Array.from(document.querySelectorAll(sel));}
-function val(tr,cls){const el=tr.querySelector('.'+cls);if(!el)return'';return el.type==='checkbox'?el.checked:el.value.trim();}
+// 2026-09 資安審查修復：換行/CR 一律清除，作為明確的程式碼防護（先前僅依賴 <input> 元素賦值時
+// 瀏覽器自動剝除換行的隱性行為，若欄位型別未來改成 <textarea> 或新增不經過 <input> 的資料流，
+// 這層保護會悄悄失效不被發現），避免表單/匯入內容含換行時被當成新指令行注入輸出的設定檔文字
+function val(tr,cls){const el=tr.querySelector('.'+cls);if(!el)return'';return el.type==='checkbox'?el.checked:el.value.replace(/[\r\n]/g,'').trim();}
 function markInvalid(el){if(el)el.classList.add('invalid');}
 
 // IPv4/CIDR 格式驗證輔助函式：取代 validateForm() 原本 4 處重複貼上的內聯正則
@@ -1823,7 +1826,7 @@ function collectModel(){
 
   return {
     vendor:document.getElementById('vendor').value,
-    sysname:document.getElementById('hostname').value.trim()||'Switch',
+    sysname:document.getElementById('hostname').value.replace(/[\r\n]/g,'').trim()||'Switch',
     snmpTrapHost:document.getElementById('snmp-trap-host').value.trim(),
     syslogServer:document.getElementById('syslog-server').value.trim(),
     vlans, interfaces, ospf, bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos, stack, users, sonicL3Interfaces, sonicQos, sonicStpVlanIntf,

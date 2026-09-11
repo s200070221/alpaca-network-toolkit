@@ -642,7 +642,7 @@
       const reasonTip = r.tier === 1
         ? tr('audit.reason_t1a') + esc(r.shadowingId) + tr('audit.reason_t1b')
         : tr('audit.reason_t2a') + esc(r.shadowingId) + tr('audit.reason_t2b');
-      h += `<tr><td>${tp}</td><td class="mono"><span class="clickable-cell" style="color:var(--red)" onclick="window._jumpToPolicy('${esc(r.shadowedId)}')" title="${esc(jh)}">${esc(r.shadowedId)}</span></td><td>${esc(r.shadowedName||'-')}</td><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy('${esc(r.shadowingId)}')" title="${esc(jh)}">${esc(r.shadowingId)}</span></td><td>${esc(r.shadowingName||'-')}</td><td style="color:var(--text-dim);font-size:11px"><span data-tip="${reasonTip.replace(/"/g,'&quot;')}">${esc(tr(r.reason))}<sup style="font-size:8px;opacity:.45;margin-left:2px;cursor:help">ⓘ</sup></span></td></tr>`;
+      h += `<tr><td>${tp}</td><td class="mono"><span class="clickable-cell" style="color:var(--red)" onclick="window._jumpToPolicy(${JSON.stringify(r.shadowedId).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.shadowedId)}</span></td><td>${esc(r.shadowedName||'-')}</td><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.shadowingId).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.shadowingId)}</span></td><td>${esc(r.shadowingName||'-')}</td><td style="color:var(--text-dim);font-size:11px"><span data-tip="${reasonTip.replace(/"/g,'&quot;')}">${esc(tr(r.reason))}<sup style="font-size:8px;opacity:.45;margin-left:2px;cursor:help">ⓘ</sup></span></td></tr>`;
     });
     h += '</tbody></table></div></div>';
     return h;
@@ -657,7 +657,7 @@
     h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_blocked_id') + '</th><th>' + tr('audit.col_blocked_name') + '</th><th>' + tr('audit.col_blocking_id') + '</th><th>' + tr('audit.col_blocking_name') + '</th></tr></thead><tbody>';
     results.forEach(r => {
       const jh = tr('audit.jump_hint');
-      h += `<tr><td class="mono"><span class="clickable-cell" style="color:var(--red)" onclick="window._jumpToPolicy('${esc(r.blockedId)}')" title="${esc(jh)}">${esc(r.blockedId)}</span></td><td>${esc(r.blockedName||'-')}</td><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy('${esc(r.blockingId)}')" title="${esc(jh)}">${esc(r.blockingId)}</span></td><td>${esc(r.blockingName||'-')}</td></tr>`;
+      h += `<tr><td class="mono"><span class="clickable-cell" style="color:var(--red)" onclick="window._jumpToPolicy(${JSON.stringify(r.blockedId).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.blockedId)}</span></td><td>${esc(r.blockedName||'-')}</td><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.blockingId).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.blockingId)}</span></td><td>${esc(r.blockingName||'-')}</td></tr>`;
     });
     h += '</tbody></table></div></div>';
     return h;
@@ -674,7 +674,7 @@
     h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_merge_field') + '</th><th>' + tr('audit.col_merge_ids') + '</th><th>' + tr('audit.col_merge_values') + '</th><th>' + tr('audit.col_merge_count') + '</th></tr></thead><tbody>';
     results.forEach(r => {
       const jh = tr('audit.jump_hint');
-      const idCells = r.ids.map(id => `<span class="clickable-cell" onclick="window._jumpToPolicy('${esc(id)}')" title="${esc(jh)}" style="margin-right:6px">${esc(id)}</span>`).join('');
+      const idCells = r.ids.map(id => `<span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(id).replace(/"/g,'&quot;')})" title="${esc(jh)}" style="margin-right:6px">${esc(id)}</span>`).join('');
       h += `<tr><td>${pill(tr(_MERGE_FIELD_LABEL[r.field]), 'p-info')}</td><td class="mono">${idCells}</td><td style="font-size:11px">${esc(r.values.join(', '))}</td><td class="mono">${r.count}</td></tr>`;
     });
     h += '</tbody></table></div></div>';
