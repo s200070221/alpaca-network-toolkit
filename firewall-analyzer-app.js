@@ -1717,7 +1717,7 @@ function onParsed(){
 
   function _scf(type,val){if(type==='action'){$('filter-action').value=val;doFilter();}else if(type==='type'){$('filter-type').value=val;doFilter();}else if(type==='clear'){$('filter-action').value='';$('filter-type').value='';window._searchQ='';$('search-inp').value='';applyFilters();}}
   window._scf=_scf;
-  function sumC(items){return items.map(i=>{const cl=i.sf?' clickable':'';const oc=i.sf?` onclick="_scf('${i.sf.t}','${i.sf.v||''}')"`:'';;return`<div class="sum-card${cl}"${oc}><div class="sl">${i.l}</div><div class="sv" style="color:${i.c}">${i.v}</div></div>`;}).join('');}
+  function sumC(items){return items.map(i=>{const cl=i.sf?' clickable':'';const oc=i.sf?` onclick="_scf(${JSON.stringify(i.sf.t).replace(/"/g,'&quot;')},${JSON.stringify(i.sf.v||'').replace(/"/g,'&quot;')})"`:'';;return`<div class="sum-card${cl}"${oc}><div class="sl">${i.l}</div><div class="sv" style="color:${i.c}">${i.v}</div></div>`;}).join('');}
 
   function rebuildSumForFiltered(sec, filtered, total) {
     const pct = Math.round(filtered.length/total*100);
@@ -1729,7 +1729,7 @@ function onParsed(){
     _renderState={thead,rowFn};
     const rows=data.map(r=>{
       let row = rowFn(r);
-      if (r._vdom) row = row.replace('<tr>', `<tr data-vdom="${r._vdom}">`);
+      if (r._vdom) row = row.replace('<tr>', `<tr data-vdom="${esc(r._vdom)}">`);
       return row;
     }).join('');
     $('tbl-wrap').innerHTML=`<table class="data-tbl"><thead>${thead}</thead><tbody>${rows||`<tr><td colspan="20"><div class="nodata">⚠ ${tr('msg.no_data')}</div></td></tr>`}</tbody></table>`;
@@ -2917,7 +2917,7 @@ function onParsed(){
     const visibleData = truncated ? data.slice(0, TABLE_ROW_CAP) : data;
     const rows = visibleData.map(r => {
       let row = rowFn(r);
-      if (r._vdom) row = row.replace('<tr>', `<tr data-vdom="${r._vdom}">`);
+      if (r._vdom) row = row.replace('<tr>', `<tr data-vdom="${esc(r._vdom)}">`);
       return row;
     }).join('');
 

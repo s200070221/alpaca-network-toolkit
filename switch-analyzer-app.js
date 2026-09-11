@@ -1369,19 +1369,19 @@ function renderLLDPTopo(nbrs){
     nb.links.slice(0,2).forEach((lk,li)=>{
       const off=(li-(nb.links.length-1)/2)*11;
       const ang=Math.atan2(dy,dx)+Math.PI/2;
-      svg+=`<text x="${mx+Math.cos(ang)*off}" y="${my+Math.sin(ang)*off}" text-anchor="middle" dominant-baseline="middle" font-size="9" fill="var(--accent)" opacity="0.85" font-family="monospace">${lk.local}→${lk.remote}</text>`;
+      svg+=`<text x="${mx+Math.cos(ang)*off}" y="${my+Math.sin(ang)*off}" text-anchor="middle" dominant-baseline="middle" font-size="9" fill="var(--accent)" opacity="0.85" font-family="monospace">${esc(lk.local)}→${esc(lk.remote)}</text>`;
     });
   });
   svg+=`<circle cx="${CX}" cy="${CY}" r="${nodeR}" fill="var(--surface2)" stroke="var(--accent)" stroke-width="2.5" filter="url(#lg)"/>`;
-  svg+=`<text x="${CX}" y="${CY-5}" text-anchor="middle" dominant-baseline="middle" font-size="10" font-weight="700" fill="var(--accent)" font-family="monospace">${(parsed.sys?.hostname||'Local').substring(0,12)}</text>`;
+  svg+=`<text x="${CX}" y="${CY-5}" text-anchor="middle" dominant-baseline="middle" font-size="10" font-weight="700" fill="var(--accent)" font-family="monospace">${esc((parsed.sys?.hostname||'Local').substring(0,12))}</text>`;
   svg+=`<text x="${CX}" y="${CY+8}" text-anchor="middle" dominant-baseline="middle" font-size="8" fill="var(--text-dim)">${tr('lldp.topo_center')}</text>`;
   positions.forEach((pos,i)=>{
     const nb=neighbors[i];
     const col=nb.links.some(l=>l.proto==='CDP')?'var(--green)':'var(--purple)';
     svg+=`<circle cx="${pos.x}" cy="${pos.y}" r="${nodeR}" fill="var(--surface2)" stroke="${col}" stroke-width="1.8"/>`;
     const nm=nb.name.length>14?nb.name.substring(0,12)+'…':nb.name;
-    svg+=`<text x="${pos.x}" y="${pos.y-5}" text-anchor="middle" dominant-baseline="middle" font-size="9" font-weight="600" fill="var(--text)" font-family="monospace">${nm}</text>`;
-    if(nb.ip&&nb.ip!=='-')svg+=`<text x="${pos.x}" y="${pos.y+8}" text-anchor="middle" dominant-baseline="middle" font-size="8" fill="var(--text-dim)">${nb.ip}</text>`;
+    svg+=`<text x="${pos.x}" y="${pos.y-5}" text-anchor="middle" dominant-baseline="middle" font-size="9" font-weight="600" fill="var(--text)" font-family="monospace">${esc(nm)}</text>`;
+    if(nb.ip&&nb.ip!=='-')svg+=`<text x="${pos.x}" y="${pos.y+8}" text-anchor="middle" dominant-baseline="middle" font-size="8" fill="var(--text-dim)">${esc(nb.ip)}</text>`;
   });
   svg+='</svg>';
   return`<div style="background:var(--surface2);border-radius:8px;padding:12px;overflow:auto">${svg}</div>`;
