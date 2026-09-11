@@ -898,6 +898,23 @@ end</pre>
     </div>
   </div>
 
+  <div class="card" id="procurve-vsf-card" style="display:none">
+    <h2 data-i18n="sec.procurveVsf">VSF 堆疊設定（僅 ProCurve / ArubaOS-Switch）</h2>
+    <div class="row">
+      <label data-i18n="lbl.pcvsfDomain">Domain ID</label>
+      <input id="procurve-vsf-domain" placeholder="5">
+    </div>
+    <table class="tbl" style="margin-top:10px">
+      <thead><tr>
+        <th data-i18n="th.stackId">Switch ID</th>
+        <th data-i18n="th.stackPriority">Priority</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="procurve-vsf-member-body"></tbody>
+    </table>
+    <button class="add-btn" data-i18n="btn.addRow" onclick="addProCurveVsfMemberRow()">+ 新增列</button>
+  </div>
+
   <div class="card" id="vxlan-card" style="display:none">
     <h2 data-i18n="sec.vxlan">VXLAN 設定（Comware / Aruba CX）</h2>
     <div class="row">
@@ -1164,6 +1181,8 @@ end</pre>
 <script src="switch-generator-juniper.js"></script>
 <script src="switch-generator-planet.js"></script>
 <script src="switch-generator-i18n.js"></script>
+<script src="switch-generator-validate.js"></script>
+<script src="switch-generator-zip.js"></script>
 <script src="switch-generator-app.js"></script>
 <div class="mini-alpaca" id="mini-alpaca" onclick="startRain(true)" onmouseenter="eggMouseOver()" title="100% 非 AI 生成 — 純手工製作">
   🦙

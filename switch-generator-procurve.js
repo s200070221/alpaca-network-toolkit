@@ -130,8 +130,26 @@ function renderProCurveUsers(users){
   if(!list.length)return '';
   return list.map(u=>`aaa authentication local-user "${u.name}" group "${u.role||'operator'}" password sha1 "${u.password}"`).join('\n');
 }
+// VSF 堆疊（2026-09 新增，Phase 4 對外查證，中信心度——官方 arubanetworking.hpe.com AOS-S
+// 16.10 文件之搜尋索引摘要＋真實使用者 troubleshooting 討論串 airheads.hpe.com 交叉確認扁平
+// 單行指令語法：`vsf member N priority P`＋`vsf enable domain N`；links（`vsf member N link L
+// PORT`）刻意不輸出——比照既有 Aruba CX VSF `renderArubaVSF()` 排除拓撲鏈路的既有慣例（需額外
+// 一組表單欄位且與本 MVP 範圍不成比例）。domain 排在最後輸出，官方文件確認此指令會觸發交換器
+// 立即重開機加入 VSF fabric，須確保各成員 priority 已設定完成後才送出
+function renderProCurveVSF(stack){
+  if(!stack||!(stack.members||[]).length)return '';
+  const lines=[];
+  stack.members.forEach(m=>{
+    if(!m.id)return;
+    if(m.priority)lines.push(`vsf member ${m.id} priority ${m.priority}`);
+  });
+  if(stack.domain)lines.push(`vsf enable domain ${stack.domain}`);
+  return lines.join('\n');
+}
 function assembleProCurveConfig(model){
   const blocks=[`; ${tr('notice.disclaimer')}`,`hostname "${model.sysname||'Switch'}"`];
+  const vsfBlockPC=renderProCurveVSF(model.procurveVsf);
+  if(vsfBlockPC)blocks.push(vsfBlockPC);
   // OSPF：官方文件將「先啟用 OSPF」列為建議步驟順序，早於「指派介面到 area」，排在
   // VLAN 區塊（內嵌逐 VLAN `ip ospf area`）之前輸出
   const ospfBlockPC=renderProCurveOSPFGlobal(model.ospf);

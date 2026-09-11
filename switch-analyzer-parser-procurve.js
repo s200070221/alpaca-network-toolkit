@@ -239,6 +239,50 @@ function parseProCurve(cfg) {
     }
     return relays;
   }
+  // VSF（Virtual Switching Framework，2026-09 新增，Phase 4 對外查證）：ArubaOS-Switch（舊款
+  // ProCurve/Aruba 2930F/2930M/3810M/5400R 等，非 Aruba CX）的堆疊技術，命名與 Aruba CX 的
+  // VSF 相同但屬不同產品線、CLI 語法細節不同，不可與 switch-analyzer-parser-aruba-cx.js 的
+  // parseArubaVSF() 混用或共用函式。真實語法為扁平單行指令（直接 fetch 官方
+  // arubanetworking.hpe.com AOS-S 16.10 文件之搜尋索引摘要＋真實使用者 troubleshooting 討論串
+  // airheads.hpe.com 交叉確認，中信心度）：
+  //   vsf enable domain <N>（域 ID，範圍 1-4294967295，同一堆疊內所有成員須設定一致的值）
+  //   vsf member <M> priority <P>（預設 128，數值越高越優先成為 Commander）
+  //   vsf member <M> link <L> <PORT>（可同一 link id 多行疊加多個埠做鏈路聚合）
+  // 另有部落格文件範例展示巢狀區塊寫法（`vsf`/`enable domain`/`member N`/`type`/`priority`/
+  // `link`/`exit`），較可能是 CLI 逐步輸入時的子模式導覽記錄而非真實 show running-config
+  // 輸出格式，信心度不足，本輪不支援；Commander 判定沿用官方文件敘述的「priority 數值最高
+  // 者」，未宣告 priority 時官方預設值為 128
+  function parseVSF() {
+    if (!/^\s*vsf\s+(enable|member)\b/m.test(cfg)) return null;
+    const byId = {};
+    const members = [];
+    const ensure = id => {
+      if (!byId[id]) { byId[id] = { id: String(id), model: '', priority: null, role: null }; members.push(byId[id]); }
+      return byId[id];
+    };
+    const linkMap = {};
+    const addLink = (lid, port) => {
+      if (!linkMap[lid]) linkMap[lid] = { id: String(lid), ports: [] };
+      if (!linkMap[lid].ports.includes(port)) linkMap[lid].ports.push(port);
+    };
+    for (const line of cfg.split(/\r?\n/)) {
+      const pm = line.match(/^\s*vsf\s+member\s+(\d+)\s+priority\s+(\d+)/);
+      if (pm) { ensure(pm[1]).priority = parseInt(pm[2]); continue; }
+      const lm = line.match(/^\s*vsf\s+member\s+(\d+)\s+link\s+(\d+)\s+(\S+)/);
+      if (lm) { ensure(lm[1]); addLink(lm[2], lm[3]); continue; }
+      const em = line.match(/^\s*vsf\s+member\s+(\d+)\b/);
+      if (em) ensure(em[1]);
+    }
+    const domainM = cfg.match(/^\s*vsf\s+enable\s+domain\s+(\d+)/m);
+    if (!members.length && !domainM) return null;
+    if (members.length) {
+      const sorted = [...members].sort((a, b) => (b.priority ?? 128) - (a.priority ?? 128) || parseInt(a.id) - parseInt(b.id));
+      sorted.forEach((mem, i) => { mem.role = i === 0 ? 'Master' : 'Member'; });
+    }
+    members.sort((a, b) => parseInt(a.id) - parseInt(b.id));
+    const links = Object.values(linkMap).sort((a, b) => parseInt(a.id) - parseInt(b.id));
+    return { type: 'VSF', domain: domainM ? domainM[1] : '', members, links };
+  }
   // 2026-07-22 新增（真實 HPE 5412zl 匯出檔查證）：使用者帳號解析，涵蓋兩種真實並存語法——
   // (1) 傳統機制：password {operator|manager} [user-name "NAME"] sha1 "HASH"（user-name 子句
   //     可省略，省略時帳號名稱即固定為 operator/manager 字面值）
@@ -264,7 +308,7 @@ function parseProCurve(cfg) {
   return {
     sys:        parseSys(),
     irf:        null,
-    stack:      null,
+    stack:      parseVSF(),
     vlans:      pcVlans,
     interfaces: pcInterfaces,
     lacp:       parseTrunk(),

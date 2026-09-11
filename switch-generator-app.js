@@ -7,14 +7,8 @@ function markInvalid(el){if(el)el.classList.add('invalid');}
 
 // IPv4/CIDR 格式驗證輔助函式：取代 validateForm() 原本 4 處重複貼上的內聯正則
 // （僅比對格式＋每段 0-255 範圍，不比對子網對齊等進階語意）
-function isValidIPv4(s){
-  const m=(s||'').match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  return !!m && m.slice(1).every(o=>parseInt(o,10)<=255);
-}
-function isValidCIDR(s){
-  const m=(s||'').match(/^(\S+)\/(\d{1,2})$/);
-  return !!m && isValidIPv4(m[1]) && parseInt(m[2],10)>=0 && parseInt(m[2],10)<=32;
-}
+// isValidIPv4() 已搬到 switch-generator-validate.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
+// isValidCIDR() 已搬到 switch-generator-validate.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
 
 // 22 個 addXxxRow() 函式逐字重複的刪除按鈕儲存格，抽成共用常數（純去重，行為不變）
 const RM_BTN_TD='<td><button class="rm-btn" onclick="this.closest(\'tr\').remove()">✕</button></td>';
@@ -770,25 +764,11 @@ function applyDeviceModel(){
 // 展開 DEVICE_MODELS 指定型號的埠清單成一個名稱 Set，供 validateForm() 交叉驗證使用；
 // 展開邏輯與 applyDeviceModel() 保持一致（同一份 ports 資料，不重寫規則）。
 // modelValue 為空/找不到型號時回傳 null，代表「未套用型號」不做交叉檢查。
-function getModelPortSet(vendor,modelValue){
-  if(!modelValue)return null;
-  const model=(DEVICE_MODELS[vendor]||[]).find(m=>m.value===modelValue);
-  if(!model)return null;
-  const set=new Set();
-  model.ports.forEach(p=>{
-    if(p.name)set.add(p.name);
-    else for(let n=p.from;n<=p.to;n++)set.add(p.prefix+n);
-  });
-  return set;
-}
+// getModelPortSet() 已搬到 switch-generator-validate.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
 
 // Breakout 子埠命名固定是「母埠 + 分隔符(: . /) + 數字」，只要母埠本身是合法埠位就視為合法，
 // 不需要另外追蹤 _breakoutEnables 狀態
-function isKnownModelPort(name,portSet){
-  if(portSet.has(name))return true;
-  const m=name.match(/^(.+?)([:./])(\d+)$/);
-  return !!(m&&portSet.has(m[1]));
-}
+// isKnownModelPort() 已搬到 switch-generator-validate.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
 
 function updateAppliedModelNotice(){
   const vendor=document.getElementById('vendor').value;
@@ -1095,6 +1075,17 @@ function addArubaVsfMemberRow(id='',model='',priority=''){
   document.getElementById('aruba-vsf-member-body').appendChild(tr);
   applyI18n(tr);
 }
+// ArubaOS-Switch（舊款 ProCurve，非 Aruba CX）VSF 堆疊列（2026-09 新增，Phase 4 對外查證）：
+// 無 model 欄位（真實扁平指令 `vsf member N priority P` 本身不含機型資訊，機型是裝置自動偵測，
+// 比照官方語法不虛構欄位）
+function addProCurveVsfMemberRow(id='',priority=''){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="pcvsf-mem-id" value="${escAttr(id)}"></td>
+    <td><input class="pcvsf-mem-priority" value="${escAttr(priority)}" placeholder="128"></td>
+    ${RM_BTN_TD}`;
+  document.getElementById('procurve-vsf-member-body').appendChild(tr);
+  applyI18n(tr);
+}
 
 function addVrrpRow(vlanId='',ip='',vrid='',vip='',priority='100',preempt=false,authMode='',authKey='',trackIf='',trackReduced=''){
   const tr=document.createElement('tr');
@@ -1396,6 +1387,8 @@ function updateModeOptions(){
   document.getElementById('alcatel-stack-card').style.display=vendor==='alcatel'?'':'none';
   document.getElementById('aruba-vsf-card').style.display=vendor==='aruba'?'':'none';
   document.getElementById('dell-vlt-card').style.display=vendor==='dell-os10'?'':'none';
+  // ArubaOS-Switch（舊款 ProCurve，非 Aruba CX）VSF 卡片（2026-09 新增，Phase 4 對外查證）
+  document.getElementById('procurve-vsf-card').style.display=vendor==='procurve'?'':'none';
   // VXLAN 卡片僅 Comware/Aruba CX 適用（switch_analyzer parseVXLAN() 目前只支援這兩家）
   document.getElementById('vxlan-card').style.display=(vendor==='comware'||vendor==='aruba'||vendor==='cisco_nxos')?'':'none';
   // class-map/match + service-policy 卡片（2026-08-28（續4）新增）：僅 Cisco/Ruijie/Planet
@@ -1812,6 +1805,15 @@ function collectModel(){
     unitId:document.getElementById('dell-vlt-unit-id').value.trim(),
     peerLink:document.getElementById('dell-vlt-peer-link').value.trim(),
   }:null;
+  // ArubaOS-Switch（舊款 ProCurve，非 Aruba CX）VSF（2026-09 新增，Phase 4 對外查證）：
+  // 無 model 欄位，見 addProCurveVsfMemberRow()/renderProCurveVSF() 註解
+  const procurveVsfDomainEl=document.getElementById('procurve-vsf-domain');
+  const procurveVsf={
+    domain:procurveVsfDomainEl?procurveVsfDomainEl.value.trim():'',
+    members:rowsOf('#procurve-vsf-member-body tr').map(tr=>({
+      id:val(tr,'pcvsf-mem-id'), priority:val(tr,'pcvsf-mem-priority'),
+    })).filter(m=>m.id),
+  };
 
   // VXLAN：僅 Comware/Aruba CX 使用，單一設定物件（非清單），欄位命名對齊 switch_analyzer
   // parseVXLAN() 既有回傳形狀 {vtep, vnis:[{vni,vlan,name,peers,rd,rtImport,rtExport,gw}]}
@@ -1831,7 +1833,7 @@ function collectModel(){
     syslogServer:document.getElementById('syslog-server').value.trim(),
     vlans, interfaces, ospf, bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos, stack, users, sonicL3Interfaces, sonicQos, sonicStpVlanIntf,
     classMaps, qosApply, planetMacAcl,
-    comwareIrf, ciscoStack, brocadeStack, alcatelStack, arubaVsf, dellVlt,
+    comwareIrf, ciscoStack, brocadeStack, alcatelStack, arubaVsf, dellVlt, procurveVsf,
   };
 }
 
@@ -1841,7 +1843,7 @@ function collectModel(){
 // 逐項呼叫 addXxxRow() 重建列。儲存的 model 就是 collectModel() 的完整輸出，故欄位
 // 名稱與此函式讀取的完全對稱，不需另外映射。
 function applyModelToForm(model){
-  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body','comware-irf-member-body','cisco-stack-member-body','brocade-stack-member-body','alcatel-stack-member-body','aruba-vsf-member-body'].forEach(id=>{
+  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body','comware-irf-member-body','cisco-stack-member-body','brocade-stack-member-body','alcatel-stack-member-body','aruba-vsf-member-body','procurve-vsf-member-body'].forEach(id=>{
     document.getElementById(id).innerHTML='';
   });
 
@@ -2021,6 +2023,12 @@ function applyModelToForm(model){
     document.getElementById('dell-vlt-priority').value=model.dellVlt.priority||'';
     document.getElementById('dell-vlt-unit-id').value=model.dellVlt.unitId||'';
     document.getElementById('dell-vlt-peer-link').value=model.dellVlt.peerLink||'';
+  }
+  const procurveVsfDomainEl=document.getElementById('procurve-vsf-domain');
+  if(procurveVsfDomainEl&&model.procurveVsf){
+    procurveVsfDomainEl.value=model.procurveVsf.domain||'';
+    document.getElementById('procurve-vsf-member-body').innerHTML='';
+    (model.procurveVsf.members||[]).forEach(m=>addProCurveVsfMemberRow(m.id,m.priority));
   }
 
   // VXLAN（僅 Comware/Aruba CX 顯示，比照 MLAG/VPC 慣例——欄位一直存在於 DOM，只是卡片被隱藏）
@@ -2223,67 +2231,16 @@ const VENDOR_FEATURE_LABEL={bgp:'BGP',rip:'RIP',vrrp:'VRRP',dhcpServer:'DHCP Ser
 // 命名，實際涵蓋全部 10 家有獨立聚合介面架構的廠牌）。802.1X／port-security 與 LACP 互斥
 // 僅 Comware 官方文件明確查證過，故該子檢查維持 Comware 專屬，未擴及其他廠牌
 // IPv4 點分十進位轉 32-bit 整數，供 CIDR/wildcard 網段比對用
-function ipv4ToInt(ip){
-  const p=(ip||'').split('.').map(Number);
-  if(p.length!==4||p.some(n=>!Number.isInteger(n)||n<0||n>255))return null;
-  return ((p[0]*256+p[1])*256+p[2])*256+p[3];
-}
+// ipv4ToInt() 已搬到 switch-generator-validate.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
 
 // Comware 專屬：OSPF 逐 area 填寫的 `network A.B.C.D wildcard-mask` 若沒有任何介面（含 SVI）
 // 目前設定的 IP 落在該網段內，使用者實測確認真實 Comware 設備會直接報錯（比「完全沒填
 // networks」的既有 val.ospf_no_network 檢查更進一步——那個檢查只抓「整個 area 空的」，
 // 這裡抓「填了但網段兜不上任何一個實際介面」）
-function comwareOspfNetworkWarnings(model){
-  const warnings=[];
-  if(!model||model.vendor!=='comware')return warnings;
-  const ifaceIps=(model.interfaces||[])
-    .map(i=>(i.ip||'').split('/')[0].split(' ')[0])
-    .filter(ip=>isValidIPv4(ip));
-  (model.ospf||[]).forEach((proc,pIdx)=>{
-    (proc.areas||[]).forEach(area=>{
-      (area.networks||[]).forEach(net=>{
-        if(!net.network||!net.wildcard)return;
-        const netInt=ipv4ToInt(net.network), wildInt=ipv4ToInt(net.wildcard);
-        if(netInt===null||wildInt===null)return;
-        const matched=ifaceIps.some(ip=>{
-          const ipInt=ipv4ToInt(ip);
-          return ipInt!==null&&(ipInt&~wildInt)===(netInt&~wildInt);
-        });
-        if(!matched){
-          warnings.push(`⚠️ ${tr('val.comware_ospf_network_no_match').replace('{n}',pIdx+1).replace('{network}',net.network).replace('{wildcard}',net.wildcard)}`);
-        }
-      });
-    });
-  });
-  return warnings;
-}
+// comwareOspfNetworkWarnings() 已搬到 switch-generator-validate.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
 
 const LACP_AGGREGATE_VENDORS=new Set(['comware','juniper','aruba','cisco','cisco_nxos','dell-os10','arista','ruijie','netgear','edgeswitch','planet']);
-function comwareLacpAttrWarnings(model){
-  const warnings=[];
-  if(!model||!LACP_AGGREGATE_VENDORS.has(model.vendor))return warnings;
-  const ifaceByName={};
-  (model.interfaces||[]).forEach(i=>{ifaceByName[i.name]=i;});
-  (model.lacp||[]).forEach(l=>{
-    const members=(l.members||[]).map(m=>ifaceByName[m]).filter(Boolean);
-    if(members.length>1){
-      const sig=i=>JSON.stringify([i.mode||'',i.trunkVlans||'',i.nativeVlan||'',i.accessVlan||'',i.hybrid||{}]);
-      const first=sig(members[0]);
-      if(members.some(m=>sig(m)!==first)){
-        warnings.push(`⚠️ ${tr('val.comware_lacp_attr_mismatch').replace('{id}',l.id)}`);
-      }
-    }
-    if(model.vendor==='comware'){
-      members.forEach(m=>{
-        const sec=(model.security||[]).find(s=>s.port===m.name);
-        if(sec&&(sec.dot1x||sec.portSec)){
-          warnings.push(`⚠️ ${tr('val.comware_lacp_security_conflict').replace('{port}',m.name).replace('{id}',l.id)}`);
-        }
-      });
-    }
-  });
-  return warnings;
-}
+// comwareLacpAttrWarnings() 已搬到 switch-generator-validate.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
 function validateForm(){
   const errors=[], warnings=[];
   const model=collectModel();
@@ -2917,7 +2874,7 @@ async function parseAndImport(){
 
   // 清空既有列（含 vrrp-body：匯入功能雖不映射 VRRP 資料，但仍須清掉畫面殘留的舊資料，
   // 避免使用者誤以為初始化 demo 列是這次匯入結果的一部分）
-  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body','comware-irf-member-body','cisco-stack-member-body','brocade-stack-member-body','alcatel-stack-member-body','aruba-vsf-member-body'].forEach(id=>{
+  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body','comware-irf-member-body','cisco-stack-member-body','brocade-stack-member-body','alcatel-stack-member-body','aruba-vsf-member-body','procurve-vsf-member-body'].forEach(id=>{
     document.getElementById(id).innerHTML='';
   });
 
@@ -3324,6 +3281,11 @@ async function parseAndImport(){
       document.getElementById('dell-vlt-unit-id').value=parsed.stack.members?.[0]?.id||'';
       document.getElementById('dell-vlt-peer-link').value=parsed.stack.peerLink||'';
     }
+  }else if(vendor==='procurve'&&parsed.stack&&parsed.stack.type==='VSF'){
+    // ArubaOS-Switch（舊款 ProCurve，非 Aruba CX）VSF（2026-09 新增，Phase 4 對外查證）
+    const pcVsfDomainEl=document.getElementById('procurve-vsf-domain');
+    if(pcVsfDomainEl)pcVsfDomainEl.value=parsed.stack.domain||'';
+    (parsed.stack.members||[]).forEach(m=>addProCurveVsfMemberRow(m.id,m.priority));
   }
 
   generate(true);
@@ -3689,78 +3651,8 @@ function downloadBulkZip(){
 // 移植自 config_anonymizer 的 makeZip()：舊版用 String.fromCharCode 拼字串
 // 再 TextEncoder 編碼，byte 值 ≥128 時會被誤當 UTF-8 多位元組編碼，導致中央
 // 目錄位移損毀；CRC-32 也原本恆為 0，一併修正為真正計算）
-function crc32(buf){
-  let c=~0;
-  const t=(()=>{
-    const T=new Uint32Array(256);
-    for(let i=0;i<256;i++){let v=i;for(let j=0;j<8;j++)v=(v&1)?(0xEDB88320^(v>>>1)):(v>>>1);T[i]=v;}
-    return T;
-  })();
-  for(let i=0;i<buf.length;i++)c=t[(c^buf[i])&0xFF]^(c>>>8);
-  return (~c)>>>0;
-}
-function createZip(files,manifestContent){
-  const fileObject={...files,'manifest.csv':manifestContent};
-  const enc=(s)=>new TextEncoder().encode(s);
-  const u16=(n)=>[n&0xFF,(n>>8)&0xFF];
-  const u32=(n)=>[n&0xFF,(n>>8)&0xFF,(n>>16)&0xFF,(n>>24)&0xFF];
-  const now=new Date();
-  const dosTime=((now.getHours()<<11)|(now.getMinutes()<<5)|(now.getSeconds()>>1));
-  const dosDate=(((now.getFullYear()-1980)<<9)|((now.getMonth()+1)<<5)|now.getDate());
-  const parts=[];
-  const centralDir=[];
-  let offset=0;
-  let numEntries=0;
-  for(const [filename,content] of Object.entries(fileObject)){
-    const nameBytes=enc(filename);
-    const data=enc(content);
-    const crc=crc32(data);
-    const size=data.length;
-    const lhdr=new Uint8Array([
-      0x50,0x4B,0x03,0x04,
-      0x14,0x00,
-      0x00,0x08, // 通用旗標 bit 11 = 檔名/註解為 UTF-8（含中文檔名時避免亂碼）
-      0x00,0x00,
-      ...u16(dosTime),...u16(dosDate),
-      ...u32(crc),
-      ...u32(size),...u32(size),
-      ...u16(nameBytes.length),0x00,0x00,
-    ]);
-    parts.push(lhdr,nameBytes,data);
-    const cdEntry=new Uint8Array([
-      0x50,0x4B,0x01,0x02,
-      0x14,0x00,0x14,0x00,
-      0x00,0x08,0x00,0x00, // 通用旗標 bit 11 = UTF-8 檔名，與 local header 一致
-
-      ...u16(dosTime),...u16(dosDate),
-      ...u32(crc),
-      ...u32(size),...u32(size),
-      ...u16(nameBytes.length),0x00,0x00, // filename length, extra field length
-      0x00,0x00,                          // file comment length
-      0x00,0x00,                          // disk number start
-      0x00,0x00,                          // internal file attributes
-      0x00,0x00,0x00,0x00,                // external file attributes
-      ...u32(offset),                     // relative offset of local header
-    ]);
-    centralDir.push(cdEntry,nameBytes);
-    offset+=lhdr.length+nameBytes.length+size;
-    numEntries++;
-  }
-  const cdSize=centralDir.reduce((s,b)=>s+b.length,0);
-  const eocd=new Uint8Array([
-    0x50,0x4B,0x05,0x06,
-    0x00,0x00,0x00,0x00,
-    ...u16(numEntries),...u16(numEntries),
-    ...u32(cdSize),...u32(offset),
-    0x00,0x00,
-  ]);
-  const all=[...parts,...centralDir,eocd];
-  const totalLen=all.reduce((s,b)=>s+b.length,0);
-  const finalBuffer=new Uint8Array(totalLen);
-  let pos=0;
-  for(const b of all){finalBuffer.set(b,pos);pos+=b.length;}
-  return finalBuffer;
-}
+// crc32() 已搬到 switch-generator-zip.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
+// createZip() 已搬到 switch-generator-zip.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
 
 // 純 JavaScript 文件下載（不依賴外部庫）
 function downloadFile(data,filename,mimeType='application/octet-stream'){
