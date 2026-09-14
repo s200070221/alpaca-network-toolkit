@@ -2589,6 +2589,9 @@ function showValidationResults(results,fromImport=false){
   document.body.appendChild(panel);
 }
 
+// 「本次變更」diff 預覽（2026-09-14 新增）：記錄上一次 generate() 產生的設定文字，供下一次
+// 呼叫時比對差異；null 代表尚未產生過任何版本（首次產生不顯示 diff，無比對基準）
+let _lastGeneratedCfg=null;
 function generate(fromImport=false){
   // 驗證表單
   const validation=validateForm();
@@ -2619,6 +2622,29 @@ function generate(fromImport=false){
   else cfg=assembleComwareConfig(model);
   document.getElementById('output').value=cfg;
   checkGeneratorEggs(model.sysname);
+  renderSessionDiff(_lastGeneratedCfg,cfg);
+  _lastGeneratedCfg=cfg;
+}
+// renderSessionDiff()：比對「上一次」與「這一次」產生的設定文字，讓使用者快速看出剛剛調整
+// 表單後實際改動了哪些行；獨立容器（#session-diff-result），不覆蓋既有「上傳兩份設定檔比對」
+// 用的 #diff-result（那是使用者主動上傳兩個檔案比對，語意不同，混用會讓使用者搞不清楚
+// 目前看到的 diff 是哪一種比對）。只顯示變動行（add/del），同批未變動的行省略不顯示，
+// 保持「這次改了什麼」的精簡呈現，與 displayDiff() 逐行全列不同
+function renderSessionDiff(oldCfg,newCfg){
+  const box=document.getElementById('session-diff-result');
+  if(!box)return;
+  if(oldCfg===null||oldCfg===newCfg){box.style.display='none';box.innerHTML='';return;}
+  const diff=computeDiff(oldCfg.split('\n'),newCfg.split('\n'));
+  const addCount=diff.filter(d=>d.type==='add').length;
+  const delCount=diff.filter(d=>d.type==='del').length;
+  if(!addCount&&!delCount){box.style.display='none';box.innerHTML='';return;}
+  const changedHtml=diff.filter(d=>d.type!=='same').map(item=>
+    item.type==='add'
+      ?`<div style="color:var(--green);background:rgba(16,185,129,.1)">+ ${escapeHtml(item.content)}</div>`
+      :`<div style="color:var(--red);background:rgba(239,68,68,.1)">- ${escapeHtml(item.content)}</div>`
+  ).join('');
+  box.innerHTML=`<div style="border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:8px;font-weight:600">📊 ${tr('diff.sessionTitle')}：${tr('diff.added')} ${addCount} | ${tr('diff.deleted')} ${delCount}</div>${changedHtml}`;
+  box.style.display='block';
 }
 
 // ── 彩蛋：主機名稱關鍵字 + 深夜/計時提醒（借鑑自 switch_analyzer checkSwitchEggs）───

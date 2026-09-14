@@ -75,6 +75,14 @@ const Reporter = (() => {
         headers = [tr('audit.col_check'),tr('audit.col_result'),tr('audit.col_risk'),tr('audit.col_detail'),tr('audit.col_standards')];
         rows = data.map(r => [r.check,r.value,r.risk,r.detail,(r.standards||[]).join('; ')]);
         break;
+      case 'exact-duplicates':
+        headers = [tr('audit.col_merge_ids'),tr('col.src_addr'),tr('col.dst_addr'),tr('col.service'),tr('col.action'),tr('audit.col_merge_count')];
+        rows = data.map(r => [r.ids.join(';'),r.srcAddr,r.dstAddr,r.service,r.action,r.count]);
+        break;
+      case 'cross-vdom':
+        headers = [tr('audit.col_category'),tr('audit.col_name'),tr('audit.col_cross_vdom_values')];
+        rows = data.map(r => [r.category,r.name,r.sample.join(' | ')]);
+        break;
       case 'users':
         headers = [tr('col.type'),tr('col.name'),tr('col.status'),tr('col.auth_method'),'Email',tr('col.two_factor'),tr('col.ldap_server'),tr('col.radius_server'),tr('col.members'),tr('col.comment')];
         rows = data.map(r => [r.type,r.name,r.status,r.authType||r.groupType||'-',r.email||'-',r.twoFactor||'-',r.ldapServer||r.server||'-',r.radiusServer||'-',r.members||'-',r.comment]);
@@ -351,7 +359,7 @@ td:first-child,th:first-child{padding-left:16px}
 .info-item .v{font-family:monospace;color:#e2e8f0;font-size:13px;word-break:break-word;overflow-wrap:break-word}
 .overflow{overflow-x:auto}
 b{font-weight:600}small{color:#64748b;font-size:11px}
-@media print{body{background:#fff;color:#000}table{border:1px solid #ccc}th{background:#f5f5f5;color:#333;-webkit-print-color-adjust:exact;print-color-adjust:exact}td{border-bottom:1px solid #eee}.badge-allow{background:#d1fae5;color:#065f46}.badge-deny{background:#fee2e2;color:#991b1b}@page{margin:1.5cm}}`;
+@media print{body{background:#fff;color:#000}table{width:100%;border:1px solid #ccc}thead{display:table-header-group}tbody tr{break-inside:avoid}.card{break-inside:avoid}th{background:#f5f5f5;color:#333;-webkit-print-color-adjust:exact;print-color-adjust:exact}td{border-bottom:1px solid #eee}.badge-allow{background:#d1fae5;color:#065f46}.badge-deny{background:#fee2e2;color:#991b1b}.badge-warn{background:#fef3c7;color:#92400e}.badge-info{background:#e0f2fe;color:#0369a1}.badge-on{background:#d1fae5;color:#065f46}.badge-off{background:#f1f5f9;color:#475569}@page{margin:1.5cm}}`;
 
   // 2026-08-24 新增（candidate list #11）：本函式先前是同步整段字串拼接，大量規則的
   // 設定檔匯出時會讓畫面凍結；現有 11 個天然的分段建置點（policyRows/ifaceRows/...）

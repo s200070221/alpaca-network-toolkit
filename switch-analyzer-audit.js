@@ -112,6 +112,48 @@ function analyzeSwitchAudit(parsed){
   f('unused-vlan-trunk', tr('audit.check_unused_vlan_trunk'), unusedTrunkVlans.length, 'low',
     unusedTrunkVlans.length?unusedTrunkVlans.map(v=>`V${v.id}`).slice(0,8).join(', ')+(unusedTrunkVlans.length>8?'…':''):tr('audit.none'),
     ['ISO27001 A.8.20','CIS v8 12.2']);
+  // 10. LACP 群組成員埠設定不一致（2026-09-14 新增）：同一聚合群組的成員埠理論上應共用相同
+  // 交換器層設定（mode/access VLAN），不一致代表設定飄移或誤將不相干埠加入群組。members 欄位
+  // 正規化邏輯與 switch-analyzer-app.js 的 _lacpMembersArr() 同款複製一份（不跨檔案 import）
+  const _lacpMembersArr=x=>Array.isArray(x.members)?x.members:String(x.members||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const lacpMismatch=[];
+  (parsed.lacp||[]).forEach(l=>{
+    const memNames=_lacpMembersArr(l).map(m=>typeof m==='string'?m:m.name);
+    const memIfaces=memNames.map(n=>interfaces.find(i=>i.name===n)).filter(Boolean);
+    if(memIfaces.length<2)return;
+    const modes=new Set(memIfaces.map(i=>i.mode||''));
+    const accessVlans=new Set(memIfaces.filter(i=>i.mode==='access').map(i=>String(i.nativeVlan||'')));
+    if(modes.size>1||accessVlans.size>1)lacpMismatch.push(l.name);
+  });
+  f('lacp-member-mismatch', tr('audit.check_lacp_member_mismatch'), lacpMismatch.length, 'medium',
+    lacpMismatch.length?lacpMismatch.slice(0,8).join(', ')+(lacpMismatch.length>8?'…':''):tr('audit.none'),
+    ['ISO27001 A.8.20','CIS v8 4.1']);
+  // 11. 實體/堆疊介面缺少描述文字（2026-09-14 新增，port==='physical'||'stack' 篩選慣例沿用
+  // switch-analyzer-app.js 既有多處 `i.type==='physical'||i.type==='stack'` 寫法）
+  const noDescIfaces=interfaces.filter(i=>(i.type==='physical'||i.type==='stack')&&!(i.desc||'').trim());
+  f('if-no-desc', tr('audit.check_if_no_desc'), noDescIfaces.length, 'low',
+    noDescIfaces.length?noDescIfaces.map(i=>i.name).slice(0,8).join(', ')+(noDescIfaces.length>8?'…':''):tr('audit.none'),
+    ['ISO27001 A.5.9','CIS v8 1.1']);
+  // 12-13. STP 誤設組合檢查（2026-09-14 新增，RouterOS 無 parsed.stp.ports[]，沿用既有第 2 項的
+  // Array.isArray guard）：(a) PortFast 與 Trunk 模式同時啟用於同一埠——PortFast 設計前提是
+  // 該埠僅接終端裝置，接在 Trunk 上聯埠會讓迴圈偵測失效；(b) 已啟用 BPDU Guard（代表設定者已
+  // 意識到邊界安全）卻在 Trunk 上聯埠遺漏 Root Guard，同屬「防護不完整」訊號
+  const stpPortsForCombo=Array.isArray(parsed?.stp?.ports)?parsed.stp.ports:[];
+  const stpPortfastTrunk=stpPortsForCombo.filter(sp=>{
+    const iface=interfaces.find(i=>i.name===sp.port);
+    return sp.portfast&&iface&&iface.mode==='trunk';
+  });
+  f('stp-portfast-trunk', tr('audit.check_stp_portfast_trunk'), stpPortfastTrunk.length, 'medium',
+    stpPortfastTrunk.length?stpPortfastTrunk.map(sp=>sp.port).slice(0,8).join(', ')+(stpPortfastTrunk.length>8?'…':''):tr('audit.none'),
+    ['ISO27001 A.8.20','CIS v8 12.2']);
+  const anyBpduGuard=stpPortsForCombo.some(sp=>sp.bpduguard);
+  const trunkNoRootGuard=anyBpduGuard?stpPortsForCombo.filter(sp=>{
+    const iface=interfaces.find(i=>i.name===sp.port);
+    return iface&&iface.mode==='trunk'&&!sp.guardRoot;
+  }):[];
+  f('stp-uplink-no-rootguard', tr('audit.check_stp_uplink_no_rootguard'), trunkNoRootGuard.length, 'low',
+    trunkNoRootGuard.length?trunkNoRootGuard.map(sp=>sp.port).slice(0,8).join(', ')+(trunkNoRootGuard.length>8?'…':''):tr('audit.none'),
+    ['ISO27001 A.8.20','CIS v8 12.2']);
   return findings;
 }
 

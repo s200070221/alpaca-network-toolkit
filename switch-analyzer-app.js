@@ -518,6 +518,26 @@ function navGo(view){
   sortCol=null;sortDir=1;
   renderView(view);
 }
+// 全域搜尋/跳轉（2026-09-14 新增）：不重新發明各分頁既有的子字串比對邏輯，只依序比對
+// VLAN id/name→介面名稱/IP→OSPF PID→ACL 名稱→主機名稱決定目標分頁後呼叫既有 navGo()，
+// renderView() 完成後該分頁自己的 #search-inp 已存在於 DOM，再把查詢字串塞進去並觸發既有
+// onSearchInput()（沿用該分頁本來就有的子字串過濾/高亮，本函式不重複實作）
+function doGlobalSearch(){
+  if(!parsed)return;
+  const raw=(document.getElementById('global-search-inp')?.value||'').trim();
+  if(!raw)return;
+  const q=raw.toLowerCase();
+  let target=null;
+  if((parsed.vlans||[]).some(v=>String(v.id).includes(raw)||(v.name||'').toLowerCase().includes(q)))target='vlans';
+  else if((parsed.interfaces||[]).some(i=>(i.name||'').toLowerCase().includes(q)||(i.ip||'').includes(raw)))target='ports';
+  else if((parsed.ospf||[]).some(o=>String(o.pid||'').includes(raw)))target='routing';
+  else if((parsed.acls||[]).some(a=>(a.name||'').toLowerCase().includes(q)))target='acl';
+  else if((parsed.sys?.hostname||'').toLowerCase().includes(q))target='overview';
+  if(!target)return;
+  navGo(target);
+  const inp=document.getElementById('search-inp');
+  if(inp){inp.value=raw;onSearchInput();}
+}
 function resetAll(){
   parsed=null;currentView='upload';
   document.getElementById('view-upload').classList.add('show');

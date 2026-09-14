@@ -560,6 +560,8 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
       <a href="log-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_log">日誌分析</a>
     </div>
     <div class="tb-right" id="tb-actions" style="display:none">
+      <input type="text" id="global-search-inp" data-i18n="search.global_placeholder" style="width:150px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--text);font-size:12px;margin-right:6px" onkeydown="if(event.key==='Enter')doGlobalSearch()">
+      <button class="btn btn-ghost btn-sm" onclick="doGlobalSearch()" data-i18n="search.global_btn">🔍 跳轉</button>
       <button class="btn btn-ghost btn-sm" onclick="exportCSV()" data-i18n="btn.export_csv">⬇ 匯出 CSV</button>
       <button class="btn btn-ghost btn-sm" onclick="exportJSON()" data-i18n="btn.export_json">⬇ 匯出 JSON</button>
       <button class="btn btn-ghost btn-sm" style="background:rgba(22,160,133,.15);color:#1abc9c;border-color:rgba(22,160,133,.35)" onclick="exportHTMLReport()" data-i18n="btn.html_report">📄 HTML 報表</button>

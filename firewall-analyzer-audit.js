@@ -428,6 +428,30 @@
     return results;
   }
 
+  // 全清單完全重複規則偵測（2026-09-14 新增）：與 analyzeMergeSuggestions() 不同——那個函式
+  // 只掃描「相鄰」規則且要求恰好 1 個欄位不同（合併建議）；此函式用 Map 對「來源/目的/服務/動作」
+  // 完全相同的規則全量分組（非相鄰亦會命中），找出的是真正的冗餘規則（可直接刪除其一），
+  // 語意與合併建議互補、非重工
+  function analyzeExactDuplicates(policies) {
+    const active = (policies || []).filter(p => p.status !== 'disable' && p.status !== 'Disable');
+    const groups = new Map();
+    active.forEach(p => {
+      const key = `${p._vdom || ''}|${p.srcAddr || '-'}|${p.dstAddr || '-'}|${p.service || '-'}|${p.action || '-'}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
+    });
+    const results = [];
+    groups.forEach(group => {
+      if (group.length < 2) return;
+      const first = group[0];
+      results.push({
+        srcAddr: first.srcAddr, dstAddr: first.dstAddr, service: first.service, action: first.action,
+        ids: group.map(p => p.id), count: group.length,
+      });
+    });
+    return results;
+  }
+
   function analyzeCompliance(parsed) {
     const findings = [];
     // standards：僅供參考的常見資安標準關聯條號（業界廣泛公開引用的控制編號與主題，
@@ -561,7 +585,119 @@
     f('broad-network', tr('audit.check_broad_network'), broadNetwork.length, 'medium',
       broadNetwork.length ? tr('audit.id_prefix') + broadNetwork.map(p => idLabel(p)).slice(0,10).join(', ') + (broadNetwork.length > 10 ? '…' : '') : tr('audit.none'),
       ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 12.2']);
+    // 12. 過寬服務物件（2026-09-14 新增）：與第 1 項 any-any 檢查角度不同——那項看的是「規則」
+    // 層級的來源/目的/服務是否皆為 all，此項專門看「服務物件本身」定義是否在物件層級就已無任何
+    // 埠限制（proto 為 ANY/IP，或 tcp/udp port-range 寬度達 65535 等同全埠開放），即使規則的
+    // src/dst 收斂，用了這種服務物件仍形同無埠管制
+    const overlyPermissiveSvc = (parsed.services || []).filter(s => {
+      const proto = String(s.proto || '').toUpperCase();
+      if (proto === 'ANY' || proto === 'IP') return true;
+      return _maxPortRangeWidth(s.tcpPorts) >= 65535 || _maxPortRangeWidth(s.udpPorts) >= 65535;
+    });
+    f('overly-permissive-svc', tr('audit.check_overly_permissive_svc'), overlyPermissiveSvc.length, 'medium',
+      overlyPermissiveSvc.length ? overlyPermissiveSvc.map(s => s.name).slice(0,10).join(', ') + (overlyPermissiveSvc.length > 10 ? '…' : '') : tr('audit.none'),
+      ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 4.4']);
     return findings;
+  }
+  // 單一 port-range token（如 "1-65535" 或 "443"）換算涵蓋的埠數量，供過寬服務物件檢查使用；
+  // 非數字/範圍格式（如具名巨集）一律回傳 0，不臆測
+  function _portRangeWidth(token) {
+    const m = /^(\d+)-(\d+)$/.exec(token.trim());
+    if (m) return Math.max(0, Number(m[2]) - Number(m[1]) + 1);
+    return /^\d+$/.test(token.trim()) ? 1 : 0;
+  }
+  // tcpPorts/udpPorts 欄位可能是逗號或空白分隔的多個 range（各廠牌慣例不同），取其中寬度最大
+  // 的單一 token（而非加總全部 token），避免把「很多個小範圍」誤判成「單一極寬範圍」
+  function _maxPortRangeWidth(portsStr) {
+    if (!portsStr || portsStr === '-') return 0;
+    return String(portsStr).split(/[\s,]+/).filter(Boolean)
+      .reduce((max, tok) => Math.max(max, _portRangeWidth(tok)), 0);
+  }
+
+  // 跨 VDOM 同名物件不一致稽核（2026-09-14 新增）：只在多 VDOM 設定檔才有意義（沿用
+  // buildVdomBar() 既有的 parsed._isMultiVdom 判斷），依 name 分組 addresses/services（皆已有
+  // _vdom 欄位），同名但跨 VDOM 內容不同（addresses 比對 subnet/startIp/endIp/fqdn，services
+  // 比對 proto/tcpPorts/udpPorts/icmpType/icmpCode）時命中——同名物件理應代表同一份定義，內容
+  // 卻不同，容易讓管理者誤以為跨 VDOM 行為一致而誤判影響範圍
+  const _CROSS_VDOM_ADDR_FIELDS = ['subnet', 'startIp', 'endIp', 'fqdn'];
+  const _CROSS_VDOM_SVC_FIELDS = ['proto', 'tcpPorts', 'udpPorts', 'icmpType', 'icmpCode'];
+  function analyzeCrossVdomInconsistency(parsed) {
+    if (!parsed || !parsed._isMultiVdom) return [];
+    const results = [];
+    const _check = (list, fields, category) => {
+      const groups = new Map();
+      (list || []).forEach(o => {
+        if (!o.name) return;
+        if (!groups.has(o.name)) groups.set(o.name, []);
+        groups.get(o.name).push(o);
+      });
+      groups.forEach((group, name) => {
+        const vdoms = [...new Set(group.map(o => o._vdom))];
+        if (vdoms.length < 2) return;
+        const keyOf = o => fields.map(f => o[f] || '').join('|');
+        const distinctKeys = new Set(group.map(keyOf));
+        if (distinctKeys.size <= 1) return;
+        results.push({
+          category, name,
+          sample: group.map(o => `${o._vdom || '-'}: ${fields.map(f => o[f]).filter(Boolean).join('/') || '-'}`),
+        });
+      });
+    };
+    _check(parsed.addresses, _CROSS_VDOM_ADDR_FIELDS, 'address');
+    _check(parsed.services, _CROSS_VDOM_SVC_FIELDS, 'service');
+    return results;
+  }
+  // SARIF（Static Analysis Results Interchange Format 2.1.0）稽核結果匯出（2026-09-14 新增）：
+  // 彙整全部既有稽核函式的結果，轉換成業界標準 schema，供 CI/CD 或安全工具鏈匯入比對。純函式，
+  // 即時重新呼叫 analyze* 系列（比照 CSV_SUBSECTION_GETTERS 型別匯出時才重算的既有慣例，不依賴
+  // 使用者是否已切換過稽核分頁的渲染快取）
+  function buildSarifAuditReport(parsed) {
+    const results = [];
+    const push = (ruleId, level, message, properties) => results.push({ ruleId, level, message: { text: message }, properties: properties || {} });
+    analyzeRuleShadowing(parsed.policies || []).forEach(r => {
+      push('rule-shadowing', 'warning', `${tr('audit.shadow_title')}: ${r.shadowedId} ${tr(r.reason)} ${r.shadowingId}`, { shadowedId: r.shadowedId, shadowedName: r.shadowedName, shadowingId: r.shadowingId, shadowingName: r.shadowingName, tier: r.tier });
+    });
+    analyzeDenyBlocking(parsed.policies || []).forEach(r => {
+      push('deny-blocking', 'warning', `${tr('audit.deny_block_title')}: ${r.blockedId} (${r.blockedName||'-'}) blocked by ${r.blockingId} (${r.blockingName||'-'})`, { blockedId: r.blockedId, blockingId: r.blockingId });
+    });
+    analyzeMergeSuggestions(parsed.policies || []).forEach(r => {
+      push('merge-suggestion', 'note', `${tr('audit.merge_title')}: ${tr(_MERGE_FIELD_LABEL[r.field])} — ${r.values.join(', ')}`, { ids: r.ids, field: r.field, count: r.count });
+    });
+    analyzeExactDuplicates(parsed.policies || []).forEach(r => {
+      push('exact-duplicate-rules', 'warning', `${tr('audit.duplicate_title')}: ${r.ids.join(', ')} (${r.srcAddr} -> ${r.dstAddr} / ${r.service} / ${r.action})`, { ids: r.ids, count: r.count });
+    });
+    const un = analyzeUnusedObjects(parsed);
+    (un.unusedAddrs || []).forEach(a => push('unused-address-object', 'note', `${tr('audit.unused_addr_header')}: ${a.name}`, { name: a.name, category: a.category }));
+    (un.unusedSvcs || []).forEach(s => push('unused-service-object', 'note', `${tr('audit.unused_svc_header')}: ${s.name}`, { name: s.name, category: s.category }));
+    analyzeCompliance(parsed).forEach(f => {
+      if (f.value > 0) push('compliance-' + f.id, f.risk === 'high' ? 'error' : f.risk === 'medium' ? 'warning' : 'note', `${f.check}: ${f.detail}`, { standards: f.standards, count: f.value });
+    });
+    analyzeCrossVdomInconsistency(parsed).forEach(r => {
+      push('cross-vdom-inconsistency', 'warning', `${tr('audit.cross_vdom_title')}: ${r.name} (${r.category}) — ${r.sample.join(' / ')}`, { category: r.category, name: r.name });
+    });
+    return {
+      '$schema': 'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json',
+      version: '2.1.0',
+      runs: [{
+        tool: { driver: { name: 'firewall_analyzer', informationUri: 'https://github.com/s200070221/alpaca-network-toolkit', version: '1.0.0', rules: [] } },
+        results,
+      }],
+    };
+  }
+
+  function buildCrossVdomHtml(results) {
+    let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--orange);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + tip('tip.cross_vdom', tr('audit.cross_vdom_title')) + '</div>';
+    h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--orange)">' + esc(tr('audit.cross_vdom_warn')) + '</div>';
+    if (!results.length) {
+      h += '<div class="nodata" style="padding:14px 0;color:var(--green)">' + esc(tr('audit.cross_vdom_none')) + '</div></div>';
+      return h;
+    }
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_category') + '</th><th>' + tr('audit.col_name') + '</th><th>' + tr('audit.col_cross_vdom_values') + '</th></tr></thead><tbody>';
+    results.forEach(r => {
+      h += `<tr><td>${pill(r.category, 'p-info')}</td><td class="mono" style="color:var(--accent)">${esc(r.name)}</td><td style="font-size:11px">${esc(r.sample.join(' / '))}</td></tr>`;
+    });
+    h += '</tbody></table></div></div>';
+    return h;
   }
 
   function buildZoneMatrixHtml(policies) {
@@ -676,6 +812,23 @@
       const jh = tr('audit.jump_hint');
       const idCells = r.ids.map(id => `<span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(id).replace(/"/g,'&quot;')})" title="${esc(jh)}" style="margin-right:6px">${esc(id)}</span>`).join('');
       h += `<tr><td>${pill(tr(_MERGE_FIELD_LABEL[r.field]), 'p-info')}</td><td class="mono">${idCells}</td><td style="font-size:11px">${esc(r.values.join(', '))}</td><td class="mono">${r.count}</td></tr>`;
+    });
+    h += '</tbody></table></div></div>';
+    return h;
+  }
+
+  function buildDuplicateHtml(results) {
+    let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--red);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + tip('tip.duplicate', tr('audit.duplicate_title')) + '</div>';
+    h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--red)">' + esc(tr('audit.duplicate_warn')) + '</div>';
+    if (!results.length) {
+      h += '<div class="nodata" style="padding:14px 0;color:var(--green)">' + esc(tr('audit.duplicate_none')) + '</div></div>';
+      return h;
+    }
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_merge_ids') + '</th><th>' + tr('col.src_addr') + '</th><th>' + tr('col.dst_addr') + '</th><th>' + tr('col.service') + '</th><th>' + tr('col.action') + '</th><th>' + tr('audit.col_merge_count') + '</th></tr></thead><tbody>';
+    results.forEach(r => {
+      const jh = tr('audit.jump_hint');
+      const idCells = r.ids.map(id => `<span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(id).replace(/"/g,'&quot;')})" title="${esc(jh)}" style="margin-right:6px">${esc(id)}</span>`).join('');
+      h += `<tr><td class="mono">${idCells}</td><td class="mono" style="font-size:11px">${esc(r.srcAddr)}</td><td class="mono" style="font-size:11px">${esc(r.dstAddr)}</td><td class="mono" style="font-size:11px">${esc(r.service)}</td><td>${pill(r.action,'p-info')}</td><td class="mono">${r.count}</td></tr>`;
     });
     h += '</tbody></table></div></div>';
     return h;
