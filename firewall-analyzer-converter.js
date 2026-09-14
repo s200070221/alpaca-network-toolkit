@@ -2077,14 +2077,30 @@ const Converter = (() => {
     // 2026-09-10 新增：具名位址/服務物件攤平。OpenWrtParser 本身查無任何具名物件語法佐證
     // （`config ipset` 與規則完整引用語法未查證，見本檔案開頭既有註解），UCI 的 src_ip/
     // dest_ip/proto/dest_port 選項本來就只接受字面值，故唯一可行修法是把具名物件解析成
-    // 字面 IP/CIDR/range 與 protocol/port 直接內嵌，而非嘗試發明 UCI 未查證過的具名物件語法；
-    // address-group／service-group 因同樣查無佐證維持現狀不處理（不劣化，非本輪新缺口）。
+    // 字面 IP/CIDR/range 與 protocol/port 直接內嵌，而非嘗試發明 UCI 未查證過的具名物件語法。
+    // **address-group 已於 2026-09-14 補上（原「查無佐證維持現狀不處理」已查證解除）**：
+    // 直接讀取 oldwiki.archive.openwrt.org/doc/uci/firewall 官方 `config ipset` 完整選項表
+    // （`match`/`storage`/`name` 等）＋多筆真實社群設定範例（`list entry 'IP'`/`list entry
+    // 'CIDR'` 靜態成員語法），確認 `config ipset` 搭配 `option match 'src_net'|'dest_net'`
+    // ＋逐筆 `list entry` 是有效寫法，規則端改用 `option ipset 'NAME'` 引用（取代
+    // `option src_ip`/`option dest_ip`）。**FQDN 群組成員仍不支援**——ipset 是核心層級的
+    // IP/網段/連接埠/MAC 集合結構，語意上本來就不可能儲存主機名稱，這是架構限制而非查證
+    // 不足，與既有「查無佐證」的 service-group（服務物件語法本身仍未查到）分開判斷。
+    // 一個位址群組若同時被當 src 與 dst 使用，因 ipset 的比對方向（match 選項）在宣告時
+    // 就固定、無法同時代表兩者，MVP 範圍僅依「群組第一次出現時的方向」宣告一份 ipset，
+    // 之後不論再被哪個方向引用皆沿用同一份（真實設定檔裡同一個群組絕大多數只會固定用在
+    // 單一方向，此限制為已知邊界案例，非本輪查證範圍）。
     const owLiteralAddrRe=/^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$|^[0-9a-f:]+:[0-9a-f:]*(\/\d{1,3})?$/i;
-    function owAddrLiteral(val){
-      if(!val||/^(any|-)$/i.test(val)||owLiteralAddrRe.test(val))return val;
-      const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===val&&a.type!=='fqdn');
-      if(!obj)return val;
+    function owAddrObjLiteral(obj){
       return obj.type==='iprange'?`${obj.startIp}-${obj.endIp}`:addrCidr(obj);
+    }
+    function owAddrLiteral(val){
+      if(!val||/^(any|-)$/i.test(val)||owLiteralAddrRe.test(val))return{literal:val};
+      const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===val&&a.type!=='fqdn');
+      if(obj)return{literal:owAddrObjLiteral(obj)};
+      const grp=(parsed.addresses||[]).find(a=>a.category==='address-group'&&a.name===val);
+      if(grp)return{ipset:val};
+      return{literal:val};
     }
     function owSvcLiteral(val){
       if(!val||val.includes('/'))return null;
@@ -2095,6 +2111,27 @@ const Converter = (() => {
       const proto=protoRaw.includes('icmp')?'icmp':(protoRaw.includes('udp')&&!protoRaw.includes('tcp'))?'udp':(protoRaw.includes('tcp')?'tcp':'');
       return{proto,port:port&&port!=='-'?port:''};
     }
+    // 第一輪：掃過全部 policy 決定每個 address-group 第一次出現的方向，並依此輸出 config ipset
+    // （必須排在 config rule 之前，UCI 檔案內具名區塊沒有先後宣告限制，但比照人類手寫慣例
+    // 讓後面的 rule 引用時容易對照）
+    const owIpsetDir={};
+    (parsed.policies||[]).forEach(p=>{
+      const sr=owAddrLiteral(p.srcAddr), dr=owAddrLiteral(p.dstAddr);
+      if(sr.ipset&&!(sr.ipset in owIpsetDir))owIpsetDir[sr.ipset]='src';
+      if(dr.ipset&&!(dr.ipset in owIpsetDir))owIpsetDir[dr.ipset]='dest';
+    });
+    Object.keys(owIpsetDir).forEach(name=>{
+      const grp=(parsed.addresses||[]).find(a=>a.category==='address-group'&&a.name===name);
+      if(!grp)return;
+      L.push(`config ipset`);
+      L.push(`\toption name '${name}'`);
+      L.push(`\toption match '${owIpsetDir[name]}_net'`);
+      sl(grp.members).forEach(m=>{
+        const memObj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===m&&a.type!=='fqdn');
+        L.push(`\tlist entry '${memObj?owAddrObjLiteral(memObj):m}'`);
+      });
+      L.push('');
+    });
     (parsed.policies||[]).forEach(p=>{
       L.push(`config rule`);
       if(p.name)L.push(`\toption name '${p.name}'`);
@@ -2105,9 +2142,11 @@ const Converter = (() => {
       const svcProto=named?named.proto:litProto, svcPort=named?named.port:litPort;
       if(svcProto&&!/^(any|all)$/i.test(svcProto))L.push(`\toption proto '${svcProto}'`);
       if(svcPort)L.push(`\toption dest_port '${svcPort}'`);
-      const srcVal=owAddrLiteral(p.srcAddr), dstVal=owAddrLiteral(p.dstAddr);
-      if(srcVal&&!/^(any|-)$/.test(srcVal))L.push(`\toption src_ip '${srcVal}'`);
-      if(dstVal&&!/^(any|-)$/.test(dstVal))L.push(`\toption dest_ip '${dstVal}'`);
+      const srcRes=owAddrLiteral(p.srcAddr), dstRes=owAddrLiteral(p.dstAddr);
+      if(srcRes.ipset)L.push(`\toption ipset '${srcRes.ipset}'`);
+      else if(srcRes.literal&&!/^(any|-)$/.test(srcRes.literal))L.push(`\toption src_ip '${srcRes.literal}'`);
+      if(dstRes.ipset&&dstRes.ipset!==srcRes.ipset)L.push(`\toption ipset '${dstRes.ipset}'`);
+      else if(!dstRes.ipset&&dstRes.literal&&!/^(any|-)$/.test(dstRes.literal))L.push(`\toption dest_ip '${dstRes.literal}'`);
       L.push(`\toption target '${p.action==='accept'?'ACCEPT':'REJECT'}'`);
       if(p.status==='disable')L.push(`\toption enabled '0'`);
       L.push('');
@@ -2502,11 +2541,12 @@ const Converter = (() => {
       if(hasGroup) notes.push('位址群組／服務群組本轉換器不會攤平（官方 ZLD CLI Reference Guide 雖有對應章節，但本輪查無足夠信心度的逐字語法可供實作），規則若引用這類物件，輸出欄位會是不合法語法或遺漏，請人工核對（單一位址/服務物件含 FQDN 已可正確攤平，不受此提示影響）');
     }
     if(targetVendor==='openwrt'){
-      // 三類皆仍未攤平：OpenWrt UCI 的具名物件語法（config ipset）本輪查證到規則引用機制
-      // 存在，但靜態成員寫入方式信心度不足，比照專案「不猜測」原則維持排除
-      const hasGroupOrFqdn=(parsed.addresses||[]).some(a=>a.category==='address-group'||a.type==='fqdn')
+      // 位址群組已於 2026-09-14 補上攤平（config ipset + list entry 靜態成員語法已查證，
+      // 見 toOpenWrt() 內註解）；FQDN／服務群組仍未攤平——FQDN 是 ipset 架構本身無法儲存
+      // 主機名稱的限制（非信心度問題），服務群組則是查無官方逐字語法佐證維持排除
+      const hasFqdnOrSvcGroup=(parsed.addresses||[]).some(a=>a.type==='fqdn')
         ||(parsed.services||[]).some(s=>s.category==='group');
-      if(hasGroupOrFqdn) notes.push('位址群組／FQDN 位址物件／服務群組本轉換器不會攤平成目標格式對應的定義，規則若引用這類物件，輸出欄位會是不合法語法或遺漏，請人工核對並改用目標裝置實際支援的表示方式（單一位址/服務物件已可正確攤平，不受此提示影響）');
+      if(hasFqdnOrSvcGroup) notes.push('FQDN 位址物件／服務群組本轉換器不會攤平成目標格式對應的定義，規則若引用這類物件，輸出欄位會是不合法語法或遺漏，請人工核對並改用目標裝置實際支援的表示方式（單一位址/服務物件與位址群組皆已可正確攤平，不受此提示影響）');
     }
     if(ifs.some(i=>i.type==='vlan')) notes.push('VLAN 子介面語法為近似對應，實機匯入前請人工確認子介面設定是否完整');
     if(targetVendor==='sonicwall') notes.push('SonicWall 僅支援 SonicOS 6.2 之前版本的 XML 匯入格式（6.2+ 已停用 XML 匯出），本輸出僅適用於舊版韌體裝置');
