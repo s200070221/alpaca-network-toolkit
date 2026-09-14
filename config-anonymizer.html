@@ -398,6 +398,11 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
       <button class="topbar-btn" id="btn-export-map" onclick="exportMapping()" disabled data-tip-key="tip.export_map"><span data-i18n="btn.export_map">匯出對照表</span></button>
       <button class="topbar-btn" id="btn-export-encrypted" onclick="showEncryptModal()" disabled data-i18n-title="btn.encrypt_title" title="下載加密還原包（.acmap），日後可用密碼還原 IP / 主機名稱">🔐 <span data-i18n="btn.encrypt">加密還原包</span></button>
       <button class="topbar-btn primary" id="btn-download" onclick="downloadAnonymized()" disabled><span data-i18n="btn.download">下載檔案</span></button>
+      <select id="send-to-tool-select" style="display:none">
+        <option value="0" data-i18n="nav.tool_fw">防火牆分析</option>
+        <option value="1" data-i18n="nav.tool_switch">交換器解析</option>
+        <option value="2" data-i18n="nav.tool_gen">交換器產生器</option>
+      </select>
       <button class="topbar-btn" id="btn-send-to-tool" onclick="_sendToAnalysisTool()" style="display:none;background:color-mix(in srgb,var(--green) 25%,var(--bg2));border-color:var(--green);color:var(--green)">🔀 <span data-i18n="btn.send_to_tool">送往分析工具</span></button>
     </header>
     <div id="content">
@@ -1010,6 +1015,10 @@ function _onLangChange() {
 // （批次流程與單檔案流程共用同一份全域 mappings 物件，批次跑完會把它覆蓋成最後一筆資料）
 const STATE = { original:'', anonymized:'', filename:'', vendor:null, mappings:null };
 let _anonChainTarget = null; // {href} — set when opened from network_analyzer "anonymize & analyze"
+// Phase 4 第 18 項：新增 switch-config-generator.html 為第三個轉送目標（原僅 fw/sw 兩家）。
+// 提升到頂層供 _sendToAnalysisTool() 與下方接收 `_netAnalyzer_anonThenOpen` 的 IIFE 共用，
+// 避免兩處各自宣告一份容易漂移
+const TOOL_HREFS = ['firewall-analyzer-fixed.html', 'switch-config-parser.html', 'switch-config-generator.html'];
 // 2026-09 資安審查修復：改寫入獨立 key `_netAnalyzer_anonResult`（原本沿用 `_netAnalyzer_pending`
 // 會與 hub 直接轉送寫入的同一把 key 搶寫，接收端可能誤把 raw 內容當成已匿名化內容載入）；並在
 // window.open() 被彈出視窗攔截（回傳 null）時立刻清掉剛寫入的 key，避免已匿名化內容無限期殘留。
@@ -1017,8 +1026,14 @@ let _anonChainTarget = null; // {href} — set when opened from network_analyzer
 // 未接住會讓後面的 window.open() 完全不執行、按鈕看起來沒反應；彈出視窗被攔截時原本也是靜默清
 // key、不提示使用者。比照 network-analyzer.html 的 _dispatchWithPending()/_dispatchWithAnon()
 // 已修過的同款問題補上 try/catch 與提示。
+// Phase 4 第 18 項：原本這顆按鈕只在使用者從 hub 的「去識別化後分析」流程進來時才會出現
+// （_anonChainTarget 只會被那個流程設定），本工具本身完全無法主動選擇轉送目標。改為只要
+// 匿名化完成就一律顯示，並新增 #send-to-tool-select 讓使用者自行選擇 3 個目標之一；
+// _anonChainTarget 有值時（沿用 hub 既有流程）優先用它，維持既有行為不變
 function _sendToAnalysisTool() {
-  if (!STATE.anonymized || !_anonChainTarget) return;
+  if (!STATE.anonymized) return;
+  const sel = document.getElementById('send-to-tool-select');
+  const href = _anonChainTarget ? _anonChainTarget.href : TOOL_HREFS[Number(sel ? sel.value : 0)] || TOOL_HREFS[0];
   let wrote = false;
   try {
     localStorage.setItem('_netAnalyzer_anonResult', JSON.stringify({
@@ -1026,7 +1041,7 @@ function _sendToAnalysisTool() {
     }));
     wrote = true;
   } catch (e) { alert(tr('err.send_fail')); }
-  const w = window.open(_anonChainTarget.href, '_blank');
+  const w = window.open(href, '_blank');
   if (wrote && !w) { localStorage.removeItem('_netAnalyzer_anonResult'); alert(tr('err.send_popup_blocked')); }
 }
 const mappings = { ip:new Map(), hostname:new Map(), user:new Map(), ssid:new Map(), alias:new Map(), vdom:new Map(), mac:new Map() };
@@ -3600,11 +3615,27 @@ function runAnonymize() {
   // Navigate to preview
   showView('preview');
 
-  // Show chain-mode button if opened via "anonymize & analyze" flow
-  if (_anonChainTarget) {
-    var _chainBtn = document.getElementById('btn-send-to-tool');
-    if (_chainBtn) _chainBtn.style.display = '';
+  // Phase 4 第 18 項：原本僅在 hub「去識別化後分析」流程才顯示，改為匿名化完成就一律顯示
+  // 送往工具的按鈕＋選單，讓使用者可主動選擇轉送目標（不限於 hub 流程帶入的那一個）
+  var _chainBtn = document.getElementById('btn-send-to-tool');
+  var _chainSel = document.getElementById('send-to-tool-select');
+  if (_chainBtn) _chainBtn.style.display = '';
+  if (_chainSel) {
+    _chainSel.style.display = '';
+    if (_anonChainTarget) {
+      var _idx = TOOL_HREFS.indexOf(_anonChainTarget.href);
+      if (_idx >= 0) _chainSel.value = String(_idx);
+    }
   }
+
+  // Phase 4 第 17 項：rolling history 供 network_analyzer hub 顯示「最近由去識別化工具處理」
+  // 摘要卡片；無 TTL（持續累積的小型歷史，非一次性交接），僅保留最近 5 筆
+  try {
+    var _hist = [];
+    try { _hist = JSON.parse(localStorage.getItem('_netAnalyzer_anonHistory') || '[]'); } catch(e) { _hist = []; }
+    _hist.unshift({ name: STATE.filename || '', vendor: vendor || null, ts: Date.now() });
+    localStorage.setItem('_netAnalyzer_anonHistory', JSON.stringify(_hist.slice(0, 5)));
+  } catch(e) { /* localStorage 滿了或被封鎖時靜默略過，不影響匿名化主流程 */ }
 
   // ── 條件型彩蛋 ────────────────────────────────────────────
   // 彩蛋2：特殊 hostname（涵蓋 sysname/hostname/set hostname）
@@ -3759,7 +3790,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 「匿名化完成後轉送給下一個工具」改寫入獨立 key `_netAnalyzer_anonResult`（見 _sendToAnalysisTool()），
   // 不再沿用 `_netAnalyzer_pending`，避免與 hub 直接轉送的寫入互相搶寫/誤讀（故此處不消費該 key）。
   (function(){
-    var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000};
+    var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000};
     var parsed = {};
     Object.keys(TTL).forEach(function(k){
       var raw = localStorage.getItem(k);
@@ -3787,7 +3818,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (pa2) pa2.value = d2.text;
       STATE.original = d2.text;
       STATE.filename = d2.name;
-      var TOOL_HREFS = ['firewall-analyzer-fixed.html', 'switch-config-parser.html'];
       _anonChainTarget = { href: TOOL_HREFS[d2.toolIdx] || TOOL_HREFS[0] };
       var lbl2 = document.getElementById('file-name-label');
       if (lbl2) { lbl2.textContent = d2.name; lbl2.style.display = ''; }

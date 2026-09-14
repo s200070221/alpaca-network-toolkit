@@ -565,6 +565,8 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
       <button class="btn btn-ghost btn-sm" style="background:rgba(22,160,133,.15);color:#1abc9c;border-color:rgba(22,160,133,.35)" onclick="exportHTMLReport()" data-i18n="btn.html_report">📄 HTML 報表</button>
       <button class="btn btn-ghost btn-sm" onclick="exportHTMLReport('print')" data-i18n="btn.print_full_report">🖨 完整報表 PDF</button>
       <button class="btn btn-ghost btn-sm" onclick="doPrint()" data-i18n="btn.print">🖨️ 列印/PDF</button>
+      <button class="btn btn-ghost btn-sm" onclick="_sendToGenerator()" data-i18n="btn.send_to_generator">➜ 傳送到產生器</button>
+      <button class="btn btn-ghost btn-sm" onclick="_sendToAnonymizer()" data-i18n="btn.send_to_anonymizer">➜ 傳送到去識別化工具</button>
       <button class="btn btn-danger btn-sm" onclick="resetAll()" data-i18n="btn.clear">✕ 清除</button>
     </div>
   </header>

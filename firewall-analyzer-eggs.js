@@ -13,7 +13,7 @@
 // 匿名化完成後轉送的獨立 key `_netAnalyzer_anonResult`（原本兩者共用 `_netAnalyzer_pending`，
 // 有搶寫/誤讀風險，已拆開）。
 (function(){
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000};
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000};
   var parsed = {};
   Object.keys(TTL).forEach(function(k){
     var raw = localStorage.getItem(k);

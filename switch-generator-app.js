@@ -2866,12 +2866,25 @@ async function parseAndImport(){
   else if(vendor==='planet')parsed=api.parsePlanet(text);
   else{
     parsed=api.parseNXOS(text);
-    // parseNXOS() 的 interface 物件形狀跟其餘廠牌不同（vlan 為單數欄位、無 hybrid；nativeVlan
-    // 2026-09-02 已補上解析，欄位命名與其餘廠牌一致不需正規化），把 vlan 正規化成其餘廠牌慣用
-    // 的 vlans 欄位，讓下方共用的 interface 回填邏輯可以直接沿用不需另開分支
-    (parsed.interfaces||[]).forEach(i=>{ i.vlans=i.vlan||''; });
+    normalizeNXOSInterfaceVlans(parsed);
   }
 
+  applyParsedConfigToForm(parsed,fns,text,vendor,genVendor);
+}
+
+// parseNXOS() 的 interface 物件形狀跟其餘廠牌不同（vlan 為單數欄位、無 hybrid；nativeVlan
+// 2026-09-02 已補上解析，欄位命名與其餘廠牌一致不需正規化），把 vlan 正規化成其餘廠牌慣用的
+// vlans 欄位，讓下方共用的 interface 回填邏輯可以直接沿用不需另開分支；switch_analyzer 直接
+// 傳來的 parsed 物件（見 buildAnalyzerFnsAdapter() 接收端）同樣需要這個正規化，故獨立抽出共用
+function normalizeNXOSInterfaceVlans(parsed){
+  (parsed.interfaces||[]).forEach(i=>{ i.vlans=i.vlan||''; });
+}
+
+// applyParsedConfigToForm()：原本是 parseAndImport() 內緊接著的程式碼，把已解析好的 parsed
+// 物件回填進表單。2026-09 抽成獨立函式參數化（parsed/fns/text/vendor/genVendor 皆變成參數，
+// 邏輯本身零變動），讓 switch_analyzer 直接傳來的已解析 parsed 物件（保真度優於本工具內建
+// BasicParser，見 buildAnalyzerFnsAdapter()）能重用同一套回填邏輯，不需要另外維護一份重複程式碼
+function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   // 清空既有列（含 vrrp-body：匯入功能雖不映射 VRRP 資料，但仍須清掉畫面殘留的舊資料，
   // 避免使用者誤以為初始化 demo 列是這次匯入結果的一部分）
   ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body','comware-irf-member-body','cisco-stack-member-body','brocade-stack-member-body','alcatel-stack-member-body','aruba-vsf-member-body','procurve-vsf-member-body'].forEach(id=>{
@@ -3292,6 +3305,35 @@ async function parseAndImport(){
   showImportMsg(tr(fns?'msg.importSuccess':'msg.importBasicFallback'),false);
 }
 
+// switch_analyzer 傳來的 parsed 物件本來就已經把 vrrp/lacp/dhcp/acls/qos/security/stp/
+// classMaps/servicePolicy 等欄位算好掛在同一個物件上（parseAny() 內部就是逐一呼叫這些同名
+// 函式後合併，見 switch-analyzer-core.js），這裡直接讀出來取代 applyParsedConfigToForm()
+// 原本用來重新解析原始文字的 fns.parseXxx(text,vendor) 呼叫；傳入的 text/vendor 參數用不到。
+// qos 因少數廠牌（brocade/extreme/routeros/sonic）用專屬非陣列形狀（dscpMap/ports、profiles
+// 等），這幾家的正確回填改走 applyParsedConfigToForm() 內既有的 parsed.qos 專屬分支（不經過
+// 這個 adapter），故用型別檢查代替寫死廠牌清單自我防護
+function buildAnalyzerFnsAdapter(parsed){
+  return {
+    parseVRRP:()=>parsed.vrrp||[],
+    parseLACP:()=>parsed.lacp||[],
+    parseDHCP:()=>parsed.dhcp||[],
+    parseACL:()=>parsed.acls||[],
+    parseQoS:()=>Array.isArray(parsed.qos)?parsed.qos:[],
+    parseSecurity:()=>parsed.security||[],
+    parseSTP:()=>parsed.stp||null,
+    parseClassMaps:()=>parsed.classMaps||[],
+    parseServicePolicy:()=>parsed.servicePolicy||[],
+    parseAristaClassMaps:()=>parsed.classMaps||[],
+    parseAristaServicePolicy:()=>parsed.servicePolicy||[],
+    parseDellOS10ClassMaps:()=>parsed.classMaps||[],
+    parseDellOS10ServicePolicy:()=>parsed.servicePolicy||[],
+    parseNxosClassMaps:()=>parsed.classMaps||[],
+    parseNxosServicePolicy:()=>parsed.servicePolicy||[],
+    parseComwareClassMaps:()=>parsed.classMaps||[],
+    parseComwareServicePolicy:()=>parsed.servicePolicy||[],
+  };
+}
+
 function dlTxt(t,fn){const b=new Blob([t],{type:'text/plain;charset=utf-8;'});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);}
 
 function copyOutput(){
@@ -3306,6 +3348,42 @@ function copyOutput(){
     b.textContent=tr('btn.copyFailed');
     setTimeout(()=>{b.textContent=orig;},2000);
   });
+}
+
+// Phase 4 第 16 項反方向：把目前組好的設定文字送去 switch_analyzer 重新分析，沿用既有
+// `_netAnalyzer_pending` key（switch_analyzer 既有接收 IIFE 本來就會消費並呼叫
+// doAnalyze()，不需要新增任何接收端程式碼）。這個方向沒有保真度問題：switch_analyzer
+// 本來就是用自己完整的 parser 重新分析文字，不像本工具的 BasicParser 那樣殘缺
+function _sendToAnalyzer(){
+  const t=document.getElementById('output').value;
+  if(!t)return;
+  let wrote=false;
+  try{
+    localStorage.setItem('_netAnalyzer_pending', JSON.stringify({
+      name:(document.getElementById('hostname').value.trim()||'switch')+'.cfg',
+      text:t, ts:Date.now(), vendor:document.getElementById('vendor').value
+    }));
+    wrote=true;
+  }catch(e){ alert(tr('err.sendFail')); }
+  const w=window.open('switch-config-parser.html','_blank');
+  if(wrote&&!w){ localStorage.removeItem('_netAnalyzer_pending'); alert(tr('err.sendPopupBlocked')); }
+}
+
+// Phase 4 第 18 項：把目前組好的設定文字送去 config_anonymizer 去識別化，補齊本工具原本
+// 只能被動接收 config_anonymizer 轉送（`_netAnalyzer_anonResult`）、無法主動送出的單向缺口
+function _sendToAnonymizer(){
+  const t=document.getElementById('output').value;
+  if(!t)return;
+  let wrote=false;
+  try{
+    localStorage.setItem('_netAnalyzer_pending', JSON.stringify({
+      name:(document.getElementById('hostname').value.trim()||'switch')+'.cfg',
+      text:t, ts:Date.now(), vendor:document.getElementById('vendor').value
+    }));
+    wrote=true;
+  }catch(e){ alert(tr('err.sendFail')); }
+  const w=window.open('config-anonymizer.html','_blank');
+  if(wrote&&!w){ localStorage.removeItem('_netAnalyzer_pending'); alert(tr('err.sendPopupBlocked')); }
 }
 
 // ── 設定對比功能 ──────────────────────────────────────────────────
@@ -4289,22 +4367,43 @@ generate();
 // 匯入卡片本來就常駐頁面上，故只需帶入 #import-text 並呼叫既有的 parseAndImport()
 // 2026-09 資安審查修復：JSON 解析失敗／已過期的 key 一律清除（不論是否為本工具負責消費），讓
 // 任一工具頁面被開啟都能順手清掉整個交接命名空間裡的殘留，縮小放棄交接流程後明碼機敏內容殘留的
-// 曝險窗口；本工具非匿名化轉送鏈的目標（見 config_anonymizer 的 `TOOL_HREFS`），故不消費
-// `_netAnalyzer_anonThenOpen`/`_netAnalyzer_anonResult`，僅在過期時順手清掉。
+// 曝險窗口。
+// 2026-09（Phase 4 第 16／18 項）：本工具現在會消費 `_netAnalyzer_anonResult`（config_anonizer
+// `TOOL_HREFS` 新增本工具為第三個轉送目標）與新的結構化交接 key `_netAnalyzer_swParsedModel`
+// （switch_analyzer 的 `_sendToGenerator()` 直接送出已解析好的 parsed 物件，保真度優於純文字
+// 交接——純文字這條路只能靠本工具內建的 `BasicParser` 重新解析，僅涵蓋 4 廠牌 VLAN/Interface
+// access/trunk，見 `parseAndImport()`）。`_netAnalyzer_anonThenOpen` 本工具仍非其消費目標，
+// 僅在過期時順手清掉。
 (function(){
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000};
-  var ownData = null;
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000};
+  var parsed = {};
   Object.keys(TTL).forEach(function(k){
     var raw = localStorage.getItem(k);
     if (!raw) return;
     try {
       var d = JSON.parse(raw);
       if (Date.now() - d.ts > TTL[k]) { localStorage.removeItem(k); return; }
-      if (k === '_netAnalyzer_pending') ownData = d;
+      parsed[k] = d;
     } catch(e) { localStorage.removeItem(k); }
   });
+
+  // 結構化交接優先權最高：直接呼叫 applyParsedConfigToForm()，略過 parseAndImport() 對原始
+  // 文字的重新解析
+  var swModel = parsed['_netAnalyzer_swParsedModel'];
+  if (swModel && swModel.parsed) {
+    localStorage.removeItem('_netAnalyzer_swParsedModel');
+    var p = swModel.parsed, v = swModel.vendor || p.vendor;
+    if (v === 'nxos') normalizeNXOSInterfaceVlans(p);
+    var gv = v === 'nxos' ? 'cisco_nxos' : v;
+    var fnameEl2 = document.getElementById('import-config-file-name');
+    if (fnameEl2 && swModel.name) fnameEl2.textContent = swModel.name;
+    applyParsedConfigToForm(p, buildAnalyzerFnsAdapter(p), '', v, gv);
+    return;
+  }
+
+  var ownData = parsed['_netAnalyzer_pending'] || parsed['_netAnalyzer_anonResult'];
   if (!ownData) return;
-  localStorage.removeItem('_netAnalyzer_pending');
+  localStorage.removeItem(parsed['_netAnalyzer_pending'] ? '_netAnalyzer_pending' : '_netAnalyzer_anonResult');
   var ta = document.getElementById('import-text');
   if (ta) ta.value = ownData.text;
   var fnameEl = document.getElementById('import-config-file-name');

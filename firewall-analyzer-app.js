@@ -3224,6 +3224,25 @@ function startMatrixRain(){
   window._injectParsed = function(d) { PARSED = d; onParsed(); };
   // 入口頁拖入自動載入
   window._loadFromPending = function(text, vendor) { ST.raw[vendor] = text; analyze(); };
+  // Phase 4 第 18 項：把目前已上傳的原始設定文字（可能有多台裝置分別掛在不同 slot）串接後
+  // 送去 config_anonymizer 去識別化，補齊本工具原本只能被動接收 config_anonymizer 轉送
+  // （`_netAnalyzer_anonResult`）、無法主動送出的單向缺口；沿用既有 `_netAnalyzer_pending`
+  // key（config_anonymizer 本來就已消費此 key），不需要新增接收端程式碼。ST 只在此 IIFE
+  // 內部可見，故此函式必須定義在這裡透過 window 暴露，比照上一行 `_loadFromPending` 的既有寫法
+  window._sendToAnonymizer = function(){
+    var slots=['f','s','c','p','j','x','w','m','a','t','z','r','u','g'];
+    var texts=slots.map(function(v){return ST.raw[v]||'';}).filter(Boolean);
+    if(!texts.length)return;
+    var wrote=false;
+    try{
+      localStorage.setItem('_netAnalyzer_pending', JSON.stringify({
+        name:'', text:texts.join('\n'), ts:Date.now(), vendor:null
+      }));
+      wrote=true;
+    }catch(e){ alert(tr('err.sendFail')); }
+    var w=window.open('config-anonymizer.html','_blank');
+    if(wrote&&!w){ localStorage.removeItem('_netAnalyzer_pending'); alert(tr('err.sendPopupBlocked')); }
+  };
   return{analyze,showView,showSection,exportSection,doExport,doConvert,downloadConv,resetAll};
 })();
 

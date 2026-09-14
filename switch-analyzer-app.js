@@ -3176,7 +3176,7 @@ setLang('zhTW');
 // 匿名化完成後轉送的獨立 key `_netAnalyzer_anonResult`（原本兩者共用 `_netAnalyzer_pending`，
 // 有搶寫/誤讀風險，已拆開）。
 (function(){
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000};
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000};
   var parsed = {};
   Object.keys(TTL).forEach(function(k){
     var raw = localStorage.getItem(k);
@@ -3187,6 +3187,8 @@ setLang('zhTW');
       parsed[k] = d;
     } catch(e) { localStorage.removeItem(k); }
   });
+  // 本工具不消費 `_netAnalyzer_swParsedModel`（那是本工具自己送給 switch_config_generator 的
+  // 結構化交接 key），若使用者剛好把這個分頁重新整理，僅需清掉過期值，不需讀取
   var d = parsed['_netAnalyzer_pending'] || parsed['_netAnalyzer_anonResult'];
   if (!d) return;
   localStorage.removeItem(parsed['_netAnalyzer_pending'] ? '_netAnalyzer_pending' : '_netAnalyzer_anonResult');
@@ -3198,6 +3200,41 @@ setLang('zhTW');
   if (fname) fname.textContent = d.name;
   doAnalyze();
 })();
+
+// Phase 4 第 16 項：傳送已解析好的 parsed 物件給 switch_config_generator，讓對方直接呼叫
+// applyParsedConfigToForm() 回填表單，不需要重新解析原始文字（那條路只能靠對方內建的
+// BasicParser，僅涵蓋 4 廠牌 VLAN/Interface access/trunk）。寫入/彈窗攔截偵測比照既有
+// config_anonymizer 的 `_sendToAnalysisTool()`／network_analyzer 的 `_dispatchWithPending()`
+// 同款寫法
+function _sendToGenerator(){
+  if(!parsed)return;
+  let wrote=false;
+  try{
+    localStorage.setItem('_netAnalyzer_swParsedModel', JSON.stringify({
+      name: (document.getElementById('fname')||{}).textContent||'', vendor: parsed.vendor, parsed: parsed, ts: Date.now()
+    }));
+    wrote=true;
+  }catch(e){ alert(tr('err.send_fail')); }
+  const w=window.open('switch-config-generator.html','_blank');
+  if(wrote&&!w){ localStorage.removeItem('_netAnalyzer_swParsedModel'); alert(tr('err.send_popup_blocked')); }
+}
+
+// Phase 4 第 18 項：傳送目前貼上的原始設定文字給 config_anonymizer 去識別化，補齊「本工具只能
+// 被動接收 config_anonymizer 轉送、無法主動送出」的單向缺口；沿用既有 `_netAnalyzer_pending`
+// key（config_anonymizer 本來就已消費此 key），不需要新增接收端程式碼
+function _sendToAnonymizer(){
+  const cfg=(document.getElementById('paste-area')||{}).value||'';
+  if(!cfg.trim())return;
+  let wrote=false;
+  try{
+    localStorage.setItem('_netAnalyzer_pending', JSON.stringify({
+      name: (document.getElementById('fname')||{}).textContent||'', text: cfg, ts: Date.now(), vendor: parsed?parsed.vendor:null
+    }));
+    wrote=true;
+  }catch(e){ alert(tr('err.send_fail')); }
+  const w=window.open('config-anonymizer.html','_blank');
+  if(wrote&&!w){ localStorage.removeItem('_netAnalyzer_pending'); alert(tr('err.send_popup_blocked')); }
+}
 
 // 名詞解釋 tooltip
 (function(){

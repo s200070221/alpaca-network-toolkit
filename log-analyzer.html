@@ -4954,7 +4954,7 @@ renderAll();
 // 曝險窗口；本工具非匿名化轉送鏈的目標，故不消費 `_netAnalyzer_anonThenOpen`/`_netAnalyzer_anonResult`，
 // 僅在過期時順手清掉。
 (function(){
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000};
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000};
   var ownData = null;
   Object.keys(TTL).forEach(function(k){
     var raw = localStorage.getItem(k);
