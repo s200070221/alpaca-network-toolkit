@@ -586,8 +586,10 @@ function onParsed(){
         const _mg = analyzeMergeSuggestions(d.policies || []);
         const _un = analyzeUnusedObjects(d);
         const _co = analyzeCompliance(d);
+        const _dup = analyzeExactDuplicates(d.policies || []);
+        const _xv = analyzeCrossVdomInconsistency(d);
         const total = _sh.length + _db.length + _mg.length + _un.unusedAddrs.length + _un.unusedSvcs.length +
-                      _co.filter(f => f.risk === 'high' || f.risk === 'medium').length;
+                      _co.filter(f => f.risk === 'high' || f.risk === 'medium').length + _dup.length + _xv.length;
         const nc = $('nc-audit');
         if (nc) { nc.textContent = total; nc.style.color = total > 0 ? 'var(--red)' : 'var(--green)'; }
       } catch(e) { console.warn('audit badge error:', e); }
@@ -1056,18 +1058,22 @@ function onParsed(){
         const _mg  = analyzeMergeSuggestions(PARSED.policies || []);
         const _un  = analyzeUnusedObjects(PARSED);
         const _co  = analyzeCompliance(PARSED);
+        const _dup = analyzeExactDuplicates(PARSED.policies || []);
+        const _xv  = analyzeCrossVdomInconsistency(PARSED);
         const _hi  = _co.filter(f => f.risk === 'high'  ).length;
         const _med = _co.filter(f => f.risk === 'medium').length;
         $('sum-wrap').innerHTML = sumC([
           { l:tr('audit.sum_shadow'),      v: _sh.length,              c: _sh.length  ? 'var(--red)'    : 'var(--green)' },
           { l:tr('audit.sum_deny_block'),  v: _db.length,               c: _db.length  ? 'var(--red)'    : 'var(--green)' },
           { l:tr('audit.sum_merge'),       v: _mg.length,               c: _mg.length  ? 'var(--teal)'   : 'var(--green)' },
+          { l:tr('audit.sum_duplicate'),   v: _dup.length,             c: _dup.length ? 'var(--red)'    : 'var(--green)' },
           { l:tr('audit.sum_unused_addr'), v: _un.unusedAddrs.length,  c: _un.unusedAddrs.length ? 'var(--yellow)' : 'var(--green)' },
           { l:tr('audit.sum_unused_svc'),  v: _un.unusedSvcs.length,   c: _un.unusedSvcs.length  ? 'var(--orange)' : 'var(--green)' },
           { l:tr('audit.sum_high_risk'),   v: _hi,                     c: _hi   ? 'var(--red)'    : 'var(--green)' },
           { l:tr('audit.sum_mid_risk'),    v: _med,                    c: _med  ? 'var(--yellow)' : 'var(--green)' },
+          { l:tr('audit.sum_cross_vdom'),  v: _xv.length,              c: _xv.length ? 'var(--orange)' : 'var(--green)' },
         ]);
-        $('tbl-cnt').textContent = `${_sh.length + _db.length + _mg.length + _un.unusedAddrs.length + _un.unusedSvcs.length + _hi + _med} ${tr('unit.findings')}`;
+        $('tbl-cnt').textContent = `${_sh.length + _db.length + _mg.length + _dup.length + _un.unusedAddrs.length + _un.unusedSvcs.length + _hi + _med + _xv.length} ${tr('unit.findings')}`;
         // Zone 拓樸圖：表格/拓樸切換，比照 case 'routes' 內既有 BGP peer 拓樸的 _fwBgpView 慣例
         let _zoneHtml = buildZoneMatrixHtml(PARSED.policies);
         if (_zoneHtml) {
@@ -1075,7 +1081,7 @@ function onParsed(){
           const _zTgl=`<div style="display:flex;gap:5px;margin-bottom:8px"><button onclick="window._fwZoneView='table';renderSection('audit')" style="${_zbs(!window._fwZoneView||window._fwZoneView==='table')}">${tr('routing.view_table')}</button><button onclick="window._fwZoneView='topo';renderSection('audit')" style="${_zbs(window._fwZoneView==='topo')}">${tr('routing.view_topo')}</button></div>`;
           _zoneHtml = _zTgl + (window._fwZoneView==='topo' ? buildZoneTopoHtml(PARSED.policies) : _zoneHtml);
         }
-        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildUnusedHtml(_un) + buildComplianceHtml(_co)
+        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co) + buildCrossVdomHtml(_xv)
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
               <div id="health-result" style="margin-top:12px"></div>
@@ -1359,7 +1365,7 @@ function onParsed(){
           src==='ciscoftd'?_vLower.includes('ftd'):
           _vLower.includes(src.slice(0,4))
         ));
-        html+=`<button class="conv-btn ${active?'conv-btn-active':''}" onclick="doConvert('${src}','${dst}')" ${(!PARSED||!hasSrc)?'disabled':''}>
+        html+=`<button class="conv-btn ${active?'conv-btn-active':''}" onclick="doConvert('${src}','${dst}')" onmouseenter="previewConversionLoss('${src}','${dst}')" onfocus="previewConversionLoss('${src}','${dst}')" onmouseleave="clearConversionPreview()" onblur="clearConversionPreview()" ${(!PARSED||!hasSrc)?'disabled':''}>
           <span class="conv-vendor conv-${src}">${vendorNames[src]}</span>
           <span class="conv-arrow">→</span>
           <span class="conv-vendor conv-${dst}">${vendorNames[dst]}</span>
@@ -1378,14 +1384,59 @@ function onParsed(){
   }
   window.updateConvButtons=updateConvButtons;
 
+  // Converter 來源設定檔 raw 文字／parser 對照表（2026-09-14 抽成共用 helper）：doConvert()
+  // 與轉換前預覽 previewConversionLoss() 都需要「依 srcVendor 解析出對應的 srcParsed」這段
+  // 邏輯，原本只存在 doConvert() 內部，抽出後兩處共用同一份定義，避免走鐘
+  function _convRawMap(){
+    return {fortigate:ST.raw.f,sophos:ST.raw.s,checkpoint:ST.raw.c,paloalto:ST.raw.p,juniper:ST.raw.j,pfsense:ST.raw.x,sonicwall:ST.raw.w,mikrotik:ST.raw.m,ciscoasa:ST.raw.a,ciscoftd:ST.raw.t,zyxel:ST.raw.z,edgerouter:ST.raw.r,openwrt:ST.raw.u};
+  }
+  function _convParserMap(){
+    return {fortigate:()=>FortigateParser.parse(ST.raw.f),sophos:()=>SophosParser.parse(ST.raw.s),checkpoint:()=>CheckpointParser.parse(ST.raw.c),paloalto:()=>PaloAltoParser.parse(ST.raw.p),juniper:()=>JuniperParser.parse(ST.raw.j),pfsense:()=>PfsenseParser.parse(ST.raw.x),sonicwall:()=>SonicWallParser.parse(ST.raw.w),mikrotik:()=>MikrotikParser.parse(ST.raw.m),ciscoasa:()=>CiscoASAParser.parse(ST.raw.a),ciscoftd:()=>CiscoFTDParser.parse(ST.raw.t),zyxel:()=>ZyxelParser.parse(ST.raw.z),edgerouter:()=>EdgeRouterParser.parse(ST.raw.r),openwrt:()=>OpenWrtParser.parse(ST.raw.u)};
+  }
+  function _resolveSrcParsed(srcVendor){
+    const rawMap=_convRawMap(), parserMap=_convParserMap();
+    return (rawMap[srcVendor]&&parserMap[srcVendor]) ? parserMap[srcVendor]() : PARSED;
+  }
+  // 轉換警語 HTML（資料遺失欄位 + 轉換注意事項，2026-09-14 抽成共用 helper）：doConvert() 實際
+  // 轉換後與 previewConversionLoss()（滑鼠移入轉換按鈕時的預覽）共用同一份判斷邏輯
+  function buildConversionWarningsHtml(srcParsed, targetVendor){
+    let html='';
+    const lossFields=Converter.getConversionLoss(srcParsed,targetVendor);
+    if(lossFields.length){
+      html+=`<span style="color:var(--orange)">${tr('conv.data_loss_warning').replace('{list}',lossFields.join(', '))}</span>`;
+    }
+    const caveats=Converter.getConversionCaveats(srcParsed, targetVendor);
+    if(caveats.length){
+      html+=(html?'<br>':'')+`<span style="color:var(--text-dim);font-size:12px">⚠️ ${caveats.map(esc).join('<br>⚠️ ')}</span>`;
+    }
+    return html;
+  }
+  // 轉換前功能流失預覽（2026-09-14 新增）：滑鼠移入/focus 轉換按鈕時，不等實際點擊轉換，先用
+  // 與 doConvert() 相同的來源解析邏輯呼叫共用 buildConversionWarningsHtml()，讓使用者下決定前
+  // 就能看到會遺失哪些欄位／需要注意什麼；解析失敗（如尚未上傳對應廠牌設定檔）靜默略過，不
+  // 影響既有畫面，等實際點擊 doConvert() 時仍會依既有流程顯示正式錯誤訊息
+  function previewConversionLoss(srcVendor, targetVendor){
+    if(!PARSED)return;
+    const el=$('conv-preview-status');
+    if(!el)return;
+    try{
+      const srcParsed=_resolveSrcParsed(srcVendor);
+      const warnHtml=buildConversionWarningsHtml(srcParsed, targetVendor);
+      el.innerHTML=warnHtml || `<span style="color:var(--green)">${tr('conv.preview_no_issues')}</span>`;
+    }catch(e){ /* 預覽失敗不影響既有畫面，靜默略過 */ }
+  }
+  window.previewConversionLoss=previewConversionLoss;
+  function clearConversionPreview(){
+    const el=$('conv-preview-status');
+    if(el)el.innerHTML='';
+  }
+  window.clearConversionPreview=clearConversionPreview;
   function doConvert(srcVendor, targetVendor){
     if(!PARSED){showErr(tr('err.upload_first'));return;}
     CONV_TARGET=targetVendor;
     try{
-      let srcParsed=PARSED;
-      const rawMap={fortigate:ST.raw.f,sophos:ST.raw.s,checkpoint:ST.raw.c,paloalto:ST.raw.p,juniper:ST.raw.j,pfsense:ST.raw.x,sonicwall:ST.raw.w,mikrotik:ST.raw.m,ciscoasa:ST.raw.a,ciscoftd:ST.raw.t,zyxel:ST.raw.z,edgerouter:ST.raw.r,openwrt:ST.raw.u};
-      const parserMap={fortigate:()=>FortigateParser.parse(ST.raw.f),sophos:()=>SophosParser.parse(ST.raw.s),checkpoint:()=>CheckpointParser.parse(ST.raw.c),paloalto:()=>PaloAltoParser.parse(ST.raw.p),juniper:()=>JuniperParser.parse(ST.raw.j),pfsense:()=>PfsenseParser.parse(ST.raw.x),sonicwall:()=>SonicWallParser.parse(ST.raw.w),mikrotik:()=>MikrotikParser.parse(ST.raw.m),ciscoasa:()=>CiscoASAParser.parse(ST.raw.a),ciscoftd:()=>CiscoFTDParser.parse(ST.raw.t),zyxel:()=>ZyxelParser.parse(ST.raw.z),edgerouter:()=>EdgeRouterParser.parse(ST.raw.r),openwrt:()=>OpenWrtParser.parse(ST.raw.u)};
-      if(rawMap[srcVendor]&&parserMap[srcVendor]) srcParsed=parserMap[srcVendor]();
+      const rawMap=_convRawMap();
+      let srcParsed=_resolveSrcParsed(srcVendor);
       // Apply VDOM filter if selected
       const convVdom = $('conv-vdom-sel')?.value || '__all__';
       if (convVdom !== '__all__' && srcParsed._perVdom) {
@@ -1414,17 +1465,10 @@ function onParsed(){
       $('conv-src').value=rawMap[srcVendor]||JSON.stringify(srcParsed,null,2);
       $('conv-dst').value=CONV_RESULT;
       let convStatusHtml=`<span style="color:var(--green)">${tr('conv.done')}</span> — ${CONV_RESULT.split('\n').length} ${tr('conv.lines_unit')}  |  ${(CONV_RESULT.length/1024).toFixed(1)} KB`;
-      const lossFields=Converter.getConversionLoss(srcParsed,targetVendor);
-      if(lossFields.length){
-        convStatusHtml+=`<br><span style="color:var(--orange)">${tr('conv.data_loss_warning').replace('{list}',lossFields.join(', '))}</span>`;
-      }
-      // 2026-07-24 新增：轉換警語（與上方資料遺失提示區分——這裡的資料仍在輸出內，但正確性
-      // 需要人工複核，例如介面命名/埠位對應、nameif 自動編號、VLAN 子介面近似對應等）
-      const caveats=Converter.getConversionCaveats(srcParsed, targetVendor);
-      if(caveats.length){
-        convStatusHtml+=`<br><span style="color:var(--text-dim);font-size:12px">⚠️ ${caveats.map(esc).join('<br>⚠️ ')}</span>`;
-      }
+      const warnHtml=buildConversionWarningsHtml(srcParsed, targetVendor);
+      if(warnHtml)convStatusHtml+='<br>'+warnHtml;
       $('conv-status').innerHTML=convStatusHtml;
+      clearConversionPreview();
       // Highlight active button
       document.querySelectorAll('.conv-btn').forEach(b=>b.classList.remove('conv-btn-running'));
       const btn=document.querySelector(`.conv-btn[onclick="doConvert('${srcVendor}','${targetVendor}')"]`);
@@ -1491,9 +1535,11 @@ function onParsed(){
     'shadow': d => analyzeRuleShadowing(d.policies||[]),
     'deny-blocking': d => analyzeDenyBlocking(d.policies||[]),
     'merge-suggest': d => analyzeMergeSuggestions(d.policies||[]),
+    'exact-duplicates': d => analyzeExactDuplicates(d.policies||[]),
     'unused-addr': d => analyzeUnusedObjects(d).unusedAddrs,
     'unused-svc': d => analyzeUnusedObjects(d).unusedSvcs,
     'compliance': d => analyzeCompliance(d),
+    'cross-vdom': d => analyzeCrossVdomInconsistency(d),
   };
 
   async function doExport(type){
@@ -1556,6 +1602,12 @@ function onParsed(){
       const content=Reporter.exportZoneMatrixCSV(d.policies||[]);
       if(content)Reporter.download(content,`fw_zone_matrix_${hn}_${ds}.csv`,'text/csv');
       else showErr(tr('err.csv_unsupported'));
+    }
+    else if(type==='sarif-audit'){
+      // SARIF 稽核結果匯出：重新呼叫 analyze* 系列即時計算（比照下方 csv-* 通用分支的
+      // CSV_SUBSECTION_GETTERS 慣例，不依賴使用者是否已切換過稽核分頁的渲染快取）
+      const sarif=buildSarifAuditReport(d);
+      Reporter.download(JSON.stringify(sarif,null,2),`fw_audit_${hn}_${ds}.sarif`,'application/json');
     }
     else if(type==='csv-query-trace'){
       // 只匯出畫面上目前這一次查詢結果（見 LAST_QUERY_TRACE 宣告處註解）

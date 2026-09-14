@@ -413,6 +413,15 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
   #content-wrap{margin-left:0!important}
   body{background:#fff}
   .card{break-inside:avoid}
+  /* 長表格跨頁列印優化（2026-09-14 新增）：thead 每頁重複顯示表頭，避免翻頁後看不出欄位
+     對應；表格列本身不強制 break-inside:avoid（長表格會被切成單一巨大區塊、無法分頁），
+     只針對「單一列」避免攔腰切斷 */
+  table{width:100%}
+  thead{display:table-header-group}
+  tbody tr{break-inside:avoid}
+  /* 徽章列印用單色樣式：.pill（本工具唯一的徽章元件，見 app.js 的 pill() helper）原本的彩色
+     底色在黑白印表機上容易糊成一片深色色塊，浪費碳粉且辨識度差，改為純外框＋黑字 */
+  .pill{background:#fff!important;color:#000!important;border:1px solid #000!important}
   @page{margin:1.5cm}
 }
 .ref-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9000;display:flex;align-items:center;justify-content:center}
@@ -628,6 +637,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
         <select id="conv-src-filter" onchange="filterConvMatrix(this.value)"><option value="" data-i18n="conv.filter_all">顯示全部轉換路徑</option><option value="fortigate" data-i18n="conv.filter_forti">僅 FortiGate 出發</option><option value="sophos" data-i18n="conv.filter_sophos">僅 Sophos 出發</option><option value="checkpoint" data-i18n="conv.filter_cp">僅 Check Point 出發</option><option value="paloalto" data-i18n="conv.filter_pa">僅 Palo Alto 出發</option><option value="juniper" data-i18n="conv.filter_juniper">僅 Juniper 出發</option><option value="pfsense" data-i18n="conv.filter_pfsense">僅 pfSense 出發</option></select>
         <select id="conv-vdom-sel" style="display:none" title="選擇要轉換的 VDOM"></select>
         <div id="conv-status" style="font-size:12px;color:var(--text-dim);font-family:'JetBrains Mono',monospace"></div>
+        <div id="conv-preview-status" style="font-size:11px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;font-style:italic"></div>
         <div style="margin-left:auto;display:flex;gap:8px">
           <button class="btn btn-ghost btn-sm" onclick="downloadConv()">⬇ <span data-i18n="btn.download_conv">下載轉換結果</span></button>
         </div>
@@ -707,9 +717,12 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
         <div class="export-card" onclick="doExport('csv-shadow')"><div class="ec-ico">🛡️</div><div class="ec-title" data-i18n="audit.shadow_title">規則遮蔽分析</div><div class="ec-sub">CSV</div></div>
         <div class="export-card" onclick="doExport('csv-deny-blocking')"><div class="ec-ico">🚫</div><div class="ec-title" data-i18n="audit.deny_block_title">較早 Deny 阻擋偵測</div><div class="ec-sub">CSV</div></div>
         <div class="export-card" onclick="doExport('csv-merge-suggest')"><div class="ec-ico">🔀</div><div class="ec-title" data-i18n="audit.merge_title">相鄰規則合併建議</div><div class="ec-sub">CSV</div></div>
+        <div class="export-card" onclick="doExport('csv-exact-duplicates')"><div class="ec-ico">👯</div><div class="ec-title" data-i18n="audit.duplicate_title">完全重複規則</div><div class="ec-sub">CSV</div></div>
         <div class="export-card" onclick="doExport('csv-unused-addr')"><div class="ec-ico">📦</div><div class="ec-title" data-i18n="audit.unused_addr_header">未使用位址物件</div><div class="ec-sub">CSV</div></div>
         <div class="export-card" onclick="doExport('csv-unused-svc')"><div class="ec-ico">🔧</div><div class="ec-title" data-i18n="audit.unused_svc_header">未使用服務物件</div><div class="ec-sub">CSV</div></div>
         <div class="export-card" onclick="doExport('csv-compliance')"><div class="ec-ico">✅</div><div class="ec-title" data-i18n="audit.compliance_title">合規檢查</div><div class="ec-sub">CSV</div></div>
+        <div class="export-card" onclick="doExport('csv-cross-vdom')"><div class="ec-ico">🏢</div><div class="ec-title" data-i18n="audit.cross_vdom_title">跨 VDOM 同名物件不一致</div><div class="ec-sub">CSV</div></div>
+        <div class="export-card" onclick="doExport('sarif-audit')"><div class="ec-ico">🧾</div><div class="ec-title" data-i18n="ec.sarif_audit">完整稽核結果</div><div class="ec-sub">SARIF</div></div>
         <div class="export-card" onclick="doExport('csv-zone-matrix')"><div class="ec-ico">🗺️</div><div class="ec-title" data-i18n="audit.zone_matrix">Zone Matrix</div><div class="ec-sub">CSV</div></div>
         <div class="export-card" onclick="doExport('csv-query-trace')"><div class="ec-ico">🔎</div><div class="ec-title" data-i18n="query.title">IP/Policy 流量查詢</div><div class="ec-sub" data-i18n="query.trace_title">評估過程</div></div>
       </div>
