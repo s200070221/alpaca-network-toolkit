@@ -10,14 +10,15 @@
 // ／`config route`（`target`／`netmask`／`gateway`／`interface`）；firewall package
 // `config zone`（`name`＋`list network`）／`config rule`（`src`／`dest`／`proto`／`src_ip`／
 // `dest_ip`／`src_port`／`dest_port`／`target`／`enabled`）／`config redirect`（port
-// forward，`target` 為 `DNAT`（預設）或 `SNAT` 兩種）；dhcp package `config dhcp`
-// （`interface`／`start`／`limit`／`leasetime`，`start`/`limit` 為相對網段的 offset，非絕對
-// IP，本工具原樣呈現不臆測絕對範圍）。`uci export`（無參數）會把所有 package 串接成一個
-// 檔案、每段以 `package <name>` 開頭分隔；個別 `/etc/config/X` 檔案單獨上傳則不含
-// `package` 行，故 parser 對未出現過 `package` 行時依已知 config 類型名稱歸類。VPN／
-// WiFi／Users／Schedules／address-object／service-object（UCI 規則的 src_ip/dest_ip 是
-// 直接內嵌值，無具名物件；`config ipset` 與 rule 的完整引用語法本輪未查證）因查無足夠
-// 把握的語法佐證維持空值不猜測。
+// forward，`target` 為 `DNAT`（預設）或 `SNAT` 兩種）；`config ipset`（`name`／`match`／
+// `list entry`，2026-09-14 新增，對外查證 oldwiki.archive.openwrt.org/doc/uci/firewall 官方
+// 選項表＋多筆真實社群範例確認靜態成員語法）＋ rule 的 `option ipset` 引用；dhcp package
+// `config dhcp`（`interface`／`start`／`limit`／`leasetime`，`start`/`limit` 為相對網段的
+// offset，非絕對 IP，本工具原樣呈現不臆測絕對範圍）。`uci export`（無參數）會把所有
+// package 串接成一個檔案、每段以 `package <name>` 開頭分隔；個別 `/etc/config/X` 檔案
+// 單獨上傳則不含 `package` 行，故 parser 對未出現過 `package` 行時依已知 config 類型名稱
+// 歸類。VPN／WiFi／Users／Schedules／service-object（查無官方逐字語法佐證）與 FQDN 位址
+// 物件（ipset 架構本身無法儲存主機名稱，非查證不足）因故維持空值不猜測。
 const OpenWrtParser = (() => {
 
   function unquote(s) {
@@ -136,22 +137,47 @@ const OpenWrtParser = (() => {
     return out;
   }
 
+  // address-group（2026-09-14 新增）：`config ipset` + `list entry` 靜態成員語法已對外查證
+  // （直接讀取 oldwiki.archive.openwrt.org/doc/uci/firewall 官方 `config ipset` 完整選項表＋
+  // 多筆真實社群設定範例交叉確認），對稱 firewall-analyzer-converter.js 的 toOpenWrt() 攤平
+  // 輸出完成 round-trip；FQDN 因 ipset 架構本身無法儲存主機名稱不支援，service-object 仍因
+  // 查無官方逐字語法佐證維持空值
+  function parseAddressGroups(pkgs) {
+    return (pkgs.firewall || []).filter(s => s.type === 'ipset').map(s => ({
+      category: 'address-group', name: val(s, 'name', s.name || ''), type: 'group',
+      members: (s.lists.entry || []).join(', '), comment: '-',
+    })).filter(g => g.name);
+  }
+
   function parsePolicies(pkgs) {
     const out = []; let idx = 0;
+    // ipset 的 match 方向（src_net/dest_net 等）在宣告時就固定，config rule 用
+    // `option ipset 'NAME'` 引用時依此方向決定要落在 srcAddr 還是 dstAddr（見
+    // toOpenWrt() 內對稱的輸出邏輯與其註解）
+    const ipsetDir = {};
+    (pkgs.firewall || []).filter(s => s.type === 'ipset').forEach(s => {
+      const name = val(s, 'name', s.name || '');
+      if (name) ipsetDir[name] = val(s, 'match', '').startsWith('dest') ? 'dest' : 'src';
+    });
     (pkgs.firewall || []).filter(s => s.type === 'rule').forEach(s => {
       idx++;
       const name = val(s, 'name', '') || `Rule-${idx}`;
       const proto = val(s, 'proto', 'any');
       const dport = val(s, 'dest_port', '');
+      const ipsetRef = val(s, 'ipset', '');
+      const ipsetIsSrc = ipsetRef && ipsetDir[ipsetRef] === 'src';
+      const ipsetIsDst = ipsetRef && ipsetDir[ipsetRef] === 'dest';
+      const srcAddrVal = ipsetIsSrc ? ipsetRef : val(s, 'src_ip', 'any');
+      const dstAddrVal = ipsetIsDst ? ipsetRef : val(s, 'dest_ip', 'any');
       // 官方文件與社群範例確認 UCI 的 src_ip/dest_ip 本身可直接承載 IPv4 或 IPv6 字面值/CIDR
       // （如 option src_ip 'fdca:f00:ba3::/64'），無獨立的 src_ip6/dest_ip6 欄位，family
-      // 選項僅輔助宣告非必要；沒有具名位址物件概念（既有範圍界定），故用免 map 版純冒號偵測
-      const srcAddrSplit = _splitAddr(val(s, 'src_ip', 'any'));
-      const dstAddrSplit = _splitAddr(val(s, 'dest_ip', 'any'));
+      // 選項僅輔助宣告非必要；ipset 群組引用非字面 IP，不適用此冒號偵測，交由呼叫端另行處理
+      const srcAddrSplit = ipsetIsSrc ? { v4: '-', v6: '-' } : _splitAddr(srcAddrVal);
+      const dstAddrSplit = ipsetIsDst ? { v4: '-', v6: '-' } : _splitAddr(dstAddrVal);
       out.push({
         id: idx, name,
         srcIntf: val(s, 'src', 'any') || 'any', dstIntf: val(s, 'dest', 'any') || 'any',
-        srcAddr: val(s, 'src_ip', 'any'), dstAddr: val(s, 'dest_ip', 'any'),
+        srcAddr: srcAddrVal, dstAddr: dstAddrVal,
         srcAddr4: srcAddrSplit.v4, srcAddr6: srcAddrSplit.v6, dstAddr4: dstAddrSplit.v4, dstAddr6: dstAddrSplit.v6,
         service: dport ? `${proto}/${dport}` : proto,
         schedule: 'always',
@@ -251,7 +277,7 @@ const OpenWrtParser = (() => {
       policies: parsePolicies(pkgs),
       routes: parseRoutes(pkgs),
       ha: null, nat: parseNAT(pkgs), vpn: [],
-      addresses: [], services: [],
+      addresses: parseAddressGroups(pkgs), services: [],
       users: [], schedules: [],
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
       dhcp: parseDHCP(pkgs), dns: null, snmp: null, logservers: null,
