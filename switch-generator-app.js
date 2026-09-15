@@ -3,6 +3,10 @@ function rowsOf(sel){return Array.from(document.querySelectorAll(sel));}
 // 瀏覽器自動剝除換行的隱性行為，若欄位型別未來改成 <textarea> 或新增不經過 <input> 的資料流，
 // 這層保護會悄悄失效不被發現），避免表單/匯入內容含換行時被當成新指令行注入輸出的設定檔文字
 function val(tr,cls){const el=tr.querySelector('.'+cls);if(!el)return'';return el.type==='checkbox'?el.checked:el.value.replace(/[\r\n]/g,'').trim();}
+// 比照 val() 同款換行清除，供非表格列的單一欄位（OSPF/BGP/RIP process-id、AS 號碼、router-id
+// 等會直接進入產生設定文字的識別碼欄位）使用；目前這些欄位皆為 <input>，瀏覽器本身就會清除
+// \r\n，此處是把保護做成程式碼層級保證，不單純依賴瀏覽器行為（2026-09 資安審查補強）
+function fval(id){const el=document.getElementById(id);return el?el.value.replace(/[\r\n]/g,'').trim():'';}
 function markInvalid(el){if(el)el.classList.add('invalid');}
 
 // IPv4/CIDR 格式驗證輔助函式：取代 validateForm() 原本 4 處重複貼上的內聯正則
@@ -22,7 +26,7 @@ const escAttr=v=>String(v==null?'':v).replace(/"/g,'&quot;');
 // 2026-09 資安審查修復：escAttr() 只跳脫雙引號，設計上只給 value="..." 這類屬性用（屬性內容不會
 // 被當 HTML 解析）；文字節點（如驗證訊息、批次匯入結果清單這類直接塞進 innerHTML 的內容）需要
 // 完整跳脫 &/</>/" 才不會被 < 提前開新標籤，兩者用途不同不可互換，此為文字節點專用版本
-const esc=v=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const esc=v=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 function addVlanRow(id='',name='',ip=''){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input class="v-id" value="${escAttr(id)}"></td><td><input class="v-name" value="${escAttr(name)}"></td><td><input class="v-ip" value="${escAttr(ip)}" placeholder="10.0.0.1/24"></td>${RM_BTN_TD}`;
@@ -1605,46 +1609,46 @@ function collectModel(){
     areaMap.get(r.area).networks.push({network:r.network,wildcard:r.wildcard||'0.0.0.0'});
   });
 
-  const pid=document.getElementById('ospf-pid').value.trim();
+  const pid=fval('ospf-pid');
   const ospf=[];
   if(pid){
     ospf.push({
       pid,
-      routerId:document.getElementById('ospf-rid').value.trim(),
+      routerId:fval('ospf-rid'),
       areas:Array.from(areaMap.values()),
-      redistributes:document.getElementById('ospf-redist').value.trim().split(/\s+/).filter(Boolean),
+      redistributes:fval('ospf-redist').split(/\s+/).filter(Boolean),
     });
   }
 
-  const bgpAsn=document.getElementById('bgp-asn').value.trim();
+  const bgpAsn=fval('bgp-asn');
   const bgp=[];
   if(bgpAsn){
     const peers=rowsOf('#bgp-peer-body tr').map(tr=>({
       ip:val(tr,'p-ip'), as:val(tr,'p-as'), desc:val(tr,'p-desc'),
     })).filter(p=>p.ip);
-    const bgpKeepalive=document.getElementById('bgp-timer-keepalive').value.trim();
-    const bgpHold=document.getElementById('bgp-timer-hold').value.trim();
+    const bgpKeepalive=fval('bgp-timer-keepalive');
+    const bgpHold=fval('bgp-timer-hold');
     bgp.push({
       asn:bgpAsn,
-      routerId:document.getElementById('bgp-rid').value.trim(),
+      routerId:fval('bgp-rid'),
       peers,
-      networks:document.getElementById('bgp-networks').value.trim().split(/\s+/).filter(Boolean),
-      peerGroups:document.getElementById('bgp-peer-group').value.trim().split(/\s+/).filter(Boolean).map(name=>({name,type:''})),
+      networks:fval('bgp-networks').split(/\s+/).filter(Boolean),
+      peerGroups:fval('bgp-peer-group').split(/\s+/).filter(Boolean).map(name=>({name,type:''})),
       timers:(bgpKeepalive&&bgpHold)?{keepalive:bgpKeepalive,holdtime:bgpHold}:null,
     });
   }
 
-  const ripPid=document.getElementById('rip-pid').value.trim();
+  const ripPid=fval('rip-pid');
   const rip=[];
   if(ripPid){
     rip.push({
       pid:ripPid,
-      version:document.getElementById('rip-version').value.trim(),
-      networks:document.getElementById('rip-networks').value.trim().split(/\s+/).filter(Boolean),
-      redistribute:document.getElementById('rip-redist').value.trim().split(/\s+/).filter(Boolean),
-      passive:document.getElementById('rip-silent').value.trim().split(/\s+/).filter(Boolean),
+      version:fval('rip-version'),
+      networks:fval('rip-networks').split(/\s+/).filter(Boolean),
+      redistribute:fval('rip-redist').split(/\s+/).filter(Boolean),
+      passive:fval('rip-silent').split(/\s+/).filter(Boolean),
       autoSummary:document.getElementById('rip-summary').checked,
-      defaultMetric:document.getElementById('rip-default-cost').value.trim(),
+      defaultMetric:fval('rip-default-cost'),
     });
   }
 
@@ -3784,7 +3788,7 @@ function processBulkCSV(){
         else if(model.vendor==='planet')cfg=assemblePlanetConfig(model);
         else cfg=assembleComwareConfig(model);
 
-        window.bulkConfigs[row.devicename]=cfg;
+        window.bulkConfigs[sanitizeZipEntryName(row.devicename)+'.cfg']=cfg;
         results.push({
           name:row.devicename,
           status:`✅ ${row.hostname} (${row.vendor})`,
@@ -3834,6 +3838,18 @@ function csvCell(v){
   if(/^[=+\-@\t\r]/.test(s))s="'"+s;
   return `"${s.replace(/"/g,'""')}"`;
 }
+// 2026-09（續）資安審查修復（Zip Slip）：devicename 同樣來自使用者上傳的批次 CSV，且完全不
+// 經過任何 <input> 元素（不像 hostname/介面描述等欄位天生受瀏覽器 value 消毒演算法保護），
+// 直接被當成 window.bulkConfigs 的鍵、最終寫入 ZIP 壓縮檔的項目名稱（見 switch-generator-zip.js
+// 的 createZip()）。若不清理，惡意 CSV 內容如 "../../evil" 會讓下載的 ZIP 內含路徑穿越項目名稱，
+// 使用者日後用較舊/未防護的解壓工具解壓縮時可能寫出到預期目錄之外——清理路徑分隔符號與連續
+// 句點，取代成底線，避免任何巡遊可能
+function sanitizeZipEntryName(name){
+  return String(name==null?'':name)
+    .replace(/[\\/]+/g,'_')
+    .replace(/\.\.+/g,'_')
+    .replace(/^[.\s]+|[.\s]+$/g,'') || 'device';
+}
 function downloadBulkZip(){
   if(Object.keys(window.bulkConfigs).length===0){
     alert(tr('msg.bulkNothingToDownload'));
@@ -3849,7 +3865,7 @@ function downloadBulkZip(){
   manifest+=tr('msg.bulkManifestHeader')+'\n';
   Object.entries(window.bulkConfigs).forEach(([name,cfg])=>{
     const lineCount=cfg.split('\n').length;
-    manifest+=`${csvCell(name+'.txt')},${lineCount}\n`;
+    manifest+=`${csvCell(name)},${lineCount}\n`;
   });
 
   // 使用純 JavaScript 建立 ZIP（未壓縮格式，相容所有解壓工具）
