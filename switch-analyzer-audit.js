@@ -17,6 +17,165 @@ function detectVlanIslands(p){
   }).filter(v => v.trunkCount === 0 && v.accessCount > 0);
 }
 
+// 同裝置 IP/子網衝突偵測共用 helper（2026-09-15 新增，供 detectSameDeviceIpConflicts() 使用）。
+// 不跨檔案 import 其他模組已有的 cidrFromMask()（定義在 switch-analyzer-parser-comware.js，
+// 本檔案供獨立測試沙箱抽取時不見得會一併載入該檔），改用位元計數自行換算遮罩→前綴長度，
+// 沿用本專案「各工具/模組各自維護一份純函式」慣例。
+// _normalizeIpMask()：相容既有 parser 三種輸出格式——SVI 多半已是 "A.B.C.D/N" CIDR 字串，
+// Loopback/Management/routed port 多半是尚未轉換的 "A.B.C.D M.M.M.M" 空白分隔原始格式（已於
+// Cisco/Arista parser 逐一確認），裸 IP（無遮罩）視為 /32 主機路由；IPv6（含 ':'）直接排除
+// 不處理，此項偵測僅涵蓋 IPv4
+function _maskToPrefixLen(mask){
+  return mask.split('.').reduce((acc,octet)=>acc+((parseInt(octet,10)>>>0).toString(2).match(/1/g)||[]).length,0);
+}
+function _normalizeIpMask(raw){
+  const s=String(raw||'').trim();
+  if(!s||s.includes(':'))return null;
+  let m=s.match(/^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/);
+  if(m)return{ip:m[1],prefixLen:parseInt(m[2],10)};
+  m=s.match(/^(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)$/);
+  if(m)return{ip:m[1],prefixLen:_maskToPrefixLen(m[2])};
+  m=s.match(/^(\d+\.\d+\.\d+\.\d+)$/);
+  if(m)return{ip:m[1],prefixLen:32};
+  return null;
+}
+function _ipToInt(ip){
+  const p=ip.split('.').map(Number);
+  return((p[0]*256+p[1])*256+p[2])*256+p[3];
+}
+// 用除法/乘法算網段範圍而非位元位移——JS 的 <</>>> 位移量對 32 取模，prefixLen=0（遮罩
+// 位元數=32）时若用 `x >>> 32` 會被當成 `x >>> 0`（原樣不變）而非預期的歸零，改用數值運算
+// 完全避開此陷阱；ipInt 最大值 2^32-1，遠低於 Number.MAX_SAFE_INTEGER，除乘法運算安全精確
+function _networkRange(o){
+  const ipInt=_ipToInt(o.ip);
+  const hostBits=32-o.prefixLen;
+  const size=hostBits>=32?4294967296:Math.pow(2,hostBits);
+  const netInt=Math.floor(ipInt/size)*size;
+  return[netInt,netInt+size-1];
+}
+function _subnetsOverlap(a,b){
+  const[aLo,aHi]=_networkRange(a);
+  const[bLo,bHi]=_networkRange(b);
+  return aLo<=bHi&&bLo<=aHi;
+}
+// 同裝置 IP/子網衝突偵測（含 VRF 感知，2026-09-15 新增）：依 interface.vrf 分組（RouterOS 無
+// vrf 欄位，undefined 與空字串視為同一預設 VRF bucket），組內任兩個位址（含次要IP陣列）比對
+// 子網是否重疊；同一介面自身的 primary/secondary IP 不視為衝突（本來就允許同介面掛多個子網）
+function detectSameDeviceIpConflicts(parsed){
+  const interfaces=parsed.interfaces||[];
+  const groups=new Map();
+  interfaces.forEach(iface=>{
+    const vrfKey=iface.vrf||'';
+    if(!groups.has(vrfKey))groups.set(vrfKey,[]);
+    const addrs=[iface.ip,...(iface.secondaryIps||[])].filter(Boolean);
+    addrs.forEach(raw=>{
+      const norm=_normalizeIpMask(raw);
+      if(norm)groups.get(vrfKey).push({iface:iface.name,ip:norm.ip,prefixLen:norm.prefixLen});
+    });
+  });
+  const conflicts=[];
+  groups.forEach(entries=>{
+    for(let i=0;i<entries.length;i++){
+      for(let j=i+1;j<entries.length;j++){
+        const a=entries[i],b=entries[j];
+        if(a.iface===b.iface)continue;
+        if(_subnetsOverlap(a,b))conflicts.push({ifaceA:a.iface,ifaceB:b.iface,sameIp:a.ip===b.ip});
+      }
+    }
+  });
+  return conflicts;
+}
+
+// switch ACL 規則遮蔽/冗餘偵測共用 helper（2026-09-15 新增）。核心比對邏輯無法直接移植
+// firewall_analyzer 的 analyzeRuleShadowing()（那是字串/具名物件集合相等性比對），switch ACL
+// 的 src/dst 是「網段+萬用遮罩」需要真正數值位元運算，僅外層演算法骨架可移植；複用 B2 項目
+// 已有的 _ipToInt()/_networkRange()。
+// _aclAddrToRange()：相容三種既有 parser 輸出格式——'any'（全範圍）、'host X.X.X.X'（單一
+// 位址）、'A.B.C.D W.X.Y.Z'（Cisco 傳統萬用遮罩，網段+遮罩以單一字串內含空白儲存）、
+// 'A.B.C.D/N'（NX-OS 等 CIDR 格式，複用 _networkRange()）；非連續萬用遮罩（技術上合法但
+// 極罕見）與其他解析失敗情況一律回傳 null 不猜測
+function _aclAddrToRange(tok){
+  const s=String(tok||'').trim();
+  if(!s||s==='-')return null;
+  if(/^any$/i.test(s))return[0,4294967295];
+  let m=s.match(/^host\s+(\d+\.\d+\.\d+\.\d+)$/i);
+  if(m){const ip=_ipToInt(m[1]);return[ip,ip];}
+  m=s.match(/^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/);
+  if(m)return _networkRange({ip:m[1],prefixLen:parseInt(m[2],10)});
+  m=s.match(/^(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)$/);
+  if(m){
+    const netRaw=_ipToInt(m[1]),wildcard=_ipToInt(m[2]);
+    if(wildcard===4294967295)return[0,4294967295];
+    const p=wildcard+1;
+    if(p<=0||(p&(p-1))!==0)return null;
+    const network=(netRaw&(~wildcard))>>>0;
+    return[network,network+wildcard];
+  }
+  return null;
+}
+// 區間涵蓋判斷：earlier 的比對範圍是否完全包含 later 的比對範圍
+function _aclCovers(earlierRange,laterRange){
+  return earlierRange[0]<=laterRange[0]&&earlierRange[1]>=laterRange[1];
+}
+function _aclProtoCovers(earlierProto,laterProto){
+  const e=String(earlierProto||'').toLowerCase();
+  if(e===''||e==='ip'||e==='any')return true;
+  return e===String(laterProto||'').toLowerCase();
+}
+// dstPort 僅做完全比對；range/多值比對不做完整區間運算（已知不支援範圍，見計畫文件）
+function _aclPortCovers(earlierPort,laterPort){
+  if(!earlierPort)return true;
+  return earlierPort===laterPort;
+}
+// 規則遮蔽偵測：依 seq 排序後，逐一檢查較晚出現的規則是否已被較早規則完全涵蓋（protocol/src/dst/
+// dstPort 皆需涵蓋才算），不要求動作（action）相同——即使 earlier 是 deny、later 是 permit，
+// later 依然永遠不會生效，同屬「規則不可達」訊號。RouterOS 排除：parsed.acls 本身是扁平規則
+// 陣列（非巢狀 {name,rules:[]}），下方 Array.isArray(acl.rules) guard 天然排除，不需另開分支
+function analyzeAclShadowing(acls){
+  const shadowed=[];
+  (acls||[]).forEach(acl=>{
+    if(!Array.isArray(acl.rules))return;
+    const rules=acl.rules.filter(r=>/^(permit|deny|accept)$/i.test(r.action||''));
+    const sorted=rules.map((r,idx)=>({r,idx})).sort((a,b)=>{
+      const sa=Number(a.r.seq),sb=Number(b.r.seq);
+      if(Number.isFinite(sa)&&Number.isFinite(sb)&&sa!==sb)return sa-sb;
+      return a.idx-b.idx;
+    });
+    for(let i=0;i<sorted.length;i++){
+      const earlier=sorted[i].r;
+      const earlierSrc=_aclAddrToRange(earlier.src),earlierDst=_aclAddrToRange(earlier.dst);
+      if(!earlierSrc||!earlierDst)continue;
+      for(let j=i+1;j<sorted.length;j++){
+        const later=sorted[j].r;
+        const laterSrc=_aclAddrToRange(later.src),laterDst=_aclAddrToRange(later.dst);
+        if(!laterSrc||!laterDst)continue;
+        if(!_aclCovers(earlierSrc,laterSrc))continue;
+        if(!_aclCovers(earlierDst,laterDst))continue;
+        if(!_aclProtoCovers(earlier.protocol,later.protocol))continue;
+        if(!_aclPortCovers(earlier.dstPort,later.dstPort))continue;
+        shadowed.push({acl:acl.name,earlierSeq:earlier.seq,laterSeq:later.seq});
+      }
+    }
+  });
+  return shadowed;
+}
+// 完全重複規則：純字串鍵值分組（action/protocol/src/dst/dstPort 完全相同），不需位元運算，
+// 比照 firewall_analyzer analyzeExactDuplicates() 手法自行實作一份
+function analyzeAclExactDuplicates(acls){
+  const duplicates=[];
+  (acls||[]).forEach(acl=>{
+    if(!Array.isArray(acl.rules))return;
+    const seen=new Map();
+    acl.rules.forEach(r=>{
+      if(!/^(permit|deny|accept)$/i.test(r.action||''))return;
+      const key=[r.action,r.protocol,r.src,r.dst,r.dstPort].map(v=>String(v||'').toLowerCase().trim()).join('|');
+      if(seen.has(key))duplicates.push({acl:acl.name,seq:r.seq,dupOfSeq:seen.get(key)});
+      else seen.set(key,r.seq);
+    });
+  });
+  return duplicates;
+}
+
 function analyzeSwitchAudit(parsed){
   const findings=[];
   const f=(id,check,value,risk,detail,standards)=>findings.push({id,check,value,risk,detail,standards:standards||[]});
@@ -153,6 +312,27 @@ function analyzeSwitchAudit(parsed){
   }):[];
   f('stp-uplink-no-rootguard', tr('audit.check_stp_uplink_no_rootguard'), trunkNoRootGuard.length, 'low',
     trunkNoRootGuard.length?trunkNoRootGuard.map(sp=>sp.port).slice(0,8).join(', ')+(trunkNoRootGuard.length>8?'…':''):tr('audit.none'),
+    ['ISO27001 A.8.20','CIS v8 12.2']);
+  // 14-15. 同裝置 IP/子網衝突（2026-09-15 新增，含 VRF 感知）：拆成兩項獨立發現而非同一項用
+  // 混合風險等級——完全相同 IP（設定錯誤/直接衝突，high）與子網重疊但 IP 不同（可能是刻意
+  // 規劃的次要IP或誤設，medium）本質不同，比照既有稽核項目「一項一個風險等級」慣例
+  const ipConflicts=detectSameDeviceIpConflicts(parsed);
+  const exactIpConflicts=ipConflicts.filter(c=>c.sameIp);
+  const subnetOnlyConflicts=ipConflicts.filter(c=>!c.sameIp);
+  f('ip-conflict-exact', tr('audit.check_ip_conflict_exact'), exactIpConflicts.length, 'high',
+    exactIpConflicts.length?exactIpConflicts.map(c=>`${c.ifaceA}↔${c.ifaceB}`).slice(0,8).join(', ')+(exactIpConflicts.length>8?'…':''):tr('audit.none'),
+    ['ISO27001 A.8.20','CIS v8 12.2']);
+  f('ip-subnet-conflict', tr('audit.check_ip_subnet_conflict'), subnetOnlyConflicts.length, 'medium',
+    subnetOnlyConflicts.length?subnetOnlyConflicts.map(c=>`${c.ifaceA}↔${c.ifaceB}`).slice(0,8).join(', ')+(subnetOnlyConflicts.length>8?'…':''):tr('audit.none'),
+    ['ISO27001 A.8.20','CIS v8 12.2']);
+  // 16-17. switch ACL 規則遮蔽/冗餘偵測（2026-09-15 新增）
+  const aclShadowed=analyzeAclShadowing(parsed.acls);
+  const aclExactDup=analyzeAclExactDuplicates(parsed.acls);
+  f('acl-shadowed', tr('audit.check_acl_shadowed'), aclShadowed.length, 'medium',
+    aclShadowed.length?aclShadowed.map(s=>`${s.acl}#${s.laterSeq}`).slice(0,8).join(', ')+(aclShadowed.length>8?'…':''):tr('audit.none'),
+    ['ISO27001 A.8.20','CIS v8 12.2']);
+  f('acl-exact-duplicate', tr('audit.check_acl_exact_duplicate'), aclExactDup.length, 'low',
+    aclExactDup.length?aclExactDup.map(d=>`${d.acl}#${d.seq}`).slice(0,8).join(', ')+(aclExactDup.length>8?'…':''):tr('audit.none'),
     ['ISO27001 A.8.20','CIS v8 12.2']);
   return findings;
 }

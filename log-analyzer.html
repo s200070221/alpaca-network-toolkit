@@ -111,8 +111,10 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
 .large-file-notice{font-size:11px;color:var(--text-dim);padding:8px 10px;background:var(--surface2);border:1px dashed var(--border2);border-radius:8px;margin-bottom:8px}
 .timeline-wrap{margin-bottom:10px}
 .timeline-label{font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
-#timeline-chart svg{width:100%;height:70px;display:block}
+#timeline-chart{position:relative}
+#timeline-chart svg{width:100%;height:70px;display:block;user-select:none}
 #timeline-chart .tl-axis{font-size:9px;fill:var(--text-muted)}
+#timeline-drag-overlay{position:absolute;top:0;height:50px;background:rgba(100,181,246,.25);border:1px solid var(--accent);pointer-events:none;display:none}
 .mini-alpaca{position:fixed;bottom:20px;right:20px;z-index:9999;font-size:32px;cursor:pointer;user-select:none;transition:transform .3s ease,filter .3s ease;filter:drop-shadow(0 2px 8px rgba(0,0,0,.5))}
 .mini-alpaca:hover{transform:scale(1.2) rotate(10deg);filter:drop-shadow(0 4px 12px var(--accent)) drop-shadow(0 0 4px var(--accent))}
 </style>
@@ -321,20 +323,42 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
     </div>
   </section>
 
+  <section class="card" id="health-card">
+    <h2 id="t-health-title"></h2>
+    <button id="health-btn" onclick="_doLogHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer"></button>
+    <div id="health-result" style="margin-top:12px"></div>
+  </section>
+
   <section class="card" id="issues-card">
     <h2 id="t-issues-title"></h2>
     <div class="btn-row" style="font-size:11px;color:var(--text-dim)">
       <span id="lbl-issues-source-filter"></span>
       <select id="issues-source-filter" class="txt"></select>
     </div>
+    <div class="btn-row" id="issues-suppress-row" style="align-items:flex-start;font-size:11px;color:var(--text-dim);display:none">
+      <span id="lbl-issues-suppress" style="white-space:nowrap;padding-top:4px"></span>
+      <div id="issues-suppress-checks" class="geo-risk-checks" style="flex:1;max-height:110px"></div>
+    </div>
     <div class="btn-row">
       <input type="text" id="issues-search" class="txt" style="margin-left:auto;width:180px">
     </div>
     <div class="tbl-wrap"><table id="issues-table"><thead></thead><tbody></tbody></table></div>
     <div class="btn-row">
+      <button class="btn" id="btn-mitre-layer"></button>
       <button class="btn" id="btn-html-report" style="margin-left:auto"></button>
       <button class="btn" id="btn-print-report"></button>
     </div>
+  </section>
+
+  <section class="card" id="baseline-card">
+    <h2 id="t-baseline-title"></h2>
+    <div class="btn-row">
+      <button class="btn" id="btn-baseline-export"></button>
+      <button class="btn" id="btn-baseline-import" onclick="document.getElementById('baseline-import-input').click()"></button>
+      <input type="file" id="baseline-import-input" accept=".json" style="display:none">
+      <span id="baseline-import-status" class="hint" style="font-size:11px"></span>
+    </div>
+    <div id="baseline-diff-result" style="margin-top:12px"></div>
   </section>
 
   <!-- 疑似關聯攻擊鏈：標題刻意不加圈碼數字，比照既有卡片排序調整慣例，避免牽動 11 語言
@@ -1019,14 +1043,26 @@ function buildTimelineSVG(buckets, startTime, endTime, bucketMs, selectedRange) 
     const bucketStart = startTime + i * bucketMs;
     const bucketEnd = bucketStart + bucketMs;
     const title = `${tlFmtTime(bucketStart)}\n${TL_SEV_ORDER.map(s => `${s}: ${b[s]}`).join(' / ')}`;
-    const selected = selectedRange && selectedRange.start === bucketStart && selectedRange.end === bucketEnd;
+    // 高亮條件（2026-09-15 改為區間重疊判斷，取代原本的單一 bucket 精確比對）：拖曳選取
+    // 可能橫跨多個 bucket，selectedRange 不再保證恰好等於某個 bucket 的 [start,end)，
+    // 改用「兩區間是否有交集」判斷，單一 bucket 點擊選取時行為與原本完全相同
+    const selected = selectedRange && bucketStart < selectedRange.end && bucketEnd > selectedRange.start;
     const highlight = selected ? `<rect x="${x.toFixed(1)}" y="0" width="${barW.toFixed(1)}" height="${barAreaH}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>` : '';
-    return `<g style="cursor:pointer" onclick="selectTimelineBucket(${bucketStart},${bucketEnd})"><title>${esc(title)}</title><rect x="${x.toFixed(1)}" y="0" width="${barW.toFixed(1)}" height="${barAreaH}" fill="transparent"/>${segs}${highlight}</g>`;
+    return `<g style="cursor:pointer" onclick="selectTimelineRange(${bucketStart},${bucketEnd})"><title>${esc(title)}</title><rect x="${x.toFixed(1)}" y="0" width="${barW.toFixed(1)}" height="${barAreaH}" fill="transparent"/>${segs}${highlight}</g>`;
   }).join('');
   const axis = `<text class="tl-axis" x="0" y="64" text-anchor="start">${esc(tlFmtTime(startTime))}</text>
     <text class="tl-axis" x="${chartW / 2}" y="64" text-anchor="middle">${esc(tlFmtTime((startTime + endTime) / 2))}</text>
     <text class="tl-axis" x="${chartW}" y="64" text-anchor="end">${esc(tlFmtTime(endTime))}</text>`;
   return `<svg viewBox="0 0 ${chartW} 70" preserveAspectRatio="none">${bars}${axis}</svg>`;
+}
+// 拖曳框選（brush-to-zoom，2026-09-15 新增）：畫面像素 X 座標 → bucket 索引，
+// buildTimelineSVG() 既有正向映射 x = i*(chartW/n) 的反向版本，純函式供測試沙箱涵蓋，
+// UI 事件綁定（mousedown/mousemove/mouseup）於下方 STATE/UI 區塊 TIMELINE_RANGE_FILTER 附近
+function xToBucketIndex(viewBoxX, n, chartW) {
+  chartW = chartW || 1000;
+  if (n <= 0) return 0;
+  const idx = Math.floor(viewBoxX / (chartW / n));
+  return Math.max(0, Math.min(n - 1, idx));
 }
 // 事件清單可點欄位標題排序；預設 col='severity' dir='asc' 時排序結果與既有 sortEventsBySeverity()
 // 完全相同（SEV_RANK 本身就是嚴重度由高到低遞增編號），不影響既有預設呈現行為
@@ -2962,6 +2998,14 @@ function filterIssuesBySource(issues, source) {
   if (!source) return issues;
   return issues.filter(is => getIssueIntelSources(is).includes(source));
 }
+// 問題清單抑制/調校清單（2026-09-15 新增）：使用者可將特定分類標記為「已知雜訊」不再顯示，
+// 純渲染層過濾（比照 filterIssuesBySource() 既有分工——buildIssueList() 本身維持不受影響，
+// 純函式，不含任何過濾邏輯），故意不套用到 CSV/HTML 報表匯出（與 ISSUES_SOURCE_FILTER 既有
+// 「僅畫面即時篩選、不影響匯出」慣例一致，避免匯出結果因螢幕設定不同而缺漏真實命中的問題）
+function filterIssuesBySuppressed(issues, suppressedSet) {
+  if (!suppressedSet || !suppressedSet.size) return issues;
+  return issues.filter(is => !suppressedSet.has(is.category));
+}
 // opts 可覆寫偵測門檻（皆為選填，未提供則沿用各函式自身預設值）：
 // windowMs/freqThreshold 對應頻率異常，scanThreshold 對應 CEF/Syslog 兩種掃描 heuristic 共用門檻
 function buildIssueList(events, intelIndexes, opts) {
@@ -2999,6 +3043,100 @@ function buildIssueList(events, intelIndexes, opts) {
   all.sort((a, b) => SEV_RANK[a.severityNorm] - SEV_RANK[b.severityNorm] || b.count - a.count);
   annotateEventsWithIssues(analyzed, all);
   return all;
+}
+
+// 健檢分數卡 A-F（2026-09-15 新增）：比照 switch_analyzer 的 computeSwitchHealth()／
+// firewall_analyzer 的 computeFirewallHealth() 同一套「score=100 起算、逐項扣分、
+// clamp 0-100、A≥90/B≥75/C≥60/D≥40/else F」慣例，但改吃 log_analyzer 已有的 ISSUES
+// （buildIssueList() 產物，本來就有 5 級 severityNorm）而非重新呼叫多個 detect 函式。
+// 每筆 issue 的扣分額度上限 5 次（Math.min(issue.count,5)），避免單一高頻類別（如
+// freq:authFail 短時間大量觸發）把分數直接歸零、蓋過其他類別的訊號
+const HEALTH_WEIGHT = { Critical: 10, High: 7, Medium: 4, Low: 2, Info: 1 };
+function computeLogHealth(issues) {
+  let score = 100;
+  const out = [];
+  (issues || []).forEach(is => {
+    const w = HEALTH_WEIGHT[is.severityNorm] || HEALTH_WEIGHT.Info;
+    score -= Math.min(is.count, 5) * w;
+    out.push({ sev: is.severityNorm, label: tr(CAT_KEY_MAP[is.category.startsWith('freq:') ? is.category.slice(5) : is.category] || 'cat.other'), count: is.count });
+  });
+  score = Math.max(0, Math.min(100, score));
+  const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
+  const gradeColor = grade === 'A' ? 'var(--green)' : grade === 'B' ? 'var(--teal)' : grade === 'C' ? 'var(--yellow)' : grade === 'D' ? 'var(--orange)' : 'var(--red)';
+  return { score, grade, gradeColor, issues: out };
+}
+
+// MITRE ATT&CK Navigator layer.json 匯出（2026-09-15 新增）：schema 已用 WebFetch 查證官方
+// mitre-attack/attack-navigator repo 的 layers/spec/v4.5/layerformat.md——頂層必要欄位
+// name/domain（domain enum 固定用 'enterprise-attack'）；versions 物件必要子欄位 navigator
+// （≥"4.9.0"）/layer（固定字串 "4.5"）；techniques[] 僅 techniqueID 必要，score/comment 等
+// 皆選填。遍歷 ISSUES，比照 renderIssues()/exportLogReport()/buildCSVRows() 三處都在用的
+// baseCat（去除 freq: 前綴）查表邏輯，查無 MITRE_MAP 對應則跳過（沿用「只標註已建立對應
+// 的分類」既有原則），依 techniqueID 分組加總 score
+function buildMitreLayer(issues) {
+  const byTech = new Map();
+  (issues || []).forEach(is => {
+    const baseCat = is.category.startsWith('freq:') ? is.category.slice(5) : is.category;
+    const tid = MITRE_MAP[baseCat];
+    if (!tid) return;
+    if (!byTech.has(tid)) byTech.set(tid, { score: 0, comments: [] });
+    const cur = byTech.get(tid);
+    cur.score += is.count;
+    cur.comments.push(`${tr(CAT_KEY_MAP[baseCat] || 'cat.other')}: ${is.count}`);
+  });
+  const techniques = Array.from(byTech, ([techniqueID, v]) => ({ techniqueID, score: v.score, comment: v.comments.join('; ') }));
+  const maxScore = techniques.length ? Math.max(...techniques.map(t => t.score)) : 1;
+  return {
+    name: `log_analyzer — ${new Date().toISOString()}`,
+    versions: { attack: '15', navigator: '4.9.0', layer: '4.5' },
+    domain: 'enterprise-attack',
+    description: tr('mitre.disclaimer'),
+    techniques,
+    gradient: { colors: ['#ffffff', '#ff6666'], minValue: 0, maxValue: Math.max(1, maxScore) },
+  };
+}
+
+// 基準線比對模式（2026-09-15 新增）：通用鍵值比對 diff 函式，獨立實作一份（不跨檔案 import
+// firewall_analyzer 的同名函式，沿用本專案「各工具各自維護一份純函式」慣例）。回傳
+// {added, removed, changed}，changed 項目帶 {key, old, new, diffFields}
+function diffArrayByKey(oldArr, newArr, keyFn, compareFields) {
+  const oldMap = new Map((oldArr || []).map(o => [keyFn(o), o]));
+  const newMap = new Map((newArr || []).map(o => [keyFn(o), o]));
+  const added = [], removed = [], changed = [];
+  newMap.forEach((n, k) => {
+    if (!oldMap.has(k)) { added.push(n); return; }
+    const o = oldMap.get(k);
+    const diffFields = (compareFields || []).filter(f => o[f] !== n[f]);
+    if (diffFields.length) changed.push({ key: k, old: o, new: n, diffFields });
+  });
+  oldMap.forEach((o, k) => { if (!newMap.has(k)) removed.push(o); });
+  return { added, removed, changed };
+}
+// 基準線快照：比照 buildCSVRows() 已算好的扁平列形狀（category/severityNorm/count/confidence/
+// firstSeen/lastSeen），只存精簡摘要，不含 relatedEvents/relatedHosts 等含 PII 的完整事件物件
+function buildBaselineSnapshot(issues) {
+  return {
+    sourceTool: 'log_analyzer',
+    generatedAt: new Date().toISOString(),
+    issues: (issues || []).map(is => ({
+      category: is.category, severityNorm: is.severityNorm, count: is.count, confidence: is.confidence,
+      intelSource: is.category === 'knownIOC' ? (getIssueIntelSources(is)[0] || null) : null,
+      firstSeen: is.firstSeen || null, lastSeen: is.lastSeen || null,
+    })),
+  };
+}
+// diff key：knownIOC 額外併入 intelSource，避免不同情資清單來源被誤判成同一筆。
+// 呼叫端（renderBaselineDiff()）兩側格式不同——舊基準線是 buildBaselineSnapshot() 已攤平
+// 的 intelSource 欄位，新的一側是即時 ISSUES（intelSource 巢狀於 intelMeta.source，需靠
+// getIssueIntelSources() 查表），故 is.intelSource 為 undefined 時 fallback 呼叫查表函式，
+// 兩種格式皆可正確取得來源
+function _baselineDiffKey(is) {
+  if (is.category !== 'knownIOC') return is.category;
+  const src = is.intelSource != null ? is.intelSource : (getIssueIntelSources(is)[0] || '');
+  return `knownIOC/${src}`;
+}
+function diffBaseline(oldIssues, newIssues) {
+  return diffArrayByKey(oldIssues, newIssues, _baselineDiffKey, ['severityNorm', 'count', 'confidence']);
 }
 
 // 事件關聯分析（2026-08-12 新增）：串出「疑似攻擊鏈」——同一行為者 IP 先出現偵察跡象，
@@ -3537,7 +3675,7 @@ const LANG = {
     'import.title':'① 匯入 Log','import.hint':'支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式、FortiGate 原生 key=value log（不需 syslog 外殼）、JSON/NDJSON，以及 Windows Event Log（wevtutil/Event Viewer XML 匯出，不支援二進位 .evtx），可貼上文字或上傳檔案，亦可直接拖放檔案至此。','nav.tools_btn':'切換工具','nav.tool_network':'總覽 / Hub','nav.tool_switch':'交換器解析','nav.tool_gen':'交換器產生器','nav.tool_fw':'防火牆分析','nav.tool_ca':'設定去識別化','nav.tool_log':'日誌分析','import.paste_placeholder':'在此貼上 log 內容，或使用下方上傳按鈕…','import.upload_btn':'上傳檔案','import.analyze_btn':'解析並分析','import.clear_btn':'清空','import.file_loaded':'已載入檔案：','import.progress_parsing':'解析中…','import.progress_analyzing':'情資比對與分類中…','import.progress_rendering':'渲染結果中…','import.progress_correlating':'關聯分析中…','import.large_file_notice':'檔案過大（{name}，共 {lines} 行），內容不於下方文字框顯示，仍會完整解析','opt.freqWindow':'頻率視窗(秒)：','opt.freqThreshold':'頻率門檻(次)：','opt.scanThreshold':'掃描門檻(數)：','opt.volumeThreshold':'流量門檻(MB)：','opt.chainWindow':'關聯時間窗(分)：','opt.gapThreshold':'斷點門檻(分)：','opt.chainGroupBy':'分組軸：','opt.chainGroupByIp':'IP','opt.chainGroupByUser':'帳號','opt.geoRiskLabel':'地理位置風險標記：','opt.geoRiskFilter':'篩選國家…',
     'results.title':'② 事件清單（依嚴重程度排序）','results.empty':'尚無資料，請先匯入並分析 log','results.col_severity':'嚴重程度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題','results.optional_cols':'顯示欄位：','results.col_src':'來源IP','results.col_dst':'目的IP','results.col_port':'Port','results.col_proto':'通訊協定','results.col_url':'URL/HTTP方法','results.col_sourcefile':'來源檔案','results.filter_all_files':'全部檔案','results.search_placeholder':'搜尋主機/內容…','issues.search_placeholder':'搜尋分類/依據…','results.col_msg':'內容','results.summary_label':'統計：','results.timeline_label':'事件時間分布',
     'sev.critical':'嚴重','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'資訊',
-    'issues.title':'③ 問題清單（基本資安分析）','issues.empty':'未發現符合規則的問題','issues.col_category':'類別','issues.col_severity':'嚴重程度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_source':'情資來源','issues.col_basis':'比對依據','issues.col_sample':'範例','issues.filter_all_sources':'全部來源','issues.source_filter_label':'篩選情資來源：',
+    'issues.title':'③ 問題清單（基本資安分析）','issues.empty':'未發現符合規則的問題','issues.col_category':'類別','issues.col_severity':'嚴重程度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_source':'情資來源','issues.col_basis':'比對依據','issues.col_sample':'範例','issues.filter_all_sources':'全部來源','issues.source_filter_label':'篩選情資來源：','issues.suppress_label':'抑制以下分類：',
     'chain.title':'疑似關聯攻擊鏈','chain.empty':'未發現符合條件的關聯攻擊鏈','chain.col_actor':'來源/行為者','chain.col_stages':'階段序列','chain.col_first':'首次時間','chain.col_last':'最後時間','chain.col_span':'涵蓋時間','topn.title':'Top-N 摘要','topn.src_title':'前 10 大來源 IP','topn.user_title':'前 10 大使用者','topn.category_title':'前 10 大分類','topn.col_value':'項目','topn.col_count':'次數','topn.empty':'無資料','filemeta.export_btn':'匯出中繼資料','filemeta.lines_suffix':'行','chain.stage_recon':'🔍 偵察','chain.stage_access':'🔑 嘗試存取','chain.stage_malicious':'⚠ 已知惡意','chain.stage_postActivity':'📤 疑似後續行為',
     'conf.confirmed':'已確認','conf.heuristic':'推測',
     'cat.authFail':'認證失敗','cat.denyBlock':'連線遭拒/阻擋','cat.attack':'攻擊/惡意軟體','cat.scanFlood':'掃描/洪水攻擊','cat.exceedThreshold':'超過門檻','cat.other':'其他','cat.freqLabel':'頻率異常：','mitre.disclaimer':'MITRE ATT&CK 技術編號僅供參考，非事件最終定性判斷','cat.possibleScan':'疑似掃描行為','cat.knownIOC':'已知情資命中','cat.volumeAnomaly':'異常流量','cat.geoRisk':'地理位置風險','cat.geoIPRisk':'地理位置風險（IP查表）','cat.beaconing':'疑似定期回報信標(C2)','cat.lateralMovement':'疑似橫向移動','cat.privEsc':'權限提升/新增帳號','cat.geoVelocity':'地理位置速度異常','note.bruteForce':'疑似猜密碼/暴力破解','note.scanOrMisconfig':'疑似掃描或誤設定','note.freqAnomaly':'頻率異常','note.possibleScan':'疑似 Port/主機掃描','note.knownIOC':'已知情資命中',
@@ -3548,6 +3686,7 @@ const LANG = {
     'deid.title':'⑧ 去識別化','deid.hint':'將事件中的 IP／主機名稱／使用者名稱替換為一致映射的假值（IP 採 RFC5737 文件用網段）。請先完成③④的問題分析與情資比對，去識別化後的假 IP 將無法再命中真實情資清單。','deid.preserve_last_octet':'保留 IP 末段','deid.run_btn':'執行去識別化','deid.download_btn':'下載去識別化結果','btn.export_map':'匯出對照表','tip.export_map':'匯出對照表：可供匯入《設定去識別化》工具，或供下次匯入本工具沿用同一組假值','btn.import_map':'📥 匯入既有對照表','tip.import_mapping':'匯入既有對照表：讓相同的原始值套用同一組假值，可用於與《設定去識別化》工具的結果保持一致','msg.mapping_imported':'已匯入 {n} 筆既有對照','msg.mapping_import_invalid':'對照表格式錯誤，請確認上傳的是本工具或《設定去識別化》工具匯出的 JSON 對照表','hint.crossToolMapping':'若這份 log 與《設定去識別化》工具處理的是同一批設備，建議匯出/匯入對照表以保持假值一致','deid.stat_replaced':'已替換','deid.stat_ip':'IP','deid.stat_hostname':'主機名稱','deid.stat_user':'使用者名稱','deid.stat_mac':'MAC','deid.stat_bucket_overflow':'⚠ {range} 類別已去識別化超過 254 個不同來源 IP（目前 {count} 個），假位址將重複使用，可能對應到錯誤的原始 IP',
     'export.csv_btn':'匯出問題清單 CSV','results.export_csv_btn':'匯出事件清單 CSV','btn.html_report':'📄 HTML 報表','btn.print_full_report':'🖨 完整報表 PDF','err.popup_blocked':'瀏覽器封鎖了彈出視窗，請允許後再試一次','report.title':'分析報表','report.total_events':'事件總數','report.formats':'涵蓋格式','report.severity_summary':'嚴重度分佈','report.sample_events':'樣本事件',
     'footer.note':'log_analyzer v1 — 純前端 JavaScript，離線可用，不上傳任何資料',
+    'health.title':'健檢分數卡','health.run':'立即執行健檢','health.recheck':'重新檢查','health.ok':'✓ 一切正常，無異常項目','btn.mitre_layer':'匯出 MITRE Layer','baseline.title':'基準線比對','baseline.export_btn':'匯出目前結果為基準線','baseline.import_btn':'上傳基準線檔案','baseline.no_diff':'與基準線相比無差異','baseline.status_added':'新增','baseline.status_removed':'移除','baseline.status_changed':'變更','baseline.col_status':'狀態','baseline.col_category':'分類','baseline.col_old':'基準線','baseline.col_new':'目前','msg.baseline_import_invalid':'基準線檔案格式錯誤','msg.baseline_imported':'已匯入基準線，共 {n} 筆問題分類',
     'egg.escToast':'啊啊啊，分析到頭痛，先清空下次再做'
   },
   en: {
@@ -3556,7 +3695,7 @@ const LANG = {
     'import.title':'① Import Log','import.hint':'Supports line-based CEF (Common Event Format), LEEF (Log Event Extended Format), standard Syslog (RFC3164/RFC5424), FortiGate native key=value logs (no syslog envelope needed), JSON/NDJSON, and Windows Event Log (wevtutil/Event Viewer XML export, binary .evtx not supported). Paste text, upload, or drag & drop a file.','nav.tools_btn':'Switch Tool','nav.tool_network':'Hub','nav.tool_switch':'Switch Analyzer','nav.tool_gen':'Switch Generator','nav.tool_fw':'Firewall Analyzer','nav.tool_ca':'Config Anonymizer','nav.tool_log':'Log Analyzer','import.paste_placeholder':'Paste log content here, or use the upload button below…','import.upload_btn':'Upload File','import.analyze_btn':'Parse & Analyze','import.clear_btn':'Clear','import.file_loaded':'Loaded file: ','import.progress_parsing':'Parsing…','import.progress_analyzing':'Matching threat intel & classifying…','import.progress_rendering':'Rendering results…','import.progress_correlating':'Correlating events…','import.large_file_notice':'File too large ({name}, {lines} lines) — content not shown in the box below, still fully parsed','opt.freqWindow':'Freq window (s):','opt.freqThreshold':'Freq threshold:','opt.scanThreshold':'Scan threshold:','opt.volumeThreshold':'Volume threshold (MB):','opt.chainWindow':'Chain window (min):','opt.gapThreshold':'Gap threshold (min):','opt.chainGroupBy':'Group by:','opt.chainGroupByIp':'IP','opt.chainGroupByUser':'User','opt.geoRiskLabel':'Geo-risk countries:','opt.geoRiskFilter':'Filter countries…',
     'results.title':'② Event List (sorted by severity)','results.empty':'No data yet — import and analyze a log first','results.col_severity':'Severity','results.col_time':'Time','results.col_host':'Host','results.col_format':'Format','results.col_category':'Category','results.col_notes':'Suspected Issue','results.optional_cols':'Show columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.col_url':'URL/Method','results.col_sourcefile':'Source File','results.filter_all_files':'All Files','results.search_placeholder':'Search host/content…','issues.search_placeholder':'Search category/basis…','results.col_msg':'Message','results.summary_label':'Summary: ','results.timeline_label':'Event Timeline',
     'sev.critical':'Critical','sev.high':'High','sev.medium':'Medium','sev.low':'Low','sev.info':'Info',
-    'issues.title':'③ Issue List (basic security analysis)','issues.empty':'No rule-based issues found','issues.col_category':'Category','issues.col_severity':'Severity','issues.col_count':'Count','issues.col_confidence':'Confidence','issues.col_source':'Intel Source','issues.col_basis':'Match Basis','issues.col_sample':'Sample','issues.filter_all_sources':'All Sources','issues.source_filter_label':'Filter by intel source:',
+    'issues.title':'③ Issue List (basic security analysis)','issues.empty':'No rule-based issues found','issues.col_category':'Category','issues.col_severity':'Severity','issues.col_count':'Count','issues.col_confidence':'Confidence','issues.col_source':'Intel Source','issues.col_basis':'Match Basis','issues.col_sample':'Sample','issues.filter_all_sources':'All Sources','issues.source_filter_label':'Filter by intel source:','issues.suppress_label':'Suppress categories:',
     'chain.title':'Suspected Correlation Chains','chain.empty':'No correlation chains found','chain.col_actor':'Source/Actor','chain.col_stages':'Stage Sequence','chain.col_first':'First Seen','chain.col_last':'Last Seen','chain.col_span':'Span','topn.title':'Top-N Summary','topn.src_title':'Top 10 Source IPs','topn.user_title':'Top 10 Users','topn.category_title':'Top 10 Categories','topn.col_value':'Item','topn.col_count':'Count','topn.empty':'No data','filemeta.export_btn':'Export Metadata','filemeta.lines_suffix':'lines','chain.stage_recon':'🔍 Recon','chain.stage_access':'🔑 Access Attempt','chain.stage_malicious':'⚠ Known Malicious','chain.stage_postActivity':'📤 Post-Activity',
     'conf.confirmed':'Confirmed','conf.heuristic':'Heuristic',
     'cat.authFail':'Auth Failure','cat.denyBlock':'Connection Denied/Blocked','cat.attack':'Attack/Malware','cat.scanFlood':'Scan/Flood','cat.exceedThreshold':'Threshold Exceeded','cat.other':'Other','cat.freqLabel':'Frequency Anomaly: ','mitre.disclaimer':'MITRE ATT&CK Technique ID — reference only, not a final determination','cat.possibleScan':'Possible Scan Activity','cat.knownIOC':'Known Threat-Intel Hit','cat.volumeAnomaly':'Volume Anomaly','cat.geoRisk':'Geo-Location Risk','cat.geoIPRisk':'Geo Risk (IP Lookup)','cat.beaconing':'Suspected Beaconing (C2)','cat.lateralMovement':'Suspected Lateral Movement','cat.privEsc':'Privilege Escalation / New Account','cat.geoVelocity':'Geo-Velocity Anomaly','note.bruteForce':'Suspected Brute-Force/Password Guessing','note.scanOrMisconfig':'Suspected Scan or Misconfiguration','note.freqAnomaly':'Frequency Anomaly','note.possibleScan':'Suspected Port/Host Scan','note.knownIOC':'Known Threat-Intel Hit',
@@ -3567,6 +3706,7 @@ const LANG = {
     'deid.title':'⑧ De-identification','deid.hint':'Replaces IP/hostname/username with consistently-mapped fake values (IPs use RFC5737 documentation ranges). Run this after steps ③④ — anonymized fake IPs can no longer match a real intel list.','deid.preserve_last_octet':'Preserve IP Last Octet','deid.run_btn':'Run De-identification','deid.download_btn':'Download De-identified Result','btn.export_map':'Export Mapping','tip.export_map':'Export mapping table: import into Config Anonymizer, or re-import here later to reuse the same fake values','btn.import_map':'📥 Import Mapping','tip.import_mapping':'Import an existing mapping table: reuses the same fake values for identical original values, keeps results consistent with Config Anonymizer','msg.mapping_imported':'Imported {n} existing mapping entries','msg.mapping_import_invalid':'Invalid mapping file, please upload a mapping JSON exported by this tool or Config Anonymizer','hint.crossToolMapping':'If this log and a Config Anonymizer run cover the same devices, export/import the mapping table to keep fake values consistent','deid.stat_replaced':'Replaced','deid.stat_ip':'IP','deid.stat_hostname':'Hostname','deid.stat_user':'Username','deid.stat_mac':'MAC','deid.stat_bucket_overflow':'⚠ Over 254 distinct source IPs de-identified in the {range} range (currently {count}) — fake addresses will repeat and may map to the wrong original IP',
     'export.csv_btn':'Export Issue List CSV','results.export_csv_btn':'Export Event List CSV','btn.html_report':'📄 HTML Report','btn.print_full_report':'🖨 Full Report PDF','err.popup_blocked':'Browser blocked the popup window, please allow it and try again','report.title':'Analysis Report','report.total_events':'Total Events','report.formats':'Formats Covered','report.severity_summary':'Severity Distribution','report.sample_events':'Sample Events',
     'footer.note':'log_analyzer v1 — pure front-end JavaScript, works offline, uploads nothing',
+    'health.title':'Health Score Card','health.run':'Run Health Check','health.recheck':'Recheck','health.ok':'✓ All clear, no issues found','btn.mitre_layer':'Export MITRE Layer','baseline.title':'Baseline Comparison','baseline.export_btn':'Export Current as Baseline','baseline.import_btn':'Upload Baseline File','baseline.no_diff':'No difference from baseline','baseline.status_added':'Added','baseline.status_removed':'Removed','baseline.status_changed':'Changed','baseline.col_status':'Status','baseline.col_category':'Category','baseline.col_old':'Baseline','baseline.col_new':'Current','msg.baseline_import_invalid':'Invalid baseline file format','msg.baseline_imported':'Baseline imported, {n} issue categories',
     'egg.escToast':'Aaargh, this analysis is giving me a headache — clearing it, I\'ll finish it another time.'
   },
   ja: {
@@ -3575,7 +3715,7 @@ const LANG = {
     'import.title':'① ログ取り込み','import.hint':'行単位の CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）、FortiGate 純正 key=value ログ（syslog エンベロープ不要）、JSON/NDJSON、および Windows イベントログ（wevtutil/イベントビューアーの XML エクスポート、バイナリ .evtx 非対応）に対応。テキスト貼り付け、アップロード、ドラッグ＆ドロップに対応。','nav.tools_btn':'ツール切替','nav.tool_network':'ハブ','nav.tool_switch':'スイッチ解析','nav.tool_gen':'スイッチ設定生成','nav.tool_fw':'ファイアウォール解析','nav.tool_ca':'設定匿名化','nav.tool_log':'ログ解析','import.paste_placeholder':'ここにログを貼り付けるか、下のアップロードボタンを使用…','import.upload_btn':'ファイルをアップロード','import.analyze_btn':'解析・分析','import.clear_btn':'クリア','import.file_loaded':'読み込み済みファイル：','import.progress_parsing':'解析中…','import.progress_analyzing':'脅威インテリジェンス照合・分類中…','import.progress_rendering':'結果を描画中…','import.progress_correlating':'相関分析中…','import.large_file_notice':'ファイルが大きすぎます（{name}、{lines} 行）。下のテキストボックスには表示されませんが、解析は正常に行われます','opt.freqWindow':'頻度ウィンドウ(秒)：','opt.freqThreshold':'頻度しきい値：','opt.scanThreshold':'スキャンしきい値：','opt.volumeThreshold':'トラフィック量しきい値(MB)：','opt.chainWindow':'相関ウィンドウ(分)：','opt.gapThreshold':'欠落しきい値(分)：','opt.chainGroupBy':'グループ軸：','opt.chainGroupByIp':'IP','opt.chainGroupByUser':'ユーザー','opt.geoRiskLabel':'地理的リスク国：','opt.geoRiskFilter':'国を絞り込み…',
     'results.title':'② イベント一覧（重要度順）','results.empty':'データがありません。まずログを取り込んで分析してください','results.col_severity':'重要度','results.col_time':'時刻','results.col_host':'ホスト','results.col_format':'形式','results.col_category':'分類','results.col_notes':'疑わしい問題','results.optional_cols':'表示項目：','results.col_src':'送信元IP','results.col_dst':'宛先IP','results.col_port':'ポート','results.col_proto':'プロトコル','results.col_url':'URL/HTTPメソッド','results.col_sourcefile':'ソースファイル','results.filter_all_files':'全ファイル','results.search_placeholder':'ホスト/内容を検索…','issues.search_placeholder':'カテゴリ/根拠を検索…','results.col_msg':'内容','results.summary_label':'集計：','results.timeline_label':'イベントの時間分布',
     'sev.critical':'重大','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'情報',
-    'issues.title':'③ 問題リスト（基本セキュリティ分析）','issues.empty':'該当する問題は見つかりませんでした','issues.col_category':'分類','issues.col_severity':'重要度','issues.col_count':'件数','issues.col_confidence':'信頼度','issues.col_source':'情報源','issues.col_basis':'照合根拠','issues.col_sample':'サンプル','issues.filter_all_sources':'すべての情報源','issues.source_filter_label':'情報源で絞り込み：',
+    'issues.title':'③ 問題リスト（基本セキュリティ分析）','issues.empty':'該当する問題は見つかりませんでした','issues.col_category':'分類','issues.col_severity':'重要度','issues.col_count':'件数','issues.col_confidence':'信頼度','issues.col_source':'情報源','issues.col_basis':'照合根拠','issues.col_sample':'サンプル','issues.filter_all_sources':'すべての情報源','issues.source_filter_label':'情報源で絞り込み：','issues.suppress_label':'抑制する分類：',
     'chain.title':'疑わしい相関攻撃チェーン','chain.empty':'該当する相関攻撃チェーンは見つかりませんでした','chain.col_actor':'送信元/行為者','chain.col_stages':'段階シーケンス','chain.col_first':'初回検知','chain.col_last':'最終検知','chain.col_span':'継続時間','topn.title':'Top-N サマリー','topn.src_title':'送信元IP トップ10','topn.user_title':'ユーザー トップ10','topn.category_title':'カテゴリ トップ10','topn.col_value':'項目','topn.col_count':'件数','topn.empty':'データなし','filemeta.export_btn':'メタデータをエクスポート','filemeta.lines_suffix':'行','chain.stage_recon':'🔍 偵察','chain.stage_access':'🔑 アクセス試行','chain.stage_malicious':'⚠ 既知の悪意','chain.stage_postActivity':'📤 事後活動の疑い',
     'conf.confirmed':'確認済み','conf.heuristic':'推定',
     'cat.authFail':'認証失敗','cat.denyBlock':'接続拒否/ブロック','cat.attack':'攻撃/マルウェア','cat.scanFlood':'スキャン/フラッド','cat.exceedThreshold':'しきい値超過','cat.other':'その他','cat.freqLabel':'頻度異常：','mitre.disclaimer':'MITRE ATT&CK 技術番号は参考情報であり、最終的な判定ではありません','cat.possibleScan':'スキャンの疑い','cat.knownIOC':'既知の脅威情報に一致','cat.volumeAnomaly':'異常なトラフィック量','cat.geoRisk':'地理的リスク','cat.geoIPRisk':'地理的リスク（IP照合）','cat.beaconing':'疑わしい定期通信（C2）','cat.lateralMovement':'疑わしい横方向移動','cat.privEsc':'権限昇格/新規アカウント','cat.geoVelocity':'地理的速度異常','note.bruteForce':'ブルートフォース/パスワード推測の疑い','note.scanOrMisconfig':'スキャンまたは設定ミスの疑い','note.freqAnomaly':'頻度異常','note.possibleScan':'ポート/ホストスキャンの疑い','note.knownIOC':'既知の脅威情報に一致',
@@ -3586,6 +3726,7 @@ const LANG = {
     'deid.title':'⑧ 匿名化','deid.hint':'IP／ホスト名／ユーザー名を一貫したマッピングの仮値に置き換えます（IP は RFC5737 の文書用アドレス帯を使用）。③④の分析・照合を先に行ってください。匿名化後の仮 IP は実際のインテリジェンスリストと一致しなくなります。','deid.preserve_last_octet':'IP末尾を保持','deid.run_btn':'匿名化を実行','deid.download_btn':'匿名化結果をダウンロード','btn.export_map':'対応表をエクスポート','tip.export_map':'対応表をエクスポート：《設定匿名化》ツールへインポート、または本ツールへの再インポートで同じ仮の値を再利用できます','btn.import_map':'📥 対応表をインポート','tip.import_mapping':'既存の対応表をインポート：同じ元の値には同じ仮の値を再利用し、《設定匿名化》ツールの結果と一致させます','msg.mapping_imported':'{n} 件の既存対応をインポートしました','msg.mapping_import_invalid':'対応表の形式が不正です。本ツールまたは《設定匿名化》ツールが出力した JSON 対応表かご確認ください','hint.crossToolMapping':'このログが《設定匿名化》ツールと同じ機器のものである場合、対応表をエクスポート/インポートして仮の値を一致させることをお勧めします','deid.stat_replaced':'置換済','deid.stat_ip':'IP','deid.stat_hostname':'ホスト名','deid.stat_user':'ユーザー名','deid.stat_mac':'MAC','deid.stat_bucket_overflow':'⚠ {range} 範囲で254個を超える送信元IPを匿名化しました（現在{count}個）。偽アドレスが重複し、誤った元のIPに対応する可能性があります',
     'export.csv_btn':'問題リストを CSV 出力','results.export_csv_btn':'イベントリストを CSV 出力','btn.html_report':'📄 HTML レポート','btn.print_full_report':'🖨 完全レポート PDF','err.popup_blocked':'ブラウザにポップアップがブロックされました。許可して再試行してください','report.title':'分析レポート','report.total_events':'イベント総数','report.formats':'対応フォーマット','report.severity_summary':'重要度分布','report.sample_events':'サンプルイベント',
     'footer.note':'log_analyzer v1 — 純粋なフロントエンド JavaScript、オフライン動作、データ送信なし',
+    'health.title':'健康度スコアカード','health.run':'健康チェック実行','health.recheck':'再チェック','health.ok':'✓ 問題なし','btn.mitre_layer':'MITRE レイヤーをエクスポート','baseline.title':'ベースライン比較','baseline.export_btn':'現在の結果をベースラインとしてエクスポート','baseline.import_btn':'ベースラインファイルをアップロード','baseline.no_diff':'ベースラインと差異なし','baseline.status_added':'追加','baseline.status_removed':'削除','baseline.status_changed':'変更','baseline.col_status':'状態','baseline.col_category':'分類','baseline.col_old':'ベースライン','baseline.col_new':'現在','msg.baseline_import_invalid':'ベースラインファイルの形式が無効です','msg.baseline_imported':'ベースラインを読み込みました（{n} 件の問題分類）',
     'egg.escToast':'うわああ、分析で頭が痛い……とりあえずクリアして、また今度やろう。'
   },
   tlh:{
@@ -3594,7 +3735,7 @@ const LANG = {
     'import.title':'① Log yIlan','import.hint':'CEF, LEEF, Syslog (RFC3164/RFC5424), FortiGate key=value (syslog Qapbe\'), JSON chaw\', Windows event De\' (XML neH). Text yIlan, file yIlan, pagh drag\'DIch.','nav.tools_btn':'Doch','nav.tool_network':'Hub','nav.tool_switch':'analyze','nav.tool_gen':'chenmoH','nav.tool_fw':'veS analyze','nav.tool_ca':'So\'','nav.tool_log':'analyze De\'','import.paste_placeholder':'log Daq yIlan…','import.upload_btn':'File yIlan','import.analyze_btn':'yIchov','import.clear_btn':'yIchIm','import.file_loaded':'File lanpu\':','import.progress_parsing':'chov…','import.progress_analyzing':'intel chov, segh…','import.progress_rendering':'nov chenmoH…','import.progress_correlating':'chain chov…','import.large_file_notice':'file tIn Doch ({name}, mI\' {lines}); box bIng ghobe\' cha\'lu\', chov naDev','opt.freqWindow':'poH (lup):','opt.freqThreshold':"mIgh QIt:",'opt.scanThreshold':'scan QIt:','opt.volumeThreshold':'traffic QIt:','opt.chainWindow':'chain poH (tup):','opt.gapThreshold':'jengva\' poH (tup):','opt.chainGroupBy':'buSHa\' pol:','opt.chainGroupByIp':'IP','opt.chainGroupByUser':'nuv','opt.geoRiskLabel':'Sep list:','opt.geoRiskFilter':'Sep nej…',
     'results.title':'② Event tetlh (severity chov)','results.empty':'Data tu\'lu\'be\', first log yIlan','results.col_severity':'severity','results.col_time':'poH','results.col_host':'host','results.col_format':'format','results.col_category':'segh','results.col_notes':'pIH mIgh','results.optional_cols':"cha' ghom:",'results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.col_url':'URL/Qap','results.col_sourcefile':'ngoQ pong','results.filter_all_files':'Hoch ngoQmey','results.search_placeholder':'nej host/mu\'meyvam…','issues.search_placeholder':'nej Segh/meq…','results.col_msg':'mu\'meyvam','results.summary_label':'chov:','results.timeline_label':'poH tetlh',
     'sev.critical':'!QIH','sev.high':'chIm','sev.medium':'motlh','sev.low':'mach','sev.info':'De\'',
-    'issues.title':'③ Issue tetlh (security chov)','issues.empty':'Issue tu\'lu\'be\'','issues.col_category':'segh','issues.col_severity':'severity','issues.col_count':'\'ar','issues.col_confidence':'HIvqa\'','issues.col_source':'source','issues.col_basis':'meq','issues.col_sample':'nughDoq','issues.filter_all_sources':'Hoch source','issues.source_filter_label':'source yIwIv:',
+    'issues.title':'③ Issue tetlh (security chov)','issues.empty':'Issue tu\'lu\'be\'','issues.col_category':'segh','issues.col_severity':'severity','issues.col_count':'\'ar','issues.col_confidence':'HIvqa\'','issues.col_source':'source','issues.col_basis':'meq','issues.col_sample':'nughDoq','issues.filter_all_sources':'Hoch source','issues.source_filter_label':'source yIwIv:','issues.suppress_label':'segh So\':',
     'chain.title':'may\' chain (HIvqa\'ghach)','chain.empty':'chain tu\'lu\'be\'','chain.col_actor':'ghot','chain.col_stages':'stage tetlh','chain.col_first':'wa\'DIch','chain.col_last':'HochDIch','chain.col_span':'poH tIq','topn.title':'Top-N chovnatlh','topn.src_title':'wa\'maH pIn (veng)','topn.user_title':'wa\'maH pIn (nuv)','topn.category_title':'wa\'maH pIn (segh)','topn.col_value':'Doch','topn.col_count':'mI\'','topn.empty':'pagh','filemeta.export_btn':'ghItlh chovnatlh ngeH','filemeta.lines_suffix':'rav','chain.stage_recon':'🔍 legh','chain.stage_access':'🔑 chal yIghoS','chain.stage_malicious':'⚠ mIghqu\'','chain.stage_postActivity':'📤 latlh vum',
     'conf.confirmed':'chovtaH','conf.heuristic':'poQlu\'',
     'cat.authFail':'authentication luj','cat.denyBlock':'connection lujqa\'','cat.attack':'HIv/malware','cat.scanFlood':'scan/flood','cat.exceedThreshold':'threshold Sub','cat.other':'latlh','cat.freqLabel':'frequency mIgh:','mitre.disclaimer':'MITRE ATT&CK Technique ID — reference only, not a final determination','cat.possibleScan':'scan pIH','cat.knownIOC':'intel Sovbogh','cat.volumeAnomaly':'traffic mIgh','cat.geoRisk':'Sep pIH','cat.geoIPRisk':'Sep pIH (IP chov)','cat.beaconing':'beacon qIp','cat.lateralMovement':'Dor lup','cat.privEsc':'mIw HoS','cat.geoVelocity':'Sep leng','note.bruteForce':"password nagh mIgh",'note.scanOrMisconfig':"scan pagh chenmoHHa'",'note.freqAnomaly':'frequency mIgh','note.possibleScan':'scan pIH','note.knownIOC':'intel Sovbogh',
@@ -3605,6 +3746,7 @@ const LANG = {
     'deid.title':'⑧ De-identification','deid.hint':'IP/host/user pong yIchoH (RFC5737 lo\'). ③④ vaj ruch, De-identify vaj fake IP intel tetlh hItqa\'be\'.','deid.preserve_last_octet':'IP mIw HochHom polmoH','deid.run_btn':'De-identify yIchav','deid.download_btn':'De-identify baghlu\'pu\' yIchoH','btn.export_map':'chen chu\' teq','tip.export_map':'chen chu\' teq: So\' Daq lan pagh DaH teq je','btn.import_map':'chen chu\' laD','tip.import_mapping':'chen chu\' laD: rap Doch rap chu\' lo\'taH; So\' je rap','msg.mapping_imported':'{n} chu\' laD ta\'pu\'','msg.mapping_import_invalid':'chu\' Doch Qagh; yIlaD pat vel So\' je','hint.crossToolMapping':'raS Doch rap Doj; chen chu\' laD pagh chu\' vaD rap taH','deid.stat_replaced':'choHpu\'','deid.stat_ip':'IP','deid.stat_hostname':'Duj pong','deid.stat_user':'ghot pong','deid.stat_mac':'MAC','deid.stat_bucket_overflow':'⚠ {range} Daq 254 IP latlh De-identify (DaH {count}) — fake IP cheghtaH, ghot Qaw\'lu\' laH',
     'export.csv_btn':'Issue tetlh CSV yIchoH','results.export_csv_btn':'wanI\' tetlh CSV yIchoH','btn.html_report':'ghItlhvam HTML yIchoH','btn.print_full_report':'Hoch ghItlhvam PDF yIchoH','err.popup_blocked':'SoQDaq lojmit. yIchu\'ta\'; qatlh yIqep','report.title':'chovnatlh De\'','report.total_events':'Hoch wanI\'','report.formats':'teller','report.severity_summary':'severity buSHa\'','report.sample_events':'chovnatlh wanI\'',
     'footer.note':'log_analyzer v1 — front-end JavaScript neH, offline Qap, data Qapbe\'',
+    'health.title':'chov naQ','health.run':'chov yIta','health.recheck':'chov latlh','health.ok':'Qagh Hutlh','btn.mitre_layer':'MITRE chovnatlh nIH','baseline.title':'chov changwI\'','baseline.export_btn':'DaH chov cha\'','baseline.import_btn':'chov teq','baseline.no_diff':'chov pagh Hoch rap','baseline.status_added':'chelta\'','baseline.status_removed':'teqta\'','baseline.status_changed':'choHta\'','baseline.col_status':'Dotlh','baseline.col_category':'segh','baseline.col_old':'chov qan','baseline.col_new':'DaH','msg.baseline_import_invalid':'chov Sar Qagh','msg.baseline_imported':'chov lI\' {n}',
     'egg.escToast':'AAAH! chov vaj nach mIgh — DaH yIchIm, latlh poH vaj yIchav.'
   },
   pirate:{
@@ -3613,7 +3755,7 @@ const LANG = {
     'import.title':'① Haul In the Log','import.hint':'Reads CEF, LEEF, plain Syslog (RFC3164/RFC5424), and FortiGate\'s own key=value charts (no syslog riggin\' needed), line by line, plus JSON/NDJSON charts, and Windows Event Log XML charts (from wevtutil or Event Viewer — no binary .evtx booty, arr). Paste the scroll, hoist a file aboard, or drag one right onto the deck.','nav.tools_btn':'Change Ships','nav.tool_network':'The Helm','nav.tool_switch':'Switch Chart Reader','nav.tool_gen':'Switch Chart Maker','nav.tool_fw':'Fleet Defense','nav.tool_ca':'Treasure Hider','nav.tool_log':'Ship\'s Log Reader','import.paste_placeholder':'Paste yer log scroll here, or hoist a file below…','import.upload_btn':'Hoist File','import.analyze_btn':'Chart & Scan','import.clear_btn':'Swab the Deck','import.file_loaded':'File aboard: ','import.progress_parsing':'Readin\' the scroll…','import.progress_analyzing':'Checkin\' \'gainst the blacklist & sortin\'…','import.progress_rendering':'Drawin\' the chart…','import.progress_correlating':'Chartin\' the chain o\' clues…','import.large_file_notice':'Scroll too big ({name}, {lines} lines) — won\'t show below, but still be read proper','opt.freqWindow':'Bells in a Watch:','opt.freqThreshold':'Ruckus Count:','opt.scanThreshold':"Scoutin' Count:",'opt.volumeThreshold':"Cargo Threshold (MB):",'opt.chainWindow':"Chain Reckonin' (min):",'opt.gapThreshold':"Gap in the Log (min):",'opt.chainGroupBy':"Reckon by:",'opt.chainGroupByIp':"Port o' Call",'opt.chainGroupByUser':"Buccaneer",'opt.geoRiskLabel':"Enemy Waters:",'opt.geoRiskFilter':'Search fer a Land…',
     'results.title':'② The Event Manifest (worst trouble first)','results.empty':'Nothin\' in the hold yet — haul in a log first','results.col_severity':'Trouble','results.col_time':'Bell','results.col_host':'Ship','results.col_format':'Rig','results.col_category':'Kind','results.col_notes':'Suspected Trouble','results.optional_cols':'Show Columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.col_url':'URL/Course','results.col_sourcefile':"Chart o' Origin",'results.filter_all_files':'Every Chart','results.search_placeholder':'Search the logbook…','issues.search_placeholder':'Search the ledger…','results.col_msg':'Word','results.summary_label':'Tally: ','results.timeline_label':'Timeline o\' Trouble',
     'sev.critical':'Mutiny!','sev.high':'Rough Seas','sev.medium':'Choppy','sev.low':'Calm','sev.info':'Just Gossip',
-    'issues.title':'③ Trouble Manifest (basic scoutin\')','issues.empty':'No trouble spotted on the horizon','issues.col_category':'Kind','issues.col_severity':'Trouble','issues.col_count':'Tally','issues.col_confidence':'How Sure','issues.col_source':'Chart Source','issues.col_basis':'The Reason Why','issues.col_sample':'Sample','issues.filter_all_sources':'All Charts','issues.source_filter_label':'Filter by chart:',
+    'issues.title':'③ Trouble Manifest (basic scoutin\')','issues.empty':'No trouble spotted on the horizon','issues.col_category':'Kind','issues.col_severity':'Trouble','issues.col_count':'Tally','issues.col_confidence':'How Sure','issues.col_source':'Chart Source','issues.col_basis':'The Reason Why','issues.col_sample':'Sample','issues.filter_all_sources':'All Charts','issues.source_filter_label':'Filter by chart:','issues.suppress_label':'Silence these kinds, arr:',
     'chain.title':'Suspected Plunderin\' Chain','chain.empty':'No chain o\' scoundrels found','chain.col_actor':'Scallywag','chain.col_stages':'The Voyage','chain.col_first':'First Sighted','chain.col_last':'Last Sighted','chain.col_span':'Time at Sea','topn.title':"Top-N Tally",'topn.src_title':"Top 10 Ports o' Call",'topn.user_title':"Top 10 Buccaneers",'topn.category_title':"Top 10 Types o' Trouble",'topn.col_value':"Item",'topn.col_count':"Tally",'topn.empty':"Nothin' Here",'filemeta.export_btn':"Export the Manifest",'filemeta.lines_suffix':"Lines",'chain.stage_recon':'🔍 Scoutin\'','chain.stage_access':'🔑 Boardin\' Attempt','chain.stage_malicious':'⚠ Known Blackheart','chain.stage_postActivity':'📤 Plunderin\' Aftermath',
     'conf.confirmed':'Confirmed, arrr','conf.heuristic':'Just a Hunch',
     'cat.authFail':'Wrong Password, Ye Scurvy Dog','cat.denyBlock':'Turned Away at the Gate','cat.attack':'Boardin\' Party / Foul Plague','cat.scanFlood':'Scoutin\' the Coast / Flood o\' Cannons','cat.exceedThreshold':'Overloaded the Hold','cat.other':'Other Business','cat.freqLabel':'Too Much Ruckus: ','mitre.disclaimer':'Just a hint from the crow\'s nest, matey — not the final verdict, arr!','cat.possibleScan':'Scoutin\' Suspected','cat.knownIOC':'Known Villain Spotted','cat.volumeAnomaly':'Suspicious Cargo Load','cat.geoRisk':'Foreign Waters Flagged','cat.geoIPRisk':'Foreign Waters, Charted by Number','cat.beaconing':'Signal Fires in the Fog','cat.lateralMovement':'Boarding Party Spreadin\' Out','cat.privEsc':'Mutiny for the Captain\'s Hat','cat.geoVelocity':'Ghost Ship, Two Ports at Once','note.bruteForce':"Suspected Password Guessin', Arr",'note.scanOrMisconfig':"Suspected Scoutin' or Bad Chartin'",'note.freqAnomaly':'Too Much Ruckus','note.possibleScan':"Suspected Port/Ship Scoutin'",'note.knownIOC':'Known Villain Spotted',
@@ -3624,6 +3766,7 @@ const LANG = {
     'deid.title':'⑧ Hide the Crew\'s True Names','deid.hint':'Swaps IP/hostname/username fer consistent fake names (IPs use the RFC5737 map-room range). Do this after ③④ — once hidden, the fake IPs won\'t match the real blacklist no more.','deid.preserve_last_octet':'Keep the Last Digits o\' the IP','deid.run_btn':'Hide Their Names','deid.download_btn':'Download the Disguised Log','btn.export_map':'Export the Chart, arr!','tip.export_map':'Export the chart o\' mappings: feed it to the Treasure Hider, or bring it back aboard here later, arr!','btn.import_map':'Import the Chart, arr!','tip.import_mapping':'Import an existing treasure chart of mappings, so the same booty always gets the same fake name across ships, arr!','msg.mapping_imported':'{n} old mappings brought aboard, arr!','msg.mapping_import_invalid':'That be a cursed chart, matey! Upload the one this ship or the Treasure Hider be makin, arr!','hint.crossToolMapping':'If this log be the same vessel as yer Treasure Hider haul, export or import the chart to keep names matchin, arr!','deid.stat_replaced':'Swapped','deid.stat_ip':'IP','deid.stat_hostname':'Ship Name','deid.stat_user':'Crew Name','deid.stat_mac':'MAC','deid.stat_bucket_overflow':'Over 254 distinct source IPs be de-identified in the {range} waters (currently {count}), arr! Fake addresses will repeat and might point to the wrong original IP!',
     'export.csv_btn':'Export Trouble Manifest CSV','results.export_csv_btn':'Export Ship\'s Log Manifest CSV','btn.html_report':'📄 Export th\' Full Report Scroll','btn.print_full_report':'🖨 Print th\' Full Report (PDF Parchment)','err.popup_blocked':'Th\' popup window be blocked by yer browser, allow it an\' try again','report.title':'Voyage Report','report.total_events':'Total Happenings','report.formats':'Charts Covered','report.severity_summary':'Trouble Breakdown','report.sample_events':'Sample Happenings',
     'footer.note':'log_analyzer v1 — plain front-end JavaScript, sails offline, sends nothin\' to shore',
+    'health.title':"Health Chart",'health.run':"Run the Health Check, arr!",'health.recheck':"Recheck, arr!",'health.ok':"✓ All clear, smooth sailing!",'btn.mitre_layer':"Export MITRE Chart, arr!",'baseline.title':"Baseline Compare, arr!",'baseline.export_btn':"Chart Current as Baseline, arr!",'baseline.import_btn':"Hoist Baseline File, arr!",'baseline.no_diff':"No change from baseline, smooth sailin'!",'baseline.status_added':"Added, arr!",'baseline.status_removed':"Removed, arr!",'baseline.status_changed':"Changed, arr!",'baseline.col_status':"Status",'baseline.col_category':"Category",'baseline.col_old':"Baseline",'baseline.col_new':"Now",'msg.baseline_import_invalid':"That baseline chart be invalid, arr!",'msg.baseline_imported':"Baseline hoisted, {n} categories aboard!",
     'egg.escToast':'ARRRGH! This chart\'s givin\' me a splittin\' headache — swabbin\' the deck now, I\'ll chart it again another day.'
   },
   emoji:{
@@ -3632,7 +3775,7 @@ const LANG = {
     'import.title':'①📥 匯入 Log','import.hint':'支援 CEF/LEEF、標準 Syslog（RFC3164/5424）📄逐行格式、FortiGate🔥原生 key=value（免外殼）＋JSON/NDJSON＋🪟Windows Event Log XML，可✍️貼上/📎上傳/🖱️拖放。','nav.tools_btn':'🧭','nav.tool_network':'🏠','nav.tool_switch':'🔀','nav.tool_gen':'🛠️','nav.tool_fw':'🛡️','nav.tool_ca':'🔒','nav.tool_log':'📜','import.paste_placeholder':'✍️在此貼上 log…','import.upload_btn':'📎上傳檔案','import.analyze_btn':'🔍解析分析','import.clear_btn':'🗑️清空','import.file_loaded':'✅已載入：','import.progress_parsing':'🔍解析中…','import.progress_analyzing':'🎯比對＋🏷️分類中…','import.progress_rendering':'🖼️渲染中…','import.progress_correlating':'🔗🔍關聯中…','import.large_file_notice':'📦檔案過大（{name}，{lines} 行），下方框不顯示內容，仍✅完整解析','opt.freqWindow':'⏱️視窗(秒)：','opt.freqThreshold':'📈門檻(次)：','opt.scanThreshold':'🔦門檻(數)：','opt.volumeThreshold':'📦門檻(MB)：','opt.chainWindow':'🔗⏱️時間窗(分)：','opt.gapThreshold':'⏱️🕳️門檻(分)：','opt.chainGroupBy':'🧑‍🤝‍🧑軸：','opt.chainGroupByIp':'🌐','opt.chainGroupByUser':'👤','opt.geoRiskLabel':'🌍風險國家：','opt.geoRiskFilter':'🔍篩選國家…',
     'results.title':'②📋 事件清單（依🔥嚴重度）','results.empty':'📭尚無資料','results.col_severity':'🔥嚴重度','results.col_time':'⏰時間','results.col_host':'🖥️主機','results.col_format':'📄格式','results.col_category':'🏷️分類','results.col_notes':'❓疑似問題','results.optional_cols':'👁️欄位：','results.col_src':'📤來源IP','results.col_dst':'📥目的IP','results.col_port':'🔌Port','results.col_proto':'📡協定','results.col_url':'🔗URL/方法','results.col_sourcefile':'📄來源','results.filter_all_files':'📄全部','results.search_placeholder':'🔍搜尋主機/內容…','issues.search_placeholder':'🔍搜尋分類/依據…','results.col_msg':'💬內容','results.summary_label':'📊統計：','results.timeline_label':'⏱️時間分布',
     'sev.critical':'🔴嚴重','sev.high':'🟠高','sev.medium':'🟡中','sev.low':'🔵低','sev.info':'⚪資訊',
-    'issues.title':'③❗ 問題清單','issues.empty':'✅未發現問題','issues.col_category':'🏷️類別','issues.col_severity':'🔥嚴重度','issues.col_count':'🔢次數','issues.col_confidence':'🎯可信度','issues.col_source':'🎯來源','issues.col_basis':'🧩比對依據','issues.col_sample':'📌範例','issues.filter_all_sources':'🌐全部','issues.source_filter_label':'🔎篩選來源：',
+    'issues.title':'③❗ 問題清單','issues.empty':'✅未發現問題','issues.col_category':'🏷️類別','issues.col_severity':'🔥嚴重度','issues.col_count':'🔢次數','issues.col_confidence':'🎯可信度','issues.col_source':'🎯來源','issues.col_basis':'🧩比對依據','issues.col_sample':'📌範例','issues.filter_all_sources':'🌐全部','issues.source_filter_label':'🔎篩選來源：','issues.suppress_label':'🔇🏷️抑制：',
     'chain.title':'🔗⚠️疑似攻擊鏈','chain.empty':'✅未發現🔗','chain.col_actor':'👤來源','chain.col_stages':'🔗階段','chain.col_first':'🕐首次','chain.col_last':'🕐最後','chain.col_span':'⏳跨度','topn.title':'🔝📊','topn.src_title':'🔝🌐','topn.user_title':'🔝👤','topn.category_title':'🔝🏷️','topn.col_value':'📌','topn.col_count':'#️⃣','topn.empty':'🚫📄','filemeta.export_btn':'📤🧾','filemeta.lines_suffix':'行','chain.stage_recon':'🔍偵察','chain.stage_access':'🔑存取','chain.stage_malicious':'☠惡意','chain.stage_postActivity':'📤後續',
     'conf.confirmed':'✅已確認','conf.heuristic':'🤔推測',
     'cat.authFail':'🔑❌認證失敗','cat.denyBlock':'🚫連線遭拒','cat.attack':'☠️攻擊/惡意軟體','cat.scanFlood':'🔦掃描/🌊洪水','cat.exceedThreshold':'📈超過門檻','cat.other':'📎其他','cat.freqLabel':'📈頻率異常：','mitre.disclaimer':'🎯 僅供參考，非最終定案','cat.possibleScan':'🔦疑似掃描','cat.knownIOC':'🎯已知情資命中','cat.volumeAnomaly':'📦🚨大量流量','cat.geoRisk':'🌍⚠️地理風險','cat.geoIPRisk':'🌍🔍地理風險(查表)','cat.beaconing':'📡🔁疑似信標(C2)','cat.lateralMovement':'↔️🏃橫向移動','cat.privEsc':'👑⬆️權限提升','cat.geoVelocity':'🌍💨地理速度異常','note.bruteForce':'🔑❓猜密碼','note.scanOrMisconfig':'🔦❓掃描/設定錯','note.freqAnomaly':'📈異常','note.possibleScan':'🔦❓Port掃描','note.knownIOC':'🎯命中',
@@ -3643,6 +3786,7 @@ const LANG = {
     'deid.title':'⑧🙈 去識別化','deid.hint':'將 IP/主機名/使用者名➡️一致假值（IP 用 RFC5737）。請先完成③④，去識別化後假 IP 🚫無法再命中真實清單。','deid.preserve_last_octet':'🔢保留IP尾段','deid.run_btn':'▶️執行去識別化','deid.download_btn':'⬇️下載結果','btn.export_map':'📤 🗂️','tip.export_map':'📤🗂️➡️🔒 或 ⬅️ 這裡，同一物件🎭一致','btn.import_map':'📥 🗂️','tip.import_mapping':'📥🗂️➡️🔗 同一原始值➡️同一假值，跟 🔒 一致 🎭','msg.mapping_imported':'✅ {n} 🗂️ 已到位','msg.mapping_import_invalid':'❌ 🗂️ 格式不對','hint.crossToolMapping':'🔗 同設備？📤📥 🗂️ 跟 🔒 保持 🎭 一致','deid.stat_replaced':'✅換了','deid.stat_ip':'IP','deid.stat_hostname':'🖥️名稱','deid.stat_user':'👤名稱','deid.stat_mac':'MAC','deid.stat_bucket_overflow':'⚠️🔁254️⃣+ IPs same bucket, fake addresses repeat, might map wrong',
     'export.csv_btn':'⬇️匯出問題清單 CSV','results.export_csv_btn':'⬇️📋匯出事件清單 CSV','btn.html_report':'📄⬇️HTML報表','btn.print_full_report':'🖨️📄PDF報表','err.popup_blocked':'🚫🪟被封鎖，請允許後再試','report.title':'📊報表','report.total_events':'📋事件總數','report.formats':'📄涵蓋格式','report.severity_summary':'⚠️嚴重度分佈','report.sample_events':'📌樣本事件',
     'footer.note':'log_analyzer v1 — 純前端 JS，📴離線可用，🚫不上傳任何資料',
+    'health.title':'🏥📊','health.run':'🏥▶️','health.recheck':'🔄🏥','health.ok':'✅','btn.mitre_layer':'🎯📤','baseline.title':'📏🔍','baseline.export_btn':'📤📏','baseline.import_btn':'📥📏','baseline.no_diff':'✅➖','baseline.status_added':'➕','baseline.status_removed':'➖','baseline.status_changed':'🔄','baseline.col_status':'🚦','baseline.col_category':'🏷️','baseline.col_old':'📏','baseline.col_new':'🆕','msg.baseline_import_invalid':'❌📏','msg.baseline_imported':'✅📏{n}',
     'egg.escToast':'😱😱😱 分析到頭痛😵‍💫，先🧹清空，改天再來👋'
   },
   bureau:{
@@ -3651,7 +3795,7 @@ const LANG = {
     'import.title':'第一項：日誌資料匯入作業','import.hint':'本作業支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog (RFC3164/RFC5424) 格式之逐行解析，暨 FortiGate 原生 key=value 格式（無須 syslog 封裝）、JSON/NDJSON 格式，以及 Windows Event Log（wevtutil／事件檢視器 XML 匯出格式，二進位 .evtx 格式不予受理），得以文字貼上、檔案上傳，或拖放檔案方式辦理。','nav.tools_btn':'工具切換作業','nav.tool_network':'總覽作業','nav.tool_switch':'交換器設定解析作業','nav.tool_gen':'交換器設定產生作業','nav.tool_fw':'防火牆設定分析作業','nav.tool_ca':'設定檔去識別化作業','nav.tool_log':'日誌分析作業','import.paste_placeholder':'請於此欄位貼上日誌內容，或依下方按鈕辦理檔案上傳作業…','import.upload_btn':'辦理檔案上傳','import.analyze_btn':'執行解析暨分析作業','import.clear_btn':'清空本欄位資料','import.file_loaded':'業已載入之檔案：','import.progress_parsing':'解析作業辦理中…','import.progress_analyzing':'情資比對暨分類作業辦理中…','import.progress_rendering':'結果繪製作業辦理中…','import.progress_correlating':'關聯性分析作業執行中…','import.large_file_notice':'檔案容量過大（{name}，計 {lines} 行），其內容不於下方文字框內顯示，惟解析作業仍依規定完整辦理','opt.freqWindow':'頻率視窗（秒）：','opt.freqThreshold':'頻率門檻（次數）：','opt.scanThreshold':'掃描門檻（數量）：','opt.volumeThreshold':'流量門檻（單位：MB，得由使用者自行調整）：','opt.chainWindow':'關聯分析時間窗設定值（分鐘）：','opt.gapThreshold':'日誌斷點門檻設定值（分鐘）：','opt.chainGroupBy':'分組依據欄位設定值：','opt.chainGroupByIp':'網路位址別','opt.chainGroupByUser':'使用者帳號別','opt.geoRiskLabel':'高風險地理區域標記清單：','opt.geoRiskFilter':'國家篩選查詢欄位：',
     'results.title':'第二項：事件清冊（依嚴重程度分級排序）','results.empty':'目前尚無資料，請依第一項規定辦理匯入及分析作業','results.col_severity':'嚴重程度等級','results.col_time':'發生時間','results.col_host':'主機識別資料','results.col_format':'資料格式','results.col_category':'事件分類','results.col_notes':'疑似問題事項','results.optional_cols':'顯示欄位：','results.col_src':'來源位址','results.col_dst':'目的位址','results.col_port':'埠口','results.col_proto':'通訊協定','results.col_url':'網址／傳輸方法','results.col_sourcefile':'來源檔案名稱','results.filter_all_files':'全部檔案清單','results.search_placeholder':'請輸入主機/內容關鍵字以辦理搜尋…','issues.search_placeholder':'請輸入分類/依據關鍵字以辦理搜尋…','results.col_msg':'事件內容','results.summary_label':'統計摘要：','results.timeline_label':'事件時間分布圖',
     'sev.critical':'甲級（嚴重）','sev.high':'乙級（高）','sev.medium':'丙級（中）','sev.low':'丁級（低）','sev.info':'參考資訊',
-    'issues.title':'第三項：問題清冊（基本資安分析作業）','issues.empty':'依現行規則，未查得相符之問題事項','issues.col_category':'問題類別','issues.col_severity':'嚴重程度等級','issues.col_count':'發生次數','issues.col_confidence':'可信程度','issues.col_source':'情資來源','issues.col_basis':'比對依據說明','issues.col_sample':'代表性樣本','issues.filter_all_sources':'全部來源','issues.source_filter_label':'情資來源篩選：',
+    'issues.title':'第三項：問題清冊（基本資安分析作業）','issues.empty':'依現行規則，未查得相符之問題事項','issues.col_category':'問題類別','issues.col_severity':'嚴重程度等級','issues.col_count':'發生次數','issues.col_confidence':'可信程度','issues.col_source':'情資來源','issues.col_basis':'比對依據說明','issues.col_sample':'代表性樣本','issues.filter_all_sources':'全部來源','issues.source_filter_label':'情資來源篩選：','issues.suppress_label':'抑制下列問題分類：',
     'chain.title':'疑似關聯性攻擊行為鏈證分析','chain.empty':'查無符合關聯條件之攻擊行為鏈證資料','chain.col_actor':'行為來源主體','chain.col_stages':'階段歷程序列','chain.col_first':'首次發現時間','chain.col_last':'末次發現時間','chain.col_span':'涵蓋期間','topn.title':'前列彙總分析報表','topn.src_title':'來源 IP 位址前十大排行','topn.user_title':'使用者帳號前十大排行','topn.category_title':'事件分類前十大排行','topn.col_value':'項目名稱','topn.col_count':'出現次數','topn.empty':'查無相關資料','filemeta.export_btn':'匯出檔案中繼資料','filemeta.lines_suffix':'列','chain.stage_recon':'🔍 偵察階段','chain.stage_access':'🔑 嘗試存取階段','chain.stage_malicious':'⚠ 已知惡意來源階段','chain.stage_postActivity':'📤 疑似後續行為階段',
     'conf.confirmed':'業經確認','conf.heuristic':'推定研判',
     'cat.authFail':'認證程序失敗事項','cat.denyBlock':'連線遭拒絕或阻擋事項','cat.attack':'攻擊行為或惡意軟體事項','cat.scanFlood':'掃描或洪水攻擊事項','cat.exceedThreshold':'超過既定門檻事項','cat.other':'其他未分類事項','cat.freqLabel':'頻率異常事項：','mitre.disclaimer':'MITRE ATT&CK 技術編號係參考性資訊，不構成正式事件定性之依據','cat.possibleScan':'疑似掃描行為（待進一步查證）','cat.knownIOC':'業經核對之已知情資命中事項','cat.volumeAnomaly':'疑似異常大量資料傳輸案件','cat.geoRisk':'涉及高風險地理區域之事項','cat.geoIPRisk':'涉及高風險地理區域之事項（資料庫查表比對）','cat.beaconing':'疑似定期回報信標(C2)之通聯紀錄','cat.lateralMovement':'疑似跨主機橫向移動之登入事件','cat.privEsc':'權限提升或新增帳號之異動紀錄','cat.geoVelocity':'地理位置速度異常之比對結果','note.bruteForce':'疑似密碼猜測攻擊事項','note.scanOrMisconfig':'疑似掃描行為或組態設定錯誤事項','note.freqAnomaly':'頻率異常事項','note.possibleScan':'疑似埠口/主機掃描事項','note.knownIOC':'業經核對之已知情資命中事項',
@@ -3662,6 +3806,7 @@ const LANG = {
     'deid.title':'第八項：資料去識別化作業','deid.hint':'將事件中之 IP、主機名稱、使用者名稱等資料，替換為具一致性對應關係之虛擬值（IP 部分採用 RFC5737 文件用網段）。請依序完成第三、四項分析及比對作業後，再辦理本項作業；本項作業完成後所產出之虛擬 IP，將無法再與真實情資清冊相符。','deid.preserve_last_octet':'保留 IP 位址末段','deid.run_btn':'執行去識別化作業','deid.download_btn':'下載去識別化作業結果','btn.export_map':'匯出對照表（依規辦理）','tip.export_map':'匯出對照表：可供匯入《設定檔去識別化作業》系統，或供本系統後續匯入沿用相同替代值，依規辦理','btn.import_map':'匯入既有對照表（依規辦理）','tip.import_mapping':'匯入既有對照表：俾利同一原始值套用相同替代值，供與《設定檔去識別化作業》系統之結果維持一致性，依規辦理','msg.mapping_imported':'業已匯入既有對照 {n} 筆，請查照','msg.mapping_import_invalid':'對照表格式不符規定，請確認係本系統或《設定檔去識別化作業》系統匯出之 JSON 檔案，依規辦理','hint.crossToolMapping':'倘本份日誌與《設定檔去識別化作業》系統處理者屬同一批設備，建議辦理對照表之匯出／匯入作業，以維持替代值一致性，請查照','deid.stat_replaced':'已置換','deid.stat_ip':'IP','deid.stat_hostname':'主機名稱','deid.stat_user':'使用者帳號名稱','deid.stat_mac':'MAC 位址','deid.stat_bucket_overflow':'該類別去識別化IP數已超過254，依規將重複配置假位址，可能對應錯誤原始IP，請依規確認來源批次',
     'export.csv_btn':'匯出問題清冊（CSV 格式）','results.export_csv_btn':'匯出事件清冊（CSV 格式）','btn.html_report':'匯出報表（HTML 格式）','btn.print_full_report':'列印完整報表（PDF 格式）','err.popup_blocked':'瀏覽器已阻擋彈出視窗，請依指示允許後重新執行','report.title':'分析報告書','report.total_events':'事件總筆數','report.formats':'涵蓋格式類別','report.severity_summary':'嚴重程度分佈統計','report.sample_events':'抽樣事件清單',
     'footer.note':'log_analyzer 第一版 — 純前端 JavaScript 程式，得離線執行，不進行任何資料上傳作業',
+    'health.title':'健康度評核卡','health.run':'執行健康度評核作業','health.recheck':'重新評核','health.ok':'✓ 查無異常事項','btn.mitre_layer':'匯出 MITRE 對應層級檔案','baseline.title':'基準線比對作業','baseline.export_btn':'匯出現行結果為基準線文件','baseline.import_btn':'上傳基準線文件','baseline.no_diff':'經比對與基準線並無差異','baseline.status_added':'新增項目','baseline.status_removed':'移除項目','baseline.status_changed':'變更項目','baseline.col_status':'狀態欄','baseline.col_category':'分類項目','baseline.col_old':'原基準線數值','baseline.col_new':'現行數值','msg.baseline_import_invalid':'基準線文件格式有誤，請重新確認後上傳','msg.baseline_imported':'基準線文件已匯入完成，計 {n} 項問題分類',
     'egg.escToast':'本工具使用人員陳報：分析作業致生頭痛不適，爰依規定先行清空本次分析資料，俟後續有需要時再行辦理。'
   },
   cat:{
@@ -3670,7 +3815,7 @@ const LANG = {
     'import.title':'①叼log進來喵','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424）跟 FortiGate 原生 key=value（不用外殼喵）都吃喵，JSON/NDJSON 也吃喵，連 Windows Event Log XML 也吃喵，貼上文字、叼檔案、或直接拖進來都可以喵。','nav.tools_btn':'切換工具喵','nav.tool_network':'總覽喵','nav.tool_switch':'交換器解析喵','nav.tool_gen':'交換器產生喵','nav.tool_fw':'防火牆分析喵','nav.tool_ca':'去識別化喵','nav.tool_log':'日誌分析喵','import.paste_placeholder':'log 貼在這裡喵…','import.upload_btn':'叼檔案進來喵','import.analyze_btn':'聞一聞分析喵','import.clear_btn':'抓沙清空喵','import.file_loaded':'已經叼進來的檔案喵：','import.progress_parsing':'聞一聞中喵…','import.progress_analyzing':'比對壞蛋分類中喵…','import.progress_rendering':'畫出來中喵…','import.progress_correlating':'正在聞出關聯喵…','import.large_file_notice':'檔案太大了喵（{name}，{lines} 行），下面框框不顯示喵，但還是會聞完喵','opt.freqWindow':'時間窗(秒)喵：','opt.freqThreshold':'門檻(次)喵：','opt.scanThreshold':'掃描門檻喵：','opt.volumeThreshold':'流量門檻喵(MB)：','opt.chainWindow':'關聯時間窗喵(分)：','opt.gapThreshold':'斷點門檻喵(分)：','opt.chainGroupBy':'分組軸喵：','opt.chainGroupByIp':'IP喵','opt.chainGroupByUser':'帳號喵','opt.geoRiskLabel':'危險國家清單喵：','opt.geoRiskFilter':'找國家喵…',
     'results.title':'②事件清單（照嚴重度排排站喵）','results.empty':'還沒東西可以聞喵，先匯入 log 喵','results.col_severity':'嚴重度喵','results.col_time':'時間喵','results.col_host':'主機喵','results.col_format':'格式喵','results.col_category':'分類喵','results.col_notes':'疑似問題喵','results.optional_cols':'顯示欄位喵：','results.col_src':'來源IP喵','results.col_dst':'目的IP喵','results.col_port':'Port喵','results.col_proto':'協定喵','results.col_url':'URL喵','results.col_sourcefile':'來源檔案喵','results.filter_all_files':'全部檔案喵','results.search_placeholder':'搜尋主機/內容喵…','issues.search_placeholder':'搜尋分類/依據喵…','results.col_msg':'內容喵','results.summary_label':'統計喵：','results.timeline_label':'什麼時候喵',
     'sev.critical':'超嚴重喵!!','sev.high':'很在意喵','sev.medium':'普通喵','sev.low':'不太在意喵','sev.info':'路過看看喵',
-    'issues.title':'③問題清單（聞出來的可疑喵）','issues.empty':'沒聞到什麼可疑的喵','issues.col_category':'類別喵','issues.col_severity':'嚴重度喵','issues.col_count':'次數喵','issues.col_confidence':'有多確定喵','issues.col_source':'哪來的喵','issues.col_basis':'為什麼喵','issues.col_sample':'範例喵','issues.filter_all_sources':'全部喵','issues.source_filter_label':'挑來源喵：',
+    'issues.title':'③問題清單（聞出來的可疑喵）','issues.empty':'沒聞到什麼可疑的喵','issues.col_category':'類別喵','issues.col_severity':'嚴重度喵','issues.col_count':'次數喵','issues.col_confidence':'有多確定喵','issues.col_source':'哪來的喵','issues.col_basis':'為什麼喵','issues.col_sample':'範例喵','issues.filter_all_sources':'全部喵','issues.source_filter_label':'挑來源喵：','issues.suppress_label':'不想看的分類喵：',
     'chain.title':'疑似關聯攻擊鏈喵','chain.empty':'沒聞到什麼關聯鏈喵','chain.col_actor':'誰幹的喵','chain.col_stages':'階段喵','chain.col_first':'首次喵','chain.col_last':'最後喵','chain.col_span':'花多久喵','topn.title':'Top-N摘要喵','topn.src_title':'前10大來源IP喵','topn.user_title':'前10大使用者喵','topn.category_title':'前10大分類喵','topn.col_value':'項目喵','topn.col_count':'次數喵','topn.empty':'沒有資料喵','filemeta.export_btn':'匯出中繼資料喵','filemeta.lines_suffix':'行喵','chain.stage_recon':'🔍偵察喵','chain.stage_access':'🔑存取喵','chain.stage_malicious':'⚠壞蛋喵','chain.stage_postActivity':'📤後續喵',
     'conf.confirmed':'確定喵！','conf.heuristic':'感覺啦喵',
     'cat.authFail':'密碼打錯了喵','cat.denyBlock':'被擋在門外喵','cat.attack':'有壞東西喵','cat.scanFlood':'鬼鬼祟祟在探路喵','cat.exceedThreshold':'超過忍耐極限喵','cat.other':'其他喵喵喵','cat.freqLabel':'太吵了喵：','mitre.disclaimer':'MITRE ATT&CK 編號只是喵喵的參考啦，不是最終答案喵','cat.possibleScan':'感覺有人在探頭探腦喵','cat.knownIOC':'抓到熟面孔壞蛋喵','cat.volumeAnomaly':'流量爆炸喵','cat.geoRisk':'危險國家出沒喵','cat.geoIPRisk':'查表抓到危險國家喵','cat.beaconing':'規律信標怪怪的喵','cat.lateralMovement':'到處亂跳主機喵','cat.privEsc':'偷偷升官喵','cat.geoVelocity':'瞬間移動國家喵','note.bruteForce':'感覺在猜密碼喵','note.scanOrMisconfig':'感覺在探路喵','note.freqAnomaly':'太吵了喵','note.possibleScan':'感覺在掃描喵','note.knownIOC':'抓到熟面孔壞蛋喵',
@@ -3681,6 +3826,7 @@ const LANG = {
     'deid.title':'⑧藏起來喵','deid.hint':'把 IP／主機名稱／使用者名稱換成固定的假名字喵（IP 用 RFC5737 那個假地址喵）。要先做完③④再做這個喵，藏起來以後假 IP 就聞不出跟真的情資清單一樣了喵。','deid.preserve_last_octet':'保留IP尾巴喵','deid.run_btn':'開始藏喵','deid.download_btn':'把藏好的叼回家喵','btn.export_map':'匯出對照表喵','tip.export_map':'匯出對照表喵：可以餵給《去識別化喵》工具，或之後叼回本工具用喵','btn.import_map':'📥 匯入對照表喵','tip.import_mapping':'匯入既有對照表喵：同樣的原始值會套用同一組假值喵，可以跟《去識別化喵》工具保持一致喵','msg.mapping_imported':'已經叼進 {n} 筆對照喵','msg.mapping_import_invalid':'對照表格式怪怪的喵，請確認是本工具或《去識別化喵》工具匯出的檔案喵','hint.crossToolMapping':'如果這份 log 跟《去識別化喵》處理的是同一批設備喵，建議匯出/匯入對照表保持假值一致喵','deid.stat_replaced':'換好了喵','deid.stat_ip':'IP','deid.stat_hostname':'主機名喵','deid.stat_user':'用戶名喵','deid.stat_mac':'MAC喵','deid.stat_bucket_overflow':'這類 IP 超過 254 個囉，假位址要重複用了，可能會對應錯喵～',
     'export.csv_btn':'把問題清單叼出去（CSV）喵','results.export_csv_btn':'把事件清單叼出去（CSV）喵','btn.html_report':'把報表叼出去（HTML）喵','btn.print_full_report':'把完整報表印出來（PDF）喵','err.popup_blocked':'瀏覽器把視窗擋住了喵，允許之後再試一次喵','report.title':'報表喵','report.total_events':'事件總數喵','report.formats':'涵蓋格式喵','report.severity_summary':'嚴重度分佈喵','report.sample_events':'樣本事件喵',
     'footer.note':'log_analyzer v1 喵 — 純前端 JavaScript，離線也能玩喵，什麼都不會上傳喵',
+    'health.title':'健檢卡喵','health.run':'開始健檢喵','health.recheck':'重新健檢喵','health.ok':'✓ 都正常喵','btn.mitre_layer':'匯出MITRE喵','baseline.title':'基準線比對喵','baseline.export_btn':'存成基準線喵','baseline.import_btn':'上傳基準線喵','baseline.no_diff':'都一樣喵~','baseline.status_added':'新增喵','baseline.status_removed':'消失喵','baseline.status_changed':'變了喵','baseline.col_status':'狀態喵','baseline.col_category':'分類喵','baseline.col_old':'之前喵','baseline.col_new':'現在喵','msg.baseline_import_invalid':'檔案怪怪的喵','msg.baseline_imported':'匯入了{n}筆喵',
     'egg.escToast':'啊啊啊，分析到頭好痛喵，先清空掉，下次再說喵~'
   },
   bean:{
@@ -3689,7 +3835,7 @@ const LANG = {
     'import.title':'①倒入🫘Log','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424）與 FortiGate🍅原生 key=value（免外殼）都能煮，JSON/NDJSON 也能下鍋，Windows Event Log XML 一樣能燉，貼上文字、上傳🥔檔案、或直接拖進鍋裡皆可。','nav.tools_btn':'切換豆具','nav.tool_network':'總豆','nav.tool_switch':'交換豆解析','nav.tool_gen':'交換豆產生','nav.tool_fw':'防火豆分析','nav.tool_ca':'豆識別化','nav.tool_log':'日誌豆析','import.paste_placeholder':'把 log 倒在這裡…','import.upload_btn':'🥔上傳檔案','import.analyze_btn':'🔥開火分析','import.clear_btn':'🧹清鍋','import.file_loaded':'已下鍋的檔案：','import.progress_parsing':'🔥燉煮中…','import.progress_analyzing':'比對配料分類中…','import.progress_rendering':'擺盤中…','import.progress_correlating':'正在串連食材線索…','import.large_file_notice':'食材太多了（{name}，{lines} 行），下面菜籃不顯示，但還是會煮完','opt.freqWindow':'⏱️時間窗(秒)：','opt.freqThreshold':'🌶️門檻(次)：','opt.scanThreshold':'🔦掃描門檻：','opt.volumeThreshold':'流量門檻🥔(MB)：','opt.chainWindow':'串連時間窗🥕(分)：','opt.gapThreshold':'斷點門檻🌱(分)：','opt.chainGroupBy':'分組軸🥦：','opt.chainGroupByIp':'IP🥕','opt.chainGroupByUser':'帳號🌽','opt.geoRiskLabel':'危險國家清單🍆：','opt.geoRiskFilter':'🥕找國家…',
     'results.title':'②事件清單（依🌶️辣度排序）','results.empty':'鍋子還是空的，先倒入 log 吧','results.col_severity':'🌶️辣度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題🌶️','results.optional_cols':'顯示欄位🌶️：','results.col_src':'來源IP🥕','results.col_dst':'目的IP🍆','results.col_port':'Port🌽','results.col_proto':'協定🫘','results.col_url':'網址🥦','results.col_sourcefile':'來源檔案🥕','results.filter_all_files':'全部🌽','results.search_placeholder':'🔍搜尋主機/內容…','issues.search_placeholder':'🔍搜尋分類/依據…','results.col_msg':'內容','results.summary_label':'總計：','results.timeline_label':'🌶️時間軸',
     'sev.critical':'🌶️🌶️🌶️超辣','sev.high':'🌶️🌶️辣','sev.medium':'🌶️微辣','sev.low':'🥒清淡','sev.info':'🥬爽口',
-    'issues.title':'③問題清單（基本廚房安全檢查）','issues.empty':'廚房目前一切正常','issues.col_category':'類別','issues.col_severity':'🌶️辣度','issues.col_count':'份數','issues.col_confidence':'火候','issues.col_source':'食材來源','issues.col_basis':'配方依據🥕','issues.col_sample':'試吃樣本','issues.filter_all_sources':'全部食材','issues.source_filter_label':'挑食材來源：',
+    'issues.title':'③問題清單（基本廚房安全檢查）','issues.empty':'廚房目前一切正常','issues.col_category':'類別','issues.col_severity':'🌶️辣度','issues.col_count':'份數','issues.col_confidence':'火候','issues.col_source':'食材來源','issues.col_basis':'配方依據🥕','issues.col_sample':'試吃樣本','issues.filter_all_sources':'全部食材','issues.source_filter_label':'挑食材來源：','issues.suppress_label':'不想看的類別：',
     'chain.title':'疑似連環偷菜事件','chain.empty':'廚房沒發現連環案','chain.col_actor':'嫌疑廚師','chain.col_stages':'案發流程','chain.col_first':'首次目擊','chain.col_last':'最後目擊','chain.col_span':'案發時長','topn.title':'Top-N摘要🥕','topn.src_title':'前10大來源IP🌽','topn.user_title':'前10大使用者🥦','topn.category_title':'前10大分類🍆','topn.col_value':'項目🥕','topn.col_count':'次數🌽','topn.empty':'沒有資料🥕','filemeta.export_btn':'匯出中繼資料🥕','filemeta.lines_suffix':'行🌽','chain.stage_recon':'🔍蹲點🥕','chain.stage_access':'🔑闖廚房','chain.stage_malicious':'⚠️慣犯🫑','chain.stage_postActivity':'📤偷吃後續',
     'conf.confirmed':'✅確定好了','conf.heuristic':'🤔大概是這樣',
     'cat.authFail':'🔑鑰匙打不開','cat.denyBlock':'🚪被拒於門外','cat.attack':'🦠壞菌入侵','cat.scanFlood':'👀被偷看/🌊太多人湧入','cat.exceedThreshold':'份量超標','cat.other':'其他配菜','cat.freqLabel':'太常出現了：','mitre.disclaimer':'MITRE ATT&CK 豆號僅供參考，非最終豆論','cat.possibleScan':'疑似有人在探頭探腦','cat.knownIOC':'認出熟面孔壞蛋🍅','cat.volumeAnomaly':'流量爆量🥦','cat.geoRisk':'危險國家🌽','cat.geoIPRisk':'查表抓到危險國家🍆','cat.beaconing':'規律信標怪怪的🥕','cat.lateralMovement':'到處亂跳主機🥒','cat.privEsc':'偷偷升官🧄','cat.geoVelocity':'瞬間移動國家🍠','note.bruteForce':'感覺在猜密碼🥕','note.scanOrMisconfig':'感覺在探路🌶️','note.freqAnomaly':'太常出現了','note.possibleScan':'感覺在掃描🔦','note.knownIOC':'認出熟面孔壞蛋🍅',
@@ -3700,6 +3846,7 @@ const LANG = {
     'deid.title':'⑧去識別化（去皮去籽）','deid.hint':'把 IP／主機名稱／使用者名稱換成固定的代號（IP 用 RFC5737 那盤示範菜）。請先完成③④再做這步，去皮後的假 IP 就配不上真正的情資清單了。','deid.preserve_last_octet':'保留IP尾巴🥕','deid.run_btn':'開始去皮','deid.download_btn':'打包帶走','btn.export_map':'豆出對照表','tip.export_map':'豆出對照表：可餵給《豆識別化》工具，或之後豆入本工具沿用','btn.import_map':'📥 豆入對照表','tip.import_mapping':'豆入既有對照表：同樣的原始值會套用同一組假值，可用於與《豆識別化》工具保持一致','msg.mapping_imported':'已豆入 {n} 筆既有對照','msg.mapping_import_invalid':'對照表格式錯誤，請確認上傳的是本工具或《豆識別化》工具豆出的 JSON 對照表','hint.crossToolMapping':'若這份 log 與《豆識別化》工具處理的是同一批設備，建議豆出/豆入對照表以保持假值一致','deid.stat_replaced':'去皮了','deid.stat_ip':'IP','deid.stat_hostname':'主機皮','deid.stat_user':'用戶皮','deid.stat_mac':'MAC皮','deid.stat_bucket_overflow':'這豆類 IP 超過 254 個，假豆址要重複用，豆可能對應錯了',
     'export.csv_btn':'把問題清單裝盒（CSV）','results.export_csv_btn':'把事件清單裝豆盒（CSV）','btn.html_report':'把報表裝盒（HTML）','btn.print_full_report':'把完整報表裝豆盒（PDF）','err.popup_blocked':'瀏覽器把窗戶擋住了，開個門再試一次','report.title':'報表豆','report.total_events':'事件總數','report.formats':'涵蓋格式','report.severity_summary':'🌶️辣度分佈','report.sample_events':'樣本事件',
     'footer.note':'log_analyzer v1 — 純🫘前端 JavaScript，離線也能開伙，不會外送任何食材資料',
+    'health.title':'健檢豆卡','health.run':'開始健檢','health.recheck':'重新豆檢','health.ok':'✓ 都正常','btn.mitre_layer':'匯出MITRE豆','baseline.title':'基準豆比對','baseline.export_btn':'存成基準豆','baseline.import_btn':'上傳基準豆','baseline.no_diff':'都沒變豆','baseline.status_added':'新增豆','baseline.status_removed':'消失豆','baseline.status_changed':'變豆了','baseline.col_status':'狀態豆','baseline.col_category':'分類豆','baseline.col_old':'之前豆','baseline.col_new':'現在豆','msg.baseline_import_invalid':'檔案壞豆了','msg.baseline_imported':'匯入{n}筆豆',
     'egg.escToast':'啊啊啊，分析到頭好痛🥴，先清空，改天再煮🥕'
   },
   alpaca:{
@@ -3708,7 +3855,7 @@ const LANG = {
     'import.title':'①牽log咩進來-aca','import.hint':'CEF、LEEF、標準Syslog（RFC3164/5424）跟FortiGate原生key=value（不用外殼咩）咩都吃-aca，JSON/NDJSON也吃咩，Windows Event Log XML也吃咩，貼文字、牽檔案、或拖進來都可以咩。','nav.tools_btn':'切咩換工咩具-aca','nav.tool_network':'總咩覽-aca','nav.tool_switch':'交咩換器咩解咩析-aca','nav.tool_gen':'交咩換器咩產咩生-aca','nav.tool_fw':'防咩火咩牆咩分咩析-aca','nav.tool_ca':'去咩識咩別咩化-aca','nav.tool_log':'日咩誌咩分咩析-aca','import.paste_placeholder':'log貼在這裡咩…','import.upload_btn':'牽檔案進來-aca','import.analyze_btn':'咩一下分析-aca','import.clear_btn':'清空草原咩','import.file_loaded':'已經牽進來咩檔案-aca：','import.progress_parsing':'咩一下中-aca…','import.progress_analyzing':'比對壞蛋分類中咩…','import.progress_rendering':'畫出來中-aca…','import.progress_correlating':'正在咩出關聯-aca…','import.large_file_notice':'檔案太大咩（{name}，{lines} 行），下面框框不顯示-aca，但還是會咩完咩','opt.freqWindow':'時間窗(秒)咩：','opt.freqThreshold':'門檻(次)-aca：','opt.scanThreshold':'掃描門檻咩：','opt.volumeThreshold':'流量門檻咩(MB)：','opt.chainWindow':'關聯時間窗咩(分)：','opt.gapThreshold':'斷點門檻咩-aca(分)：','opt.chainGroupBy':'分組軸咩：','opt.chainGroupByIp':'IP咩','opt.chainGroupByUser':'帳號咩','opt.geoRiskLabel':'危險國家清單咩：','opt.geoRiskFilter':'找國家咩…',
     'results.title':'②事件清單（排隊咩排隊-aca）','results.empty':'草原還空空咩，先牽log進來-aca','results.col_severity':'嚴重度咩','results.col_time':'時間-aca','results.col_host':'主機咩','results.col_format':'格式-aca','results.col_category':'分類咩','results.col_notes':'疑似問題-aca','results.optional_cols':'顯示欄位咩：','results.col_src':'來源IP咩','results.col_dst':'目的IP-aca','results.col_port':'Port咩','results.col_proto':'協定-aca','results.col_url':'網址咩','results.col_sourcefile':'來源檔案咩','results.filter_all_files':'全部檔案咩','results.search_placeholder':'搜尋主機/內容咩…','issues.search_placeholder':'搜尋分類/依據咩…','results.col_msg':'內容-aca','results.summary_label':'統計咩：','results.timeline_label':'什麼時候咩',
     'sev.critical':'超嚴重咩!!!','sev.high':'很緊張-aca','sev.medium':'普通咩','sev.low':'放輕鬆-aca','sev.info':'路過看看咩',
-    'issues.title':'③問題清單（咩出來的怪怪咩）','issues.empty':'沒咩到什麼怪怪的-aca','issues.col_category':'類別咩','issues.col_severity':'嚴重度-aca','issues.col_count':'次數咩','issues.col_confidence':'有多確定-aca','issues.col_source':'哪來的-aca','issues.col_basis':'依據咩','issues.col_sample':'範例咩','issues.filter_all_sources':'全部咩','issues.source_filter_label':'挑來源-aca：',
+    'issues.title':'③問題清單（咩出來的怪怪咩）','issues.empty':'沒咩到什麼怪怪的-aca','issues.col_category':'類別咩','issues.col_severity':'嚴重度-aca','issues.col_count':'次數咩','issues.col_confidence':'有多確定-aca','issues.col_source':'哪來的-aca','issues.col_basis':'依據咩','issues.col_sample':'範例咩','issues.filter_all_sources':'全部咩','issues.source_filter_label':'挑來源-aca：','issues.suppress_label':'不咩想看的類別-aca：',
     'chain.title':'疑似關聯攻擊鏈咩','chain.empty':'沒咩到什麼關聯的-aca','chain.col_actor':'誰咩的','chain.col_stages':'階段咩','chain.col_first':'首次咩','chain.col_last':'最後咩','chain.col_span':'多久咩','topn.title':'Top-N摘要咩','topn.src_title':'前10大來源IP咩','topn.user_title':'前10大使用者咩-aca','topn.category_title':'前10大分類咩','topn.col_value':'項目咩','topn.col_count':'次數咩','topn.empty':'沒有資料咩-aca','filemeta.export_btn':'匯出中繼資料咩','filemeta.lines_suffix':'行咩-aca','chain.stage_recon':'🔍偵察咩','chain.stage_access':'🔑存取-aca','chain.stage_malicious':'⚠壞咩','chain.stage_postActivity':'📤後續咩',
     'conf.confirmed':'確定咩！','conf.heuristic':'感覺啦-aca',
     'cat.authFail':'密碼咩打錯了-aca','cat.denyBlock':'被擋在柵欄外咩','cat.attack':'有壞東西咩-aca','cat.scanFlood':'鬼鬼祟祟探路咩','cat.exceedThreshold':'超過忍耐極限-aca','cat.other':'其他咩咩咩','cat.freqLabel':'太吵咩：','mitre.disclaimer':'MITRE ATT&CK 咩編號僅供咩參考，非最終咩定論-aca','cat.possibleScan':'感覺有人探頭探腦咩','cat.knownIOC':'認出熟面孔壞蛋咩','cat.volumeAnomaly':'流量爆量咩','cat.geoRisk':'危險國家出沒咩','cat.geoIPRisk':'查表抓到危險國家-aca','cat.beaconing':'規律信標怪怪的咩','cat.lateralMovement':'到處亂跳主機咩','cat.privEsc':'偷偷升官咩','cat.geoVelocity':'瞬間移動國家咩','note.bruteForce':'感覺在猜密碼咩','note.scanOrMisconfig':'感覺在探路-aca','note.freqAnomaly':'太吵咩','note.possibleScan':'感覺在掃描咩','note.knownIOC':'認出熟面孔壞蛋咩',
@@ -3719,6 +3866,7 @@ const LANG = {
     'deid.title':'⑧藏起來-aca','deid.hint':'把IP／主機名稱／使用者名稱換成固定咩假名字-aca（IP用RFC5737那個假地址咩）。要先做完③④再做這個-aca，藏起來以後假IP就配不上真正咩情資清單了-aca。','deid.preserve_last_octet':'保留IP尾段-aca','deid.run_btn':'開始藏咩','deid.download_btn':'把藏好咩牽回家-aca','btn.export_map':'匯咩出對咩照表-aca','tip.export_map':'匯咩出對咩照表咩：可咩餵給咩《去咩識咩別咩化-aca》工咩具，或咩之後咩牽回咩本工咩具沿咩用-aca','btn.import_map':'📥 匯咩入對咩照表-aca','tip.import_mapping':'匯咩入既咩有對咩照表咩：同咩樣的咩原始咩值會咩套用咩同一咩組假咩值-aca，可用咩於與咩《去咩識咩別咩化-aca》保咩持一咩致-aca','msg.mapping_imported':'已咩匯入咩 {n} 筆咩既有咩對照-aca','msg.mapping_import_invalid':'對咩照表咩格式咩錯誤咩，請確咩認上咩傳的咩是本咩工具咩或《去咩識咩別咩化-aca》匯咩出的咩 JS咩ON 對咩照表-aca','hint.crossToolMapping':'若咩這份咩 lo咩g 與咩《去咩識咩別咩化-aca》處咩理的咩是同咩一批咩設備咩，建咩議匯咩出/匯咩入對咩照表咩以保咩持假咩值一咩致-aca','deid.stat_replaced':'換好咩-aca','deid.stat_ip':'IP','deid.stat_hostname':'主機名咩','deid.stat_user':'用戶名咩','deid.stat_mac':'MAC咩','deid.stat_bucket_overflow':'這咩類IP超咩過254個，假咩地址重複用，可能咩對應錯-aca',
     'export.csv_btn':'把問題清單牽出去（CSV）咩','results.export_csv_btn':'把事件清單牽出去（CSV）咩','btn.html_report':'把報表牽出去（HTML）咩','btn.print_full_report':'把完整報表印出來（PDF）咩','err.popup_blocked':'瀏覽器把視窗擋住了咩，允許之後再試一次咩','report.title':'報表咩','report.total_events':'事件總數咩','report.formats':'涵蓋格式咩','report.severity_summary':'嚴重度分佈咩','report.sample_events':'樣本事件咩',
     'footer.note':'log_analyzer v1咩 — 純前端JavaScript-aca，離線也能吃草咩，什麼都不會上傳-aca',
+    'health.title':'健檢咩卡-aca','health.run':'開咩始健檢','health.recheck':'重咩新檢查-aca','health.ok':'✓ 都咩正常-aca','btn.mitre_layer':'匯咩出MITRE-aca','baseline.title':'基準咩線比對-aca','baseline.export_btn':'存咩成基準線-aca','baseline.import_btn':'上咩傳基準線-aca','baseline.no_diff':'都咩沒變-aca','baseline.status_added':'新咩增-aca','baseline.status_removed':'消咩失-aca','baseline.status_changed':'變咩了-aca','baseline.col_status':'狀咩態-aca','baseline.col_category':'分咩類-aca','baseline.col_old':'之咩前-aca','baseline.col_new':'現咩在-aca','msg.baseline_import_invalid':'檔咩案壞了-aca','msg.baseline_imported':'匯咩入{n}筆-aca',
     'egg.escToast':'啊啊啊，分析到頭好痛-aca，先清空咩，下次再做-aca'
   },
   yanse:{
@@ -3727,7 +3875,7 @@ const LANG = {
     'import.title':'①匯入 Log（好，開始了）','import.hint':'CEF、LEEF、標準 Syslog（RFC3164/5424），連 FortiGate 原生 key=value 格式也吃（不用 syslog 外殼，隨便啦），JSON/NDJSON 也行，Windows Event Log XML 也行啦，貼上文字、上傳、拖放都可以，隨便啦。','nav.tools_btn':'切換工具，隨便','nav.tool_network':'總覽，反正沒差','nav.tool_switch':'交換器解析，算了','nav.tool_gen':'交換器產生，隨便啦','nav.tool_fw':'防火牆分析，管它的','nav.tool_ca':'去識別化，懶得說','nav.tool_log':'日誌分析，早就知道','import.paste_placeholder':'log 貼這裡吧……','import.upload_btn':'上傳檔案（好啦）','import.analyze_btn':'解析分析（好啦）','import.clear_btn':'清空（算了）','import.file_loaded':'已載入檔案，然後呢：','import.progress_parsing':'解析中，等一下吧…','import.progress_analyzing':'比對分類中，反正很快…','import.progress_rendering':'畫結果中…','import.progress_correlating':'在串關聯，隨便等等…','import.large_file_notice':'檔案太大了（{name}，{lines} 行），下面不顯示，反正你也不會看，但還是會解析完','opt.freqWindow':'頻率視窗(秒)，隨便：','opt.freqThreshold':'頻率門檻，反正：','opt.scanThreshold':'掃描門檻，看看就好：','opt.volumeThreshold':'流量門檻，隨便你調（MB）：','opt.chainWindow':'關聯時間窗(分)，隨便填：','opt.gapThreshold':'斷點門檻(分)，隨便填：','opt.chainGroupBy':'分組軸，隨便選：','opt.chainGroupByIp':'IP','opt.chainGroupByUser':'帳號','opt.geoRiskLabel':'風險國家，你自己選：','opt.geoRiskFilter':'篩選，隨便打…',
     'results.title':'②事件清單（依嚴重度排序，反正都要看）','results.empty':'沒資料，匯入再說吧','results.col_severity':'嚴重度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題（隨便看看）','results.optional_cols':'顯示欄位，隨便：','results.col_src':'來源IP，反正','results.col_dst':'目的IP，沒差','results.col_port':'Port，看看就好','results.col_proto':'協定，算了','results.col_url':'網址，隨便','results.col_sourcefile':'來源檔案，隨便','results.filter_all_files':'全部檔案，隨便','results.search_placeholder':'搜尋，隨便打打…','issues.search_placeholder':'搜尋，隨便打打…','results.col_msg':'內容','results.summary_label':'統計，看看就好：','results.timeline_label':'時間分布，看看就好',
     'sev.critical':'嚴重（唉）','sev.high':'高（麻煩）','sev.medium':'中（還好）','sev.low':'低（無所謂）','sev.info':'資訊（隨便）',
-    'issues.title':'③問題清單（找到了，然後呢）','issues.empty':'沒發現問題，也許只是還沒發現','issues.col_category':'類別','issues.col_severity':'嚴重度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_source':'來源','issues.col_basis':'依據，其實也沒差','issues.col_sample':'範例，隨便看看','issues.filter_all_sources':'全部','issues.source_filter_label':'篩來源，隨便：',
+    'issues.title':'③問題清單（找到了，然後呢）','issues.empty':'沒發現問題，也許只是還沒發現','issues.col_category':'類別','issues.col_severity':'嚴重度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_source':'來源','issues.col_basis':'依據，其實也沒差','issues.col_sample':'範例，隨便看看','issues.filter_all_sources':'全部','issues.source_filter_label':'篩來源，隨便：','issues.suppress_label':'不想看的類別，隨便勾：',
     'chain.title':'好像有關聯的鏈，也許吧','chain.empty':'沒找到關聯，也許只是還沒找到','chain.col_actor':'誰幹的，管他的','chain.col_stages':'流程，大概','chain.col_first':'第一次，好像','chain.col_last':'最後一次','chain.col_span':'花了多久，隨便','topn.title':'Top-N摘要，大概','topn.src_title':'前10大來源IP，隨便看看','topn.user_title':'前10大使用者，隨便看看','topn.category_title':'前10大分類，隨便看看','topn.col_value':'項目','topn.col_count':'次數，大概','topn.empty':'沒資料，隨便啦','filemeta.export_btn':'匯出中繼資料，隨便','filemeta.lines_suffix':'行，大概','chain.stage_recon':'🔍看看而已','chain.stage_access':'🔑想進來','chain.stage_malicious':'⚠確定是壞的','chain.stage_postActivity':'📤後面的事',
     'conf.confirmed':'確認過了（然後呢）','conf.heuristic':'推測，別太當真',
     'cat.authFail':'認證失敗，又來了','cat.denyBlock':'連線被擋，習慣了','cat.attack':'攻擊/惡意軟體，日常','cat.scanFlood':'掃描/洪水，見怪不怪','cat.exceedThreshold':'超過門檻，隨便啦','cat.other':'其他（懶得分類）','cat.freqLabel':'頻率異常，反正常有：','mitre.disclaimer':'MITRE ATT&CK 編號僅供參考，反正也不會有人細看','cat.possibleScan':'疑似掃描（大概吧）','cat.knownIOC':'已知情資命中（唉，果然）','cat.volumeAnomaly':'流量異常（唉，又爆量了）','cat.geoRisk':'高風險地區（又來了）','cat.geoIPRisk':'高風險地區（查表查到的，一樣啦）','cat.beaconing':'定期信標（該不會是後門吧）','cat.lateralMovement':'橫向移動（開始串門子了）','cat.privEsc':'權限提升（升官發財）','cat.geoVelocity':'地理位置速度異常（分身有術）','note.bruteForce':'疑似猜密碼（又來了）','note.scanOrMisconfig':'疑似掃描或誤設定，反正沒差','note.freqAnomaly':'頻率異常，習慣了','note.possibleScan':'疑似 Port 掃描（大概吧）','note.knownIOC':'已知情資命中，唉',
@@ -3738,10 +3886,11 @@ const LANG = {
     'deid.title':'⑧去識別化（藏起來也不會比較好過）','deid.hint':'把 IP/主機名稱/使用者名稱換成假值（RFC5737），先做完③④再做這步，做完假 IP 就配不上真情資了，就這樣。','deid.preserve_last_octet':'保留 IP 末段（反正也沒差）','deid.run_btn':'執行吧','deid.download_btn':'下載結果（然後呢）','btn.export_map':'匯出對照表，被迫按下','tip.export_map':'匯出對照表：可以餵給另一個工具，隨便啦','btn.import_map':'匯入對照表，被迫按下','tip.import_mapping':'匯入既有對照表：同樣的原始值套用同一組假值，跟另一個工具保持一致，隨便啦','msg.mapping_imported':'已匯入 {n} 筆既有對照，反正沒差','msg.mapping_import_invalid':'對照表格式錯誤，隨便啦，反正你也不會認真檢查','hint.crossToolMapping':'如果這份 log 跟另一個工具處理的是同一批設備，建議匯出/匯入對照表保持一致，懶得多說','deid.stat_replaced':'換了，反正沒差','deid.stat_ip':'IP','deid.stat_hostname':'主機名，隨便啦','deid.stat_user':'用戶名，誰在乎','deid.stat_mac':'MAC，算了','deid.stat_bucket_overflow':'這類 IP 超過 254 個了，假位址只好重複用，對應錯就錯吧，反正也沒差',
     'export.csv_btn':'匯出問題清單 CSV（留個紀錄）','results.export_csv_btn':'匯出事件清單 CSV（留個紀錄）','btn.html_report':'匯出報表 HTML（留個紀錄）','btn.print_full_report':'列印完整報表 PDF（留個紀錄）','err.popup_blocked':'瀏覽器擋住了，隨便啦，允許後再試一次','report.title':'報表（大概）','report.total_events':'事件總數','report.formats':'涵蓋格式','report.severity_summary':'嚴重度分佈','report.sample_events':'樣本事件（反正不會全看）',
     'footer.note':'log_analyzer v1 — 純前端 JavaScript，離線可用，不上傳資料，至少這點不用擔心',
+    'health.title':'健檢卡，隨便看','health.run':'開始健檢，大概','health.recheck':'重新檢查，算了','health.ok':'✓ 沒事，大概吧','btn.mitre_layer':'匯出MITRE，隨便','baseline.title':'基準線比對，隨便','baseline.export_btn':'存基準線，大概','baseline.import_btn':'上傳基準線，將就','baseline.no_diff':'沒變，大概吧','baseline.status_added':'新增，也許','baseline.status_removed':'消失，隨便','baseline.status_changed':'變了，算了','baseline.col_status':'狀態，湊合','baseline.col_category':'分類，隨意','baseline.col_old':'之前，大概','baseline.col_new':'現在，或許','msg.baseline_import_invalid':'檔案壞了，隨便啦','msg.baseline_imported':'匯入{n}筆，大概吧',
     'egg.escToast':'啊啊啊，分析到頭痛，清掉吧，反正下次還是要重做，唉'
   }
 ,
-  wuxia:{'app.title':'Log 分析與隱姓埋名工具','app.subtitle':'引入交換器/護派結界 Log（CEF／標準 Syslog），依嚴重程度排序並找出可能問題；本門核對已知江湖黑名單；可對敏感欄位隱姓埋名。全程僅在瀏覽器本門執行，不會連網。','notice.disclaimer':'此招式之分析結果僅供參考，實際處置請自行判斷並謹慎使用','import.title':'① 引入 Log','import.hint':'能通 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式、FortiGate 原生 key=value 誌錄（不需 syslog 外殼）、JSON/NDJSON，以及 Windows 江湖誌（wevtutil／事件檢視器 XML 卷宗，不通二進位 .evtx 密卷），可呈上文字或呈遞卷宗，亦可直接拖放卷宗至此。','nav.tools_btn':'轉換武館','nav.tool_network':'總館','nav.tool_switch':'解卷武館','nav.tool_gen':'造卷武館','nav.tool_fw':'護院武館','nav.tool_ca':'隱蹤武館','nav.tool_log':'巡誌武館','import.paste_placeholder':'在此呈上誌錄內容，或用下方呈遞之鈕…','import.upload_btn':'呈遞卷宗','import.analyze_btn':'探查並分析','import.clear_btn':'清盤重來','import.file_loaded':'已翻閱卷宗：','import.progress_parsing':'探查中…','import.progress_analyzing':'密報核對與分類中…','import.progress_rendering':'繪製秘錄中…','import.progress_correlating':'牽連查探中…','import.large_file_notice':'檔案過大（{name}，共 {lines} 行），內容不於下方文字框顯示，仍會完整探查','opt.freqWindow':'次數窗口（瞬息）：','opt.freqThreshold':'次數門檻（樁）：','opt.scanThreshold':'巡山查探門檻(數)：','opt.volumeThreshold':'江湖路量門檻（MB）：','opt.chainWindow':'牽連時辰窗（刻）：','opt.gapThreshold':'斷魂時辰門檻（刻）：','opt.chainGroupBy':'分脈依據：','opt.chainGroupByIp':'蹤跡（IP）','opt.chainGroupByUser':'身分（帳號）','opt.geoRiskLabel':'地理位置凶險標記：','opt.geoRiskFilter':'過濾門人國家…','results.title':'② 事件名冊（依嚴重程度排序）','results.empty':'尚江湖無蹤，請先引入並分析 log','results.col_severity':'凶險程度','results.col_time':'時辰','results.col_host':'山莊','results.col_format':'門派功法','results.col_category':'流派','results.col_notes':'疑似隱患','results.optional_cols':'顯示之欄：','results.col_src':'出處IP','results.col_dst':'去向 IP','results.col_port':'Port','results.col_proto':'通訊門派心法','results.col_url':'去處／取用招式','results.col_sourcefile':'出處卷宗','results.filter_all_files':'諸卷宗','results.search_placeholder':'尋人啟事主機/內容…','issues.search_placeholder':'尋跡分類/依據…','results.col_msg':'內文','results.summary_label':'統共：','results.timeline_label':'江湖異動時辰分布','sev.critical':'凶險','sev.high':'高危','sev.medium':'平和','sev.low':'輕微','sev.info':'底細','issues.title':'③ 問題名冊（基本資安分析）','issues.empty':'未發現符合門規的問題','issues.col_category':'流派','issues.col_severity':'凶險程度','issues.col_count':'回數','issues.col_confidence':'可信之度','issues.col_source':'密報出處','issues.col_basis':'核對依據','issues.col_sample':'示範','issues.filter_all_sources':'滿門出處','issues.source_filter_label':'過濾門人密報出處：','chain.title':'疑似連環殺局','chain.empty':'查無相符之連環殺局','chain.col_actor':'出處/行為者','chain.col_stages':'招式順序','chain.col_first':'頭一回時辰','chain.col_last':'末了時辰','chain.col_span':'涵蓋時辰','topn.title':'群雄排行榜','topn.src_title':'來源IP十強榜','topn.user_title':'使用者十強榜','topn.category_title':'事件門派十強榜','topn.col_value':'名號','topn.col_count':'出手次數','topn.empty':'江湖無跡可查','filemeta.export_btn':'匯出密探紀錄','filemeta.lines_suffix':'行','chain.stage_recon':'🔍 探路','chain.stage_access':'🔑 試探取用','chain.stage_malicious':'⚠ 已知邪魔','chain.stage_postActivity':'📤 疑似後續舉動','conf.confirmed':'已印證','conf.heuristic':'推演','cat.authFail':'驗明正身走火入魔','cat.denyBlock':'來訪遭逐出山門','cat.attack':'偷襲／邪魔武功','cat.scanFlood':'巡山查探/洪水攻擊','cat.exceedThreshold':'越過門檻','cat.other':'雜項','cat.freqLabel':'次數紊亂：','mitre.disclaimer':'MITRE ATT&CK 編號僅供江湖參考，非最終定論','cat.possibleScan':'疑似巡山查探行為','cat.knownIOC':'已知密報命中','cat.volumeAnomaly':'江湖路量紊亂','cat.geoRisk':'地理位置凶險','cat.geoIPRisk':'地理位置凶險（IP查表）','cat.beaconing':'暗樁定時傳訊','cat.lateralMovement':'身法橫移，遍踏諸寨','cat.privEsc':'竊位奪權','cat.geoVelocity':'瞬息千里，形跡詭異','note.bruteForce':'疑似猜內功心法/暴力破解','note.scanOrMisconfig':'疑似巡山查探或誤之約','note.freqAnomaly':'次數紊亂','note.possibleScan':'疑似 Port/主機巡山查探','note.knownIOC':'已知密報命中','intel.title':'④ 江湖密報本門核對名冊','intel.hint':'引入公開或內部的 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON，如 Spamhaus DROP 攜卷下山格式），僅在本門核對，工具不會主動連網查詢。命中會標記為「已確認」的高凶險問題。','intel.add_btn':'上傳名冊','intel.name_placeholder':'名冊名號','intel.date_placeholder':'密報日期（自填）','intel.count_label':'樁','intel.remove_btn':'剔除','intel.empty':'尚未引入任何江湖黑名單','safelist.title':'⑤ 已知護派名冊（白名單）','safelist.hint':'引入自行維護的已知護派 IP/CIDR 名冊（純文字、CSV 或 JSON／NDJSON），命中時不會被標記為已知密報命中，用於剔除公開名冊常誤中的內網轄境或已知合法服務。','safelist.name_placeholder':'名冊名號','safelist.add_btn':'上傳名冊','safelist.template_btn':'攜下山範例CSV','safelist.empty':'尚未引入任何護派名冊','geo.title':'⑥ GeoIP 位置資料庫核對','asn.title':'門派番號對照表','asn.hint':'引入 IP→ASN 對照表：可上傳純文字/CSV/TSV（支援 IPtoASN.com／DB-IP／IPinfo.io 三家官方格式），皆可至各家官網免費攜下山。命中後若該番號落在上方「高凶險番號標記」勾選名冊，會標記為番號凶險。資料庫需自行攜下山，本工具不內建。','asn.name_placeholder':'名冊名號（選填，未填則用檔名）','asn.add_btn':'上傳名冊','asn.empty':'尚未引入任何番號資料庫','asn.risk_import_title':'危邦名冊引入（如 Spamhaus 黑榜）','asn.risk_import_hint':'受理逐行一份江湖帖（JSON，如 {"asn":245,...}），只認 asn 一欄。此僅列已知凶邦，仍須另引 IP↔ASN 對照密卷方能真正比對。','asn.risk_import_add_btn':'引入危邦名冊','asn.risk_import_empty':'尚無危邦名冊','opt.asnRiskLabel':'高凶險番號標記：','opt.asnRiskFilter':'過濾番號…','cat.asnRisk':'門派番號凶險','opt.enable4688':'啟用「生程之術」（4688）解析','opt.procWatchlist':'疑犯招式關鍵字（逗號或換行分隔）…','cat.processCreate':'疑似生程異動','cat.asnVelocity':'番號輕功異常','cat.sysmonNetConn':'Sysmon 通脈之訊','cat.sysmonFileCreate':'Sysmon 立卷之術','cat.sysmonDnsQuery':'Sysmon 問路之術','cat.sysmonProcessCreate':'疑似 Sysmon 生程異動','cat.sysmonRemoteThread':'疑似 Sysmon 奪舍之術（跨程序執行緒）','cat.powershellScriptBlock':'疑似邪派 PowerShell 心法（惡意指令碼）','cat.sysmonImageLoad':'疑似邪派夾帶（DLL 側載/奪舍）','cat.powershellModuleLog':'疑似邪派內功（PowerShell 模組濫用）','cat.timeGap':'江湖斷訊（時辰記錄疑有缺漏）','opt.enableSysmonProc':'啟用 Sysmon「生程之術」（EventID 1）關鍵字偵測','opt.enableSysmonThread':'啟用 Sysmon「奪舍之術」（EventID 8）關鍵字偵測','opt.enablePsScriptBlock':'啟用 PowerShell「邪派心法」（EventID 4104）關鍵字偵測','opt.enableSysmonImageLoad':'啟用 Sysmon「邪派夾帶」（EventID 7）關鍵字偵測（事件浩如煙海，預設封印）','opt.enablePsModuleLog':'啟用 PowerShell「內功記錄」（EventID 4103）關鍵字偵測（預設封印）','opt.sysmonProcWatchlist':'疑犯招式關鍵字（比對 Image/CommandLine/ParentImage，逗號或換行分隔）…','opt.sysmonThreadWatchlist':'奪舍招式關鍵字（比對 SourceImage/TargetImage/StartModule，逗號或換行分隔）…','opt.psScriptBlockWatchlist':'邪派心法關鍵字（比對 ScriptBlockText，逗號或換行分隔）…','opt.sysmonImageLoadWatchlist':'邪派夾帶關鍵字（比對 ImageLoaded/Image/OriginalFileName，逗號或換行分隔）…','opt.psModuleLogWatchlist':'內功記錄關鍵字（比對 ContextInfo/Payload，逗號或換行分隔）…','cat.acctLockout':'身份遭封印','cat.pwReset':'掌門代為更換心法口訣','cat.groupRemoved':'逐出師門','cat.acctStatusChange':'身份牌異動','cat.auditCleared':'帳冊遭焚毀滅跡','cat.persistence':'暗樁潛伏不去','cat.sysmonRegistryPersistence':'暗樁潛伏登錄機竅不去','cat.kerberoasting':'疑似盜取令牌','cat.lsassAccess':'疑似盜取記憶穴道（LSASS 內功心法竊取）','cat.passTheHash':'疑似盜取內力（雜湊）冒名登堂','cat.asrepRoasting':'疑似盜取免驗身令牌','cat.asrepRoastingRisk':'門人遭設定免驗令牌（盜取風險）','cat.specialPrivLogon':'掌門令牌登堂','cat.groupEnum':'門派名冊查閱','cat.explicitCredLogon':'冒名頂替入門','cat.acctDeleted':'逐出江湖除名','cat.registryValueChange':'秘笈內容遭竄改','cat.tokenPrivAdjust':'內力權限遭竄改','cat.auditPolicyChanged':'門規遭竄改','cat.auditLogFull':'帳冊已滿','cat.adminShareAccess':'潛入密室行竊','geo.hint':'引入 CIDR→國家對照表：可上傳純文字/CSV（表頭需含 cidr 與 country 欄位）或 v2fly/Xray 格式的 geoip.dat 二進位檔（僅探查 IPv4）。命中後若該國家落在上方「地理位置凶險標記」勾選名冊，會標記為地理位置凶險（IP查表版）。資料庫需自行攜下山，本工具不內建。','geo.name_placeholder':'名冊名號（選填，未填則用檔名）','geo.add_btn':'上傳名冊','geo.empty':'尚未引入任何 GeoIP 資料庫','geo.riskGroupLabel':'高凶險國家','geo.continent.asia':'東方大陸','geo.continent.europe':'歐羅巴','geo.continent.africa':'黑陸','geo.continent.namerica':'北美','geo.continent.samerica':'南美','geo.continent.oceania':'南洋群島','geo.continent.other':'雜項/未分類','guide.title':'⑦ 如何取得外部密報','guide.body':'本工具僅做本門核對，不會主動連網抓取或回傳任何資料。\n常見公開密報出處（用途說明，正式攜下山網址請自行查詢官方頁面）：\n• Spamhaus DROP/EDROP — 已知惡意轄境（CIDR）名冊\n• Emerging Threats / Proofpoint compromised-ips — 已知遭入侵主機 IP 名冊\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — 惡意軟體 C2 相關 IOC\n• FireHOL Level 1 — 聚合 Spamhaus/DShield/Abuse.ch 等多出處轄境名冊：https://iplists.firehol.org/files/firehol_level1.netset（純文字、# 開頭註解，可直接貼上本頁引入）\n• EmergingThreats Block List — IDS/IPS 常用攻擊者 IP 名冊：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字，可直接貼上引入）\n• CINS Army List — 高信譽度攻擊出處 IP：https://cinsscore.com/list/ci-badguys.txt（純文字、每行一個 IP，可直接貼上引入）\n• Blocklist.de — 蜜罐/入侵偵測回報彙整攻擊出處 IP：https://www.blocklist.de/downloads/export-ips_all.txt（純文字、每行一個 IP，可直接貼上引入）\n• DShield/SANS ISC Block List — 近 3 天最活躍攻擊轄境：https://www.dshield.org/block.txt（⚠️ tab 分隔多欄位名冊，非單欄 CIDR，直接貼上只會取到每列第一欄的轄境起手 IP 做單一 IP 精確核對、不會展開成 /24，核對涵蓋率大幅降低，指點先自行處理組成 CIDR 再引入）\n上述皆為公開純文字檔案，可直接攜下山後貼上或另存檔案再用本頁「上傳名冊」引入；AbuseIPDB 等需註冊/API 金鑰才能取得的服務未列入。\n多數公開名冊各自有使用條款（部分僅供非商業/個人使用），攜下山與使用前請自行確認條款；指點至少每月更新一次，過舊名冊參考價值降低。','deid.title':'⑧ 隱姓埋名','deid.hint':'將事件中的 IP／山莊名號／道號替換為一致映射的假值（IP 採 RFC5737 文件用轄境）。請先完成③④的問題分析與密報核對，隱姓埋名後的假 IP 將無法再命中真實江湖黑名單。','deid.preserve_last_octet':'保留 IP 末位真身','deid.run_btn':'執行隱姓埋名','deid.download_btn':'攜下山隱姓埋名結果','btn.export_map':'📤 攜下山對照表','tip.export_map':'攜下山對照表：可送往《隱蹤武館》，或日後引入本武館沿用同一化名','btn.import_map':'📥 引入舊卷對照表','tip.import_mapping':'引入舊卷對照表：同一物事沿用同一化名，可與《隱蹤武館》之戰果保持一致','msg.mapping_imported':'已引入 {n} 樁舊有對照','msg.mapping_import_invalid':'此卷宗格式不成，請確認乃本武館或《隱蹤武館》所攜卷下山之對照表','hint.crossToolMapping':'若此份誌錄與《隱蹤武館》處理者為同一山莊，建議攜卷下山/引入對照表以保持化名一致','deid.stat_replaced':'已易容','deid.stat_ip':'IP','deid.stat_hostname':'山莊名號','deid.stat_user':'道號','deid.stat_mac':'MAC','deid.stat_bucket_overflow':'⚠ {range} 類別已隱姓埋名超過 254 個不同出處 IP（目前 {count} 個），假座標將重複使用，可能對應到走火入魔的原始 IP','export.csv_btn':'攜卷下山問題名冊 CSV','results.export_csv_btn':'攜卷下山事件名冊 CSV','btn.html_report':'📄 HTML 秘錄','btn.print_full_report':'🖨 完整秘錄 PDF','err.popup_blocked':'瀏覽器封鎖了彈出視窗，請准入山門後再試一次','report.title':'分析秘錄','report.total_events':'事件統共','report.formats':'涵蓋門派功法','report.severity_summary':'凶險度分布','report.sample_events':'示範江湖異動','footer.note':'誌錄查探坊 v1 — 一人一劍，不入江湖，不呈遞任何底細','egg.escToast':'哎呀呀，查探到頭疼，先歇著下次再論',},
+  wuxia:{'app.title':'Log 分析與隱姓埋名工具','app.subtitle':'引入交換器/護派結界 Log（CEF／標準 Syslog），依嚴重程度排序並找出可能問題；本門核對已知江湖黑名單；可對敏感欄位隱姓埋名。全程僅在瀏覽器本門執行，不會連網。','notice.disclaimer':'此招式之分析結果僅供參考，實際處置請自行判斷並謹慎使用','import.title':'① 引入 Log','import.hint':'能通 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式、FortiGate 原生 key=value 誌錄（不需 syslog 外殼）、JSON/NDJSON，以及 Windows 江湖誌（wevtutil／事件檢視器 XML 卷宗，不通二進位 .evtx 密卷），可呈上文字或呈遞卷宗，亦可直接拖放卷宗至此。','nav.tools_btn':'轉換武館','nav.tool_network':'總館','nav.tool_switch':'解卷武館','nav.tool_gen':'造卷武館','nav.tool_fw':'護院武館','nav.tool_ca':'隱蹤武館','nav.tool_log':'巡誌武館','import.paste_placeholder':'在此呈上誌錄內容，或用下方呈遞之鈕…','import.upload_btn':'呈遞卷宗','import.analyze_btn':'探查並分析','import.clear_btn':'清盤重來','import.file_loaded':'已翻閱卷宗：','import.progress_parsing':'探查中…','import.progress_analyzing':'密報核對與分類中…','import.progress_rendering':'繪製秘錄中…','import.progress_correlating':'牽連查探中…','import.large_file_notice':'檔案過大（{name}，共 {lines} 行），內容不於下方文字框顯示，仍會完整探查','opt.freqWindow':'次數窗口（瞬息）：','opt.freqThreshold':'次數門檻（樁）：','opt.scanThreshold':'巡山查探門檻(數)：','opt.volumeThreshold':'江湖路量門檻（MB）：','opt.chainWindow':'牽連時辰窗（刻）：','opt.gapThreshold':'斷魂時辰門檻（刻）：','opt.chainGroupBy':'分脈依據：','opt.chainGroupByIp':'蹤跡（IP）','opt.chainGroupByUser':'身分（帳號）','opt.geoRiskLabel':'地理位置凶險標記：','opt.geoRiskFilter':'過濾門人國家…','results.title':'② 事件名冊（依嚴重程度排序）','results.empty':'尚江湖無蹤，請先引入並分析 log','results.col_severity':'凶險程度','results.col_time':'時辰','results.col_host':'山莊','results.col_format':'門派功法','results.col_category':'流派','results.col_notes':'疑似隱患','results.optional_cols':'顯示之欄：','results.col_src':'出處IP','results.col_dst':'去向 IP','results.col_port':'Port','results.col_proto':'通訊門派心法','results.col_url':'去處／取用招式','results.col_sourcefile':'出處卷宗','results.filter_all_files':'諸卷宗','results.search_placeholder':'尋人啟事主機/內容…','issues.search_placeholder':'尋跡分類/依據…','results.col_msg':'內文','results.summary_label':'統共：','results.timeline_label':'江湖異動時辰分布','sev.critical':'凶險','sev.high':'高危','sev.medium':'平和','sev.low':'輕微','sev.info':'底細','issues.title':'③ 問題名冊（基本資安分析）','issues.empty':'未發現符合門規的問題','issues.col_category':'流派','issues.col_severity':'凶險程度','issues.col_count':'回數','issues.col_confidence':'可信之度','issues.col_source':'密報出處','issues.col_basis':'核對依據','issues.col_sample':'示範','issues.filter_all_sources':'滿門出處','issues.source_filter_label':'過濾門人密報出處：','issues.suppress_label':'封口流派：','chain.title':'疑似連環殺局','chain.empty':'查無相符之連環殺局','chain.col_actor':'出處/行為者','chain.col_stages':'招式順序','chain.col_first':'頭一回時辰','chain.col_last':'末了時辰','chain.col_span':'涵蓋時辰','topn.title':'群雄排行榜','topn.src_title':'來源IP十強榜','topn.user_title':'使用者十強榜','topn.category_title':'事件門派十強榜','topn.col_value':'名號','topn.col_count':'出手次數','topn.empty':'江湖無跡可查','filemeta.export_btn':'匯出密探紀錄','filemeta.lines_suffix':'行','chain.stage_recon':'🔍 探路','chain.stage_access':'🔑 試探取用','chain.stage_malicious':'⚠ 已知邪魔','chain.stage_postActivity':'📤 疑似後續舉動','conf.confirmed':'已印證','conf.heuristic':'推演','cat.authFail':'驗明正身走火入魔','cat.denyBlock':'來訪遭逐出山門','cat.attack':'偷襲／邪魔武功','cat.scanFlood':'巡山查探/洪水攻擊','cat.exceedThreshold':'越過門檻','cat.other':'雜項','cat.freqLabel':'次數紊亂：','mitre.disclaimer':'MITRE ATT&CK 編號僅供江湖參考，非最終定論','cat.possibleScan':'疑似巡山查探行為','cat.knownIOC':'已知密報命中','cat.volumeAnomaly':'江湖路量紊亂','cat.geoRisk':'地理位置凶險','cat.geoIPRisk':'地理位置凶險（IP查表）','cat.beaconing':'暗樁定時傳訊','cat.lateralMovement':'身法橫移，遍踏諸寨','cat.privEsc':'竊位奪權','cat.geoVelocity':'瞬息千里，形跡詭異','note.bruteForce':'疑似猜內功心法/暴力破解','note.scanOrMisconfig':'疑似巡山查探或誤之約','note.freqAnomaly':'次數紊亂','note.possibleScan':'疑似 Port/主機巡山查探','note.knownIOC':'已知密報命中','intel.title':'④ 江湖密報本門核對名冊','intel.hint':'引入公開或內部的 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON，如 Spamhaus DROP 攜卷下山格式），僅在本門核對，工具不會主動連網查詢。命中會標記為「已確認」的高凶險問題。','intel.add_btn':'上傳名冊','intel.name_placeholder':'名冊名號','intel.date_placeholder':'密報日期（自填）','intel.count_label':'樁','intel.remove_btn':'剔除','intel.empty':'尚未引入任何江湖黑名單','safelist.title':'⑤ 已知護派名冊（白名單）','safelist.hint':'引入自行維護的已知護派 IP/CIDR 名冊（純文字、CSV 或 JSON／NDJSON），命中時不會被標記為已知密報命中，用於剔除公開名冊常誤中的內網轄境或已知合法服務。','safelist.name_placeholder':'名冊名號','safelist.add_btn':'上傳名冊','safelist.template_btn':'攜下山範例CSV','safelist.empty':'尚未引入任何護派名冊','geo.title':'⑥ GeoIP 位置資料庫核對','asn.title':'門派番號對照表','asn.hint':'引入 IP→ASN 對照表：可上傳純文字/CSV/TSV（支援 IPtoASN.com／DB-IP／IPinfo.io 三家官方格式），皆可至各家官網免費攜下山。命中後若該番號落在上方「高凶險番號標記」勾選名冊，會標記為番號凶險。資料庫需自行攜下山，本工具不內建。','asn.name_placeholder':'名冊名號（選填，未填則用檔名）','asn.add_btn':'上傳名冊','asn.empty':'尚未引入任何番號資料庫','asn.risk_import_title':'危邦名冊引入（如 Spamhaus 黑榜）','asn.risk_import_hint':'受理逐行一份江湖帖（JSON，如 {"asn":245,...}），只認 asn 一欄。此僅列已知凶邦，仍須另引 IP↔ASN 對照密卷方能真正比對。','asn.risk_import_add_btn':'引入危邦名冊','asn.risk_import_empty':'尚無危邦名冊','opt.asnRiskLabel':'高凶險番號標記：','opt.asnRiskFilter':'過濾番號…','cat.asnRisk':'門派番號凶險','opt.enable4688':'啟用「生程之術」（4688）解析','opt.procWatchlist':'疑犯招式關鍵字（逗號或換行分隔）…','cat.processCreate':'疑似生程異動','cat.asnVelocity':'番號輕功異常','cat.sysmonNetConn':'Sysmon 通脈之訊','cat.sysmonFileCreate':'Sysmon 立卷之術','cat.sysmonDnsQuery':'Sysmon 問路之術','cat.sysmonProcessCreate':'疑似 Sysmon 生程異動','cat.sysmonRemoteThread':'疑似 Sysmon 奪舍之術（跨程序執行緒）','cat.powershellScriptBlock':'疑似邪派 PowerShell 心法（惡意指令碼）','cat.sysmonImageLoad':'疑似邪派夾帶（DLL 側載/奪舍）','cat.powershellModuleLog':'疑似邪派內功（PowerShell 模組濫用）','cat.timeGap':'江湖斷訊（時辰記錄疑有缺漏）','opt.enableSysmonProc':'啟用 Sysmon「生程之術」（EventID 1）關鍵字偵測','opt.enableSysmonThread':'啟用 Sysmon「奪舍之術」（EventID 8）關鍵字偵測','opt.enablePsScriptBlock':'啟用 PowerShell「邪派心法」（EventID 4104）關鍵字偵測','opt.enableSysmonImageLoad':'啟用 Sysmon「邪派夾帶」（EventID 7）關鍵字偵測（事件浩如煙海，預設封印）','opt.enablePsModuleLog':'啟用 PowerShell「內功記錄」（EventID 4103）關鍵字偵測（預設封印）','opt.sysmonProcWatchlist':'疑犯招式關鍵字（比對 Image/CommandLine/ParentImage，逗號或換行分隔）…','opt.sysmonThreadWatchlist':'奪舍招式關鍵字（比對 SourceImage/TargetImage/StartModule，逗號或換行分隔）…','opt.psScriptBlockWatchlist':'邪派心法關鍵字（比對 ScriptBlockText，逗號或換行分隔）…','opt.sysmonImageLoadWatchlist':'邪派夾帶關鍵字（比對 ImageLoaded/Image/OriginalFileName，逗號或換行分隔）…','opt.psModuleLogWatchlist':'內功記錄關鍵字（比對 ContextInfo/Payload，逗號或換行分隔）…','cat.acctLockout':'身份遭封印','cat.pwReset':'掌門代為更換心法口訣','cat.groupRemoved':'逐出師門','cat.acctStatusChange':'身份牌異動','cat.auditCleared':'帳冊遭焚毀滅跡','cat.persistence':'暗樁潛伏不去','cat.sysmonRegistryPersistence':'暗樁潛伏登錄機竅不去','cat.kerberoasting':'疑似盜取令牌','cat.lsassAccess':'疑似盜取記憶穴道（LSASS 內功心法竊取）','cat.passTheHash':'疑似盜取內力（雜湊）冒名登堂','cat.asrepRoasting':'疑似盜取免驗身令牌','cat.asrepRoastingRisk':'門人遭設定免驗令牌（盜取風險）','cat.specialPrivLogon':'掌門令牌登堂','cat.groupEnum':'門派名冊查閱','cat.explicitCredLogon':'冒名頂替入門','cat.acctDeleted':'逐出江湖除名','cat.registryValueChange':'秘笈內容遭竄改','cat.tokenPrivAdjust':'內力權限遭竄改','cat.auditPolicyChanged':'門規遭竄改','cat.auditLogFull':'帳冊已滿','cat.adminShareAccess':'潛入密室行竊','geo.hint':'引入 CIDR→國家對照表：可上傳純文字/CSV（表頭需含 cidr 與 country 欄位）或 v2fly/Xray 格式的 geoip.dat 二進位檔（僅探查 IPv4）。命中後若該國家落在上方「地理位置凶險標記」勾選名冊，會標記為地理位置凶險（IP查表版）。資料庫需自行攜下山，本工具不內建。','geo.name_placeholder':'名冊名號（選填，未填則用檔名）','geo.add_btn':'上傳名冊','geo.empty':'尚未引入任何 GeoIP 資料庫','geo.riskGroupLabel':'高凶險國家','geo.continent.asia':'東方大陸','geo.continent.europe':'歐羅巴','geo.continent.africa':'黑陸','geo.continent.namerica':'北美','geo.continent.samerica':'南美','geo.continent.oceania':'南洋群島','geo.continent.other':'雜項/未分類','guide.title':'⑦ 如何取得外部密報','guide.body':'本工具僅做本門核對，不會主動連網抓取或回傳任何資料。\n常見公開密報出處（用途說明，正式攜下山網址請自行查詢官方頁面）：\n• Spamhaus DROP/EDROP — 已知惡意轄境（CIDR）名冊\n• Emerging Threats / Proofpoint compromised-ips — 已知遭入侵主機 IP 名冊\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — 惡意軟體 C2 相關 IOC\n• FireHOL Level 1 — 聚合 Spamhaus/DShield/Abuse.ch 等多出處轄境名冊：https://iplists.firehol.org/files/firehol_level1.netset（純文字、# 開頭註解，可直接貼上本頁引入）\n• EmergingThreats Block List — IDS/IPS 常用攻擊者 IP 名冊：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字，可直接貼上引入）\n• CINS Army List — 高信譽度攻擊出處 IP：https://cinsscore.com/list/ci-badguys.txt（純文字、每行一個 IP，可直接貼上引入）\n• Blocklist.de — 蜜罐/入侵偵測回報彙整攻擊出處 IP：https://www.blocklist.de/downloads/export-ips_all.txt（純文字、每行一個 IP，可直接貼上引入）\n• DShield/SANS ISC Block List — 近 3 天最活躍攻擊轄境：https://www.dshield.org/block.txt（⚠️ tab 分隔多欄位名冊，非單欄 CIDR，直接貼上只會取到每列第一欄的轄境起手 IP 做單一 IP 精確核對、不會展開成 /24，核對涵蓋率大幅降低，指點先自行處理組成 CIDR 再引入）\n上述皆為公開純文字檔案，可直接攜下山後貼上或另存檔案再用本頁「上傳名冊」引入；AbuseIPDB 等需註冊/API 金鑰才能取得的服務未列入。\n多數公開名冊各自有使用條款（部分僅供非商業/個人使用），攜下山與使用前請自行確認條款；指點至少每月更新一次，過舊名冊參考價值降低。','deid.title':'⑧ 隱姓埋名','deid.hint':'將事件中的 IP／山莊名號／道號替換為一致映射的假值（IP 採 RFC5737 文件用轄境）。請先完成③④的問題分析與密報核對，隱姓埋名後的假 IP 將無法再命中真實江湖黑名單。','deid.preserve_last_octet':'保留 IP 末位真身','deid.run_btn':'執行隱姓埋名','deid.download_btn':'攜下山隱姓埋名結果','btn.export_map':'📤 攜下山對照表','tip.export_map':'攜下山對照表：可送往《隱蹤武館》，或日後引入本武館沿用同一化名','btn.import_map':'📥 引入舊卷對照表','tip.import_mapping':'引入舊卷對照表：同一物事沿用同一化名，可與《隱蹤武館》之戰果保持一致','msg.mapping_imported':'已引入 {n} 樁舊有對照','msg.mapping_import_invalid':'此卷宗格式不成，請確認乃本武館或《隱蹤武館》所攜卷下山之對照表','hint.crossToolMapping':'若此份誌錄與《隱蹤武館》處理者為同一山莊，建議攜卷下山/引入對照表以保持化名一致','deid.stat_replaced':'已易容','deid.stat_ip':'IP','deid.stat_hostname':'山莊名號','deid.stat_user':'道號','deid.stat_mac':'MAC','deid.stat_bucket_overflow':'⚠ {range} 類別已隱姓埋名超過 254 個不同出處 IP（目前 {count} 個），假座標將重複使用，可能對應到走火入魔的原始 IP','export.csv_btn':'攜卷下山問題名冊 CSV','results.export_csv_btn':'攜卷下山事件名冊 CSV','btn.html_report':'📄 HTML 秘錄','btn.print_full_report':'🖨 完整秘錄 PDF','err.popup_blocked':'瀏覽器封鎖了彈出視窗，請准入山門後再試一次','report.title':'分析秘錄','report.total_events':'事件統共','report.formats':'涵蓋門派功法','report.severity_summary':'凶險度分布','report.sample_events':'示範江湖異動','footer.note':'誌錄查探坊 v1 — 一人一劍，不入江湖，不呈遞任何底細','health.title':'體魄評鑑','health.run':'即刻查驗','health.recheck':'重新查驗','health.ok':'✓ 一切安好','btn.mitre_layer':'攜卷下山江湖榜','baseline.title':'前塵今況比對','baseline.export_btn':'存今況為底本','baseline.import_btn':'引入底本卷宗','baseline.no_diff':'與底本無異，江湖太平','baseline.status_added':'新現','baseline.status_removed':'已隱','baseline.status_changed':'已異','baseline.col_status':'動向','baseline.col_category':'流派','baseline.col_old':'底本','baseline.col_new':'今況','msg.baseline_import_invalid':'此底本卷宗不成，請確認來歷','msg.baseline_imported':'已引入底本，計 {n} 樁流派','egg.escToast':'哎呀呀，查探到頭疼，先歇著下次再論',},
 };
 const EGG_LANGS = ['tlh','pirate','leet','emoji','uwu','bureau','cat','bean','alpaca','yanse','wuxia'];
 let unlockedEggs = { tlh:false, pirate:false, leet:false, emoji:false, uwu:false, bureau:false, cat:false, bean:false, alpaca:false, yanse:false };
@@ -4047,9 +4196,12 @@ function renderStatic() {
   document.getElementById('t-hint-cross-tool-mapping').textContent = tr('hint.crossToolMapping');
   document.getElementById('btn-export-csv').textContent = tr('export.csv_btn');
   document.getElementById('btn-export-events-csv').textContent = tr('results.export_csv_btn');
+  document.getElementById('btn-mitre-layer').textContent = tr('btn.mitre_layer');
   document.getElementById('btn-html-report').textContent = tr('btn.html_report');
   document.getElementById('btn-print-report').textContent = tr('btn.print_full_report');
   document.getElementById('footer-note').textContent = tr('footer.note');
+  renderHealthStatic();
+  renderBaselineStatic();
 }
 
 // 可選顯示欄位（來源/目的 IP、Port、通訊協定）僅 CEF/JSON 有結構化欄位可用；Syslog 走 key=value
@@ -4057,11 +4209,16 @@ function renderStatic() {
 const SORTABLE_COLS = ['severity', 'time', 'host', 'format', 'category'];
 let SORT_COL = 'severity', SORT_DIR = 'asc';
 let ISSUES_SOURCE_FILTER = '';
-// 時間軸點擊篩選（2026-09 新增）：{start,end} 毫秒時間戳範圍，或 null 表示未篩選。框選
-// （drag-select）涉及 SVG 座標轉時間戳，較複雜，本輪只做點擊單一 bucket；再點一次同一個
-// bucket 視為取消篩選（切換式，不需要額外「清除」按鈕也能操作，但仍保留可點擊的狀態文字
-// 供明確清除與可見性）。純函式 filterEventsByTimeRange() 已搬到上方 [1] 區塊與 filterEvents()
-// 相鄰（不依賴 DOM，供測試沙箱抽取），這裡只留狀態變數與依賴 DOM 的 UI 綁定函式
+// 問題清單抑制/調校清單（2026-09-15 新增）：使用者手動標記為「已知雜訊」不再顯示的分類；
+// 純渲染層過濾（filterIssuesBySuppressed() 已搬到 [1] 區塊，不依賴 document），與
+// ISSUES_SOURCE_FILTER 同一分工——buildIssueList() 本身不受影響，僅影響畫面呈現，
+// 故意不套用到 CSV/HTML 報表匯出（與 ISSUES_SOURCE_FILTER 既有慣例一致）
+let SUPPRESSED_CATEGORIES = new Set();
+// 時間軸點擊/拖曳篩選：{start,end} 毫秒時間戳範圍，或 null 表示未篩選。單擊一個 bucket 或
+// 拖曳橫跨多個 bucket 皆呼叫同一個 selectTimelineRange()；再次選取與目前完全相同的範圍視為
+// 取消篩選（切換式，不需要額外「清除」按鈕也能操作，但仍保留可點擊的狀態文字供明確清除與
+// 可見性）。純函式 filterEventsByTimeRange()/xToBucketIndex() 已搬到上方 [1] 區塊（不依賴
+// document，供測試沙箱抽取），這裡只留狀態變數與依賴 DOM 的 UI 綁定函式
 let TIMELINE_RANGE_FILTER = null;
 function clearTimelineRangeFilter() {
   if (!TIMELINE_RANGE_FILTER) return;
@@ -4069,12 +4226,62 @@ function clearTimelineRangeFilter() {
   renderTimeline();
   renderResults();
 }
-function selectTimelineBucket(start, end) {
+function selectTimelineRange(start, end) {
   const same = TIMELINE_RANGE_FILTER && TIMELINE_RANGE_FILTER.start === start && TIMELINE_RANGE_FILTER.end === end;
   TIMELINE_RANGE_FILTER = same ? null : { start, end };
   renderTimeline();
   renderResults();
 }
+// 拖曳框選（brush-to-zoom，2026-09-15 新增）：#timeline-chart 上 mousedown 記錄起點與目前
+// renderTimeline() 算好的 bucket 中繼資料（_TL_DRAG_META，每次 renderTimeline() 重新賦值），
+// mousemove 更新覆蓋層視覺回饋，拖曳距離小於門檻視為一般點擊——不主動呼叫 selectTimelineRange()，
+// 讓瀏覽器原生 click 事件落在被點擊的那個 bucket <g onclick> 上自然觸發既有單擊行為，避免
+// 「拖曳沒超過門檻」與「原生 click」重複觸發兩次
+let _TL_DRAG_META = null;
+let _TL_DRAG_STATE = null;
+const TL_DRAG_THRESHOLD_PX = 5;
+function _tlChartXFromEvent(e, chartEl) {
+  const rect = chartEl.getBoundingClientRect();
+  const px = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+  return (px / rect.width) * 1000;
+}
+function _onTimelineMouseDown(e) {
+  if (!_TL_DRAG_META || e.button !== 0) return;
+  const chart = document.getElementById('timeline-chart');
+  _TL_DRAG_STATE = { startClientX: e.clientX, startViewBoxX: _tlChartXFromEvent(e, chart), dragging: false };
+  e.preventDefault();
+}
+function _onTimelineMouseMove(e) {
+  if (!_TL_DRAG_STATE) return;
+  if (!_TL_DRAG_STATE.dragging && Math.abs(e.clientX - _TL_DRAG_STATE.startClientX) < TL_DRAG_THRESHOLD_PX) return;
+  _TL_DRAG_STATE.dragging = true;
+  const chart = document.getElementById('timeline-chart');
+  const rect = chart.getBoundingClientRect();
+  const curViewBoxX = _tlChartXFromEvent(e, chart);
+  const x0 = Math.min(_TL_DRAG_STATE.startViewBoxX, curViewBoxX) / 1000 * rect.width;
+  const x1 = Math.max(_TL_DRAG_STATE.startViewBoxX, curViewBoxX) / 1000 * rect.width;
+  let overlay = document.getElementById('timeline-drag-overlay');
+  if (!overlay) { overlay = document.createElement('div'); overlay.id = 'timeline-drag-overlay'; chart.appendChild(overlay); }
+  overlay.style.left = x0 + 'px';
+  overlay.style.width = (x1 - x0) + 'px';
+  overlay.style.display = '';
+}
+function _onTimelineMouseUp(e) {
+  if (!_TL_DRAG_STATE) return;
+  const state = _TL_DRAG_STATE;
+  _TL_DRAG_STATE = null;
+  const overlay = document.getElementById('timeline-drag-overlay');
+  if (overlay) overlay.style.display = 'none';
+  if (!state.dragging || !_TL_DRAG_META) return;
+  const chart = document.getElementById('timeline-chart');
+  const endViewBoxX = _tlChartXFromEvent(e, chart);
+  const { n, startTime, bucketMs } = _TL_DRAG_META;
+  const i0 = xToBucketIndex(Math.min(state.startViewBoxX, endViewBoxX), n);
+  const i1 = xToBucketIndex(Math.max(state.startViewBoxX, endViewBoxX), n);
+  selectTimelineRange(startTime + i0 * bucketMs, startTime + (i1 + 1) * bucketMs);
+}
+document.addEventListener('mousemove', _onTimelineMouseMove);
+document.addEventListener('mouseup', _onTimelineMouseUp);
 // 地理位置風險標記勾選清單：比對的是 log 原始 GeoIP 欄位字串本身（純英文，非 UI 顯示語意
 // 文字），不逐語言翻譯。這份是「未匯入 GeoIP 資料庫」時的預設清單，每個真實國家一筆、內含
 // aliases（同一國家的多種寫法+ISO 兩碼）；顯示用的 label 不再寫死，改由 resolveCountryInfo()
@@ -4190,8 +4397,9 @@ function renderTimeline() {
   const statusEl = document.getElementById('timeline-filter-status');
   const chart = document.getElementById('timeline-chart');
   const { buckets, startTime, endTime, bucketMs } = buildTimelineBuckets(EVENTS);
-  if (!buckets.length) { chart.innerHTML = `<div class="empty">${tr('results.empty')}</div>`; statusEl.style.display = 'none'; return; }
+  if (!buckets.length) { chart.innerHTML = `<div class="empty">${tr('results.empty')}</div>`; statusEl.style.display = 'none'; _TL_DRAG_META = null; return; }
   chart.innerHTML = buildTimelineSVG(buckets, startTime, endTime, bucketMs, TIMELINE_RANGE_FILTER);
+  _TL_DRAG_META = { n: buckets.length, startTime, bucketMs };
   if (TIMELINE_RANGE_FILTER) {
     statusEl.textContent = `🔍 ${tlFmtTime(TIMELINE_RANGE_FILTER.start)} ~ ${tlFmtTime(TIMELINE_RANGE_FILTER.end)} ✕`;
     statusEl.style.display = '';
@@ -4268,6 +4476,26 @@ function renderResults() {
   box.innerHTML = tr('results.summary_label') + ' ' + Object.keys(SEV_KEY_MAP).map(k => `<span class="summary-chip"><span class="badge ${k}">${tr(SEV_KEY_MAP[k])}</span> ${sum[k]}</span>`).join('');
 }
 
+// 分類顯示標籤（freq: 前綴／CAT_KEY_MAP 查表）：renderIssues() 表格列與抑制清單面板共用
+// 同一套標籤邏輯，避免兩處各自維護一份容易兜不起來
+function issueCategoryLabel(category) {
+  const baseCat = category.startsWith('freq:') ? category.slice(5) : category;
+  return category.startsWith('freq:') ? tr('cat.freqLabel') + tr(CAT_KEY_MAP[baseCat] || 'cat.other') : tr(CAT_KEY_MAP[category] || 'cat.other');
+}
+// 問題清單抑制/調校清單面板：比照 renderGeoRiskChecks() 既有樣式（checkbox 清單反映目前
+// 資料出現過的選項），選項來源刻意用「未套用抑制篩選前」的 ISSUES 全集，讓使用者仍能看到
+// 已抑制的分類並隨時取消抑制，而非篩掉後就再也選不到
+function renderIssuesSuppressPanel() {
+  const row = document.getElementById('issues-suppress-row');
+  const box = document.getElementById('issues-suppress-checks');
+  document.getElementById('lbl-issues-suppress').textContent = tr('issues.suppress_label');
+  const cats = Array.from(new Set(ISSUES.map(is => is.category))).sort();
+  row.style.display = cats.length ? '' : 'none';
+  box.innerHTML = cats.map(c => {
+    const checked = SUPPRESSED_CATEGORIES.has(c);
+    return `<label class="geo-risk-item"><input type="checkbox" class="issues-suppress-check" value="${esc(c)}"${checked ? ' checked' : ''}> ${esc(issueCategoryLabel(c))}</label>`;
+  }).join('');
+}
 function renderIssues() {
   const thead = document.querySelector('#issues-table thead');
   const tbody = document.querySelector('#issues-table tbody');
@@ -4281,21 +4509,17 @@ function renderIssues() {
   sourceSelect.innerHTML = `<option value="">${tr('issues.filter_all_sources')}</option>` + sources.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
   sourceSelect.value = sources.includes(ISSUES_SOURCE_FILTER) ? ISSUES_SOURCE_FILTER : '';
   if (sourceSelect.value !== prevValue) ISSUES_SOURCE_FILTER = sourceSelect.value;
+  renderIssuesSuppressPanel();
 
   thead.innerHTML = `<tr><th>${tr('issues.col_category')}</th><th>${tr('issues.col_severity')}</th><th>${tr('issues.col_count')}</th><th>${tr('issues.col_confidence')}</th><th>${tr('issues.col_source')}</th><th>${tr('issues.col_basis')}</th><th>${tr('issues.col_sample')}</th></tr>`;
-  const visible = filterIssuesBySource(ISSUES, ISSUES_SOURCE_FILTER);
+  const visible = filterIssuesBySuppressed(filterIssuesBySource(ISSUES, ISSUES_SOURCE_FILTER), SUPPRESSED_CATEGORIES);
   // 問題清單搜尋框（比照 #results-search／filterEvents() 既有樣板）：對分類標籤/來源/判斷依據/
   // 樣本原始文字做不分大小寫子字串比對，僅影響表格顯示，不重新計算分析結果
   const searchQuery = document.getElementById('issues-search').value.trim().toLowerCase();
   const rows = visible.map(is => {
-    let catLabel;
     const baseCat = is.category.startsWith('freq:') ? is.category.slice(5) : is.category;
-    if (is.category.startsWith('freq:')) {
-      catLabel = tr('cat.freqLabel') + tr(CAT_KEY_MAP[baseCat] || 'cat.other');
-    } else {
-      catLabel = tr(CAT_KEY_MAP[is.category] || 'cat.other');
-      if (is.category === 'knownIOC' && is.intelSource) catLabel += ` (${esc(is.intelSource)})`;
-    }
+    let catLabel = issueCategoryLabel(is.category);
+    if (is.category === 'knownIOC' && is.intelSource) catLabel += ` (${esc(is.intelSource)})`;
     const mitreId = MITRE_MAP[baseCat];
     const mitreBadge = mitreId ? ` <span class="mitre-badge" title="${esc(tr('mitre.disclaimer'))}">${esc(mitreId)}</span>` : '';
     const sourceCell = getIssueIntelSources(is).join(', ') || '-';
@@ -4371,6 +4595,37 @@ function renderFileMetadata() {
   if (!FILE_METADATA) { row.style.display = 'none'; return; }
   label.textContent = `SHA-256: ${FILE_METADATA.sha256} · ${FILE_METADATA.lineCount} ${tr('filemeta.lines_suffix')} · ${formatBytesHuman(FILE_METADATA.totalSize)}`;
   row.style.display = '';
+}
+
+// 健檢分數卡 A-F（2026-09-15 新增）：靜態文字（標題/按鈕）與 switch/firewall 既有模式一致
+// 每次 setLang()/renderAll() 都重繪，實際分數則比照既有「手動觸發」慣例只在按鈕點擊時計算
+function renderHealthStatic() {
+  document.getElementById('t-health-title').textContent = tr('health.title');
+  const btn = document.getElementById('health-btn');
+  if (btn) btn.textContent = tr('health.run');
+}
+function _doLogHealthCheck() {
+  const btn = document.getElementById('health-btn');
+  if (btn) btn.textContent = tr('health.recheck');
+  const res = computeLogHealth(ISSUES);
+  const sevColors = { Critical: 'var(--red)', High: 'var(--orange)', Medium: 'var(--yellow)', Low: 'var(--accent)', Info: 'var(--text-dim)' };
+  const sevIcon = { Critical: '🔴', High: '🟠', Medium: '🟡', Low: '🔵', Info: '⚪' };
+  let h = `<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
+    <div style="font-size:48px;font-weight:700;color:${res.gradeColor};line-height:1">${res.grade}</div>
+    <div><div style="font-size:13px;color:var(--text-dim)">${tr('health.title')}</div>
+    <div style="font-size:20px;font-weight:600;color:${res.gradeColor}">${res.score} / 100</div></div>
+  </div>`;
+  if (!res.issues.length) {
+    h += `<div style="color:var(--green);font-size:13px">${tr('health.ok')}</div>`;
+  } else {
+    h += res.issues.map(i => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border-left:3px solid ${sevColors[i.sev] || 'var(--border)'}">
+      <span style="font-size:14px">${sevIcon[i.sev] || ''}</span>
+      <span style="font-size:13px;color:var(--text)">${esc(i.label)}</span>
+      <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}</span>
+    </div>`).join('');
+  }
+  const el = document.getElementById('health-result');
+  if (el) el.innerHTML = h;
 }
 
 function renderIntelList() {
@@ -4489,6 +4744,7 @@ function renderAll() {
   renderSafeList();
   renderGeoList();
   renderAsnList();
+  renderBaselineDiff();
 }
 
 // ============================================================
@@ -4571,6 +4827,7 @@ async function doAnalyze() {
     renderIssues();
     renderChains();
     renderTimeline();
+    renderBaselineDiff();
   } finally {
     if (myGen === _analyzeGen) { hideProgress(); if (btn) btn.disabled = false; }
   }
@@ -4583,7 +4840,7 @@ function doClear() {
   RAW_TEXT = ''; EVENTS = []; ISSUES = []; CHAINS = []; ANON_EVENTS = null;
   SOURCE_FILE_BOUNDARIES = []; RESULTS_FILE_FILTER = '';
   FILE_METADATA = null;
-  renderResults(); renderTopN(); renderFileMetadata(); renderIssues(); renderChains(); renderTimeline();
+  renderResults(); renderTopN(); renderFileMetadata(); renderIssues(); renderChains(); renderTimeline(); renderBaselineDiff();
 }
 // 支援一次選取/拖放多個檔案：依原始順序平行讀取後 join 成單一文字餵給既有分析流程，
 // 大檔案門檻判斷改用合併後的總行數/總位元組數；file 參數同時相容單一 File（Array.isArray
@@ -4792,6 +5049,60 @@ function doExportFileMetadata() {
   a.href = url; a.download = 'log-file-metadata.json'; a.click();
   URL.revokeObjectURL(url);
 }
+// 基準線比對模式（2026-09-15 新增）：比照 exportMapping()/importMappingFile() 的 JSON 檔案
+// 匯出/匯入樣式（非 localStorage——基準線屬於分析輸出資料，與 SAFE_LISTS/INTEL_LISTS 刻意
+// 不持久化的既有原則一致）。BASELINE_SNAPSHOT 為 null 代表尚未載入任何基準線。
+let BASELINE_SNAPSHOT = null;
+function exportBaseline() {
+  const obj = buildBaselineSnapshot(ISSUES);
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'log-baseline.json'; a.click();
+  URL.revokeObjectURL(url);
+}
+function importBaselineFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    let parsed;
+    try { parsed = JSON.parse(reader.result); }
+    catch (e) { alert(tr('msg.baseline_import_invalid')); return; }
+    if (!parsed || !Array.isArray(parsed.issues)) { alert(tr('msg.baseline_import_invalid')); return; }
+    BASELINE_SNAPSHOT = parsed;
+    const label = document.getElementById('baseline-import-status');
+    if (label) {
+      label.textContent = tr('msg.baseline_imported').replace('{n}', parsed.issues.length);
+      label.style.display = '';
+    }
+    renderBaselineDiff();
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+function onBaselineImportSelect(e) { if (e.target.files[0]) importBaselineFile(e.target.files[0]); }
+// 渲染 Added/Removed/Changed 狀態表格：單一 issues 集合，比 firewall_analyzer 的 5 個實體
+// 並行 diff 簡單，故不比照該工具拆多個 section，單一表格即可
+function buildBaselineDiffHtml(diffResult) {
+  if (!diffResult || (!diffResult.added.length && !diffResult.removed.length && !diffResult.changed.length)) {
+    return `<div class="empty">${tr('baseline.no_diff')}</div>`;
+  }
+  let rows = '';
+  diffResult.added.forEach(is => { rows += `<tr><td>${esc(tr('baseline.status_added'))}</td><td>${esc(is.category)}</td><td>-</td><td>${esc(is.severityNorm)} / ${is.count}</td></tr>`; });
+  diffResult.removed.forEach(is => { rows += `<tr><td>${esc(tr('baseline.status_removed'))}</td><td>${esc(is.category)}</td><td>${esc(is.severityNorm)} / ${is.count}</td><td>-</td></tr>`; });
+  diffResult.changed.forEach(c => { rows += `<tr><td>${esc(tr('baseline.status_changed'))}</td><td>${esc(c.key)}</td><td>${esc(c.old.severityNorm)} / ${c.old.count}</td><td>${esc(c.new.severityNorm)} / ${c.new.count}</td></tr>`; });
+  return `<div class="tbl-wrap"><table><thead><tr><th>${tr('baseline.col_status')}</th><th>${tr('baseline.col_category')}</th><th>${tr('baseline.col_old')}</th><th>${tr('baseline.col_new')}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function renderBaselineDiff() {
+  const el = document.getElementById('baseline-diff-result');
+  if (!el) return;
+  if (!BASELINE_SNAPSHOT) { el.innerHTML = ''; return; }
+  el.innerHTML = buildBaselineDiffHtml(diffBaseline(BASELINE_SNAPSHOT.issues, ISSUES));
+}
+// 靜態文字（標題/按鈕）比照 renderHealthStatic() 既有模式，每次 setLang()/renderAll() 重繪
+function renderBaselineStatic() {
+  document.getElementById('t-baseline-title').textContent = tr('baseline.title');
+  document.getElementById('btn-baseline-export').textContent = tr('baseline.export_btn');
+  document.getElementById('btn-baseline-import').textContent = tr('baseline.import_btn');
+}
 // 匯入既有對照表：讀取使用者上傳的 mapping.json（本工具或 config_anonymizer 匯出皆可），
 // 套用 applyImportedMappings() 後回饋匯入筆數。DOM 相關，不進純函式測試沙箱。
 function importMappingFile(file) {
@@ -4827,6 +5138,14 @@ function doExportCSV() {
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = 'log_issues.csv'; a.click();
+}
+// MITRE ATT&CK Navigator layer.json 匯出（2026-09-15 新增）：buildMitreLayer() 為純函式，
+// 這裡只負責 Blob+<a download>（比照既有 doExportCSV() 樣式）
+function doExportMitreLayer() {
+  const layer = buildMitreLayer(ISSUES);
+  const blob = new Blob([JSON.stringify(layer, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'log_analyzer_mitre_layer.json'; a.click();
 }
 // 事件清單匯出（正規化成表格後以 CSV 呈現）：匯出目前畫面上的檢視——尊重目前搜尋框篩選與
 // 目前排序欄位/方向，與 renderResults() 用完全相同的 filterEvents→sortEventsByColumn 管線，
@@ -5024,8 +5343,12 @@ document.getElementById('btn-export-map').onclick = exportMapping;
 document.getElementById('mapping-import-input').onchange = onMappingImportSelect;
 document.getElementById('btn-export-events-csv').onclick = doExportEventsCSV;
 document.getElementById('btn-export-file-metadata').onclick = doExportFileMetadata;
+document.getElementById('btn-mitre-layer').onclick = () => doExportMitreLayer();
 document.getElementById('btn-html-report').onclick = () => exportLogReport();
 document.getElementById('btn-print-report').onclick = () => exportLogReport('print');
+document.getElementById('btn-baseline-export').onclick = exportBaseline;
+document.getElementById('baseline-import-input').onchange = onBaselineImportSelect;
+document.getElementById('timeline-chart').addEventListener('mousedown', _onTimelineMouseDown);
 document.getElementById('results-search').oninput = renderResults;
 document.getElementById('results-file-filter').onchange = e => { RESULTS_FILE_FILTER = e.target.value; renderResults(); };
 document.getElementById('issues-search').oninput = renderIssues;
@@ -5064,6 +5387,9 @@ function saveSettings() {
   SETTINGS_TEXT_IDS.forEach(id => { s[id] = document.getElementById(id).value; });
   SETTINGS_CHECK_IDS.forEach(id => { s[id] = document.getElementById(id).checked; });
   s['geo-risk-checked'] = Array.from(document.querySelectorAll('#geo-risk-checks input:checked')).map(el => el.value);
+  // 抑制清單直接以 SUPPRESSED_CATEGORIES 為準（非讀 checkbox DOM）：分類清單隨每次分析結果
+  // 變動，重新整理後在還沒跑分析前 checkbox 根本不存在，Set 本身才是唯一持久真相來源
+  s['issues-suppressed'] = Array.from(SUPPRESSED_CATEGORIES);
   try { localStorage.setItem(LS_SETTINGS_KEY, JSON.stringify(s)); } catch (e) { /* 私密瀏覽模式等情況下 localStorage 可能不可用，靜默略過即可，非核心功能 */ }
 }
 function loadSettings() {
@@ -5077,6 +5403,7 @@ function loadSettings() {
     const set = new Set(s['geo-risk-checked']);
     document.querySelectorAll('#geo-risk-checks input').forEach(el => { el.checked = set.has(el.value); });
   }
+  if (Array.isArray(s['issues-suppressed'])) SUPPRESSED_CATEGORIES = new Set(s['issues-suppressed']);
 }
 renderGeoRiskChecks();
 renderAsnRiskImportList();
@@ -5085,6 +5412,12 @@ renderAsnRiskChecks();
 document.getElementById('geo-risk-checks').addEventListener('change', saveSettings);
 document.getElementById('geo-risk-filter').addEventListener('input', e => filterGeoRiskChecks(e.target.value));
 document.getElementById('asn-risk-filter').addEventListener('input', e => filterAsnRiskChecks(e.target.value));
+document.getElementById('issues-suppress-checks').addEventListener('change', e => {
+  if (!e.target.classList.contains('issues-suppress-check')) return;
+  if (e.target.checked) SUPPRESSED_CATEGORIES.add(e.target.value); else SUPPRESSED_CATEGORIES.delete(e.target.value);
+  saveSettings();
+  renderIssues();
+});
 loadSettings();
 
 renderAll();
