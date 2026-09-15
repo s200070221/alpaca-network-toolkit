@@ -1472,6 +1472,26 @@ function updateModeOptions(){
   if(vsuCard)vsuCard.style.display=vendor==='ruijie'?'':'none';
   updateDeviceModelOptions();
   updateAppliedModelNotice();
+  renderCapabilityMatrix(vendor);
+}
+// 廠牌能力支援矩陣面板（2026-09-15 新增）：純複用既有 VENDOR_INCAPABLE／VENDOR_UNSUPPORTED／
+// VENDOR_FEATURE_LABEL 三個常數（見該三者定義處的語意說明——INCAPABLE 是裝置真的不支援，
+// UNSUPPORTED 是本工具尚未查證語法但裝置可能支援），不新增任何資料來源，僅是換一種一目了然
+// 的檢視角度；三態：❌ 不支援（INCAPABLE）／⚠️ 未查證（UNSUPPORTED）／✅ 已支援（兩份清單皆
+// 未提及）
+function renderCapabilityMatrix(vendor){
+  const tbody=document.querySelector('#capability-matrix-table tbody');
+  if(!tbody)return;
+  const incapable=new Set(VENDOR_INCAPABLE[vendor]||[]);
+  const unsupported=new Set(VENDOR_UNSUPPORTED[vendor]||[]);
+  tbody.innerHTML=Object.keys(VENDOR_FEATURE_LABEL).map(key=>{
+    const label=VENDOR_FEATURE_LABEL[key];
+    let status;
+    if(incapable.has(key))status=`<span style="color:var(--red)">❌ ${tr('cap.incapable')}</span>`;
+    else if(unsupported.has(key))status=`<span style="color:var(--yellow)">⚠️ ${tr('cap.unverified')}</span>`;
+    else status=`<span style="color:var(--green)">✅ ${tr('cap.supported')}</span>`;
+    return`<tr><td>${esc(label)}</td><td>${status}</td></tr>`;
+  }).join('');
 }
 
 function collectModel(){
@@ -2134,6 +2154,72 @@ function loadTemplate(name){
   applyModelToForm(t.model);
   generate(true);
   showTemplateMsg(tr('msg.templateLoaded'),false);
+}
+
+// section-scoped 範本庫（2026-09-15 新增，CSV 批次產生擴充套用 ACL/QoS/Security 模板）：
+// 獨立於上方整份表單快照的 cw_templates 之外，另存一份極短的平行存取函式（loadSectionTemplates/
+// saveSectionTemplates 比照 loadTemplates/saveTemplates 樣式），只存單一區塊（acl/qos/security）
+// 的資料陣列，供 CSV 批次產生（processBulkCSV()）與卡片自身的「另存為範本/套用」小工具共用同
+// 一份儲存區。套用方式沿用既有 applyModelToForm() 全表單重建機制——以 collectModel() 取得目前
+// 表單完整快照、僅覆寫其中一個區塊欄位，再整份餵回 applyModelToForm()，其餘欄位等同原樣round-trip
+// 不受影響，避免另寫一套「只更新單一區塊 DOM」的重複邏輯
+const SECTION_TEMPLATE_STORAGE_KEY='cw_section_templates';
+function loadSectionTemplates(){
+  try{
+    const raw=localStorage.getItem(SECTION_TEMPLATE_STORAGE_KEY);
+    if(!raw)return{};
+    const parsed=JSON.parse(raw);
+    return(parsed&&typeof parsed==='object')?parsed:{};
+  }catch(e){return{};}
+}
+function saveSectionTemplatesStore(templates){
+  try{localStorage.setItem(SECTION_TEMPLATE_STORAGE_KEY,JSON.stringify(templates));return true;}catch(e){return false;}
+}
+function renderSectionTemplateSelect(kind){
+  const sel=document.getElementById(`section-tmpl-select-${kind}`);
+  if(!sel)return;
+  const templates=loadSectionTemplates();
+  const names=Object.keys(templates).filter(n=>templates[n].kind===kind).sort();
+  const prev=sel.value;
+  sel.innerHTML=`<option value="">${tr('opt.sectionTemplateNone')}</option>`+names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  if(names.includes(prev))sel.value=prev;
+}
+function saveSectionTemplate(kind){
+  const nameInput=document.getElementById(`section-tmpl-name-${kind}`);
+  const name=nameInput.value.trim();
+  if(!name){ alert(tr('msg.templateNameRequired')); return; }
+  const templates=loadSectionTemplates();
+  if(name in templates && !confirm(tr('msg.templateOverwriteConfirm').replace('{name}',name)))return;
+  const model=collectModel();
+  templates[name]={savedAt:new Date().toLocaleString(),kind,data:model[kind]};
+  if(saveSectionTemplatesStore(templates)){
+    nameInput.value='';
+    renderSectionTemplateSelect(kind);
+  }else{
+    alert(tr('msg.templateSaveFailed'));
+  }
+}
+function applySectionTemplate(kind){
+  const sel=document.getElementById(`section-tmpl-select-${kind}`);
+  const name=sel&&sel.value;
+  if(!name)return;
+  const templates=loadSectionTemplates();
+  const t=templates[name];
+  if(!t)return;
+  const model=collectModel();
+  model[kind]=t.data;
+  applyModelToForm(model);
+  generate(true);
+}
+function deleteSectionTemplate(kind){
+  const sel=document.getElementById(`section-tmpl-select-${kind}`);
+  const name=sel&&sel.value;
+  if(!name)return;
+  if(!confirm(tr('msg.templateDeleteConfirm').replace('{name}',name)))return;
+  const templates=loadSectionTemplates();
+  delete templates[name];
+  saveSectionTemplatesStore(templates);
+  renderSectionTemplateSelect(kind);
 }
 
 function deleteTemplate(name){
@@ -3553,9 +3639,9 @@ function parseCSVLine(line){
 // 「常用機種預設 Interface 清單」段落說明的既有架構限制），並非本輪查證疏漏，貿然加入
 // 一個實際上寫不進任何表單欄位的「假欄位」會誤導使用者以為功能存在卻默默失效。
 function downloadBulkSampleCSV(){
-  const sample='devicename,vendor,hostname,vlanId,vlanName,ifaceDesc\n'
-    +'SW-SITE-A,cisco,SW-SITE-A-01,10,Site-A-Mgmt,Uplink-to-Core\n'
-    +'SW-SITE-B,comware,SW-SITE-B-01,20,Site-B-Mgmt,Uplink-to-Core\n';
+  const sample='devicename,vendor,hostname,vlanId,vlanName,ifaceDesc,aclTemplate,qosTemplate,securityTemplate\n'
+    +'SW-SITE-A,cisco,SW-SITE-A-01,10,Site-A-Mgmt,Uplink-to-Core,,,\n'
+    +'SW-SITE-B,comware,SW-SITE-B-01,20,Site-B-Mgmt,Uplink-to-Core,,,\n';
   downloadFile(sample,'bulk-template.csv','text/csv');
 }
 
@@ -3591,6 +3677,14 @@ function processBulkCSV(){
     // （不臆測欄位對應，見 downloadBulkSampleCSV() 上方註解說明可用欄位範圍）
     const hasVlanOverride=headers.includes('vlanid')||headers.includes('vlanname');
     const hasIfaceDescOverride=headers.includes('ifacedesc');
+    // ACL/QoS/Security 範本套用（2026-09-15 新增）：直接覆寫 collectModel() 回傳物件的對應
+    // 欄位（見下方迴圈內 model.acl/model.qos/model.security 賦值），不經過 DOM，不會有
+    // vlanId/ifaceDesc 那種需要「暫存→改 DOM→collectModel→還原」才能避免 override 外溢到
+    // 下一列的既有 bug 類型風險
+    const hasAclTemplateOverride=headers.includes('acltemplate');
+    const hasQosTemplateOverride=headers.includes('qostemplate');
+    const hasSecurityTemplateOverride=headers.includes('securitytemplate');
+    const sectionTemplatesForBulk=loadSectionTemplates();
 
     window.bulkConfigs={};
     const results=[];
@@ -3658,6 +3752,18 @@ function processBulkCSV(){
 
         // 產生配置（withSviInterfaces() 說明見 generate()）
         const model=withSviInterfaces(collectModel());
+        if(hasAclTemplateOverride&&row.acltemplate){
+          const t=sectionTemplatesForBulk[row.acltemplate];
+          if(t&&t.kind==='acl')model.acl=t.data;
+        }
+        if(hasQosTemplateOverride&&row.qostemplate){
+          const t=sectionTemplatesForBulk[row.qostemplate];
+          if(t&&t.kind==='qos')model.qos=t.data;
+        }
+        if(hasSecurityTemplateOverride&&row.securitytemplate){
+          const t=sectionTemplatesForBulk[row.securitytemplate];
+          if(t&&t.kind==='security')model.security=t.data;
+        }
         let cfg;
         if(model.vendor==='fortiswitch')cfg=assembleFortiSwitchConfig(model);
         else if(model.vendor==='aruba')cfg=assembleArubaConfig(model);
@@ -4384,7 +4490,32 @@ updateModeOptions();
 updateIfaceTableDisplay();
 updateAppliedModelNotice();
 renderTemplateList();
+['acl','qos','security'].forEach(renderSectionTemplateSelect);
 generate();
+
+// 稽核發現→產生器修復預填跨工具聯動（2026-09-15 新增）：switch_analyzer 的「修復」按鈕經
+// `_sendToGenerator(findingId)` 帶入 focusFindingId，本工具收到後捲動並短暫高亮對應卡片——
+// 卡片層級聚焦而非逐欄位精確定位（多數發現的受影響對象是「一組介面/使用者」而非單一表單欄位，
+// 精確逐項定位需要額外的列比對邏輯，工作量遠超本輪範圍）；VLAN1/未用VLAN殘留 trunk/缺描述
+// 三項因調整點都在 Interface 表格（access/native VLAN、trunk allowed vlan、描述欄位皆在同一
+// 表格），聚焦同一個 `#iface-table`，其餘 7 項各自對應到已存在 id 的卡片。找不到對應 id
+// 時安靜略過（如 REMOVED 或未來重新命名 DOM id 的情境），不拋錯
+const REMEDIATION_FOCUS_MAP={
+  'weak-pwd':'users-card','stp-no-bpduguard':'stp-card','stp-portfast-trunk':'stp-card',
+  'stp-uplink-no-rootguard':'stp-card','vlan1-inuse':'iface-table','security-off':'security-card',
+  'acl-any-any':'acl-card','unused-vlan-trunk':'iface-table','lacp-member-mismatch':'lacp-body',
+  'if-no-desc':'iface-table',
+};
+function _focusRemediationField(findingId){
+  const targetId=REMEDIATION_FOCUS_MAP[findingId];
+  if(!targetId)return;
+  const el=document.getElementById(targetId);
+  if(!el)return;
+  const card=el.closest('.card')||el;
+  card.scrollIntoView({behavior:'smooth',block:'center'});
+  card.classList.add('remediation-focus');
+  setTimeout(()=>card.classList.remove('remediation-focus'),2500);
+}
 
 // network_analyzer 拖放交接：比照 firewall_analyzer/switch_analyzer 既有 `_netAnalyzer_pending`
 // 讀取慣例（10 秒新鮮度檢查＋讀取後即刻 removeItem，避免重複帶入）。此工具原本完全沒有接收端
@@ -4424,6 +4555,7 @@ generate();
     var fnameEl2 = document.getElementById('import-config-file-name');
     if (fnameEl2 && swModel.name) fnameEl2.textContent = swModel.name;
     applyParsedConfigToForm(p, buildAnalyzerFnsAdapter(p), '', v, gv);
+    if (swModel.focusFindingId) _focusRemediationField(swModel.focusFindingId);
     return;
   }
 

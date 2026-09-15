@@ -379,6 +379,41 @@
     return nat.filter(n => ORPHAN_NAT_TYPES.has(n.type) && n.name && !usedAddr.has(n.name));
   }
 
+  // 孤兒 VPN 物件：IPSec Phase1 通道從未被任何 policy 的 srcIntf/dstIntf 引用，也從未出現在
+  // SD-WAN member 的 interface 欄位（常見「IPsec 介面模式通道被加進 SD-WAN member」情境，
+  // 不檢查會誤判）。**明確排除 Cisco ASA**——policy-based/crypto-map VPN 不透過介面名稱被規則
+  // 引用，架構上不適用，比照上方 ORPHAN_NAT_EXCLUDED_VENDOR_RE 精神。僅涵蓋 ipsec-p1（排除
+  // SSL-VPN/portal 類型，這些不透過介面被引用）。
+  // **v.iface 欄位語意隨廠牌不同，不可一律當成「可被引用的通道介面」比對**：Palo Alto／
+  // Juniper 的 v.iface 是真正的虛擬通道介面（tunnel.1／st0.0，規則直接引用）；但 FortiGate／
+  // pfSense 的 v.iface 是該通道綁定的實體 WAN 埠（如 wan1，parser 直接讀 `set interface`），
+  // 同一實體埠通常被大量無關規則引用，若同樣拿來比對會讓幾乎所有孤兒通道被誤判為「已使用」
+  // （原始實作曾誤判，已用真實 FortiGate 設定檔測資復現並修正）。故僅對 v.iface 語意等同虛擬
+  // 通道介面的廠牌白名單額外比對該欄位，其餘廠牌（含 FortiGate）僅比對 v.name（FortiGate 規則
+  // 引用的是與通道同名的自動建立虛擬介面，即 v.name 本身）。
+  const ORPHAN_VPN_EXCLUDED_VENDOR_RE = /cisco\s*asa/i;
+  const ORPHAN_VPN_IFACE_IS_TUNNEL_VENDOR_RE = /palo\s*alto|juniper/i;
+  function analyzeOrphanVPN(parsed) {
+    if (ORPHAN_VPN_EXCLUDED_VENDOR_RE.test(parsed.vendor || '')) return [];
+    const vpn = (parsed.vpn || []).filter(v => v.type === 'ipsec-p1');
+    if (!vpn.length) return [];
+    const ifaceIsTunnel = ORPHAN_VPN_IFACE_IS_TUNNEL_VENDOR_RE.test(parsed.vendor || '');
+    const usedIface = new Set();
+    for (const p of (parsed.policies || [])) {
+      [p.srcIntf, p.dstIntf].forEach(str => {
+        if (!str || str === '-') return;
+        str.split(/[,"\s]+/).forEach(n => { const t = n.trim(); if (t) usedIface.add(t); });
+      });
+    }
+    ((parsed.sdwan && parsed.sdwan.members) || []).forEach(m => {
+      if (m.iface && m.iface !== '-') usedIface.add(m.iface);
+    });
+    return vpn.filter(v => {
+      const refs = [v.name, ifaceIsTunnel ? v.iface : null].filter(x => x && x !== '-');
+      return refs.length > 0 && !refs.some(r => usedIface.has(r));
+    });
+  }
+
   // 相鄰規則合併建議：偵測「相鄰（consecutive，中間不能夾其他規則）」且除了
   // srcAddr/dstAddr/service 三者之一外，其餘關鍵欄位（action/介面/schedule/nat/
   // logtraffic/VDOM）皆完全相同的規則群組，建議合併為一條（差異欄位改用群組涵蓋多值）。
@@ -916,6 +951,38 @@
       + _buildDiffSection('diff.title_nat', diffResult.nat);
   }
 
+  // ── 合規基準快照 + drift 比對（2026-09-15 新增）───────────────────────
+  // 完整複用既有 diffArrayByKey()：analyzeCompliance() 每筆發現已有穩定短字串 id（'any-any'／
+  // 'no-2fa'／'weak-vpn' 等固定集合），天生適合當 diff key；一行 wrapper 即可，不需要另外
+  // 實作一套比對邏輯。與既有「上傳新舊設定檔比較」diffConfigs() 語意刻意區隔——那個比的是
+  // 設定檔本身，這個比的是合規檢查「結果」（風險等級/命中數量隨時間的變化趨勢）。
+  function diffCompliance(oldFindings, newFindings) {
+    return diffArrayByKey(oldFindings, newFindings, f => f.id, ['value', 'risk', 'detail']);
+  }
+  // 渲染：不比照 _buildDiffSection() 的通用 diffFields 清單顯示（那是給「任意欄位變動」用的
+  // 泛用格式），改為針對合規發現的語意客製——直接顯示 old.value→new.value 與風險等級本身，
+  // 比通用 diffFields 陣列（如 "value, risk"）更能一眼看出「發生數從幾筆變幾筆」
+  const _RISK_PILL_TYPE = { high: 'p-deny', medium: 'p-warn', low: 'p-info' };
+  function _riskLabel(risk) {
+    return risk === 'high' ? tr('audit.risk_high') : risk === 'medium' ? tr('audit.risk_mid') : tr('audit.risk_low');
+  }
+  function buildComplianceDiffHtml(diffResult) {
+    const total = diffResult.added.length + diffResult.removed.length + diffResult.changed.length;
+    if (!total) return `<div class="nodata" style="padding:14px 0;color:var(--green)">${esc(tr('diff.none_found'))}</div>`;
+    let h = '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('diff.col_status') + '</th><th>' + tr('audit.col_check') + '</th><th>' + tr('baseline.col_old') + '</th><th>' + tr('baseline.col_new') + '</th></tr></thead><tbody>';
+    diffResult.added.forEach(f => {
+      h += `<tr><td>${pill(tr('diff.status_added'), 'p-allow')}</td><td>${esc(f.check)}</td><td class="mono">-</td><td class="mono">${f.value} ${pill(_riskLabel(f.risk), _RISK_PILL_TYPE[f.risk] || 'p-info')}</td></tr>`;
+    });
+    diffResult.removed.forEach(f => {
+      h += `<tr><td>${pill(tr('diff.status_removed'), 'p-deny')}</td><td>${esc(f.check)}</td><td class="mono">${f.value} ${pill(_riskLabel(f.risk), _RISK_PILL_TYPE[f.risk] || 'p-info')}</td><td class="mono">-</td></tr>`;
+    });
+    diffResult.changed.forEach(c => {
+      h += `<tr><td>${pill(tr('diff.status_changed'), 'p-warn')}</td><td>${esc(c.new.check)}</td><td class="mono">${c.old.value} ${pill(_riskLabel(c.old.risk), _RISK_PILL_TYPE[c.old.risk] || 'p-info')}</td><td class="mono">${c.new.value} ${pill(_riskLabel(c.new.risk), _RISK_PILL_TYPE[c.new.risk] || 'p-info')}</td></tr>`;
+    });
+    h += '</tbody></table></div>';
+    return h;
+  }
+
   // ── 健康度評估 ─────────────────────────────────────────────────
   function computeFirewallHealth(parsed) {
     const policies = parsed.policies || [];
@@ -990,6 +1057,9 @@
     if (natPortConflict) { score -= natPortConflict * HEALTH_WEIGHT.medium; issues.push({ sev: 'warn', label: tr('health.nat_port_conflict'), count: natPortConflict }); }
     const orphanNatCount = analyzeOrphanNAT(parsed).length;
     if (orphanNatCount) { score -= orphanNatCount * HEALTH_WEIGHT.low; issues.push({ sev: 'info', label: tr('health.nat_orphan'), count: orphanNatCount }); }
+    // T15：孤兒 VPN 物件（2026-09-15 新增），權重比照孤兒 NAT 同屬「設定衛生」訊號，同為 low
+    const orphanVpnCount = analyzeOrphanVPN(parsed).length;
+    if (orphanVpnCount) { score -= orphanVpnCount * HEALTH_WEIGHT.low; issues.push({ sev: 'info', label: tr('health.vpn_orphan'), count: orphanVpnCount }); }
     score = Math.max(0, Math.min(100, score));
     const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
     const gradeColor = grade === 'A' ? 'var(--green)' : grade === 'B' ? 'var(--teal)' : grade === 'C' ? 'var(--yellow)' : grade === 'D' ? 'var(--orange)' : 'var(--red)';

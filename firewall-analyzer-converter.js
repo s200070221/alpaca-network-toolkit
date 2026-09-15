@@ -2411,13 +2411,48 @@ const Converter = (() => {
         const port=(portField&&portField!=='-')?portField:(p2==='udp'?obj.tcpPorts:obj.udpPorts);
         return{proto:p2,port:(port&&port!=='-')?String(port).split(/[,-]/)[0].trim():''};
       }
+      // 服務群組攤平（2026-09-15 新增，MikroTik 已由既有 parseServiceObjects() 驗證過真實
+      // 語法：dst-port= 同協定逗號分隔多埠清單、單一規則僅一個 protocol= 欄位）。查
+      // parsed.services 找 category==='group' 且名稱相符的物件，逐一展開成員（重用
+      // svcLiteral() 解析單一成員），依 protocol 分桶——同協定成員合併一筆規則、逗號合併
+      // 埠清單；跨協定成員（如群組同時含 tcp/udp 服務）在輸出端展開成對應協定數量的多條
+      // 規則，其餘比對條件（src/dst/action/comment）完全相同。巢狀群組（群組成員又是另一個
+      // 群組）僅展開一層，不遞迴——比照既有位址群組「僅一層」限制，見 getConversionCaveats()
+      function svcGroupExpand(val){
+        const tok=sl(val)[0]||'';
+        const obj=(parsed.services||[]).find(s=>s.category==='group'&&s.name===tok);
+        if(!obj)return null;
+        const buckets=new Map(); // proto -> Set(port)
+        sl(obj.members).forEach(mn=>{
+          const single=svcLiteral(mn);
+          if(!single)return;
+          if(!buckets.has(single.proto))buckets.set(single.proto,new Set());
+          if(single.port)buckets.get(single.proto).add(single.port);
+        });
+        if(!buckets.size)return null;
+        return Array.from(buckets,([proto,ports])=>({proto,port:[...ports].join(',')}));
+      }
       const ruleLines=[];
       parsed.policies.forEach(p=>{
-        let line=`add chain=forward action=${mapAction(p.action,'mikrotik')}`;
+        const baseLine=`add chain=forward action=${mapAction(p.action,'mikrotik')}`;
         const src=addrRef(p.srcAddr), dst=addrRef(p.dstAddr);
-        if(src) line+= src.list?` src-address-list=${src.value}`:` src-address=${src.value}`;
-        if(dst) line+= dst.list?` dst-address-list=${dst.value}`:` dst-address=${dst.value}`;
+        let addrPart='';
+        if(src) addrPart+= src.list?` src-address-list=${src.value}`:` src-address=${src.value}`;
+        if(dst) addrPart+= dst.list?` dst-address-list=${dst.value}`:` dst-address=${dst.value}`;
+        const commentPart=` comment="${p.name}"`+(p.status==='disable'?' disabled=yes':'');
         const named=svcLiteral(p.service);
+        const grouped=named?null:svcGroupExpand(p.service);
+        if(grouped&&grouped.length){
+          grouped.forEach(g=>{
+            let line=baseLine+addrPart;
+            if(g.proto) line+=` protocol=${g.proto}`;
+            if(g.proto&&g.proto!=='icmp'&&g.port) line+=` dst-port=${g.port}`;
+            line+=commentPart;
+            ruleLines.push(line);
+          });
+          return;
+        }
+        let line=baseLine+addrPart;
         let proto='', port='';
         if(named){ proto=named.proto; port=named.port; }
         else {
@@ -2427,8 +2462,7 @@ const Converter = (() => {
         }
         if(proto) line+=` protocol=${proto}`;
         if(proto&&proto!=='icmp'&&port) line+=` dst-port=${port}`;
-        line+=` comment="${p.name}"`;
-        if(p.status==='disable') line+=' disabled=yes';
+        line+=commentPart;
         ruleLines.push(line);
       });
       if(neededLists.size){
@@ -2524,8 +2558,11 @@ const Converter = (() => {
     // 故四家「仍未攤平」的殘餘情境已不再是同一組條件，逐廠牌精準判斷，避免對已攤平的部分
     // 誤報警語、也避免對真正仍缺的部分漏報
     if(targetVendor==='mikrotik'){
-      // 位址群組／FQDN 本輪已攤平；RouterOS 無服務物件概念，服務群組無法對應仍未攤平
-      if((parsed.services||[]).some(s=>s.category==='group')) notes.push('服務群組（parsed.services 的 group 類別）本轉換器不會攤平——RouterOS 無具名服務物件概念，規則若引用服務群組，輸出的 protocol/dst-port 欄位會遺漏，請人工核對並改用字面 protocol/port 表示');
+      // 位址群組／FQDN／服務群組（2026-09-15 新增）本輪皆已攤平；服務群組依 protocol 分桶展開成
+      // 對應數量的多條規則（RouterOS 單一規則僅一個 protocol= 欄位，無法像具名服務物件那樣一次
+      // 涵蓋多協定），僅巢狀群組（群組成員又是另一個群組）與群組成員本身混合 TCP/UDP 單一服務
+      // 物件（svcLiteral() 既有限制，見該函式）兩種情境仍需人工核對
+      if((parsed.services||[]).some(s=>s.category==='group')) notes.push('服務群組已依協定分桶展開成對應數量的規則（同協定成員合併、跨協定成員各自一條規則）；巢狀群組（群組成員本身又是另一個群組）僅展開一層不遞迴，請人工核對是否有巢狀情形，以及個別成員若同時定義 TCP/UDP 雙協定時本轉換器僅採計其中一種');
     }
     if(targetVendor==='edgerouter'){
       // 位址群組（address-group/network-group）已攤平；FQDN 因官方查證確認 EdgeOS 原生不支援

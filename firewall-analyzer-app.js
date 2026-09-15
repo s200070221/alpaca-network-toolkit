@@ -823,6 +823,8 @@ function onParsed(){
             <td class="mono">${r.phase2&&r.phase2.length?`<span class="clickable-cell" onclick="showVpnPhase2Detail(${JSON.stringify(r.name).replace(/"/g,'&quot;')})" title="${tr('vpn.phase2_tip')}">${pill(r.phase2.length+' P2','p-info')}</span>`:'-'}</td>
             <td>${r.status==='disable'||r.status==='Disable'?pill(tr('wwan.pill_disable'),'p-deny'):pill(tr('wwan.pill_enable'),'p-allow')}</td>
           </tr>`;
+        {const _orphanVpn=analyzeOrphanVPN(d);
+        if(_orphanVpn.length>0)_extraHtml+=`<div style="margin-top:16px;padding:10px 14px;background:rgba(96,165,250,.08);border-left:3px solid var(--info);border-radius:6px"><div style="font-size:12px;font-weight:600;color:var(--info);margin-bottom:6px">ℹ ${tr('vpn.orphan_title')}</div>${_orphanVpn.map(o=>`<div style="font-size:12px;color:var(--text);margin-top:4px"><span style="color:var(--info);font-weight:600">${esc(o.name)}</span></div>`).join('')}</div>`;}
         break;
       case 'nat':
         data=d.nat;
@@ -833,7 +835,7 @@ function onParsed(){
         }
         sumCards=sumC([{l:tip('tip.nat',tr('sl.total')),v:data.length,c:'var(--accent)'},{l:tip('tip.vip','VIP/DNAT'),v:data.filter(x=>x.type==='vip').length,c:'var(--yellow)'},{l:tip('tip.ippool','IP Pool'),v:data.filter(x=>x.type==='ippool').length,c:'var(--orange)'},{l:tip('tip.vipgrp','VIP Group'),v:data.filter(x=>x.type==='vipgrp').length,c:'var(--text-dim)'},{l:'NAT66',v:data.filter(x=>x.type==='vip6'||x.type==='ippool6'||x.type==='vipgrp6').length,c:'var(--info)'}]);
         thead=`<tr><th>${tip('tip.nat',tr('col.type'))}</th><th>${tr('col.name')}</th><th>${tr('col.subtype')}</th><th>${tip('tip.vip',tr('col.ext_ip'))}</th><th>${tr('col.ext_if')}</th><th>${tr('col.map_ip')}</th><th>${tr('col.port_fwd')}</th><th>${tr('col.ext_port')}</th><th>${tr('col.map_port')}</th><th>${tr('col.protocol')}</th><th>${tip('tip.status',tr('col.status'))}</th><th>${tr('col.desc')}</th></tr>`;
-        rowFn=r=>`<tr><td>${pill(r.type,'p-warn')}</td><td class="mono" style="color:var(--accent)">${esc(r.name)}</td><td style="color:var(--text-dim)">${esc(r.vipType||r.poolType||'-')}</td><td class="mono">${esc(r.extIp||r.startIp||'-')}</td><td style="color:var(--text-dim)">${esc(r.extIntf||r.srcIntf||'-')}</td><td class="mono">${esc(r.mapIp||r.endIp||'-')}</td><td>${esc(r.portFwd||'-')}</td><td class="mono">${esc(r.extPort||'-')}</td><td class="mono">${esc(r.mapPort||'-')}</td><td style="color:var(--text-dim)">${esc(r.proto||'-')}</td><td>${r.status==='disable'?pill(tr('wwan.pill_disable'),'p-deny'):pill(tr('wwan.pill_enable'),'p-allow')}</td><td style="color:var(--text-dim);font-size:11px">${esc(r.comment)}</td></tr>`;
+        rowFn=r=>{const encN=btoa(unescape(encodeURIComponent(r.name)));return`<tr><td>${pill(r.type,'p-warn')}</td><td class="mono" style="color:var(--accent)"><span class="clickable-cell" onclick="_showNatRef('${encN}')" title="${tr('addr.click_hint')}">${esc(r.name)}</span></td><td style="color:var(--text-dim)">${esc(r.vipType||r.poolType||'-')}</td><td class="mono">${esc(r.extIp||r.startIp||'-')}</td><td style="color:var(--text-dim)">${esc(r.extIntf||r.srcIntf||'-')}</td><td class="mono">${esc(r.mapIp||r.endIp||'-')}</td><td>${esc(r.portFwd||'-')}</td><td class="mono">${esc(r.extPort||'-')}</td><td class="mono">${esc(r.mapPort||'-')}</td><td style="color:var(--text-dim)">${esc(r.proto||'-')}</td><td>${r.status==='disable'?pill(tr('wwan.pill_disable'),'p-deny'):pill(tr('wwan.pill_enable'),'p-allow')}</td><td style="color:var(--text-dim);font-size:11px">${esc(r.comment)}</td></tr>`;};
         {const _natWarns=analyzeNAT(d.nat);
         if(_natWarns.length>0)_extraHtml+=`<div style="margin-top:16px;padding:10px 14px;background:rgba(234,88,12,.08);border-left:3px solid var(--orange);border-radius:6px"><div style="font-size:12px;font-weight:600;color:var(--orange);margin-bottom:6px">⚠ ${tr('nat.analysis_title')}</div>${_natWarns.map(w=>`<div style="font-size:12px;color:var(--text);margin-top:4px"><span style="color:var(--orange);font-weight:600">${esc(w.msg)}</span> — ${esc(w.detail)}</div>`).join('')}</div>`;
         const _orphanNat=analyzeOrphanNAT(d);
@@ -1085,6 +1087,15 @@ function onParsed(){
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
               <div id="health-result" style="margin-top:12px"></div>
+             </div>
+             <div id="baseline-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                <button class="btn btn-ghost btn-sm" onclick="_saveComplianceBaseline()">💾 ${tr('baseline.save_btn')}</button>
+                <button class="btn btn-ghost btn-sm" onclick="document.getElementById('baseline-file-input').click()">📂 ${tr('baseline.compare_btn')}</button>
+                <input type="file" id="baseline-file-input" accept=".json" style="display:none" onchange="_compareComplianceBaseline(this)">
+                <span id="baseline-status" style="font-size:11px;color:var(--text-dim)"></span>
+              </div>
+              <div id="baseline-diff-result" style="margin-top:12px"></div>
              </div>`;
         return;
       }
@@ -1332,6 +1343,41 @@ function onParsed(){
     if (el) el.innerHTML = h;
   }
   window._doHealthCheck = _doHealthCheck;
+
+  // ── 合規基準快照 + drift 比對（2026-09-15 新增）────────────────────────
+  // 快照僅存 analyzeCompliance() findings 陣列＋裝置識別中繼資料，非整份 parsed（與既有
+  // 「上傳新舊設定檔比較」diffConfigs() 語意區隔——那個比的是設定檔本身）。本工具目前無匯入
+  // JSON 分析結果的既有前例，此為新增但風險低（純本機 JSON.parse()，無外部請求）。
+  window._saveComplianceBaseline = function() {
+    if (!PARSED) return;
+    const snapshot = {
+      _baselineVersion: 1,
+      savedAt: new Date().toISOString(),
+      deviceInfo: { vendor: PARSED.vendor, hostname: (PARSED.deviceInfo||{}).hostname, firmware: (PARSED.deviceInfo||{}).firmware },
+      findings: analyzeCompliance(PARSED),
+    };
+    Reporter.download(JSON.stringify(snapshot, null, 2), `fw_compliance_baseline_${(PARSED.deviceInfo||{}).hostname||'device'}_${dateStr()}.json`, 'application/json');
+  };
+  window._compareComplianceBaseline = function(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let baseline;
+      try { baseline = JSON.parse(reader.result); }
+      catch (e) { alert(tr('baseline.import_invalid')); return; }
+      if (!baseline || !Array.isArray(baseline.findings)) { alert(tr('baseline.import_invalid')); return; }
+      if (!PARSED) return;
+      const newFindings = analyzeCompliance(PARSED);
+      const diffResult = diffCompliance(baseline.findings, newFindings);
+      const statusEl = $('baseline-status');
+      if (statusEl) statusEl.textContent = tr('baseline.compared_at').replace('{time}', baseline.savedAt ? new Date(baseline.savedAt).toLocaleString() : '-');
+      const resEl = $('baseline-diff-result');
+      if (resEl) resEl.innerHTML = buildComplianceDiffHtml(diffResult);
+    };
+    reader.readAsText(file, 'UTF-8');
+    input.value = '';
+  };
 
   // ── Converter ─────────────────────────────────────────────────
   function buildConvVdomSelector(parsed) {
@@ -1687,9 +1733,16 @@ function onParsed(){
   });
 
   // Build reverse index: address/service name → policy refs
+  // 2026-09-15 新增 NAT／VPN 反查索引（Phase「物件依賴關係互動檢視」延伸至 NAT/VPN，address/
+  // service 已於既有版本完整實作）：NAT 物件（vip/ippool/vipgrp）被 policy 的 srcAddr/dstAddr/
+  // poolname 引用（欄位掃描範圍與 analyzeOrphanNAT() 一致）；VPN 通道被 policy 的 srcIntf/dstIntf
+  // 引用（掃描範圍與 analyzeOrphanVPN() 一致，惟後者額外檢查 SD-WAN member 但那不是「規則」，
+  // 沒有可跳轉的 policy id，故不納入這份互動式反查索引，僅影響孤兒判定本身）
   window.buildRefIndex = function(d) {
     window._addrRefs = {};
     window._svcRefs  = {};
+    window._natRefs  = {};
+    window._vpnRefs  = {};
     if (!d || !d.policies) return;
     const addRef = (map, key, entry) => {
       if (!key || key === '-' || key === 'all' || key === 'any') return;
@@ -1701,6 +1754,11 @@ function onParsed(){
       (p.srcAddr || '').split(/[,\s]+/).forEach(n => addRef(window._addrRefs, n.trim(), {...entry, role:'src'}));
       (p.dstAddr || '').split(/[,\s]+/).forEach(n => addRef(window._addrRefs, n.trim(), {...entry, role:'dst'}));
       (p.service  || '').split(/[,\s]+/).forEach(n => addRef(window._svcRefs,  n.trim(), entry));
+      (p.srcAddr || '').split(/[,\s]+/).forEach(n => addRef(window._natRefs, n.trim(), {...entry, role:'src'}));
+      (p.dstAddr || '').split(/[,\s]+/).forEach(n => addRef(window._natRefs, n.trim(), {...entry, role:'dst'}));
+      (p.poolname || '').split(/[,\s]+/).forEach(n => addRef(window._natRefs, n.trim(), {...entry, role:'pool'}));
+      (p.srcIntf || '').split(/[,\s]+/).forEach(n => addRef(window._vpnRefs, n.trim(), {...entry, role:'src'}));
+      (p.dstIntf || '').split(/[,\s]+/).forEach(n => addRef(window._vpnRefs, n.trim(), {...entry, role:'dst'}));
     });
   };
 
@@ -2024,6 +2082,33 @@ function onParsed(){
     _showRefModal('⚙️ ' + esc(name), tr('popup.svc_obj'), detailHTML + refsHTML);
   };
 
+  // NAT 物件反查彈窗（2026-09-15 新增）：比照 _showAddr()/_showSvc() 同款樣式，NAT 表格列
+  // 目前顯示的欄位已比 address/service 精簡（見上方 case 'nat' rowFn），直接沿用該列已有的
+  // type/subtype/extIp 等欄位組 detail 表格，不重新查表
+  window._showNatRef = function(encoded) {
+    let name;
+    try { name = decodeURIComponent(escape(atob(encoded))); }
+    catch(e) { name = encoded; }
+    name = String(name).trim();
+    if (!PARSED) return;
+    const obj = (PARSED.nat || []).find(n => n.name === name || (n.name||'').trim() === name);
+    const detailRows = [];
+    if (obj) {
+      detailRows.push([tr('col.type'), obj.type], [tr('col.name'), obj.name], [tr('col.subtype'), obj.vipType||obj.poolType||'-']);
+      if (obj.extIp || obj.startIp) detailRows.push([tr('col.ext_ip'), obj.extIp||obj.startIp||'-']);
+      if (obj.mapIp || obj.endIp) detailRows.push([tr('col.map_ip'), obj.mapIp||obj.endIp||'-']);
+      if (obj.comment) detailRows.push([tr('col.desc'), obj.comment]);
+    } else {
+      detailRows.push([tr('col.name'), name], [tr('popup.desc'), tr('popup.default_obj')]);
+    }
+    const detailHTML = `<table style="font-size:12px;width:100%;border-collapse:collapse;margin-bottom:10px">${
+      detailRows.map(([k,v])=>`<tr><td style="color:var(--text-dim);padding:2px 8px 2px 0;white-space:nowrap">${esc(k)}</td><td class="mono">${esc(String(v))}</td></tr>`).join('')
+    }</table>`;
+    const refs = (window._natRefs || {})[name] || [];
+    const refsHTML = _refListHTML(refs, tr('ref.title_nat'));
+    _showRefModal('🔀 ' + esc(name), tr('popup.nat_obj'), detailHTML + refsHTML);
+  };
+
   // Print / PDF
   window.doPrint = function() {
     const hdr = document.getElementById('fw-print-header');
@@ -2096,6 +2181,19 @@ function onParsed(){
       [tr('vpn.split_tunnel_addr'), v.splitTunnelRoutingAddr || '-'],
       [tr('vpn.phase2_count'), v.phase2 ? v.phase2.length : 0],
     ]);
+    // 引用清單（2026-09-15 新增）：v.iface 語意隨廠牌不同，只有 Palo Alto/Juniper 的 v.iface
+    // 才是真正的虛擬通道介面、才適合拿來查引用；FortiGate 的 v.iface 是實體 WAN 埠（同一顆
+    // WAN 埠常被大量無關規則引用），查那個欄位只會顯示一堆誤導性的假引用，比照 analyzeOrphanVPN()
+    // 開頭註解同一份判斷（ORPHAN_VPN_IFACE_IS_TUNNEL_VENDOR_RE 定義在 firewall-analyzer-audit.js，
+    // 該檔在載入順序上位於本檔之前，全域可見）。依 policy id+role 去重避免 name/iface 兩個
+    // 欄位剛好對到同一條規則時重複顯示。
+    const ifaceIsTunnel = ORPHAN_VPN_IFACE_IS_TUNNEL_VENDOR_RE.test((PARSED && PARSED.vendor) || '');
+    const rawRefs = [...((window._vpnRefs||{})[v.name]||[]), ...((ifaceIsTunnel && v.iface && v.iface!=='-') ? ((window._vpnRefs||{})[v.iface]||[]) : [])];
+    const seen = new Set();
+    const refs = rawRefs.filter(r => { const k = r.id+':'+r.role; if (seen.has(k)) return false; seen.add(k); return true; });
+    const refsHTML = _refListHTML(refs, tr('ref.title_vpn'));
+    const body = $('pop-body');
+    if (body) body.innerHTML += refsHTML;
   };
 
   // NAC 動態 VLAN 指派 detail popup：FORTISWITCH_DATA 不在 PARSED 內（獨立 module 變數），

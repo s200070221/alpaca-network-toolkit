@@ -1579,6 +1579,10 @@ function _doSwitchHealthCheck(){
   const el=document.getElementById('sw-health-result');
   if(el)el.innerHTML=h;
 }
+// 稽核發現→產生器修復預填跨工具聯動（2026-09-15 新增）：僅這 10 項在 switch_config_generator
+// 表單已有對應欄位（SNMP community／管理介面 Telnet-SSH／路由認證金鑰因產生器表單目前完全無
+// 對應欄位，屬「新增產生器功能」而非「跨工具聯動」，刻意排除本輪範圍）
+const REMEDIABLE_FINDING_IDS=new Set(['weak-pwd','stp-no-bpduguard','stp-portfast-trunk','stp-uplink-no-rootguard','vlan1-inuse','security-off','acl-any-any','unused-vlan-trunk','lacp-member-mismatch','if-no-desc']);
 function renderAudit(){
   const findings=analyzeSwitchAudit(parsed);
   const hi=findings.filter(f=>f.risk==='high').length;
@@ -1595,15 +1599,17 @@ function renderAudit(){
     {key:'risk',label:tr('audit.col_risk')},
     {key:'detail',label:tr('audit.col_detail')},
     {key:'standards',label:tr('audit.col_standards')},
+    {key:'action',label:tr('audit.col_action')},
   ];
   const fmtRows=findings.map(f=>({...f,
     value: `<span class="mono" style="color:${f.value>0&&f.risk!=='low'?'var(--red)':'var(--green)'};font-weight:600">${f.value}</span>`,
     risk: f.risk==='high'?pill('down',tr('audit.risk_high')):f.risk==='medium'?pill('warn',tr('audit.risk_mid')):pill('info',tr('audit.risk_low')),
     detail: `<span style="color:var(--text-dim);font-size:11px">${esc(f.detail)}</span>`,
     standards: (f.standards||[]).map(s=>`<span style="display:inline-block;margin:1px 3px 1px 0;padding:1px 6px;border-radius:3px;font-size:10px;background:var(--surface2);color:var(--text-dim);border:1px solid var(--border)">${esc(s)}</span>`).join('')||'-',
+    action: (f.value>0&&REMEDIABLE_FINDING_IDS.has(f.id))?`<button class="btn btn-ghost btn-sm" onclick="_sendToGenerator('${f.id}')">${esc(tr('audit.remediate_btn'))}</button>`:'-',
   }));
-  fmtRows.forEach(r=>{r.check_html=esc(r.check);r.value_html=r.value;r.risk_html=r.risk;r.detail_html=r.detail;r.standards_html=r.standards;});
-  tableData=findings; tableKeys=['check','value','risk','detail','standards'];
+  fmtRows.forEach(r=>{r.check_html=esc(r.check);r.value_html=r.value;r.risk_html=r.risk;r.detail_html=r.detail;r.standards_html=r.standards;r.action_html=r.action;});
+  tableData=findings; tableKeys=['check','value','risk','detail','standards','action'];
   const {html}=renderTable(hdrs,fmtRows,null);
   return `<div style="font-size:13px;font-weight:600;color:var(--purple);margin-bottom:6px">${tr('audit.sw_title')}</div>`
     +cards+disclaimer
@@ -3226,12 +3232,13 @@ setLang('zhTW');
 // BasicParser，僅涵蓋 4 廠牌 VLAN/Interface access/trunk）。寫入/彈窗攔截偵測比照既有
 // config_anonymizer 的 `_sendToAnalysisTool()`／network_analyzer 的 `_dispatchWithPending()`
 // 同款寫法
-function _sendToGenerator(){
+function _sendToGenerator(focusFindingId){
   if(!parsed)return;
   let wrote=false;
   try{
     localStorage.setItem('_netAnalyzer_swParsedModel', JSON.stringify({
-      name: (document.getElementById('fname')||{}).textContent||'', vendor: parsed.vendor, parsed: parsed, ts: Date.now()
+      name: (document.getElementById('fname')||{}).textContent||'', vendor: parsed.vendor, parsed: parsed, ts: Date.now(),
+      focusFindingId: focusFindingId||null,
     }));
     wrote=true;
   }catch(e){ alert(tr('err.send_fail')); }

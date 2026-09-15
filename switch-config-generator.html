@@ -46,6 +46,7 @@ body{background:var(--bg);color:var(--text);font-family:system-ui,'-apple-system
 
 .wrap{max-width:1100px;margin:0 auto;padding:24px 32px 90px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:18px}
+.remediation-focus{outline:3px solid var(--accent);outline-offset:3px}
 .card h2{font-size:14px;font-weight:700;color:var(--accent);margin-bottom:14px;display:flex;align-items:center;gap:8px}
 .row{display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
 .row label{font-size:12px;color:var(--text-mid);min-width:100px}
@@ -290,6 +291,12 @@ input.valid,select.valid{border-color:var(--green)!important}
     <div class="row">
       <button class="add-btn" data-i18n="btn.loadExample" onclick="loadExampleData()">📋 載入範例資料</button>
     </div>
+  </div>
+
+  <div class="card" id="capability-matrix-card">
+    <h2 data-i18n="sec.capabilityMatrix">廠牌能力支援矩陣</h2>
+    <p style="font-size:11px;color:var(--text-mid);margin:0 0 10px" data-i18n="hint.capabilityMatrix">依目前所選廠牌顯示各功能支援狀態；❌ 為裝置/韌體真的不支援（卡片已隱藏），⚠️ 為本工具尚未查證語法（卡片仍顯示，僅提示風險），✅ 為已支援</p>
+    <table class="tbl" id="capability-matrix-table"><tbody></tbody></table>
   </div>
 
   <div class="card" id="snmp-syslog-card">
@@ -601,6 +608,13 @@ end</pre>
       <tbody id="acl-rule-body"></tbody>
     </table>
     <button class="add-btn" data-i18n="btn.addRow" onclick="addAclRuleRow()">+ 新增列</button>
+    <div class="row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+      <input id="section-tmpl-name-acl" data-i18n-ph="ph.sectionTemplateName" placeholder="範本名稱" style="max-width:160px">
+      <button class="add-btn" data-i18n="btn.saveSectionTemplate" onclick="saveSectionTemplate('acl')">+ 另存為範本</button>
+      <select id="section-tmpl-select-acl" style="max-width:160px"></select>
+      <button class="add-btn" data-i18n="btn.applySectionTemplate" onclick="applySectionTemplate('acl')">套用</button>
+      <button class="rm-btn" data-i18n="btn.deleteTemplate" onclick="deleteSectionTemplate('acl')">刪除</button>
+    </div>
   </div>
 
   <div class="card" id="acl-apply-card">
@@ -632,6 +646,13 @@ end</pre>
       <tbody id="qos-body"></tbody>
     </table>
     <button class="add-btn" data-i18n="btn.addRow" onclick="addQosRow()">+ 新增列</button>
+    <div class="row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+      <input id="section-tmpl-name-qos" data-i18n-ph="ph.sectionTemplateName" placeholder="範本名稱" style="max-width:160px">
+      <button class="add-btn" data-i18n="btn.saveSectionTemplate" onclick="saveSectionTemplate('qos')">+ 另存為範本</button>
+      <select id="section-tmpl-select-qos" style="max-width:160px"></select>
+      <button class="add-btn" data-i18n="btn.applySectionTemplate" onclick="applySectionTemplate('qos')">套用</button>
+      <button class="rm-btn" data-i18n="btn.deleteTemplate" onclick="deleteSectionTemplate('qos')">刪除</button>
+    </div>
   </div>
 
   <div class="card" id="classmap-card">
@@ -711,6 +732,13 @@ end</pre>
       <tbody id="security-body"></tbody>
     </table>
     <button class="add-btn" data-i18n="btn.addRow" onclick="addSecurityRow()">+ 新增列</button>
+    <div class="row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+      <input id="section-tmpl-name-security" data-i18n-ph="ph.sectionTemplateName" placeholder="範本名稱" style="max-width:160px">
+      <button class="add-btn" data-i18n="btn.saveSectionTemplate" onclick="saveSectionTemplate('security')">+ 另存為範本</button>
+      <select id="section-tmpl-select-security" style="max-width:160px"></select>
+      <button class="add-btn" data-i18n="btn.applySectionTemplate" onclick="applySectionTemplate('security')">套用</button>
+      <button class="rm-btn" data-i18n="btn.deleteTemplate" onclick="deleteSectionTemplate('security')">刪除</button>
+    </div>
   </div>
 
   <div class="card" id="stp-card">
