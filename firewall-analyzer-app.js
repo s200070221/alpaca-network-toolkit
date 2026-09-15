@@ -39,7 +39,7 @@ const App = (() => {
   // application 欄位，來自上傳設定檔原始文字，未經字元白名單過濾）、<option value="${esc(v)}">
   // （VDOM 名稱）等雙引號屬性內，惡意設定檔可構造含 " 的欄位值提前結束屬性、注入事件
   // 處理器，構成儲存型 XSS；補上雙引號跳脫
-  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   const ms=t=>new Promise(r=>setTimeout(r,t));
   const pill=(t,c)=>`<span class="pill ${c}">${esc(t)}</span>`;
   const nameMap={f:'fc-name',s:'sc-name',c:'cc-name',p:'pc-name',j:'jc-name',x:'xc-name',w:'wc-name',m:'mc-name',a:'ac-name',t:'tc-name',z:'zc-name',r:'rc-name',u:'uc-name',g:'gc-name'};
@@ -1821,7 +1821,7 @@ function onParsed(){
     if (!results.length) return `<div class="nodata">${tr('search.no_results')}</div>`;
     // 2026-08-09 稽核修復：比照同專案其餘 esc() 定義補上雙引號跳脫，統一一致（此處目前用法
     // 皆在文字內容而非屬性語境，非立即可利用，但避免未來新增用法時被誤用於屬性內）
-    const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     // 先在「原始字串」上找比對位置，三段各自 esc() 之後才組合，不能對已跳脫過的字串再搜尋一次
     // ——原本的寫法會把 "&" 跳脫成 "&amp;" 後才 indexOf()，若欄位內容本身含 &/</>/" 就會在跳脫後
     // 的字串裡找到錯位或落在實體字元中間的比對，導致畫面顯示的 <mark> 位置跑掉甚至破版

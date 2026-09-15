@@ -11,8 +11,13 @@ const Converter = (() => {
   // 供 CLI 純文字設定檔輸出使用（與供 XML 用的 esc() 不同）：換行/CR 一律清除（避免注入整行
   // 新指令，L.push()+join('\n') 的行導向組裝方式下任何內嵌換行都等同插入新指令行），引號字元
   // 換成不會提早結束字串的字元（多數廠牌 CLI 語法本身不支援跳脫，沿用既有 toJuniper()/
-  // toEdgeRouter() description 欄位已驗證過的做法：雙引號換單引號）
-  const qstr = s => String(s==null?'':s).replace(/[\r\n]/g,'').replace(/"/g,"'");
+  // toEdgeRouter() description 欄位已驗證過的做法：雙引號換單引號）。
+  // delim 選填參數指定輸出所在的引號字元（預設雙引號，OpenWrt 等單引號語法傳 "'"），
+  // 未加引號直接輸出的欄位（如部分廠牌的 hostname）沿用預設值即可，換行仍會被清除
+  const qstr = (s, delim='"') => {
+    const str = String(s==null?'':s).replace(/[\r\n]/g,'');
+    return delim === "'" ? str.replace(/'/g,'"') : str.replace(/"/g,"'");
+  };
   const sl  = str => (!str||str==='-'||/^(any|all)$/i.test(str.trim()))?[]:str.split(/,\s*/).map(s=>s.trim()).filter(Boolean);
   const now = () => new Date().toISOString().slice(0,19).replace('T',' ');
   // h（hostname）來自來源設定檔解析結果，是唯一不可信的參數；這裡輸出成單行註解文字
@@ -1028,7 +1033,7 @@ const Converter = (() => {
     L.push('');
     // system
     L.push('system {');
-    L.push(`${I(1)}host-name ${d.hostname};`);
+    L.push(`${I(1)}host-name ${qstr(d.hostname)};`);
     L.push(`${I(1)}time-zone Asia/Taipei;`);
     parsed.users.filter(u=>u.type==='admin'||u.type==='local').forEach(u=>{
       const cls=u.accessLevel==='super-admin'?'super-user':u.accessLevel==='read-only'?'read-only':'operator';
@@ -1420,7 +1425,7 @@ const Converter = (() => {
     };
 
     L.push(`: ${hdr(parsed.vendor||'?','Cisco ASA 9.x',d.hostname)}`);
-    L.push(`hostname ${d.hostname}`);
+    L.push(`hostname ${qstr(d.hostname)}`);
     L.push('');
 
     // Interfaces — 若原始資料本身就是 ASA（有 nameif/secLevel 欄位）直接沿用以利 round-trip，
@@ -1436,7 +1441,7 @@ const Converter = (() => {
         const mask=i.mask&&i.mask!=='-'?(i.mask.includes('.')?i.mask:maskOf(i.mask)):'255.255.255.0';
         L.push(` ip address ${i.ip} ${mask}`);
       }
-      if(i.desc&&i.desc!=='-') L.push(` description ${i.desc}`);
+      if(i.desc&&i.desc!=='-') L.push(` description ${qstr(i.desc)}`);
       if(i.status==='down') L.push(' shutdown');
     });
     L.push('');
@@ -1743,13 +1748,13 @@ const Converter = (() => {
   function toZyxel(parsed) {
     const L=[], d=parsed.deviceInfo;
     L.push(`! ${hdr(parsed.vendor||'?','ZLD (USG FLEX/ATP)',d.hostname)}`);
-    L.push(`hostname ${d.hostname||'Zyxel'}`);
+    L.push(`hostname ${qstr(d.hostname)||'Zyxel'}`);
     L.push('');
 
     parsed.interfaces.forEach(i=>{
       if(!i.ip||i.ip==='-'||i.ip==='DHCP')return;
       L.push(`interface ${i.name}`);
-      if(i.desc&&i.desc!=='-')L.push(` description ${i.desc}`);
+      if(i.desc&&i.desc!=='-')L.push(` description ${qstr(i.desc)}`);
       const mask=i.mask&&i.mask!=='-'?i.mask:'255.255.255.0';
       L.push(` ip address ${i.ip} ${mask}`);
       L.push('exit');
@@ -1855,7 +1860,7 @@ const Converter = (() => {
     const L=[], d=parsed.deviceInfo;
     L.push(`/* ${hdr(parsed.vendor||'?','EdgeOS',d.hostname)} */`);
     L.push('system {');
-    L.push(`    host-name ${d.hostname||'ubnt'}`);
+    L.push(`    host-name ${qstr(d.hostname)||'ubnt'}`);
     L.push('}');
 
     const ifaceLines=[];
@@ -1869,7 +1874,7 @@ const Converter = (() => {
       // address statement 即為附加式次要IP，無 secondary 關鍵字，與 parser 端既有
       // vals(node,'address').slice(1) 語法對稱）
       (i.secondaryIps||[]).forEach(s=>ifaceLines.push(`        address ${s.ip}/${bits(s.mask||'255.255.255.0')}`));
-      if(i.desc&&i.desc!=='-')ifaceLines.push(`        description ${i.desc}`);
+      if(i.desc&&i.desc!=='-')ifaceLines.push(`        description ${qstr(i.desc)}`);
       ifaceLines.push('    }');
     });
     if(ifaceLines.length){L.push('interfaces {');L.push(...ifaceLines);L.push('}');}
@@ -1968,7 +1973,7 @@ const Converter = (() => {
       natRules.forEach((n,idx)=>{
         const num=5000+idx*10;
         L.push(`        rule ${num} {`);
-        if(n.comment)L.push(`            description "${n.comment.replace(/"/g,"'")}"`);
+        if(n.comment)L.push(`            description "${qstr(n.comment)}"`);
         if(n.type==='vip'){
           L.push('            type destination');
           if(n.extIntf&&n.extIntf!=='-')L.push(`            inbound-interface ${n.extIntf}`);
@@ -2153,7 +2158,7 @@ const Converter = (() => {
     });
     (parsed.nat||[]).forEach(n=>{
       L.push(`config redirect`);
-      if(n.comment)L.push(`\toption name '${n.comment}'`);
+      if(n.comment)L.push(`\toption name '${qstr(n.comment,"'")}'`);
       if(n.type==='vip'){
         if(n.extIntf&&n.extIntf!=='-')L.push(`\toption src '${n.extIntf}'`);
         if(n.extPort&&n.extPort!=='-')L.push(`\toption src_dport '${n.extPort}'`);
@@ -2174,7 +2179,7 @@ const Converter = (() => {
   function toMikrotik(parsed) {
     const L=[], d=parsed.deviceInfo;
     L.push(`# ${hdr(parsed.vendor||'?','RouterOS 7',d.hostname)}`);
-    L.push(`/system identity set name=${d.hostname}`);
+    L.push(`/system identity set name=${qstr(d.hostname)}`);
     L.push('');
 
     // 2026-07-24 修復：原本直接把 "port5.100" 這種點號子介面名稱塞進 interface= 參數，
@@ -2192,7 +2197,7 @@ const Converter = (() => {
         const ifName=(i.type==='vlan'&&i.vlanId&&i.vlanId!=='-'&&i.interface)?`vlan${i.vlanId}`:i.name;
         if(i.ip&&i.ip!=='-'&&i.ip!=='DHCP') {
           const pfx=i.mask&&i.mask!=='-'?(i.mask.includes('.')?bits(i.mask):i.mask):'24';
-          L.push(`add address=${i.ip}/${pfx} interface=${ifName}${i.desc&&i.desc!=='-'?' comment="'+i.desc+'"':''}`);
+          L.push(`add address=${i.ip}/${pfx} interface=${ifName}${i.desc&&i.desc!=='-'?' comment="'+qstr(i.desc)+'"':''}`);
         }
         // 次要IP（2026-08-18 補上輸出端，官方文件確認同一介面重複 /ip address add 即為附加式
         // 次要IP，無 secondary 關鍵字，與 parser 端既有「第一筆進 ip/mask、後續進
@@ -2311,7 +2316,7 @@ const Converter = (() => {
           if(l.apnProfile&&l.apnProfile!=='-')line+=` apn=${l.apnProfile}`;
           if(l.allowRoaming==='yes')line+=' allow-roaming=yes';
           if(l.disabled==='yes')line+=' disabled=yes';
-          if(l.comment&&l.comment!=='-')line+=` comment="${l.comment}"`;
+          if(l.comment&&l.comment!=='-')line+=` comment="${qstr(l.comment)}"`;
           L.push(line);
         });
         L.push('');

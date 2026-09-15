@@ -136,7 +136,7 @@ function startMatrixRain(){
 // （VLAN name／介面名稱等解析正則未限制字元集合），惡意設定檔可構造含 " 的名稱提前結束
 // 屬性、注入事件處理器（如 onmouseover=），構成儲存型 XSS；比照 switch_config_generator
 // 既有的 escAttr() 補上雙引號跳脫
-const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const pill=(c,t)=>`<span class="pill p-${c}">${esc(t)}</span>`;
 let tableData=[],tableKeys=[];
 const hn=()=>parsed?.sys?.hostname||'comware';
@@ -2079,7 +2079,7 @@ b{font-weight:600}small{color:#888;font-size:11px}
 function exportHTMLReport(mode){
   if(!parsed)return;
   const p=parsed;
-  const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   // Render VLAN ip-subnet-vlan properly (ipSubnets is array of objects {cidr,network,mask})
   function fmtIpSubnets(arr){
     if(!arr||!arr.length)return'—';

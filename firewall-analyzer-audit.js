@@ -10,7 +10,7 @@
 // （深度耦合 PARSED/ST，拆分無助於降低 merge 衝突機率）刻意不搬移，詳見 now.md 對應段落評估。
 // ════════════════════════════════════════════════════════════════════════
 
-  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   const pill=(t,c)=>`<span class="pill ${c}">${esc(t)}</span>`;
 
   // ── Audit Analysis ────────────────────────────────────────────

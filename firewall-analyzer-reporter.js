@@ -378,7 +378,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
     // 執行任意 JS。本函式後段的 WiFi 區塊（buildWifiSection）已有自己的 esc2()，但最早、
     // 也最核心的 policies/interfaces/routes/vpn/addresses/users 等區塊先前完全遺漏，
     // 這裡補上共用的 esc()。
-    const esc = v => String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const esc = v => String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
     const stat = (label, val, color, sid='') =>
       `<div class="stat-card${sid?' stat-link':''}" style="border-top:3px solid ${color}"${sid?` onclick="document.getElementById('${sid}').scrollIntoView({behavior:'smooth'})" title="${label}"`:''}">
