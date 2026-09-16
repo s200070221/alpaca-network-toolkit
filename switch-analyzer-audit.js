@@ -189,6 +189,19 @@ function analyzeSwitchAudit(parsed){
   f('weak-pwd', tr('audit.check_weak_pwd'), weakPwd.length, 'high',
     weakPwd.length ? weakPwd.map(u=>u.name).slice(0,8).join(', ')+(weakPwd.length>8?'…':'') : tr('audit.none'),
     ['ISO27001 A.8.5','NIST 800-53 IA-5','CIS v8 5.2']);
+  // 1b. 密碼雜湊類型風險分級（2026-09-16 新增）：各廠牌解析器早就會算出 u.pwdType，但稽核層
+  // 先前完全沒用到。刻意不建一份跨廠牌的 pwdType 風險對照表（各廠牌粒度/命名不一致，貿然統一
+  // 對照容易誤判——如 Brocade 的 md5〔type 8〕與 Cisco 的 md5〔type 5〕經查證是不同編碼強度，
+  // 但兩邊解析器作者都已各自判斷為 pwdWeak:false，屬於已有既定判斷不該被本輪覆蓋）。改為只抓
+  // 「pwdType 字面標為 md5、但該廠牌解析器本身沒有標記為 pwdWeak」這一種明確落在既有 weak-pwd
+  // 高風險與現代強雜湊（scrypt/pbkdf2/bcrypt/sha256/sha512/cipher 等）之間的中間地帶案例——
+  // 目前只有 Cisco（type 5）與 Brocade（type 8）會落入此分類，兩者官方文件皆稱為 MD5-based，
+  // 可被離線暴力破解但非明碼/直接可逆，UI 既有 typeLabel（switch-analyzer-app.js renderUsers()）
+  // 本來就已將 md5 標示為 pwd.strength_medium，此發現只是把同一個既有判斷也帶進稽核清單
+  const legacyHashPwd=users.filter(u=>u.pwdType==='md5'&&!u.pwdWeak);
+  f('weak-pwd-legacy-hash', tr('audit.check_weak_pwd_legacy_hash'), legacyHashPwd.length, 'medium',
+    legacyHashPwd.length ? legacyHashPwd.map(u=>u.name).slice(0,8).join(', ')+(legacyHashPwd.length>8?'…':'') : tr('audit.none'),
+    ['ISO27001 A.8.5','NIST 800-53 IA-5']);
   // 2. STP Edge Port 未開 BPDU Guard（RouterOS 的 parsed.stp 形狀不同，無 ports[]，需排除）
   const stpPorts=Array.isArray(parsed?.stp?.ports)?parsed.stp.ports:[];
   const noBpduGuard=stpPorts.filter(p=>p.portfast&&!p.bpduguard);
@@ -353,4 +366,26 @@ function computeSwitchHealth(parsed){
   const grade=score>=90?'A':score>=75?'B':score>=60?'C':score>=40?'D':'F';
   const gradeColor=grade==='A'?'var(--green)':grade==='B'?'var(--teal)':grade==='C'?'var(--yellow)':grade==='D'?'var(--orange)':'var(--red)';
   return {score,grade,gradeColor,issues};
+}
+
+// 健康度分數時序追蹤（2026-09-16 新增）：輕量單序列折線圖，比照 log_analyzer 既有
+// buildTimelineSVG() 零依賴、inline SVG 的既有風格，但資料形狀不同——非多系列堆疊長條，是
+// 單一數值隨時間的折線。entries 傳入慣例是「新到舊」（比照既有 rolling-history 儲存慣例，
+// 見 config_anonymizer 的 _netAnalyzer_anonHistory），繪圖時反轉成「舊到新」由左至右，符合
+// 趨勢圖的自然閱讀方向；空陣列/單筆/多筆皆需安全產出合法 SVG 字串
+function buildHealthSparklineSVG(entries){
+  const w=280,h=60,pad=6;
+  const list=(entries||[]).slice().reverse();
+  if(!list.length) return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"></svg>`;
+  const yOf=score=>pad+(100-score)/100*(h-2*pad);
+  const titleOf=e=>`${e.score} (${new Date(e.ts).toLocaleDateString()})`;
+  if(list.length===1){
+    const y=yOf(list[0].score);
+    return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><circle cx="${w/2}" cy="${y.toFixed(1)}" r="3" fill="var(--accent)"><title>${titleOf(list[0])}</title></circle></svg>`;
+  }
+  const stepX=(w-2*pad)/(list.length-1);
+  const pts=list.map((e,i)=>({x:pad+i*stepX,y:yOf(e.score),e}));
+  const path=pts.map((p,i)=>`${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const dots=pts.map(p=>`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.5" fill="var(--accent)"><title>${titleOf(p.e)}</title></circle>`).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${dots}</svg>`;
 }

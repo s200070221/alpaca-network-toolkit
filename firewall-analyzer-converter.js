@@ -1914,15 +1914,31 @@ const Converter = (() => {
         const proto=protoRaw.includes('icmp')?'icmp':(protoRaw.includes('udp')&&!protoRaw.includes('tcp'))?'udp':(protoRaw.includes('tcp')?'tcp':'');
         return{proto,port:ports&&ports!=='-'?ports:''};
       }
-      const ruleBlocks=[];
-      rules.forEach((p,idx)=>{
-        const num=(idx+1)*10;
-        const named=svcLiteral(p.service);
-        const [litProto,litPort]=(p.service&&p.service.includes('/'))?p.service.split('/'):[p.service||'all',''];
-        const svcProto=named?named.proto:litProto, svcPort=named?named.port:litPort;
+      // 服務群組攤平（2026-09-16 新增）：與 toMikrotik() 的 svcGroupExpand() 同一套演算法
+      // （依協定分桶——同協定成員合併一筆、逗號合併埠清單；跨協定成員展開成對應協定數量的
+      // 多條規則），但輸出端不同：EdgeOS 的 destination `port` 葉節點本來就原生支援逗號分隔
+      // 多埠字面值（既有單一具名服務物件、埠號為 "80,443" 這類字串時就是直接整串塞進
+      // `port ${svcPort}`，見下方 buildOneRule()），故不需要另外產生 `firewall group
+      // port-group NAME {...}` 定義區塊再引用——每個協定桶直接輸出成一筆規則的字面 port 值即可，
+      // 比位址群組的 group{address-group} 寫法更單純。巢狀群組僅展開一層不遞迴，比照既有
+      // 位址群組限制（見 getConversionCaveats()）
+      function svcGroupExpand(val){
+        const obj=(parsed.services||[]).find(s=>s.category==='group'&&s.name===val);
+        if(!obj)return null;
+        const buckets=new Map(); // proto -> Set(port)
+        sl(obj.members).forEach(mn=>{
+          const single=svcLiteral(mn);
+          if(!single)return;
+          if(!buckets.has(single.proto))buckets.set(single.proto,new Set());
+          if(single.port)buckets.get(single.proto).add(single.port);
+        });
+        if(!buckets.size)return null;
+        return Array.from(buckets,([proto,ports])=>({proto,port:[...ports].join(',')}));
+      }
+      function buildOneRule(num,p,svcProto,svcPort){
         const lines=[`        rule ${num} {`];
         lines.push(`            action ${p.action==='accept'?'accept':'drop'}`);
-        if(p.comments)lines.push(`            description "${p.comments.replace(/"/g,"'")}"`);
+        if(p.comments)lines.push(`            description "${qstr(p.comments)}"`);
         if(svcProto&&!/^(any|all)$/i.test(svcProto))lines.push(`            protocol ${svcProto}`);
         const srcGroup=p.srcAddr?addrGroupRef(p.srcAddr):null;
         if(srcGroup){
@@ -1947,7 +1963,22 @@ const Converter = (() => {
         if(p.logtraffic==='all')lines.push('            log enable');
         if(p.status==='disable')lines.push('            disable');
         lines.push('        }');
-        ruleBlocks.push(lines.join('\n'));
+        return lines.join('\n');
+      }
+      const ruleBlocks=[];
+      rules.forEach((p,idx)=>{
+        const num=(idx+1)*10;
+        const named=svcLiteral(p.service);
+        const grouped=named?null:svcGroupExpand(p.service);
+        if(grouped&&grouped.length){
+          // 規則序號留有 10 的間距（見上方 num 算式），同一原始規則展開的子規則用 num+子索引，
+          // 最多 9 個協定桶不會撞到下一筆原始規則的 num（下一筆是 num+10）
+          grouped.forEach((g,gi)=>ruleBlocks.push(buildOneRule(num+gi,p,g.proto,g.port)));
+          return;
+        }
+        const [litProto,litPort]=(p.service&&p.service.includes('/'))?p.service.split('/'):[p.service||'all',''];
+        const svcProto=named?named.proto:litProto, svcPort=named?named.port:litPort;
+        ruleBlocks.push(buildOneRule(num,p,svcProto,svcPort));
       });
       L.push('firewall {');
       if(neededAddrGroups.size){
@@ -2570,11 +2601,14 @@ const Converter = (() => {
       if((parsed.services||[]).some(s=>s.category==='group')) notes.push('服務群組已依協定分桶展開成對應數量的規則（同協定成員合併、跨協定成員各自一條規則）；巢狀群組（群組成員本身又是另一個群組）僅展開一層不遞迴，請人工核對是否有巢狀情形，以及個別成員若同時定義 TCP/UDP 雙協定時本轉換器僅採計其中一種');
     }
     if(targetVendor==='edgerouter'){
-      // 位址群組（address-group/network-group）已攤平；FQDN 因官方查證確認 EdgeOS 原生不支援
-      // （需第三方腳本注入變通，非官方語法）與服務群組（既有 parseAddrOrPort() 單子鍵限制，
-      // 見 toEdgeRouter() 內註解）仍未攤平
-      const hasFqdnOrSvcGroup=(parsed.addresses||[]).some(a=>a.type==='fqdn')||(parsed.services||[]).some(s=>s.category==='group');
-      if(hasFqdnOrSvcGroup) notes.push('FQDN 位址物件／服務群組本轉換器不會攤平——EdgeOS 原生 address-group 不支援 FQDN 成員（僅支援字面 IP/CIDR），service 亦無法與位址 group 共存於同一個 destination{} 區塊，請人工核對並改用目標裝置實際支援的表示方式（位址群組已可正確攤平，不受此提示影響）');
+      // 位址群組（address-group/network-group）已攤平；服務群組已於 2026-09-16 依協定分桶
+      // 展開成對應數量的規則（見 toEdgeRouter() 內 svcGroupExpand()，EdgeOS destination 的
+      // port 葉節點原生支援逗號分隔多埠字面值，不需要另外產生 port-group 定義區塊）。FQDN
+      // 因官方查證確認 EdgeOS 原生 address-group 不支援 FQDN 成員（需第三方腳本注入變通，
+      // 非官方語法）仍未攤平
+      const hasFqdn=(parsed.addresses||[]).some(a=>a.type==='fqdn');
+      if(hasFqdn) notes.push('FQDN 位址物件本轉換器不會攤平——EdgeOS 原生 address-group 不支援 FQDN 成員（僅支援字面 IP/CIDR），請人工核對並改用目標裝置實際支援的表示方式（位址群組已可正確攤平，不受此提示影響）');
+      if((parsed.services||[]).some(s=>s.category==='group')) notes.push('服務群組已依協定分桶展開成對應數量的規則（同協定成員合併、跨協定成員各自一條規則，規則序號採原規則序號+子索引）；巢狀群組（群組成員本身又是另一個群組）僅展開一層不遞迴，請人工核對是否有巢狀情形');
     }
     if(targetVendor==='zyxel'){
       // FQDN 本輪已攤平（與 address-object 同一語法）；address-group／service-group 因查無
