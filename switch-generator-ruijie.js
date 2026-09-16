@@ -206,6 +206,10 @@ function assembleRuijieConfig(model){
   // 本機帳號：與 Cisco IOS 共用同一套 parseCiscoUsers()/renderCiscoUsers()，語法相符
   const ruijieUsersBlock=renderCiscoUsers(model.users);
   if(ruijieUsersBlock)blocks.push(ruijieUsersBlock);
+  // SNMP 社群／Telnet 停用（選填，2026-09-16 新增）：switch_analyzer parseSNMP()／
+  // parseMgmtAccess() 的 ruijie 分支與 cisco 共用同一套正則（見該檔案註解），沿用相同語法
+  if(model.snmpCommunity)blocks.push(`snmp-server community ${model.snmpCommunity} ro`);
+  if(model.mgmtTelnetDisable)blocks.push('line vty 0 4\n transport input ssh');
   return blocks.join('\n!\n')+'\n';
 }
 

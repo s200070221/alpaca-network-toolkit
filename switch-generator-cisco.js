@@ -169,6 +169,13 @@ function renderCiscoOSPFProcess(o){
   (o.areas||[]).forEach(a=>{
     (a.networks||[]).forEach(n=>lines.push(` network ${n.network} ${n.wildcard} area ${a.area}`));
   });
+  // 認證金鑰（選填，2026-09-16 新增）：對每個 area 輸出 message-digest 認證宣告（router-ospf
+  // 子模式下的裸指令，非巢狀 area 子模式，與既有 network 陳述式同一層級）；金鑰本身需在對應
+  // interface 另外套用 "ip ospf message-digest-key" 不在本工具產生範圍，附註解提醒
+  if(o.authKey){
+    (o.areas||[]).forEach(a=>lines.push(` area ${a.area} authentication message-digest`));
+    lines.push(`! message-digest-key: 請自行在對應 interface 補上 "ip ospf message-digest-key 1 md5 ${o.authKey}"`);
+  }
   return lines.join('\n');
 }
 function renderCiscoOSPF(list){return (list||[]).map(renderCiscoOSPFProcess).join('\n!\n');}
@@ -351,8 +358,10 @@ function assembleCiscoConfig(model){
   if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
   const ciscoUsersBlock=renderCiscoUsers(model.users);
   if(ciscoUsersBlock)blocks.push(ciscoUsersBlock);
+  if(model.snmpCommunity)blocks.push(`snmp-server community ${model.snmpCommunity} ro`);
   if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
   if(model.syslogServer)blocks.push(`logging host ${model.syslogServer}`);
+  if(model.mgmtTelnetDisable)blocks.push('line vty 0 4\n transport input ssh');
   // 結尾補換行，理由同 assembleArubaConfig
   return blocks.join('\n!\n')+'\n';
 }

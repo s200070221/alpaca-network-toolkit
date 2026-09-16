@@ -60,6 +60,10 @@ function _onLangChange() {
   ].forEach(function(p){var el=document.getElementById(p[0]);if(el)el.setAttribute('data-tip',tr(p[1]));});
   var irfItem=document.getElementById('nav-irf');
   if(irfItem && irfLbl) irfItem.setAttribute('data-tip', irfLbl.textContent);
+  // 剖析覆蓋率矩陣（2026-09-16 新增）：類別標籤／⚠️ note 皆走 tr() 而非 data-i18n（表格逐列
+  // 動態產生），語言切換需另外重繪
+  var pcSel=document.getElementById('pc-vendor-select');
+  if(pcSel && pcSel.value && typeof renderParseCoverageMatrix==='function') renderParseCoverageMatrix(pcSel.value);
 }
 
 

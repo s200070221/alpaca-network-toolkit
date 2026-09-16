@@ -1617,6 +1617,7 @@ function collectModel(){
       routerId:fval('ospf-rid'),
       areas:Array.from(areaMap.values()),
       redistributes:fval('ospf-redist').split(/\s+/).filter(Boolean),
+      authKey:fval('ospf-auth-key'),
     });
   }
 
@@ -1855,6 +1856,8 @@ function collectModel(){
     sysname:document.getElementById('hostname').value.replace(/[\r\n]/g,'').trim()||'Switch',
     snmpTrapHost:document.getElementById('snmp-trap-host').value.trim(),
     syslogServer:document.getElementById('syslog-server').value.trim(),
+    snmpCommunity:fval('snmp-community'),
+    mgmtTelnetDisable:!!document.getElementById('mgmt-telnet-disable').checked,
     vlans, interfaces, ospf, bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos, stack, users, sonicL3Interfaces, sonicQos, sonicStpVlanIntf,
     classMaps, qosApply, planetMacAcl,
     comwareIrf, ciscoStack, brocadeStack, alcatelStack, arubaVsf, dellVlt, procurveVsf,
@@ -1876,6 +1879,8 @@ function applyModelToForm(model){
   document.getElementById('hostname').value=model.sysname||'';
   document.getElementById('snmp-trap-host').value=model.snmpTrapHost||'';
   document.getElementById('syslog-server').value=model.syslogServer||'';
+  document.getElementById('snmp-community').value=model.snmpCommunity||'';
+  document.getElementById('mgmt-telnet-disable').checked=!!model.mgmtTelnetDisable;
 
   (model.vlans||[]).forEach(v=>addVlanRow(v.id,v.name,v.ip));
 
@@ -1930,6 +1935,7 @@ function applyModelToForm(model){
   document.getElementById('ospf-pid').value=o?.pid||'';
   document.getElementById('ospf-rid').value=o?.routerId||'';
   document.getElementById('ospf-redist').value=(o?.redistributes||[]).join(' ');
+  document.getElementById('ospf-auth-key').value=o?.authKey||'';
   (o?.areas||[]).forEach(a=>{
     const nets=(a.networks&&a.networks.length)?a.networks:[{network:'',wildcard:''}];
     nets.forEach(n=>addAreaRow(a.area,n.network,n.wildcard,a.type||'normal',a.noSummary));
@@ -3090,6 +3096,9 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   // ProCurve 的 parseOSPF() 極簡版本欄位是 rid（非其餘廠牌慣用的 routerId），需個別 fallback
   document.getElementById('ospf-rid').value=o?.routerId||o?.rid||'';
   document.getElementById('ospf-redist').value=(o?.redistributes||[]).join(' ');
+  // parsed.routingAuth 僅整份設定檔布林訊號，parser 從未擷取過金鑰字串，此欄位匯入時一律
+  // 清空（避免沿用表單先前殘留值，非本工具能還原的資訊）
+  document.getElementById('ospf-auth-key').value='';
   (o?.areas||[]).forEach(a=>{
     const nets=(a.networks&&a.networks.length)?a.networks:[{network:'',wildcard:''}];
     nets.forEach(n=>addAreaRow(a.area,n.network,n.wildcard,a.type||'normal',a.noSummary));
@@ -4521,6 +4530,8 @@ const REMEDIATION_FOCUS_MAP={
   'stp-uplink-no-rootguard':'stp-card','vlan1-inuse':'iface-table','security-off':'security-card',
   'acl-any-any':'acl-card','unused-vlan-trunk':'iface-table','lacp-member-mismatch':'lacp-body',
   'if-no-desc':'iface-table',
+  // 2026-09-16 新增：SNMP 社群／Telnet 停用欄位皆在同一張卡片
+  'snmp-default-name':'snmp-syslog-card','telnet-mgmt':'snmp-syslog-card',
 };
 function _focusRemediationField(findingId){
   const targetId=REMEDIATION_FOCUS_MAP[findingId];

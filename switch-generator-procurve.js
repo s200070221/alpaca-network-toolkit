@@ -166,7 +166,9 @@ function assembleProCurveConfig(model){
   if(dhcpOpt82BlockPC)blocks.push(dhcpOpt82BlockPC);
   const usersBlock=renderProCurveUsers(model.users);
   if(usersBlock)blocks.push(usersBlock);
-  if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost} "public"`);
+  // securityname 先前寫死 "public"，改沿用 model.snmpCommunity（未填時維持舊行為）；本廠牌
+  // 未列入本輪新增「定義社群」語法查證範圍，僅此處弱設定沿用修正
+  if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost} "${model.snmpCommunity||'public'}"`);
   return blocks.join('\n')+'\n';
 }
 

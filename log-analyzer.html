@@ -2646,19 +2646,42 @@ function extractCandidateIPs(evt) {
   }
   return extractIPsFromText(evt.msg);
 }
-// IOC 萃取匯出（2026-09-16 新增）：重用既有 extractCandidateIPs()/extractCandidateDomains()
-// 逐事件萃取，全域去重後回傳型別化清單。刻意不含雜湊 IOC（查無既有 helper，需另寫格式正則，
-// 範圍超出本輪，記入待辦）
+// IOC 萃取匯出（2026-09-16 新增，同日續作補上雜湊）：重用既有 extractCandidateIPs()/
+// extractCandidateDomains()。雜湊 IOC 目前僅涵蓋 Sysmon EventID 1 的 Hashes 欄位（唯一帶
+// 雜湊資料的既有欄位，detectSysmonKeywordWatchlist() 已把它列為比對欄位之一，但只當成不透明
+// 字串塞進關鍵字比對 haystack，從未解析內部結構），格式為 KEY=VALUE,KEY=VALUE,...（如
+// MD5=...,SHA256=...,IMPHASH=...）。僅解析 MD5/SHA1/SHA256 三種標準檔案雜湊（依長度驗證），
+// IMPHASH（Import Hash，比對用途與檔案身分雜湊不同、非通用威脅情資格式）刻意不納入。其餘日誌
+// 格式（CEF/LEEF/RFC5424/RFC3164/FortiGate/JSON）查無任何雜湊欄位既有 alias 或 fixture 佐證，
+// 不新增臆測性解析
+function extractCandidateHashes(evt) {
+  const out = new Set();
+  const raw = evt && evt.fields && evt.fields.Hashes;
+  if (raw) {
+    const lens = { MD5: 32, SHA1: 40, SHA256: 64 };
+    String(raw).split(',').forEach(pair => {
+      const eq = pair.indexOf('=');
+      if (eq < 0) return;
+      const key = pair.slice(0, eq).trim().toUpperCase();
+      const v = pair.slice(eq + 1).trim();
+      if (lens[key] && v.length === lens[key] && /^[0-9a-fA-F]+$/.test(v)) out.add(v.toLowerCase());
+    });
+  }
+  return Array.from(out);
+}
 function buildIOCList(events) {
   const ips = new Set();
   const domains = new Set();
+  const hashes = new Set();
   (events || []).forEach(e => {
     extractCandidateIPs(e).forEach(v => ips.add(v));
     extractCandidateDomains(e).forEach(v => domains.add(v));
+    extractCandidateHashes(e).forEach(v => hashes.add(v));
   });
   const out = [];
   ips.forEach(v => out.push({ type: 'ip', value: v }));
   domains.forEach(v => out.push({ type: 'domain', value: v }));
+  hashes.forEach(v => out.push({ type: 'hash', value: v }));
   return out;
 }
 // 情資比對必須在去識別化「之前」的原始事件上執行，否則比對到的是假 IP（見規劃文件第 6 節）

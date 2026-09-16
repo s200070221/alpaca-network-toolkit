@@ -203,6 +203,10 @@ function assembleAristaConfig(model){
   if(aristaUsersBlock)blocks.push(aristaUsersBlock);
   if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
   if(model.syslogServer)blocks.push(`logging host ${model.syslogServer}`);
+  // Telnet 停用（選填，2026-09-16 新增）：官方 Arista EOS 查證 telnet 預設 shutdown（關閉），
+  // 須 management telnet 子模式內 no shutdown 才視為開放（parseMgmtAccess() arista 分支），
+  // 明確輸出 shutdown 子指令作為 defense-in-depth 聲明
+  if(model.mgmtTelnetDisable)blocks.push('management telnet\n   shutdown');
   return blocks.join('\n!\n')+'\n';
 }
 

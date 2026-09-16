@@ -647,6 +647,16 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
         </div>
       </div>
 
+      <!-- 剖析覆蓋率矩陣（parse coverage matrix，2026-09-16 新增）：與上方 vendor-grid 互補，
+           後者是逐廠牌自由文字摘要，這裡是 20 類別的結構化 ✅/⚠️/❌ 表格 -->
+      <div class="up-card" id="parse-coverage-card" style="margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+          <span style="font-weight:700;font-size:13px" data-i18n="pcmatrix.title">剖析覆蓋率矩陣</span>
+          <select id="pc-vendor-select" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:4px 8px;font-size:12px"></select>
+        </div>
+        <div id="pc-table-wrap"></div>
+      </div>
+
       <!-- Drop zone -->
       <div class="up-card" id="drop-zone">
         <div class="dropzone" onclick="document.getElementById('file-inp').click()" id="dz">

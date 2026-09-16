@@ -378,7 +378,9 @@ function assembleExtremeConfig(model){
   if(aclBlockEx)blocks.push(aclBlockEx);
   const usersBlockEx=renderExtremeUsers(model.users);
   if(usersBlockEx)blocks.push(usersBlockEx);
-  if(model.snmpTrapHost)blocks.push(`configure snmp add trapreceiver ${model.snmpTrapHost} community public`);
+  // community 先前寫死 "public"，改沿用 model.snmpCommunity（未填時維持舊行為）；本廠牌未列
+  // 入本輪新增「定義社群」語法查證範圍，僅此處弱設定沿用修正
+  if(model.snmpTrapHost)blocks.push(`configure snmp add trapreceiver ${model.snmpTrapHost} community ${model.snmpCommunity||'public'}`);
   return blocks.join('\n#\n')+'\n';
 }
 
