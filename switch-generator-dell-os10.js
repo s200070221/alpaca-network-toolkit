@@ -277,8 +277,13 @@ function assembleDellOS10Config(model){
   if(model.qos&&model.qos.length)blocks.push(renderDellOS10QoS(model.qos));
   const dellUsersBlock=renderDellOS10Users(model.users);
   if(dellUsersBlock)blocks.push(dellUsersBlock);
+  if(model.snmpCommunity)blocks.push(`snmp-server community ${model.snmpCommunity} ro`);
   if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
   if(model.syslogServer)blocks.push(`logging server ${model.syslogServer}`);
+  // Telnet 停用（選填，2026-09-16 新增）：官方 Dell KB 查證 telnet 預設關閉，須明確
+  // "ip telnet server enable" 才開啟（parseMgmtAccess() dell-os10 分支），"no" 前綴為
+  // OS10 標準明確停用寫法
+  if(model.mgmtTelnetDisable)blocks.push('no ip telnet server enable');
   return blocks.join('\n!\n')+'\n';
 }
 // 本機帳號：switch_analyzer 的 parseDellOS10Users() OS10 語法為

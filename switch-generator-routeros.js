@@ -405,7 +405,12 @@ function assembleRouterOSConfig(model){
   if(qosBlock)blocks.push(qosBlock);
   const usersBlock=renderRouterOSUsers(model.users);
   if(usersBlock)blocks.push(usersBlock);
-  if(model.snmpTrapHost)blocks.push(`/snmp\nset trap-target=${model.snmpTrapHost} trap-community=public`);
+  // trap-community 先前寫死 "public"，改沿用 model.snmpCommunity（未填時維持舊行為）；本廠牌
+  // 未列入本輪新增「定義社群」語法查證範圍，僅此處弱設定沿用修正
+  if(model.snmpTrapHost)blocks.push(`/snmp\nset trap-target=${model.snmpTrapHost} trap-community=${model.snmpCommunity||'public'}`);
+  // Telnet 停用（選填，2026-09-16 新增）：官方 RouterOS Services 文件查證 telnet 預設開啟，
+  // 須明確 disable telnet 才關閉（parseMgmtAccess() routeros 分支）
+  if(model.mgmtTelnetDisable)blocks.push('/ip service\ndisable telnet');
   return blocks.join('\n\n')+'\n';
 }
 

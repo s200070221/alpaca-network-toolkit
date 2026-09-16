@@ -238,7 +238,9 @@ function assembleAlcatelConfig(model){
   if(dhcpBlockAl)blocks.push(dhcpBlockAl);
   const usersBlockAl=renderAlcatelUsers(model.users);
   if(usersBlockAl)blocks.push(usersBlockAl);
-  if(model.snmpTrapHost)blocks.push(`-> snmp station ${model.snmpTrapHost} "public" v2c enable`);
+  // community 先前寫死 "public"，改沿用 model.snmpCommunity（未填時維持舊行為）；本廠牌未列
+  // 入本輪新增「定義社群」語法查證範圍，僅此處弱設定沿用修正
+  if(model.snmpTrapHost)blocks.push(`-> snmp station ${model.snmpTrapHost} "${model.snmpCommunity||'public'}" v2c enable`);
   return blocks.join('\n!\n')+'\n';
 }
 

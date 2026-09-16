@@ -392,8 +392,13 @@ function assembleNXOSConfig(model){
   if(model.acl&&model.acl.length)blocks.push(renderNXOSACL(model.acl));
   const nxosUsersBlock=renderNXOSUsers(model.users);
   if(nxosUsersBlock)blocks.push(nxosUsersBlock);
+  if(model.snmpCommunity)blocks.push(`snmp-server community ${model.snmpCommunity} ro`);
   if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
   if(model.syslogServer)blocks.push(`logging server ${model.syslogServer}`);
+  // Telnet 停用（選填，2026-09-16 新增）：官方 NX-OS 查證 telnet 預設關閉，須 "feature telnet"
+  // 才開啟（switch-analyzer-parser-comware.js parseMgmtAccess() nxos 分支），本工具從不輸出
+  // "feature telnet"，此行僅作為明確聲明用途（defense-in-depth，不影響既有預設關閉行為）
+  if(model.mgmtTelnetDisable)blocks.push('no feature telnet');
   return blocks.join('\n!\n')+'\n';
 }
 // 本機帳號：switch_analyzer 的 parseUsers()（NX-OS 分支）語法為

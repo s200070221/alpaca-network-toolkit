@@ -299,7 +299,21 @@ function renderJuniperOSPFBlock(ospfList){
   ospfList.forEach(o=>{
     (o.areas||[]).forEach(a=>{
       lines.push(`        area ${a.area} {`);
-      (a.networks||[]).forEach(n=>{ if(n.network)lines.push(`            interface ${n.network};`); });
+      // 認證金鑰（選填，2026-09-16 新增）：官方 Junos 文件確認 OSPF 認證是逐 interface
+      // 宣告於 [edit protocols ospf area <id> interface <name>]，非 area 層級，故有填金鑰時
+      // 才改用巢狀區塊形式（未填維持既有扁平 "interface X;" 單行輸出，行為不變）
+      (a.networks||[]).forEach(n=>{
+        if(!n.network)return;
+        if(o.authKey){
+          lines.push(`            interface ${n.network} {`);
+          lines.push(`                authentication {`);
+          lines.push(`                    md5 1 key "${o.authKey}";`);
+          lines.push(`                }`);
+          lines.push(`            }`);
+        }else{
+          lines.push(`            interface ${n.network};`);
+        }
+      });
       lines.push('        }');
     });
   });
@@ -460,7 +474,14 @@ function assembleJuniperConfig(model){
   const aclBlock=renderJuniperACL(model.acl);
   if(aclBlock)parts.push(aclBlock);
 
-  if(model.snmpTrapHost)parts.push(`set snmp trap-group public targets ${model.snmpTrapHost}`);
+  if(model.snmpCommunity)parts.push(`set snmp community ${model.snmpCommunity} authorization read-only`);
+  // trap-group 名稱先前寫死 "public"，改沿用同一個社群欄位（未填時維持舊行為）；trap-group
+  // 名稱與 community 是兩個獨立概念，但沿用同一字串至少避免預設值本身就是常見弱字串
+  if(model.snmpTrapHost)parts.push(`set snmp trap-group ${model.snmpCommunity||'public'} targets ${model.snmpTrapHost}`);
+  // Telnet 停用（選填，2026-09-16 新增）：官方 Junos 文件確認 telnet/ssh 預設皆關閉，本工具
+  // Juniper 輸出慣例是 flat "set"／"delete" 指令（比照上方 ACL/SNMP，供 load merge terminal
+  // 貼上套用），delete 用於明確移除既有設定中可能開啟的 telnet，非單純省略
+  if(model.mgmtTelnetDisable)parts.push('delete system services telnet\nset system services ssh');
 
   return parts.join('\n');
 }

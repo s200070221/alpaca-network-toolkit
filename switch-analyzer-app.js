@@ -1614,10 +1614,67 @@ function _doSwitchHealthCheck(){
   const el=document.getElementById('sw-health-result');
   if(el)el.innerHTML=h;
 }
-// 稽核發現→產生器修復預填跨工具聯動（2026-09-15 新增）：僅這 10 項在 switch_config_generator
-// 表單已有對應欄位（SNMP community／管理介面 Telnet-SSH／路由認證金鑰因產生器表單目前完全無
-// 對應欄位，屬「新增產生器功能」而非「跨工具聯動」，刻意排除本輪範圍）
-const REMEDIABLE_FINDING_IDS=new Set(['weak-pwd','stp-no-bpduguard','stp-portfast-trunk','stp-uplink-no-rootguard','vlan1-inuse','security-off','acl-any-any','unused-vlan-trunk','lacp-member-mismatch','if-no-desc']);
+// 剖析覆蓋率矩陣（parse coverage matrix，2026-09-16 新增）：這是 parser（讀取）端的能力表，
+// 與 switch_config_generator 既有的 VENDOR_INCAPABLE/VENDOR_UNSUPPORTED（generator/寫入端）
+// 是兩份獨立矩陣、刻意不共用——那份只追蹤固定 10 種 render 卡片類別（rip/vrrp/dhcpServer/
+// dhcpRelay/acl/qos/security/stp/bgp/routes），完全不涵蓋 SNMP／VXLAN／VRF／Stack／Users，
+// 且已知有 2 處方向性落差（FortiSwitch／Aruba CX 的 QoS 在 generator 端顯示已支援，但 parser
+// 實際查無該廠牌專屬 QoS 正則，只會落入 Cisco 式 fallback；ProCurve 的 parseSTP() 有完整真實
+// 分支，但 generator 端 VENDOR_UNSUPPORTED.procurve 仍列 'stp' 未接線）——這些落差正是本矩陣
+// 需要獨立建置、不能直接借用 generator 矩陣的理由。18 廠牌 key 對應 detectVendor() 實際回傳值
+// （core.js），⚠️ 儲存格額外帶 note 字串（object 形狀 {v:'⚠️',note}），✅/❌ 為純字串
+const PARSE_COVERAGE_MATRIX={
+  comware:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'✅',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'✅',vrf:'✅',stack:'✅',ipv6:'✅',secondaryIp:'✅'},
+  fortiswitch:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'✅',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:{v:'⚠️',note:'generic Cisco 式 policy-map 正則存在，但查無該廠牌專屬 QoS 關鍵字，真實設定檔語法可能對不上此 fallback'},security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'❌',ipv6:'✅',secondaryIp:'✅'},
+  aruba:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'✅',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:{v:'⚠️',note:'generic Cisco 式 policy-map 正則存在，但查無該廠牌專屬 QoS 關鍵字，真實設定檔語法可能對不上此 fallback'},security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'✅',vrf:'✅',stack:'✅',ipv6:'✅',secondaryIp:'✅'},
+  cisco:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'✅',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'✅',stack:'✅',ipv6:'✅',secondaryIp:'✅'},
+  'dell-os10':{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'✅',stack:'✅',ipv6:'✅',secondaryIp:'✅'},
+  arista:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'✅',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'✅',stack:{v:'⚠️',note:'MLAG 與傳統機殼堆疊是不同技術概念，非字面 Stack'},ipv6:'✅',secondaryIp:'✅'},
+  ruijie:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'✅',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'✅',stack:'✅',ipv6:'✅',secondaryIp:'❌'},
+  netgear:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'❌',rip:'✅',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'❌',acl:'✅',qos:'❌',security:'❌',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'❌',ipv6:'✅',secondaryIp:'❌'},
+  edgeswitch:{vlan:'✅',interface:'✅',ospf:'❌',bgp:'❌',rip:'❌',staticRoute:'❌',lacp:'✅',vrrp:'❌',dhcp:'❌',acl:'❌',qos:'❌',security:'❌',stp:'❌',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'❌',ipv6:'❌',secondaryIp:'❌'},
+  brocade:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'✅',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:{v:'⚠️',note:'members/priority 有真實解析，但 links 固定回傳空陣列（無官方多埠鏈路語法佐證）'},ipv6:{v:'⚠️',note:'僅 VE/SVI 介面支援'},secondaryIp:{v:'⚠️',note:'僅 VE/SVI 介面支援'}},
+  alcatel:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:{v:'⚠️',note:'僅 DHCP Relay，無 Server'},acl:'❌',qos:'❌',security:'❌',stp:'❌',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'✅',ipv6:'✅',secondaryIp:'✅'},
+  sonic:{vlan:'✅',interface:'✅',ospf:'❌',bgp:{v:'⚠️',note:'BGP_NEIGHBOR+bgp_asn 有解析，但 router-id/networks 天生空值'},rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'❌',dhcp:'❌',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'❌',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'❌',ipv6:'✅',secondaryIp:'✅'},
+  extreme:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:{v:'⚠️',note:'members/priority 有真實解析，但 links 固定回傳空陣列（無官方多埠鏈路語法佐證）'},ipv6:'✅',secondaryIp:'✅'},
+  procurve:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'❌',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'❌',dhcp:{v:'⚠️',note:'僅 DHCP Relay，無 Server'},acl:'❌',qos:'❌',security:'❌',stp:{v:'⚠️',note:'parseSTP() 內有真實 procurve 分支，但 switch_config_generator 端 VENDOR_UNSUPPORTED.procurve 仍列 stp（render 未接線）'},users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'✅',ipv6:'❌',secondaryIp:'✅'},
+  routeros:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'✅',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'❌',ipv6:'❌',secondaryIp:'❌'},
+  nxos:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:{v:'⚠️',note:'class-map/match/service-policy 條件比對已支援，但基礎 policy-map 動作（bandwidth/police 數值）走 generic fallback，switch_config_generator 端 VENDOR_UNSUPPORTED.cisco_nxos 明確標示 qos 不支援'},security:{v:'⚠️',note:'802.1X 走 generic fallback，非該廠牌專屬解析'},stp:'✅',users:'✅',snmp:'✅',vxlan:'✅',vrf:'✅',stack:{v:'⚠️',note:'VPC 與傳統機殼堆疊是不同技術概念，非字面 Stack'},ipv6:'✅',secondaryIp:'✅'},
+  juniper:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'❌',dhcp:'✅',acl:'✅',qos:'❌',security:'❌',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'✅',stack:'✅',ipv6:'✅',secondaryIp:'✅'},
+  planet:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'❌',ipv6:'❌',secondaryIp:'✅'},
+};
+const PARSE_COVERAGE_CATEGORIES=['vlan','interface','ospf','bgp','rip','staticRoute','lacp','vrrp','dhcp','acl','qos','security','stp','users','snmp','vxlan','vrf','stack','ipv6','secondaryIp'];
+function renderParseCoverageMatrix(vendor){
+  const m=PARSE_COVERAGE_MATRIX[vendor];
+  const wrap=document.getElementById('pc-table-wrap');
+  if(!wrap||!m)return;
+  const rows=PARSE_COVERAGE_CATEGORIES.map(cat=>{
+    const cell=m[cat];
+    const isObj=cell&&typeof cell==='object';
+    const v=isObj?cell.v:cell;
+    const tipAttr=isObj?` data-tip="${esc(cell.note)}"`:'';
+    return `<tr><td>${esc(tr('pcmatrix.cat.'+cat))}</td><td style="text-align:center;cursor:${isObj?'help':'default'}"${tipAttr}>${v}</td></tr>`;
+  }).join('');
+  wrap.innerHTML=`<table class="data-tbl" style="width:100%"><tbody>${rows}</tbody></table>`;
+}
+// 沿用 showResultViews() 既有的品牌顯示名稱慣例（該處為函式內區域變數，此處另建一份模組級
+// 常數供本矩陣下拉選單使用，補上該處缺漏的 sonic/routeros 兩家）
+const PC_VENDOR_LABELS={'comware':'HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':'Brocade FastIron/ICX','dell-os10':'Dell EMC Networking OS','planet':'Planet Technology','sonic':'SONiC','routeros':'MikroTik RouterOS'};
+function _initParseCoverageMatrix(){
+  const sel=document.getElementById('pc-vendor-select');
+  if(!sel)return;
+  sel.innerHTML=Object.keys(PARSE_COVERAGE_MATRIX).map(v=>`<option value="${v}">${esc(PC_VENDOR_LABELS[v]||v)}</option>`).join('');
+  sel.value=(typeof parsed!=='undefined'&&parsed&&PARSE_COVERAGE_MATRIX[parsed.vendor])?parsed.vendor:Object.keys(PARSE_COVERAGE_MATRIX)[0];
+  sel.onchange=()=>renderParseCoverageMatrix(sel.value);
+  renderParseCoverageMatrix(sel.value);
+}
+// 稽核發現→產生器修復預填跨工具聯動（2026-09-15 新增，2026-09-16 擴充 2 項）：
+// switch_config_generator 表單已新增 SNMP community／管理介面 Telnet-SSH 欄位（#snmp-community／
+// #mgmt-telnet-disable），故 snmp-default-name／telnet-mgmt 兩項改列可修復。snmp-weak（v1/v2c
+// 協定層級問題，非社群字串問題，本工具無法僅靠改社群字串修復）與 routing-no-auth（產生器僅
+// OSPF 一種協定有認證金鑰欄位，BGP/RIP 場景命中此發現卻導向 OSPF 欄位會誤導使用者）仍暫緩
+// 不可修復
+const REMEDIABLE_FINDING_IDS=new Set(['weak-pwd','stp-no-bpduguard','stp-portfast-trunk','stp-uplink-no-rootguard','vlan1-inuse','security-off','acl-any-any','unused-vlan-trunk','lacp-member-mismatch','if-no-desc','snmp-default-name','telnet-mgmt']);
 function renderAudit(){
   const findings=analyzeSwitchAudit(parsed);
   const hi=findings.filter(f=>f.risk==='high').length;
@@ -3230,6 +3287,7 @@ function exportQoSCSV(){
 })();
 
 setLang('zhTW');
+_initParseCoverageMatrix();
 
 // 2026-09 資安審查修復：JSON 解析失敗／已過期的 key 一律清除（不論是否為本工具負責消費），讓
 // 任一工具頁面被開啟都能順手清掉整個交接命名空間裡的殘留，縮小放棄交接流程後明碼機敏內容殘留的

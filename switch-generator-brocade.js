@@ -473,6 +473,10 @@ function assembleBrocadeConfig(model){
   if(brocadeUsersBlock)blocks.push(brocadeUsersBlock);
   if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
   if(model.syslogServer)blocks.push(`logging host ${model.syslogServer}`);
+  // Telnet 停用（選填，2026-09-16 新增）：官方 Ruckus FastIron Security Guide 查證 telnet
+  // 預設開放，須明確 "no telnet server" 才關閉（parseMgmtAccess() brocade 分支，比對式為
+  // 精確字面比對非忽略大小寫，此處輸出字面必須完全一致）
+  if(model.mgmtTelnetDisable)blocks.push('no telnet server');
   return blocks.join('\n!\n')+'\n';
 }
 // 本機帳號：switch_analyzer 的 parseBrocadeUsers() 語法為

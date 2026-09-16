@@ -309,6 +309,16 @@ input.valid,select.valid{border-color:var(--green)!important}
       <label data-i18n="lbl.syslogServer">Syslog Server</label>
       <input id="syslog-server" placeholder="10.0.0.2">
     </div>
+    <div class="row">
+      <label data-i18n="lbl.snmpCommunity">SNMP Community</label>
+      <input id="snmp-community" placeholder="ro-community" data-tip="僅 Cisco IOS-XE/Ruijie/Comware/Juniper 支援；其餘廠牌會忽略此欄位">
+    </div>
+    <div class="row">
+      <label style="display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="mgmt-telnet-disable" data-tip="僅 Cisco IOS-XE/Ruijie/NX-OS/Dell OS10/Arista/Brocade/Comware/Juniper/MikroTik RouterOS 支援；其餘廠牌會忽略此欄位">
+        <span data-i18n="lbl.mgmtTelnetDisable">停用 Telnet（僅允許 SSH）</span>
+      </label>
+    </div>
   </div>
 
   <div class="card">
@@ -418,7 +428,7 @@ end</pre>
     <button class="add-btn" data-i18n="btn.addRow" onclick="addIfaceRow()">+ 新增列</button>
   </div>
 
-  <div class="card">
+  <div class="card" id="ospf-card">
     <h2 data-i18n="sec.ospf">OSPF 設定</h2>
     <div class="row">
       <label data-i18n="lbl.ospfPid">Process ID</label>
@@ -429,6 +439,10 @@ end</pre>
     <div class="row">
       <label data-i18n="lbl.ospfRedist">Redistribute</label>
       <input id="ospf-redist" style="flex:1;min-width:200px" placeholder="static bgp">
+    </div>
+    <div class="row">
+      <label data-i18n="lbl.ospfAuthKey">認證金鑰（選填）</label>
+      <input id="ospf-auth-key" style="flex:1;min-width:200px" placeholder="MD5 key" data-tip="僅 Cisco 語系/Comware/Juniper 支援；其餘廠牌會忽略此欄位；Cisco 對每個 Area 輸出 message-digest 認證，需自行在對應介面補上 key">
     </div>
     <table class="tbl">
       <thead><tr>

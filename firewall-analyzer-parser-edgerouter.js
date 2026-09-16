@@ -209,18 +209,26 @@ const EdgeRouterParser = (() => {
     return out;
   }
 
-  function parseAddrOrPort(node) {
+  function parseAddrOrPort(node, portGroupMap) {
     // source/destination 子區塊：address／port／group{address-group|network-group|port-group}
+    // port-group 命中時，埠號定義在具名 firewall group port-group{} 區塊裡（見 parseServiceObjects()），
+    // node 自己不會有 port 葉節點——需靠呼叫端傳入的 name→ports 查找表才能正確取得埠號，
+    // 否則會靜默讀成空字串（既有 bug，2026-09-16 修復）
     if (!node) return { addr: 'any', port: '' };
     const grp = child(node, 'group');
     if (grp) {
-      const g = val(grp, 'address-group') || val(grp, 'network-group') || val(grp, 'port-group');
-      if (g) return { addr: g, port: val(node, 'port') || '' };
+      const addrGrp = val(grp, 'address-group') || val(grp, 'network-group');
+      if (addrGrp) return { addr: addrGrp, port: val(node, 'port') || '' };
+      const portGrp = val(grp, 'port-group');
+      if (portGrp) {
+        const port = (portGroupMap && portGroupMap[portGrp]) || val(node, 'port') || '';
+        return { addr: portGrp, port };
+      }
     }
     return { addr: val(node, 'address') || 'any', port: val(node, 'port') || '' };
   }
 
-  function parsePolicies(tree, bind, addrTypeMap) {
+  function parsePolicies(tree, bind, addrTypeMap, portGroupMap) {
     const out = [];
     const rulesets = childrenPrefixed(child(tree, 'firewall'), 'name');
     let idx = 0;
@@ -229,8 +237,8 @@ const EdgeRouterParser = (() => {
       const rules = childrenPrefixed(rsNode, 'rule');
       Object.entries(rules).forEach(([rkey, rNode]) => {
         const ruleNum = rkey.replace(/^rule\s+/, '');
-        const src = parseAddrOrPort(child(rNode, 'source'));
-        const dst = parseAddrOrPort(child(rNode, 'destination'));
+        const src = parseAddrOrPort(child(rNode, 'source'), portGroupMap);
+        const dst = parseAddrOrPort(child(rNode, 'destination'), portGroupMap);
         const protocol = val(rNode, 'protocol') || 'all';
         const actionRaw = (val(rNode, 'action') || 'drop').toLowerCase();
         const desc = val(rNode, 'description') || '';
@@ -397,15 +405,20 @@ const EdgeRouterParser = (() => {
     // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 source/destination group 名稱
     // 反查 v4/v6 型別（見 buildEdgeRouterAddrTypeMap() 定義處註解）
     const addresses = parseAddressObjects(tree);
+    // 服務物件（含 port-group）同樣需先解析出來，才能建 name→ports 查找表供 policies 的
+    // source/destination port-group 引用反查埠號（見 parseAddrOrPort() 定義處註解）
+    const services = parseServiceObjects(tree);
+    const portGroupMap = {};
+    services.forEach(s => { portGroupMap[s.name] = s.tcpPorts; });
     return {
       vendor: 'EdgeRouter',
       deviceInfo: parseDeviceInfo(tree),
       interfaces: parseInterfaces(tree, bind),
-      policies: parsePolicies(tree, bind, buildEdgeRouterAddrTypeMap(addresses)),
+      policies: parsePolicies(tree, bind, buildEdgeRouterAddrTypeMap(addresses), portGroupMap),
       routes: parseRoutes(tree),
       ha: null, nat: parseNAT(tree), vpn: [],
       addresses,
-      services: parseServiceObjects(tree),
+      services,
       users: parseUsers(tree), schedules: [],
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
       // 2026-08-01 瀏覽器端到端測試意外抓到既有的「新增廠牌未同步 onParsed() 資料形狀」bug：

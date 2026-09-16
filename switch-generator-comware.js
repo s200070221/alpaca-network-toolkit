@@ -262,6 +262,10 @@ function renderComwareOSPFProcess(o){
   (o.redistributes||[]).forEach(r=>lines.push(` import-route ${r}`));
   (o.areas||[]).forEach(a=>{
     lines.push(` area ${a.area}`);
+    // 認證金鑰（選填，2026-09-16 新增，對外查證官方 H3C OSPF Commands 手冊確認）：
+    // authentication-mode 是 area 子模式底下的裸指令（非逐 network 或逐 interface），
+    // key-id 固定用 1，plain 明文金鑰輸入
+    if(o.authKey)lines.push(`  authentication-mode md5 1 plain ${o.authKey}`);
     (a.networks||[]).forEach(n=>lines.push(`  network ${n.network} ${n.wildcard}`));
     // stub/nssa 巢狀宣告在 area 區塊內（與 network 同縮排層級），對應 switch_analyzer parseOSPF 修正後的偵測邏輯。
     // no-summary 修飾詞 2026-07-22 對外查證官方 H3C 文件後新增（先前解析器/產生器皆未處理，資料遺失）
@@ -515,8 +519,17 @@ function assembleComwareConfig(model){
   if(comwareVxlan)blocks.push(comwareVxlan);
   const comwareUsersBlock=renderComwareUsers(model.users);
   if(comwareUsersBlock)blocks.push(comwareUsersBlock);
-  if(model.snmpTrapHost)blocks.push(`snmp-agent target-host trap address udp-domain ${model.snmpTrapHost} params securityname public v2c`,'#');
+  // SNMP 社群（選填，2026-09-16 新增，對外查證官方 H3C SNMP Commands 手冊確認）：
+  // snmp-agent community {read|write} {simple|cipher} community-name，read/write 與名稱
+  // 之間必須有 simple/cipher 關鍵字（既有 parseSNMP() 正則要求，缺漏會產生無效語法）；
+  // trap-host 的 securityname 先前寫死 "public"，改沿用同一個社群欄位（未填時維持舊行為）
+  if(model.snmpCommunity)blocks.push(`snmp-agent community read simple ${model.snmpCommunity}`,'#');
+  if(model.snmpTrapHost)blocks.push(`snmp-agent target-host trap address udp-domain ${model.snmpTrapHost} params securityname ${model.snmpCommunity||'public'} v2c`,'#');
   if(model.syslogServer)blocks.push(`info-center loghost ${model.syslogServer}`,'#');
+  // Telnet 停用（選填，2026-09-16 新增）：官方 H3C Login Management Commands 查證 telnet 未
+  // 設定時預設 all（telnet+ssh 皆開放），須 user-interface vty 下 protocol inbound ssh 才限縮
+  // 為僅 SSH（parseMgmtAccess() comware 分支）
+  if(model.mgmtTelnetDisable)blocks.push('user-interface vty 0 4\n protocol inbound ssh','#');
   // bgp 放最後：其區塊擷取正則靠負向前瞻(bgp/router/interface/ip route/vlan)判斷結尾，
   // 沒有明確終止字元，若後面還接其他區塊可能被吃進 body，故排在組裝順序最後最安全
   if(model.bgp&&model.bgp.length)blocks.push(renderComwareBGPList(model.bgp));
