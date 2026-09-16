@@ -1555,11 +1555,37 @@ function renderACL(){
 // 見 firewall-analyzer-audit.js。switch 的 finding.check 本身已是 tr() 過的人類可讀標籤，
 // 直接重用當 issue label，不需要像 firewall 那樣另建一組 health.* 專屬措辭 key）
 // computeSwitchHealth() 已搬到 switch-analyzer-audit.js（2026-09，純函式零 DOM/parsed 全域依賴，比照既有 switch-analyzer-diff.js 拆分先例）
+// 健康度分數時序追蹤（2026-09-16 新增）：滾動歷史，比照既有 config_anonymizer 的
+// _netAnalyzer_anonHistory precedent（持續累積、非一次性交接），依 hostname 分開存放，
+// 每個 hostname 上限最近 20 筆。已知限制、刻意不解決：設定檔未設定主機名稱時各廠牌解析器
+// fallback 值多為 'unknown'，會讓不同裝置的歷史誤合併——比照專案一貫「不猜測」原則，不做
+// 裝置指紋等臆測性去重機制
+const LS_HEALTH_HISTORY_KEY='switch_analyzer_health_history_v1';
+function _loadHealthHistory(){
+  try{return JSON.parse(localStorage.getItem(LS_HEALTH_HISTORY_KEY)||'{}');}catch(e){return{};}
+}
+function _saveHealthHistoryEntry(hostname,score,grade){
+  let hist;
+  try{hist=JSON.parse(localStorage.getItem(LS_HEALTH_HISTORY_KEY)||'{}');}catch(e){hist={};}
+  const arr=Array.isArray(hist[hostname])?hist[hostname]:[];
+  arr.unshift({score,grade,ts:Date.now()});
+  hist[hostname]=arr.slice(0,20);
+  try{localStorage.setItem(LS_HEALTH_HISTORY_KEY,JSON.stringify(hist));}catch(e){/* 私密瀏覽模式等情況下 localStorage 可能不可用，靜默略過即可，非核心功能 */}
+}
+function _clearHealthHistory(hostname){
+  const hist=_loadHealthHistory();
+  delete hist[hostname];
+  try{localStorage.setItem(LS_HEALTH_HISTORY_KEY,JSON.stringify(hist));}catch(e){}
+  _doSwitchHealthCheck();
+}
 function _doSwitchHealthCheck(){
   if(!parsed)return;
   const btn=document.getElementById('sw-health-btn');
   if(btn)btn.textContent=tr('health.recheck');
   const res=computeSwitchHealth(parsed);
+  const hostname=parsed.sys.hostname;
+  _saveHealthHistoryEntry(hostname,res.score,res.grade);
+  const history=_loadHealthHistory()[hostname]||[];
   const sevColors={crit:'var(--red)',warn:'var(--yellow)',info:'var(--accent)'};
   const sevIcon={crit:'🔴',warn:'🟡',info:'🔵'};
   let h=`<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
@@ -1575,6 +1601,15 @@ function _doSwitchHealthCheck(){
       <span style="font-size:13px;color:var(--text)">${esc(i.label)}</span>
       <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}</span>
     </div>`).join('');
+  }
+  if(history.length>1){
+    h+=`<div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <span style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px">${esc(tr('health.history_title'))}</span>
+        <button class="btn btn-ghost btn-sm" onclick="_clearHealthHistory(${JSON.stringify(hostname).replace(/"/g,'&quot;')})">${esc(tr('health.history_clear_btn'))}</button>
+      </div>
+      ${buildHealthSparklineSVG(history)}
+    </div>`;
   }
   const el=document.getElementById('sw-health-result');
   if(el)el.innerHTML=h;
