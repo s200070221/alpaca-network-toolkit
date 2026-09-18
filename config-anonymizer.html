@@ -4304,10 +4304,18 @@ async function doExportEncrypted(password) {
     vendor: STATE.vendor,
     created: new Date().toISOString(),
     sourceHash,
+    // reverse 原本只打包 ip/hostname/user 3 類，但 mappings 實際有 7 類可逆映射（見檔案開頭
+    // const mappings 宣告），ssid/alias/vdom/mac 4 類先前遺漏，導致含 WiFi SSID／VDOM 名稱／
+    // 裝置別名／MAC 位址的設定檔用 .acmap 還原時這 4 類會維持匿名化狀態且無任何警告
+    // （2026-09-18 修復，「9 個已確認 bug」第 6 項）
     reverse: {
       ip:       Object.fromEntries([...m.ip].map(([k,v]) => [v, k])),
       hostname: Object.fromEntries([...m.hostname].map(([k,v]) => [v, k])),
-      user:     Object.fromEntries([...m.user].map(([k,v]) => [v, k]))
+      user:     Object.fromEntries([...m.user].map(([k,v]) => [v, k])),
+      ssid:     Object.fromEntries([...m.ssid].map(([k,v]) => [v, k])),
+      alias:    Object.fromEntries([...m.alias].map(([k,v]) => [v, k])),
+      vdom:     Object.fromEntries([...m.vdom].map(([k,v]) => [v, k])),
+      mac:      Object.fromEntries([...m.mac].map(([k,v]) => [v, k])),
     },
     // .acmap 還原包擴充打包 customRules／dismissedResidualKeys（2026-09-15 新增，皆為選填
     // 欄位，回溯相容舊版 .acmap 檔案不含這兩欄）。customRules 沿用既有 exportCustomRules()
@@ -4334,10 +4342,16 @@ async function doExportEncrypted(password) {
 // ---- 還原邏輯 ----
 function restoreConfig(anonText, rev) {
   let text = anonText;
+  // ssid/alias/vdom/mac 4 類 2026-09-18 補上（見 doExportEncrypted() 對應修復註解）；
+  // 向下相容舊版 .acmap（無這 4 類欄位）：rev.ssid||{} 等 fallback 安全處理不拋錯
   const entries = [
     ...Object.entries(rev.ip       || {}),
     ...Object.entries(rev.hostname || {}),
-    ...Object.entries(rev.user     || {})
+    ...Object.entries(rev.user     || {}),
+    ...Object.entries(rev.ssid     || {}),
+    ...Object.entries(rev.alias    || {}),
+    ...Object.entries(rev.vdom     || {}),
+    ...Object.entries(rev.mac      || {}),
   ].sort((a, b) => b[0].length - a[0].length); // 長字串優先，避免子字串誤替換
   for (const [anon, orig] of entries) {
     text = text.split(anon).join(orig); // replaceAll polyfill-safe

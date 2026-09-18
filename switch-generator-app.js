@@ -2268,7 +2268,16 @@ const VENDOR_INCAPABLE={
   netgear:['bgp'],
 };
 const VENDOR_UNSUPPORTED={
-  comware:[], fortiswitch:[], aruba:[], cisco:[],
+  comware:[],
+  // qos：2026-07-22 對外查證官方 FortiSwitchOS Administration Guide 後 render 函式已移除
+  // （原本沿用 Cisco/Aruba 共用 policy-map/class 語法整個語法家族選錯，FortiOS 原生是
+  // config/edit/set/next/end 區塊風格），但此清單當時漏同步更新，導致使用者填寫的 QoS
+  // 資料靜默消失卻無任何警告（2026-09 全功能審查發現）
+  fortiswitch:['qos'],
+  // qos：2026-07-22 對外查證官方 AOS-CX QoS 文件後 render 函式已移除（原本沿用 Cisco 式
+  // policy-map 容器概念，真實模型是 qos queue-profile/qos schedule-profile），同上一併
+  // 修正遺漏的旗標同步（2026-09 全功能審查發現）
+  aruba:['qos'], cisco:[],
   // acl 已於 2026-07-27 修復 _parseACLJuniper() 並新增 renderJuniperACL() 接線，此清單原本
   // 殘留的 'acl' 已過時（真正支援），修正時一併移除
   juniper:['rip','vrrp','qos','security','stp'],
@@ -2284,8 +2293,10 @@ const VENDOR_UNSUPPORTED={
   // bgp 已移至 VENDOR_INCAPABLE（裝置真不支援）；dhcpRelay 已於 2026-07-27 修復
   // assembleProCurveConfig() 未引用 model.dhcp 的缺口，renderProCurveVLANs() 現已正確輸出
   // 逐 VLAN ip helper-address，此清單原本殘留的 'dhcpRelay' 已過時，修正時一併移除；
-  // rip/vrrp/acl/qos/security/stp 仍是「查無真實語法或未驗證」而非裝置不支援，維持警告
-  procurve:['rip','vrrp','dhcpServer','acl','qos','security','stp'],
+  // rip/vrrp/acl/qos/security 仍是「查無真實語法或未驗證」而非裝置不支援，維持警告；
+  // stp 已於 2026-09 對外查證官方 ArubaOS-Switch (ProCurve) 文件後新增支援（見
+  // renderProCurveSTP()），此清單原本殘留的 'stp' 已過時，修正時一併移除
+  procurve:['rip','vrrp','dhcpServer','acl','qos','security'],
   // rip/vrrp/acl/qos/security 已於 2026-07-19 新增支援（見 renderRouterOSRIP/
   // renderRouterOSVRRP/renderRouterOSACL/renderRouterOSQoS/renderRouterOSSecurity）；
   // dhcpRelay 本輪範圍外維持不支援

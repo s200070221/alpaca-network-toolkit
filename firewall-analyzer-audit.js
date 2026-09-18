@@ -18,6 +18,13 @@
   // 是否涵蓋 later 規則」，原本兩處各自定義一份逐字相同的 helper，抽到此處只定義一次
   // （2026-07-21 優化去重，行為完全不變）
   const _SHADOW_WILDCARD = new Set(['all','any','ALL','0.0.0.0/0','0.0.0.0 0.0.0.0']);
+  // 規則停用狀態判斷（2026-09-18 根因性修復）：部分廠牌 parser（如 Sophos）未正規化的原始值
+  // 會是大寫開頭的 'Disable'，逐處各自寫 p.status!=='disable' 這種精確小寫比對會漏判。原本
+  // 只有 analyzeCompliance() 內部定義了一份大小寫不敏感版本（區域變數，其餘函式各自看不到），
+  // 導致 analyzeRuleShadowing()/buildShadowMap()/analyzeDenyBlocking()/analyzeMergeSuggestions()/
+  // computeFirewallHealth() T3 仍是純小寫比對（漏判大寫來源）；提升為本檔案頂層共用 helper，
+  // 全部改呼叫這一份，避免未來新增判斷式時重蹈覆轍
+  const _isDisabledStatus = p => /^disable$/i.test(p.status || '');
   function _shadowToSet(str) {
     if (!str || str === '-') return new Set();
     return new Set(str.split(/,\s*/).map(s => s.trim().toLowerCase()));
@@ -129,7 +136,7 @@
     const toSet = _shadowToSet, covers = _shadowCovers, intfCovers = _shadowIntfCovers;
     const results = [];
     const eq = (a, b) => a.size === b.size && [...a].every(v => b.has(v));
-    const active = policies.filter(p => p.status !== 'disable');
+    const active = policies.filter(p => !_isDisabledStatus(p));
     for (let i = 0; i < active.length; i++) {
       const later = active[i];
       const lSrc = toSet(later.srcAddr), lDst = toSet(later.dstAddr), lSvc = toSet(later.service);
@@ -156,7 +163,7 @@
     // 建立每個規則遮蔽的下游規則清單（用於流程排序顯示）
     const map = {};
     const toSet = _shadowToSet, covers = _shadowCovers, intfCovers = _shadowIntfCovers;
-    const active = policies.filter(p => p.status !== 'disable');
+    const active = policies.filter(p => !_isDisabledStatus(p));
     active.forEach(p => map[p.id] = []);
     for (let i = 0; i < active.length; i++) {
       const earlier = active[i];
@@ -185,7 +192,7 @@
   function analyzeDenyBlocking(policies) {
     const toSet = _shadowToSet, covers = _shadowCovers, intfCovers = _shadowIntfCovers;
     const results = [];
-    const active = policies.filter(p => p.status !== 'disable');
+    const active = policies.filter(p => !_isDisabledStatus(p));
     for (let i = 0; i < active.length; i++) {
       const later = active[i];
       if (later.action !== 'accept') continue;   // 只關心「本該生效的 accept 規則」被擋住的情境
@@ -428,7 +435,7 @@
   function analyzeMergeSuggestions(policies) {
     const isWild = v => _SHADOW_WILDCARD.has((v || '').trim().toLowerCase());
     const results = [];
-    const active = (policies || []).filter(p => p.status !== 'disable');
+    const active = (policies || []).filter(p => !_isDisabledStatus(p));
     let i = 0;
     while (i < active.length) {
       const base = active[i];
@@ -468,7 +475,7 @@
   // 完全相同的規則全量分組（非相鄰亦會命中），找出的是真正的冗餘規則（可直接刪除其一），
   // 語意與合併建議互補、非重工
   function analyzeExactDuplicates(policies) {
-    const active = (policies || []).filter(p => p.status !== 'disable' && p.status !== 'Disable');
+    const active = (policies || []).filter(p => !_isDisabledStatus(p));
     const groups = new Map();
     active.forEach(p => {
       const key = `${p._vdom || ''}|${p.srcAddr || '-'}|${p.dstAddr || '-'}|${p.service || '-'}|${p.action || '-'}`;
@@ -502,11 +509,8 @@
     // 多 VDOM 時以 VDOM/ID 顯示，避免各 VDOM 重複的 ID 混淆
     const isMultiVdom = policies.some(p => p._vdom !== undefined && p._vdom !== null);
     const idLabel = p => (isMultiVdom && p._vdom) ? `${p._vdom}/${p.id}` : p.id;
-    // 部分廠牌 parser（如 Sophos）未正規化的原始值會是大寫開頭的 'Disable'，若逐處各自寫
-    // p.status!=='disable' 這種精確小寫比對會漏判——broad-network 檢查先前已比照補上
-    // p.status!=='Disable'，但同函式更早、更核心的 any-any／disabled-pol 兩項當時漏補，
-    // 一次性改用大小寫不敏感寫法徹底修掉這個 pattern（2026-09 全功能審查發現）
-    const _isDisabledStatus = p => /^disable$/i.test(p.status || '');
+    // _isDisabledStatus 已提升為本檔案頂層共用 helper（見檔案開頭 27 行附近），此處不再
+    // 重複定義
     // 1. any-to-any 允許規則
     const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) &&
       /\b(all|any)\b/i.test(p.srcAddr||'') && /\b(all|any)\b/i.test(p.dstAddr||'') && /\b(all|any|ALL)\b/i.test(p.service||''));
@@ -556,7 +560,13 @@
     const dangerAcc = ['http','telnet'];
     const riskyIntf = (parsed.interfaces || []).filter(i => {
       const acc = (i.allowaccess || '').toLowerCase();
-      const isExt = i.role === 'WAN' || (i.name || '').toLowerCase().match(/^(wan|ext|outside|untrust)/);
+      // 2026-09-18 新增：i.role==='external' 涵蓋 Cisco ASA 專屬的小寫角色詞彙（其餘廠牌
+      // guessRole() 皆回傳大寫 'WAN'/'LAN'/'DMZ'/...，僅 ASA 用 'external'/'internal'/'dmz'，
+      // 兩者字面不同不會誤判彼此），i.nameif 比對涵蓋 ASA 的 nameif 命名慣例（如 outside）
+      // 與 i.name（實體介面名稱如 GigabitEthernet0/0）分屬不同欄位，僅比對 i.name 永遠測不到
+      const isExt = i.role === 'WAN' || i.role === 'external' ||
+        (i.name || '').toLowerCase().match(/^(wan|ext|outside|untrust)/) ||
+        (i.nameif || '').toLowerCase().match(/^(wan|ext|outside|untrust)/);
       return isExt && dangerAcc.some(d => acc.includes(d));
     });
     f('http-mgmt', tr('audit.check_http_mgmt'), riskyIntf.length, 'high',
@@ -615,7 +625,7 @@
     };
     const isBroad = val => String(val || '').split(',').map(s => s.trim()).filter(Boolean)
       .some(p => { const len = addrPrefixLen(p); return len !== null && len <= 8; });
-    const broadNetwork = policies.filter(p => p.action === 'accept' && p.status !== 'disable' && p.status !== 'Disable' &&
+    const broadNetwork = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) &&
       (isBroad(p.srcAddr) || isBroad(p.dstAddr)));
     f('broad-network', tr('audit.check_broad_network'), broadNetwork.length, 'medium',
       broadNetwork.length ? tr('audit.id_prefix') + broadNetwork.map(p => idLabel(p)).slice(0,10).join(', ') + (broadNetwork.length > 10 ? '…' : '') : tr('audit.none'),
@@ -990,7 +1000,7 @@
     const issues = [];
     // T1: any-any accept（需排除已停用規則，比照下方 T1b/broad-network 既有慣例；
     // 先前漏了這道防呆，已停用的 any-any/no-log 規則從未真正生效卻仍被扣分，2026-09 全功能審查發現）
-    const anyAny = policies.filter(p => p.action === 'accept' && p.status !== 'disable' && p.status !== 'Disable' && /^(all|any)$/i.test((p.srcAddr||'').trim()) && /^(all|any)$/i.test((p.dstAddr||'').trim()));
+    const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && /^(all|any)$/i.test((p.srcAddr||'').trim()) && /^(all|any)$/i.test((p.dstAddr||'').trim()));
     if (anyAny.length) { score -= anyAny.length * 20; issues.push({sev:'crit', label:tr('health.any_any'), count:anyAny.length}); }
     // T1b: broad-network（2026-08-29 新增，比照 analyzeCompliance() 的 broad-network 檢查同一套
     // 判斷邏輯，權重較 any-any 低——過寬網段風險低於完全開放，但仍值得扣分）
@@ -1004,7 +1014,7 @@
     };
     const healthIsBroad = val => String(val || '').split(',').map(s => s.trim()).filter(Boolean)
       .some(p => { const len = healthAddrPrefixLen(p); return len !== null && len <= 8; });
-    const broadNetwork = policies.filter(p => p.action === 'accept' && p.status !== 'disable' && p.status !== 'Disable' && (healthIsBroad(p.srcAddr) || healthIsBroad(p.dstAddr)));
+    const broadNetwork = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && (healthIsBroad(p.srcAddr) || healthIsBroad(p.dstAddr)));
     if (broadNetwork.length) { score -= broadNetwork.length * 10; issues.push({sev:'warn', label:tr('health.broad_network'), count:broadNetwork.length}); }
     // T2: shadowed rules
     const shadowMap = buildShadowMap(policies);
@@ -1013,12 +1023,14 @@
     // T2b: rules blocked by an earlier deny rule（同 T2 權重，皆屬「規則永不生效」類問題）
     const denyBlockedCount = analyzeDenyBlocking(policies).length;
     if (denyBlockedCount) { score -= denyBlockedCount * 5; issues.push({sev:'warn', label:tr('health.deny_blocked'), count:denyBlockedCount}); }
-    // T3: disabled rules（欄位值一律是 'disable'，非 'disabled'，見 _runPolicyQuery()/各 assemble 函式既有慣例）
-    const disabled = policies.filter(p => p.status === 'disable' || p.enabled === false || p.enabled === 'disable');
+    // T3: disabled rules（欄位值一律是 'disable'，非 'disabled'，見 _runPolicyQuery()/各 assemble 函式既有慣例；
+    // 大小寫不敏感比對改用共用 _isDisabledStatus()，先前純小寫比對會 undercount Sophos 等大寫來源，
+    // 2026-09-18 根因性修復，與 T1/T1b/T4 統一）
+    const disabled = policies.filter(p => _isDisabledStatus(p) || p.enabled === false || p.enabled === 'disable');
     if (disabled.length > 3) { score -= (disabled.length - 3) * 2; issues.push({sev:'info', label:tr('health.disabled'), count:disabled.length}); }
     // T4: accept without log（欄位名稱是全小寫 logtraffic，非 logTraffic；判斷式比照 analyzeCompliance() 既有慣例，
     // 同樣需排除已停用規則，原因同 T1，2026-09 全功能審查發現）
-    const noLog = policies.filter(p => p.action === 'accept' && p.status !== 'disable' && p.status !== 'Disable' && (!p.logtraffic || p.logtraffic === 'disable' || p.logtraffic === 'utm'));
+    const noLog = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && (!p.logtraffic || p.logtraffic === 'disable' || p.logtraffic === 'utm'));
     if (noLog.length > 2) { score -= (noLog.length - 2) * 3; issues.push({sev:'warn', label:tr('health.no_log'), count:noLog.length}); }
     // T5-T11：其餘 7 項合規檢查納入健康度評分（2026-08-31 新增）。先前只有上方 4 項（any-any／
     // broad-network／disabled／no-log）會扣分，`analyzeCompliance()` 其餘 7 項發現完全不影響
