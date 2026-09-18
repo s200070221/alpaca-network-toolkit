@@ -996,9 +996,9 @@ function addUsersRow(name='',role='',password=''){
   document.getElementById('users-body').appendChild(tr);
 }
 
-function addBgpPeerRow(ip='',as='',desc=''){
+function addBgpPeerRow(ip='',as='',desc='',authKey=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="p-ip" value="${escAttr(ip)}"></td><td><input class="p-as" value="${escAttr(as)}"></td><td><input class="p-desc" value="${escAttr(desc)}"></td>${RM_BTN_TD}`;
+  tr.innerHTML=`<td><input class="p-ip" value="${escAttr(ip)}"></td><td><input class="p-as" value="${escAttr(as)}"></td><td><input class="p-desc" value="${escAttr(desc)}"></td><td><input class="p-authkey" value="${escAttr(authKey)}"></td>${RM_BTN_TD}`;
   document.getElementById('bgp-peer-body').appendChild(tr);
 }
 
@@ -1625,7 +1625,7 @@ function collectModel(){
   const bgp=[];
   if(bgpAsn){
     const peers=rowsOf('#bgp-peer-body tr').map(tr=>({
-      ip:val(tr,'p-ip'), as:val(tr,'p-as'), desc:val(tr,'p-desc'),
+      ip:val(tr,'p-ip'), as:val(tr,'p-as'), desc:val(tr,'p-desc'), authKey:val(tr,'p-authkey'),
     })).filter(p=>p.ip);
     const bgpKeepalive=fval('bgp-timer-keepalive');
     const bgpHold=fval('bgp-timer-hold');
@@ -1948,7 +1948,7 @@ function applyModelToForm(model){
   document.getElementById('bgp-peer-group').value=(b?.peerGroups||[]).map(g=>g.name).join(' ');
   document.getElementById('bgp-timer-keepalive').value=b?.timers?.keepalive||'';
   document.getElementById('bgp-timer-hold').value=b?.timers?.holdtime||'';
-  (b?.peers||[]).forEach(p=>addBgpPeerRow(p.ip,p.as,p.desc||''));
+  (b?.peers||[]).forEach(p=>addBgpPeerRow(p.ip,p.as,p.desc||'',p.authKey||''));
 
   const r=(model.rip||[])[0];
   document.getElementById('rip-pid').value=r?.pid||'';
@@ -3124,7 +3124,8 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   document.getElementById('bgp-peer-group').value=(b?.peerGroups||[]).map(g=>g.name).join(' ');
   document.getElementById('bgp-timer-keepalive').value=b?.timers?.keepalive||'';
   document.getElementById('bgp-timer-hold').value=b?.timers?.holdtime||'';
-  (b?.peers||[]).forEach(p=>addBgpPeerRow(p.ip,p.as,p.desc||''));
+  // authKey 一律清空：parsed.routingAuth 從未擷取過金鑰字串（比照 ospf-auth-key 既有決策）
+  (b?.peers||[]).forEach(p=>addBgpPeerRow(p.ip,p.as,p.desc||'',''));
 
   const r=(parsed.rip||[])[0];
   if(vendor==='brocade'){

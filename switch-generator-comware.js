@@ -302,6 +302,9 @@ function renderComwareBGP(b){
   (b.peers||[]).forEach(p=>{
     lines.push(` peer ${p.ip} as-number ${p.as}`);
     if(p.desc)lines.push(` peer ${p.ip} description ${p.desc}`);
+    // 官方語法要求 password 與金鑰之間須有 cipher/simple 關鍵字（比對既有 parseRoutingAuth()
+    // 正則 /peer\s+\S+\s+password\s+(?:cipher|simple)/i 確認）
+    if(p.authKey)lines.push(` peer ${p.ip} password cipher ${p.authKey}`);
   });
   (b.networks||[]).forEach(n=>lines.push(` network ${n}`));
   // IPv6（2026-08-23 新增）：官方 H3C BGP Commands 手冊確認 network 巢狀在獨立的

@@ -352,6 +352,10 @@ function renderJuniperBGPBlock(bgpList){
     internalPeers.forEach(p=>{
       lines.push(`            neighbor ${p.ip} {`);
       if(p.desc)lines.push(`                description "${p.desc}";`);
+      // 已知限制：此巢狀區塊語法無法透過既有 parseRoutingAuth() round-trip 驗證
+      // （該正則要求裸 "set protocols bgp" 子字串，巢狀大括號輸出永不含此字串，
+      // 與稍早 OSPF 認證金鑰那輪遇到的既有限制一致），僅以輸出字串內容斷言測試
+      if(p.authKey)lines.push(`                authentication-key "${p.authKey}";`);
       lines.push('            }');
     });
     lines.push('        }');
@@ -363,6 +367,7 @@ function renderJuniperBGPBlock(bgpList){
       lines.push(`            neighbor ${p.ip} {`);
       if(p.as)lines.push(`                peer-as ${p.as};`);
       if(p.desc)lines.push(`                description "${p.desc}";`);
+      if(p.authKey)lines.push(`                authentication-key "${p.authKey}";`);
       lines.push('            }');
     });
     lines.push('        }');

@@ -195,6 +195,7 @@ function renderCiscoBGP(b){
   (b.peers||[]).forEach(p=>{
     lines.push(` neighbor ${p.ip} remote-as ${p.as}`);
     if(p.desc)lines.push(` neighbor ${p.ip} description ${p.desc}`);
+    if(p.authKey)lines.push(` neighbor ${p.ip} password ${p.authKey}`);
   });
   // Cisco 的 network 陳述式只接受純 IP + 可選 dotted mask，不接受 CIDR 斜線寫法
   (b.networks||[]).forEach(n=>{
