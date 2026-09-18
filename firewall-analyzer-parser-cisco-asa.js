@@ -13,15 +13,30 @@ const CiscoASAParser = (() => {
 
   function parseInterfaces(text) {
     const ifaces = [];
+    // 全域管理存取指令（2026-09-18 新增）：官方語法 "http <ip> <mask> <nameif>"／
+    // "telnet <ip> <mask> <nameif>"，以 nameif（非實體介面名稱）定址、非逐介面區塊內宣告，
+    // 故獨立於下方逐介面迴圈先掃描一次；三個 \S+ token 的要求天生不會誤判 "http server enable"
+    // （僅 2 個 token）／"telnet timeout N"（僅 2 個 token）這類無關指令，不需額外排除條件
+    const mgmtAccess = new Map(); // nameif -> Set of methods
+    for (const l of text.split('\n')) {
+      const t = l.trim();
+      const mHttp = t.match(/^http\s+\S+\s+\S+\s+(\S+)/);
+      if (mHttp) { if (!mgmtAccess.has(mHttp[1])) mgmtAccess.set(mHttp[1], new Set()); mgmtAccess.get(mHttp[1]).add('http'); }
+      const mTelnet = t.match(/^telnet\s+\S+\s+\S+\s+(\S+)/);
+      if (mTelnet) { if (!mgmtAccess.has(mTelnet[1])) mgmtAccess.set(mTelnet[1], new Set()); mgmtAccess.get(mTelnet[1]).add('telnet'); }
+    }
     for (const block of text.split(/^(?=interface\s)/m)) {
       const mIf = block.match(/^interface\s+(.+)/);
       if (!mIf) continue;
       const name = mIf[1].trim();
-      let ip='-', mask='-', nameif='', secLevel=-1, shutdown=false, desc='';
+      let ip='-', mask='-', ip6='-', nameif='', secLevel=-1, shutdown=false, desc='';
       for (const l of block.split('\n').slice(1)) {
         const t = l.trim();
         const mIp  = t.match(/^ip address\s+(\S+)\s+(\S+)/);
         if (mIp) { ip = mIp[1]; mask = mIp[2]; }
+        // IPv6 介面位址（2026-09-18 新增）：官方單行語法 "ipv6 address <addr>/<prefix>"
+        const mIp6 = t.match(/^ipv6 address\s+(\S+)/);
+        if (mIp6) ip6 = mIp6[1];
         const mNif = t.match(/^nameif\s+(\S+)/);
         if (mNif) nameif = mNif[1];
         const mSec = t.match(/^security-level\s+(\d+)/);
@@ -33,7 +48,8 @@ const CiscoASAParser = (() => {
       let role = 'internal';
       if (secLevel === 0) role = 'external';
       else if (secLevel > 0 && secLevel < 100) role = 'dmz';
-      ifaces.push({ name, ip, mask, type:'physical', role, status:shutdown?'down':'up', desc, nameif, secLevel });
+      const allowaccess = mgmtAccess.has(nameif) ? [...mgmtAccess.get(nameif)].join(' ') : '-';
+      ifaces.push({ name, ip, ip6, mask, type:'physical', role, status:shutdown?'down':'up', desc, nameif, secLevel, allowaccess });
     }
     return ifaces;
   }

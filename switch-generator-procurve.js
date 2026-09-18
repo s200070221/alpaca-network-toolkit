@@ -146,6 +146,16 @@ function renderProCurveVSF(stack){
   if(stack.domain)lines.push(`vsf enable domain ${stack.domain}`);
   return lines.join('\n');
 }
+// STP（2026-09 新增，對外查證官方 ArubaOS-Switch (ProCurve) 文件確認）：僅支援全域
+// bridge priority 單行指令 "spanning-tree priority <value>"，無 per-VLAN 語法（與
+// Aruba CX/Cisco 的逐 VLAN priority 語法不同，不可重用共用的 renderSpanningTreeGlobal()）；
+// 對應 switch_analyzer parseSTP() 的 Aruba CX/Dell/ProCurve 共用 fallback 分支（僅在查無
+// 逐 VLAN instance 時才讀取裸 "spanning-tree priority N"，見 switch-analyzer-core.js）
+function renderProCurveSTP(stp){
+  const g=(stp&&stp.instances||[]).find(i=>i.id==='0'&&i.priority);
+  if(!g)return '';
+  return `spanning-tree priority ${g.priority}`;
+}
 function assembleProCurveConfig(model){
   const blocks=[`; ${tr('notice.disclaimer')}`,`hostname "${model.sysname||'Switch'}"`];
   const vsfBlockPC=renderProCurveVSF(model.procurveVsf);
@@ -160,6 +170,8 @@ function assembleProCurveConfig(model){
   if(vlanBlock)blocks.push(vlanBlock);
   const lacpBlock=renderProCurveLACP(model.lacp);
   if(lacpBlock)blocks.push(lacpBlock);
+  const stpBlockPC=renderProCurveSTP(model.stp);
+  if(stpBlockPC)blocks.push(stpBlockPC);
   if(model.interfaces&&model.interfaces.length)blocks.push(renderProCurveInterfaces(model.interfaces,model.ospf6));
   if(model.routes&&model.routes.length)blocks.push(renderProCurveRoutes(model.routes));
   const dhcpOpt82BlockPC=renderProCurveDHCPOption82(model.dhcp);
