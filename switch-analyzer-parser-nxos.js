@@ -264,9 +264,17 @@ function parseNXOS(cfg) {
 // 因未查得逐字語法佐證，非本輪範圍，不臆測。另需注意官方文件記載部分平台
 // "class-map type qos match-all" 實際不生效（一律視為 match-any）——此為裝置行為限制，
 // 非本工具解析錯誤，不在產生器端模擬此限制。
+// 2026-09-21 修復：NX-OS 官方 MQC 為三層架構，除 "class-map type qos" 外另有
+// "class-map type network-qos"／"class-map type queuing" 兩種 sibling class-map。先前收尾
+// lookahead 只認得下一個 "class-map type qos" 標頭，若設定檔中一個 qos class-map 後面
+// （中間無 policy-map）接的是 network-qos/queuing 類型 class-map，會貪婪吃進該 sibling
+// 區塊內容，其 match dscp/match cos 子正則因而誤抓進不相關 sibling 的比對條件，屬資料汙染
+// 而非單純解析失敗。修法：收尾 lookahead 放寬為任何 "class-map" 開頭行（不限定 type
+// qos），符合 NX-OS class-map 區塊「遇到下一個 class-map 或 policy-map 即結束」的語意，
+// 不論該 class-map 屬於哪個 type。
 function parseNxosClassMaps(cfg){
   const maps=[];
-  const cmRe=/^class-map\s+type\s+qos\s+(match-any|match-all)\s+(\S+)([\s\S]*?)(?=^class-map\s+type\s+qos\s+|^policy-map\s+|(?![\s\S]))/gm;
+  const cmRe=/^class-map\s+type\s+qos\s+(match-any|match-all)\s+(\S+)([\s\S]*?)(?=^class-map\s+|^policy-map\s+|(?![\s\S]))/gm;
   let m;
   while((m=cmRe.exec(cfg))!==null){
     const matchType=m[1], name=m[2], body=m[3]||'', matches=[];
