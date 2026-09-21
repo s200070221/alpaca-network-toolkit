@@ -1306,9 +1306,14 @@ function detectFrequencyIssues(events, opts) {
 function detectTimeGaps(events, opts) {
   const gapThresholdMs = (opts && opts.gapThresholdMs) || 3600000;
   if (!events.length) return [];
-  const hasRealTimestamp = events.some(e => e.timestamp);
-  if (!hasRealTimestamp) return [];
-  const sorted = [...events].sort((a, b) => effectiveTime(a) - effectiveTime(b));
+  // 2026-09-21 修復：先前只檢查「至少一筆」事件有真實時間戳就對全部事件（含無時間戳的）排序
+  // 比較，無時間戳事件的 effectiveTime() fallback 是 lineNo*1000（約 1970 年附近），真實環境
+  // 常見同一批事件裡部分有真實時間戳、部分沒有（非全有或全無），混合情境下假時間戳事件會排
+  // 在真時間戳事件之前，兩者交界處產生一個長達數十年的假「間隔」問題。改為只對有真實時間戳
+  // 的事件子集排序比較，避免混入行號模擬時間
+  const realEvents = events.filter(e => e.timestamp);
+  if (realEvents.length < 2) return [];
+  const sorted = [...realEvents].sort((a, b) => effectiveTime(a) - effectiveTime(b));
   const issues = [];
   for (let i = 1; i < sorted.length; i++) {
     const gap = effectiveTime(sorted[i]) - effectiveTime(sorted[i - 1]);
@@ -3032,7 +3037,7 @@ function annotateEventsWithIssues(events, issues) {
 // 規則／為何達門檻）；possibleScan 兩種 heuristic 的 sampleRaw 本身已是合成說明文字，這裡
 // 回傳 '-' 避免重複。內容全是 IP/CIDR/ID/數字這類語言無關資料，不需要 i18n 翻譯
 function formatIssueBasis(is) {
-  if (is.category === 'knownIOC') {
+  if (is.category === 'knownIOC' || is.category === 'knownHashIOC') {
     const ip = (is.relatedHosts && is.relatedHosts[0]) || '';
     const meta = is.intelMeta || {};
     const metaParts = Object.keys(meta)
@@ -3126,7 +3131,7 @@ function formatBytesHuman(n) {
 // intelMeta.source 會是逗號分隔字串（如 "firehol_level1,cins_army"），這裡統一拆開存取，
 // 問題清單「情資來源」欄與來源篩選下拉共用同一套拆分邏輯，避免各自寫一次逗號 split
 function getIssueIntelSources(is) {
-  if (is.category !== 'knownIOC' || !is.intelMeta || !is.intelMeta.source) return [];
+  if ((is.category !== 'knownIOC' && is.category !== 'knownHashIOC') || !is.intelMeta || !is.intelMeta.source) return [];
   return String(is.intelMeta.source).split(',').map(s => s.trim()).filter(Boolean);
 }
 function getDistinctIntelSources(issues) {
@@ -3307,7 +3312,9 @@ function buildBaselineSnapshot(issues) {
     generatedAt: new Date().toISOString(),
     issues: (issues || []).map(is => ({
       category: is.category, severityNorm: is.severityNorm, count: is.count, confidence: is.confidence,
-      intelSource: is.category === 'knownIOC' ? (getIssueIntelSources(is)[0] || null) : null,
+      intelSource: is.category === 'knownIOC' ? (getIssueIntelSources(is)[0] || null)
+        : is.category === 'knownHashIOC' ? (is.intelSource || null)
+        : null,
       firstSeen: is.firstSeen || null, lastSeen: is.lastSeen || null,
     })),
   };
@@ -3318,9 +3325,16 @@ function buildBaselineSnapshot(issues) {
 // getIssueIntelSources() 查表），故 is.intelSource 為 undefined 時 fallback 呼叫查表函式，
 // 兩種格式皆可正確取得來源
 function _baselineDiffKey(is) {
-  if (is.category !== 'knownIOC') return is.category;
-  const src = is.intelSource != null ? is.intelSource : (getIssueIntelSources(is)[0] || '');
-  return `knownIOC/${src}`;
+  if (is.category === 'knownIOC') {
+    const src = is.intelSource != null ? is.intelSource : (getIssueIntelSources(is)[0] || '');
+    return `knownIOC/${src}`;
+  }
+  // knownHashIOC（2026-09-21 修復）：不像 knownIOC 有「合併多來源 NDJSON」的 intelMeta.source
+  // 概念，雜湊清單本身就是使用者上傳的具名清單，直接用 intelSource（清單名稱）差異化即可——
+  // 先前落到下方 return is.category fallback，不同雜湊清單的命中會被誤判成同一筆（分析師備註
+  // 也共用這把鍵，可能串錯筆）
+  if (is.category === 'knownHashIOC') return `knownHashIOC/${is.intelSource || ''}`;
+  return is.category;
 }
 function diffBaseline(oldIssues, newIssues) {
   return diffArrayByKey(oldIssues, newIssues, _baselineDiffKey, ['severityNorm', 'count', 'confidence']);
@@ -4852,7 +4866,7 @@ function renderIssues() {
   const rows = visible.map(is => {
     const baseCat = is.category.startsWith('freq:') ? is.category.slice(5) : is.category;
     let catLabel = issueCategoryLabel(is.category);
-    if (is.category === 'knownIOC' && is.intelSource) catLabel += ` (${esc(is.intelSource)})`;
+    if ((is.category === 'knownIOC' || is.category === 'knownHashIOC') && is.intelSource) catLabel += ` (${esc(is.intelSource)})`;
     const mitreId = MITRE_MAP[baseCat];
     const mitreBadge = mitreId ? ` <span class="mitre-badge" title="${esc(tr('mitre.disclaimer'))}">${esc(mitreId)}</span>` : '';
     const sourceCell = getIssueIntelSources(is).join(', ') || '-';
@@ -5629,7 +5643,7 @@ function exportLogReport(mode) {
       // esc()，否則含 &/</>/" 的名稱會被雙重跳脫顯示成亂碼實體字串（如 &amp;amp;T）
       // （2026-09 全功能審查發現，比照 renderIssues() 既有正確寫法：catLabel 組好後不再
       // 額外 esc()）
-      if (is.category === 'knownIOC' && is.intelSource) catLabel += ` (${esc(is.intelSource)})`;
+      if ((is.category === 'knownIOC' || is.category === 'knownHashIOC') && is.intelSource) catLabel += ` (${esc(is.intelSource)})`;
     }
     // 2026-09-10 新增：MITRE 標註比照 renderIssues() 補上，確保下載/列印的報表與畫面上看到的
     // 資訊一致（先前只有即時畫面有徽章，分享出去的報表反而遺漏這項資訊）

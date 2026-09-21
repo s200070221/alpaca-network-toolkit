@@ -1618,10 +1618,11 @@ function _doSwitchHealthCheck(){
 // 與 switch_config_generator 既有的 VENDOR_INCAPABLE/VENDOR_UNSUPPORTED（generator/寫入端）
 // 是兩份獨立矩陣、刻意不共用——那份只追蹤固定 10 種 render 卡片類別（rip/vrrp/dhcpServer/
 // dhcpRelay/acl/qos/security/stp/bgp/routes），完全不涵蓋 SNMP／VXLAN／VRF／Stack／Users，
-// 且已知有 2 處方向性落差（FortiSwitch／Aruba CX 的 QoS 在 generator 端顯示已支援，但 parser
+// 曾有 2 處方向性落差（FortiSwitch／Aruba CX 的 QoS 在 generator 端顯示已支援，但 parser
 // 實際查無該廠牌專屬 QoS 正則，只會落入 Cisco 式 fallback；ProCurve 的 parseSTP() 有完整真實
-// 分支，但 generator 端 VENDOR_UNSUPPORTED.procurve 仍列 'stp' 未接線）——這些落差正是本矩陣
-// 需要獨立建置、不能直接借用 generator 矩陣的理由。18 廠牌 key 對應 detectVendor() 實際回傳值
+// 分支，但 generator 端 VENDOR_UNSUPPORTED.procurve 曾列 'stp' 未接線，已於 2026-09-18 接線
+// 修復）——這類落差正是本矩陣需要獨立建置、不能直接借用 generator 矩陣的理由。18 廠牌 key
+// 對應 detectVendor() 實際回傳值
 // （core.js），⚠️ 儲存格額外帶 note 字串（object 形狀 {v:'⚠️',note}），✅/❌ 為純字串
 const PARSE_COVERAGE_MATRIX={
   comware:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'✅',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'✅',vrf:'✅',stack:'✅',ipv6:'✅',secondaryIp:'✅'},
@@ -1637,7 +1638,7 @@ const PARSE_COVERAGE_MATRIX={
   alcatel:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:{v:'⚠️',note:'僅 DHCP Relay，無 Server'},acl:'❌',qos:'❌',security:'❌',stp:'❌',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'✅',ipv6:'✅',secondaryIp:'✅'},
   sonic:{vlan:'✅',interface:'✅',ospf:'❌',bgp:{v:'⚠️',note:'BGP_NEIGHBOR+bgp_asn 有解析，但 router-id/networks 天生空值'},rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'❌',dhcp:'❌',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'❌',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'❌',ipv6:'✅',secondaryIp:'✅'},
   extreme:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:{v:'⚠️',note:'members/priority 有真實解析，但 links 固定回傳空陣列（無官方多埠鏈路語法佐證）'},ipv6:'✅',secondaryIp:'✅'},
-  procurve:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'❌',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'❌',dhcp:{v:'⚠️',note:'僅 DHCP Relay，無 Server'},acl:'❌',qos:'❌',security:'❌',stp:{v:'⚠️',note:'parseSTP() 內有真實 procurve 分支，但 switch_config_generator 端 VENDOR_UNSUPPORTED.procurve 仍列 stp（render 未接線）'},users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'✅',ipv6:'❌',secondaryIp:'✅'},
+  procurve:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'❌',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'❌',dhcp:{v:'⚠️',note:'僅 DHCP Relay，無 Server'},acl:'❌',qos:'❌',security:'❌',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'✅',ipv6:'❌',secondaryIp:'✅'},
   routeros:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'✅',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'❌',ipv6:'❌',secondaryIp:'❌'},
   nxos:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:{v:'⚠️',note:'class-map/match/service-policy 條件比對已支援，但基礎 policy-map 動作（bandwidth/police 數值）走 generic fallback，switch_config_generator 端 VENDOR_UNSUPPORTED.cisco_nxos 明確標示 qos 不支援'},security:{v:'⚠️',note:'802.1X 走 generic fallback，非該廠牌專屬解析'},stp:'✅',users:'✅',snmp:'✅',vxlan:'✅',vrf:'✅',stack:{v:'⚠️',note:'VPC 與傳統機殼堆疊是不同技術概念，非字面 Stack'},ipv6:'✅',secondaryIp:'✅'},
   juniper:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'❌',dhcp:'✅',acl:'✅',qos:'❌',security:'❌',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'✅',stack:'✅',ipv6:'✅',secondaryIp:'✅'},
