@@ -312,6 +312,23 @@ const Reporter = (() => {
     return toCSV(rows, headers);
   }
 
+  // 合規基準線 drift 結果匯出（2026-09-21 新增）：diffCompliance() 產物（added/removed 元素含
+  // check/value/risk/detail，changed 元素含 old/new/diffFields），與上面 exportDiffCSV() 語意
+  // 不同（比的是合規檢查結果非設定檔實體）故獨立一個函式；risk 欄位輸出原始字串，比照既有
+  // exportCSV() 'compliance' case 慣例（非翻譯過的 pill 標籤，CSV 給人工/工具後續處理用）
+  function exportComplianceDiffCSV(result) {
+    if (!result) return null;
+    const total = result.added.length + result.removed.length + result.changed.length;
+    if (!total) return null;
+    const headers = [tr('diff.col_status'), tr('audit.col_check'), tr('audit.col_risk'), tr('baseline.col_old'), tr('baseline.col_new')];
+    const rows = [
+      ...result.added.map(f => [tr('diff.status_added'), f.check, f.risk, '-', f.value]),
+      ...result.removed.map(f => [tr('diff.status_removed'), f.check, f.risk, f.value, '-']),
+      ...result.changed.map(c => [tr('diff.status_changed'), c.new.check, c.new.risk, c.old.value, c.new.value]),
+    ];
+    return toCSV(rows, headers);
+  }
+
   // ─── JSON ─────────────────────────────────────────────────────────────────
   function exportJSON(parsed) {
     return JSON.stringify(parsed, null, 2);
@@ -385,6 +402,20 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
         <div class="stat-num" style="color:${color}">${val}</div>
         <div class="stat-lbl">${label}</div>
       </div>`;
+
+    // 健康度/合規稽核（2026-09-21 新增）：獨立可下載分享的 HTML 報表先前只有原始資料表格，
+    // 核心分析價值（A-F 健康度分級、合規檢查發現）完全不存在於報表中，只存在即時互動畫面。
+    // computeFirewallHealth()/analyzeCompliance() 定義在 audit.js（無 IIFE、頂層函式），雖然
+    // <script> 載入順序是 reporter.js 先於 audit.js，但函式呼叫在執行期才解析識別字，此處
+    // 呼叫時（使用者點擊匯出按鈕，遠晚於頁面載入）audit.js 早已載入完畢，不受載入順序影響。
+    // issues 陣列本身就是 computeFirewallHealth() 已算好的遮蔽規則數/孤兒NAT/孤兒VPN/各項
+    // 合規扣分摘要，不需要另外重複呼叫 analyzeRuleShadowing()/analyzeOrphanNAT()/analyzeOrphanVPN()
+    const health = computeFirewallHealth(parsed);
+    const complianceFindings = analyzeCompliance(parsed);
+    const healthIssueRows = health.issues.map(hi =>
+      `<tr><td>${esc(hi.label)}</td><td>${hi.count}</td></tr>`).join('');
+    const complianceRows = complianceFindings.map(f =>
+      `<tr><td>${esc(f.check)}</td><td>${esc(f.value)}</td><td>${esc(f.risk)}</td><td>${esc(f.detail)}</td><td>${esc((f.standards||[]).join('; '))}</td></tr>`).join('');
 
     const policyRows = parsed.policies.map(p =>
       `<tr>
@@ -714,6 +745,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
 </div>
 
 <div class="stats">
+  ${stat(tr('rpt.stat_health')+' '+health.grade, health.score, health.gradeColor, 'sec-audit')}
   ${stat(tr('rpt.stat_iface'), parsed.interfaces.length, '#00d4ff', 'sec-interfaces')}
   ${stat(tr('rpt.stat_policy'), parsed.policies.length, '#7dd3fc', 'sec-policies')}
   ${stat(tr('rpt.stat_allow'), allowN, '#10b981', 'sec-policies')}
@@ -728,6 +760,18 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
   ${stat(tr('rpt.stat_nat'), parsed.nat.length, '#fbbf24')}
   ${parsed.wwan&&parsed.wwan.modem5G ? stat('5G Modem', (parsed.wwan.modem5G.modem1?1:0)+(parsed.wwan.modem5G.modem2?1:0), '#00c8f0', 'sec-wwan') : parsed.wwan&&((parsed.wwan.profiles?.length)||(parsed.wwan.lteInterfaces?.length)) ? stat('LTE/WWAN', (parsed.wwan.profiles?.length)||(parsed.wwan.lteInterfaces?.length)||0, '#00c8f0', 'sec-wwan') : ''}
   ${parsed.wlan&&parsed.wlan.interfaces.length ? stat(tr('rpt.stat_wlan'), parsed.wlan.interfaces.length, '#4ade80', 'sec-wlan') : ''}
+</div>
+
+<div class="section" id="sec-audit">
+  <div class="section-title">🏥 ${tr('rpt.sec_audit')}（${health.grade} / ${health.score}）</div>
+  ${health.issues.length ? `<div class="overflow"><table>
+    <thead><tr><th>${tr('audit.col_check')}</th><th>${tr('audit.col_result')}</th></tr></thead>
+    <tbody>${healthIssueRows}</tbody>
+  </table></div>` : ''}
+  <div class="overflow" style="margin-top:12px"><table>
+    <thead><tr><th>${tr('audit.col_check')}</th><th>${tr('audit.col_result')}</th><th>${tr('audit.col_risk')}</th><th>${tr('audit.col_detail')}</th><th>${tr('audit.col_standards')}</th></tr></thead>
+    <tbody>${complianceRows || '<tr><td colspan="5" style="text-align:center;color:#64748b">'+tr('rpt.no_data')+'</td></tr>'}</tbody>
+  </table></div>
 </div>
 
 <div class="section" id="sec-interfaces">
@@ -960,7 +1004,7 @@ ${(parsed.schedules&&parsed.schedules.length)?`<div class="section" id="sec-sche
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 500);
   }
 
-  return { exportCSV, exportZoneMatrixCSV, exportQueryTraceCSV, exportDiffCSV, exportJSON, exportHTML, download };
+  return { exportCSV, exportZoneMatrixCSV, exportQueryTraceCSV, exportDiffCSV, exportComplianceDiffCSV, exportJSON, exportHTML, download };
 })();
 
 

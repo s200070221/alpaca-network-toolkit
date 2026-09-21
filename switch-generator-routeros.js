@@ -264,6 +264,21 @@ function renderRouterOSDHCP(list){
   return blocks.join('\n\n');
 }
 
+// DHCP Relay（2026-09-21 端到端接線修復）：先前 VENDOR_UNSUPPORTED.routeros 明確列出
+// dhcpRelay 是刻意排除（非旗標漂移），因 renderRouterOSDHCP() 只處理 type==='server'，relay
+// 完全沒有 render 路徑。官方語法已由 switch_analyzer 的 parseRouterOSInterfaces() 查證：
+// /ip dhcp-relay add interface=IFACE dhcp-server=SRV1,SRV2（多筆伺服器逗號分隔，同一設定
+// 檔內的多筆 relay 列各自獨立一行，不合併）
+function renderRouterOSDHCPRelay(list){
+  const relays=(list||[]).filter(d=>d.type==='relay'&&d.relayServer);
+  if(!relays.length)return '';
+  const lines=relays.map((d,idx)=>{
+    const servers=String(d.relayServer).split(/[\s,]+/).filter(Boolean).join(',');
+    return `add name=relay${idx+1} interface=${d.interface||'ether1'} dhcp-server=${servers}`;
+  });
+  return ['/ip dhcp-relay',...lines].join('\n');
+}
+
 // RIP：2026-07-19 對外查證官方 help.mikrotik.com「/routing/rip」頁確認 RouterOS v7 用
 // instance+interface-template 模型（無 network 陳述式）。沿用既有共用 RIP 表單
 // （#rip-pid/#rip-networks/#rip-redist），networks 欄位重新詮釋為啟用介面清單
@@ -397,6 +412,8 @@ function assembleRouterOSConfig(model){
   if(bgpBlock)blocks.push(bgpBlock);
   const dhcpBlock=renderRouterOSDHCP(model.dhcp);
   if(dhcpBlock)blocks.push(dhcpBlock);
+  const dhcpRelayBlock=renderRouterOSDHCPRelay(model.dhcp);
+  if(dhcpRelayBlock)blocks.push(dhcpRelayBlock);
   const securityBlock=renderRouterOSSecurity(model.security);
   if(securityBlock)blocks.push(securityBlock);
   const aclBlock=renderRouterOSACL(model.routerosAcl);

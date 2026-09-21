@@ -171,6 +171,9 @@ const App = (() => {
     openwrt:t=>OpenWrtParser.parse(t), watchguard:t=>WatchGuardParser.parse(t),
   };
   let DIFF_OLD_FILE=null, DIFF_NEW_FILE=null, DIFF_RESULT=null, _diffInited=false;
+  // 合規基準線 drift 結果快照（2026-09-21 新增），供 CSV 匯出用，獨立於上面設定檔比對的
+  // DIFF_RESULT——語意不同（這個比的是合規檢查「結果」不是設定檔本身），比照既有慣例模組級變數
+  let COMPLIANCE_DIFF_RESULT=null;
   function initDiffVendorSelect(){
     if(_diffInited)return; _diffInited=true;
     $('diff-vendor').innerHTML=FW_VENDOR_META.map(v=>`<option value="${v.key}">${esc(v.label)}</option>`).join('');
@@ -1370,6 +1373,7 @@ function onParsed(){
       if (!PARSED) return;
       const newFindings = analyzeCompliance(PARSED);
       const diffResult = diffCompliance(baseline.findings, newFindings);
+      COMPLIANCE_DIFF_RESULT = diffResult;
       const statusEl = $('baseline-status');
       if (statusEl) statusEl.textContent = tr('baseline.compared_at').replace('{time}', baseline.savedAt ? new Date(baseline.savedAt).toLocaleString() : '-');
       const resEl = $('baseline-diff-result');
@@ -1595,6 +1599,15 @@ function onParsed(){
       const entity=type.slice('csv-diff-'.length);
       const content=Reporter.exportDiffCSV(DIFF_RESULT[entity]);
       if(content)Reporter.download(content,`fw_diff_${entity}_${dateStr()}.csv`,'text/csv');
+      else showErr(tr('err.csv_unsupported'));
+      return;
+    }
+    if(type==='csv-compliance-diff'){
+      // 合規基準線 drift 匯出（2026-09-21 新增），同樣獨立於 PARSED 門檻，讀 COMPLIANCE_DIFF_RESULT
+      // 而非 DIFF_RESULT[entity]（語意不同：比的是合規檢查結果非設定檔實體）
+      if(!COMPLIANCE_DIFF_RESULT)return;
+      const content=Reporter.exportComplianceDiffCSV(COMPLIANCE_DIFF_RESULT);
+      if(content)Reporter.download(content,`fw_compliance_diff_${dateStr()}.csv`,'text/csv');
       else showErr(tr('err.csv_unsupported'));
       return;
     }

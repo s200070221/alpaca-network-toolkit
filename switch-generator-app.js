@@ -1104,7 +1104,13 @@ function addVrrpRow(vlanId='',ip='',vrid='',vip='',priority='100',preempt=false,
   document.getElementById('vrrp-body').appendChild(tr);
 }
 
-function addDhcpPoolRow(name='',network='',gateway='',dns='',range='',excluded='',lease='',iface=''){
+// bootFile/nextServer/ntpServer（2026-09-21 端到端接線修復）：switch_analyzer 的 Juniper／
+// Extreme／Brocade／RouterOS parser 早就會解析這 3 個欄位，但共用的 DHCP Server 表單先前完全
+// 沒有對應輸入框，collectModel()/applyModelToForm()/applyParsedConfigToForm() 也都沒有傳遞，
+// 導致 Extreme/Brocade/RouterOS 三家 render 函式讀取 d.bootFile 等欄位的既有程式碼永遠是死碼
+// （不管手動填表單或匯入既有設定檔，這 3 個欄位在更早的環節就已遺失）。此處補上表單輸入框
+// 讓資料能真正流通到 render 端。
+function addDhcpPoolRow(name='',network='',gateway='',dns='',range='',excluded='',lease='',iface='',bootFile='',nextServer='',ntpServer=''){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input class="dp-name" value="${escAttr(name)}"></td>
     <td><input class="dp-network" value="${escAttr(network)}" placeholder="10.0.0.0/24"></td>
@@ -1114,15 +1120,19 @@ function addDhcpPoolRow(name='',network='',gateway='',dns='',range='',excluded='
     <td><input class="dp-excluded" value="${escAttr(excluded)}"></td>
     <td><input class="dp-lease" value="${escAttr(lease)}" placeholder="1"></td>
     <td><input class="dp-iface" value="${escAttr(iface)}" placeholder="vlan10"></td>
+    <td><input class="dp-bootfile" value="${escAttr(bootFile)}"></td>
+    <td><input class="dp-nextserver" value="${escAttr(nextServer)}"></td>
+    <td><input class="dp-ntpserver" value="${escAttr(ntpServer)}"></td>
     ${RM_BTN_TD}`;
   document.getElementById('dhcp-pool-body').appendChild(tr);
 }
 
-function addDhcpRelayRow(iface='',server=''){
+function addDhcpRelayRow(iface='',server='',option82=false){
   const relayPh=tr('ph.dhcpRelayIface');
   const tr2=document.createElement('tr');
   tr2.innerHTML=`<td><input class="dr-iface" value="${escAttr(iface)}" placeholder="${relayPh}"></td>
     <td><input class="dr-server" value="${escAttr(server)}"></td>
+    <td style="text-align:center"><input type="checkbox" class="dr-option82"${option82?' checked':''}></td>
     ${RM_BTN_TD}`;
   document.getElementById('dhcp-relay-body').appendChild(tr2);
 }
@@ -1676,9 +1686,11 @@ function collectModel(){
     name:val(tr,'dp-name'), network:val(tr,'dp-network'), gateway:val(tr,'dp-gateway'),
     dns:val(tr,'dp-dns'), range:val(tr,'dp-range'), excluded:val(tr,'dp-excluded'),
     lease:val(tr,'dp-lease'), interface:val(tr,'dp-iface'), type:'server',
+    bootFile:val(tr,'dp-bootfile'), nextServer:val(tr,'dp-nextserver'), ntpServer:val(tr,'dp-ntpserver'),
   })).filter(d=>d.name);
   const dhcpRelays=rowsOf('#dhcp-relay-body tr').map(tr=>({
     interface:val(tr,'dr-iface'), relayServer:val(tr,'dr-server'), type:'relay',
+    option82:val(tr,'dr-option82'),
   })).filter(d=>d.relayServer);
   const dhcp=[...dhcpServers, ...dhcpRelays];
 
@@ -1967,8 +1979,8 @@ function applyModelToForm(model){
   (model.vrrp||[]).forEach(v=>addVrrpRow(v.vlanId,v.ip,v.vrid,v.vip,v.priority,!!v.preempt,v.authMode,v.authKey,v.trackIf,v.trackReduced));
 
   (model.dhcp||[]).forEach(d=>{
-    if(d.type==='server')addDhcpPoolRow(d.name,d.network,d.gateway,d.dns,d.range,d.excluded,d.lease,d.interface);
-    else if(d.type==='relay')addDhcpRelayRow(d.interface,d.relayServer);
+    if(d.type==='server')addDhcpPoolRow(d.name,d.network,d.gateway,d.dns,d.range,d.excluded,d.lease,d.interface,d.bootFile||'',d.nextServer||'',d.ntpServer||'');
+    else if(d.type==='relay')addDhcpRelayRow(d.interface,d.relayServer,!!d.option82);
   });
 
   (model.acl||[]).forEach(a=>{
@@ -2300,8 +2312,9 @@ const VENDOR_UNSUPPORTED={
   procurve:['rip','vrrp','dhcpServer','acl','qos','security'],
   // rip/vrrp/acl/qos/security 已於 2026-07-19 新增支援（見 renderRouterOSRIP/
   // renderRouterOSVRRP/renderRouterOSACL/renderRouterOSQoS/renderRouterOSSecurity）；
-  // dhcpRelay 本輪範圍外維持不支援
-  routeros:['dhcpRelay'],
+  // dhcpRelay 已於 2026-09-21 端到端接線（renderRouterOSDHCPRelay()），此清單原本殘留的
+  // 'dhcpRelay' 已過時，修正時一併移除
+  routeros:[],
   // DHCP Server／DHCP Relay／ACL／QoS／802.1X-Port Security：官方 CLI Command Reference
   // Manual 查有指令存在（ip helper-address 為全域指令而非逐介面，與其餘廠牌慣例不同；
   // ACL/QoS 規則細部語法未深入查證），信心度不足以貿然渲染，本輪不輸出，維持警告而非
@@ -3221,8 +3234,8 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   const dhcpBypass=vendor==='brocade'||vendor==='extreme'||vendor==='procurve'||vendor==='routeros';
   const dhcpList=fns?(dhcpBypass?(parsed.dhcp||[]):fns.parseDHCP(text,vendor)):[];
   (dhcpList||[]).forEach(d=>{
-    if(d.type==='server')addDhcpPoolRow(d.name,d.network,d.gateway,Array.isArray(d.dns)?d.dns.join(' '):(d.dns||''),d.range,d.excluded,d.lease,d.interface);
-    else if(d.type==='relay')addDhcpRelayRow(d.interface==='all'?'':(d.interface||''),d.relayServer);
+    if(d.type==='server')addDhcpPoolRow(d.name,d.network,d.gateway,Array.isArray(d.dns)?d.dns.join(' '):(d.dns||''),d.range,d.excluded,d.lease,d.interface,d.bootFile||'',d.nextServer||'',d.ntpServer||'');
+    else if(d.type==='relay')addDhcpRelayRow(d.interface==='all'?'':(d.interface||''),d.relayServer,!!d.option82);
   });
 
   // ACL：BasicParser 未涵蓋此欄位，只有完整版（fns）才映射。Cisco 的獨立 "remark" 行

@@ -584,6 +584,9 @@ end</pre>
         <th data-i18n="th.dhcpExcluded">Excluded</th>
         <th data-i18n="th.dhcpLease">Lease (天)</th>
         <th data-i18n="th.dhcpIface" data-tip="FortiSwitch：此 pool 綁定的 Layer3 介面名稱；Extreme XOS：填寫 VLAN 名稱（EXOS 指令用名稱而非 ID）；其餘廠牌不需填寫">Interface</th>
+        <th data-i18n="th.dhcpBootFile" data-tip="Juniper／Extreme／Brocade／RouterOS 支援；其餘廠牌不需填寫">Boot File</th>
+        <th data-i18n="th.dhcpNextServer" data-tip="Juniper／Extreme／Brocade／RouterOS 支援；其餘廠牌不需填寫">Next Server</th>
+        <th data-i18n="th.dhcpNtpServer" data-tip="Juniper／Extreme／Brocade／RouterOS 支援；其餘廠牌不需填寫">NTP Server</th>
         <th></th>
       </tr></thead>
       <tbody id="dhcp-pool-body"></tbody>
@@ -597,6 +600,7 @@ end</pre>
       <thead><tr>
         <th data-i18n="th.dhcpRelayIface" data-tip="填寫介面名稱產生逐介面 relay（Cisco/Aruba CX/FortiSwitch/Arista 為介面名稱；Brocade 填寫 veN；Alcatel 填寫 VLAN 介面名稱；Extreme XOS 填寫 VLAN 名稱；Comware 填寫 VLAN ID 或完整 Vlan-interface 名稱皆可）。2026-07-22 對外查證官方文件後修正：Comware 並不支援全域 relay，過去「留空=全域」的假設是誤判，現在留空不會產生任何輸出">Interface</th>
         <th data-i18n="th.dhcpRelayServer">Relay Server IP</th>
+        <th data-i18n="th.dhcpOption82" data-tip="Juniper／Extreme 支援（全域旗標，任一列勾選即輸出一次）；其餘廠牌不需勾選">Option82</th>
         <th></th>
       </tr></thead>
       <tbody id="dhcp-relay-body"></tbody>

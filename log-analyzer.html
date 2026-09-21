@@ -4909,7 +4909,14 @@ function renderChains() {
     return;
   }
   tbody.innerHTML = CHAINS.map(c => {
-    const stageText = c.stages.map(s => `<span class="badge ${s.issue.severityNorm}">${tr(CHAIN_STAGE_KEY_MAP[s.stage])}</span>`).join(' → ');
+    // MITRE 徽章（2026-09-21 新增）：比照 renderIssues()/exportLogReport() 既有 MITRE_MAP
+    // 查表+mitre-badge 樣式，讓攻擊鏈關聯表也能看出各階段對應的 ATT&CK 技術
+    const stageText = c.stages.map(s => {
+      const baseCat = s.issue.category.startsWith('freq:') ? s.issue.category.slice(5) : s.issue.category;
+      const mitreId = MITRE_MAP[baseCat];
+      const mitreBadge = mitreId ? ` <span class="mitre-badge" title="${esc(tr('mitre.disclaimer'))}">${esc(mitreId)}</span>` : '';
+      return `<span class="badge ${s.issue.severityNorm}">${tr(CHAIN_STAGE_KEY_MAP[s.stage])}</span>${mitreBadge}`;
+    }).join(' → ');
     return `<tr>
       <td>${esc(c.actor)}</td>
       <td><span class="badge ${c.severityNorm}">${tr(SEV_KEY_MAP[c.severityNorm])}</span></td>
@@ -5656,8 +5663,9 @@ function exportLogReport(mode) {
       <td>${esc(tr('conf.' + is.confidence))}</td>
       <td>${esc(getIssueIntelSources(is).join(', ') || '-')}</td>
       <td class="mono">${esc(formatIssueBasis(is))}</td>
-      <td class="mono">${esc(is.sampleRaw || '')}</td></tr>`;
-  }).join('') : `<tr><td colspan="7" class="empty">${esc(tr('issues.empty'))}</td></tr>`;
+      <td class="mono">${esc(is.sampleRaw || '')}</td>
+      <td>${esc(issueNotes[_baselineDiffKey(is)] || '')}</td></tr>`;
+  }).join('') : `<tr><td colspan="8" class="empty">${esc(tr('issues.empty'))}</td></tr>`;
   // 樣本事件：僅取嚴重度最高的前 50 筆，避免報表過長；完整清單請使用既有的事件清單 CSV 匯出
   const sampleEvents = sortEventsByColumn(EVENTS, 'severity', 'asc').slice(0, 50);
   const eventsRows = sampleEvents.map(e => `<tr>
@@ -5674,7 +5682,7 @@ function exportLogReport(mode) {
 <div class="rpt-subtitle">${esc(new Date().toLocaleString())} · ${esc(tr('report.total_events'))}: ${EVENTS.length} · ${esc(tr('report.formats'))}: ${esc(formats.join(', ') || '-')}</div>
 <div class="card"><h2>${esc(tr('report.severity_summary'))}</h2><div class="meta-grid">${metaCards}</div></div>
 <div class="card"><h2>${esc(tr('results.timeline_label'))}</h2>${buildReportTimelineSVG(EVENTS)}</div>
-<div class="card"><h2>${esc(tr('issues.title'))}</h2><table><thead><tr><th>${esc(tr('issues.col_category'))}</th><th>${esc(tr('issues.col_severity'))}</th><th>${esc(tr('issues.col_count'))}</th><th>${esc(tr('issues.col_confidence'))}</th><th>${esc(tr('issues.col_source'))}</th><th>${esc(tr('issues.col_basis'))}</th><th>${esc(tr('issues.col_sample'))}</th></tr></thead><tbody>${issuesRows}</tbody></table></div>
+<div class="card"><h2>${esc(tr('issues.title'))}</h2><table><thead><tr><th>${esc(tr('issues.col_category'))}</th><th>${esc(tr('issues.col_severity'))}</th><th>${esc(tr('issues.col_count'))}</th><th>${esc(tr('issues.col_confidence'))}</th><th>${esc(tr('issues.col_source'))}</th><th>${esc(tr('issues.col_basis'))}</th><th>${esc(tr('issues.col_sample'))}</th><th>${esc(tr('issues.col_note'))}</th></tr></thead><tbody>${issuesRows}</tbody></table></div>
 <div class="card"><h2>${esc(tr('report.sample_events'))}（${sampleEvents.length}/${EVENTS.length}）</h2><table><thead><tr><th>${esc(tr('results.col_severity'))}</th><th>${esc(tr('results.col_time'))}</th><th>${esc(tr('results.col_host'))}</th><th>${esc(tr('results.col_format'))}</th><th>${esc(tr('results.col_category'))}</th><th>${esc(tr('results.col_msg'))}</th></tr></thead><tbody>${eventsRows}</tbody></table></div>
 </div></body></html>`;
 
