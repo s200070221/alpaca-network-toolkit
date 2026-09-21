@@ -277,6 +277,12 @@ function renderJuniperDHCP(list){
       const dnsIps=d.dns.trim().split(/\s+/).filter(Boolean);
       if(dnsIps.length)inetLines.push(`                name-server {\n${dnsIps.map(ip=>`                    ${ip};`).join('\n')}\n                }`);
     }
+    // bootFile/nextServer/ntpServer：2026-09-21 端到端接線修復，官方 Junos dhcp-attributes
+    // CLI Reference 已查證的語法（boot-file/boot-server/option 42 ip-address），皆位於同一個
+    // family inet 區塊內，與既有 network/router/name-server 寫法一致
+    if(d.bootFile)inetLines.push(`                boot-file "${d.bootFile}";`);
+    if(d.nextServer)inetLines.push(`                boot-server ${d.nextServer};`);
+    if(d.ntpServer)inetLines.push(`                option 42 ip-address ${d.ntpServer};`);
     return `        pool ${d.name} {\n            family inet {\n${inetLines.join('\n')}\n            }\n        }`;
   });
   const accessBlock=poolLines.length?`access {\n    address-assignment {\n${poolLines.join('\n')}\n    }\n}`:'';
@@ -288,6 +294,9 @@ function renderJuniperDHCP(list){
     relayLines.push(`        server-group ${gname} {\n            ${d.relayServer};\n        }`);
     relayLines.push(`        group ${gname} {\n            active-server-group ${gname};\n            interface ${d.interface||'all'};\n        }`);
   });
+  // option82：2026-09-21 端到端接線修復，官方 relay-option-82 CLI Reference 已查證——掛在
+  // dhcp-relay 區塊層級（非逐 relay-group），任一列勾選即輸出一次
+  if(relays.some(d=>d.option82))relayLines.push(`        relay-option-82 {\n            circuit-id;\n            remote-id;\n        }`);
   const relayBlock=relayLines.length?`forwarding-options {\n    dhcp-relay {\n${relayLines.join('\n')}\n    }\n}`:'';
 
   return {accessBlock, relayBlock, dhcpLocalIfaces};

@@ -117,6 +117,17 @@
     return diffArrayByKey(oldArr, newArr, keyFn, _NAT_COMPARE_FIELDS, excludeFields);
   }
 
+  // VPN／Interfaces 比對（2026-09-21 新增）：與上面 4 類同構的薄包裝，key 沿用既有 _vdom
+  // 前綴慣例（Palo Alto 等多 vsys 廠牌對 interfaces 物件也會標記 _vdom）
+  const _VPN_COMPARE_FIELDS = ['remote','iface','ikeVer','authMethod','proposal','dhgrp','lifetime','natTraversal','dpd','status'];
+  function diffVpn(oldArr, newArr, excludeFields) {
+    return diffArrayByKey(oldArr, newArr, v => (v._vdom ? v._vdom + '/' : '') + v.name, _VPN_COMPARE_FIELDS, excludeFields);
+  }
+  const _INTERFACE_COMPARE_FIELDS = ['ip','mask','ip6','type','vlanId','vdom','role','mtu','speed','mode','status','allowaccess','desc'];
+  function diffInterfaces(oldArr, newArr, excludeFields) {
+    return diffArrayByKey(oldArr, newArr, i => (i._vdom ? i._vdom + '/' : '') + i.name, _INTERFACE_COMPARE_FIELDS, excludeFields);
+  }
+
   // haMode（2026-09-01 新增，功能4）：HA 主備正常應完全同步，此模式僅排除常見的裝置別
   // 註記（comment/comments）欄位差異，其餘欄位若仍有差異即代表兩台設定不同步——刻意只做
   // 這一個範圍明確、低風險的過濾，不臆測其他「裝置專屬」欄位有哪些
@@ -129,6 +140,8 @@
       services: diffServices(oldParsed.services, newParsed.services, excludeFields),
       routes: diffRoutes(oldParsed.routes, newParsed.routes, excludeFields),
       nat: diffNAT(oldParsed.nat, newParsed.nat, excludeFields),
+      vpn: diffVpn(oldParsed.vpn, newParsed.vpn, excludeFields),
+      interfaces: diffInterfaces(oldParsed.interfaces, newParsed.interfaces, excludeFields),
     };
   }
 
@@ -952,13 +965,17 @@
       <button class="btn btn-ghost btn-sm" onclick="doExport('csv-diff-services')">⬇ CSV: ${esc(tr('diff.title_services'))}</button>
       <button class="btn btn-ghost btn-sm" onclick="doExport('csv-diff-routes')">⬇ CSV: ${esc(tr('diff.title_routes'))}</button>
       <button class="btn btn-ghost btn-sm" onclick="doExport('csv-diff-nat')">⬇ CSV: ${esc(tr('diff.title_nat'))}</button>
+      <button class="btn btn-ghost btn-sm" onclick="doExport('csv-diff-vpn')">⬇ CSV: ${esc(tr('diff.title_vpn'))}</button>
+      <button class="btn btn-ghost btn-sm" onclick="doExport('csv-diff-interfaces')">⬇ CSV: ${esc(tr('diff.title_interfaces'))}</button>
     </div>`;
     return bar
       + _buildDiffSection('diff.title_policies', diffResult.policies)
       + _buildDiffSection('diff.title_addresses', diffResult.addresses)
       + _buildDiffSection('diff.title_services', diffResult.services)
       + _buildDiffSection('diff.title_routes', diffResult.routes)
-      + _buildDiffSection('diff.title_nat', diffResult.nat);
+      + _buildDiffSection('diff.title_nat', diffResult.nat)
+      + _buildDiffSection('diff.title_vpn', diffResult.vpn)
+      + _buildDiffSection('diff.title_interfaces', diffResult.interfaces);
   }
 
   // ── 合規基準快照 + drift 比對（2026-09-15 新增）───────────────────────
@@ -979,7 +996,9 @@
   function buildComplianceDiffHtml(diffResult) {
     const total = diffResult.added.length + diffResult.removed.length + diffResult.changed.length;
     if (!total) return `<div class="nodata" style="padding:14px 0;color:var(--green)">${esc(tr('diff.none_found'))}</div>`;
-    let h = '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('diff.col_status') + '</th><th>' + tr('audit.col_check') + '</th><th>' + tr('baseline.col_old') + '</th><th>' + tr('baseline.col_new') + '</th></tr></thead><tbody>';
+    // CSV 匯出按鈕（2026-09-21 新增），比照 buildDiffHtml() 既有 bar 樣式
+    let h = `<div style="display:flex;gap:8px;margin-bottom:12px"><button class="btn btn-ghost btn-sm" onclick="doExport('csv-compliance-diff')">⬇ ${esc(tr('baseline.export_csv_btn'))}</button></div>`;
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('diff.col_status') + '</th><th>' + tr('audit.col_check') + '</th><th>' + tr('baseline.col_old') + '</th><th>' + tr('baseline.col_new') + '</th></tr></thead><tbody>';
     diffResult.added.forEach(f => {
       h += `<tr><td>${pill(tr('diff.status_added'), 'p-allow')}</td><td>${esc(f.check)}</td><td class="mono">-</td><td class="mono">${f.value} ${pill(_riskLabel(f.risk), _RISK_PILL_TYPE[f.risk] || 'p-info')}</td></tr>`;
     });
