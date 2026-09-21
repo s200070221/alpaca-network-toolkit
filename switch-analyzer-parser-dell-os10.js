@@ -393,9 +393,17 @@ function parseDellOS10(cfg){
 // SmartFabric OS10 User Guide 真實設定範例後修正：dscp 正確語法是 "match ip dscp N"，
 // 非先前版本誤植的裸 "match dscp N"；同批新增 cos "match cos N"），protocol／ip-precedence
 // 仍查無官方逐字語法佐證，非本輪範圍
+// 2026-09-21 修復：對外查證官方文件確認 OS10 policy-map 確有 qos/queuing/network-qos
+// 三種 type（見上方 2026-08-28（續5）註解），對應也各自有 "class-map type network-qos
+// NAME"／"class-map type queuing NAME" 標頭語法（與 NX-OS 同一套三層 MQC 模型）。與
+// NX-OS/Arista 修復同一種風險：先前收尾 lookahead 只認得下一個 "class-map type qos"
+// 標頭，若設定檔中一個 qos class-map 後面（中間無 policy-map）接的是
+// network-qos/queuing 類型 class-map，會貪婪吃進該 sibling 區塊內容並誤抓其 match 條件。
+// 修法：收尾 lookahead 放寬為任何 "class-map" 開頭行（不限定 type qos），與
+// parseNxosClassMaps()／parseAristaClassMaps() 採同一套修復邏輯。
 function parseDellOS10ClassMaps(cfg){
   const maps=[];
-  const cmRe=/^class-map\s+type\s+qos\s+(match-any|match-all)\s+(\S+)([\s\S]*?)(?=^class-map\s+type\s+qos\s+|^policy-map\s+|(?![\s\S]))/gm;
+  const cmRe=/^class-map\s+type\s+qos\s+(match-any|match-all)\s+(\S+)([\s\S]*?)(?=^class-map\s+|^policy-map\s+|(?![\s\S]))/gm;
   let m;
   while((m=cmRe.exec(cfg))!==null){
     const matchType=m[1], name=m[2], body=m[3]||'', matches=[];

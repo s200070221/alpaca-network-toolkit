@@ -94,9 +94,17 @@ function parseArista(cfg){
 // OS10 語序相反，見該廠牌 parser 對應註解）。match 條件本輪僅確認 "match ip access-group
 // NAME"（非 Cisco 裸 "match access-group N"），dscp/cos/protocol/ip-precedence 未查得官方
 // 逐字語法，非本輪範圍，不臆測
+// 2026-09-21 修復：對外查證確認 Arista EOS 的 class-map 除 "type qos" 外，官方文件另記載
+// "class-map type copp"（Control Plane Policing）與 "class-map type pbr"（Policy-Based
+// Routing）兩種同樣以 "class-map type <type> {match-any|match-all} NAME" 起始的 sibling
+// class-map（"Each class map is typed as either qos, control plane, or PBR"）。與先前
+// NX-OS 修復同一種風險：先前收尾 lookahead 只認得下一個 "class-map type qos" 標頭，若
+// 設定檔中一個 qos class-map 後面（中間無 policy-map）接的是 copp/pbr 類型 class-map，會
+// 貪婪吃進該 sibling 區塊內容並誤抓其 match 條件。修法：收尾 lookahead 放寬為任何
+// "class-map" 開頭行（不限定 type qos），與 parseNxosClassMaps() 採同一套修復邏輯。
 function parseAristaClassMaps(cfg){
   const maps=[];
-  const cmRe=/^class-map\s+type\s+qos\s+(match-any|match-all)\s+(\S+)([\s\S]*?)(?=^class-map\s+type\s+qos\s+|^policy-map\s+|(?![\s\S]))/gm;
+  const cmRe=/^class-map\s+type\s+qos\s+(match-any|match-all)\s+(\S+)([\s\S]*?)(?=^class-map\s+|^policy-map\s+|(?![\s\S]))/gm;
   let m;
   while((m=cmRe.exec(cfg))!==null){
     const matchType=m[1], name=m[2], body=m[3]||'', matches=[];
