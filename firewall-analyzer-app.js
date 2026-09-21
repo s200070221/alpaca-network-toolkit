@@ -733,7 +733,7 @@ function onParsed(){
           const evalOrderDisplay = r.status === 'disable' ? '-' : String(_evalOrderMap.get(r.id) ?? '-');
           // NAT cell
           const natTd = r.nat === 'enable'
-            ? `<td><span class="nat-badge pill p-warn" onclick="showNatById('${r.id}')" title="${tr('nat.view_tip')}">🔀 NAT</span></td>`
+            ? `<td><span class="nat-badge pill p-warn" onclick="showNatById(${JSON.stringify(r.id).replace(/"/g,'&quot;')})" title="${tr('nat.view_tip')}">🔀 NAT</span></td>`
             : '<td>-</td>';
           // 遮蔽規則數
           const shadowedCount = _shadowMap[r.id] ? _shadowMap[r.id].length : 0;
@@ -1775,7 +1775,7 @@ function onParsed(){
         const actPill = r.action === 'accept'
           ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(34,197,94,.15);color:var(--green)">✓</span>`
           : `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(239,68,68,.15);color:var(--red)">✕</span>`;
-        return `<div class="ref-row" onclick="_jumpToPolicy('${r.id}');document.getElementById('_ref-modal-overlay')?.remove()">
+        return `<div class="ref-row" onclick="_jumpToPolicy(${JSON.stringify(r.id).replace(/"/g,'&quot;')});document.getElementById('_ref-modal-overlay')?.remove()">
           <span class="ref-id">#${esc(String(r.id))}</span>
           <span class="ref-name">${esc(r.name||'-')}</span>
           ${rolePill}${actPill}

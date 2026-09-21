@@ -1366,10 +1366,11 @@ function updateModeOptions(){
   // 邏輯且語法在 config_anonymizer 獨立第二套正則交叉驗證過）＋ 2026-08-26 新增 Extreme
   // EXOS／MikroTik RouterOS（switch_analyzer 既有 parseExtremeXOSUsers()/parseRouterOSUsers()
   // 早已存在，本輪僅補 generator 端 render；RouterOS 因真實 /export 不含密碼欄位，僅能單向
-  // 產生無法 round-trip 密碼）；Alcatel 中信心度、FortiSwitch/Netgear/EdgeSwitch/SONiC 完全
-  // 零解析（EdgeSwitch/FortiSwitch/Netgear 已於 2026-08-23 補上 switch_analyzer 端解析，
-  // generator 端尚未接線）留待後續評估，不開放
-  const USERS_CARD_VENDORS=['procurve','cisco','arista','ruijie','cisco_nxos','comware','dell-os10','brocade','aruba','juniper','extreme','routeros','planet','alcatel'];
+  // 產生無法 round-trip 密碼）；Alcatel 中信心度；FortiSwitch/Netgear/EdgeSwitch 的
+  // renderFortiSwitchUsers()/renderNetgearUsers()/renderEdgeSwitchUsers() 皆已存在且接線進
+  // assemble...Config()，但白名單先前忘了加，使用者選這 3 家時看不到帳號表單卡片（2026-09-21
+  // 修復，同一種「旗標與實作不同步」模式第 4 次出現）；SONiC 因架構限制（無 USER 表格）不開放
+  const USERS_CARD_VENDORS=['procurve','cisco','arista','ruijie','cisco_nxos','comware','dell-os10','brocade','aruba','juniper','extreme','routeros','planet','alcatel','fortiswitch','netgear','edgeswitch'];
   const usersCard=document.getElementById('users-card');
   if(usersCard)usersCard.style.display=USERS_CARD_VENDORS.includes(vendor)?'':'none';
   // SONiC L3 介面 IP 卡片僅 SONiC 適用（config_db.json 的 INTERFACE/VLAN_INTERFACE/
@@ -3027,6 +3028,14 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   document.getElementById('vendor').value=genVendor;
   updateModeOptions();
   document.getElementById('hostname').value=parsed.sys?.hostname||'';
+
+  // SNMP 社群/Trap Host/Syslog Server 回填（2026-09-21 修復既有缺口）：parseAny() 對每個廠牌
+  // （除 SONiC）皆會 res.snmp=parseSNMP()／res.syslog=parseSyslog()，但此函式先前從未讀取過，
+  // 匯入一份本來就有設定這 3 項的既有設定檔、重新產生時會靜默遺失；表單只有單一文字欄位，
+  // 比照既有單值欄位慣例取第一筆，查無資料時安全 fallback 空字串
+  document.getElementById('snmp-community').value=parsed.snmp?.communities?.[0]?.name||'';
+  document.getElementById('snmp-trap-host').value=parsed.snmp?.hosts?.[0]?.host||'';
+  document.getElementById('syslog-server').value=parsed.syslog?.servers?.[0]?.host||'';
 
   (parsed.vlans||[]).forEach(v=>addVlanRow(v.id,v.name,v.ip));
 
