@@ -1775,10 +1775,17 @@ const Converter = (() => {
     let addrSeq=1, svcSeq=1;
     const addrObjLines=[], svcObjLines=[];
     const nz=(v,fb)=>(v&&v!=='-'&&!/^(any|all)$/i.test(v))?v:fb;
-    function addrObjFor(val){
+    // 2026-09-22 修復：addrObjFor()/svcObjFor() 查找加入 VDOM 隔離（比照 firewall-analyzer-
+    // audit.js 既有 `(x._vdom?x._vdom+'/':'')+name` 慣例）。多 VDOM FortiGate 來源若不同 VDOM
+    // 剛好有同名位址/服務物件，原本 .find() 只比對 name，會取到第一個命中的 VDOM 的值，導致
+    // 轉出的 Zyxel 設定檔夾帶錯誤 VDOM 的 IP/Port（靜默資料錯置）。cache key 與輸出物件名稱
+    // 皆一併帶 vdom 後綴避免撞名；單一 VDOM（無 _vdom）來源時後綴為空字串，行為與修復前相同。
+    const zVk=(vdom,name)=>(vdom?vdom+'/':'')+name;
+    function addrObjFor(val,vdom){
       if(!val||/^(any|all|-)$/i.test(val))return null;
       const first=sl(val)[0]||val;
-      if(addrNames[first])return addrNames[first];
+      const key=zVk(vdom,first);
+      if(addrNames[key])return addrNames[key];
       // 2026-09-10 修正：先查 first 是否命中 parsed.addresses 裡的具名物件（host/subnet/
       // range 三型態皆為已查證的 address-object 官方語法涵蓋範圍），命中則沿用該物件
       // 原本的名稱＋真實值，而非把物件「名稱」本身誤當成物件「內容」寫入（先前寫法對任何
@@ -1787,19 +1794,19 @@ const Converter = (() => {
       // 處理，非本輪劣化）。2026-09-10（續）擴大：fqdn 型別已查證——ZyxelParser 的型別判斷式
       // 本身（val.includes('/')?'ipmask':/[a-zA-Z]/.test(val)?'fqdn':...）證實 address-object
       // 語法就是唯一的位址物件指令，FQDN 只是 value 恰好是網域名稱字串，非獨立語法，故一併攤平。
-      const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===first&&(a.type==='ipmask'||a.type==='iprange'||a.type==='fqdn'));
-      const name=obj?obj.name:`ADDR_${addrSeq++}`;
+      const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===first&&(a._vdom||null)===(vdom||null)&&(a.type==='ipmask'||a.type==='iprange'||a.type==='fqdn'));
+      const name=obj?(vdom?`${obj.name}_${vdom}`:obj.name):`ADDR_${addrSeq++}`;
       let value=first;
       if(obj){
         if(obj.type==='iprange') value=`${obj.startIp}-${obj.endIp}`;
         else if(obj.type==='fqdn') value=obj.fqdn;
         else { const c=addrCidr(obj); value=c.endsWith('/32')?c.slice(0,-3):c; }
       }
-      addrNames[first]=name;
+      addrNames[key]=name;
       addrObjLines.push(`address-object ${name} ${value}`);
       return name;
     }
-    function svcObjFor(val){
+    function svcObjFor(val,vdom){
       if(!val||/^(any|all|-)$/i.test(val))return null;
       const svc=sl(val)[0]||val;
       const litM=svc.match(/^(tcp|udp)\/(\d+)$/i);
@@ -1815,24 +1822,26 @@ const Converter = (() => {
       // 僅支援單一 tcp/udp port（`service-object <name> {tcp|udp} eq <port>` 已查證語法），
       // 多埠/range/icmp 查無逐字語法佐證不處理（回傳 null，該規則的 service 行維持既有
       // 「查無法解析時省略」行為，非本輪引入的新缺口）
-      const obj=(parsed.services||[]).find(s=>s.category==='service'&&s.name===svc);
+      const key=zVk(vdom,svc);
+      const obj=(parsed.services||[]).find(s=>s.category==='service'&&s.name===svc&&(s._vdom||null)===(vdom||null));
       if(!obj)return null;
-      if(svcNames[svc])return svcNames[svc];
+      if(svcNames[key])return svcNames[key];
       const proto=(obj.proto||'TCP').toLowerCase();
       if(!proto.includes('tcp')&&!proto.includes('udp'))return null;
       const p2=proto.includes('udp')&&!proto.includes('tcp')?'udp':'tcp';
       const portField=p2==='udp'?obj.udpPorts:obj.tcpPorts;
       const firstPort=(portField&&portField!=='-'?portField:(p2==='udp'?obj.tcpPorts:obj.udpPorts)||'').split(/[,-]/)[0].trim();
       if(!firstPort)return null;
-      svcNames[svc]=obj.name;
-      svcObjLines.push(`service-object ${obj.name} ${p2} eq ${firstPort}`);
-      return obj.name;
+      const name=vdom?`${obj.name}_${vdom}`:obj.name;
+      svcNames[key]=name;
+      svcObjLines.push(`service-object ${name} ${p2} eq ${firstPort}`);
+      return name;
     }
     const ruleBlocks=[];
     parsed.policies.forEach((p,idx)=>{
-      const srcObj=addrObjFor(p.srcAddr);
-      const dstObj=addrObjFor(p.dstAddr);
-      const svcObj=svcObjFor(p.service);
+      const srcObj=addrObjFor(p.srcAddr,p._vdom);
+      const dstObj=addrObjFor(p.dstAddr,p._vdom);
+      const svcObj=svcObjFor(p.service,p._vdom);
       const lines=[`secure-policy insert ${idx+1}`];
       lines.push(` from ${nz(p.srcIntf,'any')}`);
       lines.push(` to ${nz(p.dstIntf,'any')}`);
@@ -1894,16 +1903,23 @@ const Converter = (() => {
       // 具名服務物件解析成字面 protocol/port（與 MikroTik／OpenWrt 服務端處理方式一致）。
       const neededAddrGroups=new Map();
       const literalAddrRe=/^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$|^[0-9a-f:]+:[0-9a-f:]*(\/\d{1,3})?$/i;
-      function addrGroupRef(val){
+      // 2026-09-22 修復：加入 VDOM 隔離，理由與寫法比照 toZyxel() 的 addrObjFor()——原本
+      // .find() 只比對 name，多 VDOM 來源若不同 VDOM 同名位址物件會取到錯誤 VDOM 的成員值；
+      // 輸出的 address-group 名稱一併帶 vdom 後綴避免不同 VDOM 同名群組互相覆蓋（單一 VDOM
+      // 來源時後綴為空字串，行為與修復前相同）
+      const erVk=(vdom,name)=>(vdom?vdom+'/':'')+name;
+      function addrGroupRef(val,vdom){
         if(!val||/^(any|-)$/i.test(val)||literalAddrRe.test(val))return null;
-        const obj=(parsed.addresses||[]).find(a=>a.name===val&&(a.category==='address'||a.category==='address-group')&&a.type!=='fqdn');
+        const obj=(parsed.addresses||[]).find(a=>a.name===val&&(a._vdom||null)===(vdom||null)&&(a.category==='address'||a.category==='address-group')&&a.type!=='fqdn');
         if(!obj)return null;
-        if(!neededAddrGroups.has(obj.name)){
+        const key=erVk(vdom,obj.name);
+        if(!neededAddrGroups.has(key)){
           const members=obj.category==='address-group'?sl(obj.members):(obj.type==='iprange'?null:[addrCidr(obj)]);
           if(!members)return null;
-          neededAddrGroups.set(obj.name,members);
+          const outName=vdom?`${obj.name}_${vdom}`:obj.name;
+          neededAddrGroups.set(key,{name:outName,members});
         }
-        return obj.name;
+        return neededAddrGroups.get(key).name;
       }
       function svcLiteral(val){
         if(!val||val.includes('/'))return null; // 已是 "proto/port" 字面格式，交給既有邏輯處理
@@ -1940,7 +1956,7 @@ const Converter = (() => {
         lines.push(`            action ${p.action==='accept'?'accept':'drop'}`);
         if(p.comments)lines.push(`            description "${qstr(p.comments)}"`);
         if(svcProto&&!/^(any|all)$/i.test(svcProto))lines.push(`            protocol ${svcProto}`);
-        const srcGroup=p.srcAddr?addrGroupRef(p.srcAddr):null;
+        const srcGroup=p.srcAddr?addrGroupRef(p.srcAddr,p._vdom):null;
         if(srcGroup){
           lines.push('            source {');
           lines.push('                group {');
@@ -1952,7 +1968,7 @@ const Converter = (() => {
           lines.push(`                address ${p.srcAddr}`);
           lines.push('            }');
         }
-        const dstGroup=p.dstAddr?addrGroupRef(p.dstAddr):null;
+        const dstGroup=p.dstAddr?addrGroupRef(p.dstAddr,p._vdom):null;
         if(dstGroup||(p.dstAddr&&!/^(any|-)$/.test(p.dstAddr))||svcPort){
           lines.push('            destination {');
           if(dstGroup) { lines.push('                group {'); lines.push(`                    address-group ${dstGroup}`); lines.push('                }'); }
@@ -1983,7 +1999,7 @@ const Converter = (() => {
       L.push('firewall {');
       if(neededAddrGroups.size){
         L.push('    group {');
-        neededAddrGroups.forEach((members,name)=>{
+        neededAddrGroups.forEach(({name,members})=>{
           L.push(`        address-group ${name} {`);
           members.forEach(mem=>L.push(`            address ${mem}`));
           L.push('        }');
@@ -2575,6 +2591,27 @@ const Converter = (() => {
   function getConversionCaveats(parsed, targetVendor){
     const notes=['介面實體名稱／埠位對應皆直接沿用來源設定，未轉換為目標設備慣用命名，請依目標設備實際型號與埠數量人工核對介面清單'];
     const ifs=parsed.interfaces||[];
+    // 2026-09-22 新增：跨 VDOM 同名具名物件警語。toZyxel()/toEdgeRouter() 的具名物件查找已
+    // 直接修復為 VDOM 感知（見各自函式內 _vdom 比對邏輯）；toMikrotik()/toOpenWrt() 的具名
+    // 物件攤平牽涉多個互相依賴的兩段式演算法（先掃描全部 policy 決定群組/清單輸出方向與名稱、
+    // 再逐規則引用），toSonicWall() 則是直接整份輸出 parsed.addresses/services 不經過規則
+    // 逐一查找——三者要正確做到 VDOM 隔離皆需改動核心資料結構（Map key、輸出物件命名）並牽動
+    // 多個互相呼叫的內部函式，範圍與風險不成比例，故改為偵測到跨 VDOM 同名物件時提醒人工核對，
+    // 不強行重構
+    const _crossVdomDup=list=>{
+      const seen=new Map();
+      return (list||[]).some(o=>{
+        if(!o.name)return false;
+        const vdom=o._vdom||'';
+        if(seen.has(o.name)&&seen.get(o.name)!==vdom)return true;
+        seen.set(o.name,vdom);
+        return false;
+      });
+    };
+    if((targetVendor==='mikrotik'||targetVendor==='openwrt'||targetVendor==='sonicwall')&&
+       (_crossVdomDup(parsed.addresses)||_crossVdomDup(parsed.services))){
+      notes.push('偵測到來源設定檔為多 VDOM／vsys 且不同 VDOM 存在同名位址或服務物件：本轉換器的具名物件查找/輸出未依 VDOM 區分，轉換結果引用到的 IP／Port 可能夾帶另一個 VDOM 的值，請務必人工核對規則實際引用的物件內容是否正確（Zyxel／EdgeRouter 目標已修復此問題，不受此提示影響）');
+    }
     if(targetVendor==='ciscoasa'||targetVendor==='ciscoftd'){
       const intfOf=role=>{const z=mapZone(role,'ciscoasa');return z==='any'?'inside':z;};
       const counts={};

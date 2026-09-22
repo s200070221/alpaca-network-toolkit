@@ -129,7 +129,7 @@ function renderRuijieVRRPGroup(g){
     lines.push(` ip address ${ip} ${maskFromCidr(len)}`);
   }
   g.entries.forEach(v=>{
-    lines.push(` vrrp ${v.vrid} ip ${v.vip}`);
+    if(v.vip)lines.push(` vrrp ${v.vrid} ip ${v.vip}`);
     lines.push(` vrrp ${v.vrid} priority ${v.priority}`);
     if(v.preempt)lines.push(` vrrp ${v.vrid} preempt`);
   });
@@ -187,13 +187,22 @@ function assembleRuijieConfig(model){
   if(stackInfo.block)blocks.push(stackInfo.block);
   const stpBlockRj=renderSpanningTreeGlobal(model.stp);
   if(stpBlockRj)blocks.push(stpBlockRj);
-  // OSPF/BGP/RIP/靜態路由/ACL：已查證與 Cisco IOS 語法相符，直接重用對應 renderCiscoXxx，
-  // 沿用既有慣例排在 blocks 陣列最後（區塊擷取正則只認得下一個同關鍵字區塊或字串結尾）
+  // OSPF/BGP/RIP/靜態路由：已查證與 Cisco IOS 語法相符，直接重用對應 renderCiscoXxx
   if(model.ospf&&model.ospf.length)blocks.push(renderCiscoOSPF(model.ospf));
   if(model.ospf6&&model.ospf6.length)blocks.push(renderCiscoOSPFv3(model.ospf6));
   if(model.rip&&model.rip.length)blocks.push(renderCiscoRIPList(model.rip));
   if(model.routes&&model.routes.length)blocks.push(renderCiscoRoutes(model.routes));
   if(model.bgp&&model.bgp.length)blocks.push(renderCiscoBGPList(model.bgp));
+  // 本機帳號：與 Cisco IOS 共用同一套 parseCiscoUsers()/renderCiscoUsers()，語法相符
+  const ruijieUsersBlock=renderCiscoUsers(model.users);
+  if(ruijieUsersBlock)blocks.push(ruijieUsersBlock);
+  // SNMP 社群／Telnet 停用（選填，2026-09-16 新增）：switch_analyzer parseSNMP()／
+  // parseMgmtAccess() 的 ruijie 分支與 cisco 共用同一套正則（見該檔案註解），沿用相同語法
+  if(model.snmpCommunity)blocks.push(`snmp-server community ${model.snmpCommunity} ro`);
+  if(model.mgmtTelnetDisable)blocks.push('line vty 0 4\n transport input ssh');
+  // ACL：已查證與 Cisco IOS 語法相符，沿用既有慣例排在 blocks 陣列最後（區塊擷取正則只
+  // 認得下一個同關鍵字區塊或字串結尾）。2026-09-21 修正：此組先前雖彼此相鄰，卻排在
+  // Users/SNMP/Telnet 之前，同樣違反「放最後」規則，一併搬到組裝順序最末端
   if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
   // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
   // 不能顛倒（2026-08-28（續4）新增，語法比照 Cisco 未查得落差佐證，同下方 QoS 註解理由）
@@ -203,13 +212,6 @@ function assembleRuijieConfig(model){
   // "type quality-of-service"/kbps 單位詞對 Ruijie 而言查無對應佐證，不應套用）；放最後
   // 理由同 ACL/BGP（policy-map 區塊擷取正則只認得下一個同關鍵字區塊或字串結尾）
   if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
-  // 本機帳號：與 Cisco IOS 共用同一套 parseCiscoUsers()/renderCiscoUsers()，語法相符
-  const ruijieUsersBlock=renderCiscoUsers(model.users);
-  if(ruijieUsersBlock)blocks.push(ruijieUsersBlock);
-  // SNMP 社群／Telnet 停用（選填，2026-09-16 新增）：switch_analyzer parseSNMP()／
-  // parseMgmtAccess() 的 ruijie 分支與 cisco 共用同一套正則（見該檔案註解），沿用相同語法
-  if(model.snmpCommunity)blocks.push(`snmp-server community ${model.snmpCommunity} ro`);
-  if(model.mgmtTelnetDisable)blocks.push('line vty 0 4\n transport input ssh');
   return blocks.join('\n!\n')+'\n';
 }
 

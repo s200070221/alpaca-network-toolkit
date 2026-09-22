@@ -17,6 +17,33 @@ function isValidCIDR(s){
   return !!m && isValidIPv4(m[1]) && parseInt(m[2],10)>=0 && parseInt(m[2],10)<=32;
 }
 
+// IPv6 格式驗證（純位址，非 CIDR）：基本格式檢查，不追求完整 RFC 4291 相容
+// （比照上方 isValidIPv4／isValidCIDR 的簡潔風格）——僅允許十六進位字元與冒號、
+// 最多一個 "::" 縮寫、展開後 group 數不超過 8 組。
+function isValidIPv6(s){
+  s=(s||'').trim();
+  if(!s||!/^[0-9a-fA-F:]+$/.test(s))return false;
+  if(s.indexOf(':')===-1)return false;
+  if((s.match(/::/g)||[]).length>1)return false;
+  if(/:::/.test(s))return false;
+  if(!s.includes('::')){
+    const groups=s.split(':');
+    return groups.length===8 && groups.every(g=>/^[0-9a-fA-F]{1,4}$/.test(g));
+  }
+  if(s==='::')return true;
+  const sides=s.split('::');
+  if(sides.length!==2)return false;
+  const left=sides[0]?sides[0].split(':'):[];
+  const right=sides[1]?sides[1].split(':'):[];
+  if(left.length+right.length>=8)return false;
+  return [...left,...right].every(g=>/^[0-9a-fA-F]{1,4}$/.test(g));
+}
+
+function isValidIPv6CIDR(s){
+  const m=(s||'').match(/^(\S+)\/(\d{1,3})$/);
+  return !!m && isValidIPv6(m[1]) && parseInt(m[2],10)>=0 && parseInt(m[2],10)<=128;
+}
+
 function getModelPortSet(vendor,modelValue){
   if(!modelValue)return null;
   const model=(DEVICE_MODELS[vendor]||[]).find(m=>m.value===modelValue);

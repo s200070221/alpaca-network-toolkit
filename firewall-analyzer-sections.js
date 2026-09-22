@@ -26,7 +26,7 @@
 (function(){
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const pill=(t,c)=>`<span class="pill ${c}">${esc(t)}</span>`;
-function sumC(items){return items.map(i=>{const cl=i.sf?' clickable':'';const oc=i.sf?` onclick="_scf(${JSON.stringify(i.sf.t).replace(/"/g,'&quot;')},${JSON.stringify(i.sf.v||'').replace(/"/g,'&quot;')})"`:'';;return`<div class="sum-card${cl}"${oc}><div class="sl">${i.l}</div><div class="sv" style="color:${i.c}">${i.v}</div></div>`;}).join('');}
+function sumC(items){return items.map(i=>{const cl=i.sf?' clickable':'';const oc=i.sf?` onclick="_scf(${JSON.stringify(i.sf.t).replace(/"/g,'&quot;')},${JSON.stringify(i.sf.v||'').replace(/"/g,'&quot;')})"`:'';;return`<div class="sum-card${cl}"${oc}><div class="sl">${i.l}</div><div class="sv" style="color:${i.c}">${esc(i.v)}</div></div>`;}).join('');}
 
 function buildHaSectionHtml(ha){
   const sumHtml=sumC([

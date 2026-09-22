@@ -3642,6 +3642,17 @@ async function runBatch() {
   // （anonymize() 本身每次呼叫本來就會無條件重置 mappings/ctrs/stats/bucketSeen，若只在
   // runBatch() 這層跳過重置、anonymize() 內部仍會重置一次，等於完全無效）。
   const sharedMapping = !!document.getElementById('opt-batch-shared-mapping')?.checked;
+  // 2026-09-22（續，bug fix）：sharedMapping 是整批次固定不變的布林值，若直接原樣傳給每一檔案
+  // 的 anonymize() 當 keepState，批次「第一個」檔案也會跳過重置，沿用批次開始「前」殘留在全域
+  // mappings 裡的任何舊狀態（可能來自稍早的單檔模式操作、或前一次已執行完的另一個批次），使匯出
+  // 的 mapping-all.json 混入不屬於這批檔案的真實 IP/主機名稱對應，與 UI 文案「批次『內』共用
+  // 映射」語意不符。改用 isFirstInRun 追蹤「這次 runBatch() 執行以來是否已經嘗試呼叫過
+  // anonymize()」，只有真正執行到 anonymize() 那一行才消耗（`continue` 跳過的已完成檔案不消
+  // 耗），確保批次的第一次有效處理必定重置，之後才依 sharedMapping 決定是否保留狀態。
+  // isFirstInRun 在呼叫前（try 區塊外）就先翻成 false，即使該次 anonymize() 之後拋錯，也視為
+  // 「已嘗試過」不再是首檔——若第一個檔案處理失敗，第二個檔案不會被誤判成本次執行的首檔而又
+  // 觸發一次多餘重置，維持後續檔案彼此間的映射一致性。
+  let isFirstInRun = true;
   for (let i = 0; i < BATCH.files.length; i++) {
     const f = BATCH.files[i];
     if (f.status === 'done') continue;
@@ -3650,8 +3661,10 @@ async function runBatch() {
     renderBatchList();
     if (prog) prog.textContent = `${i+1} / ${BATCH.files.length}`;
     await new Promise(r => setTimeout(r, 0)); // yield to UI
+    const keepState = sharedMapping && !isFirstInRun;
+    isFirstInRun = false;
     try {
-      f.result = applyCustomRules(anonymize(f.text, f.vendor, opts, sharedMapping));
+      f.result = applyCustomRules(anonymize(f.text, f.vendor, opts, keepState));
       f.mapping = buildMappingSnapshot(mappings);
       f.residualWarnings = checkResidual(f.result);
       f.status = 'done';
