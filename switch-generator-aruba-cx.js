@@ -164,7 +164,7 @@ function renderArubaVRRPGroup(g){
   const lines=[`interface vlan${g.vlanId}`];
   if(g.ip)lines.push(`    ip address ${g.ip}`);
   g.entries.forEach(v=>{
-    lines.push(`    vrrp ${v.vrid} vip ${v.vip}`);
+    if(v.vip)lines.push(`    vrrp ${v.vrid} vip ${v.vip}`);
     lines.push(`    vrrp ${v.vrid} priority ${v.priority}`);
     if(v.preempt)lines.push(`    vrrp ${v.vrid} preempt`);
   });

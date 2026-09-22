@@ -2551,11 +2551,17 @@ async function buildIntelIndex(intelList, onProgress) {
       // 2026-09-22 修復：先前只有「網域形狀」(isDomainShape()) 的條目會轉小寫，雜湊值（純
       // 十六進位、不含 '.'，不符合 DOMAIN_SHAPE_RE）原樣存入；但 extractCandidateHashes()
       // 抽取事件端雜湊時一律轉小寫，若情資清單內是大寫十六進位雜湊（VirusTotal 等常見匯出
-      // 格式），exact.has() 永遠查不到、比對功能靜默失效。改為「非合法 IPv4/IPv6 位址」
-      // （ipToInt()/ipv6ToBigInt() 皆回傳 null）就一併轉小寫——雜湊與網域皆不分大小寫，IP
-      // 類值因為 ipToInt()/ipv6ToBigInt() 不為 null 而維持原樣，不影響既有 IP/CIDR 比對行為
-      const isIPShape = ipToInt(e.value) !== null || ipv6ToBigInt(e.value) !== null;
-      exact.set(isIPShape ? e.value : e.value.toLowerCase(), e); continue;
+      // 格式），exact.has() 永遠查不到、比對功能靜默失效。改為「非合法 IPv4 位址」
+      // （ipToInt() 回傳 null）就一併轉小寫——雜湊與網域皆不分大小寫，IPv4 類值因為
+      // ipToInt() 不為 null 而維持原樣，不影響既有 IPv4/CIDR 比對行為
+      // 2026-09-22（續）修復：上一輪僅涵蓋雜湊，IPv6 位址（ipv6ToBigInt() 不為 null）當時仍
+      // 被歸類為「IP 類值」而維持原樣不轉小寫，但 IPv6 十六進位部分本身大小寫不敏感（同一位
+      // 址可用大寫或小寫十六進位表示），exact.has() 是純字串比對，情資清單與事件欄位擷取出
+      // 的 IPv6 大小寫只要不一致就會靜默查無命中。改為只有「合法 IPv4 位址」才維持原樣，其餘
+      // （IPv6／雜湊／網域，皆不分大小寫）一律轉小寫；查詢端 intelLookup() 對 IPv6 值同步轉
+      // 小寫後才查 exact，CIDR/CIDR6 前綴比對是數值運算不受影響，不動到那條路徑
+      const isIPv4Shape = ipToInt(e.value) !== null;
+      exact.set(isIPv4Shape ? e.value : e.value.toLowerCase(), e); continue;
     }
     const [base, bitsRaw] = e.value.split('/');
     if (base.includes(':')) {
@@ -2601,7 +2607,11 @@ async function buildIntelIndex(intelList, onProgress) {
 // 結果，同一份資料調換兩行順序就會給出不同答案（2026-09 全功能審查發現）。前綴長度種類
 // 數量有限（IPv4 最多 33 種、IPv6 最多 129 種），每次查詢排序的額外開銷可忽略
 function intelLookup(index, ip) {
-  if (index.exact.has(ip)) return index.exact.get(ip);
+  // IPv6 十六進位部分大小寫不敏感，buildIntelIndex() 已將 IPv6 exact 值正規化為小寫存入
+  // （2026-09-22 續修復），查詢端比照轉小寫再查 exact，避免情資清單與事件擷取值大小寫不一致
+  // 導致靜默查無命中；IPv4（不含 ':'）維持原樣，CIDR/CIDR6 前綴比對走數值運算不受此影響
+  const exactKey = ip.includes(':') ? ip.toLowerCase() : ip;
+  if (index.exact.has(exactKey)) return index.exact.get(exactKey);
   if (ip.includes(':')) {
     const ip6Int = ipv6ToBigInt(ip);
     if (ip6Int === null) return null;

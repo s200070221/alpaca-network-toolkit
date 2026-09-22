@@ -1652,10 +1652,19 @@ function collectModel(){
   // addOspf6AreaRow() 註解）。13 家廠牌 render*()/assemble*() 只讀 model.ospf6[0]，本工具表單
   // 亦只提供單一 OSPFv3 process 的輸入。pid 為空且無任何 Area 列時，ospf6 維持空陣列，
   // 不塞一筆全空物件（比照 IPv4 ospf 既有 `if(pid){...}` 判斷慣例）。
-  const ospf6AreaRows=rowsOf('#ospf6-area-body tr').map(tr=>({
+  const ospf6AreaRowsRaw=rowsOf('#ospf6-area-body tr').map(tr=>({
     area:val(tr,'a6-area'),
     interfaces:val(tr,'a6-interfaces').split(/[,\s]+/).filter(Boolean),
   })).filter(r=>r.area);
+  // 同一 Area 值分多列填不同介面時合併成一個物件、interfaces 累加去重
+  // （比照上方 IPv4 OSPF areaMap 既有做法，保持與 model.ospf6 資料模型一致）。
+  const ospf6AreaMap=new Map();
+  ospf6AreaRowsRaw.forEach(r=>{
+    if(!ospf6AreaMap.has(r.area))ospf6AreaMap.set(r.area,{area:r.area,interfaces:[]});
+    const entry=ospf6AreaMap.get(r.area);
+    r.interfaces.forEach(ifc=>{if(!entry.interfaces.includes(ifc))entry.interfaces.push(ifc);});
+  });
+  const ospf6AreaRows=Array.from(ospf6AreaMap.values());
   const ospf6Pid=fval('ospf6-pid');
   const ospf6=[];
   if(ospf6Pid||ospf6AreaRows.length){
@@ -2387,7 +2396,17 @@ const VENDOR_UNSUPPORTED={
   // 對外查證官方 SGS-6341 Series Command Guide 後完整實作 parser+render，無不支援項目
   planet:[],
 };
-const VENDOR_FEATURE_LABEL={bgp:'BGP',rip:'RIP',vrrp:'VRRP',dhcpServer:'DHCP Server',dhcpRelay:'DHCP Relay',acl:'ACL',qos:'QoS',security:'Port Security/802.1X',stp:'STP',routes:'Static Routes'};
+const VENDOR_FEATURE_LABEL={bgp:'BGP',rip:'RIP',vrrp:'VRRP',dhcpServer:'DHCP Server',dhcpRelay:'DHCP Relay',acl:'ACL',qos:'QoS',security:'Port Security/802.1X',stp:'STP',routes:'Static Routes',ospf6:'OSPFv3',networks6:'BGP Networks (v6)',vip6:'VRRP Virtual IP (v6)'};
+
+// 問題7（細顆粒度廠牌能力警告，2026-09 新增）：VENDOR_UNSUPPORTED 只在「整個功能大類」
+// 不支援時才提示，OSPFv3/BGP networks6/VRRP vip6 這三個新欄位是「功能大類支援但這個 v6
+// 子欄位不支援」的情境（如 Aruba CX/Ruijie 支援 VRRP 但不支援 vip6），貿然沿用同一份清單
+// 判斷不出來。清單依各廠牌 render*()/assemble*() 檔案內是否實際處理該欄位整理（見
+// switch-generator-<vendor>.js 內 grep "ospf6"／"networks6"／"vip6" 的檔案清單），
+// Arista／Ruijie 的 BGP 直接沿用 renderCiscoBGPList()，故與 Cisco 共用 networks6 支援範圍。
+const OSPF6_VENDORS=new Set(['comware','cisco','arista','ruijie','aruba','dell-os10','cisco_nxos','brocade','juniper','fortiswitch','alcatel','procurve','routeros']);
+const BGP_NETWORKS6_VENDORS=new Set(['comware','cisco','arista','ruijie','aruba','dell-os10','cisco_nxos','routeros','extreme']);
+const VRRP_VIP6_VENDORS=new Set(['cisco','arista','comware','dell-os10','cisco_nxos','fortiswitch','routeros','brocade','extreme']);
 
 // Comware 專用：偵測 LACP member port 是否違反官方文件的加入條件（供 validateForm() 呼叫）。
 // 條件依據：(1) class-two 屬性（VLAN/link-type）member 間需彼此一致，否則其中至少一個
@@ -2509,6 +2528,17 @@ function validateForm(){
   // 「完全沒填 networks」的檢查之外，額外檢查「填了但網段對不上任何介面」的情況
   comwareOspfNetworkWarnings(model).forEach(w=>warnings.push(w));
 
+  // 4b. OSPFv3 驗證：router-id 語法上仍與 OSPFv2 相同（32-bit dotted-decimal，僅路由走
+  // IPv6，router-id 本身不是），直接複用 isValidIPv4()。本工具僅提供單一 OSPFv3 process
+  // 輸入，router-id 欄位視為選填，只在有填值時才檢查格式（未填不報錯，比照該欄位本身
+  // 於表單上不是必填的既有假設）。areas[].interfaces 是介面名稱字串非 IP，不做格式驗證。
+  if(model.ospf6.length>0&&model.ospf6[0].routerId){
+    if(!isValidIPv4(model.ospf6[0].routerId)){
+      errors.push(`⚠️ OSPFv3：${tr('val.format_invalid').replace('{item}','Router ID')}`);
+      markInvalid(document.getElementById('ospf6-rid'));
+    }
+  }
+
   // 5. BGP 驗證
   if(model.bgp.length>0){
     model.bgp.forEach((bgp,idx)=>{
@@ -2536,6 +2566,13 @@ function validateForm(){
         if(!p.as||!/^\d+$/.test(p.as)){
           errors.push(`⚠️ BGP ${idx+1} Peer ${pi+1}：${tr('val.invalid').replace('{item}',tr('val.field_as'))}`);
           markInvalid(peerRows[pi]?.querySelector('.p-as'));
+        }
+      });
+      // Networks (IPv6)：空白分隔多筆 CIDR，逐筆檢查格式（非 CIDR 即視為格式錯誤）
+      (bgp.networks6||[]).forEach((n,ni)=>{
+        if(!isValidIPv6CIDR(n)){
+          errors.push(`⚠️ BGP ${idx+1} Networks (v6) ${ni+1}：${tr('val.format_invalid').replace('{item}','CIDR')}`);
+          markInvalid(document.getElementById('bgp-networks6'));
         }
       });
     });
@@ -2596,6 +2633,11 @@ function validateForm(){
       errors.push(`⚠️ VRRP ${i+1}：${tr('val.format_invalid').replace('{item}',tr('val.field_vip'))}`);
       markInvalid(vrrpRows[i]?.querySelector('.vr-vip'));
     }
+    // Virtual IP (v6) 格式檢查（有填才檢查；未填屬既有「vip/vip6 擇一必填」規則已於上方處理）
+    if(v.vip6&&!isValidIPv6(v.vip6)){
+      errors.push(`⚠️ VRRP ${i+1}：${tr('val.format_invalid').replace('{item}',tr('val.field_vip')+' (v6)')}`);
+      markInvalid(vrrpRows[i]?.querySelector('.vr-vip6'));
+    }
     if(v.ip&&!isValidCIDR(v.ip)){
       errors.push(`⚠️ VRRP ${i+1}：${tr('val.format_invalid').replace('{item}','SVI IP')} (${tr('val.example').replace('{example}','192.168.10.1/24')})`);
       markInvalid(vrrpRows[i]?.querySelector('.vr-ip'));
@@ -2619,6 +2661,14 @@ function validateForm(){
     model.vrrp.forEach((v,i)=>{if(isValidIPv4(v.vip)){(vipToIdx[v.vip]=vipToIdx[v.vip]||[]).push(i+1);}});
     Object.entries(vipToIdx).filter(([,idxs])=>idxs.length>1).forEach(([vip,idxs])=>{
       warnings.push(`⚠️ ${tr('val.dup_ip').replace('{ip}',vip).replace('{items}','VRRP '+idxs.join(', '))}`);
+    });
+    // 同一份檢查的 IPv6 版本：純 IPv6 VRRP（如 RouterOS）跨群組重複使用同一個 vip6
+    // 同樣要偵測，複用既有 val.dup_ip 訊息（其文字本身語意是「IP 重複使用」，不特指
+    // IPv4/IPv6，共用不會造成誤導）
+    const vip6ToIdx={};
+    model.vrrp.forEach((v,i)=>{if(isValidIPv6(v.vip6)){(vip6ToIdx[v.vip6]=vip6ToIdx[v.vip6]||[]).push(i+1);}});
+    Object.entries(vip6ToIdx).filter(([,idxs])=>idxs.length>1).forEach(([vip6,idxs])=>{
+      warnings.push(`⚠️ ${tr('val.dup_ip').replace('{ip}',vip6).replace('{items}','VRRP '+idxs.join(', '))}`);
     });
   }
 
@@ -2677,6 +2727,20 @@ function validateForm(){
     unsupported.forEach(key=>{
       if(filled[key])warnings.push(`💡 ${tr('val.vendor_unsupported_feature').replace('{vendor}',model.vendor).replace('{feature}',VENDOR_FEATURE_LABEL[key])}`);
     });
+  }
+
+  // 11b. 細顆粒度 v6 子欄位廠牌能力提示（問題7，2026-09 新增，非阻擋性）：OSPFv3／BGP
+  // Networks (v6)／VRRP vip6 這三個欄位在部分廠牌上「功能大類支援但這個子欄位不支援」，
+  // 填了會被靜默忽略（vip6 甚至可能像問題1那樣在缺防護時產生壞資料，本輪已個別修復
+  // render 端，這裡補上使用者可見的提示）。沿用既有 val.vendor_unsupported_feature 訊息。
+  if(model.ospf6.length>0&&!OSPF6_VENDORS.has(model.vendor)){
+    warnings.push(`💡 ${tr('val.vendor_unsupported_feature').replace('{vendor}',model.vendor).replace('{feature}',VENDOR_FEATURE_LABEL.ospf6)}`);
+  }
+  if((model.bgp[0]?.networks6?.length>0)&&!BGP_NETWORKS6_VENDORS.has(model.vendor)){
+    warnings.push(`💡 ${tr('val.vendor_unsupported_feature').replace('{vendor}',model.vendor).replace('{feature}',VENDOR_FEATURE_LABEL.networks6)}`);
+  }
+  if(model.vrrp.some(v=>v.vip6)&&!VRRP_VIP6_VENDORS.has(model.vendor)){
+    warnings.push(`💡 ${tr('val.vendor_unsupported_feature').replace('{vendor}',model.vendor).replace('{feature}',VENDOR_FEATURE_LABEL.vip6)}`);
   }
 
   // 12. ProCurve OSPF Area/Network：已於 2026-07-17 對外查證 arubanetworking.hpe.com
@@ -4101,7 +4165,9 @@ function buildDocData(){
   if(model.vrrp.length>0){
     redundancyInfo+=`🔹 ${tr('sec.vrrp')}：\n`;
     model.vrrp.forEach(v=>{
-      redundancyInfo+=`  • VRID ${v.vrid}: VIP ${v.vip}, ${tr('th.vrrpPriority')} ${v.priority}\n`;
+      // 純 IPv6 VRRP（vip 空、vip6 有值）時改顯示 VIP(v6)，避免摘要文件出現空白 VIP
+      const vipLabel=v.vip?`VIP ${v.vip}`:`VIP(v6) ${v.vip6}`;
+      redundancyInfo+=`  • VRID ${v.vrid}: ${vipLabel}, ${tr('th.vrrpPriority')} ${v.priority}\n`;
     });
   }
   if(redundancyInfo){
