@@ -456,6 +456,23 @@ end</pre>
       <tbody id="area-body"></tbody>
     </table>
     <button class="add-btn" data-i18n="btn.addRow" onclick="addAreaRow()">+ 新增列</button>
+
+    <h3 data-i18n="sec.ospf6" style="margin-top:16px">OSPFv3 設定（IPv6 動態路由）</h3>
+    <div class="row">
+      <label data-i18n="lbl.ospf6Pid">Process ID</label>
+      <input id="ospf6-pid" placeholder="1">
+      <label data-i18n="lbl.ospf6Rid">Router ID</label>
+      <input id="ospf6-rid" placeholder="2.2.2.2">
+    </div>
+    <table class="tbl">
+      <thead><tr>
+        <th data-i18n="th.areaId">Area</th>
+        <th data-i18n="th.ospf6Interfaces">Interfaces</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="ospf6-area-body"></tbody>
+    </table>
+    <button class="add-btn" data-i18n="btn.addRow" onclick="addOspf6AreaRow()">+ 新增列</button>
   </div>
 
   <div class="card" id="bgp-card">
@@ -469,6 +486,10 @@ end</pre>
     <div class="row">
       <label data-i18n="lbl.bgpNetworks">Networks</label>
       <input id="bgp-networks" style="flex:1;min-width:200px" placeholder="10.0.0.0/24 10.1.0.0/24">
+    </div>
+    <div class="row">
+      <label data-i18n="lbl.bgpNetworks6">Networks (IPv6)</label>
+      <input id="bgp-networks6" style="flex:1;min-width:200px" placeholder="2001:db8::/32 2001:db8:1::/48">
     </div>
     <div class="row">
       <label data-i18n="lbl.bgpPeerGroup">Peer Group</label>
@@ -559,6 +580,7 @@ end</pre>
         <th data-i18n="th.vrrpIp" data-tip="此交換器自己在該 VLAN SVI（Layer 3 介面）上的實際 IP，非虛擬 IP">SVI IP (CIDR)</th>
         <th data-i18n="th.vrrpId">VRID</th>
         <th data-i18n="th.vrrpVip">Virtual IP</th>
+        <th data-i18n="th.vrrpVip6" data-tip="IPv6 虛擬IP，目前僅 Arista／Brocade／Cisco IOS-XE／Comware／Dell OS10／Extreme／FortiSwitch／NX-OS／RouterOS 9 家有對應輸出；與 Virtual IP 是否可並存視廠牌而定（如 RouterOS 兩者互斥，一筆記錄僅取其一）">Virtual IP (v6)</th>
         <th data-i18n="th.vrrpPriority">Priority</th>
         <th data-i18n="th.vrrpPreempt" data-tip="搶占：啟用時，優先權較高的設備恢復上線後會搶回 Master 角色；停用則維持目前 Master 不變">Preempt</th>
         <th data-i18n="th.vrrpAuthMode" data-tip="目前僅 Comware 有對應輸出；其餘廠牌會忽略此欄位">Auth Mode</th>

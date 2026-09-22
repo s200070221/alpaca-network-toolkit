@@ -795,18 +795,6 @@ function updateAppliedModelNotice(){
 // Breakout（QSFP 拆分子埠）：「同時輸出啟用指令」勾選時記錄的母埠清單，collectModel() 讀取後併入 model.breakouts
 let _breakoutEnables=[];
 
-// IPv6 動態路由暫存（2026-09-22 新增，止血修復資料遺失 bug）：OSPFv3（model.ospf6）／
-// BGP IPv6 networks（model.bgp[0].networks6）／VRRP IPv6 VIP（model.vrrp[].vip6）三個
-// 欄位在 12 家廠牌的 render*()/assemble*() 早就會消費（見 switch-generator-cisco.js 等），
-// 但本工具目前尚無對應的手動輸入 UI（新增完整輸入介面是遠超本次範圍的獨立功能專案），
-// 故比照既有 _breakoutEnables 模組級暫存慣例：匯入既有設定檔（applyParsedConfigToForm）
-// 或載入模板（applyModelToForm）時把這三個欄位存進這裡，collectModel() 組裝時原樣合併
-// 回輸出 model，避免「匯入/載入 → 重新產生」把使用者原本就有的 IPv6 動態路由資料靜默丟棄。
-// 表單本身沒有任何互動可以新增/編輯這些資料，只能靠下一次匯入或載入模板整批覆蓋。
-// vrrpVip6 以 `${vlanId}|${vrid}` 為 key，比照 applyParsedConfigToForm() 既有 VRRP 匯入
-// 迴圈推導 vlanId 的寫法（找不到對應 SVI 時退回從介面名稱抓數字）。
-let _importedIPv6Routing={ospf6:null,bgpNetworks6:null,vrrpVip6:{}};
-
 function expandBreakoutPorts(){
   const vendor=document.getElementById('vendor').value;
   const parent=document.getElementById('breakout-parent-name').value.trim();
@@ -852,6 +840,19 @@ function addAreaRow(area='',network='',wildcard='',type='normal',noSummary=false
   tr.querySelector('.a-type').value=type;
   tr.querySelector('.a-nosummary').checked=!!noSummary;
   document.getElementById('area-body').appendChild(tr);
+  applyI18n(tr);
+}
+
+// OSPFv3（IPv6 動態路由）Area 列：與 IPv4 OSPF 的「CIDR+wildcard」模式不同，是逐 Area
+// 掛「介面名稱」清單（見 model.ospf6 資料形狀說明，13 家廠牌 render 端已存在，本函式只是
+// 補上對應輸入 UI）。interfaces 欄位比照 LACP members（addLacpRow）等既有「介面清單」輸入
+// 慣例，用逗號或空白分隔的純文字輸入框，collectModel() 端統一 split(/[,\s]+/)。
+function addOspf6AreaRow(area='',interfaces=''){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class="a6-area" value="${escAttr(area)}"></td>
+    <td><input class="a6-interfaces" value="${escAttr(interfaces)}" placeholder="GigabitEthernet0/1 Vlan10"></td>
+    ${RM_BTN_TD}`;
+  document.getElementById('ospf6-area-body').appendChild(tr);
   applyI18n(tr);
 }
 
@@ -1103,9 +1104,12 @@ function addProCurveVsfMemberRow(id='',priority=''){
   applyI18n(tr);
 }
 
-function addVrrpRow(vlanId='',ip='',vrid='',vip='',priority='100',preempt=false,authMode='',authKey='',trackIf='',trackReduced=''){
+// vip6 刻意放在最後一個參數（而非緊接 vip 之後比照表格欄位順序），避免變更既有 4 個
+// 呼叫點（addVrrpRow(v.vlanId,...)／模板回填／匯入回填／示範列）的其餘位置參數對應，
+// 最小化破壞性變更；表格欄位順序仍是 vip 緊接 vip6，靠下方 innerHTML 自行決定顯示順序
+function addVrrpRow(vlanId='',ip='',vrid='',vip='',priority='100',preempt=false,authMode='',authKey='',trackIf='',trackReduced='',vip6=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="vr-vlan" value="${escAttr(vlanId)}"></td><td><input class="vr-ip" value="${escAttr(ip)}" placeholder="192.168.10.1/24"></td><td><input class="vr-id" value="${escAttr(vrid)}"></td><td><input class="vr-vip" value="${escAttr(vip)}"></td><td><input class="vr-priority" value="${escAttr(priority)}"></td><td style="text-align:center"><input type="checkbox" class="vr-preempt"></td>
+  tr.innerHTML=`<td><input class="vr-vlan" value="${escAttr(vlanId)}"></td><td><input class="vr-ip" value="${escAttr(ip)}" placeholder="192.168.10.1/24"></td><td><input class="vr-id" value="${escAttr(vrid)}"></td><td><input class="vr-vip" value="${escAttr(vip)}"></td><td><input class="vr-vip6" value="${escAttr(vip6)}" placeholder="2001:db8::1"></td><td><input class="vr-priority" value="${escAttr(priority)}"></td><td style="text-align:center"><input type="checkbox" class="vr-preempt"></td>
     <td><select class="vr-authmode"><option value="">-</option><option value="simple">simple</option><option value="md5">md5</option></select></td>
     <td><input class="vr-authkey" value="${escAttr(authKey)}"></td>
     <td><input class="vr-trackif" value="${escAttr(trackIf)}"></td>
@@ -1644,6 +1648,24 @@ function collectModel(){
     });
   }
 
+  // OSPFv3（IPv6 動態路由）：逐 Area 掛介面名稱清單，非 CIDR+wildcard 模式（見
+  // addOspf6AreaRow() 註解）。13 家廠牌 render*()/assemble*() 只讀 model.ospf6[0]，本工具表單
+  // 亦只提供單一 OSPFv3 process 的輸入。pid 為空且無任何 Area 列時，ospf6 維持空陣列，
+  // 不塞一筆全空物件（比照 IPv4 ospf 既有 `if(pid){...}` 判斷慣例）。
+  const ospf6AreaRows=rowsOf('#ospf6-area-body tr').map(tr=>({
+    area:val(tr,'a6-area'),
+    interfaces:val(tr,'a6-interfaces').split(/[,\s]+/).filter(Boolean),
+  })).filter(r=>r.area);
+  const ospf6Pid=fval('ospf6-pid');
+  const ospf6=[];
+  if(ospf6Pid||ospf6AreaRows.length){
+    ospf6.push({
+      pid:ospf6Pid,
+      routerId:fval('ospf6-rid'),
+      areas:ospf6AreaRows,
+    });
+  }
+
   const bgpAsn=fval('bgp-asn');
   const bgp=[];
   if(bgpAsn){
@@ -1657,11 +1679,10 @@ function collectModel(){
       routerId:fval('bgp-rid'),
       peers,
       networks:fval('bgp-networks').split(/\s+/).filter(Boolean),
+      networks6:fval('bgp-networks6').split(/\s+/).filter(Boolean),
       peerGroups:fval('bgp-peer-group').split(/\s+/).filter(Boolean).map(name=>({name,type:''})),
       timers:(bgpKeepalive&&bgpHold)?{keepalive:bgpKeepalive,holdtime:bgpHold}:null,
     });
-    // networks6（IPv6 動態路由止血修法）：表單無對應輸入欄位，合併回上一次匯入/載入暫存的值
-    if(_importedIPv6Routing.bgpNetworks6)bgp[0].networks6=_importedIPv6Routing.bgpNetworks6;
   }
 
   const ripPid=fval('rip-pid');
@@ -1689,16 +1710,10 @@ function collectModel(){
 
   const vrrp=rowsOf('#vrrp-body tr').map(tr=>({
     vlanId:val(tr,'vr-vlan'), ip:val(tr,'vr-ip'), vrid:val(tr,'vr-id'),
-    vip:val(tr,'vr-vip'), priority:val(tr,'vr-priority')||'100', preempt:val(tr,'vr-preempt'),
+    vip:val(tr,'vr-vip'), vip6:val(tr,'vr-vip6'), priority:val(tr,'vr-priority')||'100', preempt:val(tr,'vr-preempt'),
     authMode:val(tr,'vr-authmode'), authKey:val(tr,'vr-authkey'),
     trackIf:val(tr,'vr-trackif'), trackReduced:val(tr,'vr-trackreduced'),
-  })).filter(v=>v.vlanId&&v.vrid&&v.vip);
-  // vip6（IPv6 動態路由止血修法）：表單無對應輸入欄位，合併回上一次匯入/載入暫存的值，
-  // key 為 `${vlanId}|${vrid}`（比照 applyParsedConfigToForm() 既有 VRRP 匯入迴圈的 key 推導方式）
-  vrrp.forEach(v=>{
-    const vip6=_importedIPv6Routing.vrrpVip6[v.vlanId+'|'+v.vrid];
-    if(vip6)v.vip6=vip6;
-  });
+  })).filter(v=>v.vlanId&&v.vrid&&(v.vip||v.vip6));
 
   // DHCP：server pool 與 relay 各自獨立 UI 表格，但沿用 switch_analyzer parseDHCP 的
   // 共用扁平陣列形狀（type:'server'|'relay'）合併成單一 dhcp 清單
@@ -1891,10 +1906,7 @@ function collectModel(){
     syslogServer:document.getElementById('syslog-server').value.trim(),
     snmpCommunity:fval('snmp-community'),
     mgmtTelnetDisable:!!document.getElementById('mgmt-telnet-disable').checked,
-    vlans, interfaces, ospf,
-    // ospf6（IPv6 動態路由止血修法）：表單無對應輸入欄位，直接原樣傳遞上一次匯入/載入暫存的
-    // 整份陣列（12 家廠牌的 render*()/assemble*() 皆直接消費 model.ospf6，不需逐欄位映射）
-    ospf6:_importedIPv6Routing.ospf6||[],
+    vlans, interfaces, ospf, ospf6,
     bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos, stack, users, sonicL3Interfaces, sonicQos, sonicStpVlanIntf,
     classMaps, qosApply, planetMacAcl,
     comwareIrf, ciscoStack, brocadeStack, alcatelStack, arubaVsf, dellVlt, procurveVsf,
@@ -1906,8 +1918,17 @@ function collectModel(){
 // 慣例——先清空各表格 → 設定 vendor（觸發 updateModeOptions()）→ 設定 scalar 欄位 →
 // 逐項呼叫 addXxxRow() 重建列。儲存的 model 就是 collectModel() 的完整輸出，故欄位
 // 名稱與此函式讀取的完全對稱，不需另外映射。
+// OSPFv3 表單回填共用邏輯：applyModelToForm()（載入模板）與 applyParsedConfigToForm()
+// （匯入既有設定檔）皆呼叫同一份，避免兩處各自維護一份容易漂移。呼叫端負責先清空
+// #ospf6-area-body（比照其餘 tbody 清空慣例），本函式只負責寫回欄位與新增列。
+function fillOspf6Form(o6){
+  document.getElementById('ospf6-pid').value=o6?.pid||'';
+  document.getElementById('ospf6-rid').value=o6?.routerId||'';
+  (o6?.areas||[]).forEach(a=>addOspf6AreaRow(a.area,(a.interfaces||[]).join(' ')));
+}
+
 function applyModelToForm(model){
-  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body','comware-irf-member-body','cisco-stack-member-body','brocade-stack-member-body','alcatel-stack-member-body','aruba-vsf-member-body','procurve-vsf-member-body'].forEach(id=>{
+  ['vlan-body','iface-body','area-body','ospf6-area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body','comware-irf-member-body','cisco-stack-member-body','brocade-stack-member-body','alcatel-stack-member-body','aruba-vsf-member-body','procurve-vsf-member-body'].forEach(id=>{
     document.getElementById(id).innerHTML='';
   });
 
@@ -1977,11 +1998,13 @@ function applyModelToForm(model){
     const nets=(a.networks&&a.networks.length)?a.networks:[{network:'',wildcard:''}];
     nets.forEach(n=>addAreaRow(a.area,n.network,n.wildcard,a.type||'normal',a.noSummary));
   });
+  fillOspf6Form((model.ospf6||[])[0]);
 
   const b=(model.bgp||[])[0];
   document.getElementById('bgp-asn').value=b?.asn||'';
   document.getElementById('bgp-rid').value=b?.routerId||'';
   document.getElementById('bgp-networks').value=(b?.networks||[]).join(' ');
+  document.getElementById('bgp-networks6').value=(b?.networks6||[]).join(' ');
   document.getElementById('bgp-peer-group').value=(b?.peerGroups||[]).map(g=>g.name).join(' ');
   document.getElementById('bgp-timer-keepalive').value=b?.timers?.keepalive||'';
   document.getElementById('bgp-timer-hold').value=b?.timers?.holdtime||'';
@@ -2000,7 +2023,7 @@ function applyModelToForm(model){
 
   (model.lacp||[]).forEach(l=>addLacpRow(l.id,l.mode,(l.members||[]).join(' ')));
 
-  (model.vrrp||[]).forEach(v=>addVrrpRow(v.vlanId,v.ip,v.vrid,v.vip,v.priority,!!v.preempt,v.authMode,v.authKey,v.trackIf,v.trackReduced));
+  (model.vrrp||[]).forEach(v=>addVrrpRow(v.vlanId,v.ip,v.vrid,v.vip,v.priority,!!v.preempt,v.authMode,v.authKey,v.trackIf,v.trackReduced,v.vip6));
 
   (model.dhcp||[]).forEach(d=>{
     if(d.type==='server')addDhcpPoolRow(d.name,d.network,d.gateway,d.dns,d.range,d.excluded,d.lease,d.interface,d.bootFile||'',d.nextServer||'',d.ntpServer||'');
@@ -2109,15 +2132,6 @@ function applyModelToForm(model){
   // 之後使用者若再用「Split-out 輔助」小工具展開子埠會繼續累加
   _breakoutEnables=(model.breakouts||[]).slice();
 
-  // IPv6 動態路由暫存回填（止血修法，見 _importedIPv6Routing 宣告處註解）：模板本身就是
-  // collectModel() 的完整輸出，載入時原樣搬回暫存區，讓「載入模板 → 重新產生」不會遺失
-  // ospf6/networks6/vip6，之後再次呼叫 collectModel() 存模板時也能保留同一份資料
-  _importedIPv6Routing={
-    ospf6:(model.ospf6&&model.ospf6.length)?model.ospf6:null,
-    bgpNetworks6:(b&&b.networks6&&b.networks6.length)?b.networks6:null,
-    vrrpVip6:{},
-  };
-  (model.vrrp||[]).forEach(v=>{ if(v.vip6)_importedIPv6Routing.vrrpVip6[v.vlanId+'|'+v.vrid]=v.vip6; });
 }
 
 // localStorage 儲存的模板庫：{ [模板名稱]: { savedAt, model } }。這是本檔案第一次把
@@ -2409,7 +2423,7 @@ function validateForm(){
   const peerRows=rowsOf('#bgp-peer-body tr').filter(tr=>val(tr,'p-ip'));
   const routeRows=rowsOf('#route-body tr').filter(tr=>val(tr,'rt-dst')&&val(tr,'rt-gw'));
   const lacpRows=rowsOf('#lacp-body tr').filter(tr=>val(tr,'lg-id'));
-  const vrrpRows=rowsOf('#vrrp-body tr').filter(tr=>val(tr,'vr-vlan')&&val(tr,'vr-id')&&val(tr,'vr-vip'));
+  const vrrpRows=rowsOf('#vrrp-body tr').filter(tr=>val(tr,'vr-vlan')&&val(tr,'vr-id')&&(val(tr,'vr-vip')||val(tr,'vr-vip6')));
   const aclRuleRowsDom=rowsOf('#acl-rule-body tr').filter(tr=>val(tr,'ar-name'));
 
   // 1. 基本驗證：主機名
@@ -2571,7 +2585,14 @@ function validateForm(){
       errors.push(`⚠️ VRRP ${i+1}：${tr('val.invalid').replace('{item}','VRID')} (1-255)`);
       markInvalid(vrrpRows[i]?.querySelector('.vr-id'));
     }
-    if(!isValidIPv4(v.vip)){
+    // vip 未填但 vip6 已填時，視為純 IPv6 VRRP（RouterOS 等廠牌 vip/vip6 互斥，見
+    // renderRouterOSVRRP() 既有註解），不要求同時填 vip
+    if(v.vip){
+      if(!isValidIPv4(v.vip)){
+        errors.push(`⚠️ VRRP ${i+1}：${tr('val.format_invalid').replace('{item}',tr('val.field_vip'))}`);
+        markInvalid(vrrpRows[i]?.querySelector('.vr-vip'));
+      }
+    }else if(!v.vip6){
       errors.push(`⚠️ VRRP ${i+1}：${tr('val.format_invalid').replace('{item}',tr('val.field_vip'))}`);
       markInvalid(vrrpRows[i]?.querySelector('.vr-vip'));
     }
@@ -3068,17 +3089,13 @@ function normalizeNXOSInterfaceVlans(parsed){
 function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   // 清空既有列（含 vrrp-body：匯入功能雖不映射 VRRP 資料，但仍須清掉畫面殘留的舊資料，
   // 避免使用者誤以為初始化 demo 列是這次匯入結果的一部分）
-  ['vlan-body','iface-body','area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body','comware-irf-member-body','cisco-stack-member-body','brocade-stack-member-body','alcatel-stack-member-body','aruba-vsf-member-body','procurve-vsf-member-body'].forEach(id=>{
+  ['vlan-body','iface-body','area-body','ospf6-area-body','bgp-peer-body','route-body','lacp-body','vrrp-body','dhcp-pool-body','dhcp-relay-body','acl-rule-body','acl-apply-body','qos-body','security-body','stp-instance-body','stp-port-body','vxlan-vni-body','qos-dscp-body','extreme-qos-profile-body','extreme-qos-dscp-body','extreme-qos-port-body','routeros-acl-body','routeros-simple-queue-body','routeros-queue-tree-body','vsu-member-body','users-body','sonic-l3-body','sonic-qos-sched-body','sonic-qos-apply-body','sonic-stp-vlanintf-body','classmap-body','qos-apply-body','planet-mac-acl-rule-body','planet-mac-acl-apply-body','comware-irf-member-body','cisco-stack-member-body','brocade-stack-member-body','alcatel-stack-member-body','aruba-vsf-member-body','procurve-vsf-member-body'].forEach(id=>{
     document.getElementById(id).innerHTML='';
   });
 
   document.getElementById('vendor').value=genVendor;
   updateModeOptions();
   document.getElementById('hostname').value=parsed.sys?.hostname||'';
-
-  // IPv6 動態路由暫存重置（止血修法，見 _importedIPv6Routing 宣告處註解）：避免沿用前一次
-  // 匯入殘留的 ospf6/networks6/vip6；下方 OSPF/BGP/VRRP 區塊會依實際解析結果填入
-  _importedIPv6Routing={ospf6:null,bgpNetworks6:null,vrrpVip6:{}};
 
   // SNMP 社群/Trap Host/Syslog Server 回填（2026-09-21 修復既有缺口）：parseAny() 對每個廠牌
   // （除 SONiC）皆會 res.snmp=parseSNMP()／res.syslog=parseSyslog()，但此函式先前從未讀取過，
@@ -3159,9 +3176,7 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
     const svi=(parsed.interfaces||[]).find(i=>i.name===v.interface);
     const vlanId=svi?.vlans||(v.interface.match(/\d+/)||[])[0]||'';
     const sviIp=svi?.ip?svi.ip.split('/')[0]:'';
-    addVrrpRow(vlanId,sviIp,v.vrid,v.vip,v.priority,!!v.preempt,v.authMode,v.authKey,v.trackIf,v.trackReduced);
-    // vip6（IPv6 動態路由止血修法）：表單無對應輸入欄位，暫存供 collectModel() 合併回輸出
-    if(v.vip6)_importedIPv6Routing.vrrpVip6[vlanId+'|'+v.vrid]=v.vip6;
+    addVrrpRow(vlanId,sviIp,v.vrid,v.vip,v.priority,!!v.preempt,v.authMode,v.authKey,v.trackIf,v.trackReduced,v.vip6);
   });
 
   const o=(parsed.ospf||[])[0];
@@ -3176,13 +3191,14 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
     const nets=(a.networks&&a.networks.length)?a.networks:[{network:'',wildcard:''}];
     nets.forEach(n=>addAreaRow(a.area,n.network,n.wildcard,a.type||'normal',a.noSummary));
   });
-  // ospf6（IPv6 動態路由止血修法）：表單無對應輸入欄位，暫存整份陣列供 collectModel() 合併回輸出
-  if(parsed.ospf6&&parsed.ospf6.length)_importedIPv6Routing.ospf6=parsed.ospf6;
+  // ospf6：直接寫進正式表單欄位（fillOspf6Form()，與 applyModelToForm() 共用）
+  fillOspf6Form((parsed.ospf6||[])[0]);
 
   const b=(parsed.bgp||[])[0];
   document.getElementById('bgp-asn').value=b?.asn||'';
   document.getElementById('bgp-rid').value=b?.routerId||'';
   document.getElementById('bgp-networks').value=(b?.networks||[]).join(' ');
+  document.getElementById('bgp-networks6').value=(b?.networks6||[]).join(' ');
   // peerGroups/timers 僅在使用者上傳過 switch-config-parser.html（走沙箱抽取的真實
   // parseBGP()）那條匯入路徑才有資料，內建 BasicParser 對 BGP 永遠回傳空陣列，此為既有限制
   document.getElementById('bgp-peer-group').value=(b?.peerGroups||[]).map(g=>g.name).join(' ');
@@ -3190,8 +3206,6 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   document.getElementById('bgp-timer-hold').value=b?.timers?.holdtime||'';
   // authKey 一律清空：parsed.routingAuth 從未擷取過金鑰字串（比照 ospf-auth-key 既有決策）
   (b?.peers||[]).forEach(p=>addBgpPeerRow(p.ip,p.as,p.desc||'',''));
-  // networks6（IPv6 動態路由止血修法）：表單無對應輸入欄位，暫存供 collectModel() 合併回輸出
-  if(b?.networks6&&b.networks6.length)_importedIPv6Routing.bgpNetworks6=b.networks6;
 
   const r=(parsed.rip||[])[0];
   if(vendor==='brocade'){
