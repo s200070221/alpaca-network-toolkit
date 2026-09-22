@@ -25,9 +25,13 @@ const FortigateParser = (() => {
       if (t.toLowerCase().startsWith(keyPat.toLowerCase())) {
         const rest = t.slice(keyPat.length).trim();
         // Quoted: return content inside first pair of quotes only
+        // Fix（2026-09-21）：值內若含跳脫雙引號（如 "Rule for \"testing\" purpose"）先比照
+        // gvs() 的做法把 \" 換成佔位符再找結尾引號，避免在第一個 \" 處就被誤判為字串結尾截斷
         if (rest.startsWith('"')) {
-          const end = rest.indexOf('"', 1);
-          return end > 0 ? rest.slice(1, end) : rest.slice(1);
+          const safe = rest.replace(/\\"/g, '\u0000');
+          const end = safe.indexOf('"', 1);
+          const val = end > 0 ? safe.slice(1, end) : safe.slice(1);
+          return val.replace(/\u0000/g, '"');
         }
         // Unquoted: return full rest (handles "ip mask" two-part values)
         return rest.replace(/\r$/, '');  // Fix: Windows \r 清除

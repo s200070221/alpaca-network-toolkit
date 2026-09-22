@@ -2548,7 +2548,14 @@ async function buildIntelIndex(intelList, onProgress) {
       // v4/v6，直接存進同一個 Map 即可，不需要分開處理。domain 型清單的條目也是走這條路徑
       // 存進同一個 exact Map（2026-08-20 新增，見 intelLookupDomain()）——DNS 名稱不分大小寫，
       // 存入前先正規化成小寫，查詢端 intelLookupDomain() 查詢時同步轉小寫才能正確命中
-      exact.set(isDomainShape(e.value) ? e.value.toLowerCase() : e.value, e); continue;
+      // 2026-09-22 修復：先前只有「網域形狀」(isDomainShape()) 的條目會轉小寫，雜湊值（純
+      // 十六進位、不含 '.'，不符合 DOMAIN_SHAPE_RE）原樣存入；但 extractCandidateHashes()
+      // 抽取事件端雜湊時一律轉小寫，若情資清單內是大寫十六進位雜湊（VirusTotal 等常見匯出
+      // 格式），exact.has() 永遠查不到、比對功能靜默失效。改為「非合法 IPv4/IPv6 位址」
+      // （ipToInt()/ipv6ToBigInt() 皆回傳 null）就一併轉小寫——雜湊與網域皆不分大小寫，IP
+      // 類值因為 ipToInt()/ipv6ToBigInt() 不為 null 而維持原樣，不影響既有 IP/CIDR 比對行為
+      const isIPShape = ipToInt(e.value) !== null || ipv6ToBigInt(e.value) !== null;
+      exact.set(isIPShape ? e.value : e.value.toLowerCase(), e); continue;
     }
     const [base, bitsRaw] = e.value.split('/');
     if (base.includes(':')) {
@@ -4196,6 +4203,10 @@ const MITRE_MAP = {
   asrepRoasting:'T1558.004', asrepRoastingRisk:'T1558.004',
   lsassAccess:'T1003.001',
   sysmonRegistryPersistence:'T1547.001',
+  // 2026-09-22 新增：registryValueChange（EventID 4657，任意登錄值變更）對應 T1112（Modify
+  // Registry）——MITRE ATT&CK 框架內「修改登錄」的標準技術編號，語意明確無爭議，不同於先前
+  // 排除的 tokenPrivAdjust（3 個來源給出 3 種不同編號，信心度不足），故直接採納不額外查證
+  registryValueChange:'T1112',
   lateralMovement:'T1021',
   adminShareAccess:'T1021.002',
   privEsc:'T1098', groupRemoved:'T1098', pwReset:'T1098',
@@ -4865,7 +4876,13 @@ function renderIssues() {
   const searchQuery = document.getElementById('issues-search').value.trim().toLowerCase();
   const rows = visible.map(is => {
     const baseCat = is.category.startsWith('freq:') ? is.category.slice(5) : is.category;
-    let catLabel = issueCategoryLabel(is.category);
+    // 2026-09-22 資安修復：issueCategoryLabel() 對 custom: 類別會直接回傳使用者可匯入的
+    // 自訂規則名稱（customRuleName，未跳脫），先前這裡直接塞進 innerHTML 造成 Stored XSS。
+    // 在此處立刻 esc() 一次（而非在下方樣板字串處對整個 catLabel 再包一次 esc()）：下一行
+    // intelSource 是另外組裝、自己已經 esc() 過一次，若改成在樣板處對「已含 intelSource」的
+    // 完整 catLabel 整串再 esc() 一次，會把 intelSource 的部分雙重跳脫（比照 exportLogReport()
+    // 該處既有註解說明的同一個陷阱），故改為只對 issueCategoryLabel() 的回傳值單獨跳脫
+    let catLabel = esc(issueCategoryLabel(is.category));
     if ((is.category === 'knownIOC' || is.category === 'knownHashIOC') && is.intelSource) catLabel += ` (${esc(is.intelSource)})`;
     const mitreId = MITRE_MAP[baseCat];
     const mitreBadge = mitreId ? ` <span class="mitre-badge" title="${esc(tr('mitre.disclaimer'))}">${esc(mitreId)}</span>` : '';
@@ -5642,7 +5659,12 @@ function exportLogReport(mode) {
   const issuesRows = ISSUES.length ? ISSUES.map(is => {
     let catLabel;
     const baseCat = is.category.startsWith('freq:') ? is.category.slice(5) : is.category;
-    if (is.category.startsWith('freq:')) {
+    if (is.category.indexOf('custom:') === 0) {
+      // 2026-09-22 修復：自訂規則類別（'custom:'+規則id）先前落到下方 else 分支查
+      // CAT_KEY_MAP（查無對應鍵，一律顯示「其他」），比照 issueCategoryLabel() 既有邏輯
+      // 改為顯示該筆自訂規則名稱；customRuleName 是使用者可匯入的文字，esc() 一次後輸出
+      catLabel = esc(is.customRuleName || is.category);
+    } else if (is.category.startsWith('freq:')) {
       catLabel = tr('cat.freqLabel') + tr(CAT_KEY_MAP[baseCat] || 'cat.other');
     } else {
       catLabel = tr(CAT_KEY_MAP[is.category] || 'cat.other');

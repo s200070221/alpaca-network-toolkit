@@ -308,13 +308,17 @@ function assemblePlanetConfig(model){
   if(model.dhcp&&model.dhcp.some(d=>d.type==='server'))blocks.push(renderPlanetDHCP(model.dhcp));
   const usersBlock=renderCiscoUsers(model.users);
   if(usersBlock)blocks.push(usersBlock);
-  // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
-  // 不能顛倒（2026-08-28（續4）新增）
+  // class-map 必須先於引用它的 policy-map 定義（2026-08-28（續4）新增）
   if(model.classMaps&&model.classMaps.length)blocks.push(renderClassMapQoS(model.classMaps));
-  if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
   if(model.acl&&model.acl.length)blocks.push(renderPlanetACL(model.acl));
-  // MAC ACL 務必放在組裝順序最後一塊——區塊擷取正則只認得下一個 "mac-access-list extended"
-  // 或字串結尾兩種收尾條件，不像 class-map 那樣額外認得 policy-map 邊界（2026-08-28（續4）新增）
+  // MAC ACL 務必放在 policy-map(QoS) 之前——區塊擷取正則只認得下一個 "mac-access-list
+  // extended" 或字串結尾兩種收尾條件，不像 class-map 那樣額外認得 policy-map 邊界
+  // （2026-08-28（續4）新增）
   if(model.planetMacAcl&&model.planetMacAcl.length)blocks.push(renderPlanetMacACL(model.planetMacAcl));
+  // QoS(policy-map) 務必放在組裝順序最後一塊（2026-09-22 修正，比照 CLAUDE.md 記載
+  // 2026-09-21 對 Cisco/Aruba CX/FortiSwitch/Arista/Ruijie/Dell OS10 六家的同一輪修法）：
+  // parseQoS() 的 policy-map 收尾正則只認得下一個 "policy-map" 或字串結尾，不認得
+  // access-list／mac-access-list 為邊界，放在它們之前會貪婪吃掉後續 ACL/MAC ACL 文字
+  if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
   return blocks.join('\n!\n')+'\n';
 }
