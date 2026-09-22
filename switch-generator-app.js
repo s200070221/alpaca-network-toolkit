@@ -795,6 +795,18 @@ function updateAppliedModelNotice(){
 // Breakout（QSFP 拆分子埠）：「同時輸出啟用指令」勾選時記錄的母埠清單，collectModel() 讀取後併入 model.breakouts
 let _breakoutEnables=[];
 
+// IPv6 動態路由暫存（2026-09-22 新增，止血修復資料遺失 bug）：OSPFv3（model.ospf6）／
+// BGP IPv6 networks（model.bgp[0].networks6）／VRRP IPv6 VIP（model.vrrp[].vip6）三個
+// 欄位在 12 家廠牌的 render*()/assemble*() 早就會消費（見 switch-generator-cisco.js 等），
+// 但本工具目前尚無對應的手動輸入 UI（新增完整輸入介面是遠超本次範圍的獨立功能專案），
+// 故比照既有 _breakoutEnables 模組級暫存慣例：匯入既有設定檔（applyParsedConfigToForm）
+// 或載入模板（applyModelToForm）時把這三個欄位存進這裡，collectModel() 組裝時原樣合併
+// 回輸出 model，避免「匯入/載入 → 重新產生」把使用者原本就有的 IPv6 動態路由資料靜默丟棄。
+// 表單本身沒有任何互動可以新增/編輯這些資料，只能靠下一次匯入或載入模板整批覆蓋。
+// vrrpVip6 以 `${vlanId}|${vrid}` 為 key，比照 applyParsedConfigToForm() 既有 VRRP 匯入
+// 迴圈推導 vlanId 的寫法（找不到對應 SVI 時退回從介面名稱抓數字）。
+let _importedIPv6Routing={ospf6:null,bgpNetworks6:null,vrrpVip6:{}};
+
 function expandBreakoutPorts(){
   const vendor=document.getElementById('vendor').value;
   const parent=document.getElementById('breakout-parent-name').value.trim();
@@ -1648,6 +1660,8 @@ function collectModel(){
       peerGroups:fval('bgp-peer-group').split(/\s+/).filter(Boolean).map(name=>({name,type:''})),
       timers:(bgpKeepalive&&bgpHold)?{keepalive:bgpKeepalive,holdtime:bgpHold}:null,
     });
+    // networks6（IPv6 動態路由止血修法）：表單無對應輸入欄位，合併回上一次匯入/載入暫存的值
+    if(_importedIPv6Routing.bgpNetworks6)bgp[0].networks6=_importedIPv6Routing.bgpNetworks6;
   }
 
   const ripPid=fval('rip-pid');
@@ -1679,6 +1693,12 @@ function collectModel(){
     authMode:val(tr,'vr-authmode'), authKey:val(tr,'vr-authkey'),
     trackIf:val(tr,'vr-trackif'), trackReduced:val(tr,'vr-trackreduced'),
   })).filter(v=>v.vlanId&&v.vrid&&v.vip);
+  // vip6（IPv6 動態路由止血修法）：表單無對應輸入欄位，合併回上一次匯入/載入暫存的值，
+  // key 為 `${vlanId}|${vrid}`（比照 applyParsedConfigToForm() 既有 VRRP 匯入迴圈的 key 推導方式）
+  vrrp.forEach(v=>{
+    const vip6=_importedIPv6Routing.vrrpVip6[v.vlanId+'|'+v.vrid];
+    if(vip6)v.vip6=vip6;
+  });
 
   // DHCP：server pool 與 relay 各自獨立 UI 表格，但沿用 switch_analyzer parseDHCP 的
   // 共用扁平陣列形狀（type:'server'|'relay'）合併成單一 dhcp 清單
@@ -1871,7 +1891,11 @@ function collectModel(){
     syslogServer:document.getElementById('syslog-server').value.trim(),
     snmpCommunity:fval('snmp-community'),
     mgmtTelnetDisable:!!document.getElementById('mgmt-telnet-disable').checked,
-    vlans, interfaces, ospf, bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos, stack, users, sonicL3Interfaces, sonicQos, sonicStpVlanIntf,
+    vlans, interfaces, ospf,
+    // ospf6（IPv6 動態路由止血修法）：表單無對應輸入欄位，直接原樣傳遞上一次匯入/載入暫存的
+    // 整份陣列（12 家廠牌的 render*()/assemble*() 皆直接消費 model.ospf6，不需逐欄位映射）
+    ospf6:_importedIPv6Routing.ospf6||[],
+    bgp, rip, routes, lacp, vrrp, dhcp, acl, qos, security, stp, breakouts, mlag, vpc, vxlan, brocadeQos, extremeQos, routerosAcl, routerosQos, stack, users, sonicL3Interfaces, sonicQos, sonicStpVlanIntf,
     classMaps, qosApply, planetMacAcl,
     comwareIrf, ciscoStack, brocadeStack, alcatelStack, arubaVsf, dellVlt, procurveVsf,
   };
@@ -2084,6 +2108,16 @@ function applyModelToForm(model){
   // Breakout enable 清單：模板儲存的是產生階段當下的最終狀態，回填後維持一致，
   // 之後使用者若再用「Split-out 輔助」小工具展開子埠會繼續累加
   _breakoutEnables=(model.breakouts||[]).slice();
+
+  // IPv6 動態路由暫存回填（止血修法，見 _importedIPv6Routing 宣告處註解）：模板本身就是
+  // collectModel() 的完整輸出，載入時原樣搬回暫存區，讓「載入模板 → 重新產生」不會遺失
+  // ospf6/networks6/vip6，之後再次呼叫 collectModel() 存模板時也能保留同一份資料
+  _importedIPv6Routing={
+    ospf6:(model.ospf6&&model.ospf6.length)?model.ospf6:null,
+    bgpNetworks6:(b&&b.networks6&&b.networks6.length)?b.networks6:null,
+    vrrpVip6:{},
+  };
+  (model.vrrp||[]).forEach(v=>{ if(v.vip6)_importedIPv6Routing.vrrpVip6[v.vlanId+'|'+v.vrid]=v.vip6; });
 }
 
 // localStorage 儲存的模板庫：{ [模板名稱]: { savedAt, model } }。這是本檔案第一次把
@@ -3042,6 +3076,10 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   updateModeOptions();
   document.getElementById('hostname').value=parsed.sys?.hostname||'';
 
+  // IPv6 動態路由暫存重置（止血修法，見 _importedIPv6Routing 宣告處註解）：避免沿用前一次
+  // 匯入殘留的 ospf6/networks6/vip6；下方 OSPF/BGP/VRRP 區塊會依實際解析結果填入
+  _importedIPv6Routing={ospf6:null,bgpNetworks6:null,vrrpVip6:{}};
+
   // SNMP 社群/Trap Host/Syslog Server 回填（2026-09-21 修復既有缺口）：parseAny() 對每個廠牌
   // （除 SONiC）皆會 res.snmp=parseSNMP()／res.syslog=parseSyslog()，但此函式先前從未讀取過，
   // 匯入一份本來就有設定這 3 項的既有設定檔、重新產生時會靜默遺失；表單只有單一文字欄位，
@@ -3122,6 +3160,8 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
     const vlanId=svi?.vlans||(v.interface.match(/\d+/)||[])[0]||'';
     const sviIp=svi?.ip?svi.ip.split('/')[0]:'';
     addVrrpRow(vlanId,sviIp,v.vrid,v.vip,v.priority,!!v.preempt,v.authMode,v.authKey,v.trackIf,v.trackReduced);
+    // vip6（IPv6 動態路由止血修法）：表單無對應輸入欄位，暫存供 collectModel() 合併回輸出
+    if(v.vip6)_importedIPv6Routing.vrrpVip6[vlanId+'|'+v.vrid]=v.vip6;
   });
 
   const o=(parsed.ospf||[])[0];
@@ -3136,6 +3176,8 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
     const nets=(a.networks&&a.networks.length)?a.networks:[{network:'',wildcard:''}];
     nets.forEach(n=>addAreaRow(a.area,n.network,n.wildcard,a.type||'normal',a.noSummary));
   });
+  // ospf6（IPv6 動態路由止血修法）：表單無對應輸入欄位，暫存整份陣列供 collectModel() 合併回輸出
+  if(parsed.ospf6&&parsed.ospf6.length)_importedIPv6Routing.ospf6=parsed.ospf6;
 
   const b=(parsed.bgp||[])[0];
   document.getElementById('bgp-asn').value=b?.asn||'';
@@ -3148,6 +3190,8 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   document.getElementById('bgp-timer-hold').value=b?.timers?.holdtime||'';
   // authKey 一律清空：parsed.routingAuth 從未擷取過金鑰字串（比照 ospf-auth-key 既有決策）
   (b?.peers||[]).forEach(p=>addBgpPeerRow(p.ip,p.as,p.desc||'',''));
+  // networks6（IPv6 動態路由止血修法）：表單無對應輸入欄位，暫存供 collectModel() 合併回輸出
+  if(b?.networks6&&b.networks6.length)_importedIPv6Routing.bgpNetworks6=b.networks6;
 
   const r=(parsed.rip||[])[0];
   if(vendor==='brocade'){

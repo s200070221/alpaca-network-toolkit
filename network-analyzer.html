@@ -1124,7 +1124,11 @@ function detectTool(text) {
   // 組合（2026-09 全功能審查發現）
   if (/<abs-policy-list/i.test(t) && /<interface-list/i.test(t) && /<address-group-list/i.test(t)) return {idx:0, vendor:'g'};
   if (/<SonicWALL/i.test(t))                                                 return {idx:0, vendor:'w'};
-  if (/pfctl\b|set filterip/i.test(t))                                       return {idx:0, vendor:'x'};
+  // 2026-09-21 稽核修復：原判斷式 /pfctl\b|set filterip/i 從未對照過真實 pfSense/OPNsense
+  // 匯出格式（config.xml，XML 根標籤為 <pfsense>/<opnsense>），永遠不會命中；訊號逐字比照
+  // firewall_analyzer 自己的 FW_VENDOR_SIGS.pfsense（firewall-analyzer-app.js）改用根標籤／
+  // 廠牌字樣特徵
+  if (/<pfsense>/i.test(t) || /<opnsense>/i.test(t) || /pfSense|OPNsense/i.test(t))          return {idx:0, vendor:'x'};
   // 2026-08-09 稽核修復：Zyxel／EdgeRouter／OpenWrt 三家 firewall_analyzer／config_anonymizer
   // 已支援一段時間（2026-07-30／08-01 新增），但這份獨立維護的簡化偵測規則從未同步補上，
   // 訊號簡化移植自 firewall_analyzer 的 FW_VENDOR_SIGS 對應項目（各取 2 個特徵組合比對，
@@ -1271,6 +1275,7 @@ function renderRecentAnonHistory() {
   if (!box) return;
   var hist = [];
   try { hist = JSON.parse(localStorage.getItem('_netAnalyzer_anonHistory') || '[]'); } catch(e) { hist = []; }
+  if (!Array.isArray(hist)) hist = []; // 防呆：合法 JSON 但非陣列（如 null/{}/字串）時避免 .length/.forEach 拋錯
   box.innerHTML = '';
   if (clearBtn) clearBtn.style.display = hist.length ? '' : 'none';
   if (!hist.length) {
@@ -1319,9 +1324,15 @@ function _showDropResult(name, detected, text) {
     chip.innerHTML = vname
       ? `🔍 偵測到 <span class="drop-vendor-badge">${vname}</span> 設定`
       : `🔍 偵測到交換機設定`;
+    // 2026-09-21 稽核修復：log 格式（idx:4，CEF/Syslog/WinEvent）沒有對應的去識別化轉送鏈
+    // 目標——config_anonymizer 的 TOOL_HREFS 只有 3 個元素（fw/sw/gen），TOOL_HREFS[4] 為
+    // undefined 會 fallback 錯誤工具，且 log_analyzer 本來就不消費 _netAnalyzer_anonThenOpen/
+    // _netAnalyzer_anonResult（明確排除在匿名化轉送鏈目標之外）。故 log 格式不顯示此按鈕。
+    const anonThenOpenBtn = detected.idx === 4 ? '' :
+      `<button class="da-secondary" onclick='_dispatchWithAnon(${detected.idx},${JSON.stringify(detected.vendor)})'>🔒🔀 ${tr('drop.anon_then_open')}</button>`;
     actions.innerHTML = `
       <button class="da-primary" onclick='_dispatchWithPending(${detected.idx},${JSON.stringify(detected.vendor)})'>${TOOLS[detected.idx].icon} ${tr('drop.open')} ${tr(TOOLS[detected.idx].id+'.title')}</button>
-      <button class="da-secondary" onclick='_dispatchWithAnon(${detected.idx},${JSON.stringify(detected.vendor)})'>🔒🔀 ${tr('drop.anon_then_open')}</button>
+      ${anonThenOpenBtn}
       <button class="da-secondary" onclick="_dispatchWithPending(2,null)">🔒 ${tr('drop.to_anon')}</button>`;
     manualBtn.textContent = tr('drop.manual');
     manualBtn.style.display = '';

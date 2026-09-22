@@ -290,36 +290,40 @@
     // type 為系統自動管理，不需出現在 policy 中即算「已使用」
     const AUTO_TYPES = new Set(['interface-subnet','dynamic','wildcard-fqdn','geography']);
 
+    // key 一律帶 vdom 前綴（比照 diffAddresses()/diffServices() 既有 `(x._vdom?x._vdom+'/':'')+name`
+    // 慣例），避免多 VDOM 設定檔裡 VDOM A 的引用讓 VDOM B 同名孤兒物件被誤判為「已使用」而漏報
+    // （2026-09-21 修復）
+    const vk = (vdom, name) => (vdom ? vdom + '/' : '') + name;
     const usedAddr = new Set(), usedSvc = new Set();
-    function addRefs(str, target) {
+    function addRefs(str, target, vdom) {
       if (!str || str === '-') return;
-      str.split(/[,"\s]+/).forEach(n => { const t = n.trim(); if (t) target.add(t); });
+      str.split(/[,"\s]+/).forEach(n => { const t = n.trim(); if (t) target.add(vk(vdom, t)); });
     }
 
     // 1. Firewall policies
     for (const p of (parsed.policies || [])) {
-      addRefs(p.srcAddr, usedAddr); addRefs(p.dstAddr, usedAddr); addRefs(p.service, usedSvc);
+      addRefs(p.srcAddr, usedAddr, p._vdom); addRefs(p.dstAddr, usedAddr, p._vdom); addRefs(p.service, usedSvc, p._vdom);
     }
     // 2. NAT：VIP/ippool 名稱、vipgrp members
     for (const n of (parsed.nat || [])) {
-      usedAddr.add(n.name); // VIP/ippool 本身名稱（policy dstAddr 會直接引用）
-      if (n.members) addRefs(n.members, usedAddr); // vipgrp members
+      usedAddr.add(vk(n._vdom, n.name)); // VIP/ippool 本身名稱（policy dstAddr 會直接引用）
+      if (n.members) addRefs(n.members, usedAddr, n._vdom); // vipgrp members
     }
     // 3. SSL-VPN source-address / tunnel-ip-pools；SSL Portal ip-pools / split-tunneling-routing-address
     for (const v of (parsed.vpn || [])) {
       if (v.type === 'ssl-vpn') {
-        addRefs(v.addr,   usedAddr);
-        addRefs(v.ipPool, usedAddr);
-        addRefs(v.splitTunnelRoutingAddr, usedAddr);
+        addRefs(v.addr,   usedAddr, v._vdom);
+        addRefs(v.ipPool, usedAddr, v._vdom);
+        addRefs(v.splitTunnelRoutingAddr, usedAddr, v._vdom);
       }
       if (v.type === 'ssl-portal') {
-        addRefs(v.ipPool, usedAddr);
-        addRefs(v.splitTunnelRoutingAddr, usedAddr);
+        addRefs(v.ipPool, usedAddr, v._vdom);
+        addRefs(v.splitTunnelRoutingAddr, usedAddr, v._vdom);
       }
     }
     // 4. 有 associated-interface 的地址物件：屬於介面子網（WiFi SSID / VLAN），系統隱式使用
     for (const a of (parsed.addresses || [])) {
-      if (a.iface && a.iface !== '-') usedAddr.add(a.name);
+      if (a.iface && a.iface !== '-') usedAddr.add(vk(a._vdom, a.name));
     }
 
     // 展開 address/service groups（迭代直到穩定）
@@ -327,13 +331,13 @@
     while (changed) {
       changed = false;
       for (const a of (parsed.addresses || [])) {
-        if (a.members && usedAddr.has(a.name)) {
-          a.members.split(/,\s*/).forEach(m => { const t = m.trim(); if (t && !usedAddr.has(t)) { usedAddr.add(t); changed = true; } });
+        if (a.members && usedAddr.has(vk(a._vdom, a.name))) {
+          a.members.split(/,\s*/).forEach(m => { const t = m.trim(); if (t && !usedAddr.has(vk(a._vdom, t))) { usedAddr.add(vk(a._vdom, t)); changed = true; } });
         }
       }
       for (const s of (parsed.services || [])) {
-        if (s.members && usedSvc.has(s.name)) {
-          s.members.split(/,\s*/).forEach(m => { const t = m.trim(); if (t && !usedSvc.has(t)) { usedSvc.add(t); changed = true; } });
+        if (s.members && usedSvc.has(vk(s._vdom, s.name))) {
+          s.members.split(/,\s*/).forEach(m => { const t = m.trim(); if (t && !usedSvc.has(vk(s._vdom, t))) { usedSvc.add(vk(s._vdom, t)); changed = true; } });
         }
       }
     }
@@ -341,11 +345,11 @@
     const unusedAddrs = (parsed.addresses || []).filter(a =>
       !BUILTINS.has(a.name) &&
       !AUTO_TYPES.has(a.type) &&
-      !usedAddr.has(a.name)
+      !usedAddr.has(vk(a._vdom, a.name))
     );
     const unusedSvcs = (parsed.services || []).filter(s =>
       !BUILTINS.has(s.name) &&
-      !usedSvc.has(s.name)
+      !usedSvc.has(vk(s._vdom, s.name))
     );
     return { unusedAddrs, unusedSvcs };
   }
@@ -359,17 +363,28 @@
   function analyzeNAT(nat) {
     const warnings = [];
     const vips = (nat || []).filter(n => n.type === 'vip');
-    const ipMap = {};
-    vips.filter(v => v.portFwd === 'disable' || !v.portFwd).forEach(v => {
-      if (v.extIp && v.extIp !== '-') { (ipMap[v.extIp] = ipMap[v.extIp] || []).push(v.name); }
+    // 先依 VDOM 分組再各自比對重複（比照 analyzeExactDuplicates() 既有分組慣例，2026-09-21 修復）：
+    // 不同 VDOM 通常各自獨立 WAN，同 extIP/port 未必真衝突，不分組會漏報同 VDOM 內真正的衝突
+    // 被跨 VDOM 湊出「>1 筆」的假象掩蓋掉方向不同的問題，也可能把不同 VDOM 的巧合同址誤判為衝突
+    const byVdom = new Map();
+    vips.forEach(v => {
+      const vd = v._vdom || '';
+      if (!byVdom.has(vd)) byVdom.set(vd, []);
+      byVdom.get(vd).push(v);
     });
-    Object.entries(ipMap).filter(([, names]) => names.length > 1).forEach(([ip, names]) => warnings.push({ type: 'dup_ip', msg: `${tr('nat.dup_ip')}: ${ip}`, detail: names.join(', ') }));
-    const portMap = {};
-    vips.filter(v => v.portFwd === 'enable').forEach(v => {
-      const k = `${v.extIp}:${v.extPort}:${v.proto || 'tcp'}`;
-      if (v.extIp && v.extIp !== '-' && v.extPort && v.extPort !== '-') { (portMap[k] = portMap[k] || []).push(v.name); }
+    byVdom.forEach(group => {
+      const ipMap = {};
+      group.filter(v => v.portFwd === 'disable' || !v.portFwd).forEach(v => {
+        if (v.extIp && v.extIp !== '-') { (ipMap[v.extIp] = ipMap[v.extIp] || []).push(v.name); }
+      });
+      Object.entries(ipMap).filter(([, names]) => names.length > 1).forEach(([ip, names]) => warnings.push({ type: 'dup_ip', msg: `${tr('nat.dup_ip')}: ${ip}`, detail: names.join(', ') }));
+      const portMap = {};
+      group.filter(v => v.portFwd === 'enable').forEach(v => {
+        const k = `${v.extIp}:${v.extPort}:${v.proto || 'tcp'}`;
+        if (v.extIp && v.extIp !== '-' && v.extPort && v.extPort !== '-') { (portMap[k] = portMap[k] || []).push(v.name); }
+      });
+      Object.entries(portMap).filter(([, names]) => names.length > 1).forEach(([k, names]) => warnings.push({ type: 'port_conflict', msg: `${tr('nat.port_conflict')}: ${k}`, detail: names.join(', ') }));
     });
-    Object.entries(portMap).filter(([, names]) => names.length > 1).forEach(([k, names]) => warnings.push({ type: 'port_conflict', msg: `${tr('nat.port_conflict')}: ${k}`, detail: names.join(', ') }));
     return warnings;
   }
 
@@ -387,16 +402,19 @@
     if (ORPHAN_NAT_EXCLUDED_VENDOR_RE.test(parsed.vendor || '')) return [];
     const nat = parsed.nat || [];
     if (!nat.length) return [];
+    // key 帶 vdom 前綴（比照 diffNAT() 既有慣例，2026-09-21 修復）：避免多 VDOM 設定檔裡 VDOM A
+    // 的引用讓 VDOM B 同名孤兒 NAT 物件被誤判為「已使用」而漏報
+    const vk = (vdom, name) => (vdom ? vdom + '/' : '') + name;
     const usedAddr = new Set();
     for (const p of (parsed.policies || [])) {
       // poolname 是 ippool（SNAT／來源位址轉換）的引用欄位，與 vip 用的 srcAddr/dstAddr 不同，
       // 遺漏這欄會讓所有正常在用的 ippool 被誤判為孤兒（outbound SNAT 用 IP Pool 是常見設定）。
       [p.srcAddr, p.dstAddr, p.poolname].forEach(str => {
         if (!str || str === '-') return;
-        str.split(/[,"\s]+/).forEach(n => { const t = n.trim(); if (t) usedAddr.add(t); });
+        str.split(/[,"\s]+/).forEach(n => { const t = n.trim(); if (t) usedAddr.add(vk(p._vdom, t)); });
       });
     }
-    return nat.filter(n => ORPHAN_NAT_TYPES.has(n.type) && n.name && !usedAddr.has(n.name));
+    return nat.filter(n => ORPHAN_NAT_TYPES.has(n.type) && n.name && !usedAddr.has(vk(n._vdom, n.name)));
   }
 
   // 孤兒 VPN 物件：IPSec Phase1 通道從未被任何 policy 的 srcIntf/dstIntf 引用，也從未出現在
@@ -418,19 +436,22 @@
     const vpn = (parsed.vpn || []).filter(v => v.type === 'ipsec-p1');
     if (!vpn.length) return [];
     const ifaceIsTunnel = ORPHAN_VPN_IFACE_IS_TUNNEL_VENDOR_RE.test(parsed.vendor || '');
+    // key 帶 vdom 前綴（比照 diffVpn() 既有慣例，2026-09-21 修復）：避免多 VDOM 設定檔裡 VDOM A
+    // 的引用讓 VDOM B 同名孤兒通道被誤判為「已使用」而漏報
+    const vk = (vdom, name) => (vdom ? vdom + '/' : '') + name;
     const usedIface = new Set();
     for (const p of (parsed.policies || [])) {
       [p.srcIntf, p.dstIntf].forEach(str => {
         if (!str || str === '-') return;
-        str.split(/[,"\s]+/).forEach(n => { const t = n.trim(); if (t) usedIface.add(t); });
+        str.split(/[,"\s]+/).forEach(n => { const t = n.trim(); if (t) usedIface.add(vk(p._vdom, t)); });
       });
     }
     ((parsed.sdwan && parsed.sdwan.members) || []).forEach(m => {
-      if (m.iface && m.iface !== '-') usedIface.add(m.iface);
+      if (m.iface && m.iface !== '-') usedIface.add(vk(m._vdom, m.iface));
     });
     return vpn.filter(v => {
       const refs = [v.name, ifaceIsTunnel ? v.iface : null].filter(x => x && x !== '-');
-      return refs.length > 0 && !refs.some(r => usedIface.has(r));
+      return refs.length > 0 && !refs.some(r => usedIface.has(vk(v._vdom, r)));
     });
   }
 

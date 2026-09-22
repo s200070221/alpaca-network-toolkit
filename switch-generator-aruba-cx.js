@@ -275,12 +275,17 @@ function assembleArubaConfig(model){
   // Interfaces 之前輸出
   const arubaVrfNames=collectVrfNames(model.interfaces);
   if(arubaVrfNames.length)blocks.push(arubaVrfNames.map(n=>`vrf ${n}`).join('\n!\n'));
-  if(model.acl&&model.acl.length)blocks.push(renderArubaACL(model.acl));
   // OSPF：官方文件將「先啟用 OSPF、指派 area」列為建議步驟順序，早於「指派介面到 area」，
   // 排在 Interfaces（內嵌逐介面 `ip ospf <pid> area <area>`）之前輸出
   if(model.ospf&&model.ospf.length)blocks.push(renderArubaOSPF(model.ospf));
   if(model.ospf6&&model.ospf6.length)blocks.push(renderArubaOSPFv3(model.ospf6));
   if(model.interfaces&&model.interfaces.length)blocks.push(renderArubaInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.breakouts,model.ospf,model.ospf6));
+  // ACL 務必放在 OSPF／Interfaces 之後（2026-09-22 修正，防禦性調整，比照 CLAUDE.md 記載
+  // 2026-09-21 對其餘 6 家的同一輪修法）：_parseACLArubaCX() 的收尾正則只認得下一個
+  // "access-list" 或 "interface"，不認得 "router ospf" 為邊界，排在 OSPF 之前理論上會讓
+  // ACL 區塊貪婪吃掉緊接在後的 OSPF 文字；放在 Interfaces 之後即可讓 "interface" 邊界
+  // 提前生效，徹底排除疑慮
+  if(model.acl&&model.acl.length)blocks.push(renderArubaACL(model.acl));
   const arubaLacpExtra=renderArubaLACPExtra(model.lacp,model.interfaces);
   if(arubaLacpExtra)blocks.push(arubaLacpExtra);
   const arSecBlock=renderArubaCXSecurity(model.security);
