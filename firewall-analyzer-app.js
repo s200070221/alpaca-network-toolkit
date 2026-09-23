@@ -591,8 +591,13 @@ function onParsed(){
         const _co = analyzeCompliance(d);
         const _dup = analyzeExactDuplicates(d.policies || []);
         const _xv = analyzeCrossVdomInconsistency(d);
+        // 2026-09-23 新增：規則缺無備註／過大巢狀群組，比照上方既有註解精神，需與 case 'audit'
+        // 的 tbl-cnt 用同一套算法，避免側邊欄徽章與稽核頁面實際命中數再次脫節
+        const _mc = analyzeMissingComments(d);
+        const _og = analyzeOversizedGroups(d);
         const total = _sh.length + _db.length + _mg.length + _un.unusedAddrs.length + _un.unusedSvcs.length +
-                      _co.filter(f => f.risk === 'high' || f.risk === 'medium').length + _dup.length + _xv.length;
+                      _co.filter(f => f.risk === 'high' || f.risk === 'medium').length + _dup.length + _xv.length +
+                      _mc.length + _og.length;
         const nc = $('nc-audit');
         if (nc) { nc.textContent = total; nc.style.color = total > 0 ? 'var(--red)' : 'var(--green)'; }
       } catch(e) { console.warn('audit badge error:', e); }
@@ -1065,6 +1070,8 @@ function onParsed(){
         const _co  = analyzeCompliance(PARSED);
         const _dup = analyzeExactDuplicates(PARSED.policies || []);
         const _xv  = analyzeCrossVdomInconsistency(PARSED);
+        const _mc  = analyzeMissingComments(PARSED);
+        const _og  = analyzeOversizedGroups(PARSED);
         const _hi  = _co.filter(f => f.risk === 'high'  ).length;
         const _med = _co.filter(f => f.risk === 'medium').length;
         $('sum-wrap').innerHTML = sumC([
@@ -1077,8 +1084,10 @@ function onParsed(){
           { l:tr('audit.sum_high_risk'),   v: _hi,                     c: _hi   ? 'var(--red)'    : 'var(--green)' },
           { l:tr('audit.sum_mid_risk'),    v: _med,                    c: _med  ? 'var(--yellow)' : 'var(--green)' },
           { l:tr('audit.sum_cross_vdom'),  v: _xv.length,              c: _xv.length ? 'var(--orange)' : 'var(--green)' },
+          { l:tr('audit.sum_missing_comments'), v: _mc.length,         c: _mc.length ? 'var(--yellow)' : 'var(--green)' },
+          { l:tr('audit.sum_oversized_groups'), v: _og.length,         c: _og.length ? 'var(--yellow)' : 'var(--green)' },
         ]);
-        $('tbl-cnt').textContent = `${_sh.length + _db.length + _mg.length + _dup.length + _un.unusedAddrs.length + _un.unusedSvcs.length + _hi + _med + _xv.length} ${tr('unit.findings')}`;
+        $('tbl-cnt').textContent = `${_sh.length + _db.length + _mg.length + _dup.length + _un.unusedAddrs.length + _un.unusedSvcs.length + _hi + _med + _xv.length + _mc.length + _og.length} ${tr('unit.findings')}`;
         // Zone 拓樸圖：表格/拓樸切換，比照 case 'routes' 內既有 BGP peer 拓樸的 _fwBgpView 慣例
         let _zoneHtml = buildZoneMatrixHtml(PARSED.policies);
         if (_zoneHtml) {
@@ -1086,7 +1095,7 @@ function onParsed(){
           const _zTgl=`<div style="display:flex;gap:5px;margin-bottom:8px"><button onclick="window._fwZoneView='table';renderSection('audit')" style="${_zbs(!window._fwZoneView||window._fwZoneView==='table')}">${tr('routing.view_table')}</button><button onclick="window._fwZoneView='topo';renderSection('audit')" style="${_zbs(window._fwZoneView==='topo')}">${tr('routing.view_topo')}</button></div>`;
           _zoneHtml = _zTgl + (window._fwZoneView==='topo' ? buildZoneTopoHtml(PARSED.policies) : _zoneHtml);
         }
-        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co) + buildCrossVdomHtml(_xv)
+        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og)
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
               <div id="health-result" style="margin-top:12px"></div>
@@ -1814,23 +1823,26 @@ function onParsed(){
 
 
   // ── Global cross-field search ────────────────────────────────────────────
+  // 比對邏輯（regex／欄位範圍）已抽到 firewall-analyzer-audit.js 的 runGlobalSearch()（純函式，
+  // 不碰 DOM，供 Node 測試涵蓋）；這裡只負責讀 DOM 上的 checkbox/select 選項、組出結果 HTML
+  // 寫回頁面，維持既有結果呈現方式不變（2026-09-23 新增 regex／欄位範圍功能）
   window.doGlobalQuery = function(q) {
     const el = $('global-search-result');
     if (!el) return;
     q = (q||'').trim();
     if (!q) { el.innerHTML = ''; return; }
     if (!PARSED) { el.innerHTML = `<div class="nodata">${tr('search.no_data')}</div>`; return; }
-    const ql = q.toLowerCase();
-    const SECTIONS = ['interfaces','policies','routes','vpn','nat','addresses','services','users'];
-    const results = SECTIONS.map(sec => {
-      const arr = PARSED[sec] || [];
-      const hits = arr.filter(r => Object.values(r).some(v => String(v??'').toLowerCase().includes(ql))).slice(0, 30);
-      return { sec, label: SEC_LABELS[sec] ? SEC_LABELS[sec]() : sec, count: hits.length, rows: hits };
-    }).filter(r => r.count > 0);
-    el.innerHTML = renderGlobalResults(results, q);
+    const regexEl = $('g-search-regex'), scopeEl = $('g-search-scope');
+    const useRegex = !!(regexEl && regexEl.checked);
+    const scope = scopeEl ? scopeEl.value : 'all';
+    const { results, regexError } = runGlobalSearch(PARSED, q, { useRegex, scope });
+    const labeled = results.map(r => ({ ...r, label: SEC_LABELS[r.sec] ? SEC_LABELS[r.sec]() : r.sec }));
+    let html = regexError ? `<div class="badge badge-warn" style="margin-bottom:8px;display:inline-block">${tr('search.regex_invalid')}</div>` : '';
+    html += renderGlobalResults(labeled, q, useRegex);
+    el.innerHTML = html;
   };
 
-  function renderGlobalResults(results, q) {
+  function renderGlobalResults(results, q, useRegex) {
     if (!results.length) return `<div class="nodata">${tr('search.no_results')}</div>`;
     // 2026-08-09 稽核修復：比照同專案其餘 esc() 定義補上雙引號跳脫，統一一致（此處目前用法
     // 皆在文字內容而非屬性語境，非立即可利用，但避免未來新增用法時被誤用於屬性內）
@@ -1839,7 +1851,21 @@ function onParsed(){
     // ——原本的寫法會把 "&" 跳脫成 "&amp;" 後才 indexOf()，若欄位內容本身含 &/</>/" 就會在跳脫後
     // 的字串裡找到錯位或落在實體字元中間的比對，導致畫面顯示的 <mark> 位置跑掉甚至破版
     // （2026-09 全功能審查發現）
-    const hl = s => { const str = String(s); const qi = str.toLowerCase().indexOf(q.toLowerCase()); if(qi<0)return esc(str); return esc(str.slice(0,qi))+'<mark style="background:rgba(0,212,255,.25);border-radius:2px;padding:0 2px">'+esc(str.slice(qi,qi+q.length))+'</mark>'+esc(str.slice(qi+q.length)); };
+    // 2026-09-23 新增 regex 模式：用同一個 RegExp 找命中位置與長度（一般文字模式命中長度固定
+    // 是 q.length，regex 命中長度可能不同，如 "10\.\d+"），regex 建置失敗時降級為一般文字比對，
+    // 與 doGlobalQuery() 呼叫 runGlobalSearch() 失敗時的降級邏輯一致
+    let re = null;
+    if (useRegex) { try { re = new RegExp(q, 'i'); } catch (e) { re = null; } }
+    const hl = s => {
+      const str = String(s);
+      if (re) {
+        const m = re.exec(str);
+        if (!m || m[0] === '') return esc(str);
+        const qi = m.index, qlen = m[0].length;
+        return esc(str.slice(0,qi))+'<mark style="background:rgba(0,212,255,.25);border-radius:2px;padding:0 2px">'+esc(str.slice(qi,qi+qlen))+'</mark>'+esc(str.slice(qi+qlen));
+      }
+      const qi = str.toLowerCase().indexOf(q.toLowerCase()); if(qi<0)return esc(str); return esc(str.slice(0,qi))+'<mark style="background:rgba(0,212,255,.25);border-radius:2px;padding:0 2px">'+esc(str.slice(qi,qi+q.length))+'</mark>'+esc(str.slice(qi+q.length));
+    };
     return results.map(({sec, label, count, rows}) => {
       const keys = Object.keys(rows[0]||{}).filter(k=>!['phase2','comment','_shadow'].includes(k)).slice(0,6);
       const rowsHtml = rows.map(r => `<tr>${keys.map(k=>`<td>${hl(r[k])}</td>`).join('')}</tr>`).join('');

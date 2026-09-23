@@ -2179,6 +2179,7 @@ function renderTemplateList(){
     empty.dataset.i18n='msg.noTemplates';
     listEl.appendChild(empty);
     applyI18n(listEl);
+    renderCompareTemplateSelects();
     return;
   }
   // 用 DOM API 逐一建構（而非 innerHTML 字串拼接 + inline onclick），避免模板名稱這種
@@ -2200,13 +2201,105 @@ function renderTemplateList(){
     const loadBtn=document.createElement('button');
     loadBtn.className='add-btn'; loadBtn.dataset.i18n='btn.loadTemplate'; loadBtn.textContent=tr('btn.loadTemplate');
     loadBtn.onclick=()=>loadTemplate(name);
+    const exportBtn=document.createElement('button');
+    exportBtn.className='add-btn'; exportBtn.dataset.i18n='btn.exportTemplate'; exportBtn.textContent=tr('btn.exportTemplate');
+    exportBtn.onclick=()=>exportTemplate(name);
     const delBtn=document.createElement('button');
     delBtn.className='rm-btn'; delBtn.dataset.i18n='btn.deleteTemplate'; delBtn.textContent=tr('btn.deleteTemplate');
     delBtn.onclick=()=>deleteTemplate(name);
-    actions.appendChild(loadBtn); actions.appendChild(delBtn);
+    actions.appendChild(loadBtn); actions.appendChild(exportBtn); actions.appendChild(delBtn);
     item.appendChild(info); item.appendChild(actions);
     listEl.appendChild(item);
   });
+  renderCompareTemplateSelects();
+}
+
+// ── 設定模板：匯出／匯入／比較（2026-09-23 新增，任務2）──────────────────────
+// 匯出：把 {savedAt,model} 原樣包成 JSON 檔案下載，檔名沿用模板名稱（做基本檔名字元過濾，
+// 避免使用者自訂名稱內含 "/" 等字元造成下載檔名異常）。
+function _safeFileNamePart(s){
+  return String(s||'').replace(/[\\/:*?"<>|]/g,'_').trim()||'template';
+}
+function exportTemplate(name){
+  const templates=loadTemplates();
+  const t=templates[name];
+  if(!t){ showTemplateMsg(tr('msg.templateNotFound'),true); return; }
+  const blob=new Blob([JSON.stringify(t,null,2)],{type:'application/json;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download=`${_safeFileNamePart(name)}.json`; a.click();
+  URL.revokeObjectURL(url);
+  showTemplateMsg(tr('msg.templateExported'),false);
+}
+
+// 匯入：上傳的 JSON 檔案須是 exportTemplate() 產生的 {savedAt,model} 形狀（model 至少要有
+// vendor 欄位，粗略防呆避免誤上傳其他 JSON 檔案）；名稱以檔名（去副檔名）為準，若與既有模板
+// 重複則詢問是否覆蓋，取消則自動加上時間戳後綴另存（不覆蓋、不中斷匯入），比照既有
+// saveTemplate() 的 confirm() 覆蓋詢問慣例
+function importTemplateFile(){
+  const fileInput=document.getElementById('template-import-file');
+  const file=fileInput&&fileInput.files[0];
+  if(!file){ showTemplateMsg(tr('msg.templateImportNoFile'),true); return; }
+  file.text().then(text=>{
+    let parsed;
+    try{ parsed=JSON.parse(text); }catch(e){ showTemplateMsg(tr('msg.templateImportInvalid'),true); return; }
+    if(!parsed||typeof parsed!=='object'||!parsed.model||typeof parsed.model!=='object'||!parsed.model.vendor){
+      showTemplateMsg(tr('msg.templateImportInvalid'),true); return;
+    }
+    const templates=loadTemplates();
+    let name=file.name.replace(/\.json$/i,'')||'imported';
+    if(name in templates){
+      if(!confirm(tr('msg.templateOverwriteConfirm').replace('{name}',name))){
+        name=`${name}_${Date.now()}`;
+      }
+    }
+    templates[name]={ savedAt:parsed.savedAt||new Date().toLocaleString(), model:parsed.model };
+    if(saveTemplates(templates)){
+      fileInput.value='';
+      showTemplateMsg(tr('msg.templateImported').replace('{name}',name),false);
+      renderTemplateList();
+    }else{
+      showTemplateMsg(tr('msg.templateSaveFailed'),true);
+    }
+  }).catch(()=>{ showTemplateMsg(tr('msg.templateImportInvalid'),true); });
+}
+
+// 比較兩個模板：填兩個下拉選單，選定後呼叫純函式 diffTemplateModels() 取得欄位級差異清單並渲染
+function renderCompareTemplateSelects(){
+  const selA=document.getElementById('compare-template-a');
+  const selB=document.getElementById('compare-template-b');
+  if(!selA||!selB)return;
+  const names=Object.keys(loadTemplates()).sort();
+  const opt=n=>`<option value="${escAttr(n)}">${esc(n)}</option>`;
+  const placeholder=`<option value="">${esc(tr('opt.selectTemplate'))}</option>`;
+  [selA,selB].forEach(sel=>{
+    const prev=sel.value;
+    sel.innerHTML=placeholder+names.map(opt).join('');
+    if(names.includes(prev))sel.value=prev;
+  });
+}
+function compareTemplates(){
+  const nameA=document.getElementById('compare-template-a').value;
+  const nameB=document.getElementById('compare-template-b').value;
+  const resultEl=document.getElementById('template-diff-result');
+  if(!nameA||!nameB||nameA===nameB){
+    alert(tr('msg.compareSelectTwo'));
+    return;
+  }
+  const templates=loadTemplates();
+  const diffs=diffTemplateModels(templates[nameA]?.model, templates[nameB]?.model);
+  if(!diffs.length){
+    resultEl.innerHTML=`<div>${esc(tr('msg.compareNoDiff'))}</div>`;
+  }else{
+    const fmt=v=>v===undefined?'—':(typeof v==='object'?JSON.stringify(v):String(v));
+    const rows=diffs.map(d=>`<div style="padding:4px 0;border-bottom:1px solid var(--border)">`
+      +`<div style="color:var(--accent);font-weight:600">${esc(d.path)}</div>`
+      +`<div style="color:var(--red)">- ${esc(fmt(d.oldValue))}</div>`
+      +`<div style="color:var(--green)">+ ${esc(fmt(d.newValue))}</div>`
+      +`</div>`).join('');
+    resultEl.innerHTML=`<div style="margin-bottom:8px;color:var(--text-dim)">${esc(tr('diff.templateDiffCount').replace('{n}',diffs.length))}</div>`+rows;
+  }
+  resultEl.style.display='block';
 }
 
 function saveTemplate(){
@@ -2768,6 +2861,11 @@ function validateForm(){
     });
   }
 
+  // 16. 認證金鑰弱值提示（2026-09-23 新增，任務3，vendor-agnostic，warning 不阻擋產生）：
+  // OSPF/BGP MD5 認證金鑰、VRRP authentication 金鑰若非空字串但長度過短或命中常見弱值字面，
+  // 提示使用者更換（純函式定義見 switch-generator-validate.js）
+  weakAuthKeyWarnings(model).forEach(w=>warnings.push(w));
+
   // 15. 埠位與所選機型交叉驗證：DEVICE_MODELS 未必窮舉真實裝置全部模組/擴充卡，
   // 故僅警告不擋（沿用第 14 項 Extreme DHCP 拼字檢查的相同「警告不擋」慣例）
   const modelPortSet=getModelPortSet(model.vendor,document.getElementById('device-model')?.value);
@@ -2864,6 +2962,15 @@ function generate(fromImport=false){
   checkGeneratorEggs(model.sysname);
   renderSessionDiff(_lastGeneratedCfg,cfg);
   _lastGeneratedCfg=cfg;
+  // 跨工具活動時間軸（2026-09-23 新增）：寫入 `_netAnalyzer_activityHistory` rolling-history
+  // （持續累積歷史，無 TTL，比照 config_anonymizer 既有 `_netAnalyzer_anonHistory` 樣式），
+  // 供 network_analyzer hub 合併顯示；跑到這裡代表設定檔已成功組裝完成
+  try{
+    let _hist=[];
+    try{_hist=JSON.parse(localStorage.getItem('_netAnalyzer_activityHistory')||'[]');}catch(e){_hist=[];}
+    _hist.unshift({tool:'switch_config_generator',name:model.sysname||'',vendor:model.vendor||null,ts:Date.now()});
+    localStorage.setItem('_netAnalyzer_activityHistory',JSON.stringify(_hist.slice(0,5)));
+  }catch(e){/* localStorage 滿了或被封鎖時靜默略過，不影響產生設定主流程 */}
 }
 // renderSessionDiff()：比對「上一次」與「這一次」產生的設定文字，讓使用者快速看出剛剛調整
 // 表單後實際改動了哪些行；獨立容器（#session-diff-result），不覆蓋既有「上傳兩份設定檔比對」
@@ -3665,6 +3772,37 @@ function _sendToAnonymizer(){
   }catch(e){ alert(tr('err.sendFail')); }
   const w=window.open('config-anonymizer.html','_blank');
   if(wrote&&!w){ localStorage.removeItem('_netAnalyzer_pending'); alert(tr('err.sendPopupBlocked')); }
+}
+
+// ── 產生前安全稽核預覽（2026-09-23 新增，任務1）──────────────────────────
+// 純函式 analyzeGeneratorAudit()/computeGeneratorAuditHealth() 定義於
+// switch-generator-validate.js；此處僅負責收集目前表單、呼叫純函式、渲染結果，UI 風格比照
+// switch_analyzer 既有 #sw-health-section／_doSwitchHealthCheck()（首次「執行」，之後變
+// 「重新檢查」的按鈕互動模式）。不驗證表單（不呼叫 validateForm()），純粹是產生設定前的
+// 自我檢查小工具，按下後也不影響既有「產生設定」流程。
+function _doGeneratorAuditCheck(){
+  const model=collectModel();
+  const btn=document.getElementById('gen-audit-btn');
+  if(btn)btn.textContent=tr('btn.auditPreviewRecheck');
+  const res=computeGeneratorAuditHealth(model);
+  const sevColors={crit:'var(--red)',warn:'var(--yellow)',info:'var(--accent)'};
+  const sevIcon={crit:'🔴',warn:'🟡',info:'🔵'};
+  let h=`<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
+    <div style="font-size:48px;font-weight:700;color:${res.gradeColor};line-height:1">${res.grade}</div>
+    <div><div style="font-size:13px;color:var(--text-dim)">${esc(tr('genaudit.title'))}</div>
+    <div style="font-size:20px;font-weight:600;color:${res.gradeColor}">${res.score} / 100</div></div>
+  </div>`;
+  if(!res.issues.length){
+    h+=`<div style="color:var(--green);font-size:13px">${esc(tr('genaudit.ok'))}</div>`;
+  }else{
+    h+=res.issues.map(i=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border-left:3px solid ${sevColors[i.sev]||'var(--border)'}">
+      <span style="font-size:14px">${sevIcon[i.sev]||''}</span>
+      <span style="font-size:13px;color:var(--text)">${esc(i.label)}</span>
+      <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}</span>
+    </div>`).join('');
+  }
+  const el=document.getElementById('gen-audit-result');
+  if(el)el.innerHTML=h;
 }
 
 // ── 設定對比功能 ──────────────────────────────────────────────────

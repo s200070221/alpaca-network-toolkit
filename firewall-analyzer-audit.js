@@ -455,6 +455,69 @@
     });
   }
 
+  // 規則缺無備註稽核（2026-09-23 新增，使用者發想功能）：檢查每筆規則的 comments 欄位是否為
+  // 空字串／未定義／各廠牌 parser 常見的無值佔位符 '-'（比照本檔案既有 _shadowToSet() 等函式
+  // 「'-' 視為空」慣例統一判斷；各廠牌 parser 對 policies 的欄位名稱固定是 comments 複數形，
+  // 見各 firewall-analyzer-parser-*.js 的 parsePolicies()）。回傳陣列比照 analyzeOrphanNAT()
+  // 既有慣例，直接回傳命中的規則物件本身（非另包一層 warning 物件），供 computeFirewallHealth()
+  // 計數與畫面渲染共用；不區分規則是否已停用——備註缺漏本身是「設定衛生」問題，即使規則目前
+  // 停用，日後重新啟用時仍受益於清楚的備註說明。
+  function analyzeMissingComments(parsed) {
+    const policies = parsed.policies || [];
+    return policies.filter(p => !p.comments || p.comments === '-');
+  }
+
+  // 過大／巢狀過深群組物件稽核（2026-09-23 新增，使用者發想功能）：檢查 addresses/services
+  // 內具有 members 欄位的群組型物件（各廠牌 category 命名不一，如 address-group／group，
+  // 統一以「members 欄位非空」判斷是否為群組，比照 analyzeUnusedObjects() 展開 group members
+  // 時的既有判斷慣例）。門檻為簡單常數，未來若需調整只改這兩個常數即可，非對外查證數字。
+  // 巢狀深度計算需防禦循環引用（正常設定不該出現，但群組互相引用的畸形資料理論上可能發生）：
+  // 用 visiting 集合偵測，命中即視為已超過門檻不再往下展開，避免無窮迴圈卡住畫面；depthCache
+  // 記錄每個物件算過的深度，避免同一物件被不同起點的群組重複展開造成效能問題。
+  const OVERSIZED_GROUP_MEMBER_THRESHOLD = 50;
+  const OVERSIZED_GROUP_DEPTH_THRESHOLD = 3;
+  function analyzeOversizedGroups(parsed) {
+    const results = [];
+    const _check = (list, category) => {
+      const items = list || [];
+      const vk = (vdom, name) => (vdom ? vdom + '/' : '') + name;
+      const byKey = new Map(items.map(o => [vk(o._vdom, o.name), o]));
+      const depthCache = new Map();
+      function depthOf(obj, visiting) {
+        const key = vk(obj._vdom, obj.name);
+        if (depthCache.has(key)) return depthCache.get(key);
+        if (visiting.has(key)) return OVERSIZED_GROUP_DEPTH_THRESHOLD + 1; // 循環引用防禦：直接視為超標，不再往下展開
+        visiting.add(key);
+        const memberNames = (obj.members || '').split(/,\s*/).map(s => s.trim()).filter(Boolean);
+        let maxChildDepth = 0;
+        memberNames.forEach(m => {
+          const child = byKey.get(vk(obj._vdom, m));
+          if (child && child.members && child.members !== '-') {
+            maxChildDepth = Math.max(maxChildDepth, depthOf(child, visiting));
+          }
+        });
+        visiting.delete(key);
+        const depth = 1 + maxChildDepth;
+        depthCache.set(key, depth);
+        return depth;
+      }
+      items.forEach(o => {
+        if (!o.members || o.members === '-') return; // 非群組物件（一般 host/range/port 定義）
+        const memberCount = o.members.split(/,\s*/).map(s => s.trim()).filter(Boolean).length;
+        if (memberCount > OVERSIZED_GROUP_MEMBER_THRESHOLD) {
+          results.push({ category, name: o.name, vdom: o._vdom || '', issue: 'members', value: memberCount });
+        }
+        const depth = depthOf(o, new Set());
+        if (depth > OVERSIZED_GROUP_DEPTH_THRESHOLD) {
+          results.push({ category, name: o.name, vdom: o._vdom || '', issue: 'depth', value: depth });
+        }
+      });
+    };
+    _check(parsed.addresses, 'address');
+    _check(parsed.services, 'service');
+    return results;
+  }
+
   // 相鄰規則合併建議：偵測「相鄰（consecutive，中間不能夾其他規則）」且除了
   // srcAddr/dstAddr/service 三者之一外，其餘關鍵欄位（action/介面/schedule/nat/
   // logtraffic/VDOM）皆完全相同的規則群組，建議合併為一條（差異欄位改用群組涵蓋多值）。
@@ -941,6 +1004,43 @@
     return h;
   }
 
+  // 規則缺無備註稽核渲染（2026-09-23 新增）：比照 buildDuplicateHtml() 既有樣式（警語橫幅＋
+  // 表格＋可點擊跳轉），列出的是「命中的規則物件」本身（analyzeMissingComments() 回傳形狀）
+  function buildMissingCommentsHtml(results) {
+    let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--yellow);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('audit.missing_comments_title')) + '</div>';
+    if (!results.length) {
+      h += '<div class="nodata" style="padding:14px 0;color:var(--green)">' + esc(tr('audit.missing_comments_none')) + '</div></div>';
+      return h;
+    }
+    h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--yellow)">' + esc(tr('audit.missing_comments_warn')) + '</div>';
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>ID</th><th>' + tr('audit.col_name') + '</th><th>' + tr('audit.col_vdom') + '</th></tr></thead><tbody>';
+    results.forEach(p => {
+      const jh = tr('audit.jump_hint');
+      h += `<tr><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(p.id).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(p.id)}</span></td><td>${esc(p.name||'-')}</td><td style="color:var(--text-dim)">${esc(p._vdom||'-')}</td></tr>`;
+    });
+    h += '</tbody></table></div></div>';
+    return h;
+  }
+
+  // 過大／巢狀過深群組物件稽核渲染（2026-09-23 新增）：同一群組物件可能同時命中「成員過多」
+  // 與「巢狀過深」兩種 issue，各自獨立一列顯示，不合併，避免單列塞兩種不同語意的數值
+  const _OVERSIZED_GROUP_ISSUE_LABEL = { members: 'audit.issue_too_many_members', depth: 'audit.issue_too_deep' };
+  function buildOversizedGroupsHtml(results) {
+    let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--yellow);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('audit.oversized_group_title')) + '</div>';
+    if (!results.length) {
+      h += '<div class="nodata" style="padding:14px 0;color:var(--green)">' + esc(tr('audit.oversized_group_none')) + '</div></div>';
+      return h;
+    }
+    h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--yellow)">' + esc(tr('audit.oversized_group_warn')) + '</div>';
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_category') + '</th><th>' + tr('audit.col_name') + '</th><th>' + tr('audit.col_vdom') + '</th><th>' + tr('audit.col_issue_type') + '</th><th>' + tr('audit.col_count') + '</th></tr></thead><tbody>';
+    results.forEach(r => {
+      const issueLabel = tr(_OVERSIZED_GROUP_ISSUE_LABEL[r.issue]);
+      h += `<tr><td>${pill(r.category,'p-info')}</td><td class="mono" style="color:var(--accent)">${esc(r.name)}</td><td style="color:var(--text-dim)">${esc(r.vdom||'-')}</td><td>${pill(issueLabel,'p-warn')}</td><td class="mono">${r.value}</td></tr>`;
+    });
+    h += '</tbody></table></div></div>';
+    return h;
+  }
+
   function buildComplianceHtml(findings) {
     const rp = r => r === 'high' ? pill(tr('audit.risk_high'),'p-deny') : r === 'medium' ? pill(tr('audit.risk_mid'),'p-warn') : pill(tr('audit.risk_low'),'p-allow');
     let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--purple);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + tip('tip.compliance', tr('audit.compliance_title')) + '</div>';
@@ -1117,8 +1217,55 @@
     // T15：孤兒 VPN 物件（2026-09-15 新增），權重比照孤兒 NAT 同屬「設定衛生」訊號，同為 low
     const orphanVpnCount = analyzeOrphanVPN(parsed).length;
     if (orphanVpnCount) { score -= orphanVpnCount * HEALTH_WEIGHT.low; issues.push({ sev: 'info', label: tr('health.vpn_orphan'), count: orphanVpnCount }); }
+    // T16：規則缺無備註（2026-09-23 新增），權重比照孤兒 NAT/VPN 同屬「設定衛生」訊號，同為 low
+    const missingCommentsCount = analyzeMissingComments(parsed).length;
+    if (missingCommentsCount) { score -= missingCommentsCount * HEALTH_WEIGHT.low; issues.push({ sev: 'info', label: tr('health.missing_comments'), count: missingCommentsCount }); }
+    // T17：過大／巢狀過深群組物件（2026-09-23 新增），權重同上
+    const oversizedGroupCount = analyzeOversizedGroups(parsed).length;
+    if (oversizedGroupCount) { score -= oversizedGroupCount * HEALTH_WEIGHT.low; issues.push({ sev: 'info', label: tr('health.oversized_group'), count: oversizedGroupCount }); }
     score = Math.max(0, Math.min(100, score));
     const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
     const gradeColor = grade === 'A' ? 'var(--green)' : grade === 'B' ? 'var(--teal)' : grade === 'C' ? 'var(--yellow)' : grade === 'D' ? 'var(--orange)' : 'var(--red)';
     return {score, grade, gradeColor, issues};
+  }
+
+  // ── 全域搜尋比對邏輯（2026-09-23 新增）─────────────────────────────────────
+  // 抽出為純函式，供 app.js 的 doGlobalQuery()（負責讀寫 DOM）呼叫，也讓 Node 測試能在
+  // 不碰 DOM 的情況下驗證比對邏輯本身。useRegex 開啟時以 try/catch 包住 new RegExp()，
+  // 避免使用者輸入無效正則（如未閉合的括號）直接讓整頁報錯；正則建置失敗時退回一般子字串
+  // 比對，並回傳 regexError 供呼叫端顯示提示。
+  function _buildGlobalSearchMatcher(query, useRegex) {
+    if (useRegex) {
+      try {
+        const re = new RegExp(query, 'i');
+        return { test: v => re.test(String(v ?? '')), regexError: false };
+      } catch (e) {
+        // 無效正則：退回一般文字比對，不讓整頁報錯
+      }
+    }
+    const ql = query.toLowerCase();
+    return { test: v => String(v ?? '').toLowerCase().includes(ql), regexError: !!useRegex };
+  }
+
+  // 欄位範圍白名單：'all' 沿用既有全部 8 個資料表；其餘為單一資料表限定，供畫面的
+  // 欄位範圍下拉選單使用（2026-09-23 新增）
+  const GLOBAL_SEARCH_SCOPES = {
+    all: ['interfaces', 'policies', 'routes', 'vpn', 'nat', 'addresses', 'services', 'users'],
+    policies: ['policies'],
+    addresses: ['addresses'],
+    services: ['services'],
+  };
+
+  function runGlobalSearch(parsed, query, opts) {
+    opts = opts || {};
+    const q = (query || '').trim();
+    if (!q || !parsed) return { results: [], regexError: false };
+    const matcher = _buildGlobalSearchMatcher(q, !!opts.useRegex);
+    const sections = GLOBAL_SEARCH_SCOPES[opts.scope] || GLOBAL_SEARCH_SCOPES.all;
+    const results = sections.map(sec => {
+      const arr = parsed[sec] || [];
+      const hits = arr.filter(r => Object.values(r).some(v => matcher.test(v))).slice(0, 30);
+      return { sec, count: hits.length, rows: hits };
+    }).filter(r => r.count > 0);
+    return { results, regexError: matcher.regexError };
   }
