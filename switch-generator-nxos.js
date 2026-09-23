@@ -366,9 +366,6 @@ function assembleNXOSConfig(model){
   // Configuring vPCs 文件），結構與已修復的 Comware Bridge-Aggregation 問題相同
   const nxosVpcBlock=renderNXOSVpc(model.vpc);
   if(nxosVpcBlock)blocks.push(nxosVpcBlock);
-  // class-map(type qos) 必須先於引用它的 service-policy 定義，比照 Cisco/Arista/Dell OS10/
-  // Comware 既有慣例（2026-08-31 新增）
-  if(model.classMaps&&model.classMaps.length)blocks.push(renderNxosClassMapQoS(model.classMaps));
   if(model.interfaces&&model.interfaces.length)blocks.push(renderNXOSInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.vpc,model.ospf6,model.qosApply));
   const nxosLacpExtra=renderNXOSLACPExtra(model.lacp,model.interfaces);
   if(nxosLacpExtra)blocks.push(nxosLacpExtra);
@@ -383,13 +380,6 @@ function assembleNXOSConfig(model){
   if(model.ospf6&&model.ospf6.length)blocks.push(renderNXOSOSPFv3(model.ospf6));
   if(model.routes&&model.routes.length)blocks.push(renderNXOSRoutes(model.routes));
   if(model.bgp&&model.bgp.length)blocks.push(renderNXOSBGPList(model.bgp));
-  // ACL 定義本身（規則清單）：2026-07-22 對外查證官方 NX-OS Security Configuration
-  // Guide 後改用專屬 renderNXOSACL()——原本沿用 renderCiscoACL()（IOS-XE 語法），但真實
-  // NX-OS 容器是裸 "ip access-list NAME"（無 standard/extended 關鍵字），規則列格式也
-  // 不同（序號在最前面，無 rule/seq 關鍵字），與 IOS-XE 完全不相容，對應的
-  // _parseACLNXOS() 已同步新增。必須放在組裝順序最後——理由與 assembleDellOS10Config/
-  // assembleCiscoConfig 相同：區塊擷取 regex 只認得下一個同關鍵字區塊或字串結尾
-  if(model.acl&&model.acl.length)blocks.push(renderNXOSACL(model.acl));
   const nxosUsersBlock=renderNXOSUsers(model.users);
   if(nxosUsersBlock)blocks.push(nxosUsersBlock);
   if(model.snmpCommunity)blocks.push(`snmp-server community ${model.snmpCommunity} ro`);
@@ -399,6 +389,22 @@ function assembleNXOSConfig(model){
   // 才開啟（switch-analyzer-parser-comware.js parseMgmtAccess() nxos 分支），本工具從不輸出
   // "feature telnet"，此行僅作為明確聲明用途（defense-in-depth，不影響既有預設關閉行為）
   if(model.mgmtTelnetDisable)blocks.push('no feature telnet');
+  // ACL 定義本身（規則清單）：2026-07-22 對外查證官方 NX-OS Security Configuration
+  // Guide 後改用專屬 renderNXOSACL()——原本沿用 renderCiscoACL()（IOS-XE 語法），但真實
+  // NX-OS 容器是裸 "ip access-list NAME"（無 standard/extended 關鍵字），規則列格式也
+  // 不同（序號在最前面，無 rule/seq 關鍵字），與 IOS-XE 完全不相容，對應的
+  // _parseACLNXOS() 已同步新增。必須放在組裝順序最後——理由與 assembleDellOS10Config/
+  // assembleCiscoConfig 相同：區塊擷取 regex 只認得下一個同關鍵字區塊或字串結尾。
+  // 2026-09-21 修正：先前排在 Users/SNMP/syslog/Telnet 之前，同樣違反「放最後」規則，
+  // 搬到組裝順序最末端
+  if(model.acl&&model.acl.length)blocks.push(renderNXOSACL(model.acl));
+  // class-map(type qos)：2026-09-23 修復，比照 Cisco/Arista/Ruijie/Dell OS10 既有「classMap+
+  // QoS 放最後」慣例搬到組裝順序真正最末端。NX-OS 從未輸出過獨立的 policy-map 區塊，最後一個
+  // class-map 的收尾正則只能靠字串結尾當終止點，先前排在 Interfaces 之前時，後面接著的
+  // Interfaces/OSPF/BGP/Routes/ACL 等內容全被貪婪吃進最後一個 class-map 的比對範圍，造成資料
+  // 汙染；現在確保它後面不再接任何內容即可正確終止。real device 是否要求 class-map 定義早於
+  // service-policy 引用不影響本工具的 round-trip 正確性驗證方式，比照其餘 6 家既有先例。
+  if(model.classMaps&&model.classMaps.length)blocks.push(renderNxosClassMapQoS(model.classMaps));
   return blocks.join('\n!\n')+'\n';
 }
 // 本機帳號：switch_analyzer 的 parseUsers()（NX-OS 分支）語法為
