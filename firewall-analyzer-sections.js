@@ -490,11 +490,21 @@ function buildQuerySectionHtml(qvdoms){
       <div style="margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid var(--border)">
         <h2 style="margin:0 0 6px;font-size:16px">${tr('search.title')}</h2>
         <p style="color:var(--text-dim);margin:0 0 10px;font-size:12px">${tr('search.hint')}</p>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <input id="g-search" type="text" placeholder="${tr('search.placeholder')}"
             style="flex:1;max-width:400px;padding:7px 12px;border-radius:6px;border:1px solid var(--border);
                    background:var(--surface2);color:var(--text);font-size:13px"
             oninput="doGlobalQuery(this.value)" onkeydown="if(event.key==='Escape')this.value=''">
+          <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-dim);white-space:nowrap;cursor:pointer">
+            <input type="checkbox" id="g-search-regex" onchange="doGlobalQuery(document.getElementById('g-search').value)">${tr('search.use_regex')}
+          </label>
+          <select id="g-search-scope" title="${tr('search.scope_label')}" onchange="doGlobalQuery(document.getElementById('g-search').value)"
+            style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:12px">
+            <option value="all">${tr('search.scope_all')}</option>
+            <option value="policies">${tr('sec.policies')}</option>
+            <option value="addresses">${tr('sec.addresses')}</option>
+            <option value="services">${tr('sec.services')}</option>
+          </select>
         </div>
         <div id="global-search-result" style="margin-top:14px"></div>
       </div>

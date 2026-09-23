@@ -5,7 +5,9 @@
 // switch-analyzer-audit.js 同批拆分先例，以及更早的 switch-analyzer-diff.js／
 // firewall-analyzer-audit.js 拆分傳統）——switch-generator-app.js 本身頂層有多處立即執行的
 // DOM 綁定，純函式若寫進該檔會導致 Node 測試沙箱一讀取整檔就因 document is not defined 拋錯。
-// 涵蓋：IPv4/CIDR 格式驗證、常用機種 port 集合查詢、Comware OSPF network/LACP 屬性一致性警告。
+// 涵蓋：IPv4/CIDR 格式驗證、常用機種 port 集合查詢、Comware OSPF network/LACP 屬性一致性警告、
+// 認證金鑰弱值偵測、產生前安全稽核預覽／健康度評分、設定模板欄位級 diff（2026-09-23 新增，
+// 三者皆為 vendor-agnostic 的表單/邏輯層級功能，非新查證廠牌語法，故一併收在本檔）。
 
 function isValidIPv4(s){
   const m=(s||'').match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -117,4 +119,162 @@ function comwareLacpAttrWarnings(model){
     }
   });
   return warnings;
+}
+
+// ── 認證金鑰弱值偵測（2026-09-23 新增，任務3）──────────────────────────
+// OSPF/BGP MD5 認證金鑰（model.ospf[].authKey／model.bgp[].peers[].authKey）與 VRRP
+// authentication 金鑰（model.vrrp[].authKey）皆是使用者直接輸入的明文字串（非雜湊），
+// 長度過短或命中業界常見弱值字面，都有被離線字典/暴力猜測之風險；純字面比對，
+// vendor-agnostic，不需新查證任何廠牌語法。
+const WEAK_AUTH_KEY_VALUES=new Set(['cisco','password','123456','admin','12345678','password1','changeme','secret','default','qwerty']);
+function isWeakAuthKey(key){
+  const k=String(key||'').trim();
+  if(!k)return false;
+  if(k.length<6)return true;
+  return WEAK_AUTH_KEY_VALUES.has(k.toLowerCase());
+}
+function weakAuthKeyWarnings(model){
+  const warnings=[];
+  if(!model)return warnings;
+  (model.ospf||[]).forEach((o,i)=>{
+    if(isWeakAuthKey(o.authKey))warnings.push(`⚠️ ${tr('val.weak_auth_key').replace('{item}','OSPF '+(i+1))}`);
+  });
+  (model.bgp||[]).forEach((b,i)=>{
+    (b.peers||[]).forEach((p,pi)=>{
+      if(isWeakAuthKey(p.authKey))warnings.push(`⚠️ ${tr('val.weak_auth_key').replace('{item}','BGP '+(i+1)+' Peer '+(p.ip||pi+1))}`);
+    });
+  });
+  (model.vrrp||[]).forEach((v,i)=>{
+    if(isWeakAuthKey(v.authKey))warnings.push(`⚠️ ${tr('val.weak_auth_key').replace('{item}','VRRP '+(i+1))}`);
+  });
+  return warnings;
+}
+
+// ── 產生前安全稽核預覽（2026-09-23 新增，任務1）──────────────────────────
+// 概念比照 switch_analyzer 既有 analyzeSwitchAudit()/computeSwitchHealth()（見
+// switch-analyzer-audit.js／CLAUDE.md「switch_analyzer 設定健康度評分」小節），但刻意不直接
+// 呼叫該函式——analyzeSwitchAudit() 讀取的是「設定檔解析後」的 parsed 形狀（users[].pwdWeak／
+// snmp.communities[]／mgmtAccess.telnet／interfaces[].type 等欄位），與本工具 collectModel()
+// 輸出的「表單填寫中」model 形狀有多處不對稱（model 沒有 pwdWeak/pwdType，snmpCommunity 是單一
+// 字串非陣列……），貿然直接餵入會讓多數檢查項目因欄位缺席而恆為 0，造成「已檢查、無問題」的
+// 錯誤安全感。改為另建一組聚焦於 model 實際擁有欄位的精簡版檢查清單，並沿用
+// computeSwitchHealth() 同一套權重與 A-F 門檻（WEIGHT/GRADE 邏輯直接複製一份，非跨檔案
+// import，比照本專案「各工具/模組各自維護一份純函式」慣例）。
+function analyzeGeneratorAudit(model){
+  const findings=[];
+  const f=(id,check,value,risk,detail)=>findings.push({id,check,value,risk,detail});
+  const none=tr('genaudit.none');
+  const ifaces=model.interfaces||[];
+  // 1. 本機帳號弱密碼（password 為使用者直接輸入的字面值，重用上方 isWeakAuthKey()）
+  const users=model.users||[];
+  const weakPwd=users.filter(u=>isWeakAuthKey(u.password));
+  f('weak-pwd', tr('genaudit.check_weak_pwd'), weakPwd.length, 'high',
+    weakPwd.length?weakPwd.map(u=>u.name).join(', '):none);
+  // 2. VLAN1（預設/原生 VLAN）仍用於使用者流量
+  const vlan1Ports=ifaces.filter(i=>(i.mode==='access'||i.mode==='trunk')&&(!i.nativeVlan||i.nativeVlan==='1'));
+  f('vlan1-inuse', tr('genaudit.check_vlan1_inuse'), vlan1Ports.length, 'medium',
+    vlan1Ports.length?vlan1Ports.map(i=>i.name).join(', '):none);
+  // 3. 已填寫的 access/trunk 介面未出現在 Security 表格（model.security 只收錄「有填」的列，
+  // 與 switch_analyzer 掃描全部真實介面的語意略有不同——這裡僅能掃描使用者已在 Interface
+  // 表格填寫的列）
+  const secPorts=new Set((model.security||[]).map(s=>s.port));
+  const noAuth=ifaces.filter(i=>(i.mode==='access'||i.mode==='trunk')&&!secPorts.has(i.name));
+  f('security-off', tr('genaudit.check_security_off'), noAuth.length, 'medium',
+    noAuth.length?noAuth.map(i=>i.name).join(', '):none);
+  // 4. STP Edge Port 未啟用 BPDU Guard
+  const stpPorts=(model.stp&&Array.isArray(model.stp.ports))?model.stp.ports:[];
+  const noBpduGuard=stpPorts.filter(p=>p.portfast&&!p.bpduguard);
+  f('stp-no-bpduguard', tr('genaudit.check_stp_no_bpduguard'), noBpduGuard.length, 'medium',
+    noBpduGuard.length?noBpduGuard.map(p=>p.port).join(', '):none);
+  // 5. ACL 存在允許 any-to-any 的規則
+  const isAnyAddr=v=>/^any$/i.test(String(v||'').trim());
+  const anyAnyRules=[];
+  (model.acl||[]).forEach(acl=>{
+    (acl.rules||[]).forEach(r=>{
+      if(/^(permit|accept)$/i.test(r.action||'')&&isAnyAddr(r.src)&&isAnyAddr(r.dst))anyAnyRules.push(`${acl.name}${r.seq?'#'+r.seq:''}`);
+    });
+  });
+  f('acl-any-any', tr('genaudit.check_acl_any_any'), anyAnyRules.length, 'high',
+    anyAnyRules.length?anyAnyRules.join(', '):none);
+  // 6. 完全未使用（無 access 埠成員）卻仍出現在某條 trunk 允許清單的 VLAN
+  const unusedTrunkVlans=(model.vlans||[]).map(v=>{
+    const vid=String(v.id);
+    const accessCount=ifaces.filter(i=>i.mode==='access'&&String(i.accessVlan)===vid).length;
+    const trunkCount=ifaces.filter(i=>i.mode==='trunk'&&(i.trunkVlans||'').split(/[\s,]+/).includes(vid)).length;
+    return{id:v.id,accessCount,trunkCount};
+  }).filter(v=>v.accessCount===0&&v.trunkCount>0);
+  f('unused-vlan-trunk', tr('genaudit.check_unused_vlan_trunk'), unusedTrunkVlans.length, 'low',
+    unusedTrunkVlans.length?unusedTrunkVlans.map(v=>`V${v.id}`).join(', '):none);
+  // 7. 管理介面未停用 Telnet（僅供參考——並非所有廠牌預設就是啟用 Telnet，見
+  // model.mgmtTelnetDisable 既有註解，此處僅提示「使用者尚未主動停用」）
+  f('telnet-mgmt', tr('genaudit.check_telnet_mgmt'), model.mgmtTelnetDisable?0:1, 'high',
+    model.mgmtTelnetDisable?none:tr('genaudit.telnet_enabled_detail'));
+  // 8. SNMP Community 為業界公認預設弱名稱（public/private）
+  const defaultCommunity=/^(public|private)$/i.test((model.snmpCommunity||'').trim());
+  f('snmp-default-name', tr('genaudit.check_snmp_default_name'), defaultCommunity?1:0, 'high',
+    defaultCommunity?model.snmpCommunity:none);
+  // 9. OSPF/BGP 未設定認證金鑰（僅檢查「完全沒填」，欄位本身填了但過於簡單由上方
+  // weakAuthKeyWarnings() 另行提示，兩者互補不重複）
+  const noRoutingAuth=[];
+  (model.ospf||[]).forEach(o=>{if(!o.authKey)noRoutingAuth.push('OSPF');});
+  (model.bgp||[]).forEach(b=>{if((b.peers||[]).length&&!(b.peers||[]).some(p=>p.authKey))noRoutingAuth.push('BGP');});
+  f('routing-no-auth', tr('genaudit.check_routing_no_auth'), noRoutingAuth.length, 'medium',
+    noRoutingAuth.length?noRoutingAuth.join(', '):none);
+  // 10. 已填寫的介面缺少描述文字
+  const noDescIfaces=ifaces.filter(i=>!(i.desc||'').trim());
+  f('if-no-desc', tr('genaudit.check_if_no_desc'), noDescIfaces.length, 'low',
+    noDescIfaces.length?noDescIfaces.map(i=>i.name).join(', '):none);
+  return findings;
+}
+
+function computeGeneratorAuditHealth(model){
+  const findings=analyzeGeneratorAudit(model);
+  let score=100;
+  const issues=[];
+  const WEIGHT={high:10,medium:5,low:3};
+  const SEV={high:'crit',medium:'warn',low:'info'};
+  findings.forEach(f=>{
+    if(f.value>0){
+      score-=f.value*(WEIGHT[f.risk]||WEIGHT.low);
+      issues.push({sev:SEV[f.risk]||'info',label:f.check,count:f.value});
+    }
+  });
+  score=Math.max(0,Math.min(100,score));
+  const grade=score>=90?'A':score>=75?'B':score>=60?'C':score>=40?'D':'F';
+  const gradeColor=grade==='A'?'var(--green)':grade==='B'?'var(--teal)':grade==='C'?'var(--yellow)':grade==='D'?'var(--orange)':'var(--red)';
+  return {score,grade,gradeColor,issues};
+}
+
+// ── 設定模板欄位級 diff（2026-09-23 新增，任務2）──────────────────────────
+// 目的僅是「正確可用、清楚呈現」，不追求 firewall_analyzer 那種陣列 key-based 精細比對——
+// 把兩個 model 物件展開成 {路徑:葉值} 的扁平表後逐路徑比對，陣列以索引展開（[0]/[1]/...），
+// 長度不同的陣列會讓多出的索引路徑只出現在其中一邊，同樣能正確反映出差異。
+function flattenForDiff(obj, prefix, out){
+  out=out||{};
+  const key=prefix||'(root)';
+  if(obj===null||obj===undefined){ out[key]=obj; return out; }
+  if(Array.isArray(obj)){
+    if(!obj.length){ out[key]=obj; return out; }
+    obj.forEach((v,i)=>flattenForDiff(v, prefix?`${prefix}[${i}]`:`[${i}]`, out));
+    return out;
+  }
+  if(typeof obj==='object'){
+    const keys=Object.keys(obj);
+    if(!keys.length){ out[key]=obj; return out; }
+    keys.forEach(k=>flattenForDiff(obj[k], prefix?`${prefix}.${k}`:k, out));
+    return out;
+  }
+  out[key]=obj;
+  return out;
+}
+function diffTemplateModels(modelA, modelB){
+  const flatA=flattenForDiff(modelA||{});
+  const flatB=flattenForDiff(modelB||{});
+  const paths=Array.from(new Set([...Object.keys(flatA), ...Object.keys(flatB)])).sort();
+  const diffs=[];
+  paths.forEach(path=>{
+    const a=flatA[path], b=flatB[path];
+    if(JSON.stringify(a)!==JSON.stringify(b))diffs.push({path, oldValue:a, newValue:b});
+  });
+  return diffs;
 }

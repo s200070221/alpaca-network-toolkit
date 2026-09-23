@@ -21,14 +21,14 @@
 :root{
   --bg:#080c17;--surface:#0f1629;--surface2:#162035;--surface3:#1e2d4a;
   --border:#1e3a5f;--border2:#243d63;
-  --accent:#00c8f0;--accent2:#0ea5e9;--green:#10b981;--red:#ef4444;--yellow:#f59e0b;
+  --accent:#00c8f0;--accent2:#0ea5e9;--green:#10b981;--red:#ef4444;--yellow:#f59e0b;--orange:#fb923c;--teal:#2dd4bf;
   --text:#dde8f5;--text-dim:#64748b;--text-mid:#94a3b8;
 }
 body[data-theme="light"]{
   --bg:#f0f4f8;--surface:#ffffff;--surface2:#f8fafc;--surface3:#e8f0f8;
   --border:#cbd5e1;--border2:#94a3b8;
   --text:#1e293b;--text-dim:#475569;--text-mid:#64748b;
-  --accent:#0090b8;--accent2:#0284c7;--green:#059669;--red:#dc2626;--yellow:#d97706;
+  --accent:#0090b8;--accent2:#0284c7;--green:#059669;--red:#dc2626;--yellow:#d97706;--orange:#ea580c;--teal:#0d9488;
 }
 body{background:var(--bg);color:var(--text);font-family:system-ui,'-apple-system','Segoe UI','Helvetica Neue',sans-serif;font-size:13px;min-height:100vh}
 ::-webkit-scrollbar{width:6px;height:6px}
@@ -330,6 +330,24 @@ input.valid,select.valid{border-color:var(--green)!important}
     </div>
     <div id="template-msg" style="margin:4px 0 2px;font-size:12px"></div>
     <div id="template-list" class="template-list"></div>
+    <div class="row" style="margin-top:10px">
+      <input type="file" id="template-import-file" accept="application/json" style="max-width:220px">
+      <button class="add-btn" data-i18n="btn.importTemplate" onclick="importTemplateFile()">📥 匯入模板</button>
+    </div>
+    <div class="row" style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+      <label data-i18n="lbl.compareTemplates">比較兩個模板</label>
+      <select id="compare-template-a"></select>
+      <select id="compare-template-b"></select>
+      <button class="add-btn" data-i18n="btn.runCompare" onclick="compareTemplates()">開始比較</button>
+    </div>
+    <div id="template-diff-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:10px;max-height:360px;overflow-y:auto;font-family:Menlo,'Courier New',monospace;font-size:11px;line-height:1.5"></div>
+  </div>
+
+  <div class="card" id="gen-audit-card">
+    <h2 data-i18n="sec.auditPreview">安全稽核預覽</h2>
+    <p style="font-size:11px;color:var(--text-mid);margin:0 0 10px" data-i18n="hint.auditPreview">依目前表單填寫內容進行的簡易自我檢查（vendor-agnostic，非完整涵蓋 switch_analyzer 的稽核項目），正式部署前仍建議產生設定後用 switch_analyzer 做完整分析。</p>
+    <button id="gen-audit-btn" class="add-btn" onclick="_doGeneratorAuditCheck()" data-i18n="btn.auditPreviewRun">執行</button>
+    <div id="gen-audit-result" style="margin-top:12px"></div>
   </div>
 
   <div id="applied-model-notice" class="notice" style="display:none;margin:16px 32px 0;padding:9px 16px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.3);color:#059669"></div>
