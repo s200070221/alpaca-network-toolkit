@@ -320,3 +320,30 @@ function matchIfaceNamesBySpec(names, spec){
   });
   return {indexes:[...hit].sort((x,y)=>x-y),invalid};
 }
+
+// 表單草稿是否有實質內容（2026-09-24 新增）：有主機名稱，或任一頂層陣列欄位（VLAN／介面／
+// 路由／ACL…）非空即算。用於自動暫存時避免把空白表單存成草稿、下次開頁時跳出無意義的還原提示。
+// collectModel() 在主機名稱留空時會自動補 'Switch'，故該預設值視同未填
+function draftModelHasContent(model){
+  if(!model||typeof model!=='object')return false;
+  const name=String(model.sysname||'').trim();
+  if(name&&name!=='Switch')return true;
+  return Object.values(model).some(v=>Array.isArray(v)&&v.length>0);
+}
+
+// 匯入原始設定 vs 產生結果比對前的正規化（2026-09-24 新增）：去掉每行首尾空白、空白行與整行註解
+// （! 或 # 開頭；Comware 的區塊結尾 # 本身不帶設定內容，一併略過不影響比對），避免縮排、空行與
+// 產生器自己加的免責註解讓真正的設定差異被格式差異淹沒。純函式，回傳行陣列
+function normalizeConfigLinesForDiff(text){
+  return String(text||'').replace(/\r\n/g,'\n').split('\n').map(l=>l.trim()).filter(l=>l&&!/^[!#]/.test(l));
+}
+
+// 介面描述命名範本（2026-09-24 新增）：替換 {name}（介面名稱）、{n}（名稱最後的編號）、
+// {hostname}（主機名稱）、{vlan}（該介面 Access VLAN）；不認得的佔位符原樣保留，方便使用者
+// 發現打錯字。無佔位符時原字串直接回傳。純函式
+function renderIfaceDescTemplate(tpl,ctx){
+  const c=ctx||{};
+  const num=(String(c.name||'').match(/(\d+)$/)||[])[1]||'';
+  const map={name:c.name||'',n:num,hostname:c.hostname||'',vlan:c.vlan||''};
+  return String(tpl||'').replace(/\{(\w+)\}/g,(m,k)=>Object.prototype.hasOwnProperty.call(map,k)?map[k]:m);
+}

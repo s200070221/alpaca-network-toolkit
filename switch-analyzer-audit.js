@@ -480,3 +480,22 @@ function buildSwitchAuditMarkdown(parsed){
   lines.push('',`> ${tr('audit.standards_disclaimer')}`,'');
   return lines.join('\n');
 }
+
+// ── 已 shutdown 但仍保留設定的介面（2026-09-24 新增）───────────────────────
+// 保留的設定：IP（含 IPv6／次要IP）、VRF、非預設（非 1）的 VLAN 指派、native VLAN、trunk／hybrid
+// 模式。描述不算——替閒置埠寫「預留」「Spare」之類說明本身是好習慣，列入只會產生雜訊。
+// 回傳 [{name, desc, items:[欄位代號]}]；只列清單不計入 analyzeSwitchAudit()，不影響健康度
+function analyzeShutdownConfigured(parsed){
+  return (parsed.interfaces||[]).filter(i=>i.shutdown).map(i=>{
+    const items=[];
+    if(i.ip)items.push('ip');
+    if(i.ip6)items.push('ipv6');
+    if(i.secondaryIps&&i.secondaryIps.length)items.push('secondaryIp');
+    if(i.vrf)items.push('vrf');
+    if(i.mode==='trunk'||i.mode==='hybrid')items.push(i.mode);
+    const vids=_expandVidList(i.vlans).filter(v=>v!=='1');
+    if(vids.length||i.vlans==='all')items.push('vlan');
+    if(i.nativeVlan&&String(i.nativeVlan)!=='1')items.push('nativeVlan');
+    return {name:i.name,desc:i.desc||'',items};
+  }).filter(r=>r.items.length);
+}
