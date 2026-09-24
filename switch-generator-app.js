@@ -53,7 +53,9 @@ function applyIfaceBulk(){
     if(acc)r.querySelector('.i-access-vlan').value=acc;
     if(trunk)r.querySelector('.i-trunk-vlans').value=trunk;
     if(nat)r.querySelector('.i-native-vlan').value=nat;
-    if(desc)r.querySelector('.i-desc').value=desc;
+    // 描述支援命名範本佔位符（2026-09-24 新增，見 renderIfaceDescTemplate()）；{vlan} 取套用後的
+    // Access VLAN，故放在 VLAN 欄位寫入之後
+    if(desc)r.querySelector('.i-desc').value=renderIfaceDescTemplate(desc,{name:names[i],hostname:(document.getElementById('hostname')?.value||'').trim(),vlan:r.querySelector('.i-access-vlan').value.trim()});
     if(shut)r.querySelector('.i-shutdown').checked=(shut==='down');
   });
   const msg=document.getElementById('bulkif-msg');
@@ -3046,6 +3048,29 @@ function renderSessionDiff(oldCfg,newCfg){
   box.style.display='block';
 }
 
+// 產生結果與匯入原始設定比對（2026-09-24 新增）：比對前以 normalizeConfigLinesForDiff() 去除縮排、
+// 空行與註解，沿用既有 computeDiff() 逐行比對；按鈕只在本次有從文字匯入設定檔後才顯示（其他工具
+// 以結構化資料交接時沒有原文可比，不顯示）。再按一次收合
+let _importedOriginalText=null;
+function toggleImportDiff(){
+  const box=document.getElementById('import-diff-result');
+  if(!box)return;
+  if(box.style.display==='block'){box.style.display='none';return;}
+  const out=document.getElementById('output').value;
+  if(!_importedOriginalText||!out){box.innerHTML=`<div>${escapeHtml(tr('importDiff.needBoth'))}</div>`;box.style.display='block';return;}
+  const diff=computeDiff(normalizeConfigLinesForDiff(_importedOriginalText),normalizeConfigLinesForDiff(out));
+  const addCount=diff.filter(d=>d.type==='add').length;
+  const delCount=diff.filter(d=>d.type==='del').length;
+  const head=`<div style="border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:8px;font-weight:600">⇄ ${escapeHtml(tr('importDiff.title'))}：${tr('diff.added')} ${addCount} | ${tr('diff.deleted')} ${delCount}</div><div style="margin-bottom:6px;color:var(--text-dim)">${escapeHtml(tr('importDiff.hint'))}</div>`;
+  const body=(addCount||delCount)?diff.filter(d=>d.type!=='same').map(item=>
+    item.type==='add'
+      ?`<div style="color:var(--green);background:rgba(16,185,129,.1)">+ ${escapeHtml(item.content)}</div>`
+      :`<div style="color:var(--red);background:rgba(239,68,68,.1)">- ${escapeHtml(item.content)}</div>`
+  ).join(''):`<div>${escapeHtml(tr('importDiff.same'))}</div>`;
+  box.innerHTML=head+body;
+  box.style.display='block';
+}
+
 // ── 彩蛋：主機名稱關鍵字 + 深夜/計時提醒（借鑑自 switch_analyzer checkSwitchEggs）───
 function checkGeneratorEggs(hostname){
   const h=(hostname||'').toLowerCase();
@@ -3270,6 +3295,10 @@ async function parseAndImport(){
   // assembleXxxConfig() 派送用的是 'cisco_nxos'，兩邊命名不同，需要單獨映射；
   // 其餘（含 arista）兩邊命名一致，不需映射
   const genVendor=vendor==='nxos'?'cisco_nxos':vendor;
+  // 保留匯入原文供「與匯入原始設定比對」使用（2026-09-24 新增）
+  _importedOriginalText=text;
+  const idBtn=document.getElementById('import-diff-btn');
+  if(idBtn)idBtn.style.display='';
 
   let parsed;
   if(vendor==='comware')parsed=api.parseComware(text);
@@ -4929,6 +4958,7 @@ function _focusRemediationField(findingId){
     var gv = v === 'nxos' ? 'cisco_nxos' : v;
     var fnameEl2 = document.getElementById('import-config-file-name');
     if (fnameEl2 && swModel.name) fnameEl2.textContent = swModel.name;
+    window._cwHandoffImported = true;
     applyParsedConfigToForm(p, buildAnalyzerFnsAdapter(p), '', v, gv);
     if (swModel.focusFindingId) _focusRemediationField(swModel.focusFindingId);
     return;
@@ -4941,5 +4971,49 @@ function _focusRemediationField(findingId){
   if (ta) ta.value = ownData.text;
   var fnameEl = document.getElementById('import-config-file-name');
   if (fnameEl && ownData.name) fnameEl.textContent = ownData.name;
+  window._cwHandoffImported = true;
   parseAndImport();
+})();
+
+// 表單草稿自動暫存（2026-09-24 新增）：任何輸入／變更／按鈕點擊後延遲 1 秒以 collectModel()
+// 快照存到 localStorage 'cw_draft'（空白表單不存，見 draftModelHasContent()）。下次開頁若有
+// 草稿，在免責提示下方顯示非阻擋式提示列讓使用者選擇還原或捨棄；提示列尚未回應前暫停自動暫存，
+// 避免使用者一開始動表單就把還沒還原的舊草稿覆蓋掉。本次開頁若是其他工具交接匯入
+// （window._cwHandoffImported），不顯示提示以免與剛匯入的內容混淆，草稿仍保留到下次
+const DRAFT_KEY='cw_draft';
+let _draftTimer=null,_draftPending=false;
+function saveDraftNow(){
+  if(_draftPending)return;
+  try{
+    const model=collectModel();
+    if(!draftModelHasContent(model)){localStorage.removeItem(DRAFT_KEY);return;}
+    localStorage.setItem(DRAFT_KEY,JSON.stringify({ts:Date.now(),model}));
+  }catch(e){/* localStorage 不可用或表單狀態異常時略過，不影響操作 */}
+}
+function saveDraftSoon(){clearTimeout(_draftTimer);_draftTimer=setTimeout(saveDraftNow,1000);}
+function _closeDraftBanner(){const b=document.getElementById('draft-banner');if(b)b.remove();_draftPending=false;}
+function restoreDraft(){
+  try{const d=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');if(d&&d.model)applyModelToForm(d.model);}catch(e){}
+  _closeDraftBanner();
+}
+function discardDraft(){try{localStorage.removeItem(DRAFT_KEY);}catch(e){}_closeDraftBanner();}
+(function(){
+  let d=null;
+  try{d=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');}catch(e){d=null;}
+  if(d&&d.model&&draftModelHasContent(d.model)&&!window._cwHandoffImported){
+    _draftPending=true;
+    const notice=document.querySelector('.notice');
+    const bar=document.createElement('div');
+    bar.id='draft-banner';bar.className='notice';
+    bar.style.cssText='display:flex;align-items:center;gap:10px;flex-wrap:wrap';
+    const txt=document.createElement('span');
+    txt.textContent=tr('draft.found').replace('{time}',new Date(d.ts).toLocaleString()).replace('{name}',d.model.sysname||'-');
+    const bR=document.createElement('button');bR.className='add-btn';bR.textContent=tr('draft.restore');bR.onclick=restoreDraft;
+    const bD=document.createElement('button');bD.className='add-btn';bD.textContent=tr('draft.discard');bD.onclick=discardDraft;
+    bar.append(txt,bR,bD);
+    if(notice&&notice.parentNode)notice.parentNode.insertBefore(bar,notice.nextSibling);else document.body.prepend(bar);
+  }
+  document.addEventListener('input',saveDraftSoon);
+  document.addEventListener('change',saveDraftSoon);
+  document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('button'))saveDraftSoon();});
 })();

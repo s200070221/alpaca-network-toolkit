@@ -1264,6 +1264,72 @@
     return {score, grade, gradeColor, issues};
   }
 
+  // 命名規範檢查（2026-09-24 新增）：rules = {address, service, policy} 三條使用者自訂正則字串
+  // （空字串代表不檢查該類）。正則區分大小寫（命名規範通常大小寫有意義）；無效正則不拋錯，
+  // 改回報在 errors 讓畫面提示。all/any/none 為多數廠牌內建位址名稱，不列入；沒有名稱或名稱
+  // 為 '-' 的規則也略過（規則名稱在部分廠牌本來就是選填）。不計入健康度——命名規範屬團隊自訂
+  // 標準而非安全風險
+  const NAMING_BUILTIN_ADDR = new Set(['all', 'any', 'none']);
+  function analyzeNamingConvention(parsed, rules) {
+    const results = [], errors = [];
+    const mk = (kind) => {
+      const src = (rules && rules[kind]) || '';
+      if (!src) return null;
+      try { return new RegExp(src); } catch (e) { errors.push(kind); return null; }
+    };
+    const ra = mk('address'), rs = mk('service'), rp = mk('policy');
+    if (ra) (parsed.addresses || []).forEach(a => {
+      if (!a.name || NAMING_BUILTIN_ADDR.has(String(a.name).toLowerCase())) return;
+      if (!ra.test(a.name)) results.push({ kind: 'address', id: '', name: a.name, vdom: a._vdom || '' });
+    });
+    if (rs) (parsed.services || []).forEach(sv => {
+      if (!sv.name) return;
+      if (!rs.test(sv.name)) results.push({ kind: 'service', id: '', name: sv.name, vdom: sv._vdom || '' });
+    });
+    if (rp) (parsed.policies || []).forEach(p => {
+      if (!p.name || p.name === '-') return;
+      if (!rp.test(p.name)) results.push({ kind: 'policy', id: p.id, name: p.name, vdom: p._vdom || '' });
+    });
+    return { results, errors };
+  }
+  function buildNamingConventionHtml(res, rules) {
+    const kindLabel = { address: tr('naming.kind_address'), service: tr('naming.kind_service'), policy: tr('naming.kind_policy') };
+    const inp = (kind) => `<label style="display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--text-dim)">${esc(kindLabel[kind])}<input id="naming-${kind}" class="mono" value="${esc((rules && rules[kind]) || '')}" placeholder="^[A-Z]" style="width:200px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface2);color:var(--text)"></label>`;
+    let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('naming.title')) + '</div>';
+    h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('naming.hint')) + '</div>';
+    h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">${inp('address')}${inp('service')}${inp('policy')}<button class="btn btn-ghost btn-sm" onclick="window._applyNamingRules()">${esc(tr('naming.apply'))}</button></div>`;
+    if (res.errors.length) h += `<div style="color:var(--red);font-size:12px;margin-bottom:8px">${esc(tr('naming.regex_error').replace('{items}', res.errors.map(k => kindLabel[k]).join(', ')))}</div>`;
+    const anyRule = rules && (rules.address || rules.service || rules.policy);
+    if (!anyRule) return h + '</div>';
+    if (!res.results.length) return h + '<div class="nodata" style="padding:14px 0;color:var(--green)">' + esc(tr('naming.none')) + '</div></div>';
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('naming.col_kind') + '</th><th>ID</th><th>' + tr('audit.col_name') + '</th><th>' + tr('audit.col_vdom') + '</th></tr></thead><tbody>';
+    res.results.forEach(r => {
+      const idCell = r.kind === 'policy' ? `<span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.id).replace(/"/g,'&quot;')})" title="${esc(tr('audit.jump_hint'))}">${esc(r.id)}</span>` : '-';
+      h += `<tr><td>${pill(kindLabel[r.kind], 'p-info')}</td><td class="mono">${idCell}</td><td class="mono" style="color:var(--accent)">${esc(r.name)}</td><td style="color:var(--text-dim)">${esc(r.vdom || '-')}</td></tr>`;
+    });
+    return h + '</tbody></table></div></div>';
+  }
+
+  // 健康度歷史折線圖（2026-09-24 新增）：比照 switch-analyzer-audit.js buildHealthSparklineSVG()
+  // 同一套零依賴 inline SVG 寫法（各工具各自維護一份純函式的既有慣例）。entries 為「新到舊」，
+  // 繪圖時反轉成由左至右的舊到新
+  function buildHealthSparklineSVG(entries) {
+    const w = 280, h = 60, pad = 6;
+    const list = (entries || []).slice().reverse();
+    if (!list.length) return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"></svg>`;
+    const yOf = score => pad + (100 - score) / 100 * (h - 2 * pad);
+    const titleOf = e => `${e.score} (${new Date(e.ts).toLocaleDateString()})`;
+    if (list.length === 1) {
+      const y = yOf(list[0].score);
+      return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><circle cx="${w / 2}" cy="${y.toFixed(1)}" r="3" fill="var(--accent)"><title>${titleOf(list[0])}</title></circle></svg>`;
+    }
+    const stepX = (w - 2 * pad) / (list.length - 1);
+    const pts = list.map((e, i) => ({ x: pad + i * stepX, y: yOf(e.score), e }));
+    const path = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+    const dots = pts.map(p => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.5" fill="var(--accent)"><title>${titleOf(p.e)}</title></circle>`).join('');
+    return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${dots}</svg>`;
+  }
+
   // ── 全域搜尋比對邏輯（2026-09-23 新增）─────────────────────────────────────
   // 抽出為純函式，供 app.js 的 doGlobalQuery()（負責讀寫 DOM）呼叫，也讓 Node 測試能在
   // 不碰 DOM 的情況下驗證比對邏輯本身。useRegex 開啟時以 try/catch 包住 new RegExp()，

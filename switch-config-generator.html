@@ -1270,9 +1270,11 @@ end</pre>
       <button class="act-btn" data-i18n="btn.doc" onclick="showDocExportOptions()">📋 文檔</button>
       <button class="act-btn" data-i18n="btn.sendToAnalyzer" onclick="_sendToAnalyzer()">➜ 傳送到分析器</button>
       <button class="act-btn" data-i18n="btn.sendToAnonymizer" onclick="_sendToAnonymizer()">➜ 傳送到去識別化工具</button>
+      <button class="act-btn" id="import-diff-btn" style="display:none" data-i18n="importDiff.btn" onclick="toggleImportDiff()">⇄ 與匯入原始設定比對</button>
       <button class="act-btn" style="margin-left:auto" data-i18n="btn.diff" onclick="toggleDiffCard()">🔄 對比</button>
     </div>
     <textarea id="output" readonly spellcheck="false"></textarea>
+    <div id="import-diff-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:10px;max-height:360px;overflow-y:auto;font-family:Menlo,'Courier New',monospace;font-size:11px;line-height:1.5"></div>
     <div id="session-diff-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:10px;max-height:300px;overflow-y:auto;font-family:Menlo,'Courier New',monospace;font-size:11px;line-height:1.5"></div>
   </div>
 

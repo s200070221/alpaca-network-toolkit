@@ -1030,6 +1030,28 @@ function renderVLANs(){
   return mkTbar('search-inp',[{v:'all',l:tr('filter.all_vlan')},{v:'withip',l:tr('filter.withip')},{v:'declared',l:tr('filter.declared')},{v:'implied',l:tr('filter.implied_only')}],'exportVLANsCSV')+
     `<div class="tbl-wrap">${html}</div><div class="tbl-foot"><span>${count} / ${total} ${tr('unit.count')}</span><span>${tr('vlan.foot_declared')}: ${declaredCount} · ${tr('vlan.foot_implied')}: ${impliedCount}</span></div>${islandCard}${buildVlanUsageCard(analyzeVlanUsage(parsed))}`;
 }
+// 已 shutdown 仍保留設定的介面卡片（2026-09-24 新增）：資料來自 switch-analyzer-audit.js
+// analyzeShutdownConfigured()；不計入上方稽核發現與健康度，純提醒清理
+const SHUTDOWN_ITEM_LABEL={ip:'IP',ipv6:'IPv6',secondaryIp:'Secondary IP',vrf:'VRF',trunk:'Trunk',hybrid:'Hybrid',vlan:'VLAN',nativeVlan:'Native VLAN'};
+function buildShutdownConfiguredCard(rows){
+  const ok=!rows.length;
+  const color=ok?'var(--green)':'var(--yellow)';
+  let h=`<div style="margin-top:14px;border-left:3px solid ${color};padding:10px 14px;background:var(--surface2);border-radius:4px">
+    <div style="font-weight:600;color:${color};margin-bottom:6px">${esc(tr('audit.shut_cfg_title'))} (${rows.length})</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:${ok?0:8}px">${esc(tr(ok?'audit.shut_cfg_none':'audit.shut_cfg_hint'))}</div>`;
+  if(!ok){
+    h+=`<table style="border-collapse:collapse;width:100%;font-size:12px"><thead><tr>
+      <th style="text-align:left;padding:3px 8px;border-bottom:1px solid var(--border)">${esc(tr('col.iface'))}</th>
+      <th style="text-align:left;padding:3px 8px;border-bottom:1px solid var(--border)">${esc(tr('col.desc'))}</th>
+      <th style="text-align:left;padding:3px 8px;border-bottom:1px solid var(--border)">${esc(tr('audit.shut_cfg_items'))}</th>
+    </tr></thead><tbody>${rows.map(r=>`<tr>
+      <td class="mono" style="padding:3px 8px">${esc(r.name)}</td>
+      <td style="padding:3px 8px">${esc(r.desc||'—')}</td>
+      <td style="padding:3px 8px">${r.items.map(k=>pill('warn',SHUTDOWN_ITEM_LABEL[k]||k)).join(' ')}</td>
+    </tr>`).join('')}</tbody></table>`;
+  }
+  return h+'</div>';
+}
 // VLAN 使用率卡片（2026-09-24 新增）：資料來自 switch-analyzer-audit.js analyzeVlanUsage()，
 // 完全未使用（無 access／tagged 埠且無 SVI）的 VLAN 排最前並以黃色標示
 function buildVlanUsageCard(usage){
@@ -1742,6 +1764,7 @@ function renderAudit(){
     +cards+disclaimer
     +`<div style="display:flex;gap:6px;margin:6px 0 8px"><button class="btn btn-ghost btn-sm" onclick="exportAuditSARIF()">🧾 ${esc(tr('audit.export_sarif'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditMarkdown()">📝 ${esc(tr('audit.export_md'))}</button></div>`
     +`<div style="overflow-x:auto"><div class="tbl-wrap">${html}</div></div>`
+    +buildShutdownConfiguredCard(analyzeShutdownConfigured(parsed))
     +`<div id="sw-health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
         <button id="sw-health-btn" onclick="_doSwitchHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
         <div id="sw-health-result" style="margin-top:12px"></div>

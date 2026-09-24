@@ -1110,7 +1110,7 @@ function onParsed(){
           const _zTgl=`<div style="display:flex;gap:5px;margin-bottom:8px"><button onclick="window._fwZoneView='table';renderSection('audit')" style="${_zbs(!window._fwZoneView||window._fwZoneView==='table')}">${tr('routing.view_table')}</button><button onclick="window._fwZoneView='topo';renderSection('audit')" style="${_zbs(window._fwZoneView==='topo')}">${tr('routing.view_topo')}</button></div>`;
           _zoneHtml = _zTgl + (window._fwZoneView==='topo' ? buildZoneTopoHtml(PARSED.policies) : _zoneHtml);
         }
-        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og)
+        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules())
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
               <div id="health-result" style="margin-top:12px"></div>
@@ -1362,18 +1362,66 @@ function onParsed(){
       if (set.size) all[_acceptedRiskHost()] = [...set]; else delete all[_acceptedRiskHost()];
       localStorage.setItem(ACCEPTED_RISKS_LS, JSON.stringify(all));
     } catch (e) { /* localStorage 不可用時靜默略過 */ }
-    _doHealthCheck();
+    _doHealthCheck(true);
   }
   window._toggleAcceptedRisk = _toggleAcceptedRisk;
+
+  // 命名規範規則（2026-09-24 新增）：localStorage 'fw_naming_rules' = {address, service, policy}，
+  // 不分裝置（命名規範通常是整個團隊共用的標準）；套用後重繪稽核頁
+  const NAMING_RULES_LS = 'fw_naming_rules';
+  let _namingRulesMem = null; // localStorage 不可用時的本次工作階段備援
+  function _loadNamingRules() {
+    try { const r = JSON.parse(localStorage.getItem(NAMING_RULES_LS) || 'null'); if (r && typeof r === 'object') return r; }
+    catch (e) { /* 落到記憶體備援 */ }
+    return _namingRulesMem || {};
+  }
+  window._applyNamingRules = function() {
+    const rules = {};
+    ['address', 'service', 'policy'].forEach(k => { const el = document.getElementById('naming-' + k); rules[k] = el ? el.value.trim() : ''; });
+    _namingRulesMem = rules;
+    try { localStorage.setItem(NAMING_RULES_LS, JSON.stringify(rules)); } catch (e) { /* 不可用時由 _namingRulesMem 維持本次有效 */ }
+    renderSection('audit');
+  };
+
+  // 健康度歷史（2026-09-24 新增）：比照 switch_analyzer 既有 switch_analyzer_health_history_v1，
+  // 依 hostname 分開存放、每台最多 20 筆（新到舊）。記錄的是畫面上顯示的分數（已排除接受風險）；
+  // 只有使用者按「執行健康度檢查」才記錄一筆，勾選接受風險／清除歷史造成的重繪不記錄，避免同一次
+  // 檢查產生多個點污染趨勢
+  const FW_HEALTH_HISTORY_LS = 'firewall_analyzer_health_history_v1';
+  function _loadFwHealthHistory() {
+    try { const all = JSON.parse(localStorage.getItem(FW_HEALTH_HISTORY_LS) || '{}'); return Array.isArray(all[_acceptedRiskHost()]) ? all[_acceptedRiskHost()] : []; }
+    catch (e) { return []; }
+  }
+  function _saveFwHealthHistory(score, grade) {
+    try {
+      const all = JSON.parse(localStorage.getItem(FW_HEALTH_HISTORY_LS) || '{}');
+      const arr = Array.isArray(all[_acceptedRiskHost()]) ? all[_acceptedRiskHost()] : [];
+      arr.unshift({ score, grade, ts: Date.now() });
+      all[_acceptedRiskHost()] = arr.slice(0, 20);
+      localStorage.setItem(FW_HEALTH_HISTORY_LS, JSON.stringify(all));
+    } catch (e) { /* localStorage 不可用時靜默略過 */ }
+  }
+  function _clearFwHealthHistory() {
+    try {
+      const all = JSON.parse(localStorage.getItem(FW_HEALTH_HISTORY_LS) || '{}');
+      delete all[_acceptedRiskHost()];
+      localStorage.setItem(FW_HEALTH_HISTORY_LS, JSON.stringify(all));
+    } catch (e) { /* 同上 */ }
+    _doHealthCheck(true);
+  }
+  window._clearFwHealthHistory = _clearFwHealthHistory;
   window._loadAcceptedRisks = _loadAcceptedRisks;
 
-  function _doHealthCheck() {
+  function _doHealthCheck(skipRecord) {
     if (!PARSED) return;
     const btn = document.getElementById('health-btn');
     if (btn) btn.textContent = tr('health.recheck');
     const accepted = _loadAcceptedRisks();
     const res = computeFirewallHealth(PARSED, { acceptedRisks: accepted });
     const rawScore = accepted.length ? computeFirewallHealth(PARSED).score : res.score;
+    // onclick="_doHealthCheck()" 傳入的是 undefined，事件物件不會傳進來，故以 !== true 判斷
+    if (skipRecord !== true) _saveFwHealthHistory(res.score, res.grade);
+    const history = _loadFwHealthHistory();
     const sevColors = {crit:'var(--red)', warn:'var(--yellow)', info:'var(--accent)'};
     const sevIcon = {crit:'🔴', warn:'🟡', info:'🔵'};
     let h = `<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
@@ -1391,6 +1439,15 @@ function onParsed(){
         <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}</span>
         <label style="font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:3px;cursor:pointer" title="${esc(tr('health.accept_risk_tip'))}"><input type="checkbox" ${i.accepted ? 'checked' : ''} onchange="_toggleAcceptedRisk(${JSON.stringify(i.key).replace(/"/g,'&quot;')}, this.checked)">${esc(tr('health.accept_risk'))}</label>
       </div>`).join('');
+    }
+    if (history.length > 1) {
+      h += `<div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <span style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px">${esc(tr('health.history_title'))}</span>
+          <button class="btn btn-ghost btn-sm" onclick="_clearFwHealthHistory()">${esc(tr('health.history_clear_btn'))}</button>
+        </div>
+        ${buildHealthSparklineSVG(history)}
+      </div>`;
     }
     const el = document.getElementById('health-result');
     if (el) el.innerHTML = h;
