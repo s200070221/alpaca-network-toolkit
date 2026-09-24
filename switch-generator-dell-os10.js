@@ -266,15 +266,6 @@ function assembleDellOS10Config(model){
   if(model.ospf6&&model.ospf6.length)blocks.push(renderDellOS10OSPFv3(model.ospf6));
   if(model.routes&&model.routes.length)blocks.push(renderDellOS10Routes(model.routes));
   if(model.bgp&&model.bgp.length)blocks.push(renderDellOS10BGPList(model.bgp));
-  // ACL：已查證官方 SmartFabric OS10 User Guide 後改用 renderDellOS10ACL()（規則列帶
-  // seq 前綴，非 Cisco 裸數字寫法）；QoS 同批查證後改用 renderDellOS10QoS()（police
-  // cir/pir、bandwidth percent，與 Cisco 裸數字寫法不同）。必須放在組裝順序最後——
-  // 理由與 assembleCiscoConfig 相同：兩者的區塊擷取 regex 只認得下一個同關鍵字區塊或字串結尾
-  if(model.acl&&model.acl.length)blocks.push(renderDellOS10ACL(model.acl));
-  // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
-  // 不能顛倒（2026-08-28（續5）新增）
-  if(model.classMaps&&model.classMaps.length)blocks.push(renderDellOS10ClassMapQoS(model.classMaps));
-  if(model.qos&&model.qos.length)blocks.push(renderDellOS10QoS(model.qos));
   const dellUsersBlock=renderDellOS10Users(model.users);
   if(dellUsersBlock)blocks.push(dellUsersBlock);
   if(model.snmpCommunity)blocks.push(`snmp-server community ${model.snmpCommunity} ro`);
@@ -284,6 +275,17 @@ function assembleDellOS10Config(model){
   // "ip telnet server enable" 才開啟（parseMgmtAccess() dell-os10 分支），"no" 前綴為
   // OS10 標準明確停用寫法
   if(model.mgmtTelnetDisable)blocks.push('no ip telnet server enable');
+  // ACL：已查證官方 SmartFabric OS10 User Guide 後改用 renderDellOS10ACL()（規則列帶
+  // seq 前綴，非 Cisco 裸數字寫法）；QoS 同批查證後改用 renderDellOS10QoS()（police
+  // cir/pir、bandwidth percent，與 Cisco 裸數字寫法不同）。必須放在組裝順序最後——
+  // 理由與 assembleCiscoConfig 相同：兩者的區塊擷取 regex 只認得下一個同關鍵字區塊或字串
+  // 結尾。2026-09-21 修正：此組先前雖彼此相鄰，卻排在 Users/SNMP/syslog/Telnet 之前，
+  // 同樣違反「放最後」規則，一併搬到組裝順序最末端
+  if(model.acl&&model.acl.length)blocks.push(renderDellOS10ACL(model.acl));
+  // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
+  // 不能顛倒（2026-08-28（續5）新增）
+  if(model.classMaps&&model.classMaps.length)blocks.push(renderDellOS10ClassMapQoS(model.classMaps));
+  if(model.qos&&model.qos.length)blocks.push(renderDellOS10QoS(model.qos));
   return blocks.join('\n!\n')+'\n';
 }
 // 本機帳號：switch_analyzer 的 parseDellOS10Users() OS10 語法為

@@ -34,6 +34,58 @@ function addVlanRow(id='',name='',ip=''){
   updateVlanIpAvailability(tr);
 }
 
+// 介面批次套用（2026-09-24 新增）：選取交給 switch-generator-validate.js 的純函式
+// matchIfaceNamesBySpec()；各欄位留空（或下拉選「不變更」）即維持原值。改模式後呼叫既有
+// updateIfaceRowDisplay() 讓該列的 access/trunk/hybrid 欄位顯示同步切換
+function applyIfaceBulk(){
+  const rows=rowsOf('#iface-body tr');
+  const names=rows.map(r=>(r.querySelector('.i-name')?.value||'').trim());
+  const {indexes,invalid}=matchIfaceNamesBySpec(names,document.getElementById('bulkif-spec').value);
+  const mode=document.getElementById('bulkif-mode').value;
+  const acc=document.getElementById('bulkif-access').value.trim();
+  const trunk=document.getElementById('bulkif-trunk').value.trim();
+  const nat=document.getElementById('bulkif-native').value.trim();
+  const desc=document.getElementById('bulkif-desc').value.trim();
+  const shut=document.getElementById('bulkif-shutdown').value;
+  indexes.forEach(i=>{
+    const r=rows[i];
+    if(mode){const sel=r.querySelector('.i-mode');sel.value=mode;updateIfaceRowDisplay(sel);}
+    if(acc)r.querySelector('.i-access-vlan').value=acc;
+    if(trunk)r.querySelector('.i-trunk-vlans').value=trunk;
+    if(nat)r.querySelector('.i-native-vlan').value=nat;
+    if(desc)r.querySelector('.i-desc').value=desc;
+    if(shut)r.querySelector('.i-shutdown').checked=(shut==='down');
+  });
+  const msg=document.getElementById('bulkif-msg');
+  let text=tr('bulkIf.done').replace('{n}',indexes.length);
+  if(invalid.length)text+=' '+tr('bulkIf.invalid').replace('{items}',invalid.join(', '));
+  msg.textContent=text;
+  msg.style.color=(!indexes.length||invalid.length)?'var(--warn,#d97706)':'var(--text-dim,#64748b)';
+}
+
+// VLAN 範圍一次新增（2026-09-24 新增）：解析交給 switch-generator-validate.js 的純函式
+// parseVlanRangeSpec()；表格中已存在的 VLAN ID 略過不重複新增，結果訊息顯示在輸入框旁
+function addVlanRange(){
+  const inp=document.getElementById('vlan-range-input');
+  const msg=document.getElementById('vlan-range-msg');
+  const {ids,invalid}=parseVlanRangeSpec(inp.value);
+  const existing=new Set(rowsOf('#vlan-body tr').map(r=>(r.querySelector('.v-id')?.value||'').trim()));
+  // 表格只剩一列空白預設列時，直接用範圍結果取代，避免留下一列空的 VLAN
+  const rows=rowsOf('#vlan-body tr');
+  if(ids.length&&rows.length===1){
+    const r=rows[0];
+    const blank=['.v-id','.v-name','.v-ip'].every(sel=>!(r.querySelector(sel)?.value||'').trim());
+    if(blank)r.remove();
+  }
+  let added=0;
+  ids.forEach(id=>{if(!existing.has(id)){addVlanRow(id);added++;}});
+  const skipped=ids.length-added;
+  let text=tr('msg.vlanRangeAdded').replace('{added}',added).replace('{skipped}',skipped);
+  if(invalid.length)text+=' '+tr('msg.vlanRangeInvalid').replace('{items}',invalid.join(', '));
+  if(msg){msg.textContent=text;msg.style.color=invalid.length?'var(--warn,#d97706)':'var(--text-dim,#64748b)';}
+  if(added)inp.value='';
+}
+
 // VLAN IP（withSviInterfaces()／switch-generator-core.js）不支援的 2 家廠牌：SONiC 已有自己
 // 專屬的「SONiC L3 介面 IP」卡片；EdgeSwitch 因裝置架構限制（VLAN Routing 邏輯介面 ID 由裝置
 // 動態配置產生，無法靜態預測，CLAUDE.md 已記載既有限制）。RouterOS 已於 2026-09-09 補上對應

@@ -364,6 +364,11 @@ input.valid,select.valid{border-color:var(--green)!important}
       <tbody id="vlan-body"></tbody>
     </table>
     <button class="add-btn" data-i18n="btn.addRow" onclick="addVlanRow()">+ 新增列</button>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
+      <input id="vlan-range-input" data-i18n-ph="ph.vlanRange" placeholder="10-20,30" style="width:160px" onkeydown="if(event.key==='Enter')addVlanRange()">
+      <button class="add-btn" data-i18n="btn.addVlanRange" onclick="addVlanRange()">+ 依範圍新增</button>
+      <span id="vlan-range-msg" style="font-size:12px"></span>
+    </div>
   </div>
 
   <div class="card">
@@ -444,6 +449,30 @@ end</pre>
       <tbody id="iface-body"></tbody>
     </table>
     <button class="add-btn" data-i18n="btn.addRow" onclick="addIfaceRow()">+ 新增列</button>
+    <details id="iface-bulk" style="margin-top:8px">
+      <summary data-i18n="bulkIf.title">批次套用到多個介面</summary>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px">
+        <input id="bulkif-spec" data-i18n-ph="bulkIf.specPh" placeholder="1/0/1-24, port1-8" style="width:200px">
+        <select id="bulkif-mode">
+          <option value="" data-i18n="bulkIf.keep">不變更</option>
+          <option value="access" data-i18n="opt.access">Access</option>
+          <option value="trunk" data-i18n="opt.trunk">Trunk</option>
+          <option value="hybrid" data-i18n="opt.hybrid">Hybrid</option>
+        </select>
+        <input id="bulkif-access" data-i18n-ph="bulkIf.accessPh" placeholder="Access VLAN" style="width:110px">
+        <input id="bulkif-trunk" data-i18n-ph="bulkIf.trunkPh" placeholder="Trunk VLANs" style="width:130px">
+        <input id="bulkif-native" data-i18n-ph="bulkIf.nativePh" placeholder="Native VLAN" style="width:110px">
+        <input id="bulkif-desc" data-i18n-ph="bulkIf.descPh" placeholder="描述" style="width:160px">
+        <select id="bulkif-shutdown">
+          <option value="" data-i18n="bulkIf.keep">不變更</option>
+          <option value="up" data-i18n="bulkIf.enable">啟用</option>
+          <option value="down" data-i18n="bulkIf.shutdown">關閉（shutdown）</option>
+        </select>
+        <button class="add-btn" data-i18n="bulkIf.apply" onclick="applyIfaceBulk()">套用</button>
+      </div>
+      <div style="font-size:12px;color:var(--text-dim,#64748b);margin-top:4px" data-i18n="bulkIf.hint">依介面名稱結尾的編號選取，例如 1/0/1-24 選中 GigabitEthernet1/0/1～24；只輸入數字範圍則比對名稱最後的編號。欄位留空即維持原值。</div>
+      <div id="bulkif-msg" style="font-size:12px;margin-top:4px"></div>
+    </details>
   </div>
 
   <div class="card" id="ospf-card">

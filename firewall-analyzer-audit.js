@@ -467,6 +467,13 @@
     return policies.filter(p => !p.comments || p.comments === '-');
   }
 
+  // 停用規則清理清單（2026-09-24 新增）：analyzeCompliance() 的 'disabled-pol' 只給計數，
+  // 此函式列出明細供清理／匯出 CSV。判斷式刻意沿用同一個 _isDisabledStatus()，確保清單筆數
+  // 與合規檢查顯示的計數一致；不另外計入稽核總數／健康度（合規檢查已計過，避免重複扣分）
+  function analyzeDisabledPolicies(parsed) {
+    return (parsed.policies || []).filter(p => _isDisabledStatus(p));
+  }
+
   // 過大／巢狀過深群組物件稽核（2026-09-23 新增，使用者發想功能）：檢查 addresses/services
   // 內具有 members 欄位的群組型物件（各廠牌 category 命名不一，如 address-group／group，
   // 統一以「members 欄位非空」判斷是否為群組，比照 analyzeUnusedObjects() 展開 group members
@@ -1022,6 +1029,24 @@
     return h;
   }
 
+  // 停用規則清理清單渲染（2026-09-24 新增）：比照 buildMissingCommentsHtml() 樣式，
+  // 多列出來源/目的/服務/備註，方便判斷該規則是否可直接刪除
+  function buildDisabledPoliciesHtml(results) {
+    let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--yellow);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('audit.disabled_title')) + '</div>';
+    if (!results.length) {
+      h += '<div class="nodata" style="padding:14px 0;color:var(--green)">' + esc(tr('audit.disabled_none')) + '</div></div>';
+      return h;
+    }
+    h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--yellow)">' + esc(tr('audit.disabled_warn')) + '</div>';
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>ID</th><th>' + tr('audit.col_name') + '</th><th>' + tr('col.src_addr') + '</th><th>' + tr('col.dst_addr') + '</th><th>' + tr('col.service') + '</th><th>' + tr('col.action') + '</th><th>' + tr('audit.col_vdom') + '</th><th>' + tr('col.comments') + '</th></tr></thead><tbody>';
+    results.forEach(p => {
+      const jh = tr('audit.jump_hint');
+      h += `<tr><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(p.id).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(p.id)}</span></td><td>${esc(p.name||'-')}</td><td class="mono">${esc(p.srcAddr||'-')}</td><td class="mono">${esc(p.dstAddr||'-')}</td><td class="mono">${esc(p.service||'-')}</td><td>${esc(p.action||'-')}</td><td style="color:var(--text-dim)">${esc(p._vdom||'-')}</td><td style="color:var(--text-dim)">${esc(p.comments||'-')}</td></tr>`;
+    });
+    h += '</tbody></table></div></div>';
+    return h;
+  }
+
   // 過大／巢狀過深群組物件稽核渲染（2026-09-23 新增）：同一群組物件可能同時命中「成員過多」
   // 與「巢狀過深」兩種 issue，各自獨立一列顯示，不合併，避免單列塞兩種不同語意的數值
   const _OVERSIZED_GROUP_ISSUE_LABEL = { members: 'audit.issue_too_many_members', depth: 'audit.issue_too_deep' };
@@ -1137,14 +1162,25 @@
   }
 
   // ── 健康度評估 ─────────────────────────────────────────────────
-  function computeFirewallHealth(parsed) {
+  // opts.acceptedRisks（2026-09-24 新增）：已由使用者標記為「接受風險」的項目 key 清單
+  // （Set 或陣列，key＝health.* i18n key 去掉前綴，如 'any_any'）。命中者不扣分，但仍保留在
+  // issues 內並標 accepted:true，讓畫面／報表能顯示「已接受」而非讓問題憑空消失；未傳 opts
+  // 時行為與先前完全相同
+  function computeFirewallHealth(parsed, opts) {
     const policies = parsed.policies || [];
     let score = 100;
     const issues = [];
+    const acceptedRisks = (opts && opts.acceptedRisks) ? new Set(opts.acceptedRisks) : new Set();
+    const deduct = (labelKey, sev, count, amount) => {
+      const key = labelKey.replace(/^health\./, '');
+      if (acceptedRisks.has(key)) { issues.push({ key, sev, label: tr(labelKey), count, accepted: true }); return; }
+      score -= amount;
+      issues.push({ key, sev, label: tr(labelKey), count });
+    };
     // T1: any-any accept（需排除已停用規則，比照下方 T1b/broad-network 既有慣例；
     // 先前漏了這道防呆，已停用的 any-any/no-log 規則從未真正生效卻仍被扣分，2026-09 全功能審查發現）
     const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && /^(all|any)$/i.test((p.srcAddr||'').trim()) && /^(all|any)$/i.test((p.dstAddr||'').trim()));
-    if (anyAny.length) { score -= anyAny.length * 20; issues.push({sev:'crit', label:tr('health.any_any'), count:anyAny.length}); }
+    if (anyAny.length) deduct('health.any_any', 'crit', anyAny.length, anyAny.length * 20);
     // T1b: broad-network（2026-08-29 新增，比照 analyzeCompliance() 的 broad-network 檢查同一套
     // 判斷邏輯，權重較 any-any 低——過寬網段風險低於完全開放，但仍值得扣分）
     // key 帶 vdom 前綴，理由與修法同 analyzeCompliance() 的 broad-network 檢查（2026-09-22 修復）
@@ -1160,23 +1196,23 @@
     const healthIsBroad = (val, vdom) => String(val || '').split(',').map(s => s.trim()).filter(Boolean)
       .some(p => { const len = healthAddrPrefixLen(p, vdom); return len !== null && len <= 8; });
     const broadNetwork = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && (healthIsBroad(p.srcAddr, p._vdom) || healthIsBroad(p.dstAddr, p._vdom)));
-    if (broadNetwork.length) { score -= broadNetwork.length * 10; issues.push({sev:'warn', label:tr('health.broad_network'), count:broadNetwork.length}); }
+    if (broadNetwork.length) deduct('health.broad_network', 'warn', broadNetwork.length, broadNetwork.length * 10);
     // T2: shadowed rules
     const shadowMap = buildShadowMap(policies);
     const shadowCount = Object.values(shadowMap).reduce((s, arr) => s + arr.length, 0);
-    if (shadowCount) { score -= shadowCount * 5; issues.push({sev:'warn', label:tr('health.shadowed'), count:shadowCount}); }
+    if (shadowCount) deduct('health.shadowed', 'warn', shadowCount, shadowCount * 5);
     // T2b: rules blocked by an earlier deny rule（同 T2 權重，皆屬「規則永不生效」類問題）
     const denyBlockedCount = analyzeDenyBlocking(policies).length;
-    if (denyBlockedCount) { score -= denyBlockedCount * 5; issues.push({sev:'warn', label:tr('health.deny_blocked'), count:denyBlockedCount}); }
+    if (denyBlockedCount) deduct('health.deny_blocked', 'warn', denyBlockedCount, denyBlockedCount * 5);
     // T3: disabled rules（欄位值一律是 'disable'，非 'disabled'，見 _runPolicyQuery()/各 assemble 函式既有慣例；
     // 大小寫不敏感比對改用共用 _isDisabledStatus()，先前純小寫比對會 undercount Sophos 等大寫來源，
     // 2026-09-18 根因性修復，與 T1/T1b/T4 統一）
     const disabled = policies.filter(p => _isDisabledStatus(p) || p.enabled === false || p.enabled === 'disable');
-    if (disabled.length > 3) { score -= (disabled.length - 3) * 2; issues.push({sev:'info', label:tr('health.disabled'), count:disabled.length}); }
+    if (disabled.length > 3) deduct('health.disabled', 'info', disabled.length, (disabled.length - 3) * 2);
     // T4: accept without log（欄位名稱是全小寫 logtraffic，非 logTraffic；判斷式比照 analyzeCompliance() 既有慣例，
     // 同樣需排除已停用規則，原因同 T1，2026-09 全功能審查發現）
     const noLog = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && (!p.logtraffic || p.logtraffic === 'disable' || p.logtraffic === 'utm'));
-    if (noLog.length > 2) { score -= (noLog.length - 2) * 3; issues.push({sev:'warn', label:tr('health.no_log'), count:noLog.length}); }
+    if (noLog.length > 2) deduct('health.no_log', 'warn', noLog.length, (noLog.length - 2) * 3);
     // T5-T11：其餘 7 項合規檢查納入健康度評分（2026-08-31 新增）。先前只有上方 4 項（any-any／
     // broad-network／disabled／no-log）會扣分，`analyzeCompliance()` 其餘 7 項發現完全不影響
     // 分數，是探勘功能4「弱加密VPN/預設帳號偵測」時發現的真實缺口（該兩項本身早已存在，缺口
@@ -1199,8 +1235,7 @@
       const found = complianceFindings.find(f => f.id === id);
       if (found && found.value > 0) {
         const weight = HEALTH_WEIGHT[found.risk] || HEALTH_WEIGHT.low;
-        score -= found.value * weight;
-        issues.push({ sev: found.risk === 'high' ? 'crit' : found.risk === 'medium' ? 'warn' : 'info', label: tr(labelKey), count: found.value });
+        deduct(labelKey, found.risk === 'high' ? 'crit' : found.risk === 'medium' ? 'warn' : 'info', found.value, found.value * weight);
       }
     });
     // T12-T14：NAT 規則健檢納入健康度評分（2026-09-01 新增，功能5）。dup_ip／port_conflict
@@ -1209,20 +1244,20 @@
     // 定為 low(-3)，且刻意不對 Cisco ASA／SonicWall 執行（見 analyzeOrphanNAT() 排除清單）。
     const natWarns = analyzeNAT(parsed.nat);
     const natDupIp = natWarns.filter(w => w.type === 'dup_ip').length;
-    if (natDupIp) { score -= natDupIp * HEALTH_WEIGHT.medium; issues.push({ sev: 'warn', label: tr('health.nat_dup_ip'), count: natDupIp }); }
+    if (natDupIp) deduct('health.nat_dup_ip', 'warn', natDupIp, natDupIp * HEALTH_WEIGHT.medium);
     const natPortConflict = natWarns.filter(w => w.type === 'port_conflict').length;
-    if (natPortConflict) { score -= natPortConflict * HEALTH_WEIGHT.medium; issues.push({ sev: 'warn', label: tr('health.nat_port_conflict'), count: natPortConflict }); }
+    if (natPortConflict) deduct('health.nat_port_conflict', 'warn', natPortConflict, natPortConflict * HEALTH_WEIGHT.medium);
     const orphanNatCount = analyzeOrphanNAT(parsed).length;
-    if (orphanNatCount) { score -= orphanNatCount * HEALTH_WEIGHT.low; issues.push({ sev: 'info', label: tr('health.nat_orphan'), count: orphanNatCount }); }
+    if (orphanNatCount) deduct('health.nat_orphan', 'info', orphanNatCount, orphanNatCount * HEALTH_WEIGHT.low);
     // T15：孤兒 VPN 物件（2026-09-15 新增），權重比照孤兒 NAT 同屬「設定衛生」訊號，同為 low
     const orphanVpnCount = analyzeOrphanVPN(parsed).length;
-    if (orphanVpnCount) { score -= orphanVpnCount * HEALTH_WEIGHT.low; issues.push({ sev: 'info', label: tr('health.vpn_orphan'), count: orphanVpnCount }); }
+    if (orphanVpnCount) deduct('health.vpn_orphan', 'info', orphanVpnCount, orphanVpnCount * HEALTH_WEIGHT.low);
     // T16：規則缺無備註（2026-09-23 新增），權重比照孤兒 NAT/VPN 同屬「設定衛生」訊號，同為 low
     const missingCommentsCount = analyzeMissingComments(parsed).length;
-    if (missingCommentsCount) { score -= missingCommentsCount * HEALTH_WEIGHT.low; issues.push({ sev: 'info', label: tr('health.missing_comments'), count: missingCommentsCount }); }
+    if (missingCommentsCount) deduct('health.missing_comments', 'info', missingCommentsCount, missingCommentsCount * HEALTH_WEIGHT.low);
     // T17：過大／巢狀過深群組物件（2026-09-23 新增），權重同上
     const oversizedGroupCount = analyzeOversizedGroups(parsed).length;
-    if (oversizedGroupCount) { score -= oversizedGroupCount * HEALTH_WEIGHT.low; issues.push({ sev: 'info', label: tr('health.oversized_group'), count: oversizedGroupCount }); }
+    if (oversizedGroupCount) deduct('health.oversized_group', 'info', oversizedGroupCount, oversizedGroupCount * HEALTH_WEIGHT.low);
     score = Math.max(0, Math.min(100, score));
     const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
     const gradeColor = grade === 'A' ? 'var(--green)' : grade === 'B' ? 'var(--teal)' : grade === 'C' ? 'var(--yellow)' : grade === 'D' ? 'var(--orange)' : 'var(--red)';
@@ -1268,4 +1303,52 @@
       return { sec, count: hits.length, rows: hits };
     }).filter(r => r.count > 0);
     return { results, regexError: matcher.regexError };
+  }
+
+  // 稽核結果 Markdown 匯出（2026-09-24 新增）：供貼到工單／Wiki。內容重新呼叫 analyze* 系列
+  // 即時計算（比照 buildSarifAuditReport() 慣例，不依賴稽核分頁渲染快取）；各區塊命中數與稽核頁
+  // 摘要卡片同一組函式，合規檢查與健康度問題另列明細表
+  function _mdCell(v) { return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' '); }
+  function buildFirewallAuditMarkdown(parsed, opts) {
+    const pol = parsed.policies || [];
+    const info = parsed.deviceInfo || {};
+    const un = analyzeUnusedObjects(parsed);
+    const co = analyzeCompliance(parsed);
+    const health = computeFirewallHealth(parsed, opts);
+    const riskLabel = { high: tr('audit.risk_high'), medium: tr('audit.risk_mid'), low: tr('audit.risk_low') };
+    const summary = [
+      [tr('audit.sum_shadow'), analyzeRuleShadowing(pol).length],
+      [tr('audit.sum_deny_block'), analyzeDenyBlocking(pol).length],
+      [tr('audit.sum_merge'), analyzeMergeSuggestions(pol).length],
+      [tr('audit.sum_duplicate'), analyzeExactDuplicates(pol).length],
+      [tr('audit.sum_unused_addr'), un.unusedAddrs.length],
+      [tr('audit.sum_unused_svc'), un.unusedSvcs.length],
+      [tr('audit.sum_cross_vdom'), analyzeCrossVdomInconsistency(parsed).length],
+      [tr('audit.sum_missing_comments'), analyzeMissingComments(parsed).length],
+      [tr('audit.sum_oversized_groups'), analyzeOversizedGroups(parsed).length],
+      [tr('audit.disabled_title'), analyzeDisabledPolicies(parsed).length],
+    ];
+    const L = [
+      `# ${tr('md.fw_title')} — ${info.hostname || '-'}`,
+      '',
+      `- ${tr('md.vendor')}: ${parsed.vendor || info.vendor || '-'}`,
+      `- ${tr('md.generated')}: ${new Date().toISOString()}`,
+      `- ${tr('md.health')}: ${health.score} (${health.grade})`,
+      '',
+      `## ${tr('md.summary')}`,
+      '',
+      `| ${tr('audit.col_check')} | ${tr('audit.col_result')} |`,
+      '|---|---|',
+    ];
+    summary.forEach(([k, v]) => L.push(`| ${_mdCell(k)} | ${v} |`));
+    L.push('', `## ${tr('audit.compliance_title')}`, '',
+      `| ${tr('audit.col_check')} | ${tr('audit.col_result')} | ${tr('audit.col_risk')} | ${tr('audit.col_detail')} | ${tr('audit.col_standards')} |`,
+      '|---|---|---|---|---|');
+    co.forEach(f => L.push(`| ${_mdCell(f.check)} | ${f.value} | ${_mdCell(riskLabel[f.risk] || f.risk)} | ${_mdCell(f.detail)} | ${_mdCell((f.standards || []).join('; '))} |`));
+    if (health.issues.length) {
+      L.push('', `## ${tr('health.title')}`, '');
+      health.issues.forEach(i => L.push(`- ${_mdCell(i.label)}: ${i.count}${i.accepted ? ` (${tr('health.accepted_mark')})` : ''}`));
+    }
+    L.push('', `> ${tr('audit.standards_disclaimer')}`, '');
+    return L.join('\n');
   }

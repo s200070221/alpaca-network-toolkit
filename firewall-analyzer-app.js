@@ -382,6 +382,7 @@ const App = (() => {
       window._PARSED = PARSED; // 供 console 診斷：_PARSED._perVdom.map(v=>({name:v.name,routes:v.routes.length,policies:v.policies.length}))
       $('prog-overlay').classList.remove('show');
       onParsed();
+      recordFirewallActivity(PARSED);
       checkAnalyzeEggs(PARSED);
       clearTimeout(window._workTimer30); clearTimeout(window._workTimer60);
       window._workTimer30 = setTimeout(()=>showEggToast(tr('egg.work_30min'),5000), 1800000);
@@ -392,6 +393,20 @@ const App = (() => {
     }
   }
   window.analyze=analyze;
+
+  // 跨工具活動時間軸（2026-09-24 新增）：寫入 `_netAnalyzer_activityHistory` rolling-history
+  // （持續累積歷史，無 TTL，比照 log_analyzer／switch_config_generator 既有寫入端），
+  // 供 network_analyzer hub 合併顯示；多台裝置合併分析時 hostname/vendor 沿用 merge() 串接結果
+  function recordFirewallActivity(p){
+    try{
+      let _hist=[];
+      try{_hist=JSON.parse(localStorage.getItem('_netAnalyzer_activityHistory')||'[]');}catch(e){_hist=[];}
+      if(!Array.isArray(_hist))_hist=[];
+      const host=p&&p.deviceInfo&&p.deviceInfo.hostname;
+      _hist.unshift({tool:'firewall_analyzer',name:(host&&host!=='-')?host:'',vendor:(p&&p.vendor)||null,ts:Date.now()});
+      localStorage.setItem('_netAnalyzer_activityHistory',JSON.stringify(_hist.slice(0,5)));
+    }catch(e){/* localStorage 滿了或被封鎖時靜默略過，不影響分析主流程 */}
+  }
 
   function merge(a,b){
     return{
@@ -1095,7 +1110,7 @@ function onParsed(){
           const _zTgl=`<div style="display:flex;gap:5px;margin-bottom:8px"><button onclick="window._fwZoneView='table';renderSection('audit')" style="${_zbs(!window._fwZoneView||window._fwZoneView==='table')}">${tr('routing.view_table')}</button><button onclick="window._fwZoneView='topo';renderSection('audit')" style="${_zbs(window._fwZoneView==='topo')}">${tr('routing.view_topo')}</button></div>`;
           _zoneHtml = _zTgl + (window._fwZoneView==='topo' ? buildZoneTopoHtml(PARSED.policies) : _zoneHtml);
         }
-        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og)
+        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og)
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
               <div id="health-result" style="margin-top:12px"></div>
@@ -1330,25 +1345,51 @@ function onParsed(){
   }
   window._jumpToPolicy = _jumpToPolicy;
 
+  // 接受風險標記（2026-09-24 新增）：localStorage 'fw_accepted_risks' = {[hostname]: [key,...]}，
+  // key 為 computeFirewallHealth() issues[].key。依裝置 hostname 分開保存，換分析另一台裝置不會
+  // 套用到別台的決定；純本機偏好，localStorage 不可用時退回空清單（等同全部未接受）
+  const ACCEPTED_RISKS_LS = 'fw_accepted_risks';
+  function _acceptedRiskHost() { return (PARSED && PARSED.deviceInfo && PARSED.deviceInfo.hostname) || '-'; }
+  function _loadAcceptedRisks() {
+    try { const all = JSON.parse(localStorage.getItem(ACCEPTED_RISKS_LS) || '{}'); return Array.isArray(all[_acceptedRiskHost()]) ? all[_acceptedRiskHost()] : []; }
+    catch (e) { return []; }
+  }
+  function _toggleAcceptedRisk(key, on) {
+    try {
+      const all = JSON.parse(localStorage.getItem(ACCEPTED_RISKS_LS) || '{}');
+      const set = new Set(Array.isArray(all[_acceptedRiskHost()]) ? all[_acceptedRiskHost()] : []);
+      if (on) set.add(key); else set.delete(key);
+      if (set.size) all[_acceptedRiskHost()] = [...set]; else delete all[_acceptedRiskHost()];
+      localStorage.setItem(ACCEPTED_RISKS_LS, JSON.stringify(all));
+    } catch (e) { /* localStorage 不可用時靜默略過 */ }
+    _doHealthCheck();
+  }
+  window._toggleAcceptedRisk = _toggleAcceptedRisk;
+  window._loadAcceptedRisks = _loadAcceptedRisks;
+
   function _doHealthCheck() {
     if (!PARSED) return;
     const btn = document.getElementById('health-btn');
     if (btn) btn.textContent = tr('health.recheck');
-    const res = computeFirewallHealth(PARSED);
+    const accepted = _loadAcceptedRisks();
+    const res = computeFirewallHealth(PARSED, { acceptedRisks: accepted });
+    const rawScore = accepted.length ? computeFirewallHealth(PARSED).score : res.score;
     const sevColors = {crit:'var(--red)', warn:'var(--yellow)', info:'var(--accent)'};
     const sevIcon = {crit:'🔴', warn:'🟡', info:'🔵'};
     let h = `<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
       <div style="font-size:48px;font-weight:700;color:${res.gradeColor};line-height:1">${res.grade}</div>
       <div><div style="font-size:13px;color:var(--text-dim)">${tr('health.title')}</div>
-      <div style="font-size:20px;font-weight:600;color:${res.gradeColor}">${res.score} / 100</div></div>
+      <div style="font-size:20px;font-weight:600;color:${res.gradeColor}">${res.score} / 100</div>
+      ${rawScore !== res.score ? `<div style="font-size:11px;color:var(--text-dim)">${esc(tr('health.raw_score').replace('{score}', rawScore))}</div>` : ''}</div>
     </div>`;
     if (!res.issues.length) {
       h += `<div style="color:var(--green);font-size:13px">${tr('health.ok')}</div>`;
     } else {
-      h += res.issues.map(i => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border-left:3px solid ${sevColors[i.sev]||'var(--border)'}">
+      h += res.issues.map(i => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border-left:3px solid ${sevColors[i.sev]||'var(--border)'}${i.accepted ? ';opacity:.55' : ''}">
         <span style="font-size:14px">${sevIcon[i.sev]||''}</span>
-        <span style="font-size:13px;color:var(--text)">${i.label}</span>
+        <span style="font-size:13px;color:var(--text)${i.accepted ? ';text-decoration:line-through' : ''}">${esc(i.label)}</span>
         <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}</span>
+        <label style="font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:3px;cursor:pointer" title="${esc(tr('health.accept_risk_tip'))}"><input type="checkbox" ${i.accepted ? 'checked' : ''} onchange="_toggleAcceptedRisk(${JSON.stringify(i.key).replace(/"/g,'&quot;')}, this.checked)">${esc(tr('health.accept_risk'))}</label>
       </div>`).join('');
     }
     const el = document.getElementById('health-result');
@@ -1599,6 +1640,7 @@ function onParsed(){
     'unused-svc': d => analyzeUnusedObjects(d).unusedSvcs,
     'compliance': d => analyzeCompliance(d),
     'cross-vdom': d => analyzeCrossVdomInconsistency(d),
+    'disabled-policies': d => analyzeDisabledPolicies(d),
   };
 
   async function doExport(type){
@@ -1630,7 +1672,7 @@ function onParsed(){
       // 內部 DOM 結構安全，不依賴卡片的巢狀標籤結構
       document.body.style.cursor='wait';
       try{
-        const html=await Reporter.exportHTML(d, WIFI_DATA);
+        const html=await Reporter.exportHTML(d, WIFI_DATA, { acceptedRisks: _loadAcceptedRisks() });
         Reporter.download(html,`fw_report_${hn}_${ds}.html`,'text/html');
       } finally {
         document.body.style.cursor='';
@@ -1641,7 +1683,7 @@ function onParsed(){
       // 使用者可在瀏覽器列印對話框選「另存為 PDF」；零外部依賴、離線可用
       const printWin=window.open('','_blank');
       if(!printWin){alert(tr('err.popup_blocked'));return;}
-      const html=await Reporter.exportHTML(d, WIFI_DATA);
+      const html=await Reporter.exportHTML(d, WIFI_DATA, { acceptedRisks: _loadAcceptedRisks() });
       printWin.document.open();printWin.document.write(html);printWin.document.close();
       printWin.onload=()=>{printWin.focus();printWin.print();};
     }
@@ -1676,6 +1718,10 @@ function onParsed(){
       // CSV_SUBSECTION_GETTERS 慣例，不依賴使用者是否已切換過稽核分頁的渲染快取）
       const sarif=buildSarifAuditReport(d);
       Reporter.download(JSON.stringify(sarif,null,2),`fw_audit_${hn}_${ds}.sarif`,'application/json');
+    }
+    else if(type==='md-audit'){
+      // 稽核結果 Markdown 匯出（2026-09-24 新增），內容由 -audit.js buildFirewallAuditMarkdown() 即時計算
+      Reporter.download(buildFirewallAuditMarkdown(d, { acceptedRisks: _loadAcceptedRisks() }),`fw_audit_${hn}_${ds}.md`,'text/markdown');
     }
     else if(type==='csv-query-trace'){
       // 只匯出畫面上目前這一次查詢結果（見 LAST_QUERY_TRACE 宣告處註解）

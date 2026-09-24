@@ -278,3 +278,45 @@ function diffTemplateModels(modelA, modelB){
   });
   return diffs;
 }
+
+// VLAN 範圍輸入解析（2026-09-24 新增）：把「10-20,30」這類字串展開成 VLAN ID 陣列，供 VLAN
+// 表格一次新增多列。接受逗號／空白分隔、a-b 範圍；超出 1-4094、格式錯誤、範圍顛倒的片段放進
+// invalid 不中斷其餘片段；結果去重並依數字排序。純函式，不碰 DOM
+function parseVlanRangeSpec(spec){
+  const ids=new Set(),invalid=[];
+  String(spec||'').split(/[,\s]+/).filter(Boolean).forEach(tok=>{
+    const m=tok.match(/^(\d+)(?:-(\d+))?$/);
+    if(!m){invalid.push(tok);return;}
+    const a=Number(m[1]),b=m[2]===undefined?a:Number(m[2]);
+    if(a<1||b>4094||a>b){invalid.push(tok);return;}
+    for(let i=a;i<=b;i++)ids.add(i);
+  });
+  return {ids:[...ids].sort((x,y)=>x-y).map(String),invalid};
+}
+
+// 介面批次套用選取（2026-09-24 新增）：spec 以逗號／空白分隔多個片段，每段為「名稱結尾」加上
+// 編號或編號範圍，例如 1/0/1-24、port1-8、ge-0/0/3。介面名稱需以「前綴＋編號」結尾，且前綴前
+// 一個字元不是數字（避免 1/0/1 誤中 11/0/1），才算命中。回傳命中的索引（依表格順序）與無法
+// 解析的片段；純函式，不碰 DOM
+function matchIfaceNamesBySpec(names, spec){
+  const hit=new Set(),invalid=[];
+  String(spec||'').split(/[,\s]+/).filter(Boolean).forEach(tok=>{
+    const m=tok.match(/^(.*?)(\d+)(?:-(\d+))?$/);
+    if(!m){invalid.push(tok);return;}
+    const prefix=m[1],a=Number(m[2]),b=m[3]===undefined?a:Number(m[3]);
+    if(a>b){invalid.push(tok);return;}
+    names.forEach((n,i)=>{
+      const name=String(n||'');
+      const nm=name.match(/(\d+)$/);
+      if(!nm)return;
+      const num=Number(nm[1]);
+      if(num<a||num>b)return;
+      const head=name.slice(0,name.length-nm[1].length);
+      if(!head.endsWith(prefix))return;
+      const before=head.slice(0,head.length-prefix.length);
+      if(prefix&&/\d$/.test(before)&&/^\d/.test(prefix))return;
+      hit.add(i);
+    });
+  });
+  return {indexes:[...hit].sort((x,y)=>x-y),invalid};
+}

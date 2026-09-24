@@ -350,19 +350,21 @@ function assembleCiscoConfig(model){
   if(model.rip&&model.rip.length)blocks.push(renderCiscoRIPList(model.rip));
   if(model.routes&&model.routes.length)blocks.push(renderCiscoRoutes(model.routes));
   if(model.bgp&&model.bgp.length)blocks.push(renderCiscoBGPList(model.bgp));
-  if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
-  // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
-  // 不能顛倒（2026-08-28（續4）新增）
-  if(model.classMaps&&model.classMaps.length)blocks.push(renderClassMapQoS(model.classMaps));
-  // QoS 放最後（同一個原因：policy-map 區塊擷取正則只認得下一個 "policy-map " 或字串
-  // 結尾，沒有其他終止字元，比照 ACL/BGP 慣例排在組裝順序最後）
-  if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
   const ciscoUsersBlock=renderCiscoUsers(model.users);
   if(ciscoUsersBlock)blocks.push(ciscoUsersBlock);
   if(model.snmpCommunity)blocks.push(`snmp-server community ${model.snmpCommunity} ro`);
   if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
   if(model.syslogServer)blocks.push(`logging host ${model.syslogServer}`);
   if(model.mgmtTelnetDisable)blocks.push('line vty 0 4\n transport input ssh');
+  if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
+  // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
+  // 不能顛倒（2026-08-28（續4）新增）
+  if(model.classMaps&&model.classMaps.length)blocks.push(renderClassMapQoS(model.classMaps));
+  // QoS 放最後（同一個原因：policy-map 區塊擷取正則只認得下一個 "policy-map " 或字串
+  // 結尾，沒有其他終止字元，比照 ACL/BGP 慣例排在組裝順序最後）。2026-09-21 修正：ACL/
+  // classMap/QoS 這一整組先前雖然彼此相鄰，卻排在 Users/SNMP/syslog/Telnet 之前，同樣
+  // 違反「放最後」的規則，一併搬到組裝順序最末端
+  if(model.qos&&model.qos.length)blocks.push(renderPolicyMapQoS(model.qos));
   // 結尾補換行，理由同 assembleArubaConfig
   return blocks.join('\n!\n')+'\n';
 }
