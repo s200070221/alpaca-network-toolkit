@@ -416,7 +416,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
     const health = computeFirewallHealth(parsed, opts);
     const complianceFindings = analyzeCompliance(parsed);
     const healthIssueRows = health.issues.map(hi =>
-      `<tr><td>${esc(hi.label)}${hi.accepted ? ` <em>(${esc(tr('health.accepted_mark'))})</em>` : ''}</td><td>${hi.count}</td></tr>`).join('');
+      `<tr><td>${esc(hi.label)}${hi.accepted ? ` <em>(${esc(tr('health.accepted_mark'))})</em>` : ''}${hi.capped ? ` <em>(${esc(tr('health.capped_mark'))})</em>` : ''}</td><td>${hi.count}</td></tr>`).join('');
     const complianceRows = complianceFindings.map(f =>
       `<tr><td>${esc(f.check)}</td><td>${esc(f.value)}</td><td>${esc(f.risk)}</td><td>${esc(f.detail)}</td><td>${esc((f.standards||[]).join('; '))}</td></tr>`).join('');
 

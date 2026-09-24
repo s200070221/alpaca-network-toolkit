@@ -1171,16 +1171,22 @@
     let score = 100;
     const issues = [];
     const acceptedRisks = (opts && opts.acceptedRisks) ? new Set(opts.acceptedRisks) : new Set();
-    const deduct = (labelKey, sev, count, amount) => {
+    // 每項扣分上限（2026-09-24 使用者決定）：逐筆扣分但單一檢查最多扣「每筆權重×3」，避免
+    // 規則缺備註、孤兒物件等逐筆累加的項目在真實設定檔（數百條規則）把分數一律壓到 0 分，
+    // 讓健康度失去區辨力；達上限者標 capped:true 供畫面提示實際數量比扣分反映的更多
+    const HEALTH_CAP_MULTIPLIER = 3;
+    const deduct = (labelKey, sev, count, amount, perItem) => {
       const key = labelKey.replace(/^health\./, '');
       if (acceptedRisks.has(key)) { issues.push({ key, sev, label: tr(labelKey), count, accepted: true }); return; }
-      score -= amount;
-      issues.push({ key, sev, label: tr(labelKey), count });
+      const cap = perItem * HEALTH_CAP_MULTIPLIER;
+      const capped = amount > cap;
+      score -= capped ? cap : amount;
+      issues.push(capped ? { key, sev, label: tr(labelKey), count, capped: true } : { key, sev, label: tr(labelKey), count });
     };
     // T1: any-any accept（需排除已停用規則，比照下方 T1b/broad-network 既有慣例；
     // 先前漏了這道防呆，已停用的 any-any/no-log 規則從未真正生效卻仍被扣分，2026-09 全功能審查發現）
     const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && /^(all|any)$/i.test((p.srcAddr||'').trim()) && /^(all|any)$/i.test((p.dstAddr||'').trim()));
-    if (anyAny.length) deduct('health.any_any', 'crit', anyAny.length, anyAny.length * 20);
+    if (anyAny.length) deduct('health.any_any', 'crit', anyAny.length, anyAny.length * 20, 20);
     // T1b: broad-network（2026-08-29 新增，比照 analyzeCompliance() 的 broad-network 檢查同一套
     // 判斷邏輯，權重較 any-any 低——過寬網段風險低於完全開放，但仍值得扣分）
     // key 帶 vdom 前綴，理由與修法同 analyzeCompliance() 的 broad-network 檢查（2026-09-22 修復）
@@ -1196,23 +1202,23 @@
     const healthIsBroad = (val, vdom) => String(val || '').split(',').map(s => s.trim()).filter(Boolean)
       .some(p => { const len = healthAddrPrefixLen(p, vdom); return len !== null && len <= 8; });
     const broadNetwork = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && (healthIsBroad(p.srcAddr, p._vdom) || healthIsBroad(p.dstAddr, p._vdom)));
-    if (broadNetwork.length) deduct('health.broad_network', 'warn', broadNetwork.length, broadNetwork.length * 10);
+    if (broadNetwork.length) deduct('health.broad_network', 'warn', broadNetwork.length, broadNetwork.length * 10, 10);
     // T2: shadowed rules
     const shadowMap = buildShadowMap(policies);
     const shadowCount = Object.values(shadowMap).reduce((s, arr) => s + arr.length, 0);
-    if (shadowCount) deduct('health.shadowed', 'warn', shadowCount, shadowCount * 5);
+    if (shadowCount) deduct('health.shadowed', 'warn', shadowCount, shadowCount * 5, 5);
     // T2b: rules blocked by an earlier deny rule（同 T2 權重，皆屬「規則永不生效」類問題）
     const denyBlockedCount = analyzeDenyBlocking(policies).length;
-    if (denyBlockedCount) deduct('health.deny_blocked', 'warn', denyBlockedCount, denyBlockedCount * 5);
+    if (denyBlockedCount) deduct('health.deny_blocked', 'warn', denyBlockedCount, denyBlockedCount * 5, 5);
     // T3: disabled rules（欄位值一律是 'disable'，非 'disabled'，見 _runPolicyQuery()/各 assemble 函式既有慣例；
     // 大小寫不敏感比對改用共用 _isDisabledStatus()，先前純小寫比對會 undercount Sophos 等大寫來源，
     // 2026-09-18 根因性修復，與 T1/T1b/T4 統一）
     const disabled = policies.filter(p => _isDisabledStatus(p) || p.enabled === false || p.enabled === 'disable');
-    if (disabled.length > 3) deduct('health.disabled', 'info', disabled.length, (disabled.length - 3) * 2);
+    if (disabled.length > 3) deduct('health.disabled', 'info', disabled.length, (disabled.length - 3) * 2, 2);
     // T4: accept without log（欄位名稱是全小寫 logtraffic，非 logTraffic；判斷式比照 analyzeCompliance() 既有慣例，
     // 同樣需排除已停用規則，原因同 T1，2026-09 全功能審查發現）
     const noLog = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && (!p.logtraffic || p.logtraffic === 'disable' || p.logtraffic === 'utm'));
-    if (noLog.length > 2) deduct('health.no_log', 'warn', noLog.length, (noLog.length - 2) * 3);
+    if (noLog.length > 2) deduct('health.no_log', 'warn', noLog.length, (noLog.length - 2) * 3, 3);
     // T5-T11：其餘 7 項合規檢查納入健康度評分（2026-08-31 新增）。先前只有上方 4 項（any-any／
     // broad-network／disabled／no-log）會扣分，`analyzeCompliance()` 其餘 7 項發現完全不影響
     // 分數，是探勘功能4「弱加密VPN/預設帳號偵測」時發現的真實缺口（該兩項本身早已存在，缺口
@@ -1235,7 +1241,7 @@
       const found = complianceFindings.find(f => f.id === id);
       if (found && found.value > 0) {
         const weight = HEALTH_WEIGHT[found.risk] || HEALTH_WEIGHT.low;
-        deduct(labelKey, found.risk === 'high' ? 'crit' : found.risk === 'medium' ? 'warn' : 'info', found.value, found.value * weight);
+        deduct(labelKey, found.risk === 'high' ? 'crit' : found.risk === 'medium' ? 'warn' : 'info', found.value, found.value * weight, weight);
       }
     });
     // T12-T14：NAT 規則健檢納入健康度評分（2026-09-01 新增，功能5）。dup_ip／port_conflict
@@ -1244,20 +1250,20 @@
     // 定為 low(-3)，且刻意不對 Cisco ASA／SonicWall 執行（見 analyzeOrphanNAT() 排除清單）。
     const natWarns = analyzeNAT(parsed.nat);
     const natDupIp = natWarns.filter(w => w.type === 'dup_ip').length;
-    if (natDupIp) deduct('health.nat_dup_ip', 'warn', natDupIp, natDupIp * HEALTH_WEIGHT.medium);
+    if (natDupIp) deduct('health.nat_dup_ip', 'warn', natDupIp, natDupIp * HEALTH_WEIGHT.medium, HEALTH_WEIGHT.medium);
     const natPortConflict = natWarns.filter(w => w.type === 'port_conflict').length;
-    if (natPortConflict) deduct('health.nat_port_conflict', 'warn', natPortConflict, natPortConflict * HEALTH_WEIGHT.medium);
+    if (natPortConflict) deduct('health.nat_port_conflict', 'warn', natPortConflict, natPortConflict * HEALTH_WEIGHT.medium, HEALTH_WEIGHT.medium);
     const orphanNatCount = analyzeOrphanNAT(parsed).length;
-    if (orphanNatCount) deduct('health.nat_orphan', 'info', orphanNatCount, orphanNatCount * HEALTH_WEIGHT.low);
+    if (orphanNatCount) deduct('health.nat_orphan', 'info', orphanNatCount, orphanNatCount * HEALTH_WEIGHT.low, HEALTH_WEIGHT.low);
     // T15：孤兒 VPN 物件（2026-09-15 新增），權重比照孤兒 NAT 同屬「設定衛生」訊號，同為 low
     const orphanVpnCount = analyzeOrphanVPN(parsed).length;
-    if (orphanVpnCount) deduct('health.vpn_orphan', 'info', orphanVpnCount, orphanVpnCount * HEALTH_WEIGHT.low);
+    if (orphanVpnCount) deduct('health.vpn_orphan', 'info', orphanVpnCount, orphanVpnCount * HEALTH_WEIGHT.low, HEALTH_WEIGHT.low);
     // T16：規則缺無備註（2026-09-23 新增），權重比照孤兒 NAT/VPN 同屬「設定衛生」訊號，同為 low
     const missingCommentsCount = analyzeMissingComments(parsed).length;
-    if (missingCommentsCount) deduct('health.missing_comments', 'info', missingCommentsCount, missingCommentsCount * HEALTH_WEIGHT.low);
+    if (missingCommentsCount) deduct('health.missing_comments', 'info', missingCommentsCount, missingCommentsCount * HEALTH_WEIGHT.low, HEALTH_WEIGHT.low);
     // T17：過大／巢狀過深群組物件（2026-09-23 新增），權重同上
     const oversizedGroupCount = analyzeOversizedGroups(parsed).length;
-    if (oversizedGroupCount) deduct('health.oversized_group', 'info', oversizedGroupCount, oversizedGroupCount * HEALTH_WEIGHT.low);
+    if (oversizedGroupCount) deduct('health.oversized_group', 'info', oversizedGroupCount, oversizedGroupCount * HEALTH_WEIGHT.low, HEALTH_WEIGHT.low);
     score = Math.max(0, Math.min(100, score));
     const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
     const gradeColor = grade === 'A' ? 'var(--green)' : grade === 'B' ? 'var(--teal)' : grade === 'C' ? 'var(--yellow)' : grade === 'D' ? 'var(--orange)' : 'var(--red)';
@@ -1413,7 +1419,7 @@
     co.forEach(f => L.push(`| ${_mdCell(f.check)} | ${f.value} | ${_mdCell(riskLabel[f.risk] || f.risk)} | ${_mdCell(f.detail)} | ${_mdCell((f.standards || []).join('; '))} |`));
     if (health.issues.length) {
       L.push('', `## ${tr('health.title')}`, '');
-      health.issues.forEach(i => L.push(`- ${_mdCell(i.label)}: ${i.count}${i.accepted ? ` (${tr('health.accepted_mark')})` : ''}`));
+      health.issues.forEach(i => L.push(`- ${_mdCell(i.label)}: ${i.count}${i.accepted ? ` (${tr('health.accepted_mark')})` : ''}${i.capped ? ` (${tr('health.capped_mark')})` : ''}`));
     }
     L.push('', `> ${tr('audit.standards_disclaimer')}`, '');
     return L.join('\n');
