@@ -1550,8 +1550,30 @@ function _openDropMultiItem(i) {
   const it = _dropMultiItems[i];
   if (!it) return;
   _dropPending = { name: it.name, text: it.text };
-  const ok = _dispatchWithPending(it.detected ? it.detected.idx : 2, it.detected ? it.detected.vendor : null, true);
-  if (ok) { it.opened = true; const b = document.getElementById('drop-multi-btn-' + i); if (b) b.textContent = '✓ ' + b.textContent.replace(/^✓ /, ''); }
+  const toolIdx = it.detected ? it.detected.idx : 2;
+  const ok = _dispatchWithPending(toolIdx, it.detected ? it.detected.vendor : null, true);
+  if (ok) {
+    it.opened = true;
+    const b = document.getElementById('drop-multi-btn-' + i);
+    if (b) b.textContent = '✓ ' + b.textContent.replace(/^✓ /, '');
+    _lockMultiButtonsUntilConsumed();
+  }
+}
+// 交接競態防護（2026-09-24 新增）：交接 key 一次只存一份，若目標分頁尚未載入就再點另一個檔案，
+// 新寫入會覆蓋前一份。開啟後暫停全部多檔按鈕，輪詢到目標分頁取走 key（被移除）或超過 10 秒
+// 時限（與 key 本身 TTL 相同，過期後目標分頁也不會再讀取）才恢復
+function _lockMultiButtonsUntilConsumed() {
+  const btns = [...document.querySelectorAll('[id^="drop-multi-btn-"]')];
+  btns.forEach(b => { b.disabled = true; });
+  const started = Date.now();
+  const timer = setInterval(() => {
+    let pending = null;
+    try { pending = localStorage.getItem('_netAnalyzer_pending'); } catch (e) { pending = null; }
+    if (!pending || Date.now() - started > 10000) {
+      clearInterval(timer);
+      btns.forEach(b => { b.disabled = false; });
+    }
+  }, 300);
 }
 function _showDropMultiResult(items) {
   _dropMultiItems = items;

@@ -3811,6 +3811,7 @@ function copyOutput(){
   const b=document.getElementById('copy-btn');
   const orig=b.textContent;
   navigator.clipboard.writeText(t).then(()=>{
+    clearDraftAfterExport();
     b.textContent=tr('btn.copied');
     setTimeout(()=>{b.textContent=orig;},1500);
   }).catch(()=>{
@@ -3879,7 +3880,7 @@ function _doGeneratorAuditCheck(){
     h+=res.issues.map(i=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border-left:3px solid ${sevColors[i.sev]||'var(--border)'}">
       <span style="font-size:14px">${sevIcon[i.sev]||''}</span>
       <span style="font-size:13px;color:var(--text)">${esc(i.label)}</span>
-      <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}</span>
+      <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}${i.capped?` <span title="${escapeHtml(tr('genaudit.capped_tip'))}">(${escapeHtml(tr('genaudit.capped_mark'))})</span>`:''}</span>
     </div>`).join('');
   }
   const el=document.getElementById('gen-audit-result');
@@ -4587,6 +4588,7 @@ window.addEventListener('load',function(){
 function downloadOutput(){
   const t=document.getElementById('output').value;
   if(!t)return;
+  clearDraftAfterExport();
   const hostname=document.getElementById('hostname').value.trim()||'switch';
   if(document.getElementById('vendor').value==='sonic'){
     // config_db.json 本體就是 JSON，比照 generateDocumentationAsJSON() 既有 Blob 寫法，
@@ -4981,16 +4983,27 @@ function _focusRemediationField(findingId){
 // 避免使用者一開始動表單就把還沒還原的舊草稿覆蓋掉。本次開頁若是其他工具交接匯入
 // （window._cwHandoffImported），不顯示提示以免與剛匯入的內容混淆，草稿仍保留到下次
 const DRAFT_KEY='cw_draft';
-let _draftTimer=null,_draftPending=false;
+let _draftTimer=null,_draftPending=false,_draftExportedSnapshot=null;
 function saveDraftNow(){
   if(_draftPending)return;
   try{
     const model=collectModel();
+    // 已下載／複製過的同一份表單內容不再存回草稿（見 clearDraftAfterExport()）；表單一有變動就恢復暫存
+    if(_draftExportedSnapshot!==null&&JSON.stringify(model)===_draftExportedSnapshot)return;
+    _draftExportedSnapshot=null;
     if(!draftModelHasContent(model)){localStorage.removeItem(DRAFT_KEY);return;}
     localStorage.setItem(DRAFT_KEY,JSON.stringify({ts:Date.now(),model}));
   }catch(e){/* localStorage 不可用或表單狀態異常時略過，不影響操作 */}
 }
 function saveDraftSoon(){clearTimeout(_draftTimer);_draftTimer=setTimeout(saveDraftNow,1000);}
+// 下載或複製產生結果後清除草稿（2026-09-24 新增）：工作已完成，下次開頁不必再提示還原。
+// 下載／複製本身是按鈕點擊，會觸發上面的自動暫存，故記下當下表單快照，內容未變動前不再存回
+function clearDraftAfterExport(){
+  try{
+    _draftExportedSnapshot=JSON.stringify(collectModel());
+    localStorage.removeItem(DRAFT_KEY);
+  }catch(e){/* 略過 */}
+}
 function _closeDraftBanner(){const b=document.getElementById('draft-banner');if(b)b.remove();_draftPending=false;}
 function restoreDraft(){
   try{const d=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');if(d&&d.model)applyModelToForm(d.model);}catch(e){}

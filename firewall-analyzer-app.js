@@ -1436,7 +1436,7 @@ function onParsed(){
       h += res.issues.map(i => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border-left:3px solid ${sevColors[i.sev]||'var(--border)'}${i.accepted ? ';opacity:.55' : ''}">
         <span style="font-size:14px">${sevIcon[i.sev]||''}</span>
         <span style="font-size:13px;color:var(--text)${i.accepted ? ';text-decoration:line-through' : ''}">${esc(i.label)}</span>
-        <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}</span>
+        <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}${i.capped ? ` <span title="${esc(tr('health.capped_tip'))}">(${esc(tr('health.capped_mark'))})</span>` : ''}</span>
         <label style="font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:3px;cursor:pointer" title="${esc(tr('health.accept_risk_tip'))}"><input type="checkbox" ${i.accepted ? 'checked' : ''} onchange="_toggleAcceptedRisk(${JSON.stringify(i.key).replace(/"/g,'&quot;')}, this.checked)">${esc(tr('health.accept_risk'))}</label>
       </div>`).join('');
     }

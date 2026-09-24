@@ -9,11 +9,13 @@
 
 function detectVlanIslands(p){
   const ifaces = p.interfaces || [];
+  // 2026-09-24 修正：原本 access 埠只比對 nativeVlan、trunk 攜帶只用逗號/空白切割不展開範圍，
+  // 但多數廠牌 parser 把 access VLAN 存在 vlans 欄位（nativeVlan 為空），導致 access 埠幾乎全被
+  // 漏算、本函式實際上永遠回傳空陣列。改用與 VLAN 矩陣／analyzeVlanUsage() 同一套埠歸屬計算
+  const m = _vlanPortMembership(p);
   return (p.vlans || []).filter(v => !v.implied).map(v => {
     const vid = String(v.id);
-    const access = ifaces.filter(i => i.mode === 'access' && String(i.nativeVlan) === vid);
-    const trunk = ifaces.filter(i => i.mode === 'trunk' && (i.vlans === 'all' || (i.vlans||'').split(/[\s,]+/).includes(vid)));
-    return {id: v.id, name: v.name||'—', accessCount: access.length, trunkCount: trunk.length};
+    return {id: v.id, name: v.name||'—', accessCount: m.untagged[vid] ? m.untagged[vid].size : 0, trunkCount: m.tagged[vid] ? m.tagged[vid].size : 0};
   }).filter(v => v.trunkCount === 0 && v.accessCount > 0);
 }
 
@@ -275,10 +277,13 @@ function analyzeSwitchAudit(parsed){
   // （2026-09 新增，鏡像既有 detectVlanIslands() 邏輯：該函式找「有 access 埠但沒被 trunk」
   // 的 VLAN，此處反過來找「沒有 access 埠卻還被 trunk 攜帶」的 VLAN，同屬設定 hygiene
   // 訊號——不必要地擴大廣播網域範圍，建議 trunk 修剪）
+  // 2026-09-24 修正：同 detectVlanIslands()，原本 access 埠只比對 nativeVlan 造成幾乎所有 VLAN
+  // 都被誤判為「只在 trunk 上攜帶」（每筆 -3 分），改用共用的 _vlanPortMembership() 計算
+  const _vm=_vlanPortMembership(parsed);
   const unusedTrunkVlans=(parsed.vlans||[]).filter(v=>!v.implied).map(v=>{
     const vid=String(v.id);
-    const accessCount=interfaces.filter(i=>i.mode==='access'&&String(i.nativeVlan)===vid).length;
-    const trunkCount=interfaces.filter(i=>i.mode==='trunk'&&(i.vlans==='all'||(i.vlans||'').split(/[\s,]+/).includes(vid))).length;
+    const accessCount=_vm.untagged[vid]?_vm.untagged[vid].size:0;
+    const trunkCount=_vm.tagged[vid]?_vm.tagged[vid].size:0;
     return{id:v.id,name:v.name||'—',accessCount,trunkCount};
   }).filter(v=>v.accessCount===0&&v.trunkCount>0);
   f('unused-vlan-trunk', tr('audit.check_unused_vlan_trunk'), unusedTrunkVlans.length, 'low',
@@ -356,10 +361,15 @@ function computeSwitchHealth(parsed){
   const issues=[];
   const WEIGHT={high:10,medium:5,low:3};
   const SEV={high:'crit',medium:'warn',low:'info'};
+  // 每項扣分上限（2026-09-24 使用者決定，與 firewall_analyzer 一致）：逐筆扣分但單一檢查最多扣
+  // 「每筆權重×3」，避免「VLAN 1 仍用於使用者埠」「介面缺描述」等逐筆累加項目在真實設定檔把分數
+  // 一律壓到 0 分；達上限者標 capped:true 供畫面提示
   findings.forEach(f=>{
     if(f.value>0){
-      score-=f.value*(WEIGHT[f.risk]||WEIGHT.low);
-      issues.push({sev:SEV[f.risk]||'info',label:f.check,count:f.value});
+      const w=WEIGHT[f.risk]||WEIGHT.low;
+      const capped=f.value>3;
+      score-=capped?w*3:f.value*w;
+      issues.push(capped?{sev:SEV[f.risk]||'info',label:f.check,count:f.value,capped:true}:{sev:SEV[f.risk]||'info',label:f.check,count:f.value});
     }
   });
   score=Math.max(0,Math.min(100,score));
@@ -400,41 +410,68 @@ function buildHealthSparklineSVG(entries){
 function _expandVidList(str){
   if(!str)return[];
   const ids=[];
-  for(const tok of String(str).replace(/\s+to\s+/gi,'-').split(/[,\s]+/)){
+  // 分號為 Planet 等廠牌的 VLAN 清單分隔符（例：10;20-22），2026-09-24 補上
+  for(const tok of String(str).replace(/\s+to\s+/gi,'-').split(/[,;\s]+/)){
     if(tok.includes('-')){const[a,b]=tok.split('-').map(Number);if(!isNaN(a)&&!isNaN(b)&&b-a<=4094)for(let i=a;i<=b;i++)ids.push(String(i));}
     else if(/^\d+$/.test(tok))ids.push(tok);
   }
   return ids;
 }
-function analyzeVlanUsage(parsed){
+// 各 VLAN 的 tagged／untagged 成員埠與 SVI（2026-09-24 抽出共用）：analyzeVlanUsage()、
+// detectVlanIslands()、analyzeSwitchAudit() 的 unused-vlan-trunk 皆以此為準。除了介面上的
+// mode/vlans/nativeVlan/hybrid 外，也納入 VLAN 物件本身的 tagged／untagged 成員字串（如 RouterOS
+// bridge VLAN 表 `tagged=ether1,ether2`，在設定檔未另外宣告介面時介面清單會是空的）
+function _vlanPortMembership(parsed){
   const vlans=(parsed.vlans||[]).filter(v=>!v.implied);
   const tagged={},untagged={},svi=new Set();
-  const add=(map,vid,name)=>{vid=String(vid);(map[vid]=map[vid]||new Set()).add(name);};
+  const add=(map,vid,name)=>{if(!name)return;vid=String(vid);(map[vid]=map[vid]||new Set()).add(name);};
+  const splitPorts=s=>Array.isArray(s)?s:String(s||'').split(/[,\s]+/).filter(Boolean);
+  // Juniper 等廠牌的介面以 VLAN 名稱引用（members vlan30），非數字 ID；依已宣告 VLAN 的名稱對回 ID
+  const nameToId={};
+  vlans.forEach(v=>{if(v.name)nameToId[String(v.name)]=String(v.id);});
+  const vids=str=>{
+    const out=_expandVidList(str);
+    String(str||'').split(/[,;\s]+/).forEach(tok=>{if(nameToId[tok]&&!/^\d/.test(tok))out.push(nameToId[tok]);});
+    return out;
+  };
+  vlans.forEach(v=>{
+    splitPorts(v.tagged).forEach(pn=>add(tagged,v.id,pn));
+    splitPorts(v.untagged).forEach(pn=>add(untagged,v.id,pn));
+  });
   for(const i of parsed.interfaces||[]){
     if(i.type==='svi'){const m=String(i.name||'').match(/(\d+)\s*$/);if(m)svi.add(m[1]);continue;}
     if(i.type==='null'||i.type==='loopback')continue;
     const nm=i.name;
     if(i.mode==='trunk'){
       if(i.vlans==='all')vlans.forEach(v=>add(tagged,v.id,nm));
-      else _expandVidList(i.vlans).forEach(v=>add(tagged,v,nm));
+      else vids(i.vlans).forEach(v=>add(tagged,v,nm));
       if(i.nativeVlan)add(untagged,i.nativeVlan,nm);
     }else if(i.mode==='access'){
-      const vid=i.nativeVlan||_expandVidList(i.vlans)[0];
+      const vid=i.nativeVlan||vids(i.vlans)[0];
       if(vid)add(untagged,vid,nm);
     }else if(i.mode==='hybrid'&&i.hybrid){
       (i.hybrid.tagged||[]).forEach(v=>add(tagged,v,nm));
       (i.hybrid.untagged||[]).forEach(v=>add(untagged,v,nm));
       if(i.hybrid.pvid)add(untagged,i.hybrid.pvid,nm);
     }else if(i.vlans){
-      _expandVidList(i.vlans).forEach(v=>add(tagged,v,nm));
+      vids(i.vlans).forEach(v=>add(tagged,v,nm));
     }
   }
+  return {tagged,untagged,svi};
+}
+function analyzeVlanUsage(parsed){
+  const vlans=(parsed.vlans||[]).filter(v=>!v.implied);
+  const {tagged,untagged,svi}=_vlanPortMembership(parsed);
+  // 被 802.1X guest VLAN 引用的 VLAN 視為使用中（2026-09-24 新增）：即使目前沒有任何埠，
+  // 刪除它會讓認證失敗的終端無處可落
+  const guestRef=new Set((parsed.security||[]).map(r=>String(r.guestVlan||'')).filter(x=>x&&x!=='-'));
   return vlans.map(v=>{
     const vid=String(v.id);
     const accessCount=untagged[vid]?untagged[vid].size:0;
     const taggedCount=tagged[vid]?tagged[vid].size:0;
     const hasSvi=svi.has(vid);
-    return {id:v.id,name:v.name||'',accessCount,taggedCount,hasSvi,unused:!accessCount&&!taggedCount&&!hasSvi};
+    const guestRefd=guestRef.has(vid);
+    return {id:v.id,name:v.name||'',accessCount,taggedCount,hasSvi,guestRef:guestRefd,unused:!accessCount&&!taggedCount&&!hasSvi&&!guestRefd};
   });
 }
 

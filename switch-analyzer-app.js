@@ -923,7 +923,8 @@ function _abbrevPort(name){
 function _expandVids(str){
   if(!str)return[];
   const ids=[];
-  for(const tok of str.replace(/\s+to\s+/gi,'-').split(/[,\s]+/)){
+  // 分號為 Planet 等廠牌的 VLAN 清單分隔符（例：10;20-22），2026-09-24 補上
+  for(const tok of str.replace(/\s+to\s+/gi,'-').split(/[,;\s]+/)){
     if(tok.includes('-')){const[a,b]=tok.split('-').map(Number);if(!isNaN(a)&&!isNaN(b))for(let i=a;i<=b;i++)ids.push(String(i));}
     else if(/^\d+$/.test(tok))ids.push(tok);
   }
@@ -1655,7 +1656,7 @@ function _doSwitchHealthCheck(){
     h+=res.issues.map(i=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border-left:3px solid ${sevColors[i.sev]||'var(--border)'}">
       <span style="font-size:14px">${sevIcon[i.sev]||''}</span>
       <span style="font-size:13px;color:var(--text)">${esc(i.label)}</span>
-      <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}</span>
+      <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}${i.capped?` <span title="${esc(tr('health.capped_tip'))}">(${esc(tr('health.capped_mark'))})</span>`:''}</span>
     </div>`).join('');
   }
   if(history.length>1){

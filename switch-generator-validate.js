@@ -200,7 +200,8 @@ function analyzeGeneratorAudit(model){
   const unusedTrunkVlans=(model.vlans||[]).map(v=>{
     const vid=String(v.id);
     const accessCount=ifaces.filter(i=>i.mode==='access'&&String(i.accessVlan)===vid).length;
-    const trunkCount=ifaces.filter(i=>i.mode==='trunk'&&(i.trunkVlans||'').split(/[\s,]+/).includes(vid)).length;
+    // 2026-09-24：改用 parseVlanRangeSpec() 展開 10-20 這類範圍寫法（原本只切逗號/空白，範圍內的 VLAN 會漏算）
+    const trunkCount=ifaces.filter(i=>i.mode==='trunk'&&parseVlanRangeSpec(i.trunkVlans).ids.includes(vid)).length;
     return{id:v.id,accessCount,trunkCount};
   }).filter(v=>v.accessCount===0&&v.trunkCount>0);
   f('unused-vlan-trunk', tr('genaudit.check_unused_vlan_trunk'), unusedTrunkVlans.length, 'low',
@@ -233,10 +234,13 @@ function computeGeneratorAuditHealth(model){
   const issues=[];
   const WEIGHT={high:10,medium:5,low:3};
   const SEV={high:'crit',medium:'warn',low:'info'};
+  // 每項扣分上限（2026-09-24，與 switch_analyzer／firewall_analyzer 一致）：單一檢查最多扣「每筆權重×3」
   findings.forEach(f=>{
     if(f.value>0){
-      score-=f.value*(WEIGHT[f.risk]||WEIGHT.low);
-      issues.push({sev:SEV[f.risk]||'info',label:f.check,count:f.value});
+      const w=WEIGHT[f.risk]||WEIGHT.low;
+      const capped=f.value>3;
+      score-=capped?w*3:f.value*w;
+      issues.push(capped?{sev:SEV[f.risk]||'info',label:f.check,count:f.value,capped:true}:{sev:SEV[f.risk]||'info',label:f.check,count:f.value});
     }
   });
   score=Math.max(0,Math.min(100,score));
