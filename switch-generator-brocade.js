@@ -464,11 +464,10 @@ function assembleBrocadeConfig(model){
   if(authBlockBr)blocks.push(authBlockBr);
   const stpBlockBr=renderBrocadeSTP(model.stp);
   if(stpBlockBr)blocks.push(stpBlockBr);
+  // QoS：parseBrocadeQoS() 用逐行/逐介面正則（非「貪婪到下一同關鍵字區塊或字串結尾」樣式），
+  // 不受 ACL 那種組裝順序陷阱影響，原地留在這裡即可，不需搬到最後
   const qosBlockBr=renderBrocadeQoSGlobal(model.brocadeQos);
   if(qosBlockBr)blocks.push(qosBlockBr);
-  // ACL 放最後：parseACL 對 brocade fallback 到 _parseACLCisco，其區塊擷取正則只認得
-  // 下一個同關鍵字區塊或字串結尾，理由同 assembleCiscoConfig/assembleDellOS10Config
-  if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
   const brocadeUsersBlock=renderBrocadeUsers(model.users);
   if(brocadeUsersBlock)blocks.push(brocadeUsersBlock);
   if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
@@ -477,6 +476,11 @@ function assembleBrocadeConfig(model){
   // 預設開放，須明確 "no telnet server" 才關閉（parseMgmtAccess() brocade 分支，比對式為
   // 精確字面比對非忽略大小寫，此處輸出字面必須完全一致）
   if(model.mgmtTelnetDisable)blocks.push('no telnet server');
+  // ACL 放最後：parseACL 對 brocade fallback 到 _parseACLCisco，其區塊擷取正則只認得
+  // 下一個同關鍵字區塊或字串結尾，理由同 assembleCiscoConfig/assembleDellOS10Config。
+  // 2026-09-21 修正：先前排在 Users/SNMP/syslog/Telnet 之前，同樣違反「放最後」規則，
+  // 搬到組裝順序最末端
+  if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
   return blocks.join('\n!\n')+'\n';
 }
 // 本機帳號：switch_analyzer 的 parseBrocadeUsers() 語法為

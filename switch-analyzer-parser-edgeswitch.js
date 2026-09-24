@@ -53,10 +53,24 @@ function parseEdgeSwitchInterfaces(cfg){
   return ifaces;
 }
 
+// 本機帳號（2026-08-23 新增）：官方 Ubiquiti EdgeSwitch ES-24-250W Command Reference
+// Manual 逐字確認單行語法 "username NAME password PASSWORD level N"（username 1-64
+// 字元／password 8-64 字元／level 0-15，1=唯讀 15=讀寫）。與 Netgear M4300 語法完全相同
+// （同源 ICOS），但比照本檔既有慣例（LACP 邏輯已獨立複製一份，見 renderEdgeSwitchLACPExtra()
+// 上方註解）不共用函式，避免未來任一廠牌語法出現分歧時互相牽動
+function parseEdgeSwitchUsers(cfg){
+  const users=[];
+  const re=/^username\s+(\S+)\s+password\s+(\S+)\s+level\s+(\d+)/gm;
+  let m;
+  while((m=re.exec(cfg))!==null){
+    users.push({name:m[1],role:'level-'+m[3],service:'ssh/console',hasPwd:true,pwdType:'set',pwdWeak:false});
+  }
+  return users;
+}
 function parseEdgeSwitch(cfg){
   const sys=parseEdgeSwitchSysInfo(cfg);
   const vlans=parseEdgeSwitchVLANs(cfg);
   const interfaces=parseEdgeSwitchInterfaces(cfg);
-  return{sys,irf:null,stack:null,vlans,interfaces,routes:[],vrfs:[],users:[],ospf:[],bgp:[],rip:[],vrrp:[],vxlan:null,vendor:'edgeswitch',breakouts:[]};
+  return{sys,irf:null,stack:null,vlans,interfaces,routes:[],vrfs:[],users:parseEdgeSwitchUsers(cfg),ospf:[],bgp:[],rip:[],vrrp:[],vxlan:null,vendor:'edgeswitch',breakouts:[]};
 }
 

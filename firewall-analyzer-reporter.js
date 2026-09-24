@@ -26,6 +26,8 @@ const Reporter = (() => {
         headers = [tr('col.name'),tr('col.alias'),tr('col.ip'),tr('col.mask'),tr('col.secondaryIp'),tr('col.ipv6'),tr('col.type'),tr('col.vlan_id'),tr('col.vdom'),tr('col.role'),tr('col.speed'),tr('col.mtu'),tr('col.mac'),tr('col.mode'),tr('col.status'),tr('col.allowaccess'),tr('col.desc')];
         rows = data.map(r => [r.name,r.alias,r.ip,r.mask,(r.secondaryIps&&r.secondaryIps.length)?r.secondaryIps.map(s=>`${s.ip}${s.mask&&s.mask!=='-'?' / '+s.mask:''}`).join('; '):'-',r.ip6||'-',r.type,r.vlanId,r.vdom,r.role,r.speed,r.mtu,r.macaddr,r.mode,r.status,r.allowaccess,r.desc]);
         break;
+      // disabled-policies（稽核停用規則清單）直接沿用 policies 既有欄位形狀
+      case 'disabled-policies':
       case 'policies':
         headers = ['ID',tr('col.name'),tr('col.src_intf'),tr('col.dst_intf'),tr('col.src_addr'),tr('col.dst_addr'),tr('col.service'),tr('col.schedule'),tr('col.action'),'NAT','IP Pool','Pool Name',tr('col.log'),'UTM-AV','UTM-Web','UTM-IPS','UTM-App',tr('col.status'),tr('col.users'),tr('col.groups'),tr('col.comments')];
         rows = data.map(r => [r.id,r.name,r.srcIntf,r.dstIntf,r.srcAddr,r.dstAddr,r.service,r.schedule,r.action,r.nat,r.ippool,r.poolname,r.logtraffic,r.utm.av,r.utm.webfilter,r.utm.ips,r.utm.appctrl,r.status,r.users,r.groups,r.comments]);
@@ -386,7 +388,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
   // 不需要 log_analyzer 那種對抗瀏覽器巢狀計時器節流的 MessageChannel 版本。
   const ms = t => new Promise(r => setTimeout(r, t));
 
-  async function exportHTML(parsed, wifiData) {
+  async function exportHTML(parsed, wifiData, opts) {
     const vendor = parsed.vendor;
     const info   = parsed.deviceInfo;
     const now    = new Date().toLocaleString(_lang==='ja'?'ja-JP':_lang==='en'?'en-US':'zh-TW');
@@ -410,10 +412,11 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
     // 呼叫時（使用者點擊匯出按鈕，遠晚於頁面載入）audit.js 早已載入完畢，不受載入順序影響。
     // issues 陣列本身就是 computeFirewallHealth() 已算好的遮蔽規則數/孤兒NAT/孤兒VPN/各項
     // 合規扣分摘要，不需要另外重複呼叫 analyzeRuleShadowing()/analyzeOrphanNAT()/analyzeOrphanVPN()
-    const health = computeFirewallHealth(parsed);
+    // opts.acceptedRisks（2026-09-24 新增）：使用者標記接受的風險不扣分，但報表仍列出並註明
+    const health = computeFirewallHealth(parsed, opts);
     const complianceFindings = analyzeCompliance(parsed);
     const healthIssueRows = health.issues.map(hi =>
-      `<tr><td>${esc(hi.label)}</td><td>${hi.count}</td></tr>`).join('');
+      `<tr><td>${esc(hi.label)}${hi.accepted ? ` <em>(${esc(tr('health.accepted_mark'))})</em>` : ''}</td><td>${hi.count}</td></tr>`).join('');
     const complianceRows = complianceFindings.map(f =>
       `<tr><td>${esc(f.check)}</td><td>${esc(f.value)}</td><td>${esc(f.risk)}</td><td>${esc(f.detail)}</td><td>${esc((f.standards||[]).join('; '))}</td></tr>`).join('');
 

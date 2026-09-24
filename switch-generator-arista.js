@@ -190,14 +190,6 @@ function assembleAristaConfig(model){
   if(model.rip&&model.rip.length)blocks.push(renderCiscoRIPList(model.rip));
   if(model.routes&&model.routes.length)blocks.push(renderCiscoRoutes(model.routes));
   if(model.bgp&&model.bgp.length)blocks.push(renderCiscoBGPList(model.bgp));
-  // ACL：已查證官方 Arista EOS User Manual 後確認與 Cisco 語法相符，沿用 renderCiscoACL
-  // 不需改動。QoS 已查證確認不相符，改用 renderAristaQoS()。放最後：理由同
-  // assembleCiscoConfig/assembleDellOS10Config（區塊擷取正則只認得下一個同關鍵字區塊或字串結尾）
-  if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
-  // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
-  // 不能顛倒（2026-08-28（續5）新增）
-  if(model.classMaps&&model.classMaps.length)blocks.push(renderAristaClassMapQoS(model.classMaps));
-  if(model.qos&&model.qos.length)blocks.push(renderAristaQoS(model.qos));
   // 本機帳號：與 Cisco IOS 共用同一套 parseCiscoUsers()/renderCiscoUsers()，語法相符
   const aristaUsersBlock=renderCiscoUsers(model.users);
   if(aristaUsersBlock)blocks.push(aristaUsersBlock);
@@ -207,6 +199,16 @@ function assembleAristaConfig(model){
   // 須 management telnet 子模式內 no shutdown 才視為開放（parseMgmtAccess() arista 分支），
   // 明確輸出 shutdown 子指令作為 defense-in-depth 聲明
   if(model.mgmtTelnetDisable)blocks.push('management telnet\n   shutdown');
+  // ACL：已查證官方 Arista EOS User Manual 後確認與 Cisco 語法相符，沿用 renderCiscoACL
+  // 不需改動。QoS 已查證確認不相符，改用 renderAristaQoS()。放最後：理由同
+  // assembleCiscoConfig/assembleDellOS10Config（區塊擷取正則只認得下一個同關鍵字區塊或字串
+  // 結尾）。2026-09-21 修正：此組先前雖彼此相鄰，卻排在 Users/SNMP/syslog/Telnet 之前，
+  // 同樣違反「放最後」規則，一併搬到組裝順序最末端
+  if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
+  // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
+  // 不能顛倒（2026-08-28（續5）新增）
+  if(model.classMaps&&model.classMaps.length)blocks.push(renderAristaClassMapQoS(model.classMaps));
+  if(model.qos&&model.qos.length)blocks.push(renderAristaQoS(model.qos));
   return blocks.join('\n!\n')+'\n';
 }
 

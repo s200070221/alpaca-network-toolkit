@@ -242,6 +242,20 @@ function doAnalyze(){
   window._workTimer30 = setTimeout(()=>_showSwitchToast(tr('egg.work_30min'),5000), 1800000);
   window._workTimer60 = setTimeout(()=>_showSwitchToast(tr('egg.work_60min'),5000), 3600000);
   setLang(_lang);
+  recordSwitchActivity(parsed);
+}
+// 跨工具活動時間軸（2026-09-24 新增）：寫入 `_netAnalyzer_activityHistory` rolling-history
+// （持續累積歷史，無 TTL，比照 log_analyzer／switch_config_generator 既有寫入端），
+// 供 network_analyzer hub 合併顯示；name 用裝置 hostname（比照 generator 用 sysname）
+function recordSwitchActivity(p){
+  try{
+    if(typeof localStorage==='undefined')return;
+    let _hist=[];
+    try{_hist=JSON.parse(localStorage.getItem('_netAnalyzer_activityHistory')||'[]');}catch(e){_hist=[];}
+    if(!Array.isArray(_hist))_hist=[];
+    _hist.unshift({tool:'switch_analyzer',name:(p&&p.sys&&p.sys.hostname)||'',vendor:(p&&p.vendor)||null,ts:Date.now()});
+    localStorage.setItem('_netAnalyzer_activityHistory',JSON.stringify(_hist.slice(0,5)));
+  }catch(e){/* localStorage 滿了或被封鎖時靜默略過，不影響分析主流程 */}
 }
 function showResultViews(){
   document.getElementById('view-upload').classList.remove('show');
@@ -1014,7 +1028,27 @@ function renderVLANs(){
       <td style="padding:3px 8px"><span style="color:var(--yellow)">${v.accessCount}</span></td>
     </tr>`).join('')}</tbody></table></div>` : '';
   return mkTbar('search-inp',[{v:'all',l:tr('filter.all_vlan')},{v:'withip',l:tr('filter.withip')},{v:'declared',l:tr('filter.declared')},{v:'implied',l:tr('filter.implied_only')}],'exportVLANsCSV')+
-    `<div class="tbl-wrap">${html}</div><div class="tbl-foot"><span>${count} / ${total} ${tr('unit.count')}</span><span>${tr('vlan.foot_declared')}: ${declaredCount} · ${tr('vlan.foot_implied')}: ${impliedCount}</span></div>${islandCard}`;
+    `<div class="tbl-wrap">${html}</div><div class="tbl-foot"><span>${count} / ${total} ${tr('unit.count')}</span><span>${tr('vlan.foot_declared')}: ${declaredCount} · ${tr('vlan.foot_implied')}: ${impliedCount}</span></div>${islandCard}${buildVlanUsageCard(analyzeVlanUsage(parsed))}`;
+}
+// VLAN 使用率卡片（2026-09-24 新增）：資料來自 switch-analyzer-audit.js analyzeVlanUsage()，
+// 完全未使用（無 access／tagged 埠且無 SVI）的 VLAN 排最前並以黃色標示
+function buildVlanUsageCard(usage){
+  if(!usage.length)return'';
+  const unused=usage.filter(u=>u.unused);
+  const rows=[...unused,...usage.filter(u=>!u.unused)];
+  const th=t=>`<th style="text-align:left;padding:3px 8px;border-bottom:1px solid var(--border)">${t}</th>`;
+  return `<div style="margin-top:14px;border-left:3px solid ${unused.length?'var(--yellow)':'var(--green)'};padding:10px 14px;background:var(--surface2);border-radius:4px">
+    <div style="font-weight:600;color:${unused.length?'var(--yellow)':'var(--green)'};margin-bottom:6px">${esc(tr('vlan.usage_title'))} (${esc(tr('vlan.usage_unused'))}: ${unused.length} / ${usage.length})</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('vlan.usage_hint'))}</div>
+    <div style="max-height:320px;overflow:auto"><table style="border-collapse:collapse;width:100%;font-size:12px"><thead><tr>
+      ${th(tr('vlan.island_col_id'))}${th(tr('vlan.island_col_name'))}${th(tr('vlan.usage_col_access'))}${th(tr('vlan.usage_col_tagged'))}${th('SVI')}
+    </tr></thead><tbody>${rows.map(u=>`<tr${u.unused?' style="background:rgba(234,179,8,.12)"':''}>
+      <td style="padding:3px 8px"><span class="pill p-vlan">V${esc(u.id)}</span>${u.unused?` <span class="pill p-warn">${esc(tr('vlan.usage_unused'))}</span>`:''}</td>
+      <td style="padding:3px 8px">${esc(u.name||'—')}</td>
+      <td style="padding:3px 8px">${u.accessCount}</td>
+      <td style="padding:3px 8px">${u.taggedCount}</td>
+      <td style="padding:3px 8px">${u.hasSvi?'✔':'—'}</td>
+    </tr>`).join('')}</tbody></table></div></div>`;
 }
 function hybridCell(iface){
   if(!iface.hybrid)return '—';
@@ -1706,6 +1740,7 @@ function renderAudit(){
   const {html}=renderTable(hdrs,fmtRows,null);
   return `<div style="font-size:13px;font-weight:600;color:var(--purple);margin-bottom:6px">${tr('audit.sw_title')}</div>`
     +cards+disclaimer
+    +`<div style="display:flex;gap:6px;margin:6px 0 8px"><button class="btn btn-ghost btn-sm" onclick="exportAuditSARIF()">🧾 ${esc(tr('audit.export_sarif'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditMarkdown()">📝 ${esc(tr('audit.export_md'))}</button></div>`
     +`<div style="overflow-x:auto"><div class="tbl-wrap">${html}</div></div>`
     +`<div id="sw-health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
         <button id="sw-health-btn" onclick="_doSwitchHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
@@ -1720,6 +1755,18 @@ function exportAuditCSV(){
     [tr('audit.col_check'),tr('audit.col_result'),tr('audit.col_risk'),tr('audit.col_detail'),tr('audit.col_standards')],
     `${hn()}_audit.csv`
   );
+}
+// 稽核結果 SARIF／Markdown 匯出（2026-09-24 新增）：內容由 switch-analyzer-audit.js 的純函式
+// buildSwitchSarifReport()／buildSwitchAuditMarkdown() 產生，此處只負責下載
+function exportAuditSARIF(){
+  if(!parsed){alert(tr('msg.no_config'));return;}
+  const b=new Blob([JSON.stringify(buildSwitchSarifReport(parsed),null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=`${hn()}_audit.sarif`;a.click();URL.revokeObjectURL(url);
+}
+function exportAuditMarkdown(){
+  if(!parsed){alert(tr('msg.no_config'));return;}
+  const b=new Blob([buildSwitchAuditMarkdown(parsed)],{type:'text/markdown;charset=utf-8;'});
+  const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=`${hn()}_audit.md`;a.click();URL.revokeObjectURL(url);
 }
 function renderSecurity(){
   const rows=parsed.security||[];

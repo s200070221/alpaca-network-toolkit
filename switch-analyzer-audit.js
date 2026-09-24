@@ -389,3 +389,94 @@ function buildHealthSparklineSVG(entries){
   const dots=pts.map(p=>`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.5" fill="var(--accent)"><title>${titleOf(p.e)}</title></circle>`).join('');
   return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${dots}</svg>`;
 }
+
+// ── VLAN 使用率（2026-09-24 新增）──────────────────────────────────────────
+// 既有 unused-vlan-trunk 稽核只看「trunk 上攜帶但無 access 埠」；此函式對每個宣告的 VLAN
+// 統計 access（untagged）埠數、tagged 埠數與是否有 SVI，找出「宣告了卻完全沒被使用」的 VLAN。
+// 埠歸屬判斷沿用 switch-analyzer-app.js renderVLANMatrix() 同一套規則（trunk 的 all/範圍字串、
+// native VLAN、access、hybrid tagged/untagged/pvid），SVI 由介面名稱結尾數字對應 VLAN ID
+// （Vlan10／Vlan-interface10／ve 10／irb.10 等命名皆以數字結尾）。implied（僅被引用、未宣告）
+// 的 VLAN 不列入——它們本來就是因為被引用才出現，不可能是未使用。
+function _expandVidList(str){
+  if(!str)return[];
+  const ids=[];
+  for(const tok of String(str).replace(/\s+to\s+/gi,'-').split(/[,\s]+/)){
+    if(tok.includes('-')){const[a,b]=tok.split('-').map(Number);if(!isNaN(a)&&!isNaN(b)&&b-a<=4094)for(let i=a;i<=b;i++)ids.push(String(i));}
+    else if(/^\d+$/.test(tok))ids.push(tok);
+  }
+  return ids;
+}
+function analyzeVlanUsage(parsed){
+  const vlans=(parsed.vlans||[]).filter(v=>!v.implied);
+  const tagged={},untagged={},svi=new Set();
+  const add=(map,vid,name)=>{vid=String(vid);(map[vid]=map[vid]||new Set()).add(name);};
+  for(const i of parsed.interfaces||[]){
+    if(i.type==='svi'){const m=String(i.name||'').match(/(\d+)\s*$/);if(m)svi.add(m[1]);continue;}
+    if(i.type==='null'||i.type==='loopback')continue;
+    const nm=i.name;
+    if(i.mode==='trunk'){
+      if(i.vlans==='all')vlans.forEach(v=>add(tagged,v.id,nm));
+      else _expandVidList(i.vlans).forEach(v=>add(tagged,v,nm));
+      if(i.nativeVlan)add(untagged,i.nativeVlan,nm);
+    }else if(i.mode==='access'){
+      const vid=i.nativeVlan||_expandVidList(i.vlans)[0];
+      if(vid)add(untagged,vid,nm);
+    }else if(i.mode==='hybrid'&&i.hybrid){
+      (i.hybrid.tagged||[]).forEach(v=>add(tagged,v,nm));
+      (i.hybrid.untagged||[]).forEach(v=>add(untagged,v,nm));
+      if(i.hybrid.pvid)add(untagged,i.hybrid.pvid,nm);
+    }else if(i.vlans){
+      _expandVidList(i.vlans).forEach(v=>add(tagged,v,nm));
+    }
+  }
+  return vlans.map(v=>{
+    const vid=String(v.id);
+    const accessCount=untagged[vid]?untagged[vid].size:0;
+    const taggedCount=tagged[vid]?tagged[vid].size:0;
+    const hasSvi=svi.has(vid);
+    return {id:v.id,name:v.name||'',accessCount,taggedCount,hasSvi,unused:!accessCount&&!taggedCount&&!hasSvi};
+  });
+}
+
+// ── 稽核結果匯出：SARIF／Markdown（2026-09-24 新增）──────────────────────
+// SARIF 2.1.0 結構比照 firewall_analyzer buildSarifAuditReport()（同一 schema／level 對應：
+// high→error、medium→warning、low→note），只輸出有命中（value>0）的檢查項目
+function buildSwitchSarifReport(parsed){
+  const LEVEL={high:'error',medium:'warning',low:'note'};
+  const results=analyzeSwitchAudit(parsed).filter(f=>f.value>0).map(f=>({
+    ruleId:'switch-audit-'+f.id,
+    level:LEVEL[f.risk]||'note',
+    message:{text:`${f.check}: ${f.detail}`},
+    properties:{count:f.value,risk:f.risk,standards:f.standards||[]},
+  }));
+  return {
+    '$schema':'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json',
+    version:'2.1.0',
+    runs:[{
+      tool:{driver:{name:'switch_analyzer',informationUri:'https://github.com/s200070221/alpaca-network-toolkit',version:'1.0.0',rules:[]}},
+      results,
+    }],
+  };
+}
+// Markdown 表格儲存格跳脫：| 會破壞欄位切割、換行會破壞整列，其餘字元原樣保留
+function _mdCell(v){return String(v==null?'':v).replace(/\\/g,'\\\\').replace(/\|/g,'\\|').replace(/\r?\n/g,' ');}
+function buildSwitchAuditMarkdown(parsed){
+  const findings=analyzeSwitchAudit(parsed);
+  const health=computeSwitchHealth(parsed);
+  const riskLabel={high:tr('audit.risk_high'),medium:tr('audit.risk_mid'),low:tr('audit.risk_low')};
+  const host=(parsed.sys&&parsed.sys.hostname)||'-';
+  const lines=[
+    `# ${tr('audit.sw_title')} — ${host}`,
+    '',
+    `- ${tr('md.vendor')}: ${parsed.vendor||'-'}`,
+    `- ${tr('md.generated')}: ${new Date().toISOString()}`,
+    `- ${tr('md.health')}: ${health.score} (${health.grade})`,
+    `- ${tr('audit.sum_high')}: ${findings.filter(f=>f.risk==='high'&&f.value>0).length} / ${tr('audit.sum_medium')}: ${findings.filter(f=>f.risk==='medium'&&f.value>0).length}`,
+    '',
+    `| ${tr('audit.col_check')} | ${tr('audit.col_result')} | ${tr('audit.col_risk')} | ${tr('audit.col_detail')} | ${tr('audit.col_standards')} |`,
+    '|---|---|---|---|---|',
+  ];
+  findings.forEach(f=>lines.push(`| ${_mdCell(f.check)} | ${f.value} | ${_mdCell(riskLabel[f.risk]||f.risk)} | ${_mdCell(f.detail)} | ${_mdCell((f.standards||[]).join('; '))} |`));
+  lines.push('',`> ${tr('audit.standards_disclaimer')}`,'');
+  return lines.join('\n');
+}
