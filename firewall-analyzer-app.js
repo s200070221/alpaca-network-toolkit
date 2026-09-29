@@ -131,6 +131,86 @@ const App = (() => {
     $(chipMap[v]).style.display='flex';
     updBtn();
   }
+  // ── FortiGate 清理指令卡片（2026-09-29 新增，第六輪 WJ）──────────────────
+  // 指令組裝在 firewall-analyzer-audit.js 的 buildFortiGateCleanupScript()（純函式）；只在單一
+  // FortiGate 設定時顯示（多廠牌合併分析時物件沒有來源廠牌標記，無法只挑 FortiGate 的項目）。
+  // 勾選變更只重算文字框，不重繪整個稽核頁
+  const _fwCleanupOpts = { disabled: true, unused: true, shadowed: false };
+  function _fwCleanupSummary(r) {
+    return tr('cleanup.summary').replace('{pol}', r.counts.disabled + r.counts.shadowed).replace('{dis}', r.counts.disabled)
+      .replace('{sh}', r.counts.shadowed).replace('{addr}', r.counts.addresses).replace('{svc}', r.counts.services);
+  }
+  function _fwCleanupCardHtml() {
+    const r = buildFortiGateCleanupScript(PARSED, _fwCleanupOpts);
+    const cb = (k, key) => `<label style="display:inline-flex;gap:4px;align-items:center;font-size:12px;margin-right:14px"><input type="checkbox" ${_fwCleanupOpts[k] ? 'checked' : ''} onchange="window._fwCleanupToggle('${k}',this.checked)">${esc(tr(key))}</label>`;
+    return `<div id="cleanup-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px">🧹 ${esc(tr('cleanup.title'))}</div>
+      <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--yellow)">${esc(tr('cleanup.hint'))}</div>
+      <div style="margin-bottom:6px">${cb('disabled', 'cleanup.opt_disabled')}${cb('unused', 'cleanup.opt_unused')}${cb('shadowed', 'cleanup.opt_shadowed')}</div>
+      <div id="cleanup-summary" style="font-size:12px;margin-bottom:6px">${esc(r.total ? _fwCleanupSummary(r) : tr('cleanup.none'))}</div>
+      <textarea id="cleanup-text" readonly aria-label="${esc(tr('cleanup.title'))}" style="width:100%;height:180px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${esc(r.text)}</textarea>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn btn-ghost btn-sm" onclick="window._fwCleanupCopy(this)">${esc(tr('cleanup.copy_btn'))}</button>
+        <button class="btn btn-ghost btn-sm" onclick="window._fwCleanupDownload()">${esc(tr('cleanup.download_btn'))}</button>
+      </div>
+    </div>`;
+  }
+  function _fwCleanupToggle(k, v) {
+    _fwCleanupOpts[k] = !!v;
+    const r = buildFortiGateCleanupScript(PARSED, _fwCleanupOpts);
+    const ta = document.getElementById('cleanup-text'), sm = document.getElementById('cleanup-summary');
+    if (ta) ta.value = r.text;
+    if (sm) sm.textContent = r.total ? _fwCleanupSummary(r) : tr('cleanup.none');
+  }
+  function _fwCleanupCopy(btn) {
+    const ta = document.getElementById('cleanup-text');
+    if (!ta || !ta.value) return;
+    const done = () => { const o = btn.textContent; btn.textContent = tr('cleanup.copied'); setTimeout(() => { btn.textContent = o; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(ta.value).then(done, () => { ta.select(); document.execCommand('copy'); done(); });
+    else { ta.select(); document.execCommand('copy'); done(); }
+  }
+  function _fwCleanupDownload() {
+    const ta = document.getElementById('cleanup-text');
+    if (!ta || !ta.value) return;
+    const host = (PARSED.deviceInfo && PARSED.deviceInfo.hostname && PARSED.deviceInfo.hostname !== '-') ? PARSED.deviceInfo.hostname : 'fortigate';
+    const b = new Blob([ta.value], { type: 'text/plain;charset=utf-8' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = host.replace(/[^\w.\-]/g, '_') + '_cleanup.txt'; a.click(); URL.revokeObjectURL(a.href);
+  }
+  window._fwCleanupToggle = _fwCleanupToggle;
+  window._fwCleanupCopy = _fwCleanupCopy;
+  window._fwCleanupDownload = _fwCleanupDownload;
+  // ── 開通需求檢查（FortiGate，2026-09-29 新增，第六輪 WI）──────────────────
+  window._runAllowCheck = function() {
+    const el = $('req-result'); if (!el || !PARSED) return;
+    const v = id => (($(id) || {}).value || '').trim();
+    const req = { src: v('req-src'), dst: v('req-dst'), proto: v('req-proto') || 'tcp', port: v('req-port'), srcIntf: v('req-srcintf'), dstIntf: v('req-dstintf'), vdom: v('req-vdom') };
+    const r = fgCheckRequest(PARSED, req);
+    const errKey = { invalid_ip: 'allow.err_ip', no_policy: 'allow.err_ip', ipv4_only: 'allow.err_ipv4', need_vdom: 'allow.err_vdom' };
+    if (r.error) { el.innerHTML = `<div style="color:var(--red)">${esc(tr(errKey[r.error] || 'allow.err_ip'))}</div>`; return; }
+    const g = x => x ? ' ' + tr('allow.guessed') : '';
+    const intfLine = tr('allow.intf_used').replace('{src}', (r.srcIntf || '?') + g(r.guessedSrc && r.srcIntf)).replace('{dst}', (r.dstIntf || '?') + g(r.guessedDst && r.dstIntf));
+    const p = r.res.matched;
+    let status, color;
+    if (r.res.action === 'accept') { status = tr('allow.result_allowed').replace('{id}', p.id).replace('{name}', p.name || ''); color = 'var(--green)'; }
+    else if (p) { status = tr('allow.result_blocked').replace('{id}', p.id).replace('{name}', p.name || ''); color = 'var(--red)'; }
+    else { status = tr('allow.result_implicit'); color = 'var(--orange)'; }
+    let h = `<div style="padding:10px 14px;border-radius:8px;border:1px solid ${color};background:var(--bg2);font-size:13px"><b style="color:${color}">${esc(status)}</b><div style="font-size:12px;color:var(--text-dim);margin-top:4px">${esc(intfLine)}</div></div>`;
+    const c = r.cmd;
+    if (c && c.error) h += `<div style="color:var(--red);margin-top:8px">${esc(tr(errKey[c.error] || 'allow.err_ip'))}</div>`;
+    else if (c) {
+      if (c.warnings.includes('intf')) h += `<div style="font-size:12px;color:var(--orange);margin-top:8px">${esc(tr('allow.warn_intf'))}</div>`;
+      h += `<div style="font-size:12px;margin-top:8px">${esc(tr('allow.new_objs').replace('{addr}', c.newAddrs).replace('{svc}', c.newSvcs))}</div>
+        <textarea id="req-cmd" readonly aria-label="${esc(tr('allow.title'))}" style="width:100%;height:220px;box-sizing:border-box;margin-top:6px;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${esc(c.text)}</textarea>
+        <div style="display:flex;gap:8px;margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="window._copyTextarea('req-cmd',this)">${esc(tr('cleanup.copy_btn'))}</button></div>`;
+    }
+    el.innerHTML = h;
+  };
+  window._copyTextarea = function(id, btn) {
+    const ta = document.getElementById(id); if (!ta || !ta.value) return;
+    const done = () => { const o = btn.textContent; btn.textContent = tr('cleanup.copied'); setTimeout(() => { btn.textContent = o; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(ta.value).then(done, () => { ta.select(); document.execCommand('copy'); done(); });
+    else { ta.select(); document.execCommand('copy'); done(); }
+  };
   window.pickFile=pickFile;
 
   function clearFile(e,v){
@@ -1177,6 +1257,7 @@ function onParsed(){
           _zoneHtml = _zTgl + (window._fwZoneView==='topo' ? buildZoneTopoHtml(PARSED.policies) : _zoneHtml);
         }
         $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules())
+          + (PARSED.vendor === 'FortiGate' ? _fwCleanupCardHtml() : '')
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
               <div id="health-result" style="margin-top:12px"></div>
@@ -1204,7 +1285,7 @@ function onParsed(){
           return;
         }
         const _qvdoms = [...new Set((PARSED.policies||[]).map(p=>p._vdom).filter(Boolean))];
-        $('tbl-wrap').innerHTML = buildQuerySectionHtml(_qvdoms);
+        $('tbl-wrap').innerHTML = buildQuerySectionHtml(_qvdoms, PARSED.vendor === 'FortiGate');
         $('tbl-section-label').textContent = tr('nav.query');
         if (_sv.src) { const _e=$('q-src'); if(_e) _e.value=_sv.src; }
         if (_sv.dst) { const _e=$('q-dst'); if(_e) _e.value=_sv.dst; }

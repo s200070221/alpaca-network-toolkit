@@ -1440,3 +1440,179 @@
     L.push('', `> ${tr('audit.standards_disclaimer')}`, '');
     return L.join('\n');
   }
+
+  // ── FortiGate 清理指令產生（2026-09-29 新增，第六輪 WJ）──────────────────
+  // 把既有稽核找到的「停用規則／未使用物件／被上方 accept 規則完全涵蓋的規則」轉成可檢視後
+  // 貼上執行的 FortiOS CLI 刪除指令（config <表格> → delete <項目> → end）。僅 FortiGate：
+  // 表格名稱依 parser 的 category 對應（address／addrgrp／address6／addrgrp6、service custom／
+  // group、policy／policy6〔id 帶 v6/ 前綴〕）；其他 category 不產生指令。
+  // 順序：先刪規則（規則會引用物件），再刪群組、最後刪單一物件；同為未使用的巢狀群組，先刪
+  // 引用別人的外層群組，避免「仍被群組引用」而刪除失敗。
+  // 多 VDOM 時以 config vdom → edit <vdom> … next → end 包起來。遮蔽規則在各 VDOM 內各自分析
+  // （規則編號只在 VDOM 內唯一）。
+  const _FG_ADDR_TABLE = { 'address': 'firewall address', 'address-group': 'firewall addrgrp', 'address6': 'firewall address6', 'address-group6': 'firewall addrgrp6' };
+  const _FG_SVC_TABLE = { 'custom': 'firewall service custom', 'group': 'firewall service group' };
+  function _fgQuote(n) { return '"' + String(n).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; }
+  // 群組刪除順序：還被其他「待刪群組」引用的群組放後面
+  function _fgGroupOrder(groups) {
+    const left = groups.slice(), out = [];
+    while (left.length) {
+      let idx = left.findIndex(g => !left.some(o => o !== g && String(o.members || '').split(/,\s*/).map(s => s.trim()).includes(g.name)));
+      if (idx < 0) idx = 0; // 循環引用（畸形資料）時照原順序，避免無窮迴圈
+      out.push(left.splice(idx, 1)[0]);
+    }
+    return out;
+  }
+  function buildFortiGateCleanupScript(parsed, opts) {
+    const o = Object.assign({ disabled: true, unused: true, shadowed: false }, opts || {});
+    const pols = parsed.policies || [];
+    const vdoms = [...new Set([...pols, ...(parsed.addresses || []), ...(parsed.services || [])].map(x => x._vdom || ''))];
+    // 只有真正的多 VDOM 設定才包 config vdom（單一 VDOM 的 FortiGate 沒有此指令；parser 對單一 VDOM 也會把 _vdom 設為 root）
+    const multi = !!(parsed.deviceInfo && parsed.deviceInfo.isMultiVdom);
+    const counts = { disabled: 0, shadowed: 0, addresses: 0, services: 0 };
+    const un = o.unused ? analyzeUnusedObjects(parsed) : { unusedAddrs: [], unusedSvcs: [] };
+    const body = [];
+    for (const vd of vdoms.sort()) {
+      const blk = [];
+      const table = (name, lines) => { if (lines.length) blk.push('config ' + name, ...lines.map(l => '    ' + l), 'end'); };
+      const vp = pols.filter(p => (p._vdom || '') === vd);
+      const delPol = new Map(); // id → 原因
+      if (o.disabled) vp.filter(p => _isDisabledStatus(p)).forEach(p => { delPol.set(p.id, 'disabled'); });
+      if (o.shadowed) analyzeRuleShadowing(vp).forEach(r => { if (!delPol.has(r.shadowedId)) delPol.set(r.shadowedId, 'shadowed'); });
+      const v4 = [], v6 = [];
+      delPol.forEach((why, id) => {
+        counts[why]++;
+        const s = String(id);
+        (s.startsWith('v6/') ? v6 : v4).push('delete ' + s.replace(/^v6\//, ''));
+      });
+      table('firewall policy', v4);
+      table('firewall policy6', v6);
+      const addrs = un.unusedAddrs.filter(a => (a._vdom || '') === vd && _FG_ADDR_TABLE[a.category]);
+      const svcs = un.unusedSvcs.filter(s => (s._vdom || '') === vd && _FG_SVC_TABLE[s.category]);
+      counts.addresses += addrs.length; counts.services += svcs.length;
+      ['address-group', 'address-group6'].forEach(c => table(_FG_ADDR_TABLE[c], _fgGroupOrder(addrs.filter(a => a.category === c)).map(a => 'delete ' + _fgQuote(a.name))));
+      table(_FG_SVC_TABLE.group, _fgGroupOrder(svcs.filter(s => s.category === 'group')).map(s => 'delete ' + _fgQuote(s.name)));
+      ['address', 'address6'].forEach(c => table(_FG_ADDR_TABLE[c], addrs.filter(a => a.category === c).map(a => 'delete ' + _fgQuote(a.name))));
+      table(_FG_SVC_TABLE.custom, svcs.filter(s => s.category === 'custom').map(s => 'delete ' + _fgQuote(s.name)));
+      if (!blk.length) continue;
+      if (multi) body.push('edit ' + (vd || 'root'), ...blk, 'next');
+      else body.push(...blk);
+    }
+    if (multi && body.length) { body.unshift('config vdom'); body.push('end'); }
+    const total = counts.disabled + counts.shadowed + counts.addresses + counts.services;
+    const head = String(tr('cleanup.script_header')).split('\n').map(l => '# ' + l);
+    return { text: total ? [...head, '', ...body, ''].join('\n') : '', counts, total };
+  }
+
+  // ── FortiGate 開通指令產生（2026-09-29 新增，第六輪 WI）──────────────────
+  // 在既有「IP/Policy 查詢」判定為未放行（明確 deny 或 implicit deny）時，產生新增放行規則的
+  // FortiOS CLI：沿用同 VDOM 內已存在的主機位址物件（/32）與單一埠服務物件，沒有才新增；新規則
+  // 編號取該 VDOM 現有最大編號 +1（明確指定編號，才能接著用 move 調整位置）；若被明確 deny 規則
+  // 擋住，加上 move <新編號> before <deny 規則編號>，implicit deny 則不需移動。
+  // 範圍：僅 IPv4（FortiOS 6.x 的 policy6 與 7.x 合併表格語法不同，不猜測）；不設定 NAT。
+  function _fgIp4(s) { const p = String(s || '').trim().split('.'); if (p.length !== 4 || p.some(x => !/^\d{1,3}$/.test(x) || +x > 255)) return null; return p.reduce((a, b) => (a * 256) + (+b), 0); }
+  function _fgMaskLen(m) {
+    const t = String(m || '').trim();
+    if (/^\d{1,2}$/.test(t)) return +t;
+    const n = _fgIp4(t); if (n === null) return null;
+    let len = 0; for (let b = 31; b >= 0; b--) { if (Math.floor(n / 2 ** b) % 2) len++; else break; }
+    return len;
+  }
+  function _fgInNet(ip, net, len) { if (ip === null || net === null || len === null) return false; const size = 2 ** (32 - len); return Math.floor(ip / size) === Math.floor(net / size); }
+  // 推測介面：先找直連網段（介面 IP／遮罩或次要 IP 涵蓋此位址），再找最長前綴的靜態路由出口介面
+  function fgGuessInterface(parsed, ip, vdom) {
+    const t = _fgIp4(ip); if (t === null) return '';
+    const inVd = x => !vdom || !x._vdom || x._vdom === vdom;
+    for (const i of (parsed.interfaces || []).filter(inVd)) {
+      const cands = [{ ip: i.ip, mask: i.mask }, ...((i.secondaryIps || []))];
+      if (cands.some(c => _fgInNet(t, _fgIp4(c.ip), _fgMaskLen(c.mask)))) return i.name;
+    }
+    let best = null, bestLen = -1;
+    for (const r of (parsed.routes || []).filter(inVd)) {
+      if (r.type !== 'static' || !r.device || r.device === '-') continue;
+      const parts = String(r.dst || '').trim().split(/\s*\/\s*|\s+/);
+      const len = parts[1] === undefined ? 32 : _fgMaskLen(parts[1]);
+      if (_fgInNet(t, _fgIp4(parts[0]), len) && len > bestLen) { best = r; bestLen = len; }
+    }
+    return best ? best.device : '';
+  }
+  function buildFortiGateAllowCommand(parsed, req, queryRes) {
+    const warnings = [];
+    const src = String(req.src || '').trim(), dst = String(req.dst || '').trim();
+    if (_fgIp4(src) === null || _fgIp4(dst) === null) return { error: 'ipv4_only' };
+    if (queryRes && queryRes.action === 'accept') return { error: 'already_allowed' };
+    const multi = !!(parsed.deviceInfo && parsed.deviceInfo.isMultiVdom);
+    let vd = req.vdom && req.vdom !== '__all__' ? req.vdom : '';
+    if (multi && !vd) return { error: 'need_vdom' };
+    if (!vd) vd = (parsed.policies || [])[0]?._vdom || 'root';
+    const inVd = x => (x._vdom || 'root') === vd;
+    const addrs = (parsed.addresses || []).filter(inVd), svcs = (parsed.services || []).filter(inVd);
+    const newObjs = { addr: [], svc: [] };
+    const hostObj = ip => {
+      const hit = addrs.find(a => a.category === 'address' && (a.type === 'ipmask' || !a.type) && (() => { const [n, m] = String(a.subnet || '').split(/\s*\/\s*|\s+/); return n === ip && _fgMaskLen(m) === 32; })());
+      if (hit) return hit.name;
+      let name = 'H_' + ip;
+      if (addrs.some(a => a.name === name) || newObjs.addr.some(a => a.name === name)) name += '_REQ';
+      if (!newObjs.addr.some(a => a.name === name)) newObjs.addr.push({ name, ip });
+      return name;
+    };
+    const srcName = hostObj(src), dstName = hostObj(dst);
+    const proto = String(req.proto || 'any').toLowerCase(), port = String(req.port || '').trim();
+    let svcName;
+    if (proto === 'any' || proto === '') svcName = 'ALL';
+    else if (proto === 'icmp') svcName = 'ALL_ICMP';
+    else if (!port) svcName = proto === 'tcp' ? 'ALL_TCP' : 'ALL_UDP';
+    else {
+      const key = proto === 'tcp' ? 'tcpPorts' : 'udpPorts', other = proto === 'tcp' ? 'udpPorts' : 'tcpPorts';
+      const hit = svcs.find(s => s.category === 'custom' && String(s[key] || '').trim() === port && (!s[other] || s[other] === '-'));
+      if (hit) svcName = hit.name;
+      else {
+        svcName = proto.toUpperCase() + '_' + port;
+        if (svcs.some(s => s.name === svcName)) svcName += '_REQ';
+        newObjs.svc.push({ name: svcName, key: proto + '-portrange', port });
+      }
+    }
+    const nums = (parsed.policies || []).filter(inVd).filter(p => /^\d+$/.test(String(p.id))).map(p => parseInt(p.id, 10));
+    const newId = (nums.length ? Math.max(...nums) : 0) + 1;
+    const blocker = queryRes && queryRes.action === 'deny' && queryRes.matched && /^\d+$/.test(String(queryRes.matched.id)) ? queryRes.matched : null;
+    const srcIntf = String(req.srcIntf || '').trim(), dstIntf = String(req.dstIntf || '').trim();
+    if (!srcIntf || !dstIntf) warnings.push('intf');
+    if (blocker) warnings.push('blocked');
+    const q = _fgQuote;
+    const body = [];
+    if (newObjs.addr.length) body.push('config firewall address', ...newObjs.addr.flatMap(a => ['    edit ' + q(a.name), '        set subnet ' + a.ip + ' 255.255.255.255', '    next']), 'end');
+    if (newObjs.svc.length) body.push('config firewall service custom', ...newObjs.svc.flatMap(s => ['    edit ' + q(s.name), '        set ' + s.key + ' ' + s.port, '    next']), 'end');
+    const name = String(req.name || ('REQ_' + dst + (port ? '_' + port : ''))).slice(0, 35);
+    body.push('config firewall policy', '    edit ' + newId,
+      '        set name ' + q(name),
+      '        set srcintf ' + q(srcIntf || 'CHANGE_ME'), '        set dstintf ' + q(dstIntf || 'CHANGE_ME'),
+      '        set srcaddr ' + q(srcName), '        set dstaddr ' + q(dstName),
+      '        set action accept', '        set schedule "always"', '        set service ' + q(svcName), '        set logtraffic all',
+      '    next');
+    if (blocker) body.push('    move ' + newId + ' before ' + blocker.id);
+    body.push('end');
+    const wrapped = multi ? ['config vdom', 'edit ' + vd, ...body, 'next', 'end'] : body;
+    const head = String(tr('allow.script_header')).replace('{req}', `${src} → ${dst} ${proto.toUpperCase()}${port ? '/' + port : ''}`).split('\n').map(l => '# ' + l);
+    return { text: [...head, '', ...wrapped, ''].join('\n'), newId, blockerId: blocker ? blocker.id : null, newAddrs: newObjs.addr.length, newSvcs: newObjs.svc.length, warnings, vdom: vd };
+  }
+  // 開通需求檢查：既有 IP/Policy 查詢只比對位址與服務、不看介面；FortiGate 規則是先依來源／目的
+  // 介面篩選，只看位址會把「別的介面方向」的 all→all 規則誤當成已放行。這裡先推測（或使用者
+  // 指定）來源／目的介面，只保留介面相符（含 any、未解析 -）的規則後，再交給既有 _runPolicyQuery()。
+  // 介面屬於 zone／SD-WAN 時規則寫的是 zone 名稱，推測不到，需使用者直接填入規則使用的名稱。
+  function _fgIntfMatch(list, name) {
+    if (!name) return true;
+    const items = String(list || '-').split(/\s*,\s*/).map(s => s.trim().toLowerCase());
+    return items.some(s => s === 'any' || s === '-' || s === name.toLowerCase());
+  }
+  function fgCheckRequest(parsed, req) {
+    const multi = !!(parsed.deviceInfo && parsed.deviceInfo.isMultiVdom);
+    const vd = req.vdom && req.vdom !== '__all__' ? req.vdom : '';
+    const guessedSrc = !String(req.srcIntf || '').trim(), guessedDst = !String(req.dstIntf || '').trim();
+    const srcIntf = guessedSrc ? fgGuessInterface(parsed, req.src, vd) : String(req.srcIntf).trim();
+    const dstIntf = guessedDst ? fgGuessInterface(parsed, req.dst, vd) : String(req.dstIntf).trim();
+    const filtered = Object.assign({}, parsed, { policies: (parsed.policies || []).filter(p => _fgIntfMatch(p.srcIntf, srcIntf) && _fgIntfMatch(p.dstIntf, dstIntf)) });
+    const res = _runPolicyQuery(String(req.src || '').trim(), String(req.dst || '').trim(), req.proto || 'any', req.port || '', vd || '__all__', filtered);
+    if (!res || res.error) return { error: res ? res.error : 'no_policy' };
+    const cmd = res.action === 'accept' ? null : buildFortiGateAllowCommand(parsed, Object.assign({}, req, { srcIntf, dstIntf, vdom: vd || (multi ? '' : req.vdom) }), res);
+    return { res, srcIntf, dstIntf, guessedSrc, guessedDst, cmd };
+  }

@@ -3073,6 +3073,40 @@ function toggleImportDiff(){
   box.style.display='block';
 }
 
+// 增量指令（2026-09-29 新增，第六輪 WE）：匯入完成當下把表單內容存成快照，之後與目前表單比較，
+// 只輸出差異指令（buildIncrementalCommands() 在 switch-generator-core.js）。僅 Cisco IOS-XE 與
+// Comware；按鈕在匯入後顯示，再按一次收合
+let _importedModel=null;
+function snapshotImportedModel(){
+  try{_importedModel=JSON.parse(JSON.stringify(collectModel()));}catch(e){_importedModel=null;}
+  const b=document.getElementById('delta-btn');
+  if(b)b.style.display=_importedModel?'':'none';
+}
+function toggleDeltaCommands(){
+  const box=document.getElementById('delta-result');
+  if(!box)return;
+  if(box.style.display==='block'){box.style.display='none';return;}
+  const model=collectModel();
+  let html;
+  if(!_importedModel)html=`<div>${escapeHtml(tr('delta.need_import'))}</div>`;
+  else if(model.vendor!=='cisco'&&model.vendor!=='comware')html=`<div>${escapeHtml(tr('delta.vendor_only'))}</div>`;
+  else if(_importedModel.vendor!==model.vendor)html=`<div>${escapeHtml(tr('delta.vendor_changed'))}</div>`;
+  else{
+    const r=buildIncrementalCommands(_importedModel,model,model.vendor);
+    html=`<div style="font-weight:600;margin-bottom:6px">${escapeHtml(tr('delta.title'))}</div><div style="margin-bottom:6px;color:var(--text-dim);font-family:inherit">${escapeHtml(tr('delta.hint'))}</div>`
+      +(r.text?`<textarea id="delta-text" readonly aria-label="${escapeHtml(tr('delta.title'))}" style="width:100%;height:220px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${escapeHtml(r.text)}</textarea>
+        <button class="act-btn" style="margin-top:6px" onclick="copyDeltaCommands(this)">${escapeHtml(tr('delta.copy'))}</button>`:`<div>${escapeHtml(tr('delta.none'))}</div>`);
+  }
+  box.innerHTML=html;
+  box.style.display='block';
+}
+function copyDeltaCommands(btn){
+  const ta=document.getElementById('delta-text');if(!ta)return;
+  const done=()=>{const o=btn.textContent;btn.textContent=tr('delta.copied');setTimeout(()=>{btn.textContent=o;},1500);};
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(ta.value).then(done,()=>{ta.select();document.execCommand('copy');done();});
+  else{ta.select();document.execCommand('copy');done();}
+}
+
 // ── 彩蛋：主機名稱關鍵字 + 深夜/計時提醒（借鑑自 switch_analyzer checkSwitchEggs）───
 function checkGeneratorEggs(hostname){
   const h=(hostname||'').toLowerCase();
@@ -3327,6 +3361,7 @@ async function parseAndImport(){
   }
 
   applyParsedConfigToForm(parsed,fns,text,vendor,genVendor);
+  snapshotImportedModel();
   // 解析結果過少（介面與已宣告 VLAN 皆 0，門檻比照 switch_analyzer switchReportTrigger()）
   if(importLooksSparse(parsed)){
     showImportMsg(tr('msg.importSparse'),true);
@@ -5026,6 +5061,7 @@ function _focusRemediationField(findingId){
     if (fnameEl2 && swModel.name) fnameEl2.textContent = swModel.name;
     window._cwHandoffImported = true;
     applyParsedConfigToForm(p, buildAnalyzerFnsAdapter(p), '', v, gv);
+    snapshotImportedModel();
     if (swModel.focusFindingId) _focusRemediationField(swModel.focusFindingId);
     return;
   }

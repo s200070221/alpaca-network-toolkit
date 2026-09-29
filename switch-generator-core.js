@@ -295,3 +295,90 @@ function withSviInterfaces(model){
   return {...model, interfaces:[...(model.interfaces||[]), ...svis]};
 }
 
+
+// ── 增量指令（2026-09-29 新增，第六輪 WE）──────────────────────────────────
+// 匯入既有設定檔後在表單上修改，只輸出「要下的差異指令」，不是整份設定。
+// 範圍：VLAN（新增／刪除／改名／SVI IPv4 位址）、介面（描述、access／trunk 模式、access VLAN、
+// trunk 允許清單、native VLAN、shutdown）、靜態路由（新增／刪除），Cisco IOS-XE 與 Comware 兩家。
+// hybrid、IPv6 SVI 與其餘欄位列在 unsupported（以註解輸出），請手動處理。
+// 語法沿用本工具既有 render 函式：Cisco `switchport …`／`no …`、Comware `port …`／`undo …`；
+// Comware trunk 允許清單是累加式（port trunk permit vlan 只會增加），改清單時先
+// `undo port trunk permit vlan all` 再重新 permit，讓結果與表單一致。
+function _deltaKey(s){return String(s||'').trim().toLowerCase();}
+function _deltaVlanList(s){return String(s||'').trim().split(/[,\s]+/).filter(Boolean);}
+function buildIncrementalCommands(oldModel,newModel,vendor){
+  const isCw=vendor==='comware';
+  const C=isCw?'#':'!';
+  const NO=isCw?'undo ':'no ';
+  const EXIT=isCw?' quit':' exit';
+  const sviName=id=>isCw?`Vlan-interface${id}`:`Vlan${id}`;
+  const out=[], unsupported=[];
+  const counts={vlanAdd:0,vlanDel:0,vlanMod:0,ifaceMod:0,routeAdd:0,routeDel:0};
+  const block=(head,lines)=>{ if(lines.length) out.push(head,...lines,EXIT); };
+  const ipLine=cidr=>{ const [ip,len]=cidr.split('/'); return ` ip address ${ip} ${maskFromCidr(len||'32')}`; };
+  // VLAN
+  const oV=new Map((oldModel.vlans||[]).map(v=>[String(v.id),v])), nV=new Map((newModel.vlans||[]).map(v=>[String(v.id),v]));
+  nV.forEach((v,id)=>{
+    const o=oV.get(id);
+    if(!o){ counts.vlanAdd++; out.push(`vlan ${id}`,...(v.name?[` name ${v.name}`]:[]),EXIT); }
+    else if((o.name||'')!==(v.name||'')){ counts.vlanMod++; block(`vlan ${id}`,[v.name?` name ${v.name}`:` ${NO}name`]); }
+    const oip=(o&&o.ip)||'', nip=v.ip||'';
+    if(oip!==nip){
+      if(nip.includes(':')||oip.includes(':')){ unsupported.push(`${sviName(id)}: IPv6`); return; }
+      if(o)counts.vlanMod++;
+      block(`interface ${sviName(id)}`,[nip?ipLine(nip):` ${NO}ip address`]);
+    }
+  });
+  oV.forEach((o,id)=>{ if(!nV.has(id)){ counts.vlanDel++; if(o.ip)out.push(`${NO}interface ${sviName(id)}`); out.push(`${NO}vlan ${id}`); } });
+  // 介面
+  const oI=new Map((oldModel.interfaces||[]).map(i=>[_deltaKey(i.name),i]));
+  const nKeys=new Set();
+  (newModel.interfaces||[]).forEach(n=>{
+    const k=_deltaKey(n.name); nKeys.add(k);
+    const o=oI.get(k)||{mode:'',desc:'',accessVlan:'',trunkVlans:'',nativeVlan:'',shutdown:false};
+    const L=[];
+    if((o.desc||'')!==(n.desc||''))L.push(n.desc?` description ${n.desc}`:` ${NO}description`);
+    const om=o.mode||'', nm=n.mode||'';
+    if(om==='hybrid'||nm==='hybrid'||(nm&&!['access','trunk'].includes(nm))||(om&&nm!==om&&!['access','trunk'].includes(om))){
+      if(om!==nm||JSON.stringify(o.hybrid||{})!==JSON.stringify(n.hybrid||{}))unsupported.push(`${n.name}: ${om||'-'} → ${nm||'-'}`);
+    }else if(nm==='access'){
+      if(om!=='access'){
+        L.push(isCw?' port link-type access':' switchport mode access');
+        if(!isCw&&om==='trunk'){ if(o.trunkVlans)L.push(' no switchport trunk allowed vlan'); if(o.nativeVlan)L.push(' no switchport trunk native vlan'); }
+      }
+      if((o.accessVlan||'')!==(n.accessVlan||'')||om!=='access'){
+        if(n.accessVlan)L.push(isCw?` port access vlan ${n.accessVlan}`:` switchport access vlan ${n.accessVlan}`);
+        else if(om==='access'&&o.accessVlan)L.push(isCw?' undo port access vlan':' no switchport access vlan');
+      }
+    }else if(nm==='trunk'){
+      if(om!=='trunk'){
+        L.push(isCw?' port link-type trunk':' switchport mode trunk');
+        if(!isCw&&om==='access'&&o.accessVlan)L.push(' no switchport access vlan');
+      }
+      const ol=_deltaVlanList(om==='trunk'?o.trunkVlans:''), nl=_deltaVlanList(n.trunkVlans);
+      if(ol.join(' ')!==nl.join(' ')){
+        if(isCw){ if(om==='trunk')L.push(' undo port trunk permit vlan all'); if(nl.length)L.push(` port trunk permit vlan ${nl.join(' ')}`); }
+        else L.push(nl.length?` switchport trunk allowed vlan ${nl.join(',')}`:' no switchport trunk allowed vlan');
+      }
+      const on=om==='trunk'?(o.nativeVlan||''):'', nn=n.nativeVlan||'';
+      if(on!==nn)L.push(nn?(isCw?` port trunk pvid vlan ${nn}`:` switchport trunk native vlan ${nn}`):(isCw?' undo port trunk pvid':' no switchport trunk native vlan'));
+    }else if(om==='access'||om==='trunk'){
+      unsupported.push(`${n.name}: ${om} → -`);
+    }
+    if(!!o.shutdown!==!!n.shutdown)L.push(n.shutdown?' shutdown':` ${NO}shutdown`);
+    if(L.length){ counts.ifaceMod++; block(`interface ${n.name}`,L); }
+  });
+  oI.forEach((o,k)=>{ if(!nKeys.has(k))unsupported.push(`${o.name}: ${isCw?'removed from form (physical interfaces cannot be deleted)':'removed from form'}`); });
+  // 靜態路由（metric 不在 render 輸出範圍，比對只看目的與下一跳）
+  const rk=r=>_deltaKey(r.dst)+'|'+_deltaKey(r.gw);
+  const render=r=>isCw?renderComwareRoute(r):renderCiscoRoute(r);
+  const oR=new Map((oldModel.routes||[]).map(r=>[rk(r),r])), nR=new Map((newModel.routes||[]).map(r=>[rk(r),r]));
+  oR.forEach((r,k)=>{ if(!nR.has(k)){ counts.routeDel++; out.push(NO+render(r)); } });
+  nR.forEach((r,k)=>{ if(!oR.has(k)){ counts.routeAdd++; out.push(render(r)); } });
+  const total=Object.values(counts).reduce((a,b)=>a+b,0);
+  if(!total&&!unsupported.length)return {text:'',counts,unsupported,total};
+  const head=String(tr('delta.script_header')).split('\n').map(l=>C+' '+l);
+  const tail=unsupported.map(u=>`${C} ${tr('delta.manual')}: ${u}`);
+  const body=isCw?['system-view',...out,'return']:['configure terminal',...out,'end'];
+  return {text:[...head,...tail,'',...(out.length?body:[]),''].join('\n'),counts,unsupported,total};
+}

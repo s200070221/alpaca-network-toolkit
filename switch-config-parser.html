@@ -520,6 +520,8 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
     <div class="nav-grp-lbl" data-i18n="nav.func_group">功能</div>
     <div class="nav-item active" id="nav-upload" data-tip="載入設定" onclick="navGo('upload')"><span class="ico">📄</span><span class="nav-lbl" data-i18n="nav.upload">載入設定檔</span></div>
     <div class="nav-item" id="nav-diff" data-tip="設定比較" onclick="navGo('diff')"><span class="ico">🔄</span><span class="nav-lbl" data-i18n="nav.diff">設定比較</span></div>
+    <div class="nav-item" id="nav-endpoint" data-tip="終端定位／空 port" onclick="navGo('endpoint')"><span class="ico">📍</span><span class="nav-lbl" data-i18n="nav.endpoint">終端定位／空 port</span></div>
+    <div class="nav-item" id="nav-inventory" data-tip="多設備清冊" onclick="navGo('inventory')"><span class="ico">🗃️</span><span class="nav-lbl" data-i18n="nav.inventory">多設備清冊</span></div>
     <div class="nav-grp-lbl" id="lbl-result" data-i18n="nav.result_group" style="display:none">解析結果</div>
     <div class="nav-item" id="nav-overview" data-tip="總覽" onclick="navGo('overview')" style="display:none"><span class="ico">📊</span><span class="nav-lbl" data-i18n="nav.overview">總覽</span></div>
     <div class="nav-item" id="nav-irf" data-tip="堆疊拓撲" onclick="navGo('irf')" style="display:none"><span class="ico">🔗</span><span class="nav-lbl" id="nav-irf-lbl">堆疊拓撲</span><span class="cnt" id="nc-irf">0</span></div>
@@ -745,6 +747,8 @@ Cisco IOS/IOS-XE：hostname、switchport mode trunk、ip route..."></textarea>
 <script src="switch-analyzer-diff.js"></script>
 <script src="switch-analyzer-topology.js"></script>
 <script src="switch-analyzer-audit.js"></script>
+<script src="switch-analyzer-endpoint.js"></script>
+<script src="switch-analyzer-inventory.js"></script>
 <script src="switch-analyzer-app.js"></script>
 <div class="mini-alpaca" id="mini-alpaca" onclick="startRain(true)">
   🦙
