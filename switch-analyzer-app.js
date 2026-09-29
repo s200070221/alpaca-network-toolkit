@@ -3,6 +3,8 @@ let sortCol=null, sortDir=1; // 1=asc -1=desc
 let lldpView='table'; // 'table' | 'topo' | 'multi'
 let portView='table'; // 'table' | 'heatmap'
 let diffMode='text'; // 'text' | 'structured'
+// 終端定位／空 port 盤點（WA/WB）頁面狀態：切換分頁後回來仍保留貼上內容與查詢結果
+let epText='', epModel=null, epQuery='', epResult=null, epCat='all';
 let _multiDevices=[]; // [{hostname, lldp:[]}] for cross-device topology
 
 // ════════════════════════════════════
@@ -578,11 +580,21 @@ function resetAll(){
 }
 function renderView(view){
   const tc=document.getElementById('tab-content');
+  // 設定比較／終端定位不需要先解析設定檔；未解析前 view-result 是隱藏的，這裡切換可見性
+  // （點回「載入設定檔」時還原），已解析後維持原本行為不變
+  if(!parsed){
+    const standalone=(view==='diff'||view==='endpoint'||view==='inventory');
+    document.getElementById('view-upload').classList.toggle('show',!standalone);
+    const vr=document.getElementById('view-result');
+    vr.style.display=standalone?'flex':'none';vr.style.flexDirection='column';
+  }
   if(view==='upload'){return;}
   // 設定比較（diff）獨立於主要解析流程，不需要先上傳/解析成功才能使用，比照 nav-upload
   // 在 !parsed 判斷式之前特別處理（switch_config_generator 早就有此功能，此為移植，
   // 見 switch-generator-app.js 的 toggleDiffCard/performDiff/computeDiff）
   if(view==='diff'){tc.innerHTML=renderDiffCard();return;}
+  if(view==='endpoint'){tc.innerHTML=renderEndpointCard();return;}
+  if(view==='inventory'){tc.innerHTML=renderInventoryCard();return;}
   if(!parsed){tc.innerHTML='<div class="nodata">'+tr('msg.no_config')+'</div>';return;}
   switch(view){
     case'overview': tc.innerHTML=renderOverview();break;
@@ -3595,6 +3607,250 @@ function _setupVendorPersona() {
   });
 }
 
+// 以 FileReader 讀檔（與主上傳 readFile() 相同）：瀏覽器依 BOM 自動辨識 UTF-8／UTF-16，
+// File.text() 一律當 UTF-8 解碼，UTF-16 匯出檔會變亂碼
+function swReadText(f){
+  return new Promise(res=>{const r=new FileReader();r.onload=e=>res(String(e.target.result||''));r.onerror=()=>res('');r.readAsText(f,'UTF-8');});
+}
+
+// ── 多設備資產清冊（2026-09-29 新增，第六輪 WF） ─────────────────────────────
+// 擷取邏輯在 switch-analyzer-inventory.js（純函式），這裡只負責 UI；每份設定獨立 parseAny()，
+// 不影響目前主畫面已載入的設定（parsed）
+let invRows=[], invTexts=[], invFails=[], invParsed=[];
+function renderInventoryCard(){
+  const btn='background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;cursor:pointer';
+  const btn2='background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer';
+  let h=`<div style="padding:16px 18px;overflow-y:auto;flex:1">
+    <h2 style="margin:0 0 8px">${esc(tr('inv.title'))}</h2>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:10px">${esc(tr('inv.hint'))}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <label style="${btn}">${esc(tr('inv.add_btn'))}<input type="file" id="inv-files" multiple accept=".txt,.cfg,.conf,.log,.rsc,.json" onchange="invAddFiles(this)"></label>
+      ${invRows.length?`<button style="${btn2}" onclick="invExportCSV()">${esc(tr('inv.csv_btn'))}</button><button style="${btn2}" onclick="invRows=[];invTexts=[];invFails=[];invParsed=[];goldResult=null;navGo('inventory')">${esc(tr('inv.clear_btn'))}</button>`:''}
+    </div>`;
+  if(invFails.length)h+=`<div style="font-size:12px;color:var(--red);margin-bottom:8px">${esc(tr('inv.parse_fail').replace('{file}',invFails.join('、')))}</div>`;
+  if(!invRows.length)return h+`<div class="nodata">${esc(tr('inv.empty'))}</div></div>`;
+  const dup=invDuplicateHosts(invRows);
+  if(dup.length)h+=`<div style="font-size:12px;color:var(--yellow);margin-bottom:8px">${esc(tr('inv.dup_warn').replace('{list}',dup.join('、')))}</div>`;
+  const none=`<span style="color:var(--text-muted)">${esc(tr('inv.none_set'))}</span>`;
+  const list=a=>a.length?esc(a.join(', ')):none;
+  h+=`<div class="tbl-wrap" style="overflow-x:auto"><table class="data-tbl"><thead><tr>
+    <th>${esc(tr('inv.col_host'))}</th><th>${esc(tr('inv.col_vendor'))}</th><th>${esc(tr('inv.col_model'))}</th><th>${esc(tr('inv.col_version'))}</th>
+    <th><span data-tip="${esc(tr('inv.mgmt_tip'))}">${esc(tr('inv.col_mgmt'))}</span></th><th>NTP</th><th>Syslog</th><th>SNMP</th>
+    <th>${esc(tr('inv.col_users'))}</th><th>Telnet</th><th>VLAN</th><th>${esc(tr('inv.col_ifaces'))}</th><th>${esc(tr('inv.col_health'))}</th><th>${esc(tr('inv.col_file'))}</th><th></th></tr></thead><tbody>`+
+    invRows.map((r,i)=>{
+      const gc=r.grade==='A'||r.grade==='B'?'up':r.grade==='C'?'warn':'down';
+      const snmp=(r.snmpCommunities||r.snmpV3Users)?`<span style="white-space:nowrap">${esc(`v1/v2c ${r.snmpCommunities}｜v3 ${r.snmpV3Users}`)}</span>`:none;
+      return `<tr><td><b>${esc(r.hostname||'-')}</b></td><td>${esc(r.vendor)}</td><td>${esc(r.model||'-')}</td><td>${esc(r.version||'-')}</td>
+        <td class="mono">${esc(r.mgmtIp||'-')}</td><td>${list(r.ntp)}</td><td>${list(r.syslog)}</td><td>${snmp}</td>
+        <td>${r.users}</td><td>${r.telnet?pill('down','ON'):'-'}</td><td>${r.vlans}</td><td>${r.interfaces}</td>
+        <td>${r.score==null?'-':pill(gc,r.score+' '+r.grade)}</td><td style="font-size:11px">${esc(r.file)}</td>
+        <td><button style="${btn2};padding:2px 10px" onclick="invOpen(${i})">${esc(tr('inv.open_btn'))}</button></td></tr>`;
+    }).join('')+'</tbody></table></div>';
+  return h+renderConsistencyCard()+renderGoldenCard()+'</div>';
+}
+// 跨設備一致性（WH）：invConsistency() 在 switch-analyzer-inventory.js
+function renderConsistencyCard(){
+  let h=`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:6px">${esc(tr('wh.title'))}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('wh.hint'))}</div>`;
+  if(invRows.length<2)return h+`<div class="nodata">${esc(tr('wh.need_two'))}</div></div>`;
+  const r=invConsistency(invRows.map((row,i)=>({hostname:row.hostname||row.file,parsed:invParsed[i]})));
+  if(!r.vlanNames.length&&!r.dupIps.length&&!r.overlaps.length)return h+`<div style="font-size:12px;color:var(--green)">${esc(tr('wh.none'))}</div></div>`;
+  const sub=t=>`<div style="font-size:13px;font-weight:600;margin:10px 0 4px">${esc(t)}</div>`;
+  if(r.vlanNames.length){
+    h+=sub(tr('wh.vlan_title')+' ('+r.vlanNames.length+')')+`<table class="data-tbl"><thead><tr><th>VLAN</th><th>${esc(tr('wh.col_names'))}</th></tr></thead><tbody>`+
+      r.vlanNames.map(v=>`<tr><td>${esc(v.id)}</td><td>${v.names.map(n=>`<b>${esc(n.name)}</b>：${esc(n.hosts.join('、'))}`).join('<br>')}</td></tr>`).join('')+'</tbody></table>';
+  }
+  if(r.dupIps.length){
+    h+=sub(tr('wh.dup_title')+' ('+r.dupIps.length+')')+`<table class="data-tbl"><thead><tr><th>IP</th><th>${esc(tr('wh.col_where'))}</th></tr></thead><tbody>`+
+      r.dupIps.map(d=>`<tr><td class="mono">${esc(d.ip)}</td><td>${esc(d.where.map(w=>w.host+' '+w.iface).join('、'))}</td></tr>`).join('')+'</tbody></table>';
+  }
+  if(r.overlaps.length){
+    h+=sub(tr('wh.overlap_title')+' ('+r.overlaps.length+')')+`<table class="data-tbl"><thead><tr><th>${esc(tr('wh.col_big'))}</th><th>${esc(tr('wh.col_small'))}</th></tr></thead><tbody>`+
+      r.overlaps.map(o=>`<tr><td>${esc(o.a.host+' '+o.a.iface)} <span class="mono">${esc(o.a.cidr)}</span></td><td>${esc(o.b.host+' '+o.b.iface)} <span class="mono">${esc(o.b.cidr)}</span></td></tr>`).join('')+'</tbody></table>';
+  }
+  return h+'</div>';
+}
+// 黃金範本規則（WG）：規則文字存在 localStorage（個人便利用途，讀寫皆 try/catch，失敗不影響功能）
+// 範例規則走 i18n（gold.sample_rules），規則名稱隨語言切換
+let goldText=null, goldResult=null;
+function goldLoadText(){
+  if(goldText!==null)return goldText;
+  try{goldText=localStorage.getItem('sw_golden_rules')||'';}catch(e){goldText='';}
+  return goldText;
+}
+function renderGoldenCard(){
+  const btn='background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;cursor:pointer';
+  const btn2='background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer';
+  let h=`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:6px">${esc(tr('gold.title'))}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px;white-space:pre-line">${esc(tr('gold.hint'))}</div>
+    <textarea id="gold-rules" spellcheck="false" style="width:100%;height:110px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px" oninput="goldText=this.value">${esc(goldLoadText())}</textarea>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+      <button style="${btn}" onclick="goldRun()">${esc(tr('gold.run_btn'))}</button>
+      <button style="${btn2}" onclick="goldText=tr('gold.sample_rules');goldRun()">${esc(tr('gold.sample_btn'))}</button>
+      ${goldResult&&goldResult.rules.length?`<button style="${btn2}" onclick="goldExportCSV()">${esc(tr('gold.csv_btn'))}</button>`:''}
+    </div>`;
+  const g=goldResult;
+  if(g){
+    if(g.errors.length)h+=`<div style="font-size:12px;color:var(--red);margin-bottom:6px">${g.errors.map(e=>esc(tr('gold.rule_err').replace('{n}',e.line).replace('{text}',e.text))).join('<br>')}</div>`;
+    if(!g.rules.length)h+=`<div class="nodata">${esc(tr('gold.no_rules'))}</div>`;
+    else{
+      h+=`<div class="tbl-wrap" style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc(tr('inv.col_host'))}</th>${g.rules.map(r=>`<th title="${esc(r.pattern)}" style="max-width:160px;white-space:normal">${esc(r.label)}</th>`).join('')}<th>${esc(tr('gold.col_pass'))}</th></tr></thead><tbody>`+
+        g.rows.map(row=>{
+          const pass=row.results.filter(x=>x.ok).length;
+          return `<tr><td><b>${esc(row.hostname||row.file)}</b></td>${row.results.map(x=>`<td title="${esc(x.hit)}">${x.ok?pill('up','✓'):pill('down','✗')}</td>`).join('')}<td>${pass}/${row.results.length}</td></tr>`;
+        }).join('')+'</tbody></table></div>';
+    }
+  }
+  return h+'</div>';
+}
+function goldRun(){
+  const ta=document.getElementById('gold-rules');
+  if(ta&&goldText===null)goldText=ta.value;
+  try{localStorage.setItem('sw_golden_rules',goldText||'');}catch(e){}
+  const pr=invParseRules(goldText||'');
+  goldResult={rules:pr.rules,errors:pr.errors,rows:invRows.map((r,i)=>({hostname:r.hostname,file:r.file,results:invCheckRules(invTexts[i],pr.rules)}))};
+  navGo('inventory');
+}
+function goldExportCSV(){
+  const g=goldResult;if(!g)return;
+  const rows=g.rows.map(row=>[row.hostname,row.file,...row.results.map(x=>x.ok?'PASS':'FAIL'),row.results.filter(x=>x.ok).length+'/'+row.results.length]);
+  dlCSV(rows,[tr('inv.col_host'),tr('inv.col_file'),...g.rules.map(r=>r.label),tr('gold.col_pass')],'golden_compliance.csv');
+}
+function invAddFiles(inp){
+  const files=[...(inp.files||[])];
+  if(!files.length)return;
+  Promise.all(files.map(swReadText)).then(texts=>{
+    texts.forEach((t,k)=>{
+      const cfg=t.replace(/^﻿/,'').replace(/\r\n/g,'\n');
+      try{
+        const p=parseAny(cfg);
+        invRows.push(invBuildRow(files[k].name,cfg,p,computeSwitchHealth));
+        invTexts.push(cfg);
+        invParsed.push(p);
+      }catch(e){invFails.push(files[k].name);}
+    });
+    if(goldResult){goldRun();return;}
+    navGo('inventory');
+  });
+}
+function invOpen(i){
+  const ta=document.getElementById('paste-area');
+  if(!ta||invTexts[i]==null)return;
+  ta.value=invTexts[i];
+  doAnalyze();
+}
+function invExportCSV(){
+  const rows=invRows.map(r=>[r.hostname,r.vendor,r.model,r.version,r.mgmtIp,r.ntp.join(' '),r.syslog.join(' '),r.snmpCommunities,r.snmpV3Users,r.users,r.telnet?'Y':'N',r.vlans,r.interfaces,r.score==null?'':r.score,r.grade,r.file]);
+  dlCSV(rows,[tr('inv.col_host'),tr('inv.col_vendor'),tr('inv.col_model'),tr('inv.col_version'),tr('inv.col_mgmt'),'NTP','Syslog','SNMP v1/v2c','SNMP v3',tr('inv.col_users'),'Telnet','VLAN',tr('inv.col_ifaces'),tr('inv.col_health'),'Grade',tr('inv.col_file')],'switch_inventory.csv');
+}
+
+// ── 終端定位與空 port 盤點（2026-09-29 新增，第六輪 WA/WB） ─────────────────
+// 解析與查詢邏輯在 switch-analyzer-endpoint.js（純函式），這裡只負責 UI；
+// 已載入設定檔且 hostname 與貼上輸出的裝置名稱相同時，用設定檔補介面描述與 trunk 判斷
+const EP_SAMPLE_TEXT = "CORE-SW#show ip arp\nProtocol  Address          Age (min)  Hardware Addr   Type   Interface\nInternet  192.0.2.1               -   a1b2.c3d4.0f01  ARPA   Vlan10\nInternet  192.0.2.21              3   a1b2.c3d4.0001  ARPA   Vlan10\nInternet  192.0.2.22              7   a1b2.c3d4.0002  ARPA   Vlan10\nInternet  198.51.100.5            1   0050.7966.0005  ARPA   Vlan20\nInternet  198.51.100.9            0   Incomplete      ARPA\nCORE-SW#show mac address-table\n          Mac Address Table\n-------------------------------------------\n\nVlan    Mac Address       Type        Ports\n----    -----------       --------    -----\n All    0100.0ccc.cccc    STATIC      CPU\n  10    a1b2.c3d4.0001    DYNAMIC     Gi1/0/24\n  10    a1b2.c3d4.0002    DYNAMIC     Gi1/0/24\n  20    0050.7966.0005    DYNAMIC     Gi1/0/23\nTotal Mac Addresses for this criterion: 4\nCORE-SW#show interfaces status\n\nPort      Name               Status       Vlan       Duplex  Speed Type\nGi1/0/23  TO-H3C-ACC         connected    trunk      a-full a-1000 10/100/1000BaseTX\nGi1/0/24  TO-ACC-SW1         connected    trunk      a-full a-1000 10/100/1000BaseTX\nVl10                         connected    routed       auto   auto\nACC-SW1#show mac address-table\n          Mac Address Table\n-------------------------------------------\n\nVlan    Mac Address       Type        Ports\n----    -----------       --------    -----\n  10    a1b2.c3d4.0001    DYNAMIC     Gi1/0/1\n  10    a1b2.c3d4.0002    DYNAMIC     Gi1/0/2\n  10    a1b2.c3d4.0f01    DYNAMIC     Gi1/0/48\n  10    a1b2.c3d4.0101    DYNAMIC     Gi1/0/48\n  10    a1b2.c3d4.0102    DYNAMIC     Gi1/0/48\n  20    0050.7966.0005    DYNAMIC     Gi1/0/48\n  20    0050.7966.0106    DYNAMIC     Gi1/0/48\nTotal Mac Addresses for this criterion: 7\nACC-SW1#show interfaces status\n\nPort      Name               Status       Vlan       Duplex  Speed Type\nGi1/0/1   PC-01              connected    10         a-full a-1000 10/100/1000BaseTX\nGi1/0/2   Backup up link     connected    10         a-full a-1000 10/100/1000BaseTX\nGi1/0/3                      notconnect   1            auto   auto 10/100/1000BaseTX\nGi1/0/4   Printer-3F         notconnect   10           auto   auto 10/100/1000BaseTX\nGi1/0/5                      disabled     1            auto   auto 10/100/1000BaseTX\nGi1/0/6   Cam-01             err-disabled 30           auto   auto 10/100/1000BaseTX\nGi1/0/48  UPLINK-CORE        connected    trunk      a-full a-1000 10/100/1000BaseTX\nPo1                          notconnect   unassigned   auto   auto\n<H3C-ACC>display mac-address\nMAC Address      VLAN ID  State            Port/NickName            Aging\n0050-7966-0005   20       Learned          GE1/0/5                  Y\na1b2-c3d4-0f01   20       Learned          XGE1/0/49                Y\n<H3C-ACC>display interface brief\nBrief information on interfaces in route mode:\nLink: ADM - administratively down; Stby - standby\nProtocol: (s) - spoofing\nInterface            Link Protocol Primary IP        Description\nVlan20               UP   UP       198.51.100.2      users\nBrief information on interfaces in bridge mode:\nLink: ADM - administratively down; Stby - standby\nSpeed: (a) - auto\nDuplex: (a)/A - auto; H - half; F - full\nType: A - access; T - trunk; H - hybrid\nInterface            Link Speed   Duplex Type PVID Description\nGE1/0/5              UP   1G(a)   F(a)   A    20   Desk-5F-12\nGE1/0/6              DOWN auto    A      A    1\nGE1/0/7              ADM  auto    A      A    20   Guest-Room\nXGE1/0/49            UP   10G(a)  F(a)   T    1    To-Core\n";
+function epCfgByDevice(){
+  const h=parsed?.sys?.hostname;
+  return h?{[h.toLowerCase()]:parsed.interfaces||[]}:null;
+}
+function renderEndpointCard(){
+  const box='background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:14px';
+  const btn='background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;cursor:pointer';
+  const btn2='background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer';
+  let h=`<div style="padding:16px 18px;overflow-y:auto;flex:1">
+    <h2 style="margin:0 0 8px">${esc(tr('ep.title'))}</h2>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:10px">${esc(tr('ep.hint'))}</div>
+    <textarea id="ep-text" spellcheck="false" style="width:100%;height:160px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px" oninput="epText=this.value">${esc(epText)}</textarea>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 14px">
+      <button style="${btn}" onclick="epParse(true)">${esc(tr('ep.parse_btn'))}</button>
+      <button style="${btn2}" onclick="epLoadSample()">${esc(tr('btn.loadSample'))}</button>
+      <label style="${btn2}">${esc(tr('ep.file_lbl'))}<input type="file" id="ep-files" multiple accept=".txt,.log,.cfg" onchange="epReadFiles(this)"></label>
+    </div>`;
+  if(epModel){
+    const devs=epModel.devices;
+    if(!devs.length){h+=`<div class="nodata">${esc(tr('ep.none'))}</div></div>`;return h;}
+    const sum=a=>devs.reduce((n,d)=>n+d[a].length,0);
+    h+=`<div style="font-size:12px;margin-bottom:10px">${esc(tr('ep.summary').replace('{dev}',devs.length).replace('{mac}',sum('macs')).replace('{arp}',sum('arps')).replace('{port}',sum('ports')))}</div>`;
+    h+=`<div style="${box}">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="ep-query" value="${esc(epQuery)}" placeholder="${esc(tr('ep.search_ph'))}" style="flex:1;min-width:220px;padding:6px 8px;font-size:12px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px" onkeydown="if(event.key==='Enter')epSearch()">
+        <button style="${btn}" onclick="epSearch()">${esc(tr('ep.search_btn'))}</button>
+      </div>
+      <div id="ep-result">${renderEndpointResult()}</div>
+    </div>`;
+    h+=renderFreePorts();
+  }
+  return h+'</div>';
+}
+function renderEndpointResult(){
+  const r=epResult;
+  if(!r||!r.query)return '';
+  if(!r.kind||(!r.locations.length&&!r.arpSeen.length))return `<div class="nodata" style="margin-top:8px">${esc(tr('ep.no_match'))}</div>`;
+  let h='';
+  if(r.arpSeen.length){
+    h+=`<div style="font-size:12px;font-weight:600;margin:10px 0 4px">${esc(tr('ep.arp_seen'))}</div><table class="data-tbl"><thead><tr><th>${esc(tr('ep.col_device'))}</th><th>${esc(tr('ep.col_ip'))}</th><th>${esc(tr('ep.col_mac'))}</th><th>${esc(tr('ep.col_vlan'))}</th><th>${esc(tr('ep.col_port'))}</th></tr></thead><tbody>`+
+      r.arpSeen.map(a=>`<tr><td>${esc(a.device)}</td><td>${esc(a.ip)}</td><td style="font-family:monospace">${esc(epFmtMac(a.mac))}</td><td>${esc(a.vlan)}</td><td>${esc(a.iface)}</td></tr>`).join('')+'</tbody></table>';
+  }
+  if(!r.locations.length){
+    h+=`<div style="font-size:12px;color:var(--yellow);margin-top:8px">${esc(tr('ep.no_mac_table'))}</div>`;
+    return h;
+  }
+  if(r.locations.every(l=>l.uplink))h+=`<div style="font-size:12px;color:var(--yellow);margin-top:8px">${esc(tr('ep.all_uplink_note'))}</div>`;
+  h+=`<table class="data-tbl" style="margin-top:8px"><thead><tr><th>${esc(tr('ep.col_device'))}</th><th>${esc(tr('ep.col_port'))}</th><th>${esc(tr('ep.col_vlan'))}</th><th>${esc(tr('ep.col_mac'))}</th><th>${esc(tr('ep.col_status'))}</th><th>${esc(tr('ep.col_desc'))}</th><th>${esc(tr('ep.col_macs'))}</th><th></th></tr></thead><tbody>`+
+    r.locations.map(l=>`<tr${l.uplink?' style="opacity:.6"':''}><td>${esc(l.device)}</td><td><b>${esc(l.port)}</b></td><td>${esc(l.vlan)}</td><td style="font-family:monospace">${esc(epFmtMac(l.mac))}</td><td>${esc(l.status||'-')}</td><td>${esc(l.desc||'')}</td><td>${l.macCount}</td><td>${l.uplink?pill('warn',tr('ep.uplink')):pill('up',tr('ep.edge'))}</td></tr>`).join('')+'</tbody></table>';
+  return h;
+}
+function renderFreePorts(){
+  const fp=epFreePorts(epModel,epCfgByDevice());
+  let h=`<div style="font-size:14px;font-weight:600;margin:4px 0 6px">${esc(tr('ep.free_title'))}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('ep.free_hint'))}</div>`;
+  if(!fp.stats.length)return h+`<div class="nodata">${esc(tr('ep.no_status'))}</div>`;
+  h+=fp.stats.map(s=>`<div style="font-size:12px;margin-bottom:4px"><b>${esc(s.device)}</b>：${esc(tr('ep.dev_stats').replace('{total}',s.total).replace('{conn}',s.connected).replace('{free}',s.free).replace('{stale}',s.stale).replace('{err}',s.errdisabled))}</div>`).join('');
+  const cats=['all','free','stale','errdisabled'];
+  const lbl=c=>tr(c==='all'?'ep.cat_all':c==='free'?'ep.cat_free':c==='stale'?'ep.cat_stale':'ep.cat_errdis');
+  h+=`<div style="display:flex;gap:8px;align-items:center;margin:8px 0">
+    <select id="ep-cat" onchange="epCat=this.value;navGo('endpoint')" style="font-size:12px;padding:4px">${cats.map(c=>`<option value="${c}"${epCat===c?' selected':''}>${esc(lbl(c))}</option>`).join('')}</select>
+    <button style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer" onclick="epExportCSV()">${esc(tr('ep.csv_btn'))}</button>
+  </div>`;
+  const rows=fp.rows.filter(r=>epCat==='all'||r.category===epCat);
+  const pc={free:'up',stale:'warn',errdisabled:'down'};
+  h+=`<table class="data-tbl"><thead><tr><th>${esc(tr('ep.col_device'))}</th><th>${esc(tr('ep.col_port'))}</th><th>${esc(tr('ep.col_status'))}</th><th>${esc(tr('ep.col_vlan'))}</th><th>${esc(tr('ep.col_speed'))}</th><th>${esc(tr('ep.col_desc'))}</th><th>${esc(tr('ep.col_category'))}</th></tr></thead><tbody>`+
+    rows.map(r=>`<tr><td>${esc(r.device)}</td><td>${esc(r.port)}</td><td>${esc(r.status)}</td><td>${esc(r.vlan)}</td><td>${esc(r.speed)}</td><td>${esc(r.desc)}</td><td>${pill(pc[r.category],lbl(r.category))}</td></tr>`).join('')+'</tbody></table>';
+  return h;
+}
+// fromInput：按「解析」按鈕時才從文字框取值；載入範例／讀檔是直接改 epText，不可再被舊的文字框內容蓋掉
+function epParse(fromInput){
+  const ta=document.getElementById('ep-text');
+  if(fromInput&&ta)epText=ta.value;
+  epModel=parseEndpointText(epText);
+  epResult=epQuery?epLookup(epModel,epQuery,epCfgByDevice()):null;
+  navGo('endpoint');
+}
+function epLoadSample(){epText=EP_SAMPLE_TEXT;epQuery='192.0.2.21';epParse();}
+function epReadFiles(inp){
+  const files=[...(inp.files||[])];
+  if(!files.length)return;
+  Promise.all(files.map(swReadText)).then(texts=>{
+    epText=(epText?epText.replace(/\s*$/,'\n'):'')+texts.join('\n');
+    epParse();
+  });
+}
+function epSearch(){
+  epQuery=(document.getElementById('ep-query')?.value||'').trim();
+  if(!epModel)return;
+  epResult=epLookup(epModel,epQuery,epCfgByDevice());
+  const el=document.getElementById('ep-result');
+  if(el)el.innerHTML=renderEndpointResult();
+}
+function epExportCSV(){
+  if(!epModel)return;
+  const fp=epFreePorts(epModel,epCfgByDevice());
+  const lbl={free:tr('ep.cat_free'),stale:tr('ep.cat_stale'),errdisabled:tr('ep.cat_errdis')};
+  const rows=fp.rows.filter(r=>epCat==='all'||r.category===epCat).map(r=>[r.device,r.port,r.status,r.vlan,r.speed,r.type,r.desc,lbl[r.category]]);
+  dlCSV(rows,[tr('ep.col_device'),tr('ep.col_port'),tr('ep.col_status'),tr('ep.col_vlan'),tr('ep.col_speed'),tr('ep.col_type'),tr('ep.col_desc'),tr('ep.col_category')],'free_ports.csv');
+}
+
 // ── 設定比較（diff，2026-08-24 移植自 switch_config_generator） ──────────────
 // switch_config_generator 早就有此功能（switch-generator-app.js 的 toggleDiffCard/
 // performDiff/computeDiff/computeDiffSimple/displayDiff），switch_analyzer 端從未有過，
@@ -3614,11 +3870,11 @@ function renderDiffCard(){
     <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
       <div style="flex:1;min-width:200px">
         <label style="font-weight:600;font-size:12px;display:block;margin-bottom:6px">${esc(tr('diff.oldLabel'))}</label>
-        <input type="file" id="diff-old-file" accept=".txt,.cfg,.conf,.log" style="width:100%">
+        <input type="file" id="diff-old-file" accept=".txt,.cfg,.conf,.log" style="width:100%;display:block">
       </div>
       <div style="flex:1;min-width:200px">
         <label style="font-weight:600;font-size:12px;display:block;margin-bottom:6px">${esc(tr('diff.newLabel'))}</label>
-        <input type="file" id="diff-new-file" accept=".txt,.cfg,.conf,.log" style="width:100%">
+        <input type="file" id="diff-new-file" accept=".txt,.cfg,.conf,.log" style="width:100%;display:block">
       </div>
       <button style="align-self:flex-end;background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:12px;cursor:pointer" onclick="performDiff()">${esc(tr('diff.runBtn'))}</button>
     </div>

@@ -82,7 +82,8 @@ function parseCiscoInterfaces(cfg,vendor){
     const secondaryIps=[...body.matchAll(/^\s*ip address\s+(\S+)\s+(\S+)\s+secondary/gm)].map(m=>m[1]+'/'+cidrFromMask(m[2]));
     // Loopback
     if(/^Loopback/i.test(name)){
-      let ip=(body.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+      // 位址與遮罩之間只允許同一行的空白（[ \t]+）：Arista 的 CIDR 寫法只有一個 token，用 \s+ 會跨行吃到下一行
+      let ip=(body.match(/^\s*ip address[ \t]+(\S+(?:[ \t]+(?!secondary\b)\S+)?)/m)||[])[1]||'';
       // IPv6（試點 5 廠牌之一，標準 Cisco/Arista 語法 `ipv6 address ADDR/PREFIXLEN`）
       if(!ip)ip=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       // 雙棧修復（2026-08-13 新增）：ip6 獨立無條件擷取，不再受 if(!ip) 影響（同一介面
@@ -93,8 +94,9 @@ function parseCiscoInterfaces(cfg,vendor){
     }
     // SVI: Vlan interface
     if(/^Vlan/i.test(name)){
-      const ipRaw=(body.match(/^\s*ip address\s+(\S+)\s+(\S+)/m)||[]);
-      let ip=ipRaw[1]&&ipRaw[2]?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
+      // 同上：限定同一行（Arista `ip address A/N` 原本會跨行把下一行當遮罩，產生 A/N/0）
+      const ipRaw=(body.match(/^\s*ip address[ \t]+(\S+)[ \t]+(\S+)/m)||[]);
+      let ip=ipRaw[1]&&ipRaw[2]&&!ipRaw[1].includes('/')?ipRaw[1]+'/'+cidrFromMask(ipRaw[2]):(body.match(/^\s*ip address\s+([\d.]+\/\d+)/m)||[])[1]||'';
       if(!ip)ip=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       // 雙棧修復（2026-08-13 新增，同 Loopback）
       const ip6=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
@@ -111,7 +113,7 @@ function parseCiscoInterfaces(cfg,vendor){
     }
     // Management (no routing)
     if(/^Management/i.test(name)){
-      let ip=(body.match(/^\s*ip address\s+(\S+\s+\S+)/m)||[])[1]||'';
+      let ip=(body.match(/^\s*ip address[ \t]+(\S+(?:[ \t]+(?!secondary\b)\S+)?)/m)||[])[1]||'';
       if(!ip)ip=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       // 雙棧修復（2026-08-13 新增，同 Loopback）
       const ip6=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
@@ -123,7 +125,7 @@ function parseCiscoInterfaces(cfg,vendor){
     const noRouting=/no switchport/.test(body);
     if(noRouting){
       // Routed port
-      let ip=(body.match(/^\s*ip address\s+(\S+(?:\s+\S+)?)/m)||[])[1]||'';
+      let ip=(body.match(/^\s*ip address[ \t]+(\S+(?:[ \t]+(?!secondary\b)\S+)?)/m)||[])[1]||'';
       if(!ip)ip=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       // 雙棧修復（2026-08-13 新增，同 Loopback）
       const ip6=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';

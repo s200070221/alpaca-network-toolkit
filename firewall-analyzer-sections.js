@@ -478,7 +478,7 @@ function buildFortiswitchSectionHtml(fSwitches, fPorts, fMacPolicies, fNacPolici
   return { sumHtml, html };
 }
 
-function buildQuerySectionHtml(qvdoms){
+function buildQuerySectionHtml(qvdoms, isFortiGate){
   const qvdomOpts = `<option value="__all__">${tr('query.all_vdom')}</option>`
     + qvdoms.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
   const qVdomSel = qvdoms.length > 1
@@ -559,8 +559,32 @@ function buildQuerySectionHtml(qvdoms){
         </div>
         <div id="batch-result" style="margin-top:14px"></div>
       </div>
+      ${isFortiGate ? buildAllowRequestHtml(qvdoms) : ''}
     </div>`;
 }
+// 開通需求檢查（FortiGate，2026-09-29 新增，第六輪 WI）：輸入欄位；判斷與指令組裝在
+// firewall-analyzer-audit.js 的 fgCheckRequest()／buildFortiGateAllowCommand()，DOM 寫入由 app.js _runAllowCheck() 負責
+function buildAllowRequestHtml(qvdoms){
+  const inp=(id,ph,w,mono)=>`<input id="${id}" type="text" placeholder="${esc(ph)}" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text);${mono?'font-family:monospace;':''}width:${w}px" onkeydown="if(event.key==='Enter')_runAllowCheck()">`;
+  const lbl=(t,inner)=>`<label style="display:flex;flex-direction:column;gap:4px;font-size:12px">${esc(t)}${inner}</label>`;
+  const vdomSel=qvdoms.length>1?lbl(tr('query.vdom'),`<select id="req-vdom" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text)"><option value="">-</option>${qvdoms.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('')}</select>`):'';
+  return `<div style="margin-top:28px;padding-top:20px;border-top:1px solid var(--border)">
+    <h2 style="margin:0 0 6px;font-size:16px">${esc(tr('allow.title'))}</h2>
+    <p style="color:var(--text-dim);margin:0 0 10px;font-size:12px">${esc(tr('allow.hint'))}</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+      ${lbl(tr('query.src_ip'),inp('req-src','192.0.2.10',150,true))}
+      ${lbl(tr('query.dst_ip'),inp('req-dst','198.51.100.20',150,true))}
+      ${lbl(tr('query.proto'),`<select id="req-proto" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text)"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option><option value="any">${esc(tr('query.any_proto'))}</option></select>`)}
+      ${lbl(tr('query.port'),inp('req-port','443',80,false))}
+      ${lbl(tr('allow.src_intf'),inp('req-srcintf',tr('allow.intf_auto'),130,false))}
+      ${lbl(tr('allow.dst_intf'),inp('req-dstintf',tr('allow.intf_auto'),130,false))}
+      ${vdomSel}
+      <button type="button" onclick="_runAllowCheck()" style="padding:7px 20px;border-radius:6px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600;font-size:13px">${esc(tr('allow.btn'))}</button>
+    </div>
+    <div id="req-result" style="margin-top:14px"></div>
+  </div>`;
+}
+window.buildAllowRequestHtml=buildAllowRequestHtml;
 // 批次查詢結果表格（2026-09-29 新增）：results 為 runBatchPolicyQuery() 輸出，errors 為
 // parseBatchQueryCSV() 無法解析的列；純字串組裝，DOM 寫入由 app.js _runBatchQuery() 負責
 // CIDR／範圍列部分允許時的結果文字（2026-09-29 新增，FF），批次查詢與跨版本比對共用
