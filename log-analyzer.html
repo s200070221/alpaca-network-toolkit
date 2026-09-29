@@ -566,6 +566,10 @@ function detectLineFormat(line) {
   // FortiOS 原生 log（execute log filter／GUI 下載／memory 緩衝區匯出）沒有 syslog 外殼，
   // 直接以固定順序的 date=/time=/logid= 開頭，與上面幾種格式互斥，可高信心判定
   if (/^date=\d{4}-\d{2}-\d{2}\s+time=\d{2}:\d{2}:\d{2}\b/.test(line) && /\blogid=/.test(line)) return 'fortigate';
+  // MikroTik RouterOS 本機 /log print 匯出（無 syslog 外殼）與不含時間／主機名的遠端 syslog，
+  // 需開頭為 <PRI> 或時間，且接著的 topics 清單含嚴重度字（見 splitMikroTikTopics()）才判定
+  const mt = line.match(MIKROTIK_LINE_RE);
+  if (mt && (mt[1] !== undefined || mt[3]) && splitMikroTikTopics(mt[4])) return 'mikrotik';
   return 'unknown';
 }
 
@@ -794,13 +798,16 @@ function parseRFC5424Line(line, lineNo) {
   const priNum = Number(pri);
   const facility = Math.floor(priNum / 8);
   const severityRaw = priNum % 8;
+  const fields = parseStructuredData(sd);
+  const mt = parseMikroTikMsg(msg);
+  if (mt) Object.keys(mt.fields).forEach(k => { if (fields[k] === undefined) fields[k] = mt.fields[k]; });
   return {
-    format: 'rfc5424', raw: line, lineNo,
+    format: 'rfc5424', raw: line, lineNo, mikrotik: !!mt,
     timestamp: parseSyslogTimestamp(ts, 'iso'), timestampRaw: ts,
     host, appName: app === '-' ? '' : app, procid: procid === '-' ? '' : procid, msgid: msgid === '-' ? '' : msgid,
     severityRaw, severityNorm: normSyslogSeverity(severityRaw),
     facility, facilityAuth: (facility === 4 || facility === 10),
-    msg, fields: parseStructuredData(sd)
+    msg, fields
   };
 }
 function parseRFC3164Line(line, lineNo) {
@@ -814,19 +821,20 @@ function parseRFC3164Line(line, lineNo) {
   const priNum = hasPri ? Number(pri) : null;
   const facility = hasPri ? Math.floor(priNum / 8) : null;
   const severityRaw = hasPri ? priNum % 8 : null;
-  const tagMatch = rest.match(/^([\w./-]+)(?:\[(\d+)\])?:\s*([\s\S]*)$/);
+  const mt = parseMikroTikMsg(rest);
+  const tagMatch = mt ? null : rest.match(/^([\w./-]+)(?:\[(\d+)\])?:\s*([\s\S]*)$/);
   // PID 先前被正則擷取後直接捨棄，procid 一律寫死空字串，與 RFC5424/ASA 事件的 schema
   // 不一致，下游若依賴 procid 做行為者關聯會少一個可用訊號（2026-09 全功能審查發現）
   const appName = tagMatch ? tagMatch[1] : '';
   const procid = tagMatch && tagMatch[2] ? tagMatch[2] : '';
   const msg = tagMatch ? tagMatch[3] : rest;
   return {
-    format: 'rfc3164', raw: line, lineNo,
+    format: 'rfc3164', raw: line, lineNo, mikrotik: !!mt,
     timestamp: parseSyslogTimestamp(ts, 'bsd'), timestampRaw: ts,
     host, appName, procid, msgid: '',
-    severityRaw, severityNorm: hasPri ? normSyslogSeverity(severityRaw) : 'Info',
+    severityRaw, severityNorm: hasPri ? normSyslogSeverity(severityRaw) : (mt && mt.topics.length ? mikrotikTopicSeverity(mt.topics) : 'Info'),
     facility, facilityAuth: hasPri && (facility === 4 || facility === 10),
-    msg, fields: {}
+    msg, fields: mt ? mt.fields : {}
   };
 }
 // Cisco ASA %ASA-LEVEL-MSGID: 語法（官方 ASA 設定手冊確認），時間戳含年份與標準 RFC3164
@@ -876,6 +884,109 @@ function parseFortiGateLine(line, lineNo) {
     msg: fields.msg || '', fields, fieldOrder: order, fieldsQuoted: quoted
   };
 }
+// MikroTik RouterOS log（2026-09-29 新增）：語法依兩份獨立的真實 Logstash grok 規則
+// （coolacid/logstash-grok、frap/logstash 的 patterns/mikrotik）與 MikroTik 論壇、fail2ban
+// 回報的實際 log 交叉確認：訊息開頭為 topics（逗號分隔，如 system,error,critical／
+// firewall,info），防火牆 log 為「[前綴 ]鏈: in:介面 out:介面, [src-mac MAC, ]proto P[ (旗標)],
+// 來源[:埠]->目的[:埠], [NAT ..., ]len N」，登入為「login failure for user U from IP via 方式」
+// 與「user U logged in|out from IP via 方式」。BSD syslog 模式下 topics 可能不存在，故 topics
+// 為選填，但沒有 topics 時必須命中防火牆或登入語法才視為 MikroTik 訊息。
+const MIKROTIK_SEV_WORDS = ['critical', 'error', 'warning', 'info', 'debug'];
+function splitMikroTikTopics(text) {
+  const m = String(text || '').match(/^([a-z][a-z0-9-]*(?:,[a-z][a-z0-9-]*)*)\s+([\s\S]*)$/);
+  if (!m) return null;
+  const topics = m[1].split(',');
+  if (!topics.some(t => MIKROTIK_SEV_WORDS.includes(t))) return null;
+  return { topics, body: m[2] };
+}
+// 端點：IPv4 可帶 :埠；IPv6 帶埠時以 [位址]:埠 表示；ICMP 等無埠時只有位址
+function splitMikroTikEndpoint(s) {
+  let m = s.match(/^\[([0-9A-Fa-f:.]+)\]:(\d+)$/);
+  if (m) return { ip: m[1], port: m[2] };
+  m = s.match(/^(\d{1,3}(?:\.\d{1,3}){3}):(\d+)$/);
+  if (m) return { ip: m[1], port: m[2] };
+  return { ip: s, port: '' };
+}
+function parseMikroTikMsg(text) {
+  const t = splitMikroTikTopics(text);
+  const body = t ? t.body : String(text || '');
+  const fields = {};
+  const fw = body.match(/^(?:(.*?)\s+)?([\w-]+): in:(\S+) out:([^,]+),/);
+  const proto = body.match(/\bproto (\w+)(?: \(([^)]*)\))?/);
+  if (fw && proto) {
+    if (fw[1]) fields.logprefix = fw[1];
+    fields.chain = fw[2]; fields.inintf = fw[3]; fields.outintf = fw[4].trim();
+    fields.proto = proto[1];
+    if (proto[2]) fields.protoflags = proto[2];
+    const mac = body.match(/\bsrc-mac ((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})/);
+    if (mac) fields.srcmac = mac[1];
+    // 位址對一律取 proto 之後第一組「, A->B,」（NAT 段落在其後，不會先命中）
+    const addr = body.slice(proto.index).match(/,\s*(\S+?)->(\S+?),/);
+    if (addr) {
+      const a = splitMikroTikEndpoint(addr[1]), b = splitMikroTikEndpoint(addr[2]);
+      fields.srcip = a.ip; if (a.port) fields.srcport = a.port;
+      fields.dstip = b.ip; if (b.port) fields.dstport = b.port;
+    }
+    const len = body.match(/,\s*len (\d+)/);
+    if (len) fields.len = len[1];
+  }
+  let m = body.match(/\blogin failure for user (\S*) from (\S+) via (\S+)/);
+  if (m) { if (m[1]) fields.user = m[1]; fields.srcip = m[2]; fields.method = m[3]; }
+  else if ((m = body.match(/\buser (\S+) logged (in|out) from (\S+) via (\S+)/))) {
+    fields.user = m[1]; fields.loginaction = 'logged ' + m[2]; fields.srcip = m[3]; fields.method = m[4];
+  }
+  if (!t && !Object.keys(fields).length) return null;
+  if (t) fields.topics = t.topics.join(',');
+  return { topics: t ? t.topics : [], body, fields };
+}
+// topics 內嚴重度字取最嚴重者，沿用 normGenericSeverity() 既有詞彙對照（critical→Critical、
+// error→High、warning→Medium、info→Low、debug→Info）；僅在沒有 <PRI> 可用時使用
+function mikrotikTopicSeverity(topics) {
+  const w = MIKROTIK_SEV_WORDS.find(s => topics.includes(s));
+  return w ? normGenericSeverity(w) : 'Info';
+}
+// 本機 /log print 匯出的時間欄位：當天只有 HH:MM:SS；今年為 mmm/dd；較舊為 mmm/dd/yyyy；
+// RouterOS 7.10 起改為 MM-DD／YYYY-MM-DD（官方論壇 7.10 日期格式變更公告）。缺年份或日期時
+// 以目前日期補上（比照 parseSyslogTimestamp('bsd') 補目前年份的既有做法），以本機時區解讀
+const MIKROTIK_MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+const MIKROTIK_LINE_RE = /^(?:<(\d{1,3})>)?(?:(?:(\d{4}-\d{2}-\d{2}|\d{2}-\d{2}|[A-Za-z]{3}\/\d{2}(?:\/\d{4})?)\s+)?(\d{2}:\d{2}:\d{2})\s+)?([a-z][\s\S]*)$/;
+function parseMikroTikTimestamp(date, time, now) {
+  if (!time) return null;
+  const [hh, mi, ss] = time.split(':').map(Number);
+  const ref = now || new Date();
+  let y = ref.getFullYear(), mo = ref.getMonth(), d = ref.getDate(), m;
+  if (date) {
+    if ((m = date.match(/^(\d{4})-(\d{2})-(\d{2})$/))) { y = +m[1]; mo = +m[2] - 1; d = +m[3]; }
+    else if ((m = date.match(/^(\d{2})-(\d{2})$/))) { mo = +m[1] - 1; d = +m[2]; }
+    else if ((m = date.match(/^([A-Za-z]{3})\/(\d{2})(?:\/(\d{4}))?$/))) {
+      const k = MIKROTIK_MONTHS[m[1].toLowerCase()];
+      if (k === undefined) return null;
+      mo = k; d = +m[2]; if (m[3]) y = +m[3];
+    } else return null;
+  }
+  const r = new Date(y, mo, d, hh, mi, ss);
+  return isNaN(r.getTime()) ? null : r;
+}
+function parseMikroTikLine(line, lineNo) {
+  const m = line.match(MIKROTIK_LINE_RE);
+  if (!m) return null;
+  const [, pri, date, time, rest] = m;
+  if (pri === undefined && !time) return null;
+  const mt = parseMikroTikMsg(rest);
+  if (!mt || !mt.topics.length) return null;
+  const hasPri = pri !== undefined;
+  const priNum = hasPri ? Number(pri) : null;
+  const facility = hasPri ? Math.floor(priNum / 8) : null;
+  const severityRaw = hasPri ? priNum % 8 : null;
+  return {
+    format: 'mikrotik', raw: line, lineNo, mikrotik: true,
+    timestamp: parseMikroTikTimestamp(date, time), timestampRaw: [date, time].filter(Boolean).join(' '),
+    host: '', appName: '', procid: '', msgid: '',
+    severityRaw, severityNorm: hasPri ? normSyslogSeverity(severityRaw) : mikrotikTopicSeverity(mt.topics),
+    facility, facilityAuth: hasPri && (facility === 4 || facility === 10),
+    msg: rest, fields: mt.fields
+  };
+}
 function parseLogLine(line, lineNo) {
   const fmt = detectLineFormat(line);
   if (fmt === 'rfc5424') return parseRFC5424Line(line, lineNo);
@@ -885,6 +996,7 @@ function parseLogLine(line, lineNo) {
   if (fmt === 'leef') return parseLEEFLine(line, lineNo);
   if (fmt === 'rfc3164') return parseRFC3164Line(line, lineNo);
   if (fmt === 'fortigate') return parseFortiGateLine(line, lineNo);
+  if (fmt === 'mikrotik') return parseMikroTikLine(line, lineNo);
   return null;
 }
 // JSON log 沒有統一欄位規格，依常見別名（TS_KEYS/SEV_KEYS/HOST_KEYS/MSG_KEYS/APP_KEYS，定義於
@@ -1427,13 +1539,17 @@ function detectTimeGaps(events, opts) {
 function detectScanHeuristicCEF(events, opts) {
   const threshold = (opts && opts.threshold) || 5;
   const bySrc = new Map();
-  events.filter(e => e.format === 'cef' && e.fields && e.fields.src && (e.fields.dst || e.fields.dpt))
-    .forEach(e => {
-      if (!bySrc.has(e.fields.src)) bySrc.set(e.fields.src, { targets: new Set(), events: [] });
-      const g = bySrc.get(e.fields.src);
-      g.targets.add(`${e.fields.dst || ''}:${e.fields.dpt || ''}`);
-      g.events.push(e);
-    });
+  // MikroTik 防火牆 log（parseMikroTikMsg() 拆出 srcip/dstip/dstport）同屬結構化欄位，一併納入
+  const tupleOf = e => e.format === 'cef' ? { src: e.fields.src, dst: e.fields.dst, dpt: e.fields.dpt }
+    : (e.mikrotik ? { src: e.fields.srcip, dst: e.fields.dstip, dpt: e.fields.dstport } : null);
+  events.forEach(e => {
+    const t = e.fields ? tupleOf(e) : null;
+    if (!t || !t.src || !(t.dst || t.dpt)) return;
+    if (!bySrc.has(t.src)) bySrc.set(t.src, { targets: new Set(), events: [] });
+    const g = bySrc.get(t.src);
+    g.targets.add(`${t.dst || ''}:${t.dpt || ''}`);
+    g.events.push(e);
+  });
   const issues = [];
   for (const [src, g] of bySrc) {
     if (g.targets.size >= threshold) {
@@ -1537,7 +1653,9 @@ function getEventNetTuple(e) {
   // RFC5424 Structured Data 無固定 SD-PARAM 命名規格，僅在剛好命中常見別名（src/srcip 等）
   // 時才視為結構化欄位；命中任一欄位才採用，否則落回下面的 msg 文字 key=value 擷取
   // （SD 內容已被 splitSDandMSG() 從 msg 切走，兩者不會重複比對到同一段文字）
-  if (e.format === 'rfc5424' && e.fields && Object.keys(e.fields).length) {
+  // rfc3164／mikrotik 的 fields 只有 MikroTik 訊息拆解時才有內容（見 parseMikroTikMsg()），
+  // 一般 rfc3164 為空物件，照舊落回下方 msg 文字擷取
+  if ((e.format === 'rfc5424' || e.format === 'rfc3164' || e.format === 'mikrotik') && e.fields && Object.keys(e.fields).length) {
     const src = pickField(e.fields, SRC_IP_KEYS);
     const dst = pickField(e.fields, DST_IP_KEYS);
     const spt = pickField(e.fields, SRC_PORT_KEYS);
@@ -1594,7 +1712,7 @@ function buildTopNSummary(events, field, n) {
 function detectScanHeuristicSyslog(events, opts) {
   const threshold = (opts && opts.threshold) || 5;
   const byHost = new Map();
-  events.filter(e => e.format !== 'cef').forEach(e => {
+  events.filter(e => e.format !== 'cef' && !e.mikrotik).forEach(e => {
     // JSON／RFC5424 等格式缺 host 欄位時 parser 預設值是空字串 ''，若不排除會讓多筆彼此
     // 無關、只是剛好都沒帶 host 的事件被聚合進同一個 '' bucket，各自訊息裡的 IP 被合併計數
     // 誤判成同一來源的掃描（比照同檔案 detectBeaconing() 的 e.host||null 既有防呆手法，
@@ -3881,6 +3999,10 @@ function rebuildWinEventXML(evt) {
   return xml;
 }
 function rebuildSyslogRaw(evt) {
+  if (evt.format === 'mikrotik') {
+    const pri = evt.facility === null ? '' : `<${evt.facility * 8 + Number(evt.severityRaw || 0)}>`;
+    return `${pri}${evt.timestampRaw ? evt.timestampRaw + ' ' : ''}${evt.msg || ''}`;
+  }
   // 原本就沒有 PRI 的 rfc3164 事件（facility===null 是解析階段留下的判斷依據，見
   // parseRFC3164Line）重建時同樣不帶 PRI，避免無中生有塞入假造的 <0>
   if (evt.format === 'rfc3164' && evt.facility === null) {
@@ -3906,6 +4028,22 @@ function anonymizeJSONFields(fields, opts) {
     else if (MSG_KEYS.includes(k)) fields[k] = replaceMACsInLine(replaceIPsInLine(String(v), opts));
   });
   return fields;
+}
+// MikroTik 拆出的欄位（見 parseMikroTikMsg()）：IP／MAC 欄位與 msg 同步去識別化，帳號因
+// 語法固定（login failure for user X／user X logged in），msg 內的帳號也一併替換；
+// ipsDone=true 表示呼叫端已對全部欄位做過通用 IP 替換（rfc5424 分支），避免重複映射
+function anonymizeMikroTikFields(clone, opts, ipsDone) {
+  const f = clone.fields;
+  if (!ipsDone) {
+    ['srcip', 'dstip'].forEach(k => { if (f[k]) f[k] = isValidIPv4(f[k]) ? anonIP(f[k], opts) : 'REDACTED'; });
+    if (f.srcmac) f.srcmac = anonMAC(f.srcmac);
+  }
+  if (f.user) {
+    const u = anonUser(f.user);
+    clone.msg = (clone.msg || '').replace(/(\blogin failure for user )(\S+)( from )/, `$1${u}$3`)
+      .replace(/(\buser )(\S+)( logged (?:in|out) from )/, `$1${u}$3`);
+    f.user = u;
+  }
 }
 function anonymizeEvent(evt, opts) {
   const clone = { ...evt, fields: { ...evt.fields } };
@@ -3981,10 +4119,12 @@ function anonymizeEvent(evt, opts) {
     Object.keys(clone.fields || {}).forEach(k => { anonFields[k] = replaceMACsInLine(replaceIPsInLine(String(clone.fields[k]), opts)); });
     clone.fields = anonFields;
     clone.msg = replaceMACsInLine(replaceIPsInLine(clone.msg || '', opts));
+    if (clone.mikrotik) anonymizeMikroTikFields(clone, opts, true);
     clone.raw = rebuildSyslogRaw(clone);
   } else {
     if (clone.host) clone.host = anonHostname(clone.host);
     clone.msg = replaceMACsInLine(replaceIPsInLine(clone.msg || '', opts));
+    if (clone.mikrotik) anonymizeMikroTikFields(clone, opts, false);
     clone.raw = rebuildSyslogRaw(clone);
   }
   return clone;
@@ -4044,7 +4184,7 @@ const LANG = {
   zhTW: {'import.sample_btn':"載入範例",'opt.advanced':"進階設定（偵測門檻、地理/ASN 風險、選擇性偵測）",'results.no_match':"沒有符合目前搜尋或篩選條件的事件",'results.showing':"顯示前 {shown} 筆，共 {total} 筆（匯出 CSV 仍包含全部）",'results.show_more':"再顯示 {n} 筆",'report.bar_unknown_vendor':"無法辨識此日誌的格式，沒有解析出任何事件。可將無法解析的行（最多 200 行）去識別化後回報，協助支援此格式。",'report.bar_sparse':"有 {n} 行（{pct}%）無法解析，可能是尚未支援的格式。可將這些行（最多 200 行）去識別化後回報，協助支援此格式。",'report.bar_btn':"回報無法解析的行",'timeline.chain_hint':"下方色條為各攻擊鏈涵蓋的時間區段（顏色代表嚴重度），滑鼠移上可看行為者與階段，點擊可只顯示該區段的事件",'actor.export_csv_btn':"📄 匯出事件 CSV",'status.filter_label':"處理狀態：",'status.filter_all':"全部",'status.filter_open':"僅未處理",'status.filter_confirmed':"僅已確認",'status.filter_fp':"僅誤判",'status.filter_hide_fp':"隱藏誤判",'preset.label':"篩選預設集：",'preset.choose':"— 選擇預設集 —",'preset.save_btn':"💾 儲存目前篩選",'preset.delete_btn':"刪除",'preset.name_prompt':"預設集名稱（同名會覆蓋）：",'actor.title':"行為者檢視",'actor.placeholder':"輸入 IP、帳號或主機名稱",'actor.show_btn':"🔎 檢視",'actor.none':"找不到與此行為者相關的事件、問題或攻擊鏈",'actor.summary':"相關事件 {events} 筆、問題 {issues} 類、攻擊鏈 {chains} 條",'actor.events_title':"相關事件（依時間排序）",'actor.more':"僅顯示前 {n} 筆，完整清單請用事件清單搜尋後匯出 CSV",'issues.col_status':"處理狀態",'status.open':"未處理",'status.confirmed':"已確認",'status.falsePositive':"誤判",'issues.export_md_btn':"📝 匯出 Markdown",
     'app.title':'Log 分析與去識別化工具','app.subtitle':'匯入交換器/防火牆 Log（CEF／標準 Syslog），依嚴重程度排序並找出可能問題；本機比對已知情資清單；可對敏感欄位去識別化。全程僅在瀏覽器本機執行，不會連網。',
     'notice.disclaimer':'此功能之分析結果僅供參考，實際處置請自行判斷並謹慎使用',
-    'import.title':'① 匯入 Log','import.hint':'支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式、FortiGate 原生 key=value log（不需 syslog 外殼）、JSON/NDJSON，以及 Windows Event Log（wevtutil/Event Viewer XML 匯出，不支援二進位 .evtx），可貼上文字或上傳檔案，亦可直接拖放檔案至此。','nav.tools_btn':'切換工具','nav.tool_network':'總覽 / Hub','nav.tool_switch':'交換器解析','nav.tool_gen':'交換器產生器','nav.tool_fw':'防火牆分析','nav.tool_ca':'設定去識別化','nav.tool_log':'日誌分析','import.paste_placeholder':'在此貼上 log 內容，或使用下方上傳按鈕…','import.upload_btn':'上傳檔案','import.analyze_btn':'解析並分析','import.clear_btn':'清空','import.file_loaded':'已載入檔案：','import.progress_parsing':'解析中…','import.progress_analyzing':'情資比對與分類中…','import.progress_rendering':'渲染結果中…','import.progress_correlating':'關聯分析中…','import.large_file_notice':'檔案過大（{name}，共 {lines} 行），內容不於下方文字框顯示，仍會完整解析','opt.freqWindow':'頻率視窗(秒)：','opt.freqThreshold':'頻率門檻(次)：','opt.scanThreshold':'掃描門檻(數)：','opt.volumeThreshold':'流量門檻(MB)：','opt.chainWindow':'關聯時間窗(分)：','opt.gapThreshold':'斷點門檻(分)：','opt.chainGroupBy':'分組軸：','opt.chainGroupByIp':'IP','opt.chainGroupByUser':'帳號','opt.geoRiskLabel':'地理位置風險標記：','opt.geoRiskFilter':'篩選國家…',
+    'import.title':'① 匯入 Log','import.hint':'支援 CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）逐行格式、FortiGate 原生 key=value log（不需 syslog 外殼）、MikroTik RouterOS log（遠端 syslog 或 /log print 匯出）、JSON/NDJSON，以及 Windows Event Log（wevtutil/Event Viewer XML 匯出，不支援二進位 .evtx），可貼上文字或上傳檔案，亦可直接拖放檔案至此。','nav.tools_btn':'切換工具','nav.tool_network':'總覽 / Hub','nav.tool_switch':'交換器解析','nav.tool_gen':'交換器產生器','nav.tool_fw':'防火牆分析','nav.tool_ca':'設定去識別化','nav.tool_log':'日誌分析','import.paste_placeholder':'在此貼上 log 內容，或使用下方上傳按鈕…','import.upload_btn':'上傳檔案','import.analyze_btn':'解析並分析','import.clear_btn':'清空','import.file_loaded':'已載入檔案：','import.progress_parsing':'解析中…','import.progress_analyzing':'情資比對與分類中…','import.progress_rendering':'渲染結果中…','import.progress_correlating':'關聯分析中…','import.large_file_notice':'檔案過大（{name}，共 {lines} 行），內容不於下方文字框顯示，仍會完整解析','opt.freqWindow':'頻率視窗(秒)：','opt.freqThreshold':'頻率門檻(次)：','opt.scanThreshold':'掃描門檻(數)：','opt.volumeThreshold':'流量門檻(MB)：','opt.chainWindow':'關聯時間窗(分)：','opt.gapThreshold':'斷點門檻(分)：','opt.chainGroupBy':'分組軸：','opt.chainGroupByIp':'IP','opt.chainGroupByUser':'帳號','opt.geoRiskLabel':'地理位置風險標記：','opt.geoRiskFilter':'篩選國家…',
     'results.title':'② 事件清單（依嚴重程度排序）','results.empty':'尚無資料，請先匯入並分析 log','results.col_severity':'嚴重程度','results.col_time':'時間','results.col_host':'主機','results.col_format':'格式','results.col_category':'分類','results.col_notes':'疑似問題','results.optional_cols':'顯示欄位：','results.col_src':'來源IP','results.col_dst':'目的IP','results.col_port':'Port','results.col_proto':'通訊協定','results.col_url':'URL/HTTP方法','results.col_sourcefile':'來源檔案','results.filter_all_files':'全部檔案','results.search_placeholder':'搜尋主機/內容…','issues.search_placeholder':'搜尋分類/依據…','results.col_msg':'內容','results.summary_label':'統計：','results.timeline_label':'事件時間分布',
     'sev.critical':'嚴重','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'資訊',
     'issues.title':'③ 問題清單（基本資安分析）','issues.empty':'未發現符合規則的問題','issues.col_category':'類別','issues.col_severity':'嚴重程度','issues.col_count':'次數','issues.col_confidence':'可信度','issues.col_source':'情資來源','issues.col_basis':'比對依據','issues.col_note':'備註','issues.note_prompt':'輸入備註（留空以刪除）：','issues.col_sample':'範例','issues.filter_all_sources':'全部來源','issues.source_filter_label':'篩選情資來源：','issues.suppress_label':'抑制以下分類：',
@@ -4064,7 +4204,7 @@ const LANG = {
   en: {'import.sample_btn':"Load sample",'opt.advanced':"Advanced settings (thresholds, geo/ASN risk, opt-in detectors)",'results.no_match':"No events match the current search or filters",'results.showing':"Showing first {shown} of {total} (CSV export still includes all)",'results.show_more':"Show {n} more",'report.bar_unknown_vendor':"The log format could not be recognized and no events were parsed. You can anonymize and report the unparsed lines (up to 200) to help add support for this format.",'report.bar_sparse':"{n} lines ({pct}%) could not be parsed; the format may not be supported yet. You can anonymize and report these lines (up to 200) to help add support.",'report.bar_btn':"Report unparsed lines",'timeline.chain_hint':"The bars below mark the time span of each attack chain (colored by severity). Hover to see the actor and stages; click to show only events in that span",'actor.export_csv_btn':"📄 Export events CSV",'status.filter_label':"Status:",'status.filter_all':"All",'status.filter_open':"Open only",'status.filter_confirmed':"Confirmed only",'status.filter_fp':"False positives only",'status.filter_hide_fp':"Hide false positives",'preset.label':"Filter presets:",'preset.choose':"— Choose a preset —",'preset.save_btn':"💾 Save current filters",'preset.delete_btn':"Delete",'preset.name_prompt':"Preset name (same name overwrites):",'actor.title':"Actor View",'actor.placeholder':"Enter IP, account or hostname",'actor.show_btn':"🔎 View",'actor.none':"No events, issues or attack chains found for this actor",'actor.summary':"{events} related events, {issues} issue categories, {chains} attack chains",'actor.events_title':"Related events (by time)",'actor.more':"Showing first {n} only; search the event list and export CSV for the full list",'issues.col_status':"Status",'status.open':"Open",'status.confirmed':"Confirmed",'status.falsePositive':"False positive",'issues.export_md_btn':"📝 Export Markdown",
     'app.title':'Log Analyzer & De-identifier','app.subtitle':'Import switch/firewall logs (CEF / standard Syslog), rank by severity and surface likely issues; match against local threat-intel lists; de-identify sensitive fields. Runs entirely in your browser, no network calls.',
     'notice.disclaimer':'Analysis results are for reference only — use your own judgement before acting on them',
-    'import.title':'① Import Log','import.hint':'Supports line-based CEF (Common Event Format), LEEF (Log Event Extended Format), standard Syslog (RFC3164/RFC5424), FortiGate native key=value logs (no syslog envelope needed), JSON/NDJSON, and Windows Event Log (wevtutil/Event Viewer XML export, binary .evtx not supported). Paste text, upload, or drag & drop a file.','nav.tools_btn':'Switch Tool','nav.tool_network':'Hub','nav.tool_switch':'Switch Analyzer','nav.tool_gen':'Switch Generator','nav.tool_fw':'Firewall Analyzer','nav.tool_ca':'Config Anonymizer','nav.tool_log':'Log Analyzer','import.paste_placeholder':'Paste log content here, or use the upload button below…','import.upload_btn':'Upload File','import.analyze_btn':'Parse & Analyze','import.clear_btn':'Clear','import.file_loaded':'Loaded file: ','import.progress_parsing':'Parsing…','import.progress_analyzing':'Matching threat intel & classifying…','import.progress_rendering':'Rendering results…','import.progress_correlating':'Correlating events…','import.large_file_notice':'File too large ({name}, {lines} lines) — content not shown in the box below, still fully parsed','opt.freqWindow':'Freq window (s):','opt.freqThreshold':'Freq threshold:','opt.scanThreshold':'Scan threshold:','opt.volumeThreshold':'Volume threshold (MB):','opt.chainWindow':'Chain window (min):','opt.gapThreshold':'Gap threshold (min):','opt.chainGroupBy':'Group by:','opt.chainGroupByIp':'IP','opt.chainGroupByUser':'User','opt.geoRiskLabel':'Geo-risk countries:','opt.geoRiskFilter':'Filter countries…',
+    'import.title':'① Import Log','import.hint':'Supports line-based CEF (Common Event Format), LEEF (Log Event Extended Format), standard Syslog (RFC3164/RFC5424), FortiGate native key=value logs (no syslog envelope needed), MikroTik RouterOS logs (remote syslog or /log print export), JSON/NDJSON, and Windows Event Log (wevtutil/Event Viewer XML export, binary .evtx not supported). Paste text, upload, or drag & drop a file.','nav.tools_btn':'Switch Tool','nav.tool_network':'Hub','nav.tool_switch':'Switch Analyzer','nav.tool_gen':'Switch Generator','nav.tool_fw':'Firewall Analyzer','nav.tool_ca':'Config Anonymizer','nav.tool_log':'Log Analyzer','import.paste_placeholder':'Paste log content here, or use the upload button below…','import.upload_btn':'Upload File','import.analyze_btn':'Parse & Analyze','import.clear_btn':'Clear','import.file_loaded':'Loaded file: ','import.progress_parsing':'Parsing…','import.progress_analyzing':'Matching threat intel & classifying…','import.progress_rendering':'Rendering results…','import.progress_correlating':'Correlating events…','import.large_file_notice':'File too large ({name}, {lines} lines) — content not shown in the box below, still fully parsed','opt.freqWindow':'Freq window (s):','opt.freqThreshold':'Freq threshold:','opt.scanThreshold':'Scan threshold:','opt.volumeThreshold':'Volume threshold (MB):','opt.chainWindow':'Chain window (min):','opt.gapThreshold':'Gap threshold (min):','opt.chainGroupBy':'Group by:','opt.chainGroupByIp':'IP','opt.chainGroupByUser':'User','opt.geoRiskLabel':'Geo-risk countries:','opt.geoRiskFilter':'Filter countries…',
     'results.title':'② Event List (sorted by severity)','results.empty':'No data yet — import and analyze a log first','results.col_severity':'Severity','results.col_time':'Time','results.col_host':'Host','results.col_format':'Format','results.col_category':'Category','results.col_notes':'Suspected Issue','results.optional_cols':'Show columns:','results.col_src':'Source IP','results.col_dst':'Dest IP','results.col_port':'Port','results.col_proto':'Protocol','results.col_url':'URL/Method','results.col_sourcefile':'Source File','results.filter_all_files':'All Files','results.search_placeholder':'Search host/content…','issues.search_placeholder':'Search category/basis…','results.col_msg':'Message','results.summary_label':'Summary: ','results.timeline_label':'Event Timeline',
     'sev.critical':'Critical','sev.high':'High','sev.medium':'Medium','sev.low':'Low','sev.info':'Info',
     'issues.title':'③ Issue List (basic security analysis)','issues.empty':'No rule-based issues found','issues.col_category':'Category','issues.col_severity':'Severity','issues.col_count':'Count','issues.col_confidence':'Confidence','issues.col_source':'Intel Source','issues.col_basis':'Match Basis','issues.col_note':'Note','issues.note_prompt':'Enter a note (leave empty to remove):','issues.col_sample':'Sample','issues.filter_all_sources':'All Sources','issues.source_filter_label':'Filter by intel source:','issues.suppress_label':'Suppress categories:',
@@ -4084,7 +4224,7 @@ const LANG = {
   ja: {'import.sample_btn':"サンプルを読み込む",'opt.advanced':"詳細設定（検知しきい値・地理/ASN リスク・任意検知）",'results.no_match':"現在の検索・フィルター条件に一致するイベントはありません",'results.showing':"全 {total} 件中 先頭 {shown} 件を表示（CSV エクスポートは全件）",'results.show_more':"さらに {n} 件表示",'report.bar_unknown_vendor':"このログの形式を認識できず、イベントを 1 件も解析できませんでした。解析できない行（最大 200 行）を匿名化して報告し、この形式への対応に協力できます。",'report.bar_sparse':"{n} 行（{pct}%）を解析できませんでした。未対応の形式の可能性があります。これらの行（最大 200 行）を匿名化して報告し、対応に協力できます。",'report.bar_btn':"解析できない行を報告",'timeline.chain_hint':"下の色付きバーは各攻撃チェーンの期間を示します（色は重大度）。マウスを重ねるとアクターと段階を表示し、クリックするとその期間のイベントのみ表示します",'actor.export_csv_btn':"📄 イベントを CSV エクスポート",'status.filter_label':"対応状況：",'status.filter_all':"すべて",'status.filter_open':"未対応のみ",'status.filter_confirmed':"確認済みのみ",'status.filter_fp':"誤検知のみ",'status.filter_hide_fp':"誤検知を非表示",'preset.label':"フィルタープリセット：",'preset.choose':"— プリセットを選択 —",'preset.save_btn':"💾 現在のフィルターを保存",'preset.delete_btn':"削除",'preset.name_prompt':"プリセット名（同名は上書き）：",'actor.title':"アクター表示",'actor.placeholder':"IP、アカウント、ホスト名を入力",'actor.show_btn':"🔎 表示",'actor.none':"このアクターに関連するイベント・問題・攻撃チェーンは見つかりません",'actor.summary':"関連イベント {events} 件、問題 {issues} 種類、攻撃チェーン {chains} 件",'actor.events_title':"関連イベント（時系列）",'actor.more':"先頭 {n} 件のみ表示。全件はイベント一覧で検索して CSV エクスポートしてください",'issues.col_status':"対応状況",'status.open':"未対応",'status.confirmed':"確認済み",'status.falsePositive':"誤検知",'issues.export_md_btn':"📝 Markdown エクスポート",
     'app.title':'ログ分析・匿名化ツール','app.subtitle':'スイッチ/ファイアウォールのログ（CEF／標準 Syslog）を取り込み、重要度順に並べ替えて問題点を洗い出します。ローカルの脅威インテリジェンスリストと照合し、機密項目を匿名化できます。すべてブラウザ内で完結し、通信は行いません。',
     'notice.disclaimer':'本機能の分析結果は参考情報です。実際の対応はご自身の判断で慎重に行ってください',
-    'import.title':'① ログ取り込み','import.hint':'行単位の CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）、FortiGate 純正 key=value ログ（syslog エンベロープ不要）、JSON/NDJSON、および Windows イベントログ（wevtutil/イベントビューアーの XML エクスポート、バイナリ .evtx 非対応）に対応。テキスト貼り付け、アップロード、ドラッグ＆ドロップに対応。','nav.tools_btn':'ツール切替','nav.tool_network':'ハブ','nav.tool_switch':'スイッチ解析','nav.tool_gen':'スイッチ設定生成','nav.tool_fw':'ファイアウォール解析','nav.tool_ca':'設定匿名化','nav.tool_log':'ログ解析','import.paste_placeholder':'ここにログを貼り付けるか、下のアップロードボタンを使用…','import.upload_btn':'ファイルをアップロード','import.analyze_btn':'解析・分析','import.clear_btn':'クリア','import.file_loaded':'読み込み済みファイル：','import.progress_parsing':'解析中…','import.progress_analyzing':'脅威インテリジェンス照合・分類中…','import.progress_rendering':'結果を描画中…','import.progress_correlating':'相関分析中…','import.large_file_notice':'ファイルが大きすぎます（{name}、{lines} 行）。下のテキストボックスには表示されませんが、解析は正常に行われます','opt.freqWindow':'頻度ウィンドウ(秒)：','opt.freqThreshold':'頻度しきい値：','opt.scanThreshold':'スキャンしきい値：','opt.volumeThreshold':'トラフィック量しきい値(MB)：','opt.chainWindow':'相関ウィンドウ(分)：','opt.gapThreshold':'欠落しきい値(分)：','opt.chainGroupBy':'グループ軸：','opt.chainGroupByIp':'IP','opt.chainGroupByUser':'ユーザー','opt.geoRiskLabel':'地理的リスク国：','opt.geoRiskFilter':'国を絞り込み…',
+    'import.title':'① ログ取り込み','import.hint':'行単位の CEF (Common Event Format)、LEEF (Log Event Extended Format)、標準 Syslog（RFC3164/RFC5424）、FortiGate 純正 key=value ログ（syslog エンベロープ不要）、MikroTik RouterOS ログ（リモート syslog または /log print の出力）、JSON/NDJSON、および Windows イベントログ（wevtutil/イベントビューアーの XML エクスポート、バイナリ .evtx 非対応）に対応。テキスト貼り付け、アップロード、ドラッグ＆ドロップに対応。','nav.tools_btn':'ツール切替','nav.tool_network':'ハブ','nav.tool_switch':'スイッチ解析','nav.tool_gen':'スイッチ設定生成','nav.tool_fw':'ファイアウォール解析','nav.tool_ca':'設定匿名化','nav.tool_log':'ログ解析','import.paste_placeholder':'ここにログを貼り付けるか、下のアップロードボタンを使用…','import.upload_btn':'ファイルをアップロード','import.analyze_btn':'解析・分析','import.clear_btn':'クリア','import.file_loaded':'読み込み済みファイル：','import.progress_parsing':'解析中…','import.progress_analyzing':'脅威インテリジェンス照合・分類中…','import.progress_rendering':'結果を描画中…','import.progress_correlating':'相関分析中…','import.large_file_notice':'ファイルが大きすぎます（{name}、{lines} 行）。下のテキストボックスには表示されませんが、解析は正常に行われます','opt.freqWindow':'頻度ウィンドウ(秒)：','opt.freqThreshold':'頻度しきい値：','opt.scanThreshold':'スキャンしきい値：','opt.volumeThreshold':'トラフィック量しきい値(MB)：','opt.chainWindow':'相関ウィンドウ(分)：','opt.gapThreshold':'欠落しきい値(分)：','opt.chainGroupBy':'グループ軸：','opt.chainGroupByIp':'IP','opt.chainGroupByUser':'ユーザー','opt.geoRiskLabel':'地理的リスク国：','opt.geoRiskFilter':'国を絞り込み…',
     'results.title':'② イベント一覧（重要度順）','results.empty':'データがありません。まずログを取り込んで分析してください','results.col_severity':'重要度','results.col_time':'時刻','results.col_host':'ホスト','results.col_format':'形式','results.col_category':'分類','results.col_notes':'疑わしい問題','results.optional_cols':'表示項目：','results.col_src':'送信元IP','results.col_dst':'宛先IP','results.col_port':'ポート','results.col_proto':'プロトコル','results.col_url':'URL/HTTPメソッド','results.col_sourcefile':'ソースファイル','results.filter_all_files':'全ファイル','results.search_placeholder':'ホスト/内容を検索…','issues.search_placeholder':'カテゴリ/根拠を検索…','results.col_msg':'内容','results.summary_label':'集計：','results.timeline_label':'イベントの時間分布',
     'sev.critical':'重大','sev.high':'高','sev.medium':'中','sev.low':'低','sev.info':'情報',
     'issues.title':'③ 問題リスト（基本セキュリティ分析）','issues.empty':'該当する問題は見つかりませんでした','issues.col_category':'分類','issues.col_severity':'重要度','issues.col_count':'件数','issues.col_confidence':'信頼度','issues.col_source':'情報源','issues.col_basis':'照合根拠','issues.col_note':'備考','issues.note_prompt':'備考を入力（空欄で削除）：','issues.col_sample':'サンプル','issues.filter_all_sources':'すべての情報源','issues.source_filter_label':'情報源で絞り込み：','issues.suppress_label':'抑制する分類：',
@@ -5059,7 +5199,7 @@ function renderIssuesSuppressPanel() {
 // ══════════════════════════════════════════════════════════════════
 let customDetectRules = [];
 let _customRuleIdSeq = 0;
-const CUSTOM_RULE_FORMATS = ['cef', 'leef', 'rfc5424', 'rfc3164', 'asa', 'fortigate', 'json', 'winevent'];
+const CUSTOM_RULE_FORMATS = ['cef', 'leef', 'rfc5424', 'rfc3164', 'asa', 'fortigate', 'mikrotik', 'json', 'winevent'];
 function _isValidCustomRuleRegex(pattern) {
   try { new RegExp(pattern); return true; } catch (e) { return false; }
 }
