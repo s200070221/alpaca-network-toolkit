@@ -176,6 +176,8 @@ const App = (() => {
     openwrt:t=>OpenWrtParser.parse(t), watchguard:t=>WatchGuardParser.parse(t),
   };
   let DIFF_OLD_FILE=null, DIFF_NEW_FILE=null, DIFF_RESULT=null, _diffInited=false;
+  // 批次查詢跨版本比對（FE）：最近一次比對成功的新舊解析結果與比對結果快取
+  let DIFF_OLD_PARSED=null, DIFF_NEW_PARSED=null, LAST_BATCH_DIFF=null, LAST_BATCH_DIFF_ERRORS=[];
   // 合規基準線 drift 結果快照（2026-09-21 新增），供 CSV 匯出用，獨立於上面設定檔比對的
   // DIFF_RESULT——語意不同（這個比的是合規檢查「結果」不是設定檔本身），比照既有慣例模組級變數
   let COMPLIANCE_DIFF_RESULT=null;
@@ -228,12 +230,21 @@ const App = (() => {
       const haMode=!!document.getElementById('diff-ha-mode')?.checked;
       DIFF_RESULT=diffConfigs(oldParsed,newParsed,{haMode});
       $('diff-result').innerHTML=buildDiffHtml(DIFF_RESULT);
+      DIFF_OLD_PARSED=oldParsed; DIFF_NEW_PARSED=newParsed; LAST_BATCH_DIFF=null;
+      $('diff-batch').style.display=''; $('diff-batch-result').innerHTML='';
     }catch(e){
-      DIFF_RESULT=null;
+      DIFF_RESULT=null; DIFF_OLD_PARSED=null; DIFF_NEW_PARSED=null; LAST_BATCH_DIFF=null;
+      $('diff-batch').style.display='none';
       $('diff-result').innerHTML=`<div class="nodata" style="color:var(--red)">${esc(e.message)}</div>`;
     }
   }
   window.runDiffCompare=runDiffCompare;
+  window._runBatchDiff=function(){
+    const el=$('diff-batch-result'); if(!el||!DIFF_OLD_PARSED||!DIFF_NEW_PARSED)return;
+    const { rows, errors } = parseBatchQueryCSV(($('diff-batch-input')||{}).value||'');
+    LAST_BATCH_DIFF=compareBatchQuery(rows, DIFF_OLD_PARSED, DIFF_NEW_PARSED); LAST_BATCH_DIFF_ERRORS=errors;
+    el.innerHTML=buildBatchDiffResultHtml(LAST_BATCH_DIFF, errors);
+  };
 
   // Progress
   function setStep(n){for(let i=1;i<=8;i++){const el=$(`ps${i}`);if(!el)continue;const ico=el.querySelector('.pico');if(i<n){el.className='pstep done';ico.textContent='✓';}else if(i===n){el.className='pstep cur';ico.textContent='⏳';}else{el.className='pstep';ico.textContent='○';}}}
@@ -713,6 +724,7 @@ function onParsed(){
     if(PARSED && document.getElementById('view-perms') && document.getElementById('view-perms').style.display!=='none') renderPermissions();
     // 新舊設定比對結果為靜態 innerHTML，非 data-i18n 屬性可自動翻譯，語言切換時需手動重繪
     if(DIFF_RESULT && document.getElementById('view-diff') && document.getElementById('view-diff').style.display!=='none') $('diff-result').innerHTML=buildDiffHtml(DIFF_RESULT);
+    if(LAST_BATCH_DIFF && $('diff-batch-result')) $('diff-batch-result').innerHTML=buildBatchDiffResultHtml(LAST_BATCH_DIFF, LAST_BATCH_DIFF_ERRORS);
     // 羊駝 tooltip 跟語言走
     var ac=document.getElementById('alpaca-corner'); if(ac) ac.setAttribute('title', tr('egg.alpaca_title'));
   };
@@ -1712,6 +1724,13 @@ function onParsed(){
   };
 
   async function doExport(type){
+    // 批次查詢跨版本比對（FE）同樣屬於獨立於 PARSED 的比對流程，比照下方 csv-diff- 在門檻前處理
+    if(type==='csv-batch-diff'){
+      const content=Reporter.exportBatchDiffCSV(LAST_BATCH_DIFF);
+      if(content)Reporter.download(content,`fw_batch_diff_${dateStr()}.csv`,'text/csv');
+      else showErr(tr('batch.empty'));
+      return;
+    }
     if(type.startsWith('csv-diff-')){
       // 新舊比對是獨立於 ST/PARSED 的比對流程，不受單一設定分析的 PARSED 門檻限制
       if(!DIFF_RESULT)return;

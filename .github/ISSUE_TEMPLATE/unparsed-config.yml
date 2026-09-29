@@ -15,7 +15,7 @@ body:
     id: tool
     attributes:
       label: 來源工具 / Source tool
-      placeholder: switch_analyzer / firewall_analyzer / config_anonymizer
+      placeholder: switch_analyzer / firewall_analyzer / log_analyzer / config_anonymizer
     validations:
       required: true
   - type: input

@@ -243,6 +243,20 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED) {
       hasFqdn: !!(mt && mt.hasFqdn), check: r.expect ? (r.expect === 'accept') === allowed : null };
   });
 }
+// 批次查詢跨版本比對（2026-09-29 新增，FE）：同一批查詢對新舊兩份設定各跑一次。
+// change：'action'＝允許／拒絕結果改變（implicit deny 視同 deny）；'policy'＝結果相同但命中的
+// 規則 ID 不同；''＝完全相同。回傳 [{...row, old:{action,policyId,policyName}, new:{...}, change}]
+function compareBatchQuery(rows, oldParsed, newParsed) {
+  const o = runBatchPolicyQuery(rows, '__all__', oldParsed);
+  const n = runBatchPolicyQuery(rows, '__all__', newParsed);
+  const pick = r => ({ action: r.action, policyId: r.policyId, policyName: r.policyName });
+  return rows.map((row, i) => {
+    const a = o[i], b = n[i];
+    const allowA = a.action === 'accept', allowB = b.action === 'accept';
+    const change = allowA !== allowB ? 'action' : (String(a.policyId) !== String(b.policyId) ? 'policy' : '');
+    return { ...row, old: pick(a), new: pick(b), change };
+  });
+}
 // ── End IP/Policy Query utils ──────────────────────────────────────────────
 
 function tr(key) {
