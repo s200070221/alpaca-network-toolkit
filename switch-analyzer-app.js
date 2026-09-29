@@ -226,6 +226,13 @@ const FORCE_VENDOR_LIST=[
   });
 })();
 
+// 內建範例（PD，2026-09-29 新增）：第一次使用可一鍵試用；只用 RFC 5737 文件用 IP，並刻意含幾項稽核會標出的問題
+const SW_SAMPLE_CONFIG = "! Sample config - RFC 5737 documentation IPs only, not a real device\nhostname SAMPLE-SW01\n!\nenable secret 5 $1$SMPL$SampleHashOnly000000\nusername admin privilege 15 secret 0 Sample-Pass1\n!\nvlan 10\n name USERS\nvlan 20\n name SERVERS\nvlan 99\n name MGMT\n!\ninterface GigabitEthernet1/0/1\n description PC-01\n switchport mode access\n switchport access vlan 10\n spanning-tree portfast\n!\ninterface GigabitEthernet1/0/2\n description SERVER-01\n switchport mode access\n switchport access vlan 20\n!\ninterface GigabitEthernet1/0/3\n shutdown\n!\ninterface GigabitEthernet1/0/24\n description UPLINK-CORE\n switchport mode trunk\n switchport trunk allowed vlan 10,20,99\n!\ninterface Vlan99\n ip address 192.0.2.10 255.255.255.0\n!\nip route 0.0.0.0 0.0.0.0 192.0.2.1\nsnmp-server community public RO\nlogging host 198.51.100.20\n!\nline vty 0 4\n transport input telnet\n!\nend\n";
+function loadSampleConfig(){
+  const fv = document.getElementById('force-vendor-select'); if (fv) fv.value = '';
+  document.getElementById('paste-area').value = SW_SAMPLE_CONFIG; doAnalyze();
+}
+
 function doAnalyze(){
   const cfg=document.getElementById('paste-area').value.trim();
   if(!cfg){alert(tr('msg.no_config'));return;}
@@ -3358,7 +3365,8 @@ function exportQoSCSV(){
   });
 })();
 
-setLang('zhTW');
+setLang(loadLangPref());
+autoLabelControls();
 _initParseCoverageMatrix();
 
 // 2026-09 資安審查修復：JSON 解析失敗／已過期的 key 一律清除（不論是否為本工具負責消費），讓

@@ -148,6 +148,9 @@ input.valid,select.valid{border-color:var(--green)!important}
   .card{padding:14px}
   .row{flex-direction:column;align-items:stretch;gap:4px}
   .row label{min-width:0}
+  /* 手機版（2026-09-29，UC）：下拉選單的寬度會跟著最長選項撐開，超出卡片造成整頁橫向捲動 */
+  .row select,.row input,.row textarea{max-width:100%;min-width:0}
+  .card table{display:block;overflow-x:auto;max-width:100%}
   .out-actions{flex-wrap:wrap}
   .gen-btn,.act-btn{width:100%;text-align:center}
   #output{height:180px}
@@ -235,7 +238,7 @@ input.valid,select.valid{border-color:var(--green)!important}
       </div>
     </div>
     <div class="row">
-      <label data-i18n="lbl.importPaste">貼上設定檔內容</label>
+      <label for="import-text" data-i18n="lbl.importPaste">貼上設定檔內容</label>
     </div>
     <textarea id="import-text" style="width:100%;height:140px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:Menlo,'Courier New',monospace;font-size:12px;padding:10px" spellcheck="false"></textarea>
     <details class="import-fallback">
@@ -335,9 +338,9 @@ input.valid,select.valid{border-color:var(--green)!important}
       <button class="add-btn" data-i18n="btn.importTemplate" onclick="importTemplateFile()">📥 匯入模板</button>
     </div>
     <div class="row" style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
-      <label data-i18n="lbl.compareTemplates">比較兩個模板</label>
+      <label id="lbl-compare-templates" data-i18n="lbl.compareTemplates">比較兩個模板</label>
       <select id="compare-template-a"></select>
-      <select id="compare-template-b"></select>
+      <select id="compare-template-b" aria-labelledby="lbl-compare-templates"></select>
       <button class="add-btn" data-i18n="btn.runCompare" onclick="compareTemplates()">開始比較</button>
     </div>
     <div id="template-diff-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:10px;max-height:360px;overflow-y:auto;font-family:Menlo,'Courier New',monospace;font-size:11px;line-height:1.5"></div>
@@ -1263,7 +1266,7 @@ end</pre>
   </div>
 
   <div class="card">
-    <h2 data-i18n="sec.output">產生結果</h2>
+    <h2 id="h-output" data-i18n="sec.output">產生結果</h2>
     <div class="out-actions">
       <button class="act-btn" id="copy-btn" data-i18n="btn.copy" onclick="copyOutput()">複製</button>
       <button class="act-btn" data-i18n="btn.download" onclick="downloadOutput()">下載</button>
@@ -1273,7 +1276,7 @@ end</pre>
       <button class="act-btn" id="import-diff-btn" style="display:none" data-i18n="importDiff.btn" onclick="toggleImportDiff()">⇄ 與匯入原始設定比對</button>
       <button class="act-btn" style="margin-left:auto" data-i18n="btn.diff" onclick="toggleDiffCard()">🔄 對比</button>
     </div>
-    <textarea id="output" readonly spellcheck="false"></textarea>
+    <textarea id="output" aria-labelledby="h-output" readonly spellcheck="false"></textarea>
     <div id="import-diff-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:10px;max-height:360px;overflow-y:auto;font-family:Menlo,'Courier New',monospace;font-size:11px;line-height:1.5"></div>
     <div id="session-diff-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:10px;max-height:300px;overflow-y:auto;font-family:Menlo,'Courier New',monospace;font-size:11px;line-height:1.5"></div>
   </div>

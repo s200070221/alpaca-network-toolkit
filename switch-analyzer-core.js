@@ -15,8 +15,40 @@ function tip(key, label) {
   if (!t || t === key) return label;
   return '<span data-tip="' + t.replace(/"/g,'&quot;') + '">' + label + '<sup style="font-size:8px;opacity:.45;margin-left:2px;cursor:help">ⓘ</sup></span>';
 }
+// 語言偏好跨工具共用（2026-09-29，PB）：共用 localStorage key 'cw_lang'（比照主題 'cw_theme'），
+// 只記住三種正式語言；彩蛋語言需各工具各自解鎖，不跨工具帶入。未存過時依瀏覽器語言決定
+function loadLangPref() {
+  try { const v = localStorage.getItem('cw_lang'); if (v === 'zhTW' || v === 'en' || v === 'ja') return v; } catch (e) {}
+  const n = ((typeof navigator !== 'undefined' && navigator.language) || '').toLowerCase();
+  return n.indexOf('ja') === 0 ? 'ja' : (n.indexOf('zh') === 0 || !n ? 'zhTW' : 'en');
+}
+// 無障礙（UE，2026-09-29 新增）：沒有可存取名稱的輸入欄位，自動關聯到緊鄰的標籤——前一個兄弟元素是
+// 沒有 for 的 <label> 時補 for；是 <span> 時以 aria-labelledby 指向它（語言切換後名稱跟著更新）。
+// 已有 label／aria／title／placeholder（瀏覽器本身會當名稱）者不動。各工具各自一份，不跨檔引用
+function autoLabelControls() {
+  var n = 0;
+  document.querySelectorAll('input:not([type=hidden]):not([type=file]),select,textarea').forEach(function (el) {
+    if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.title || el.placeholder || el.closest('label')) return;
+    if (el.id && document.querySelector('label[for="' + el.id + '"]')) return;
+    var lb = el.previousElementSibling;
+    if (!lb || !/^(LABEL|SPAN)$/.test(lb.tagName) || lb.querySelector('input,select,textarea')) return;
+    if (lb.tagName === 'LABEL' && !lb.htmlFor && el.id) { lb.htmlFor = el.id; return; }
+    if (!lb.id) lb.id = 'auto-lbl-' + (++n);
+    el.setAttribute('aria-labelledby', lb.id);
+  });
+}
+function saveLangPref(code) {
+  if (code === 'zhTW' || code === 'en' || code === 'ja') { try { localStorage.setItem('cw_lang', code); } catch (e) {} }
+}
+// <html lang> 對應（2026-09-29，PB）：螢幕閱讀器依此決定朗讀語言；中文系彩蛋語言視為 zh-TW
+function htmlLangFor(code) {
+  if (code === 'ja') return 'ja';
+  return ['zhTW', 'bureau', 'cat', 'bean', 'alpaca', 'yanse', 'wuxia'].indexOf(code) >= 0 ? 'zh-TW' : 'en';
+}
 function setLang(code) {
   _lang = code;
+  saveLangPref(code);
+  document.documentElement.lang = htmlLangFor(code);
   document.querySelectorAll('[data-i18n]').forEach(function(el) {
     var k = el.dataset.i18n;
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.placeholder = tr(k);

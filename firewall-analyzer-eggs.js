@@ -32,7 +32,8 @@
 })();
 
 // 初始化語言
-setLang('zhTW');
+setLang(loadLangPref());
+autoLabelControls();
 
 // 名詞解釋 tooltip
 (function(){

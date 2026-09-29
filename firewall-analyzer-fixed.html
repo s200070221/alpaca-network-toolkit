@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>防火牆設定分析器 v3</title>
+<title>防火牆設定分析器</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦙</text></svg>">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans+TC:wght@300;400;500;700&display=swap');
@@ -232,6 +232,9 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 
 /* ═══ Responsive: Phone ≤540px ══════════════════════════════════════ */
 @media(max-width:540px){
+  /* 手機版（2026-09-29，UC）：頂部列換行，避免右側主題／工具按鈕被擠出畫面 */
+  #topbar{flex-wrap:wrap;row-gap:6px}
+  .lang-btn{white-space:nowrap}
   /* Sidebar: icon-only, narrower */
   #sidebar{width:44px}
   .nav-item{padding:7px 12px}
@@ -519,8 +522,14 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
   <div id="content">
     <!-- Upload -->
     <div id="view-upload">
-      <div class="upload-headline" data-i18n="upload.headline">防火牆設定分析器</div>
-      <div class="upload-sub" data-i18n="upload.sub">FortiGate · Sophos XG · Check Point · Palo Alto · SonicWall · MikroTik — 純前端 · 離線 · 不依賴外部 AI</div>
+      <h1 class="upload-headline" data-i18n="upload.headline">防火牆設定分析器</h1>
+      <div class="upload-sub" data-i18n="upload.sub">支援 13 家主流防火牆（FortiGate、Palo Alto、Check Point、Cisco ASA／FTD、Juniper SRX、Sophos 等）— 純前端 · 離線 · 不依賴外部 AI</div>
+      <!-- 自動偵測上傳（PC）：依檔案內容特徵放入下方對應廠牌欄位，可一次多檔 -->
+      <div class="ucard" id="autoc" style="width:100%;max-width:860px;margin-bottom:10px;border-style:dashed;padding:12px" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('autoc').classList.add('drag-over')" ondragleave="document.getElementById('autoc').classList.remove('drag-over')" ondrop="handleAutoDrop(event)" onclick="if(event.target.closest('#auto-msg'))return;document.getElementById('auto-fi').click()">
+        <div class="dropzone" style="border:none;padding:4px"><div class="dz-icon">🔍</div><div class="dz-text" data-i18n="upload.auto_title">自動偵測廠牌：拖曳或點擊上傳（可多檔）</div><div class="dz-hint" data-i18n="upload.auto_hint">依檔案內容特徵自動放入下方對應廠牌欄位，認不出時可手動選擇</div></div>
+        <input type="file" id="auto-fi" multiple accept=".conf,.txt,.cfg,.log,.xml,.exp,.rsc,.boot,.C,.W,.fws" onchange="autoDetectFiles(this.files);this.value=''">
+        <div id="auto-msg" style="font-size:12px;text-align:left;cursor:default"></div>
+      </div>
       <div class="upload-grid">
         <div class="ucard forti" id="fc" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('fc').classList.add('drag-over')" ondragleave="document.getElementById('fc').classList.remove('drag-over')" ondrop="handleDrop(event,'f')" onclick="document.getElementById('fi').click()">
           <div class="ucard-head"><div class="vendor-dot forti">🔴</div><div><h3>FortiGate</h3><div class="ver">v7.x · .conf / .txt</div></div></div>
@@ -609,6 +618,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
       </div>
       <div class="analyze-row">
         <button class="btn-analyze" id="btn-go" onclick="analyze()" disabled>🔍 <span data-i18n="btn.analyze">開始分析</span></button>
+        <button class="btn btn-ghost" id="sample-btn" onclick="_loadSampleConfig()" data-i18n="btn.loadSample">載入範例</button>
         <span class="analyze-hint" id="analyze-hint">請選擇至少一個設定檔案</span>
       </div>
     </div>

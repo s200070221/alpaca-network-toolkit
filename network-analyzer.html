@@ -55,12 +55,12 @@ a{text-decoration:none;color:inherit}
 
 .card-icon{font-size:36px;line-height:1}
 .card-title{font-size:16px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px}
-.card-badge{font-size:10px;font-family:'JetBrains Mono',monospace;
+.card-badge{font-size:11px;font-family:'JetBrains Mono',monospace;
   background:rgba(0,212,255,.12);color:var(--accent);border-radius:4px;padding:2px 6px}
 .card-badge-experimental{background:rgba(245,158,11,.15);color:#f59e0b;margin-left:4px}
 .card-desc{font-size:12px;color:var(--text-mid);line-height:1.7;flex:1}
 .card-tags{display:flex;flex-wrap:wrap;gap:5px}
-.tag{font-size:10px;font-family:'JetBrains Mono',monospace;
+.tag{font-size:11px;font-family:'JetBrains Mono',monospace;
   background:var(--surface2);border:1px solid var(--border);
   border-radius:4px;padding:2px 7px;color:var(--text-dim)}
 .card-features{border-top:1px solid var(--border);padding-top:14px;display:flex;flex-wrap:wrap;gap:6px}
@@ -179,6 +179,9 @@ a{text-decoration:none;color:inherit}
 
 @media(max-width:600px){
   .header,.cards,.hero,.footer{padding-left:20px;padding-right:20px}
+  /* 手機版（2026-09-29，UC）：語言／彩蛋圖示列換行，避免主題與工具選單按鈕被推出畫面 */
+  .header{flex-wrap:wrap;gap:10px}
+  .lang-bar{flex-wrap:wrap}
   .notice{margin-left:20px;margin-right:20px}
   .cards{grid-template-columns:1fr}
 }
@@ -286,7 +289,7 @@ a{text-decoration:none;color:inherit}
   <div class="recent-anon-title" id="activity-timeline-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
     <span id="activity-timeline-title-text"></span>
     <span style="display:flex;align-items:center;gap:10px">
-      <select id="activity-timeline-filter" onchange="renderActivityTimeline()" style="font-size:11px;padding:1px 4px;max-width:160px"></select>
+      <select id="activity-timeline-filter" aria-labelledby="activity-timeline-title-text" onchange="renderActivityTimeline()" style="font-size:11px;padding:1px 4px;max-width:160px"></select>
       <span class="recent-anon-clear" id="activity-timeline-export-btn" onclick="exportActivityTimeline()" style="cursor:pointer;font-weight:400;font-size:11px;color:var(--text-dim,#94a3b8);text-decoration:underline"></span>
       <span class="recent-anon-clear" id="activity-timeline-clear-btn" onclick="clearActivityTimeline()" style="cursor:pointer;font-weight:400;font-size:11px;color:var(--text-dim,#94a3b8);text-decoration:underline"></span>
     </span>
@@ -882,8 +885,34 @@ function tip(key, label) {
   if (!t || t === key) return label;
   return `<span data-tip="${t.replace(/"/g,'&quot;')}">${label}<sup style="font-size:8px;opacity:.45;margin-left:2px;cursor:help">ⓘ</sup></span>`;
 }
+// 語言偏好跨工具共用（2026-09-29，PB）：共用 localStorage key 'cw_lang'（比照主題 'cw_theme'），
+// 只記住三種正式語言；彩蛋語言需各工具各自解鎖，不跨工具帶入。未存過時依瀏覽器語言決定
+function loadLangPref() {
+  try { const v = localStorage.getItem('cw_lang'); if (v === 'zhTW' || v === 'en' || v === 'ja') return v; } catch (e) {}
+  const n = ((typeof navigator !== 'undefined' && navigator.language) || '').toLowerCase();
+  return n.indexOf('ja') === 0 ? 'ja' : (n.indexOf('zh') === 0 || !n ? 'zhTW' : 'en');
+}
+// 無障礙（UE，2026-09-29 新增）：沒有可存取名稱的輸入欄位，自動關聯到緊鄰的標籤——前一個兄弟元素是
+// 沒有 for 的 <label> 時補 for；是 <span> 時以 aria-labelledby 指向它（語言切換後名稱跟著更新）。
+// 已有 label／aria／title／placeholder（瀏覽器本身會當名稱）者不動。各工具各自一份，不跨檔引用
+function autoLabelControls() {
+  var n = 0;
+  document.querySelectorAll('input:not([type=hidden]):not([type=file]),select,textarea').forEach(function (el) {
+    if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.title || el.placeholder || el.closest('label')) return;
+    if (el.id && document.querySelector('label[for="' + el.id + '"]')) return;
+    var lb = el.previousElementSibling;
+    if (!lb || !/^(LABEL|SPAN)$/.test(lb.tagName) || lb.querySelector('input,select,textarea')) return;
+    if (lb.tagName === 'LABEL' && !lb.htmlFor && el.id) { lb.htmlFor = el.id; return; }
+    if (!lb.id) lb.id = 'auto-lbl-' + (++n);
+    el.setAttribute('aria-labelledby', lb.id);
+  });
+}
+function saveLangPref(code) {
+  if (code === 'zhTW' || code === 'en' || code === 'ja') { try { localStorage.setItem('cw_lang', code); } catch (e) {} }
+}
 function setLang(lang) {
   _lang = lang;
+  saveLangPref(lang);
   document.documentElement.lang = lang === 'zhTW' ? 'zh-TW' : lang;
   document.querySelectorAll('.lang-btn[data-lang]').forEach(b => {
     b.classList.toggle('active', b.dataset.lang === lang);
@@ -1746,7 +1775,8 @@ document.getElementById('file-pick').addEventListener('change', function() {
 });
 
 // ── Init ──────────────────────────────────────────────────────────
-setLang('zhTW');
+setLang(loadLangPref());
+autoLabelControls();
 // ── 彩蛋：Rage quit（連按 Esc 三次）────────────────────────
 (function(){
   var _rq=0,_rqT;

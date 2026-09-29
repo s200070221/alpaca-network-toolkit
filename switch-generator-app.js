@@ -2984,10 +2984,12 @@ function showValidationResults(results,fromImport=false){
 // 「本次變更」diff 預覽（2026-09-14 新增）：記錄上一次 generate() 產生的設定文字，供下一次
 // 呼叫時比對差異；null 代表尚未產生過任何版本（首次產生不顯示 diff，無比對基準）
 let _lastGeneratedCfg=null;
-function generate(fromImport=false){
+// quiet（2026-09-29，UC）：頁面初始化時使用者什麼都還沒做，不跳出「所有檢查通過」浮窗
+// （手機上還會蓋住頁首），只有檢查失敗才顯示；按「產生設定」等使用者操作仍一律顯示
+function generate(fromImport=false,quiet=false){
   // 驗證表單
   const validation=validateForm();
-  showValidationResults(validation,fromImport);
+  if(!quiet||!validation.valid)showValidationResults(validation,fromImport);
   if(!validation.valid)return;
 
   // withSviInterfaces()：13 家廠牌把 VLAN 的 L3 IP 建模成獨立 SVI 介面，這裡才依 vlans[].ip
@@ -4653,8 +4655,34 @@ function applyI18n(root){
   (root||document).querySelectorAll('[data-i18n-ph]').forEach(el=>{el.placeholder=tr(el.dataset.i18nPh);});
 }
 
+// 語言偏好跨工具共用（2026-09-29，PB）：共用 localStorage key 'cw_lang'（比照主題 'cw_theme'），
+// 只記住三種正式語言；彩蛋語言需各工具各自解鎖，不跨工具帶入。未存過時依瀏覽器語言決定
+function loadLangPref() {
+  try { const v = localStorage.getItem('cw_lang'); if (v === 'zhTW' || v === 'en' || v === 'ja') return v; } catch (e) {}
+  const n = ((typeof navigator !== 'undefined' && navigator.language) || '').toLowerCase();
+  return n.indexOf('ja') === 0 ? 'ja' : (n.indexOf('zh') === 0 || !n ? 'zhTW' : 'en');
+}
+// 無障礙（UE，2026-09-29 新增）：沒有可存取名稱的輸入欄位，自動關聯到緊鄰的標籤——前一個兄弟元素是
+// 沒有 for 的 <label> 時補 for；是 <span> 時以 aria-labelledby 指向它（語言切換後名稱跟著更新）。
+// 已有 label／aria／title／placeholder（瀏覽器本身會當名稱）者不動。各工具各自一份，不跨檔引用
+function autoLabelControls() {
+  var n = 0;
+  document.querySelectorAll('input:not([type=hidden]):not([type=file]),select,textarea').forEach(function (el) {
+    if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.title || el.placeholder || el.closest('label')) return;
+    if (el.id && document.querySelector('label[for="' + el.id + '"]')) return;
+    var lb = el.previousElementSibling;
+    if (!lb || !/^(LABEL|SPAN)$/.test(lb.tagName) || lb.querySelector('input,select,textarea')) return;
+    if (lb.tagName === 'LABEL' && !lb.htmlFor && el.id) { lb.htmlFor = el.id; return; }
+    if (!lb.id) lb.id = 'auto-lbl-' + (++n);
+    el.setAttribute('aria-labelledby', lb.id);
+  });
+}
+function saveLangPref(code) {
+  if (code === 'zhTW' || code === 'en' || code === 'ja') { try { localStorage.setItem('cw_lang', code); } catch (e) {} }
+}
 function setLang(lang){
   _lang=lang;
+  saveLangPref(lang);
   document.documentElement.lang=lang==='zhTW'?'zh-TW':lang;
   document.querySelectorAll('.lang-btn[data-lang]').forEach(b=>b.classList.toggle('active',b.dataset.lang===lang));
   // 保存當前的設備模型選擇，以防語言切換過程中遺失
@@ -4909,11 +4937,12 @@ window.loadExampleData=loadExampleData;
 // 初始化流程：確保所有依賴都已加載
 
 // 第一步：設置語言，但延遲 device-model 更新
-_lang='zhTW';
-document.documentElement.lang='zh-TW';
-document.querySelectorAll('.lang-btn[data-lang]').forEach(b=>b.classList.toggle('active',b.dataset.lang==='zhTW'));
+_lang=loadLangPref();
+document.documentElement.lang=_lang==='zhTW'?'zh-TW':_lang;
+document.querySelectorAll('.lang-btn[data-lang]').forEach(b=>b.classList.toggle('active',b.dataset.lang===_lang));
 applyI18n(document);
 document.getElementById('h-title').textContent=tr('title');
+autoLabelControls();
 document.title=tr('title');
 
 // 第二步：確保 vendor 下拉有正確的初始值
@@ -4930,7 +4959,7 @@ updateIfaceTableDisplay();
 updateAppliedModelNotice();
 renderTemplateList();
 ['acl','qos','security'].forEach(renderSectionTemplateSelect);
-generate();
+generate(false,true);
 
 // 稽核發現→產生器修復預填跨工具聯動（2026-09-15 新增）：switch_analyzer 的「修復」按鈕經
 // `_sendToGenerator(findingId)` 帶入 focusFindingId，本工具收到後捲動並短暫高亮對應卡片——
