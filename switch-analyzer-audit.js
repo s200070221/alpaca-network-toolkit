@@ -515,13 +515,46 @@ function buildSwitchAuditMarkdown(parsed){
   ];
   findings.forEach(f=>lines.push(`| ${_mdCell(f.check)} | ${f.value} | ${_mdCell(riskLabel[f.risk]||f.risk)} | ${_mdCell(f.detail)} | ${_mdCell((f.standards||[]).join('; '))} |`));
   lines.push('',`> ${tr('audit.standards_disclaimer')}`,'');
+  // VLAN 使用率與已關閉仍保留設定的介面（2026-09-29 新增）：與畫面卡片同一資料來源，
+  // 不計入上方稽核發現與健康度；無已宣告 VLAN／無命中介面時只寫一行說明不出表格
+  const usage=analyzeVlanUsage(parsed);
+  lines.push(`## ${tr('vlan.usage_title')} (${tr('vlan.usage_unused')}: ${usage.filter(u=>u.unused).length} / ${usage.length})`,'');
+  if(usage.length){
+    lines.push(`| ${tr('vlan.island_col_id')} | ${tr('vlan.island_col_name')} | ${tr('vlan.usage_col_access')} | ${tr('vlan.usage_col_tagged')} | SVI |`,'|---|---|---|---|---|');
+    usage.forEach(u=>lines.push(`| ${_mdCell(u.id)}${u.unused?' ('+_mdCell(tr('vlan.usage_unused'))+')':''} | ${_mdCell(u.name)} | ${u.accessCount} | ${u.taggedCount} | ${u.hasSvi?'✓':''} |`));
+    lines.push('');
+  }
+  const shut=analyzeShutdownConfigured(parsed);
+  lines.push(`## ${tr('audit.shut_cfg_title')} (${shut.length})`,'');
+  if(shut.length){
+    lines.push(`| ${tr('col.iface')} | ${tr('col.desc')} | ${tr('audit.shut_cfg_items')} |`,'|---|---|---|');
+    shut.forEach(r=>lines.push(`| ${_mdCell(r.name)} | ${_mdCell(r.desc)} | ${_mdCell(r.items.map(k=>SHUTDOWN_ITEM_LABEL[k]||k).join(', '))} |`));
+  }else{
+    lines.push(tr('audit.shut_cfg_none'));
+  }
+  lines.push('');
   return lines.join('\n');
+}
+
+// ── 無法解析設定檔回報觸發判斷（2026-09-29 新增）──────────────────────────
+// 'unknown_vendor'：未命中任何廠牌簽章；'sparse'：有廠牌但介面與已宣告 VLAN 皆為 0（交換器
+// 設定檔幾乎必定至少有一個介面，兩者皆空代表解析器對此檔案幾乎沒有作用）；其餘回傳 ''。
+// 門檻刻意保守，避免正常但精簡的設定檔也跳出回報提示
+function switchReportTrigger(p){
+  if(!p||p.vendor==='unknown')return 'unknown_vendor';
+  const vlans=(p.vlans||[]).filter(v=>!v.implied).length;
+  if(!(p.interfaces||[]).length&&!vlans)return 'sparse';
+  return '';
+}
+function switchReportStats(p){
+  return {interfaces:(p.interfaces||[]).length,vlans:(p.vlans||[]).filter(v=>!v.implied).length,routes:(p.routes||[]).length};
 }
 
 // ── 已 shutdown 但仍保留設定的介面（2026-09-24 新增）───────────────────────
 // 保留的設定：IP（含 IPv6／次要IP）、VRF、非預設（非 1）的 VLAN 指派、native VLAN、trunk／hybrid
 // 模式。描述不算——替閒置埠寫「預留」「Spare」之類說明本身是好習慣，列入只會產生雜訊。
 // 回傳 [{name, desc, items:[欄位代號]}]；只列清單不計入 analyzeSwitchAudit()，不影響健康度
+const SHUTDOWN_ITEM_LABEL={ip:'IP',ipv6:'IPv6',secondaryIp:'Secondary IP',vrf:'VRF',trunk:'Trunk',hybrid:'Hybrid',vlan:'VLAN',nativeVlan:'Native VLAN'};
 function analyzeShutdownConfigured(parsed){
   return (parsed.interfaces||[]).filter(i=>i.shutdown).map(i=>{
     const items=[];

@@ -1032,8 +1032,8 @@ function renderVLANs(){
     `<div class="tbl-wrap">${html}</div><div class="tbl-foot"><span>${count} / ${total} ${tr('unit.count')}</span><span>${tr('vlan.foot_declared')}: ${declaredCount} · ${tr('vlan.foot_implied')}: ${impliedCount}</span></div>${islandCard}${buildVlanUsageCard(analyzeVlanUsage(parsed))}`;
 }
 // 已 shutdown 仍保留設定的介面卡片（2026-09-24 新增）：資料來自 switch-analyzer-audit.js
-// analyzeShutdownConfigured()；不計入上方稽核發現與健康度，純提醒清理
-const SHUTDOWN_ITEM_LABEL={ip:'IP',ipv6:'IPv6',secondaryIp:'Secondary IP',vrf:'VRF',trunk:'Trunk',hybrid:'Hybrid',vlan:'VLAN',nativeVlan:'Native VLAN'};
+// analyzeShutdownConfigured()；不計入上方稽核發現與健康度，純提醒清理。
+// 欄位代號標籤 SHUTDOWN_ITEM_LABEL 定義在 audit.js（Markdown 匯出共用）
 function buildShutdownConfiguredCard(rows){
   const ok=!rows.length;
   const color=ok?'var(--green)':'var(--yellow)';
@@ -3409,6 +3409,32 @@ function _sendToGenerator(focusFindingId){
   }catch(e){ alert(tr('err.send_fail')); }
   const w=window.open('switch-config-generator.html','_blank');
   if(wrote&&!w){ localStorage.removeItem('_netAnalyzer_swParsedModel'); alert(tr('err.send_popup_blocked')); }
+}
+
+// 無法解析設定檔回報（2026-09-29 新增）：解析後若無法辨識廠牌或結果過少，在結果頁上方顯示
+// 提示列；按下回報會帶 report 中繼資料轉送 config_anonymizer（強制全開遮蔽、填寫原因、
+// 殘留警告全數審閱後才能開啟 GitHub 回報頁），沿用既有 `_netAnalyzer_pending` 交接 key
+function renderReportBar(){
+  const bar=document.getElementById('report-bar');
+  if(!bar)return;
+  const trig=parsed?switchReportTrigger(parsed):'';
+  if(!trig){bar.style.display='none';bar.innerHTML='';return;}
+  bar.innerHTML=`⚠ ${esc(tr('report.bar_'+trig))} <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="_sendReportToAnonymizer()">📮 ${esc(tr('report.bar_btn'))}</button>`;
+  bar.style.display='';
+}
+function _sendReportToAnonymizer(){
+  const cfg=(document.getElementById('paste-area')||{}).value||'';
+  if(!cfg.trim()||!parsed)return;
+  let wrote=false;
+  try{
+    localStorage.setItem('_netAnalyzer_pending', JSON.stringify({
+      name:(document.getElementById('fname')||{}).textContent||'', text:cfg, ts:Date.now(), vendor:parsed.vendor,
+      report:{tool:'switch_analyzer', trigger:switchReportTrigger(parsed)||'manual', vendor:parsed.vendor, stats:switchReportStats(parsed)}
+    }));
+    wrote=true;
+  }catch(e){ alert(tr('err.send_fail')); }
+  const w=window.open('config-anonymizer.html','_blank');
+  if(wrote&&!w){ localStorage.removeItem('_netAnalyzer_pending'); alert(tr('err.send_popup_blocked')); }
 }
 
 // Phase 4 第 18 項：傳送目前貼上的原始設定文字給 config_anonymizer 去識別化，補齊「本工具只能

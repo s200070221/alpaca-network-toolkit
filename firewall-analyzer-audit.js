@@ -1336,6 +1336,22 @@
     return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${dots}</svg>`;
   }
 
+  // 無法解析設定檔回報觸發判斷（2026-09-29 新增）：unknownSlots 為上傳時未命中任何廠牌簽章的
+  // 欄位廠牌清單（app.js 在 detectFwVendor() 檢查時收集）；有值即 'unknown_vendor'。否則若介面、
+  // 規則、位址物件、路由四者皆為 0 視為 'sparse'（防火牆設定檔幾乎必定至少有介面或規則）；
+  // 其餘回傳 ''。門檻刻意保守，避免精簡但正常的設定檔也跳出提示
+  function fwReportTrigger(parsed, unknownSlots) {
+    if (unknownSlots && unknownSlots.length) return 'unknown_vendor';
+    const p = parsed || {};
+    const n = k => (p[k] || []).length;
+    if (!n('interfaces') && !n('policies') && !n('addresses') && !n('routes')) return 'sparse';
+    return '';
+  }
+  function fwReportStats(parsed) {
+    const p = parsed || {};
+    return { interfaces: (p.interfaces || []).length, policies: (p.policies || []).length, addresses: (p.addresses || []).length, routes: (p.routes || []).length };
+  }
+
   // ── 全域搜尋比對邏輯（2026-09-23 新增）─────────────────────────────────────
   // 抽出為純函式，供 app.js 的 doGlobalQuery()（負責讀寫 DOM）呼叫，也讓 Node 測試能在
   // 不碰 DOM 的情況下驗證比對邏輯本身。useRegex 開啟時以 try/catch 包住 new RegExp()，

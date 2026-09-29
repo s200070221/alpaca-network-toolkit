@@ -1,0 +1,68 @@
+name: 無法解析的設定檔回報 / Unparsed config report
+description: 回報工具無法辨識廠牌或解析結果過少的設定檔（內容會公開，請務必先去識別化）/ Report a config the tools cannot recognize or barely parse (public — anonymize first)
+title: "[unparsed] "
+labels: ["unparsed-config"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠ **此 issue 的所有內容都會公開，任何人都看得到。** 請只貼上經 config_anonymizer（設定去識別化工具）處理過、且已逐筆檢查殘留警告的內容。
+        ⚠ **Everything in this issue is public.** Only paste content processed by config_anonymizer whose residual warnings you have reviewed one by one.
+
+        建議從分析工具結果頁上方的「回報此設定檔」或去識別化工具統計頁的回報區塊開啟本頁，欄位會自動帶入。
+        Opening this page from the "Report this config" bar in an analyzer, or the report section of the anonymizer, pre-fills the fields.
+  - type: input
+    id: tool
+    attributes:
+      label: 來源工具 / Source tool
+      placeholder: switch_analyzer / firewall_analyzer / config_anonymizer
+    validations:
+      required: true
+  - type: input
+    id: trigger
+    attributes:
+      label: 觸發原因 / Trigger
+      description: unknown_vendor（無法辨識廠牌）、sparse（解析結果過少）或 manual（手動回報）
+      placeholder: unknown_vendor
+    validations:
+      required: true
+  - type: input
+    id: vendor
+    attributes:
+      label: 偵測或指定的廠牌 / Detected or selected vendor
+      placeholder: unknown
+  - type: input
+    id: stats
+    attributes:
+      label: 解析統計 / Parse stats
+      placeholder: interfaces=0, vlans=0
+  - type: input
+    id: model
+    attributes:
+      label: 設備型號／韌體版本 / Device model / firmware
+      placeholder: e.g. C9300-48P / 17.9.4
+  - type: textarea
+    id: reason
+    attributes:
+      label: 上傳原因 / Reason for upload
+      description: 哪些內容沒有被正確解析？預期看到什麼？ / What was not parsed correctly, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: 去識別化設定檔 / Anonymized config
+      description: 貼上去識別化後的設定檔內容；超過 6 萬字元時請改用下方附件上傳去識別化工具下載的 .txt 回報檔 / Paste the anonymized config; if it exceeds 60,000 characters, attach the .txt report file below instead
+      render: text
+  - type: textarea
+    id: attachment
+    attributes:
+      label: 附件（內容過長時）/ Attachment (for long configs)
+      description: 將 .txt 回報檔拖放到此欄 / Drag the .txt report file into this field
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 確認事項 / Confirmation
+      options:
+        - label: 我已檢查去識別化結果，確認不含密碼、金鑰、真實 IP、主機名稱或其他機敏資訊，並同意公開 / I have reviewed the anonymized content, confirm it contains no passwords, keys, real IPs, hostnames or other sensitive data, and agree to make it public
+          required: true

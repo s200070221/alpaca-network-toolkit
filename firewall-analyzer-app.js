@@ -30,6 +30,11 @@ const App = (() => {
   // Audit 分頁時得到的空白 CSV」與「切過分頁但真的 0 筆結果」兩種情況無法區分
   // （唯讀稽核發現的既有 UX 疑慮，此設計直接消除該疑慮而非加視覺提示遮蓋）
   let LAST_QUERY_TRACE = null;
+  // 批次查詢結果快取（2026-09-29 新增），供匯出按鈕使用；重新解析新檔案時清除
+  let LAST_BATCH_RESULTS = null;
+  // 無法解析設定檔回報（2026-09-29 新增）：上傳檢查時未命中任何廠牌簽章的欄位廠牌（如 'fortigate'）
+  // 與本次上傳的第一個欄位廠牌，供 renderReportBar()／_sendReportToAnonymizer() 使用
+  let REPORT_UNKNOWN_SLOTS = [], REPORT_FIRST_SLOT_VENDOR = '';
   let CONV_RESULT='', CONV_TARGET='', CONV_SRC_VENDOR='';
   let ACTIVE_VDOM='__all__';  // '__all__' or specific vdom name
 
@@ -263,9 +268,12 @@ const App = (() => {
       const FW_SLOT_VENDOR={f:'fortigate',s:'sophos',c:'checkpoint',p:'paloalto',j:'juniper',x:'pfsense',w:'sonicwall',m:'mikrotik',a:'ciscoasa',t:'ciscoasa',z:'zyxel',r:'edgerouter',u:'openwrt',g:'watchguard'};
       const FW_SLOT_LABEL={f:'FortiGate',s:'Sophos XG/XGS',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense/OPNsense',w:'SonicWall',m:'MikroTik RouterOS',a:'Cisco ASA',t:'Cisco Firepower/FTD',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',u:'OpenWrt (UCI)',g:'WatchGuard Firebox'};
       const FW_DETECTED_LABEL={fortigate:'FortiGate',paloalto:'Palo Alto',juniper:'Juniper',checkpoint:'Check Point',pfsense:'pfSense/OPNsense',sonicwall:'SonicWall',mikrotik:'MikroTik RouterOS',ciscoasa:'Cisco ASA/FTD',sophos:'Sophos XG',zyxel:'Zyxel USG/ATP',edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',watchguard:'WatchGuard Firebox'};
+      REPORT_UNKNOWN_SLOTS = []; REPORT_FIRST_SLOT_VENDOR = '';
       ['f','s','c','p','j','x','w','m','a','t','z','r','u','g'].forEach(v=>{
         if(!ST.raw[v])return;
         const detected=detectFwVendor(ST.raw[v]);
+        if(!REPORT_FIRST_SLOT_VENDOR) REPORT_FIRST_SLOT_VENDOR=FW_SLOT_VENDOR[v];
+        if(detected==='unknown') REPORT_UNKNOWN_SLOTS.push(FW_SLOT_VENDOR[v]);
         if(detected!=='unknown'&&detected!==FW_SLOT_VENDOR[v]){
           warnMsgs.push(tr('msg.vendor_mismatch').replace('{slot}',FW_SLOT_LABEL[v]).replace('{detected}',FW_DETECTED_LABEL[detected]||detected));
         }
@@ -327,6 +335,7 @@ const App = (() => {
       // 開過 Query 分頁，切換到新檔案後直接按「查詢追蹤結果」CSV 匯出按鈕會拿到
       // 舊檔案的過期查詢結果（唯讀稽核發現的既有 bug）
       LAST_QUERY_TRACE = null;
+      LAST_BATCH_RESULTS = null;
       // WiFi analysis（2026-08-19 擴大：原僅 FortiGate，對外查證後新增 mikrotik/openwrt/
       // pfsense 三家「自身即為 AP」架構的廠牌，合併各自 vaps 並重新計算共用 summary；
       // sophos/sonicwall 查證後查無語法佐證，維持排除，見下方 WIFI_UNSUPPORTED）
@@ -382,6 +391,7 @@ const App = (() => {
       window._PARSED = PARSED; // 供 console 診斷：_PARSED._perVdom.map(v=>({name:v.name,routes:v.routes.length,policies:v.policies.length}))
       $('prog-overlay').classList.remove('show');
       onParsed();
+      renderReportBar();
       recordFirewallActivity(PARSED);
       checkAnalyzeEggs(PARSED);
       clearTimeout(window._workTimer30); clearTimeout(window._workTimer60);
@@ -698,6 +708,7 @@ function onParsed(){
   window.showSection=showSection;
   window._triggerLangRefresh=function(){
     if(CURRENT_SECTION && PARSED) showSection(CURRENT_SECTION);
+    renderReportBar();
     // perms view 也重繪（若已開啟）
     if(PARSED && document.getElementById('view-perms') && document.getElementById('view-perms').style.display!=='none') renderPermissions();
     // 新舊設定比對結果為靜態 innerHTML，非 data-i18n 屬性可自動翻譯，語言切換時需手動重繪
@@ -1780,6 +1791,11 @@ function onParsed(){
       // 稽核結果 Markdown 匯出（2026-09-24 新增），內容由 -audit.js buildFirewallAuditMarkdown() 即時計算
       Reporter.download(buildFirewallAuditMarkdown(d, { acceptedRisks: _loadAcceptedRisks() }),`fw_audit_${hn}_${ds}.md`,'text/markdown');
     }
+    else if(type==='csv-batch-query'){
+      const content=Reporter.exportBatchQueryCSV(LAST_BATCH_RESULTS);
+      if(content)Reporter.download(content,`fw_batch_query_${hn}_${ds}.csv`,'text/csv');
+      else showErr(tr('batch.empty'));
+    }
     else if(type==='csv-query-trace'){
       // 只匯出畫面上目前這一次查詢結果（見 LAST_QUERY_TRACE 宣告處註解）
       const content=Reporter.exportQueryTraceCSV(LAST_QUERY_TRACE);
@@ -2039,6 +2055,51 @@ function onParsed(){
       ${denied&&!res.matched?`<div style="font-size:11px;color:var(--text-dim);margin-top:8px">${tr('pw.deny_note')}</div>`:''}
     </div>`;
   }
+
+  // ── 批次 IP/Policy 查詢（2026-09-29 新增）：解析／查詢邏輯在 core.js，這裡只接 DOM ──
+  window._runBatchQuery = function() {
+    const el = $('batch-result'); if (!el) return;
+    const { rows, errors } = parseBatchQueryCSV(($('batch-input')||{}).value||'');
+    const vdom = $('q-vdom') ? $('q-vdom').value : '__all__';
+    LAST_BATCH_RESULTS = runBatchPolicyQuery(rows, vdom, PARSED);
+    el.innerHTML = buildBatchQueryResultHtml(LAST_BATCH_RESULTS, errors);
+  };
+  window._loadBatchFile = function(input) {
+    const f = input.files && input.files[0]; if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => { const t = $('batch-input'); if (t) t.value = String(rd.result||''); input.value = ''; };
+    rd.readAsText(f);
+  };
+  window._downloadBatchSample = function() {
+    Reporter.download('src,dst,proto,port,expect\r\n192.168.1.10,10.0.0.5,TCP,443,accept\r\n192.168.1.10,10.0.0.5,TCP,22,deny\r\n10.0.0.8,8.8.8.8,UDP,53,\r\n', 'fw_batch_query_sample.csv', 'text/csv');
+  };
+
+  // ── 無法解析設定檔回報（2026-09-29 新增）：提示列與轉送 config_anonymizer ──────
+  // 沿用既有 `_netAnalyzer_pending` 交接 key，額外帶 report 中繼資料（見 config-anonymizer.html）
+  function renderReportBar(){
+    const bar=$('report-bar'); if(!bar)return;
+    const trig=PARSED?fwReportTrigger(PARSED,REPORT_UNKNOWN_SLOTS):'';
+    if(!trig){bar.style.display='none';bar.innerHTML='';return;}
+    bar.innerHTML=`⚠ ${esc(tr('report.bar_'+trig))} <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="_sendReportToAnonymizer()">📮 ${esc(tr('report.bar_btn'))}</button>`;
+    bar.style.display='';
+  }
+  window._sendReportToAnonymizer = function(){
+    var slots=['f','s','c','p','j','x','w','m','a','t','z','r','u','g'];
+    var texts=slots.map(function(v){return ST.raw[v]||'';}).filter(Boolean);
+    if(!texts.length||!PARSED)return;
+    var trig=fwReportTrigger(PARSED,REPORT_UNKNOWN_SLOTS)||'manual';
+    var vendor=(trig==='unknown_vendor'?REPORT_UNKNOWN_SLOTS[0]:REPORT_FIRST_SLOT_VENDOR)||'unknown';
+    var wrote=false;
+    try{
+      localStorage.setItem('_netAnalyzer_pending', JSON.stringify({
+        name:'', text:texts.join('\n'), ts:Date.now(), vendor:null,
+        report:{tool:'firewall_analyzer', trigger:trig, vendor:vendor, stats:fwReportStats(PARSED)}
+      }));
+      wrote=true;
+    }catch(e){ alert(tr('err.sendFail')); }
+    var w=window.open('config-anonymizer.html','_blank');
+    if(wrote&&!w){ localStorage.removeItem('_netAnalyzer_pending'); alert(tr('err.sendPopupBlocked')); }
+  };
 
   // ── IP/Policy Query: run ────────────────────────────────────────────────
   window._runQuery = function() {
@@ -2694,6 +2755,8 @@ function startMatrixRain(){
 
   function resetAll(){
     LAST_QUERY_TRACE = null;
+    REPORT_UNKNOWN_SLOTS = [];
+    if($('report-bar')){$('report-bar').style.display='none';$('report-bar').innerHTML='';}
     WIFI_DATA = null;
     FORTISWITCH_DATA = null;
     const navWifi = $('nav-wifi');

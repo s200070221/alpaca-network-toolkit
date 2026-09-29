@@ -179,6 +179,70 @@ function _policyAddrResolve(addrStr, targetInt, addrList) {
   }
   return fqdn||{match:false,display:addrStr||'-',detail:''};
 }
+// ── 批次 IP/Policy 查詢（2026-09-29 新增）──────────────────────────────────
+// 一次查詢多組 src/dst/proto/port，逐列沿用 _runPolicyQuery()，適合變更前後驗證。
+// CSV 欄位：src,dst,proto,port,expect（proto/port/expect 可省略）。第一列含 src 與 dst
+// 欄名時視為表頭、依欄名對應（順序不拘）；否則依上述固定順序。# 開頭與空白列略過。
+// expect 選填 accept/allow 或 deny/drop/block，有填時比對實際結果（implicit deny 也算 deny）。
+const BATCH_QUERY_MAX_ROWS = 1000;
+function _splitCsvLine(line) {
+  const out = []; let cur = '', q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) {
+      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '"') q = false;
+      else cur += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { out.push(cur.trim()); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur.trim());
+  return out;
+}
+function parseBatchQueryCSV(text) {
+  const lines = String(text || '').replace(/^﻿/, '').split(/\r?\n/);
+  const rows = [], errors = [];
+  let cols = ['src', 'dst', 'proto', 'port', 'expect'], started = false;
+  lines.forEach((raw, i) => {
+    const line = raw.trim(), lineNo = i + 1;
+    if (!line || line.startsWith('#')) return;
+    const cells = _splitCsvLine(line);
+    if (!started) {
+      started = true;
+      const lower = cells.map(c => c.toLowerCase());
+      if (lower.includes('src') && lower.includes('dst')) { cols = lower; return; }
+    }
+    const get = k => { const idx = cols.indexOf(k); return idx >= 0 ? (cells[idx] || '') : ''; };
+    const src = get('src'), dst = get('dst');
+    let proto = get('proto').toUpperCase() || 'any';
+    if (proto === 'ANY') proto = 'any';
+    const port = get('port');
+    const exp = get('expect').toLowerCase();
+    let expect = '';
+    if (exp === 'accept' || exp === 'allow') expect = 'accept';
+    else if (exp === 'deny' || exp === 'drop' || exp === 'block') expect = 'deny';
+    if (_ipToInt(src) === null || _ipToInt(dst) === null) { errors.push({ line: lineNo, reason: 'ip' }); return; }
+    if (!['any', 'TCP', 'UDP', 'ICMP'].includes(proto)) { errors.push({ line: lineNo, reason: 'proto' }); return; }
+    if (port && !(/^\d+$/.test(port) && +port >= 1 && +port <= 65535)) { errors.push({ line: lineNo, reason: 'port' }); return; }
+    if (exp && !expect) { errors.push({ line: lineNo, reason: 'expect' }); return; }
+    if (rows.length >= BATCH_QUERY_MAX_ROWS) { errors.push({ line: lineNo, reason: 'max' }); return; }
+    rows.push({ line: lineNo, src, dst, proto, port, expect });
+  });
+  return { rows, errors };
+}
+// 回傳每列 {…row, action:'accept'|'deny'|'implicit_deny', policyId, policyName, hasFqdn, check}；
+// check：未填 expect 為 null，否則 true（符合）／false（不符）
+function runBatchPolicyQuery(rows, vdomFilter, PARSED) {
+  return rows.map(r => {
+    const res = _runPolicyQuery(r.src, r.dst, r.proto, r.port, vdomFilter, PARSED) || { matched: null, action: 'implicit_deny', trace: [] };
+    const m = res.matched;
+    const mt = (res.trace || []).find(t => t.result === 'match');
+    const allowed = res.action === 'accept';
+    return { ...r, action: res.action, policyId: m ? m.id : '', policyName: m ? (m.name || '') : '',
+      hasFqdn: !!(mt && mt.hasFqdn), check: r.expect ? (r.expect === 'accept') === allowed : null };
+  });
+}
 // ── End IP/Policy Query utils ──────────────────────────────────────────────
 
 function tr(key) {
