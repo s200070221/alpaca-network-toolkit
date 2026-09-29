@@ -376,9 +376,51 @@ function buildIncrementalCommands(oldModel,newModel,vendor){
   oR.forEach((r,k)=>{ if(!nR.has(k)){ counts.routeDel++; out.push(NO+render(r)); } });
   nR.forEach((r,k)=>{ if(!oR.has(k)){ counts.routeAdd++; out.push(render(r)); } });
   const total=Object.values(counts).reduce((a,b)=>a+b,0);
-  if(!total&&!unsupported.length)return {text:'',counts,unsupported,total};
+  if(!total&&!unsupported.length)return {text:'',counts,unsupported,total,risks:[]};
   const head=String(tr('delta.script_header')).split('\n').map(l=>C+' '+l);
-  const tail=unsupported.map(u=>`${C} ${tr('delta.manual')}: ${u}`);
+  // 斷線風險（ND）：同時放進指令檔頭註解，複製出去的指令也看得到
+  const risks=deltaRiskWarnings(oldModel,newModel);
+  const riskLines=risks.map(w=>`${C} ⚠ ${deltaRiskText(w)}`);
+  const tail=[...riskLines,...unsupported.map(u=>`${C} ${tr('delta.manual')}: ${u}`)];
   const body=isCw?['system-view',...out,'return']:['configure terminal',...out,'end'];
-  return {text:[...head,...tail,'',...(out.length?body:[]),''].join('\n'),counts,unsupported,total};
+  return {text:[...head,...tail,'',...(out.length?body:[]),''].join('\n'),counts,unsupported,total,risks};
+}
+
+// ── 差異指令的斷線風險提示（2026-09-29 新增，第七輪 ND）──────────────────────
+// 比較匯入快照與目前表單，找出可能造成斷線的變更，回傳 [{kind, target, extra}]：
+//   uplink   上行／聚合相關介面有變動：原本是 trunk、描述像上聯（uplink／core／to-／上聯…）或是 LACP 成員
+//   mgmt     管理 VLAN（名稱含 mgmt／manage／管理）被刪除、改名或 SVI IP 變動
+//   vlanInUse VLAN 被刪除，但目前表單仍有介面以 access 或 trunk 清單使用它
+//   shutdown 介面將被關閉
+// 判斷刻意寬鬆（寧可多提醒），只提示不阻擋。
+const DELTA_UPLINK_DESC_RE=/uplink|up-link|core|dist|to[-_ ]|trunk|上聯|上行|骨幹/i;
+const DELTA_MGMT_RE=/mgmt|manage|管理/i;
+function deltaRiskWarnings(oldModel,newModel){
+  const out=[];
+  const key=s=>String(s||'').trim().toLowerCase();
+  const oI=new Map((oldModel.interfaces||[]).map(i=>[key(i.name),i]));
+  const lacpMembers=new Set([...(oldModel.lacp||[]),...(newModel.lacp||[])].flatMap(l=>(l.members||[]).map(key)));
+  const sameIface=(a,b)=>['desc','mode','accessVlan','trunkVlans','nativeVlan'].every(k=>String(a[k]||'')===String(b[k]||''))&&!!a.shutdown===!!b.shutdown;
+  (newModel.interfaces||[]).forEach(n=>{
+    const o=oI.get(key(n.name));
+    if(!o)return;
+    if(!!n.shutdown&&!o.shutdown)out.push({kind:'shutdown',target:n.name});
+    if(sameIface(o,n))return;
+    if(o.mode==='trunk'||DELTA_UPLINK_DESC_RE.test(o.desc||'')||lacpMembers.has(key(n.name)))out.push({kind:'uplink',target:n.name});
+  });
+  const nV=new Map((newModel.vlans||[]).map(v=>[String(v.id),v]));
+  const inList=(list,id)=>String(list||'').split(/[,\s]+/).some(tok=>{const m=tok.match(/^(\d+)-(\d+)$/);return m?(+id>=+m[1]&&+id<=+m[2]):tok===id;});
+  (oldModel.vlans||[]).forEach(o=>{
+    const id=String(o.id), n=nV.get(id);
+    if(DELTA_MGMT_RE.test(o.name||'')&&(!n||(n.name||'')!==(o.name||'')||(n.ip||'')!==(o.ip||'')))out.push({kind:'mgmt',target:'VLAN '+id});
+    else if(n&&o.ip&&(n.ip||'')!==o.ip)out.push({kind:'mgmt',target:'VLAN '+id+' SVI'});
+    if(!n){
+      const users=(newModel.interfaces||[]).filter(i=>(i.mode==='access'&&String(i.accessVlan)===id)||(i.mode==='trunk'&&inList(i.trunkVlans,id))).map(i=>i.name);
+      if(users.length)out.push({kind:'vlanInUse',target:id,extra:users.slice(0,10).join(', ')+(users.length>10?'…':'')});
+    }
+  });
+  return out;
+}
+function deltaRiskText(w){
+  return tr('delta.risk_'+w.kind).replace('{target}',w.target).replace('{extra}',w.extra||'');
 }

@@ -3094,6 +3094,7 @@ function toggleDeltaCommands(){
   else{
     const r=buildIncrementalCommands(_importedModel,model,model.vendor);
     html=`<div style="font-weight:600;margin-bottom:6px">${escapeHtml(tr('delta.title'))}</div><div style="margin-bottom:6px;color:var(--text-dim);font-family:inherit">${escapeHtml(tr('delta.hint'))}</div>`
+      +(r.risks&&r.risks.length?`<div style="border:1px solid var(--yellow,#f59e0b);background:rgba(245,158,11,.1);border-radius:6px;padding:8px 10px;margin-bottom:8px"><div style="font-weight:600;margin-bottom:4px">⚠ ${escapeHtml(tr('delta.risk_title'))}</div><ul style="margin:0 0 4px 18px;padding:0">${r.risks.map(w=>`<li>${escapeHtml(deltaRiskText(w))}</li>`).join('')}</ul><div style="font-size:11px;color:var(--text-dim)">${escapeHtml(tr('delta.risk_hint'))}</div></div>`:'')
       +(r.text?`<textarea id="delta-text" readonly aria-label="${escapeHtml(tr('delta.title'))}" style="width:100%;height:220px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${escapeHtml(r.text)}</textarea>
         <button class="act-btn" style="margin-top:6px" onclick="copyDeltaCommands(this)">${escapeHtml(tr('delta.copy'))}</button>`:`<div>${escapeHtml(tr('delta.none'))}</div>`);
   }
@@ -5129,4 +5130,38 @@ function discardDraft(){try{localStorage.removeItem(DRAFT_KEY);}catch(e){}_close
   document.addEventListener('input',saveDraftSoon);
   document.addEventListener('change',saveDraftSoon);
   document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('button'))saveDraftSoon();});
+})();
+
+// ── 名詞小辭典（2026-09-29 新增，第七輪 NC）─────────────────────────────────
+// 表頭（th）文字含常見網路名詞時，自動加上滑鼠提示（沿用既有 [data-tip] 提示框）與 ⓘ 標記。
+// 以 MutationObserver 監看畫面變動後統一處理，不需改動各頁面的渲染程式；已有 data-tip 的表頭不覆蓋。
+// 切換語言時表頭文字重繪會觸發同一流程，依 data-gl-term 以新語言更新提示。整段包在 IIFE 內，
+// 避免與其他 classic <script> 的頂層識別字撞名。
+(function(){
+  var TERMS=[["native", "Native VLAN"], ["vlan", "VLAN"], ["trunk", "Trunk"], ["svi", "SVI"], ["lacp", "LACP"], ["vrrp", "VRRP"], ["hsrp", "HSRP"], ["stp", "STP"], ["bpdu", "BPDU"], ["portfast", "PortFast"], ["dot1x", "802.1X"], ["acl", "ACL"], ["qos", "QoS"], ["ospf", "OSPF"], ["bgp", "BGP"], ["snmp", "SNMP"], ["nat", "NAT"], ["vdom", "VDOM"], ["vpn", "VPN"], ["dhcp", "DHCP"], ["lldp", "LLDP"], ["mtu", "MTU"], ["poe", "PoE"], ["vrf", "VRF"]];
+  var RE=TERMS.map(function(t){return [t[0],t[1],new RegExp('(^|[^A-Za-z0-9])'+t[1].replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'($|[^A-Za-z0-9])','i')];});
+  function tipOf(k,term){var s=tr('gl.'+k);return (!s||s==='gl.'+k)?'':term+': '+s;}
+  function mark(th){
+    if(!th.querySelector('sup.gl-mark')){var sup=document.createElement('sup');sup.className='gl-mark';sup.textContent='ⓘ';sup.style.cssText='font-size:8px;opacity:.45;margin-left:2px;cursor:help';th.appendChild(sup);}
+  }
+  function applyGlossary(){
+    var ths=document.querySelectorAll('th');
+    for(var i=0;i<ths.length;i++){
+      var th=ths[i], k=th.getAttribute('data-gl-term');
+      if(k){var t=tipOf(k,th.getAttribute('data-gl-label'));if(t&&th.getAttribute('data-tip')!==t)th.setAttribute('data-tip',t);if(t)mark(th);continue;}
+      if(th.hasAttribute('data-gl-skip'))continue;
+      if(th.hasAttribute('data-tip')||th.querySelector('[data-tip]')){th.setAttribute('data-gl-skip','1');continue;}
+      var text=th.textContent||'', hit=null;
+      for(var j=0;j<RE.length;j++){if(RE[j][2].test(text)){hit=RE[j];break;}}
+      if(!hit){th.setAttribute('data-gl-skip','1');continue;}
+      var tip=tipOf(hit[0],hit[1]);
+      if(!tip)continue;
+      th.setAttribute('data-gl-term',hit[0]);th.setAttribute('data-gl-label',hit[1]);th.setAttribute('data-tip',tip);mark(th);
+    }
+  }
+  window.applyGlossary=applyGlossary;
+  var timer=null;
+  function schedule(){clearTimeout(timer);timer=setTimeout(applyGlossary,150);}
+  if(document.body)new MutationObserver(schedule).observe(document.body,{childList:true,subtree:true,characterData:true});
+  schedule();
 })();

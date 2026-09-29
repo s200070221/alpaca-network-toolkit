@@ -210,3 +210,47 @@ function invConsistency(entries) {
   }
   return res;
 }
+
+// ── 帳號與密碼保存方式盤點（2026-09-29 新增，第七輪 AD） ────────────────────
+// entries：[{hostname, parsed}]。依各廠牌 parser 已算好的 pwdType／pwdWeak／hasPwd 歸類保存方式，
+// 不重新解析密碼字串：
+//   plain      明碼（plaintext／simple，或 parser 標為弱且無其他型別）          → 高風險
+//   type7      Cisco type 7 等可直接還原的弱加密（type7-weak／encrypted）         → 高風險
+//   reversible 廠牌可逆加密（cipher／ciphertext，設備以固定金鑰加密、非雜湊）     → 中風險
+//   legacy     MD5 雜湊（可離線暴力破解）                                         → 中風險
+//   strong     強雜湊（hash／scrypt／pbkdf2／sha256／sha512／bcrypt）
+//   nopwd      未設密碼                                                           → 高風險
+//   unknown    設定檔看不出保存方式（如 RouterOS 匯出不含密碼、FortiSwitch ENC）
+// 另標示預設帳號名稱與同名帳號出現在多台（可能是共用帳號，稽核常要求個人帳號）。
+const ACCT_STRONG=new Set(['hash','scrypt','pbkdf2','sha256','sha512','bcrypt']);
+const ACCT_DEFAULT_NAMES=/^(admin|administrator|root|guest|test|cisco|manager|operator|user|support)$/i;
+function invAccountStorage(u){
+  const t=String(u.pwdType||'').toLowerCase();
+  if(u.hasPwd===false||t==='none')return 'nopwd';
+  if(t==='plaintext'||t==='simple')return 'plain';
+  if(t==='type7-weak'||t==='encrypted')return 'type7';
+  if(t==='cipher')return 'reversible';
+  if(t==='md5')return 'legacy';
+  if(ACCT_STRONG.has(t))return 'strong';
+  if(u.pwdWeak===true)return 'plain';
+  return 'unknown';
+}
+const ACCT_RISK={plain:'high',type7:'high',nopwd:'high',reversible:'medium',legacy:'medium',strong:'low',unknown:'low'};
+function invAccounts(entries){
+  const rows=[];
+  (entries||[]).forEach(e=>((e.parsed&&e.parsed.users)||[]).forEach(u=>{
+    const name=u.name||u.username||'';
+    if(!name)return;
+    const storage=invAccountStorage(u);
+    rows.push({host:e.hostname,name,role:u.role||u.group||(u.privilege?'privilege-'+u.privilege:''),storage,risk:ACCT_RISK[storage],isDefault:ACCT_DEFAULT_NAMES.test(name)});
+  }));
+  const hostsByName={};
+  rows.forEach(r=>{const k=r.name.toLowerCase();(hostsByName[k]=hostsByName[k]||new Set()).add(r.host);});
+  rows.forEach(r=>{r.deviceCount=hostsByName[r.name.toLowerCase()].size;});
+  const order={high:0,medium:1,low:2};
+  rows.sort((a,b)=>order[a.risk]-order[b.risk]||a.name.localeCompare(b.name)||a.host.localeCompare(b.host));
+  const summary={total:rows.length,weak:rows.filter(r=>r.storage==='plain'||r.storage==='type7').length,
+    nopwd:rows.filter(r=>r.storage==='nopwd').length,medium:rows.filter(r=>r.risk==='medium').length,
+    defaults:rows.filter(r=>r.isDefault).length,shared:new Set(rows.filter(r=>r.deviceCount>1).map(r=>r.name.toLowerCase())).size};
+  return {rows,summary};
+}
