@@ -102,7 +102,7 @@ function buildTopoSVG(p){
 <text x="18" y="18" font-size="10" fill="#64748b" font-family="JetBrains Mono,monospace" letter-spacing="1" font-weight="600">IRF STACK TOPOLOGY${tr('stack.topo_sub')}</text>
 <text x="18" y="38" font-size="15" fill="#dde8f5" font-weight="700">${esc(p.sys.hostname)}</text>
 <rect x="${W-120}" y="11" width="108" height="28" rx="7" fill="${tc}" opacity=".12" stroke="${tc}" stroke-width="1"/>
-<text x="${W-66}" y="30" font-size="12" fill="${tc}" font-weight="700" text-anchor="middle" font-family="JetBrains Mono,monospace">IRF · Domain ${irf?.domain||'—'}</text>`;
+<text x="${W-66}" y="30" font-size="12" fill="${tc}" font-weight="700" text-anchor="middle" font-family="JetBrains Mono,monospace">IRF · Domain ${esc(irf?.domain||'—')}</text>`;
 
   // Draw links
   const isRing=mems.length>2;

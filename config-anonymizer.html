@@ -1367,8 +1367,31 @@ function anonIP(ip, opts) {
   return mapped;
 }
 
+// IPv6 正規化（2026-09-29 QB）：同一位址的不同寫法（大小寫、省略前導零、:: 縮寫與否）轉成
+// 8 組小寫、去前導零的標準形式；無法解析（含 IPv4 內嵌等）時回傳 null，維持原本逐字比對
+function canonIPv6(ip) {
+  const s = String(ip).toLowerCase();
+  if (!/^[0-9a-f:]+$/.test(s) || (s.match(/::/g) || []).length > 1) return null;
+  let parts;
+  if (s.includes('::')) {
+    const [a, b] = s.split('::');
+    const head = a ? a.split(':') : [], tail = b ? b.split(':') : [];
+    const fill = 8 - head.length - tail.length;
+    if (fill < 1) return null;
+    parts = [...head, ...Array(fill).fill('0'), ...tail];
+  } else parts = s.split(':');
+  if (parts.length !== 8 || parts.some(p => !/^[0-9a-f]{1,4}$/.test(p))) return null;
+  return parts.map(p => p.replace(/^0+(?=.)/, '')).join(':');
+}
 function anonIPv6(ip) {
   if (mappings.ip.has(ip)) return mappings.ip.get(ip);
+  // 映射表裡已有同一位址的其他寫法時沿用同一個假值（不新增狀態，匯入的對照表種子與批次共用映射也適用）
+  const c = canonIPv6(ip);
+  if (c) {
+    for (const [k, v] of mappings.ip) {
+      if (k.includes(':') && canonIPv6(k) === c) { mappings.ip.set(ip, v); return v; }
+    }
+  }
   ctrs.ip6++;
   const mapped = `2001:db8::${ctrs.ip6}`;
   mappings.ip.set(ip, mapped);
@@ -2388,6 +2411,58 @@ function anonComware(text, opts) {
 }
 
 // ---- Cisco IOS / IOS-XE ----
+// Cisco 語系共用機敏欄位（2026-09-29 QA）：實測 Cisco IOS 設定有 20 種機敏值原本以明碼殘留。
+// 語法依 Cisco 官方命令參考確認（HSRP standby authentication、snmp-server host、IKEv2 keyring
+// pre-shared-key local/remote 等）。Arista／Ruijie／Planet／NX-OS 同為 Cisco 風格指令，一併套用；
+// 該廠牌沒有的語法不會命中，只會多遮不會少遮。回傳處理後的行
+const CISCO_STYLE_SECRET_RULES = [
+  // line con/vty/aux 等區塊內的 password（可帶加密等級 0/5/7）
+  { re: /^(\s+password\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_PASSWORD', stat: 'password' },
+  // key chain 內的 key-string
+  { re: /^(\s+key-string\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
+  // tacacs-server／radius-server host 行內金鑰
+  { re: /^((?:tacacs-server|radius-server)\s+host\s+\S+.*?\s+key\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
+  // aaa group server 內的 server-private ... key
+  { re: /^(\s*server-private\s+\S+.*?\s+key\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
+  { re: /^(ntp\s+authentication-key\s+\d+\s+md5\s+)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
+  // HSRP／VRRP 認證：md5 key-string、text、舊版不帶關鍵字的純字串（md5 key-chain 為名稱，不遮）
+  { re: /^(\s+(?:standby|vrrp)\s+(?:\d+\s+)?authentication\s+(?:md5\s+key-string\s+(?:\d\s+)?|text\s+))(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
+  { re: /^(\s+(?:standby|vrrp)\s+(?:\d+\s+)?authentication\s+)(?!md5\b|text\b)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
+  // crypto keyring／IKEv2 keyring 的預先共用金鑰
+  { re: /^(\s+pre-shared-key\s+(?:(?:local|remote)\s+|address\s+\S+(?:\s+\S+)?\s+key\s+|hostname\s+\S+\s+key\s+)?(?:\d\s+)?)(\S+)/, tag: 'REDACTED_PSK', stat: 'key' },
+  { re: /^(\s+ppp\s+chap\s+password\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_PASSWORD', stat: 'password' },
+  { re: /^(\s+ppp\s+pap\s+sent-username\s+\S+\s+password\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_PASSWORD', stat: 'password' },  // 以下原本只寫在 anonCiscoIOS()，Arista／Ruijie／Planet／NX-OS 各自的函式缺漏，改為共用
+  { re: /^(enable\s+(?:secret|password)\s+(?:level\s+\d+\s+)?(?:\d\s+)?)(\S+)/, tag: 'REDACTED_HASH', stat: 'password' },
+  { re: /^(username\s+\S+\s+.*?\b(?:secret|password)\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_HASH', stat: 'password' },
+  { re: /^((?:tacacs-server|radius-server)\s+key\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
+  { re: /^(\s+key\s+(?:\d\s+)?)([A-Za-z]\S*)$/, tag: 'REDACTED_KEY', stat: 'key' },
+  { re: /^(crypto\s+isakmp\s+key\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_PSK', stat: 'key' },
+  { re: /^(\s*ip\s+ospf\s+(?:authentication-key|message-digest-key\s+\d+\s+md5)\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
+  { re: /^(\s+neighbor\s+\S+\s+password\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_PASSWORD', stat: 'password' },
+  { re: /^(snmp-server\s+user\s+.*?\bauth\s+\S+\s+)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
+  { re: /^(snmp-server\s+user\s+.*?\bpriv\s+\S+(?:\s+\d+)?\s+)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
+];
+function anonCiscoStyleSecrets(line, opts) {
+  // 已被廠牌函式遮蔽（REDACTED_*）的值不再處理，避免統計重複計數
+  for (const r of CISCO_STYLE_SECRET_RULES) {
+    line = line.replace(r.re, (m, pre, tok) => {
+      if (tok.startsWith('REDACTED')) return m;
+      stats[r.stat]++;
+      return pre + r.tag;
+    });
+  }
+  // snmp-server host：v1/v2c 時該位置是 community；v3 時是帳號名稱
+  line = line.replace(/^(snmp-server\s+host\s+\S+\s+(?:vrf\s+\S+\s+)?(?:informs\s+|traps\s+)?(version\s+(?:1|2c|3\s+(?:auth|noauth|priv))\s+)?)(\S+)/, (m, pre, ver, tok) => {
+    if (ver && /version\s+3/.test(ver)) return opts.user ? pre + anonUser(tok) : m;
+    stats.community++;
+    return pre + 'REDACTED_COMMUNITY';
+  });
+  // SNMPv3 使用者帳號名稱
+  if (opts.user) line = line.replace(/^(snmp-server\s+user\s+)(\S+)/, (m, p, n) => p + anonUser(n));
+  // PPP PAP 傳送的帳號名稱
+  if (opts.user) line = line.replace(/^(\s+ppp\s+pap\s+sent-username\s+)(\S+)/, (m, p, n) => p + anonUser(n));
+  return line;
+}
 function anonCiscoIOS(text, opts) {
   return text.split('\n').map(line => {
     if (opts.hostname) {
@@ -2428,6 +2503,7 @@ function anonCiscoIOS(text, opts) {
       line = line.replace(/(\bpriv\s+\S+(?:\s+\d+)?\s+)(\S+)$/, '$1REDACTED_KEY');
       stats.key++;
     }
+    line = anonCiscoStyleSecrets(line, opts);
     line = replaceDescLine(line, opts);
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
@@ -2508,6 +2584,7 @@ function anonCiscoNXOS(text, opts) {
       line = line.replace(/(\bpriv\s+\S+(?:\s+\d+)?\s+)(\S+)$/, '$1REDACTED_KEY');
       stats.key++;
     }
+    line = anonCiscoStyleSecrets(line, opts);
     line = replaceDescLine(line, opts);
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
@@ -2603,6 +2680,7 @@ function anonArista(text, opts) {
       line = line.replace(/(\bpriv\s+\S+(?:\s+\d+)?\s+)(\S+)$/, '$1REDACTED_KEY');
       stats.key++;
     }
+    line = anonCiscoStyleSecrets(line, opts);
     line = replaceDescLine(line, opts);
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
@@ -2978,6 +3056,7 @@ function anonPlanet(text, opts) {
     }
     const comR = line.replace(/^(\s*snmp-server\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
     if (comR !== line) { stats.community++; line = comR; }
+    line = anonCiscoStyleSecrets(line, opts);
     line = replaceDescLine(line, opts);
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
@@ -3006,6 +3085,7 @@ function anonRuijie(text, opts) {
     if (bgpR !== line) { stats.password++; line = bgpR; }
     const ospfKeyR = line.replace(/^(\s*ip\s+ospf\s+message-digest-key\s+\d+\s+md5\s+)(\S+)/, '$1REDACTED_KEY');
     if (ospfKeyR !== line) { stats.key++; line = ospfKeyR; }
+    line = anonCiscoStyleSecrets(line, opts);
     line = replaceDescLine(line, opts);
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);

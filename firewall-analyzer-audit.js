@@ -30,18 +30,28 @@
     return new Set(str.split(/,\s*/).map(s => s.trim().toLowerCase()));
   }
   function _shadowIsWild(set) { return [...set].some(v => _SHADOW_WILDCARD.has(v)); }
-  // 欄位涵蓋：earlier 是萬用字元，或與 later 完全相同
-  function _shadowCovers(eSet, lSet) {
-    return _shadowIsWild(eSet) || (eSet.size === lSet.size && [...eSet].every(v => lSet.has(v)));
+  // 每條規則的 src/dst/service 集合只算一次（2026-09-29 QE）：原本兩兩比對的內層迴圈每次都
+  // 重新切字串建集合，3000 條規則約重算 450 萬次、耗時約 4.5 秒；比對邏輯本身不變
+  // 介面欄位預先整理：null＝未解析（'-' 或空白，不阻擋比對）、'any'＝萬用、否則為小寫介面集合
+  // （多值介面以逗號分隔，earlier 需包含 later 的所有介面）
+  function _shadowIntfPrep(v) {
+    if (!v || v === '-') return null;
+    const parts = new Set(v.split(/,\s*/).map(x => x.trim().toLowerCase()));
+    return (v === 'any' || v === 'all' || parts.has('any') || parts.has('all')) ? 'any' : parts;
   }
-  // 介面涵蓋：支援多值介面（逗號分隔），earlier 需包含 later 的所有介面
-  // 任一方為 '-'（未解析）→ 不阻擋比對
-  function _shadowIntfCovers(eIntf, lIntf) {
-    if (!eIntf || eIntf === '-' || !lIntf || lIntf === '-') return true;
-    if (eIntf === 'any' || eIntf === 'all') return true;
-    const eParts = new Set(eIntf.split(/,\s*/).map(s => s.trim().toLowerCase()));
-    if (eParts.has('any') || eParts.has('all')) return true;
-    return lIntf.split(/,\s*/).every(p => eParts.has(p.trim().toLowerCase()));
+  function _shadowPrep(active) {
+    return active.map(p => {
+      const src = _shadowToSet(p.srcAddr), dst = _shadowToSet(p.dstAddr), svc = _shadowToSet(p.service);
+      return { src, dst, svc, srcW: _shadowIsWild(src), dstW: _shadowIsWild(dst), svcW: _shadowIsWild(svc),
+        si: _shadowIntfPrep(p.srcIntf), di: _shadowIntfPrep(p.dstIntf) };
+    });
+  }
+  // 以預先整理的資料判斷 e（較早規則）是否涵蓋 l（較晚規則）：介面涵蓋，且 src/dst/service
+  // 各欄位 earlier 為萬用字元或與 later 完全相同
+  function _shadowPrepCovers(e, l) {
+    const intfOk = (ei, li) => ei === null || li === null || ei === 'any' || (li !== 'any' && [...li].every(x => ei.has(x)));
+    const fieldOk = (eS, eW, lS) => eW || (eS.size === lS.size && [...eS].every(v => lS.has(v)));
+    return intfOk(e.si, l.si) && intfOk(e.di, l.di) && fieldOk(e.src, e.srcW, l.src) && fieldOk(e.dst, e.dstW, l.dst) && fieldOk(e.svc, e.svcW, l.svc);
   }
 
   // ── 新舊設定檔結構化比對（單一設備）────────────────────────────
@@ -146,21 +156,19 @@
   }
 
   function analyzeRuleShadowing(policies) {
-    const toSet = _shadowToSet, covers = _shadowCovers, intfCovers = _shadowIntfCovers;
     const results = [];
     const eq = (a, b) => a.size === b.size && [...a].every(v => b.has(v));
     const active = policies.filter(p => !_isDisabledStatus(p));
+    const prep = _shadowPrep(active);
     for (let i = 0; i < active.length; i++) {
       const later = active[i];
-      const lSrc = toSet(later.srcAddr), lDst = toSet(later.dstAddr), lSvc = toSet(later.service);
+      const { src: lSrc, dst: lDst, svc: lSvc } = prep[i];
       for (let j = 0; j < i; j++) {
         const earlier = active[j];
         if (earlier.action !== 'accept') continue;       // deny 規則不構成遮蔽
         if (earlier._vdom !== later._vdom) continue;     // 不同 VDOM 彼此獨立
-        if (!intfCovers(earlier.srcIntf, later.srcIntf)) continue;
-        if (!intfCovers(earlier.dstIntf, later.dstIntf)) continue;
-        const eSrc = toSet(earlier.srcAddr), eDst = toSet(earlier.dstAddr), eSvc = toSet(earlier.service);
-        if (!covers(eSrc, lSrc) || !covers(eDst, lDst) || !covers(eSvc, lSvc)) continue;
+        if (!_shadowPrepCovers(prep[j], prep[i])) continue;
+        const { src: eSrc, dst: eDst, svc: eSvc } = prep[j];
         // 判斷 tier：三欄位全相等 = 完全重複；否則為部分覆蓋
         const tier = (eq(eSrc,lSrc) && eq(eDst,lDst) && eq(eSvc,lSvc)) ? 1 : 2;
         const reason = tier === 1 ? 'audit.reason1_short' : 'audit.reason2_short';
@@ -175,20 +183,16 @@
   function buildShadowMap(policies) {
     // 建立每個規則遮蔽的下游規則清單（用於流程排序顯示）
     const map = {};
-    const toSet = _shadowToSet, covers = _shadowCovers, intfCovers = _shadowIntfCovers;
     const active = policies.filter(p => !_isDisabledStatus(p));
+    const prep = _shadowPrep(active);
     active.forEach(p => map[p.id] = []);
     for (let i = 0; i < active.length; i++) {
       const earlier = active[i];
       if (earlier.action !== 'accept') continue;
-      const eSrc = toSet(earlier.srcAddr), eDst = toSet(earlier.dstAddr), eSvc = toSet(earlier.service);
       for (let j = i + 1; j < active.length; j++) {
         const later = active[j];
         if (earlier._vdom !== later._vdom) continue;
-        if (!intfCovers(earlier.srcIntf, later.srcIntf)) continue;
-        if (!intfCovers(earlier.dstIntf, later.dstIntf)) continue;
-        const lSrc = toSet(later.srcAddr), lDst = toSet(later.dstAddr), lSvc = toSet(later.service);
-        if (covers(eSrc, lSrc) && covers(eDst, lDst) && covers(eSvc, lSvc)) {
+        if (_shadowPrepCovers(prep[i], prep[j])) {
           map[earlier.id].push(later.id);
         }
       }
@@ -203,21 +207,17 @@
   // policies 正規化模型 action 欄位只有二元值 accept/deny（見 firewall-analyzer-parser-fortigate.js
   // 的 `gv(t,'action')||'deny'` 預設值慣例），不需處理 vendor 專屬的 drop/reject 同義詞。
   function analyzeDenyBlocking(policies) {
-    const toSet = _shadowToSet, covers = _shadowCovers, intfCovers = _shadowIntfCovers;
     const results = [];
     const active = policies.filter(p => !_isDisabledStatus(p));
+    const prep = _shadowPrep(active);
     for (let i = 0; i < active.length; i++) {
       const later = active[i];
       if (later.action !== 'accept') continue;   // 只關心「本該生效的 accept 規則」被擋住的情境
-      const lSrc = toSet(later.srcAddr), lDst = toSet(later.dstAddr), lSvc = toSet(later.service);
       for (let j = 0; j < i; j++) {
         const earlier = active[j];
         if (earlier.action !== 'deny') continue;
         if (earlier._vdom !== later._vdom) continue;
-        if (!intfCovers(earlier.srcIntf, later.srcIntf)) continue;
-        if (!intfCovers(earlier.dstIntf, later.dstIntf)) continue;
-        const eSrc = toSet(earlier.srcAddr), eDst = toSet(earlier.dstAddr), eSvc = toSet(earlier.service);
-        if (!covers(eSrc, lSrc) || !covers(eDst, lDst) || !covers(eSvc, lSvc)) continue;
+        if (!_shadowPrepCovers(prep[j], prep[i])) continue;
         results.push({ blockedId: later.id, blockedName: later.name,
           blockingId: earlier.id, blockingName: earlier.name });
         break;

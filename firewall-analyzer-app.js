@@ -2070,12 +2070,20 @@ function onParsed(){
   function _lookupRoute(dstIp, routes) {
     if (!dstIp || !routes) return null;
     let best = null, bestLen = -1;
-    routes.filter(r => r.type === 'static' || r.type === 'connected').forEach(r => {
-      if (!r.dst) return;
-      const parts = r.dst.split('/');
-      const net = parts[0]; const prefixLen = parseInt(parts[1] || '32', 10);
+    // 路由與目的位址須同一家族（2026-09-29 QF）：IPv6 目的原本會被當成 IPv4 比對而命中 0.0.0.0/0
+    const v6 = dstIp.includes(':');
+    // dst 寫法：「位址/前綴」或「位址 點分遮罩」（FortiGate 為後者，原本只處理前者，IPv4 查表一直命中不到）；
+    // IPv6 靜態路由在 FortiGate 的類型為 static6
+    routes.filter(r => r.type === 'static' || r.type === 'static6' || r.type === 'connected').forEach(r => {
+      if (!r.dst || r.dst.includes(':') !== v6) return;
+      const parts = r.dst.trim().split(/\s*\/\s*|\s+/);
+      const net = parts[0];
+      const prefixLen = parts[1] === undefined ? (v6 ? 128 : 32) : (v6 ? parseInt(parts[1], 10) : _cidrPrefixLen(parts[1]));
+      if (prefixLen === null || isNaN(prefixLen)) return;
       try {
-        if (_ipInSubnet(dstIp, net, prefixLen) && prefixLen > bestLen) {
+        const target = v6 ? _ipv6ToBig(dstIp) : null;
+        const hit = v6 ? (target !== null && _ipv6InPrefix(target, `${net}/${prefixLen}`)) : _ipInSubnet(dstIp, net, prefixLen);
+        if (hit && prefixLen > bestLen) {
           bestLen = prefixLen; best = r;
         }
       } catch(e) {}
