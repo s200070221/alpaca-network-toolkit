@@ -39,7 +39,40 @@ function _extractLiteralCidrPrefixLen(str) {
   if (m[3]) return _cidrPrefixLen(m[3]);
   return 32;
 }
+// ── IPv6 查詢支援（2026-09-29 QF）：IPv4 目標沿用原本的 32 位元整數；IPv6 目標以 {v6: BigInt}
+// 表示。位址物件／字面位址為另一家族時一律「不符」（先前 IPv4 查詢遇到 IPv6 物件會回傳 null＝
+// 無法判斷，被當成可能命中）
+function _ipv6ToBig(ip) {
+  const s = String(ip || '').trim().toLowerCase();
+  if (!/^[0-9a-f:]+$/.test(s) || (s.match(/::/g) || []).length > 1) return null;
+  let parts;
+  if (s.includes('::')) {
+    const [a, b] = s.split('::');
+    const head = a ? a.split(':') : [], tail = b ? b.split(':') : [];
+    const fill = 8 - head.length - tail.length;
+    if (fill < 1) return null;
+    parts = [...head, ...Array(fill).fill('0'), ...tail];
+  } else parts = s.split(':');
+  if (parts.length !== 8 || parts.some(p => !/^[0-9a-f]{1,4}$/.test(p))) return null;
+  return parts.reduce((acc, p) => (acc << 16n) | BigInt(parseInt(p, 16)), 0n);
+}
+// 查詢輸入：合法 IPv4 回傳整數、合法 IPv6 回傳 {v6}，其餘 null
+function _parseQueryIp(str) {
+  const t = String(str || '').trim();
+  if (t.includes(':')) { const n = _ipv6ToBig(t); return n === null ? null : { v6: n }; }
+  return _strictIpInt(t);
+}
+function _ipv6InPrefix(targetBig, subnetStr) {
+  const [addr, lenStr] = String(subnetStr).trim().split('/');
+  const base = _ipv6ToBig(addr), len = lenStr === undefined ? 128 : parseInt(lenStr, 10);
+  if (base === null || !(len >= 0 && len <= 128)) return null;
+  const shift = BigInt(128 - len);
+  return (targetBig >> shift) === (base >> shift);
+}
 function _ipInSubnet(targetInt, subnetStr) {
+  const isV6Subnet = String(subnetStr).includes(':');
+  if (typeof targetInt === 'object') return isV6Subnet ? _ipv6InPrefix(targetInt.v6, subnetStr) : false;
+  if (isV6Subnet) return false;
   const s = subnetStr.replace('/', ' ').trim();
   const parts = s.split(/\s+/);
   const ipInt = _ipToInt(parts[0]), maskInt = _maskToInt(parts[1]||'32');
@@ -48,6 +81,13 @@ function _ipInSubnet(targetInt, subnetStr) {
   return targetInt >= net && targetInt <= ((net | (~maskInt >>> 0)) >>> 0);
 }
 function _ipInRange(targetInt, startStr, endStr) {
+  const isV6Range = String(startStr).includes(':');
+  if (typeof targetInt === 'object') {
+    if (!isV6Range) return false;
+    const a = _ipv6ToBig(startStr), b = _ipv6ToBig(endStr);
+    return a !== null && b !== null && targetInt.v6 >= a && targetInt.v6 <= b;
+  }
+  if (isV6Range) return false;
   const si = _ipToInt(startStr), ei = _ipToInt(endStr);
   return si !== null && ei !== null && targetInt >= si && targetInt <= ei;
 }
@@ -58,7 +98,7 @@ function _addrMatchesIp(name, targetInt, addrList, seen) {
   seen.add(nm);
   const obj = addrList.find(a => a.name.toLowerCase()===nm);
   if (!obj) return null;
-  if (obj.type==='ipmask' && obj.subnet && obj.subnet!=='-')
+  if ((obj.type==='ipmask'||obj.type==='ipprefix') && obj.subnet && obj.subnet!=='-')
     return _ipInSubnet(targetInt, obj.subnet);
   if (obj.type==='iprange')
     return _ipInRange(targetInt, obj.startIp, obj.endIp);
@@ -116,22 +156,35 @@ function _policySvcMatches(svcStr, proto, port, svcList) {
 }
 function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED) {
   if (!PARSED||!PARSED.policies) return null;
-  const srcInt=_ipToInt(srcStr), dstInt=_ipToInt(dstStr);
+  const srcInt=_parseQueryIp(srcStr), dstInt=_parseQueryIp(dstStr);
   if (srcInt===null||dstInt===null) return {error:'invalid_ip'};
+  // 來源與目的必須同一家族
+  const isV6 = typeof srcInt === 'object';
+  if (isV6 !== (typeof dstInt === 'object')) return {error:'invalid_ip'};
+  // IPv6 查詢：有 srcAddr6/dstAddr6（parser 依位址物件家族拆分）的廠牌只看 IPv6 那組，並把字面
+  // 'any' 視為兩個家族皆適用（Palo Alto／Juniper／ASA 等的 any 本身不分家族；FortiGate 的 'all'
+  // 是 IPv4 專用，不在此列）；沒有拆分欄位的廠牌沿用原欄位
+  const addrField = (p, k) => {
+    if (!isV6 || p[k + '6'] === undefined) return p[k];
+    const six = p[k + '6'] === '-' ? [] : p[k + '6'].split(/\s*,\s*/);
+    const anyNames = (p[k] || '').split(/\s*,\s*/).filter(n => n.trim().toLowerCase() === 'any');
+    return [...new Set([...six, ...anyNames])].filter(Boolean).join(', ');
+  };
   const addrs=PARSED.addresses||[], svcs=PARSED.services||[];
   let pols = PARSED.policies;
   if (vdomFilter&&vdomFilter!=='__all__') pols=pols.filter(p=>p._vdom===vdomFilter);
   const trace=[];
   for (const p of pols) {
     if (p.status==='disable') { trace.push({policy:p,result:'disabled'}); continue; }
-    const sm=_policyAddrMatches(p.srcAddr,srcInt,addrs);
+    const pSrc=addrField(p,'srcAddr'), pDst=addrField(p,'dstAddr');
+    const sm=_policyAddrMatches(pSrc,srcInt,addrs);
     if (sm===false) { trace.push({policy:p,result:'skip',reason:'src_addr'}); continue; }
-    const dm=_policyAddrMatches(p.dstAddr,dstInt,addrs);
+    const dm=_policyAddrMatches(pDst,dstInt,addrs);
     if (dm===false) { trace.push({policy:p,result:'skip',reason:'dst_addr'}); continue; }
     const svm=_policySvcMatches(p.service,proto,port?parseInt(port):null,svcs);
     if (!svm) { trace.push({policy:p,result:'skip',reason:'service'}); continue; }
-    const resolvedSrc=_policyAddrResolve(p.srcAddr,srcInt,addrs);
-    const resolvedDst=_policyAddrResolve(p.dstAddr,dstInt,addrs);
+    const resolvedSrc=_policyAddrResolve(pSrc,srcInt,addrs);
+    const resolvedDst=_policyAddrResolve(pDst,dstInt,addrs);
     trace.push({policy:p,result:'match',hasFqdn:sm===null||dm===null,resolvedSrc,resolvedDst});
     return {matched:p,action:p.action==='accept'?'accept':'deny',trace};
   }
@@ -146,7 +199,7 @@ function _addrResolvePath(name, targetInt, addrList, seen, pathPfx) {
   const path = pathPfx ? pathPfx + ' → ' + raw : raw;
   const obj = addrList.find(a=>a.name.toLowerCase()===nm);
   if (!obj) return {match:null, display:path, detail:'(unresolved)'};
-  if (obj.type==='ipmask'&&obj.subnet&&obj.subnet!=='-') {
+  if ((obj.type==='ipmask'||obj.type==='ipprefix')&&obj.subnet&&obj.subnet!=='-') {
     const r=_ipInSubnet(targetInt,obj.subnet);
     if (r===true)  return {match:true,  display:path, detail:obj.subnet};
     if (r===null)  return {match:null,  display:path, detail:obj.subnet};
@@ -196,8 +249,32 @@ function _strictIpInt(s) {
 }
 const _intToIpStr = n => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
 // 回傳位址字串陣列；格式錯誤回傳 null；超過上限回傳 'too_large'
+// IPv6：BigInt 轉回壓縮前的 8 組十六進位字串（查詢比對只需可解析，不需最短寫法）
+const _bigToIpv6 = n => Array.from({ length: 8 }, (_, i) => ((n >> BigInt(112 - i * 16)) & 0xffffn).toString(16)).join(':');
+function _expandBatchAddr6(t) {
+  const cidr = t.match(/^([0-9a-fA-F:]+)\/(\d{1,3})$/);
+  const range = t.match(/^([0-9a-fA-F:]+)\s*-\s*([0-9a-fA-F:]+)$/);
+  let lo, hi;
+  if (cidr) {
+    const base = _ipv6ToBig(cidr[1]), bits = +cidr[2];
+    if (base === null || bits > 128) return null;
+    if (128 - bits > 8 || 2 ** (128 - bits) > BATCH_EXPAND_MAX) return 'too_large';
+    const size = 1n << BigInt(128 - bits);
+    lo = (base / size) * size; hi = lo + size - 1n;
+  } else if (range) {
+    lo = _ipv6ToBig(range[1]); hi = _ipv6ToBig(range[2]);
+    if (lo === null || hi === null || hi < lo) return null;
+    if (hi - lo + 1n > BigInt(BATCH_EXPAND_MAX)) return 'too_large';
+  } else {
+    return _ipv6ToBig(t) === null ? null : [t];
+  }
+  const out = [];
+  for (let n = lo; n <= hi; n++) out.push(_bigToIpv6(n));
+  return out;
+}
 function _expandBatchAddr(str) {
   const t = String(str || '').trim();
+  if (t.includes(':')) return _expandBatchAddr6(t);
   let lo, hi;
   const cidr = t.match(/^([\d.]+)\/(\d{1,2})$/);
   const range = t.match(/^([\d.]+)\s*-\s*([\d.]+)$/);
@@ -257,7 +334,8 @@ function parseBatchQueryCSV(text) {
     if (exp === 'accept' || exp === 'allow') expect = 'accept';
     else if (exp === 'deny' || exp === 'drop' || exp === 'block') expect = 'deny';
     const srcList = _expandBatchAddr(src), dstList = _expandBatchAddr(dst);
-    if (srcList === null || dstList === null) { errors.push({ line: lineNo, reason: 'ip' }); return; }
+    // 來源與目的須同一家族（IPv4／IPv6 混用無從比對），列為位址錯誤
+    if (srcList === null || dstList === null || src.includes(':') !== dst.includes(':')) { errors.push({ line: lineNo, reason: 'ip' }); return; }
     if (srcList === 'too_large' || dstList === 'too_large' || srcList.length * dstList.length > BATCH_EXPAND_MAX) { errors.push({ line: lineNo, reason: 'range' }); return; }
     if (!['any', 'TCP', 'UDP', 'ICMP'].includes(proto)) { errors.push({ line: lineNo, reason: 'proto' }); return; }
     if (port && !(/^\d+$/.test(port) && +port >= 1 && +port <= 65535)) { errors.push({ line: lineNo, reason: 'port' }); return; }

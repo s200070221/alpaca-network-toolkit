@@ -2255,6 +2255,10 @@ function parseAny(cfg,forceVendor){
     res.classMaps=parseNxosClassMaps(cfg);
     res.servicePolicy=parseNxosServicePolicy(cfg);
   }
+  // 畫面（摘要卡片、總覽、VLAN 表、CSV 匯出）一律讀 vlans[].ipSubnets.length；NX-OS 與 RouterOS
+  // 的 VLAN 物件沒有這個欄位，貼上這兩家設定時整頁出錯什麼都顯示不出來（2026-09-29 BD 掃描發現）。
+  // 在統一出口補上空陣列，涵蓋所有廠牌
+  (res.vlans||[]).forEach(v=>{ if(!Array.isArray(v.ipSubnets)) v.ipSubnets=[]; });
   return res;
 }
 

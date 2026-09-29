@@ -627,7 +627,7 @@ function renderOverview(){
   <div class="ov-card">
     <div class="ov-card-title">${tr('ov.vlan_summary')}</div>
     <div style="display:flex;flex-wrap:wrap;gap:4px;padding-top:4px">
-    ${p.vlans.slice(0,30).map(v=>`<span class="pill p-vlan">V${v.id}${v.name?' '+v.name:''}</span>`).join('')}
+    ${p.vlans.slice(0,30).map(v=>`<span class="pill p-vlan">V${esc(v.id)}${v.name?' '+esc(v.name):''}</span>`).join('')}
     ${p.vlans.length>30?`<span style="color:var(--text-muted);font-size:10px">+${p.vlans.length-30}...</span>`:''}
     </div>
   </div>
@@ -731,7 +731,7 @@ function renderBrocadeStack(){
     svg+=`<rect x="${bx.x}" y="${bx.y+22}" width="${boxW}" height="10" fill="#0f1629"/>`;
     svg+=`<text x="${bx.cx}" y="${bx.y+21}" font-size="13" fill="${isActive?tc:'#dde8f5'}" font-weight="700" text-anchor="middle">Unit ${m.id}</text>`;
     svg+=`<rect x="${bx.cx-30}" y="${bx.y+38}" width="60" height="18" rx="5" fill="${roleColor}" opacity=".18" stroke="${roleColor}" stroke-width="1"/>`;
-    svg+=`<text x="${bx.cx}" y="${bx.y+51}" font-size="10" fill="${roleColor}" font-weight="700" text-anchor="middle" font-family="JetBrains Mono,monospace">${m.role||'Member'}</text>`;
+    svg+=`<text x="${bx.cx}" y="${bx.y+51}" font-size="10" fill="${roleColor}" font-weight="700" text-anchor="middle" font-family="JetBrains Mono,monospace">${esc(m.role||'Member')}</text>`;
     if(m.model&&m.model!=='—')svg+=`<text x="${bx.cx}" y="${bx.y+78}" font-size="10" fill="#94a3b8" text-anchor="middle">${esc(m.model)}</text>`;
     if(m.priority>0)svg+=`<text x="${bx.cx}" y="${bx.y+98}" font-size="10" fill="#64748b" text-anchor="middle" font-family="JetBrains Mono,monospace">prio: ${m.priority}</text>`;
   }
@@ -814,7 +814,7 @@ function renderDellStack(){
       <div class="ov-card">
         <div class="ov-card-title">📦 ${isVLT?tr('ds.vlt_cfg'):tr('ds.stack_cfg')}</div>
         <div class="ov-row"><span class="ov-key">${tr('col.type')}</span><span class="ov-val">${pill('p-master',isVLT?'VLT':'Traditional Stack')}</span></div>
-        <div class="ov-row"><span class="ov-key">Domain</span><span class="ov-val mono">${stk.domain||'—'}</span></div>
+        <div class="ov-row"><span class="ov-key">Domain</span><span class="ov-val mono">${esc(stk.domain||'—')}</span></div>
         ${isVLT?`<div class="ov-row"><span class="ov-key">Peer-Link</span><span class="ov-val mono">${esc(stk.peerLink||'—')}</span></div>`:''}
         <div class="ov-row"><span class="ov-key">${tr('stack.member_count')}</span><span class="ov-val">${members.length}</span></div>
       </div>
@@ -835,7 +835,7 @@ function renderIRF(){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 18px 14px">
       <div class="ov-card">
         <div class="ov-card-title">⚡ ${tr('stack.irf_cfg')}</div>
-        <div class="ov-row"><span class="ov-key">Domain</span><span class="ov-val">${irf.domain}</span></div>
+        <div class="ov-row"><span class="ov-key">Domain</span><span class="ov-val">${esc(irf.domain)}</span></div>
         <div class="ov-row"><span class="ov-key">${tr('stack.member_count')}</span><span class="ov-val">${irf.members.length}</span></div>
         <div class="ov-row"><span class="ov-key">${tr('stack.irf_port_links')}</span><span class="ov-val">${irf.links.length}</span></div>
         <div class="ov-row"><span class="ov-key">${tr('stack.auto_update')}</span><span class="ov-val">${irf.autoUpdate?pill('p-up',tr('rt.auto_sum_on')):pill('p-down',tr('rt.auto_sum_off'))}</span></div>
@@ -2601,7 +2601,7 @@ function renderStackWise(){
           const roleClass=m.role==='Active'?'sw-active':m.role==='Standby'?'sw-standby':'sw-member';
           return`<div class="ov-row">
             <span class="ov-key">${pill('p-stack','SW'+m.id)}</span>
-            <span class="ov-val"><span class="sw-type-badge ${roleClass}">${m.role||'—'}</span> · ${tr('stack.port_col')}${pcount} · prio:${m.priority||'—'}</span>
+            <span class="ov-val"><span class="sw-type-badge ${roleClass}">${esc(m.role||'—')}</span> · ${tr('stack.port_col')}${pcount} · prio:${m.priority||'—'}</span>
           </div>`;
         }).join('')}
       </div>
@@ -2616,7 +2616,7 @@ function renderStackWise(){
             const roleClass=m.role==='Active'?'p-master':m.role==='Standby'?'p-up':'p-standby';
             return`<tr>
               <td>${pill('p-stack','SW'+m.id)}</td>
-              <td class="mono">${m.model||'—'}</td>
+              <td class="mono">${esc(m.model||'—')}</td>
               <td class="mono" style="color:var(--yellow)">${m.priority||'—'}</td>
               <td>${pill(roleClass,m.role||'—')}</td>
               <td class="mono">${pcount}</td>
