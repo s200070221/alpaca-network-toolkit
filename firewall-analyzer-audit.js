@@ -608,7 +608,9 @@
     // 等公開次級來源交叉核對官方 2013→2022 對照表（2026-07-22，非直接核對付費原文，
     // 部分條號查證信心為中高非完全確定，詳見 now.md 對應段落）；
     // NIST 800-53/CIS v8 沿用既有引用（CIS v8 已於 2026-07-21 查證）。
-    const f = (id, check, value, risk, detail, standards) => findings.push({ id, check, value, risk, detail, standards: standards||[] });
+    // items（2026-09-29 新增，AA）：完整命中對象 {kind, id?, name, vdom?}，供 buildFirewallAuditEvidence() 找原始設定行
+    const f = (id, check, value, risk, detail, standards, items) => findings.push({ id, check, value, risk, detail, standards: standards||[], items: items||[] });
+    const polItems = arr => arr.map(p => ({ kind: 'policy', id: p.id, name: p.name, vdom: p._vdom }));
     const policies = parsed.policies || [];
     // 多 VDOM 時以 VDOM/ID 顯示，避免各 VDOM 重複的 ID 混淆
     const isMultiVdom = policies.some(p => p._vdom !== undefined && p._vdom !== null);
@@ -620,24 +622,24 @@
       /\b(all|any)\b/i.test(p.srcAddr||'') && /\b(all|any)\b/i.test(p.dstAddr||'') && /\b(all|any|ALL)\b/i.test(p.service||''));
     f('any-any', tr('audit.check_any_any'), anyAny.length, 'high',
       anyAny.length ? tr('audit.id_prefix') + anyAny.map(p => idLabel(p)).slice(0,10).join(', ') + (anyAny.length > 10 ? '…' : '') : tr('audit.none'),
-      ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 12.2']);
+      ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 12.2'], polItems(anyAny));
     // 2. 停用規則數量
     const disabled = policies.filter(p => _isDisabledStatus(p));
     f('disabled-pol', tr('audit.check_disabled'), disabled.length, 'medium',
       disabled.length ? `${disabled.length}` + tr('audit.rec_disabled') : tr('audit.none'),
-      ['ISO27001 A.8.9', 'PCI-DSS 4.0 1.2.7', 'NIST 800-53 CM-7', 'CIS v8 4.1']);
+      ['ISO27001 A.8.9', 'PCI-DSS 4.0 1.2.7', 'NIST 800-53 CM-7', 'CIS v8 4.1'], polItems(disabled));
     // 3. 無日誌的允許規則
     const noLog = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) &&
       (!p.logtraffic || p.logtraffic === 'disable' || p.logtraffic === 'utm'));
     f('no-log', tr('audit.check_no_log'), noLog.length, 'medium',
       noLog.length ? `${noLog.length}` + tr('audit.rec_log') : tr('audit.all_logged'),
-      ['ISO27001 A.8.15', 'PCI-DSS 4.0 10.2.1', 'NIST 800-53 AU-2', 'CIS v8 8.2']);
+      ['ISO27001 A.8.15', 'PCI-DSS 4.0 10.2.1', 'NIST 800-53 AU-2', 'CIS v8 8.2'], polItems(noLog));
     // 4. SNMP v1/v2c
     const snmp = parsed.snmp;
     const hasV1v2 = snmp && snmp.communities && snmp.communities.length > 0;
     f('snmp-v1v2', tr('audit.check_snmp'), hasV1v2 ? snmp.communities.length : 0, 'high',
       hasV1v2 ? `Community: ${snmp.communities.length}` + tr('audit.rec_snmpv3') : tr('audit.none'),
-      ['ISO27001 A.8.24', 'PCI-DSS 4.0 2.2.6', 'NIST 800-53 IA-5', 'CIS v8 4.8']);
+      ['ISO27001 A.8.24', 'PCI-DSS 4.0 2.2.6', 'NIST 800-53 IA-5', 'CIS v8 4.8'], hasV1v2 ? snmp.communities.map(c => ({ kind: 'snmp', name: c.name })) : []);
     // 5. 管理員未啟用 2FA（2026-08-19 擴大涵蓋 type==='local' 但實際等同管理員權限的帳號：
     // CiscoASA 用單數 role 欄位、CheckPoint 用 roles/accessLevel、PaloAlto mgt-config users
     // 節點本身無角色欄位但本質即管理員帳號、Sophos accessLevel 可能是 admin/super-admin。
@@ -659,7 +661,7 @@
     const no2fa  = admins.filter(u => !u.twoFactor || u.twoFactor === 'disable');
     f('no-2fa', tr('audit.check_no_2fa'), no2fa.length, 'high',
       no2fa.length ? no2fa.map(u => u.name).slice(0,8).join(', ') + (no2fa.length > 8 ? '…' : '') : tr('audit.all_2fa'),
-      ['ISO27001 A.8.5', 'PCI-DSS 4.0 8.4.1', 'NIST 800-53 IA-2(1)', 'CIS v8 6.5']);
+      ['ISO27001 A.8.5', 'PCI-DSS 4.0 8.4.1', 'NIST 800-53 IA-2(1)', 'CIS v8 6.5'], no2fa.map(u => ({ kind: 'user', name: u.name, vdom: u._vdom })));
     // 6. 外部介面允許 HTTP/Telnet
     const dangerAcc = ['http','telnet'];
     const riskyIntf = (parsed.interfaces || []).filter(i => {
@@ -675,13 +677,13 @@
     });
     f('http-mgmt', tr('audit.check_http_mgmt'), riskyIntf.length, 'high',
       riskyIntf.length ? riskyIntf.map(i => `${i.name}(${i.allowaccess})`).join(', ') : tr('audit.normal'),
-      ['ISO27001 A.5.15', 'PCI-DSS 4.0 2.2.7', 'NIST 800-53 AC-17', 'CIS v8 12.3']);
+      ['ISO27001 A.5.15', 'PCI-DSS 4.0 2.2.7', 'NIST 800-53 AC-17', 'CIS v8 12.3'], riskyIntf.map(i => ({ kind: 'iface', name: i.name, vdom: i._vdom })));
     // 7. VPN 弱加密
     const WEAK = /\b(des\b|3des|md5|rc4|null)/i;
     const weakVpn = (parsed.vpn || []).filter(v => WEAK.test((v.proposal || '') + ' ' + (v.dhgrp || '')));
     f('weak-vpn', tr('audit.check_weak_vpn'), weakVpn.length, 'high',
       weakVpn.length ? weakVpn.map(v => v.name).slice(0,6).join(', ') : tr('audit.normal'),
-      ['ISO27001 A.8.24', 'PCI-DSS 4.0 4.2.1', 'NIST 800-53 SC-13', 'CIS v8 3.10']);
+      ['ISO27001 A.8.24', 'PCI-DSS 4.0 4.2.1', 'NIST 800-53 SC-13', 'CIS v8 3.10'], weakVpn.map(v => ({ kind: 'vpn', name: v.name, vdom: v._vdom })));
     // 8. VPN Phase2 未啟用 PFS（新增：PCI-DSS 4.0 逐條擴充，Req 4.2.1 強加密延伸至完美前向保密）
     const noPfs = [];
     (parsed.vpn || []).forEach(v => {
@@ -692,14 +694,14 @@
     });
     f('vpn-no-pfs', tr('audit.check_vpn_no_pfs'), noPfs.length, 'medium',
       noPfs.length ? noPfs.slice(0,8).join(', ') + (noPfs.length > 8 ? '…' : '') : tr('audit.normal'),
-      ['ISO27001 A.8.24', 'PCI-DSS 4.0 4.2.1']);
+      ['ISO27001 A.8.24', 'PCI-DSS 4.0 4.2.1'], noPfs.map(n => ({ kind: 'vpn', name: String(n).split('/')[0] })));
     // 9. 預設/通用管理員帳號名稱仍啟用（新增：PCI-DSS 4.0 逐條擴充，Req 2.2.2 預設帳號／8.2.2 共用帳號禁用）
     const DEFAULT_NAMES = /^(admin|administrator|root|guest|test|demo)$/i;
     const defaultAdmins = (parsed.users || []).filter(u =>
       (u.type === 'admin' || u.type === 'local') && u.status !== 'disable' && DEFAULT_NAMES.test((u.name || '').trim()));
     f('default-admin-name', tr('audit.check_default_admin'), defaultAdmins.length, 'medium',
       defaultAdmins.length ? defaultAdmins.map(u => u.name).slice(0,8).join(', ') + (defaultAdmins.length > 8 ? '…' : '') : tr('audit.none'),
-      ['ISO27001 A.5.16', 'PCI-DSS 4.0 2.2.2/8.2.2']);
+      ['ISO27001 A.5.16', 'PCI-DSS 4.0 2.2.2/8.2.2'], defaultAdmins.map(u => ({ kind: 'user', name: u.name, vdom: u._vdom })));
     // 10. SNMPv3 認證/加密強度不足（僅涵蓋有實際解析出 v3users 的 6 家：FortiGate/Juniper/PaloAlto/
     // Sophos/CheckPoint/MikroTik；CiscoASA/pfSense/SonicWall 固定空陣列、EdgeRouter/OpenWrt/Zyxel
     // 無 snmp 物件，皆非本檢查涵蓋範圍，非「查無弱設定」）
@@ -711,7 +713,7 @@
       (u.privProto && WEAK_PRIV.includes(String(u.privProto).toLowerCase())));
     f('snmpv3-weak', tr('audit.check_snmpv3_weak'), weakV3.length, weakV3.length ? 'medium' : 'low',
       weakV3.length ? weakV3.map(u => u.name).slice(0,8).join(', ') + (weakV3.length > 8 ? '…' : '') + tr('audit.rec_snmpv3_strong') : tr('audit.none'),
-      ['NIST 800-53 IA-5', 'CIS v8 4.8']);
+      ['NIST 800-53 IA-5', 'CIS v8 4.8'], weakV3.map(u => ({ kind: 'snmp', name: u.name })));
     // 11. 過寬規則：來源/目的為超大範圍網段（2026-08-29 新增，使用者發想 5 項新功能第 3 項）。
     // 上方第 1 項 any-any 檢查只用字面 all/any 文字比對，查證確認查無法命中字面 CIDR 寫法
     // （如 0.0.0.0/0、10.0.0.0/8），是既有真實缺口而非與 any-any 重工。僅評估能解析出明確
@@ -736,7 +738,7 @@
       (isBroad(p.srcAddr, p._vdom) || isBroad(p.dstAddr, p._vdom)));
     f('broad-network', tr('audit.check_broad_network'), broadNetwork.length, 'medium',
       broadNetwork.length ? tr('audit.id_prefix') + broadNetwork.map(p => idLabel(p)).slice(0,10).join(', ') + (broadNetwork.length > 10 ? '…' : '') : tr('audit.none'),
-      ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 12.2']);
+      ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 12.2'], polItems(broadNetwork));
     // 12. 過寬服務物件（2026-09-14 新增）：與第 1 項 any-any 檢查角度不同——那項看的是「規則」
     // 層級的來源/目的/服務是否皆為 all，此項專門看「服務物件本身」定義是否在物件層級就已無任何
     // 埠限制（proto 為 ANY/IP，或 tcp/udp port-range 寬度達 65535 等同全埠開放），即使規則的
@@ -748,7 +750,7 @@
     });
     f('overly-permissive-svc', tr('audit.check_overly_permissive_svc'), overlyPermissiveSvc.length, 'medium',
       overlyPermissiveSvc.length ? overlyPermissiveSvc.map(s => s.name).slice(0,10).join(', ') + (overlyPermissiveSvc.length > 10 ? '…' : '') : tr('audit.none'),
-      ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 4.4']);
+      ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 4.4'], overlyPermissiveSvc.map(x => ({ kind: 'svc', name: x.name, vdom: x._vdom })));
     return findings;
   }
   // 單一 port-range token（如 "1-65535" 或 "443"）換算涵蓋的埠數量，供過寬服務物件檢查使用；
@@ -803,7 +805,8 @@
   // 彙整全部既有稽核函式的結果，轉換成業界標準 schema，供 CI/CD 或安全工具鏈匯入比對。純函式，
   // 即時重新呼叫 analyze* 系列（比照 CSV_SUBSECTION_GETTERS 型別匯出時才重算的既有慣例，不依賴
   // 使用者是否已切換過稽核分頁的渲染快取）
-  function buildSarifAuditReport(parsed) {
+  // sources（選填，AA）：[{name,text}] 原始設定；有提供時合規檢查結果附上證據行（physicalLocation）
+  function buildSarifAuditReport(parsed, sources) {
     const results = [];
     const push = (ruleId, level, message, properties) => results.push({ ruleId, level, message: { text: message }, properties: properties || {} });
     analyzeRuleShadowing(parsed.policies || []).forEach(r => {
@@ -821,8 +824,13 @@
     const un = analyzeUnusedObjects(parsed);
     (un.unusedAddrs || []).forEach(a => push('unused-address-object', 'note', `${tr('audit.unused_addr_header')}: ${a.name}`, { name: a.name, category: a.category }));
     (un.unusedSvcs || []).forEach(s => push('unused-service-object', 'note', `${tr('audit.unused_svc_header')}: ${s.name}`, { name: s.name, category: s.category }));
-    analyzeCompliance(parsed).forEach(f => {
-      if (f.value > 0) push('compliance-' + f.id, f.risk === 'high' ? 'error' : f.risk === 'medium' ? 'warning' : 'note', `${f.check}: ${f.detail}`, { standards: f.standards, count: f.value });
+    const _co = analyzeCompliance(parsed);
+    const _ev = sources ? buildFirewallAuditEvidence(sources, _co) : {};
+    _co.forEach(f => {
+      if (f.value > 0) {
+        push('compliance-' + f.id, f.risk === 'high' ? 'error' : f.risk === 'medium' ? 'warning' : 'note', `${f.check}: ${f.detail}`, { standards: f.standards, count: f.value });
+        if ((_ev[f.id] || []).length) results[results.length - 1].locations = _ev[f.id].map(e => ({ physicalLocation: { artifactLocation: { uri: e.src || 'config' }, region: { startLine: e.line, snippet: { text: e.text } } } }));
+      }
     });
     analyzeCrossVdomInconsistency(parsed).forEach(r => {
       push('cross-vdom-inconsistency', 'warning', `${tr('audit.cross_vdom_title')}: ${r.name} (${r.category}) — ${r.sample.join(' / ')}`, { category: r.category, name: r.name });
@@ -1066,16 +1074,45 @@
     return h;
   }
 
-  function buildComplianceHtml(findings) {
+  // 證據行（AA）：可展開的原始設定行清單（多檔時標示檔名）；有命中但找不到對應行時顯示說明
+  function _buildEvidenceDetails(f, ev) {
+    if (!f.value || !ev) return '';
+    if (!ev.length) return `<div style="font-size:10px;color:var(--text-muted);margin-top:3px">${esc(tr('audit.evidence_none'))}</div>`;
+    const multi = new Set(ev.map(e => e.src)).size > 1;
+    return `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:11px;color:var(--accent)">${esc(tr('audit.evidence').replace('{n}', ev.length))}</summary>`
+      + `<pre style="margin:4px 0 0;padding:6px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;font-size:11px;line-height:1.5;white-space:pre-wrap;max-height:220px;overflow:auto">`
+      + ev.map(e => `<span style="color:var(--text-muted)">${multi ? esc(e.src) + ' ' : ''}L${e.line}</span>  ${esc(e.text)}`).join('\n') + '</pre></details>';
+  }
+  // 為什麼重要／怎麼修（NB）：白話說明（i18n fix.<id>）＋ FortiGate 修正指令範例
+  function _buildFixDetails(f, vendor) {
+    if (!f.value) return '';
+    const why = tr('fix.' + f.id);
+    if (!why || why === 'fix.' + f.id) return '';
+    const cmd = buildFirewallFixCommands(f, vendor);
+    return `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:11px;color:var(--accent)">${esc(tr('fix.title'))}</summary>`
+      + `<div style="font-size:12px;color:var(--text);margin:4px 0;line-height:1.5">${esc(why)}</div>`
+      + (cmd ? `<div style="font-size:11px;color:var(--text-dim);margin-top:4px">${esc(tr('fix.cmd_title').replace('{vendor}', 'FortiGate'))}</div>`
+        + `<pre style="margin:4px 0 0;padding:6px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;font-size:11px;line-height:1.5;white-space:pre-wrap;max-height:220px;overflow:auto">${esc(cmd)}</pre>`
+        + `<div style="font-size:10px;color:var(--text-muted);margin-top:3px">${esc(tr('fix.cmd_note'))}</div>` : '')
+      + '</details>';
+  }
+  // marks（選填，AB）：{發現id:{status,note}}；有提供時多一欄處置狀態＋備註，並在表頭上方顯示審查者欄位與工作底稿匯出按鈕
+  function _buildMarkCell(id, m) {
+    const opt = st => `<option value="${st}"${(m.status || 'open') === st ? ' selected' : ''}>${esc(tr('wp.status_' + st))}</option>`;
+    return `<select aria-label="${esc(tr('wp.col_status'))}" onchange="window._fwSetAuditMark('${id}','status',this.value)" style="font-size:11px;padding:2px 4px;margin-bottom:3px">${AUDIT_MARK_STATUSES.map(opt).join('')}</select>`
+      + `<input value="${esc(m.note || '')}" placeholder="${esc(tr('wp.note_ph'))}" aria-label="${esc(tr('wp.col_note'))}" onchange="window._fwSetAuditMark('${id}','note',this.value)" style="font-size:11px;padding:2px 4px;width:120px;display:block">`;
+  }
+  function buildComplianceHtml(findings, evidence, vendor, marks, reviewer) {
     const rp = r => r === 'high' ? pill(tr('audit.risk_high'),'p-deny') : r === 'medium' ? pill(tr('audit.risk_mid'),'p-warn') : pill(tr('audit.risk_low'),'p-allow');
     let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--purple);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + tip('tip.compliance', tr('audit.compliance_title')) + '</div>';
     h += `<div style="color:var(--text-dim);font-size:11px;margin-bottom:8px">${esc(tr('audit.standards_disclaimer'))}</div>`;
-    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_check') + '</th><th>' + tr('audit.col_result') + '</th><th>' + tr('audit.col_risk') + '</th><th>' + tr('audit.col_detail') + '</th><th>' + tr('audit.col_standards') + '</th></tr></thead><tbody>';
+    if (marks) h += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px"><button class="btn btn-ghost btn-sm" onclick="window._fwExportWorkpaper()">📋 ${esc(tr('wp.export_btn'))}</button><input id="fw-audit-reviewer" value="${esc(reviewer || '')}" placeholder="${esc(tr('wp.reviewer_ph'))}" aria-label="${esc(tr('wp.col_reviewer'))}" onchange="window._fwSetAuditReviewer(this.value)" style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg2);color:var(--text);width:140px"><span style="font-size:11px;color:var(--text-muted)">${esc(tr('wp.hint'))}</span></div>`;
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_check') + '</th><th>' + tr('audit.col_result') + '</th><th>' + tr('audit.col_risk') + '</th><th>' + tr('audit.col_detail') + '</th><th>' + tr('audit.col_standards') + '</th>' + (marks ? '<th>' + tr('wp.col_status') + '</th>' : '') + '</tr></thead><tbody>';
     findings.forEach(f => {
       const ok = f.value === 0;
       const vc = (!ok && f.risk !== 'low') ? 'var(--red)' : 'var(--green)';
       const stdBadges = (f.standards||[]).map(s => `<span style="display:inline-block;margin:1px 3px 1px 0;padding:1px 6px;border-radius:3px;font-size:10px;background:var(--surface2);color:var(--text-dim);border:1px solid var(--border)">${esc(s)}</span>`).join('');
-      h += `<tr><td>${esc(f.check)}</td><td class="mono" style="color:${vc};font-weight:600">${esc(String(f.value))}</td><td>${rp(f.risk)}</td><td style="color:var(--text-dim);font-size:11px">${esc(f.detail)}</td><td style="font-size:11px;white-space:normal;min-width:220px">${stdBadges || '-'}</td></tr>`;
+      h += `<tr><td>${esc(f.check)}</td><td class="mono" style="color:${vc};font-weight:600">${esc(String(f.value))}</td><td>${rp(f.risk)}</td><td style="color:var(--text-dim);font-size:11px">${esc(f.detail)}${_buildEvidenceDetails(f, evidence && evidence[f.id])}${_buildFixDetails(f, vendor)}</td><td style="font-size:11px;white-space:normal;min-width:220px">${stdBadges || '-'}</td>${marks ? `<td>${f.value ? _buildMarkCell(f.id, marks[f.id] || {}) : '-'}</td>` : ''}</tr>`;
     });
     h += '</tbody></table></div></div>';
     return h;
@@ -1433,6 +1470,25 @@
       `| ${tr('audit.col_check')} | ${tr('audit.col_result')} | ${tr('audit.col_risk')} | ${tr('audit.col_detail')} | ${tr('audit.col_standards')} |`,
       '|---|---|---|---|---|');
     co.forEach(f => L.push(`| ${_mdCell(f.check)} | ${f.value} | ${_mdCell(riskLabel[f.risk] || f.risk)} | ${_mdCell(f.detail)} | ${_mdCell((f.standards || []).join('; '))} |`));
+    // 證據行（AA）：opts.sources 有原始設定時，逐項列出命中的設定行
+    if (opts && opts.sources) {
+      const ev = buildFirewallAuditEvidence(opts.sources, co);
+      const hits = co.filter(f => f.value > 0);
+      if (hits.length) {
+        L.push('', `## ${tr('audit.evidence_title')}`, '');
+        const multi = new Set(opts.sources.filter(x => x && x.text).map(x => x.name)).size > 1;
+        hits.forEach(f => {
+          L.push(`### ${f.check}`, '');
+          const e = ev[f.id] || [];
+          if (e.length) L.push('```', ...e.map(x => `${multi ? x.src + ' ' : ''}L${x.line}: ${x.text}`), '```', '');
+          else L.push(tr('audit.evidence_none'), '');
+          const why = tr('fix.' + f.id);
+          if (why && why !== 'fix.' + f.id) L.push(`**${tr('fix.title')}**: ${why}`, '');
+          const cmd = buildFirewallFixCommands(f, parsed.vendor);
+          if (cmd) L.push('```', cmd, '```', '');
+        });
+      }
+    }
     if (health.issues.length) {
       L.push('', `## ${tr('health.title')}`, '');
       health.issues.forEach(i => L.push(`- ${_mdCell(i.label)}: ${i.count}${i.accepted ? ` (${tr('health.accepted_mark')})` : ''}${i.capped ? ` (${tr('health.capped_mark')})` : ''}`));
@@ -1615,4 +1671,151 @@
     if (!res || res.error) return { error: res ? res.error : 'no_policy' };
     const cmd = res.action === 'accept' ? null : buildFortiGateAllowCommand(parsed, Object.assign({}, req, { srcIntf, dstIntf, vdom: vd || (multi ? '' : req.vdom) }), res);
     return { res, srcIntf, dstIntf, guessedSrc, guessedDst, cmd };
+  }
+
+  // ── 合規檢查的證據行（2026-09-29 新增，第七輪 AA）──────────────────────────
+  // sources：[{name: 檔名, text: 原始設定文字}]（多台同時分析時逐一搜尋）；依 analyzeCompliance()
+  // 每項發現的 items 找出原始設定行，回傳 {發現id: [{src, line, text}]}（line 為 1 起算）。
+  //   policy：FortiGate 在 config firewall policy／policy6 區段內找 edit <編號>（多 VDOM 依區段前最近的
+  //           頂層 edit 判斷所屬 VDOM）；其他廠牌以規則名稱找宣告行。之後帶出區塊內與該項檢查相關的子行。
+  //   user／iface／vpn／svc／snmp：以名稱找宣告行（edit／set／<entry name=…>／username 等）＋相關子行
+  // 找不到時清單為空。密碼、金鑰、PSK 值一律遮成 ****。以縮排判斷區塊（FortiGate edit…next、
+  // Palo Alto／Sophos 等 XML 縮排、Junos 大括號皆適用）。
+  const _FW_EV_SUB = {
+    'any-any': /srcaddr|dstaddr|service|action|source|destination|application|from|to\b|match/i,
+    'broad-network': /srcaddr|dstaddr|source|destination|address/i,
+    'no-log': /log|action/i,
+    'disabled-pol': /status|disable/i,
+    'no-2fa': /two-factor|2fa|otp|accprofile|trusthost/i,
+    'default-admin-name': /accprofile|profile|level|user-type/i,
+    'http-mgmt': /allowaccess|manage|http|telnet/i,
+    'weak-vpn': /proposal|dhgrp|encrypt|hash|dh-group|authentication/i,
+    'vpn-no-pfs': /pfs|dhgrp|dh-group/i,
+    'snmpv3-weak': /auth|priv/i,
+    'overly-permissive-svc': /port|protocol/i,
+  };
+  const _FW_EV_MAX = 30;
+  function _fwEvEsc(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+  function _fwEvNameRe(name) { return new RegExp('(^|[\\s"\'>=])' + _fwEvEsc(name) + '($|[\\s"\'<;{,])', 'i'); }
+  function _fwEvIndent(l) { return (l.match(/^[ \t]*/) || [''])[0].length; }
+  function _fwEvBlock(lines, i) {
+    const out = [], base = _fwEvIndent(lines[i]);
+    for (let k = i + 1; k < lines.length; k++) {
+      const l = lines[k];
+      if (!l.trim()) continue;
+      if (_fwEvIndent(l) <= base) break;
+      out.push(k);
+    }
+    return out;
+  }
+  function _fwEvMask(l) {
+    return l.replace(/\b(password|passwd|phash|secret|psksecret|pre-shared-key|pre-shared-secret|keystring|auth-pwd|priv-pwd|key)(\s+ENC)?(\s+)("?)[^\s"<]+\4/gi, (m, kw, enc, sp, q) => `${kw}${enc || ''}${sp}${q}****${q}`)
+      .replace(/<(password|phash|psk|pre-shared-key|secret|key)>[^<]*<\//gi, '<$1>****</');
+  }
+  // FortiGate：每個 config firewall policy(6) 區段的起訖行與所屬 VDOM
+  function _fgPolicySections(lines) {
+    const secs = [];
+    let vdom = '';
+    lines.forEach((l, i) => {
+      const top = l.match(/^edit\s+"?([^"\s]+)"?\s*$/);
+      if (top) vdom = top[1];
+      const m = l.match(/^(\s*)config firewall (policy6?)\s*$/);
+      if (m) {
+        let end = lines.length;
+        for (let k = i + 1; k < lines.length; k++) if (_fwEvIndent(lines[k]) === m[1].length && /^\s*end\s*$/.test(lines[k])) { end = k; break; }
+        secs.push({ start: i, end, vdom, six: m[2] === 'policy6' });
+      }
+    });
+    return secs;
+  }
+  function buildFirewallAuditEvidence(sources, findings) {
+    const res = {};
+    const srcs = (sources || []).filter(s => s && s.text).map(s => ({ name: s.name || '', lines: String(s.text).replace(/^﻿/, '').replace(/\r\n?/g, '\n').split('\n') }));
+    srcs.forEach(s => { s.fgSecs = /^\s*config firewall policy/m.test(s.lines.join('\n')) ? _fgPolicySections(s.lines) : null; });
+    (findings || []).forEach(f => {
+      const out = [];
+      const seen = new Set();
+      const sub = _FW_EV_SUB[f.id];
+      if (!f.value) { res[f.id] = out; return; }
+      srcs.forEach(src => {
+        const L = src.lines;
+        const add = k => { const key = src.name + ':' + k; if (out.length < _FW_EV_MAX && !seen.has(key)) { seen.add(key); out.push({ src: src.name, line: k + 1, text: _fwEvMask(L[k].replace(/\s+$/, '')) }); } };
+        const addBlock = k => { add(k); if (sub) _fwEvBlock(L, k).forEach(b => { if (sub.test(L[b])) add(b); }); };
+        (f.items || []).forEach(it => {
+          if (it.kind === 'policy') {
+            if (src.fgSecs) {
+              const idStr = String(it.id), six = idStr.startsWith('v6/'), num = idStr.replace(/^v6\//, '');
+              src.fgSecs.filter(sec => sec.six === six && (!it.vdom || !sec.vdom || sec.vdom === it.vdom)).forEach(sec => {
+                for (let k = sec.start + 1; k < sec.end; k++) if (new RegExp('^\\s*edit\\s+"?' + _fwEvEsc(num) + '"?\\s*$').test(L[k])) { addBlock(k); break; }
+              });
+              return;
+            }
+            const re = it.name ? _fwEvNameRe(it.name) : _fwEvNameRe(it.id);
+            const k = L.findIndex(l => re.test(l) && /rule|policy|entry|edit|name|access-list|filter|term|set/i.test(l));
+            if (k >= 0) addBlock(k);
+            return;
+          }
+          if (!it.name) return;
+          const re = _fwEvNameRe(it.name);
+          // 先找物件宣告行（edit／<entry>），再找其他常見開頭，最後才是任何含此名稱的行
+          let k = L.findIndex(l => re.test(l) && /^\s*(edit|<entry)\b/i.test(l));
+          if (k < 0) k = L.findIndex(l => re.test(l) && /^\s*(set|username|user|<name>|interface|crypto|tunnel-group|community|snmp|add|\/)/i.test(l));
+          if (k < 0) k = L.findIndex(l => re.test(l));
+          if (k >= 0) addBlock(k);
+        });
+      });
+      res[f.id] = out;
+    });
+    return res;
+  }
+
+  // ── 合規發現的修正指令範例（2026-09-29 新增，第七輪 NB）──────────────────────
+  // 只提供 FortiGate（FortiOS）；其他廠牌只顯示白話說明（i18n fix.<發現id>）。以發現的 items 代入
+  // （規則編號、帳號、介面、VPN、服務物件），每項最多 10 個對象，<...> 為需要自行填入的值；
+  // 多 VDOM 設定需先 config vdom／edit <vdom>，此處不自動包覆（同一發現可能跨多個 VDOM）。
+  const FW_FIX_MAX = 10;
+  const _fgPol = (it, lines) => ['config firewall policy', ...(it || []).filter(x => !String(x.id).startsWith('v6/')).slice(0, FW_FIX_MAX).flatMap(x => [`    edit ${x.id}`, ...lines.map(l => '        ' + l), '    next']), 'end'];
+  const _fgEdit = (table, it, lines) => [`config ${table}`, ...(it || []).slice(0, FW_FIX_MAX).flatMap(x => [`    edit ${_fgQuote(x.name)}`, ...lines.map(l => '        ' + l), '    next']), 'end'];
+  const FW_FIX_CMDS_FORTIGATE = {
+    'any-any': it => _fgPol(it, ['set srcaddr "<specific-source>"', 'set dstaddr "<specific-destination>"', 'set service "<specific-service>"']),
+    'disabled-pol': it => ['config firewall policy', ...(it || []).filter(x => !String(x.id).startsWith('v6/')).slice(0, FW_FIX_MAX).map(x => `    delete ${x.id}`), 'end'],
+    'no-log': it => _fgPol(it, ['set logtraffic all']),
+    'snmp-v1v2': () => ['config system snmp community', '    delete <community-id>', 'end', 'config system snmp user', '    edit "<user>"', '        set security-level auth-priv', '        set auth-proto sha256', '        set auth-pwd <auth-password>', '        set priv-proto aes256', '        set priv-pwd <priv-password>', '    next', 'end'],
+    'no-2fa': it => _fgEdit('system admin', it, ['set two-factor fortitoken', 'set fortitoken <token-serial>']),
+    'http-mgmt': it => _fgEdit('system interface', it, ['set allowaccess ping https ssh']),
+    'weak-vpn': it => _fgEdit('vpn ipsec phase1-interface', it, ['set proposal aes256-sha256', 'set dhgrp 14']),
+    'vpn-no-pfs': () => ['config vpn ipsec phase2-interface', '    edit "<phase2-name>"', '        set pfs enable', '        set dhgrp 14', '    next', 'end'],
+    'default-admin-name': it => ['config system admin', '    edit "<new-admin-name>"', '        set accprofile "super_admin"', '        set password <new-password>', '    next', ...(it || []).slice(0, FW_FIX_MAX).map(x => `    delete ${_fgQuote(x.name)}`), 'end'],
+    'snmpv3-weak': it => ['config system snmp user', ...(it || []).slice(0, FW_FIX_MAX).flatMap(x => [`    edit ${_fgQuote(x.name)}`, '        set auth-proto sha256', '        set priv-proto aes256', '    next']), 'end'],
+    'broad-network': it => _fgPol(it, ['set srcaddr "<narrower-source>"', 'set dstaddr "<narrower-destination>"']),
+    'overly-permissive-svc': it => _fgEdit('firewall service custom', it, ['set tcp-portrange <specific-ports>']),
+  };
+  function buildFirewallFixCommands(finding, vendor) {
+    if (!finding.value || !/FortiGate/i.test(vendor || '') || / \+ /.test(vendor || '')) return '';
+    const fn = FW_FIX_CMDS_FORTIGATE[finding.id];
+    return fn ? fn(finding.items || []).join('\n') : '';
+  }
+
+  // ── 稽核工作底稿（2026-09-29 新增，第七輪 AB）─────────────────────────────
+  // 合規檢查每項一列：主機、檢查項目、風險、結果、詳細說明、相關標準、證據行、修正建議（說明＋指令）、
+  // 處置狀態、審查者備註、審查者、更新時間。marks＝{發現id:{status,note,ts}}（畫面上由使用者填寫，存在
+  // 瀏覽器）；與健康度的「接受風險」是兩套獨立標記（後者影響分數，此處只是底稿紀錄）。
+  const AUDIT_MARK_STATUSES = ['open', 'todo', 'fixed', 'accepted'];
+  function auditStatusLabel(st) { return tr('wp.status_' + (AUDIT_MARK_STATUSES.includes(st) ? st : 'open')); }
+  function buildFirewallWorkpaper(parsed, sources, marks, reviewer) {
+    const co = analyzeCompliance(parsed);
+    const ev = sources ? buildFirewallAuditEvidence(sources, co) : {};
+    const host = (parsed.deviceInfo && parsed.deviceInfo.hostname) || '-';
+    const riskLabel = { high: tr('audit.risk_high'), medium: tr('audit.risk_mid'), low: tr('audit.risk_low') };
+    const headers = [tr('wp.col_host'), tr('audit.col_check'), tr('audit.col_risk'), tr('audit.col_result'), tr('audit.col_detail'), tr('audit.col_standards'), tr('audit.col_evidence'), tr('wp.col_fix'), tr('wp.col_status'), tr('wp.col_note'), tr('wp.col_reviewer'), tr('wp.col_updated')];
+    const multi = new Set((sources || []).filter(s => s && s.text).map(s => s.name)).size > 1;
+    const rows = co.map(f => {
+      const m = (marks && marks[f.id]) || {};
+      const why = tr('fix.' + f.id);
+      const fix = f.value ? [why !== 'fix.' + f.id ? why : '', buildFirewallFixCommands(f, parsed.vendor)].filter(Boolean).join('\n') : '';
+      return [host, f.check, riskLabel[f.risk] || f.risk, f.value, f.detail, (f.standards || []).join('; '),
+        (ev[f.id] || []).map(e => `${multi ? e.src + ' ' : ''}L${e.line}: ${e.text}`).join('\n'), fix,
+        f.value ? auditStatusLabel(m.status) : '-', m.note || '', reviewer || '', m.ts ? new Date(m.ts).toISOString() : ''];
+    });
+    return { headers, rows };
   }

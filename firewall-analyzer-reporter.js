@@ -1026,7 +1026,7 @@ ${(parsed.schedules&&parsed.schedules.length)?`<div class="section" id="sec-sche
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 500);
   }
 
-  return { exportCSV, exportZoneMatrixCSV, exportQueryTraceCSV, exportBatchQueryCSV, exportBatchDiffCSV, exportDiffCSV, exportComplianceDiffCSV, exportJSON, exportHTML, download };
+  return { toCSV, exportCSV, exportZoneMatrixCSV, exportQueryTraceCSV, exportBatchQueryCSV, exportBatchDiffCSV, exportDiffCSV, exportComplianceDiffCSV, exportJSON, exportHTML, download };
 })();
 
 

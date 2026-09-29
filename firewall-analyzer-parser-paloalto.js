@@ -787,7 +787,8 @@ const PaloAltoParser = (() => {
 
     if (isXml(text)) {
       // Local users (device users / admin)
-      xblks(xv(text,'users')||xv(xv(text,'mgt-config')||text,'users')||text, 'entry').forEach(e => {
+      // 沒有 <users> 區塊時不可退回整份設定檔：否則設定檔中每個 <entry>（介面、區域、規則…）都會被當成帳號（2026-09-29 修正）
+      xblks(xv(text,'users')||xv(xv(text,'mgt-config')||'','users')||'', 'entry').forEach(e => {
         const name = xname(e);
         users.push({
           type:'local', name,

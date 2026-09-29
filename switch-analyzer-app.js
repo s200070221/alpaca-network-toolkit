@@ -1,4 +1,6 @@
 let parsed=null, currentView='upload', sbMini=false;
+// 最近一次解析的原始設定文字（稽核證據行用，2026-09-29 AA）
+let rawCfgText='';
 let sortCol=null, sortDir=1; // 1=asc -1=desc
 let lldpView='table'; // 'table' | 'topo' | 'multi'
 let portView='table'; // 'table' | 'heatmap'
@@ -239,6 +241,7 @@ function doAnalyze(){
   const cfg=document.getElementById('paste-area').value.trim();
   if(!cfg){alert(tr('msg.no_config'));return;}
   const forceVendor=document.getElementById('force-vendor-select')?.value||'';
+  rawCfgText=cfg;
   parsed=parseAny(cfg,forceVendor);
   const lldpText=(document.getElementById('lldp-area')?.value||'').trim();
   parsed.lldp=lldpText?LLDPParser.parse(lldpText,parsed.vendor):[];
@@ -583,7 +586,7 @@ function renderView(view){
   // 設定比較／終端定位不需要先解析設定檔；未解析前 view-result 是隱藏的，這裡切換可見性
   // （點回「載入設定檔」時還原），已解析後維持原本行為不變
   if(!parsed){
-    const standalone=(view==='diff'||view==='endpoint'||view==='inventory');
+    const standalone=(view==='diff'||view==='endpoint'||view==='inventory'||view==='explain');
     document.getElementById('view-upload').classList.toggle('show',!standalone);
     const vr=document.getElementById('view-result');
     vr.style.display=standalone?'flex':'none';vr.style.flexDirection='column';
@@ -595,6 +598,7 @@ function renderView(view){
   if(view==='diff'){tc.innerHTML=renderDiffCard();return;}
   if(view==='endpoint'){tc.innerHTML=renderEndpointCard();return;}
   if(view==='inventory'){tc.innerHTML=renderInventoryCard();return;}
+  if(view==='explain'){tc.innerHTML=renderExplainCard();return;}
   if(!parsed){tc.innerHTML='<div class="nodata">'+tr('msg.no_config')+'</div>';return;}
   switch(view){
     case'overview': tc.innerHTML=renderOverview();break;
@@ -1769,20 +1773,25 @@ function renderAudit(){
     {key:'detail',label:tr('audit.col_detail')},
     {key:'standards',label:tr('audit.col_standards')},
     {key:'action',label:tr('audit.col_action')},
+    {key:'status',label:tr('wp.col_status')},
   ];
+  const evidence=buildSwitchAuditEvidence(rawCfgText,findings);
+  const marks=swAuditMarks();
   const fmtRows=findings.map(f=>({...f,
     value: `<span class="mono" style="color:${f.value>0&&f.risk!=='low'?'var(--red)':'var(--green)'};font-weight:600">${f.value}</span>`,
     risk: f.risk==='high'?pill('down',tr('audit.risk_high')):f.risk==='medium'?pill('warn',tr('audit.risk_mid')):pill('info',tr('audit.risk_low')),
-    detail: `<span style="color:var(--text-dim);font-size:11px">${esc(f.detail)}</span>`,
+    detail: `<span style="color:var(--text-dim);font-size:11px">${esc(f.detail)}</span>`+renderEvidenceDetails(f,evidence[f.id])+renderFixDetails(f,parsed.vendor),
     standards: (f.standards||[]).map(s=>`<span style="display:inline-block;margin:1px 3px 1px 0;padding:1px 6px;border-radius:3px;font-size:10px;background:var(--surface2);color:var(--text-dim);border:1px solid var(--border)">${esc(s)}</span>`).join('')||'-',
+    status: f.value>0?renderAuditMarkCell(f.id,marks[f.id]||{}):'-',
     action: (f.value>0&&REMEDIABLE_FINDING_IDS.has(f.id))?`<button class="btn btn-ghost btn-sm" onclick="_sendToGenerator('${f.id}')">${esc(tr('audit.remediate_btn'))}</button>`:'-',
   }));
-  fmtRows.forEach(r=>{r.check_html=esc(r.check);r.value_html=r.value;r.risk_html=r.risk;r.detail_html=r.detail;r.standards_html=r.standards;r.action_html=r.action;});
-  tableData=findings; tableKeys=['check','value','risk','detail','standards','action'];
+  fmtRows.forEach(r=>{r.check_html=esc(r.check);r.value_html=r.value;r.risk_html=r.risk;r.detail_html=r.detail;r.standards_html=r.standards;r.action_html=r.action;r.status_html=r.status;});
+  tableData=findings; tableKeys=['check','value','risk','detail','standards','action','status'];
   const {html}=renderTable(hdrs,fmtRows,null);
   return `<div style="font-size:13px;font-weight:600;color:var(--purple);margin-bottom:6px">${tr('audit.sw_title')}</div>`
     +cards+disclaimer
-    +`<div style="display:flex;gap:6px;margin:6px 0 8px"><button class="btn btn-ghost btn-sm" onclick="exportAuditSARIF()">🧾 ${esc(tr('audit.export_sarif'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditMarkdown()">📝 ${esc(tr('audit.export_md'))}</button></div>`
+    +`<div style="display:flex;gap:6px;margin:6px 0 8px"><button class="btn btn-ghost btn-sm" onclick="exportAuditSARIF()">🧾 ${esc(tr('audit.export_sarif'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditMarkdown()">📝 ${esc(tr('audit.export_md'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditWorkpaper()">📋 ${esc(tr('wp.export_btn'))}</button><button class="btn btn-ghost btn-sm" onclick="saveSwitchAuditBaseline()">💾 ${esc(tr('swbase.save_btn'))}</button><label class="btn btn-ghost btn-sm" style="cursor:pointer">📂 ${esc(tr('swbase.compare_btn'))}<input type="file" accept=".json" onchange="compareSwitchAuditBaseline(this)"></label><input id="sw-audit-reviewer" value="${esc(swAuditReviewer())}" placeholder="${esc(tr('wp.reviewer_ph'))}" aria-label="${esc(tr('wp.col_reviewer'))}" onchange="swSetAuditReviewer(this.value)" style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);width:140px"></div><div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">${esc(tr('wp.hint'))}</div>`
+    +`<div id="sw-baseline-result"></div>`
     +`<div style="overflow-x:auto"><div class="tbl-wrap">${html}</div></div>`
     +buildShutdownConfiguredCard(analyzeShutdownConfigured(parsed))
     +`<div id="sw-health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
@@ -1790,12 +1799,95 @@ function renderAudit(){
         <div id="sw-health-result" style="margin-top:12px"></div>
        </div>`;
 }
+// 證據行（AA）：可展開的原始設定行清單；有命中但找不到對應行時說明可能是廠牌預設值
+function renderEvidenceDetails(f,ev){
+  if(!f.value)return '';
+  if(!ev||!ev.length)return `<div style="font-size:10px;color:var(--text-muted);margin-top:3px">${esc(tr('audit.evidence_none'))}</div>`;
+  return `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:11px;color:var(--accent)">${esc(tr('audit.evidence').replace('{n}',ev.length))}</summary>`
+    +`<pre style="margin:4px 0 0;padding:6px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;font-size:11px;line-height:1.5;white-space:pre-wrap;max-height:220px;overflow:auto">`
+    +ev.map(e=>`<span style="color:var(--text-muted)">L${e.line}</span>  ${esc(e.text)}`).join('\n')+`</pre></details>`;
+}
+// 為什麼重要／怎麼修（NB）：白話說明（i18n fix.<id>）＋ Cisco／Comware 修正指令範例
+function renderFixDetails(f,vendor){
+  if(!f.value)return '';
+  const why=tr('fix.'+f.id);
+  if(!why||why==='fix.'+f.id)return '';
+  const cmd=buildSwitchFixCommands(f,vendor);
+  return `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:11px;color:var(--accent)">${esc(tr('fix.title'))}</summary>`
+    +`<div style="font-size:12px;color:var(--text);margin:4px 0;line-height:1.5">${esc(why)}</div>`
+    +(cmd?`<div style="font-size:11px;color:var(--text-dim);margin-top:4px">${esc(tr('fix.cmd_title').replace('{vendor}',vendor==='cisco'?'Cisco IOS／IOS-XE':'Comware'))}</div>`
+      +`<pre style="margin:4px 0 0;padding:6px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;font-size:11px;line-height:1.5;white-space:pre-wrap;max-height:220px;overflow:auto">${esc(cmd)}</pre>`
+      +`<div style="font-size:10px;color:var(--text-muted);margin-top:3px">${esc(tr('fix.cmd_note'))}</div>`:'')
+    +`</details>`;
+}
+// 稽核工作底稿（AB）：處置狀態／備註依主機名稱存在 localStorage（個人便利用途，try/catch；
+// 不可用時只在本次工作階段有效）；審查者姓名跨主機共用
+const SW_AUDIT_MARKS_LS='sw_audit_marks', SW_AUDIT_REVIEWER_LS='sw_audit_reviewer';
+let _swMarksMem={}, _swReviewerMem='';
+function _swMarkHost(){return (parsed&&parsed.sys&&parsed.sys.hostname)||'-';}
+function swAuditMarks(){
+  try{const all=JSON.parse(localStorage.getItem(SW_AUDIT_MARKS_LS)||'{}');return all[_swMarkHost()]||{};}catch(e){return _swMarksMem[_swMarkHost()]||{};}
+}
+function swSetAuditMark(id,field,value){
+  let all;
+  try{all=JSON.parse(localStorage.getItem(SW_AUDIT_MARKS_LS)||'{}');}catch(e){all=_swMarksMem;}
+  const h=_swMarkHost();
+  all[h]=all[h]||{};
+  all[h][id]=Object.assign({},all[h][id]||{},{[field]:value,ts:Date.now()});
+  _swMarksMem=all;
+  try{localStorage.setItem(SW_AUDIT_MARKS_LS,JSON.stringify(all));}catch(e){}
+}
+function swAuditReviewer(){try{return localStorage.getItem(SW_AUDIT_REVIEWER_LS)||'';}catch(e){return _swReviewerMem;}}
+function swSetAuditReviewer(v){_swReviewerMem=v;try{localStorage.setItem(SW_AUDIT_REVIEWER_LS,v);}catch(e){}}
+function renderAuditMarkCell(id,m){
+  const opt=st=>`<option value="${st}"${(m.status||'open')===st?' selected':''}>${esc(tr('wp.status_'+st))}</option>`;
+  return `<select aria-label="${esc(tr('wp.col_status'))}" onchange="swSetAuditMark('${id}','status',this.value)" style="font-size:11px;padding:2px 4px;margin-bottom:3px">${AUDIT_MARK_STATUSES.map(opt).join('')}</select>`
+    +`<input value="${esc(m.note||'')}" placeholder="${esc(tr('wp.note_ph'))}" aria-label="${esc(tr('wp.col_note'))}" onchange="swSetAuditMark('${id}','note',this.value)" style="font-size:11px;padding:2px 4px;width:120px;display:block">`;
+}
+// 稽核前後期比較（AC）：基準檔由使用者自行下載保存（不存瀏覽器），比較結果只顯示在畫面上
+function saveSwitchAuditBaseline(){
+  if(!parsed){alert(tr('msg.no_config'));return;}
+  const b=new Blob([JSON.stringify(buildSwitchAuditBaseline(parsed),null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=`${hn()}_audit_baseline_${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(url);
+}
+function compareSwitchAuditBaseline(inp){
+  const f=inp.files&&inp.files[0];
+  if(!f||!parsed)return;
+  swReadText(f).then(t=>{
+    let base=null;
+    try{base=JSON.parse(t.replace(/^\uFEFF/,''));}catch(e){}
+    const d=diffSwitchAudit(base,parsed);
+    const el=document.getElementById('sw-baseline-result');
+    inp.value='';
+    if(!el)return;
+    if(!d){el.innerHTML=`<div style="color:var(--red);font-size:12px;margin:6px 0">${esc(tr('swbase.invalid'))}</div>`;return;}
+    el.innerHTML=renderSwitchBaselineDiff(d);
+  });
+}
+function renderSwitchBaselineDiff(d){
+  const time=d.savedAt?new Date(d.savedAt).toLocaleString():'-';
+  let h=`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin:6px 0 10px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:4px">${esc(tr('swbase.title'))}</div>
+    <div style="font-size:12px;margin-bottom:6px">${esc(tr('swbase.summary').replace('{time}',time).replace('{new}',d.summary.new).replace('{resolved}',d.summary.resolved).replace('{persist}',d.summary.persisting))}</div>`;
+  if(d.hostMismatch)h+=`<div style="font-size:12px;color:var(--orange);margin-bottom:6px">${esc(tr('swbase.host_mismatch').replace('{old}',d.oldHost).replace('{now}',hn()))}</div>`;
+  if(!d.rows.length)return h+`<div style="font-size:12px;color:var(--green)">${esc(tr('swbase.none'))}</div></div>`;
+  const pc={new:'down',persisting:'warn',resolved:'up'};
+  h+=`<table class="data-tbl"><thead><tr><th>${esc(tr('audit.col_check'))}</th><th>${esc(tr('swbase.col_change'))}</th><th>${esc(tr('audit.col_result'))}</th><th>${esc(tr('swbase.col_added'))}</th><th>${esc(tr('swbase.col_resolved'))}</th></tr></thead><tbody>`+
+    d.rows.map(r=>`<tr><td>${esc(r.check)}</td><td>${pill(pc[r.category],tr('swbase.cat_'+r.category))}</td><td class="mono">${r.oldValue} → ${r.newValue}</td><td style="font-size:11px">${esc(r.addedItems.slice(0,10).join(', '))}${r.addedItems.length>10?'…':''}</td><td style="font-size:11px">${esc(r.resolvedItems.slice(0,10).join(', '))}${r.resolvedItems.length>10?'…':''}</td></tr>`).join('')+'</tbody></table>';
+  return h+'</div>';
+}
+function exportAuditWorkpaper(){
+  if(!parsed){alert(tr('msg.no_config'));return;}
+  const wp=buildSwitchWorkpaper(parsed,rawCfgText,swAuditMarks(),swAuditReviewer());
+  dlCSV(wp.rows,wp.headers,`${hn()}_audit_workpaper.csv`);
+}
 function exportAuditCSV(){
   if(!parsed){alert(tr('msg.no_config'));return;}
   const findings=analyzeSwitchAudit(parsed);
+  const ev=buildSwitchAuditEvidence(rawCfgText,findings);
   dlCSV(
-    findings.map(f=>[f.check,f.value,f.risk,f.detail,(f.standards||[]).join('; ')]),
-    [tr('audit.col_check'),tr('audit.col_result'),tr('audit.col_risk'),tr('audit.col_detail'),tr('audit.col_standards')],
+    findings.map(f=>[f.check,f.value,f.risk,f.detail,(f.standards||[]).join('; '),(ev[f.id]||[]).map(e=>`L${e.line}: ${e.text.trim()}`).join(' | ')]),
+    [tr('audit.col_check'),tr('audit.col_result'),tr('audit.col_risk'),tr('audit.col_detail'),tr('audit.col_standards'),tr('audit.col_evidence')],
     `${hn()}_audit.csv`
   );
 }
@@ -1803,12 +1895,12 @@ function exportAuditCSV(){
 // buildSwitchSarifReport()／buildSwitchAuditMarkdown() 產生，此處只負責下載
 function exportAuditSARIF(){
   if(!parsed){alert(tr('msg.no_config'));return;}
-  const b=new Blob([JSON.stringify(buildSwitchSarifReport(parsed),null,2)],{type:'application/json'});
+  const b=new Blob([JSON.stringify(buildSwitchSarifReport(parsed,rawCfgText),null,2)],{type:'application/json'});
   const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=`${hn()}_audit.sarif`;a.click();URL.revokeObjectURL(url);
 }
 function exportAuditMarkdown(){
   if(!parsed){alert(tr('msg.no_config'));return;}
-  const b=new Blob([buildSwitchAuditMarkdown(parsed)],{type:'text/markdown;charset=utf-8;'});
+  const b=new Blob([buildSwitchAuditMarkdown(parsed,rawCfgText)],{type:'text/markdown;charset=utf-8;'});
   const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=`${hn()}_audit.md`;a.click();URL.revokeObjectURL(url);
 }
 function renderSecurity(){
@@ -3646,7 +3738,7 @@ function renderInventoryCard(){
         <td>${r.score==null?'-':pill(gc,r.score+' '+r.grade)}</td><td style="font-size:11px">${esc(r.file)}</td>
         <td><button style="${btn2};padding:2px 10px" onclick="invOpen(${i})">${esc(tr('inv.open_btn'))}</button></td></tr>`;
     }).join('')+'</tbody></table></div>';
-  return h+renderConsistencyCard()+renderGoldenCard()+'</div>';
+  return h+renderConsistencyCard()+renderAccountsCard()+renderGoldenCard()+'</div>';
 }
 // 跨設備一致性（WH）：invConsistency() 在 switch-analyzer-inventory.js
 function renderConsistencyCard(){
@@ -3670,6 +3762,26 @@ function renderConsistencyCard(){
       r.overlaps.map(o=>`<tr><td>${esc(o.a.host+' '+o.a.iface)} <span class="mono">${esc(o.a.cidr)}</span></td><td>${esc(o.b.host+' '+o.b.iface)} <span class="mono">${esc(o.b.cidr)}</span></td></tr>`).join('')+'</tbody></table>';
   }
   return h+'</div>';
+}
+// 帳號與密碼保存方式盤點（AD）：invAccounts() 在 switch-analyzer-inventory.js
+function renderAccountsCard(){
+  const r=invAccounts(invRows.map((row,i)=>({hostname:row.hostname||row.file,parsed:invParsed[i]})));
+  let h=`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px"><span style="font-size:14px;font-weight:600">${esc(tr('acct.title'))}</span>
+    ${r.rows.length?`<button class="btn btn-ghost btn-sm" onclick="exportAccountsCSV()">${esc(tr('acct.csv_btn'))}</button>`:''}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('acct.hint'))}</div>`;
+  if(!r.rows.length)return h+`<div class="nodata">${esc(tr('acct.none'))}</div></div>`;
+  const s=r.summary;
+  h+=`<div style="font-size:12px;margin-bottom:8px">${esc(tr('acct.summary').replace('{total}',s.total).replace('{weak}',s.weak).replace('{nopwd}',s.nopwd).replace('{medium}',s.medium).replace('{defaults}',s.defaults).replace('{shared}',s.shared))}</div>`;
+  const pc={high:'down',medium:'warn',low:'up'};
+  h+=`<div class="tbl-wrap" style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc(tr('acct.col_account'))}</th><th>${esc(tr('inv.col_host'))}</th><th>${esc(tr('acct.col_role'))}</th><th>${esc(tr('acct.col_storage'))}</th><th>${esc(tr('acct.col_flags'))}</th></tr></thead><tbody>`+
+    r.rows.map(x=>`<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.host)}</td><td>${esc(x.role||'-')}</td><td>${pill(pc[x.risk],tr('acct.st_'+x.storage))}</td><td style="font-size:11px">${[x.isDefault?esc(tr('acct.flag_default')):'',x.deviceCount>1?esc(tr('acct.flag_multi').replace('{n}',x.deviceCount)):''].filter(Boolean).join('<br>')||'-'}</td></tr>`).join('')+'</tbody></table></div>';
+  return h+'</div>';
+}
+function exportAccountsCSV(){
+  const r=invAccounts(invRows.map((row,i)=>({hostname:row.hostname||row.file,parsed:invParsed[i]})));
+  dlCSV(r.rows.map(x=>[x.name,x.host,x.role,tr('acct.st_'+x.storage),x.isDefault?tr('acct.flag_default'):'',x.deviceCount>1?tr('acct.flag_multi').replace('{n}',x.deviceCount):'']),
+    [tr('acct.col_account'),tr('inv.col_host'),tr('acct.col_role'),tr('acct.col_storage'),tr('acct.flag_default'),tr('acct.col_flags')],'switch_accounts.csv');
 }
 // 黃金範本規則（WG）：規則文字存在 localStorage（個人便利用途，讀寫皆 try/catch，失敗不影響功能）
 // 範例規則走 i18n（gold.sample_rules），規則名稱隨語言切換
@@ -3754,6 +3866,41 @@ function epCfgByDevice(){
   const h=parsed?.sys?.hostname;
   return h?{[h.toLowerCase()]:parsed.interfaces||[]}:null;
 }
+// 設定逐行解說（NA）：規則與比對在 switch-analyzer-explain.js（純函式），這裡只負責 UI；
+// 不需要先解析設定檔，可直接貼上（含 FortiGate）；已載入設定時預先帶入 rawCfgText
+let exText=null,exOnly=false,exResult=null;
+function renderExplainCard(){
+  if(exText===null)exText=rawCfgText||'';
+  const btn='background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;cursor:pointer';
+  const btn2='background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer';
+  let h=`<div style="padding:16px 18px;overflow-y:auto;flex:1">
+    <h2 style="margin:0 0 8px">${esc(tr('ex.title'))}</h2>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:10px">${esc(tr('ex.hint'))}</div>
+    <textarea id="ex-text" spellcheck="false" placeholder="${esc(tr('ex.ph'))}" style="width:100%;height:160px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${esc(exText)}</textarea>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 14px">
+      <button style="${btn}" onclick="exRun()">${esc(tr('ex.run_btn'))}</button>
+      ${rawCfgText?`<button style="${btn2}" onclick="exUseLoaded()">${esc(tr('ex.use_loaded'))}</button>`:''}
+      <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" id="ex-only" ${exOnly?'checked':''} onchange="exOnly=this.checked;navGo('explain')">${esc(tr('ex.only'))}</label>
+    </div>`;
+  if(exResult){
+    const hit=exResult.rows.filter(r=>r.id).length,total=exResult.rows.filter(r=>r.text.trim()).length;
+    const vname={cisco:'Cisco IOS／IOS-XE',comware:'Comware (H3C)',fortigate:'FortiGate'}[exResult.vendor]||exResult.vendor;
+    h+=`<div style="font-size:12px;margin-bottom:8px">${esc(tr('ex.vendor').replace('{vendor}',vname))}｜${esc(tr('ex.summary').replace('{total}',total).replace('{hit}',hit))}</div>`;
+    const rows=exResult.rows.filter(r=>r.text.trim()&&(!exOnly||r.id));
+    h+=`<table class="data-tbl" id="ex-table"><thead><tr><th style="width:50px">${esc(tr('ex.col_line'))}</th><th>${esc(tr('ex.col_code'))}</th><th>${esc(tr('ex.col_explain'))}</th></tr></thead><tbody>`;
+    h+=rows.map(r=>`<tr><td style="color:var(--text-muted)">${r.line}</td><td style="font-family:Menlo,'Courier New',monospace;font-size:11px;white-space:pre-wrap">${esc(r.text)}</td><td style="font-size:12px">${r.id?esc(tr('ex.'+r.id)):''}</td></tr>`).join('');
+    h+='</tbody></table>';
+  }
+  return h+'</div>';
+}
+function exRun(){
+  const el=document.getElementById('ex-text');exText=el?el.value:'';
+  if(!exText.trim()){exResult=null;alert(tr('ex.empty'));return;}
+  exResult={vendor:exDetectSyntax(exText),rows:explainConfigLines(exText)};
+  navGo('explain');
+}
+// exRun() 以輸入框內容為準，所以先把已載入的設定寫進輸入框
+function exUseLoaded(){const el=document.getElementById('ex-text');if(el)el.value=rawCfgText||'';exRun();}
 function renderEndpointCard(){
   const box='background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:14px';
   const btn='background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;cursor:pointer';
@@ -4043,3 +4190,36 @@ function setTheme(t){document.body.dataset.theme=t;const b=document.getElementBy
 function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
 (function(){const s=localStorage.getItem('cw_theme');const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
 
+// ── 名詞小辭典（2026-09-29 新增，第七輪 NC）─────────────────────────────────
+// 表頭（th）文字含常見網路名詞時，自動加上滑鼠提示（沿用既有 [data-tip] 提示框）與 ⓘ 標記。
+// 以 MutationObserver 監看畫面變動後統一處理，不需改動各頁面的渲染程式；已有 data-tip 的表頭不覆蓋。
+// 切換語言時表頭文字重繪會觸發同一流程，依 data-gl-term 以新語言更新提示。整段包在 IIFE 內，
+// 避免與其他 classic <script> 的頂層識別字撞名。
+(function(){
+  var TERMS=[["native", "Native VLAN"], ["vlan", "VLAN"], ["trunk", "Trunk"], ["svi", "SVI"], ["lacp", "LACP"], ["vrrp", "VRRP"], ["hsrp", "HSRP"], ["stp", "STP"], ["bpdu", "BPDU"], ["portfast", "PortFast"], ["dot1x", "802.1X"], ["acl", "ACL"], ["qos", "QoS"], ["ospf", "OSPF"], ["bgp", "BGP"], ["snmp", "SNMP"], ["nat", "NAT"], ["vdom", "VDOM"], ["vpn", "VPN"], ["dhcp", "DHCP"], ["lldp", "LLDP"], ["mtu", "MTU"], ["poe", "PoE"], ["vrf", "VRF"]];
+  var RE=TERMS.map(function(t){return [t[0],t[1],new RegExp('(^|[^A-Za-z0-9])'+t[1].replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'($|[^A-Za-z0-9])','i')];});
+  function tipOf(k,term){var s=tr('gl.'+k);return (!s||s==='gl.'+k)?'':term+': '+s;}
+  function mark(th){
+    if(!th.querySelector('sup.gl-mark')){var sup=document.createElement('sup');sup.className='gl-mark';sup.textContent='ⓘ';sup.style.cssText='font-size:8px;opacity:.45;margin-left:2px;cursor:help';th.appendChild(sup);}
+  }
+  function applyGlossary(){
+    var ths=document.querySelectorAll('th');
+    for(var i=0;i<ths.length;i++){
+      var th=ths[i], k=th.getAttribute('data-gl-term');
+      if(k){var t=tipOf(k,th.getAttribute('data-gl-label'));if(t&&th.getAttribute('data-tip')!==t)th.setAttribute('data-tip',t);if(t)mark(th);continue;}
+      if(th.hasAttribute('data-gl-skip'))continue;
+      if(th.hasAttribute('data-tip')||th.querySelector('[data-tip]')){th.setAttribute('data-gl-skip','1');continue;}
+      var text=th.textContent||'', hit=null;
+      for(var j=0;j<RE.length;j++){if(RE[j][2].test(text)){hit=RE[j];break;}}
+      if(!hit){th.setAttribute('data-gl-skip','1');continue;}
+      var tip=tipOf(hit[0],hit[1]);
+      if(!tip)continue;
+      th.setAttribute('data-gl-term',hit[0]);th.setAttribute('data-gl-label',hit[1]);th.setAttribute('data-tip',tip);mark(th);
+    }
+  }
+  window.applyGlossary=applyGlossary;
+  var timer=null;
+  function schedule(){clearTimeout(timer);timer=setTimeout(applyGlossary,150);}
+  if(document.body)new MutationObserver(schedule).observe(document.body,{childList:true,subtree:true,characterData:true});
+  schedule();
+})();

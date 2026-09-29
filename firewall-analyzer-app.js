@@ -211,6 +211,34 @@ const App = (() => {
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(ta.value).then(done, () => { ta.select(); document.execCommand('copy'); done(); });
     else { ta.select(); document.execCommand('copy'); done(); }
   };
+  // 稽核證據行（AA）用的原始設定：每個已載入的上傳欄位一份（檔名＋文字）
+  function _fwEvidenceSources() {
+    return Object.keys(ST.raw).filter(k => ST.raw[k]).map(k => ({ name: (ST[k] && ST[k].name) || k, text: ST.raw[k] }));
+  }
+  // 稽核工作底稿（AB）：處置狀態／備註依主機名稱存在 localStorage（個人便利用途；不可用時只在本次工作階段有效）
+  const FW_AUDIT_MARKS_LS = 'fw_audit_marks', FW_AUDIT_REVIEWER_LS = 'fw_audit_reviewer';
+  let _fwMarksMem = {}, _fwReviewerMem = '';
+  function _fwAuditMarks() {
+    try { const all = JSON.parse(localStorage.getItem(FW_AUDIT_MARKS_LS) || '{}'); return all[_acceptedRiskHost()] || {}; }
+    catch (e) { return _fwMarksMem[_acceptedRiskHost()] || {}; }
+  }
+  window._fwSetAuditMark = function(id, field, value) {
+    let all;
+    try { all = JSON.parse(localStorage.getItem(FW_AUDIT_MARKS_LS) || '{}'); } catch (e) { all = _fwMarksMem; }
+    const h = _acceptedRiskHost();
+    all[h] = all[h] || {};
+    all[h][id] = Object.assign({}, all[h][id] || {}, { [field]: value, ts: Date.now() });
+    _fwMarksMem = all;
+    try { localStorage.setItem(FW_AUDIT_MARKS_LS, JSON.stringify(all)); } catch (e) { /* 不可用時由 _fwMarksMem 維持 */ }
+  };
+  function _fwAuditReviewer() { try { return localStorage.getItem(FW_AUDIT_REVIEWER_LS) || ''; } catch (e) { return _fwReviewerMem; } }
+  window._fwSetAuditReviewer = function(v) { _fwReviewerMem = v; try { localStorage.setItem(FW_AUDIT_REVIEWER_LS, v); } catch (e) { /* 同上 */ } };
+  window._fwExportWorkpaper = function() {
+    if (!PARSED) return;
+    const wp = buildFirewallWorkpaper(PARSED, _fwEvidenceSources(), _fwAuditMarks(), _fwAuditReviewer());
+    const hn = ((PARSED.deviceInfo && PARSED.deviceInfo.hostname) || 'firewall').replace(/[^\w.\-]/g, '_');
+    Reporter.download(Reporter.toCSV(wp.rows, wp.headers), `fw_audit_workpaper_${hn}.csv`, 'text/csv');
+  };
   window.pickFile=pickFile;
 
   function clearFile(e,v){
@@ -1256,7 +1284,7 @@ function onParsed(){
           const _zTgl=`<div style="display:flex;gap:5px;margin-bottom:8px"><button onclick="window._fwZoneView='table';renderSection('audit')" style="${_zbs(!window._fwZoneView||window._fwZoneView==='table')}">${tr('routing.view_table')}</button><button onclick="window._fwZoneView='topo';renderSection('audit')" style="${_zbs(window._fwZoneView==='topo')}">${tr('routing.view_topo')}</button></div>`;
           _zoneHtml = _zTgl + (window._fwZoneView==='topo' ? buildZoneTopoHtml(PARSED.policies) : _zoneHtml);
         }
-        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules())
+        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules())
           + (PARSED.vendor === 'FortiGate' ? _fwCleanupCardHtml() : '')
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
@@ -1927,12 +1955,12 @@ function onParsed(){
     else if(type==='sarif-audit'){
       // SARIF 稽核結果匯出：重新呼叫 analyze* 系列即時計算（比照下方 csv-* 通用分支的
       // CSV_SUBSECTION_GETTERS 慣例，不依賴使用者是否已切換過稽核分頁的渲染快取）
-      const sarif=buildSarifAuditReport(d);
+      const sarif=buildSarifAuditReport(d, _fwEvidenceSources());
       Reporter.download(JSON.stringify(sarif,null,2),`fw_audit_${hn}_${ds}.sarif`,'application/json');
     }
     else if(type==='md-audit'){
       // 稽核結果 Markdown 匯出（2026-09-24 新增），內容由 -audit.js buildFirewallAuditMarkdown() 即時計算
-      Reporter.download(buildFirewallAuditMarkdown(d, { acceptedRisks: _loadAcceptedRisks() }),`fw_audit_${hn}_${ds}.md`,'text/markdown');
+      Reporter.download(buildFirewallAuditMarkdown(d, { acceptedRisks: _loadAcceptedRisks(), sources: _fwEvidenceSources() }),`fw_audit_${hn}_${ds}.md`,'text/markdown');
     }
     else if(type==='csv-batch-query'){
       const content=Reporter.exportBatchQueryCSV(LAST_BATCH_RESULTS);
