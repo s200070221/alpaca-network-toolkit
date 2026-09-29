@@ -3289,6 +3289,7 @@ async function parseAndImport(){
   const vendor=api.detectVendor(text);
   if(!vendor||!['comware','cisco','aruba','fortiswitch','juniper','nxos','arista','dell-os10','brocade','alcatel','extreme','procurve','routeros','ruijie','netgear','edgeswitch','sonic','planet'].includes(vendor)){
     showImportMsg(tr('msg.importNoVendor'),true);
+    appendImportAnalyzerButton();
     return;
   }
   // switch_analyzer 的 detectVendor()/parseNXOS() 用 'nxos'，但本工具廠牌下拉與
@@ -3324,6 +3325,40 @@ async function parseAndImport(){
   }
 
   applyParsedConfigToForm(parsed,fns,text,vendor,genVendor);
+  // 解析結果過少（介面與已宣告 VLAN 皆 0，門檻比照 switch_analyzer switchReportTrigger()）
+  if(importLooksSparse(parsed)){
+    showImportMsg(tr('msg.importSparse'),true);
+    appendImportAnalyzerButton();
+  }
+}
+
+// 匯入認不出廠牌／結果過少時（2026-09-29，RD）：不直接開回報——本工具未上傳完整解析器時只有
+// 內建 BasicParser（4 廠牌），認不出多半不代表真的無法解析；改提供「在交換器分析工具開啟」，
+// 由 switch_analyzer 以完整解析器再判斷，真的無法解析時該工具會顯示既有的回報提示列
+function importLooksSparse(parsed){
+  if(!parsed)return true;
+  const vlans=(parsed.vlans||[]).filter(v=>!v.implied).length;
+  return !(parsed.interfaces||[]).length&&!vlans;
+}
+function appendImportAnalyzerButton(){
+  const el=document.getElementById('import-msg');
+  if(!el)return;
+  const b=document.createElement('button');
+  b.type='button'; b.className='act-btn'; b.style.marginLeft='8px';
+  b.textContent=tr('btn.importOpenAnalyzer');
+  b.onclick=_sendImportTextToAnalyzer;
+  el.appendChild(b);
+}
+function _sendImportTextToAnalyzer(){
+  const t=document.getElementById('import-text').value;
+  if(!t.trim())return;
+  let wrote=false;
+  try{
+    localStorage.setItem('_netAnalyzer_pending', JSON.stringify({ name:'import.cfg', text:t, ts:Date.now(), vendor:null }));
+    wrote=true;
+  }catch(e){ alert(tr('err.sendFail')); }
+  const w=window.open('switch-config-parser.html','_blank');
+  if(wrote&&!w){ localStorage.removeItem('_netAnalyzer_pending'); alert(tr('err.sendPopupBlocked')); }
 }
 
 // parseNXOS() 的 interface 物件形狀跟其餘廠牌不同（vlan 為單數欄位、無 hybrid；nativeVlan

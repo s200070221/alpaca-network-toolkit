@@ -308,6 +308,15 @@ const Reporter = (() => {
     return toCSV(rows, headers);
   }
 
+  // 批次查詢跨版本比對（2026-09-29 新增，FE）：輸出全部列（含未改變者），change 欄為 action／policy／空白
+  function exportBatchDiffCSV(results) {
+    if (!results || !results.length) return null;
+    const headers = ['line','src','dst','proto','port','old_result','old_policy_id','old_policy_name','new_result','new_policy_id','new_policy_name','change'];
+    const rows = results.map(r => [r.line, r.src, r.dst, r.proto, r.port, r.old.action, r.old.policyId, r.old.policyName,
+      r.new.action, r.new.policyId, r.new.policyName, r.change]);
+    return toCSV(rows, headers);
+  }
+
   // 新舊設定檔比對：added/removed/changed 攤平成單一表格，四種實體型別共用同一欄位形狀
   function exportDiffCSV(result) {
     if (!result) return null;
@@ -1016,7 +1025,7 @@ ${(parsed.schedules&&parsed.schedules.length)?`<div class="section" id="sec-sche
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 500);
   }
 
-  return { exportCSV, exportZoneMatrixCSV, exportQueryTraceCSV, exportBatchQueryCSV, exportDiffCSV, exportComplianceDiffCSV, exportJSON, exportHTML, download };
+  return { exportCSV, exportZoneMatrixCSV, exportQueryTraceCSV, exportBatchQueryCSV, exportBatchDiffCSV, exportDiffCSV, exportComplianceDiffCSV, exportJSON, exportHTML, download };
 })();
 
 

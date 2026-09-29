@@ -880,6 +880,26 @@ window.buildWlanSectionHtml=buildWlanSectionHtml;
 window.buildFortiswitchSectionHtml=buildFortiswitchSectionHtml;
 window.buildQuerySectionHtml=buildQuerySectionHtml;
 window.buildBatchQueryResultHtml=buildBatchQueryResultHtml;
+// 批次查詢跨版本比對結果（2026-09-29 新增，FE）：results 為 compareBatchQuery() 輸出；預設只列有改變的列
+function buildBatchDiffResultHtml(results, errors){
+  const actLbl={accept:tr('query.result_accept'),deny:tr('query.result_deny'),implicit_deny:tr('query.result_implicit')};
+  const nAct=results.filter(r=>r.change==='action').length, nPol=results.filter(r=>r.change==='policy').length;
+  let h=`<div style="font-size:13px;margin-bottom:8px;color:${nAct?'var(--red)':'var(--text)'}">${esc(tr('bdiff.summary').replace('{total}',results.length).replace('{action}',nAct).replace('{policy}',nPol))}</div>`;
+  if(errors.length) h+=`<div style="font-size:12px;color:var(--orange);margin-bottom:8px">${esc(tr('batch.errors').replace('{items}',errors.map(e=>e.line+'('+e.reason+')').join(', ')))}</div>`;
+  if(!results.length) return h+`<div class="nodata">${tr('batch.empty')}</div>`;
+  h+=`<button type="button" class="btn btn-ghost btn-sm" style="margin-bottom:8px" onclick="doExport('csv-batch-diff')">⬇ ${tr('batch.export')}</button>`;
+  const changed=results.filter(r=>r.change);
+  if(!changed.length) return h+`<div class="nodata" style="color:var(--green)">${tr('bdiff.none')}</div>`;
+  const cell=x=>`${esc(actLbl[x.action]||x.action)}<br><span class="mono" style="font-size:11px;color:var(--text-dim)">${esc(x.policyId===''?'-':String(x.policyId))}${x.policyName?' '+esc(x.policyName):''}</span>`;
+  h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>#</th><th>${tr('query.src_ip')}</th><th>${tr('query.dst_ip')}</th><th>${tr('query.proto')}</th><th>${tr('query.port')}</th><th>${tr('bdiff.col_old')}</th><th>${tr('bdiff.col_new')}</th><th>${tr('bdiff.col_change')}</th></tr></thead><tbody>`;
+  changed.forEach(r=>{
+    const isAct=r.change==='action';
+    h+=`<tr style="background:${isAct?'rgba(239,83,80,.08)':'rgba(255,193,7,.08)'}"><td class="mono">${r.line}</td><td class="mono">${esc(r.src)}</td><td class="mono">${esc(r.dst)}</td><td>${esc(r.proto==='any'?tr('query.any_proto'):r.proto)}</td><td class="mono">${esc(r.port||'-')}</td>`
+      +`<td>${cell(r.old)}</td><td>${cell(r.new)}</td><td style="color:${isAct?'var(--red)':'var(--orange)'};font-weight:600">${esc(tr(isAct?'bdiff.change_action':'bdiff.change_policy'))}</td></tr>`;
+  });
+  return h+'</tbody></table></div>';
+}
+window.buildBatchDiffResultHtml=buildBatchDiffResultHtml;
 window.renderWifiSection=renderWifiSection;
 window.buildSdwanSectionHtml=buildSdwanSectionHtml;
 })();

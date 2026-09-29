@@ -1075,7 +1075,7 @@ function _onLangChange() {
 // exportMapping()/doExportEncrypted() 一律讀這份快照而非即時全域 mappings，避免使用者
 // 切去「批次處理」跑完後，回到單檔案畫面點擊匯出時，實際匯出的是批次最後一個檔案的映射
 // （批次流程與單檔案流程共用同一份全域 mappings 物件，批次跑完會把它覆蓋成最後一筆資料）
-const STATE = { original:'', anonymized:'', filename:'', vendor:null, mappings:null, vendorCandidates:[], reportMeta:null, reportDiffViewed:false };
+const STATE = { original:'', anonymized:'', filename:'', vendor:null, mappings:null, vendorCandidates:[], reportMeta:null, reportDiffViewed:false, reportHash:'' };
 let _anonChainTarget = null; // {href} — set when opened from network_analyzer "anonymize & analyze"
 // Phase 4 第 18 項：新增 switch-config-generator.html 為第三個轉送目標（原僅 fw/sw 兩家）。
 // 提升到頂層供 _sendToAnalysisTool() 與下方接收 `_netAnalyzer_anonThenOpen` 的 IIFE 共用，
@@ -2801,6 +2801,23 @@ function anonBrocade(text, opts) {
 // 值前最多 2 個加密類型／編號代碼（如 `7`、`md5`、`1 md5`、`encrypted`）一併跳過，只遮真正的值。
 // 寧可多遮：通用模式常用於回報無法解析的設定檔，漏遮的代價遠高於多遮
 const GENERIC_SECRET_RE = /(^|[^\w-])(password|passwd|secret|passphrase|isakmp\s+key|pre-shared-key|pre-shared-secret|preshared-key|psk|wpa-psk|community|key-string|keystring|auth-key|authentication-key|auth-password|priv-password|api-key|token)(?![\w-])((?:\s+|\s*[=:]\s*)(?:(?:\d+|md5|sha\d*|cipher|encrypted|hash|plain|plaintext|simple|text)\s+){0,2})("[^"]*"|'[^']*'|[^\s"']+)/gi;
+// 通用模式第二輪補強（2026-09-29，RA）：帳號名稱、行中描述、SNMP 位置／聯絡人、email、網域名稱。
+// 網域名稱比對「至少一個點、最後一段為 2 字母以上、非常見檔案副檔名」的字串，沿用 hostname
+// 對照類別（可由對照表還原）；公開網域（如 pool.ntp.org）也會被替換——通用模式寧可多遮
+const GENERIC_USER_RE = /^(\s*(?:username|user-name|local-user|user)\s+)("[^"]+"|[^\s"]+)/i;
+// 行內「鍵=值」帳號欄位（log 與 CEF 常見：user=／usr=／suser=／duser= 等）
+const GENERIC_USER_KV_RE = /(\b(?:user|usr|username|user-name|login|account|suser|duser)=)("[^"]*"|[^\s|,;"]+)/gi;
+const GENERIC_DESC_RE = /(\s(?:description|desc|remark|comment|comments|alias)(?:\s+|\s*[=:]\s*))("[^"]*"|[^"\s].*)$/i;
+const GENERIC_SNMP_INFO_RE = /(\b(?:location|contact|sys-?location|sys-?contact|syslocation|syscontact)(?:\s+|\s*[=:]\s*))(.+)$/i;
+const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+const FILE_EXT_RE = /^(?:bin|img|cfg|conf|txt|log|xml|json|pkg|tar|gz|tgz|zip|exe|dll|so|py|sh|pem|crt|cer|key|lic|iso|ova|html?|js|css|swi|spk|out|dat|db)$/i;
+const FQDN_RE = /(?<![\w.@-])((?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+([A-Za-z]{2,24}))(?![\w.-])/g;
+function anonGenericDomains(line, opts) {
+  return line.replace(FQDN_RE, (m, fq, tld) => {
+    if (FILE_EXT_RE.test(tld) || /^example\./i.test(fq) || /\.example$/i.test(fq)) return m;
+    return anonHostname(fq, 'dom', opts);
+  });
+}
 function anonGeneric(text, opts) {
   return text.split('\n').map(line => {
     // Generic password patterns
@@ -2816,6 +2833,30 @@ function anonGeneric(text, opts) {
       line = line.replace(/^\s*(?:hostname|sysname|system-name|switchname|device-name|set\s+hostname|set\s+system\s+host-name)\s+"?([^\s"]+)/i, (m, n) => m.replace(n, anonHostname(n, 'fw', opts)));
     }
     line = replaceDescLine(line, opts);
+    if (opts.comments && !/REDACTED_COMMENT/.test(line)) {
+      const d = line.replace(GENERIC_DESC_RE, (m, pre, val) => pre + (val[0] === '"' ? '"REDACTED_COMMENT"' : 'REDACTED_COMMENT'));
+      if (d !== line) { stats.comment++; line = d; }
+    }
+    // SNMP location／contact 是實體地點與聯絡人（個人資料），比照 email 不論選項一律遮蔽
+    if (/snmp|sys-?(?:location|contact)|syslocation|syscontact/i.test(line)) {
+      const sn = line.replace(GENERIC_SNMP_INFO_RE, (m, pre, val) => /REDACTED/.test(val) ? m : pre + 'REDACTED_COMMENT');
+      if (sn !== line) { stats.comment++; line = sn; }
+    }
+    if (opts.user) {
+      line = line.replace(GENERIC_USER_RE, (m, pre, name) => {
+        const q = name[0] === '"' ? '"' : '';
+        const raw = q ? name.slice(1, -1) : name;
+        return /REDACTED/.test(raw) ? m : pre + q + anonUser(raw) + q;
+      });
+      line = line.replace(GENERIC_USER_KV_RE, (m, pre, val) => {
+        const q = val[0] === '"' ? '"' : '';
+        const raw = q ? val.slice(1, -1) : val;
+        return (!raw || /REDACTED/.test(raw)) ? m : pre + q + anonUser(raw) + q;
+      });
+    }
+    // email 不論選項一律遮蔽（個人資料），在網域名稱替換之前處理，避免 email 的網域部分被拆開替換
+    line = line.replace(EMAIL_RE, () => { stats.user++; return 'REDACTED_EMAIL'; });
+    if (opts.hostname) line = anonGenericDomains(line, opts);
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
     return line;
@@ -3168,6 +3209,7 @@ function buildReportText(meta, form, anonText) {
   const L = ['# alpaca-network-toolkit unparsed config report', '# tool: ' + meta.tool, '# trigger: ' + meta.trigger,
     '# detected_vendor: ' + meta.vendor];
   if (form.model) L.push('# device_model: ' + String(form.model).replace(/[\r\n]+/g, ' '));
+  if (meta.hash) L.push('# content_sha256: ' + meta.hash);
   const st = _reportStatsText(meta.stats);
   if (st) L.push('# parse_stats: ' + st);
   L.push('# lines: ' + String(anonText).split('\n').length, '# reason:');
@@ -3178,7 +3220,8 @@ function buildReportText(meta, form, anonText) {
 function buildReportIssueUrl(meta, form) {
   const q = new URLSearchParams();
   q.set('template', REPORT_ISSUE_TEMPLATE);
-  q.set('title', '[unparsed] ' + meta.vendor + ' / ' + meta.tool);
+  // 標題附內容雜湊前 8 碼（2026-09-29，RE）：同一份內容重複回報時標題相同，triage 時易於辨識
+  q.set('title', '[unparsed] ' + meta.vendor + ' / ' + meta.tool + (meta.hash ? ' #' + meta.hash.slice(0, 8) : ''));
   q.set('tool', meta.tool);
   q.set('trigger', meta.trigger);
   q.set('vendor', meta.vendor);
@@ -3195,6 +3238,8 @@ function reportFileName(meta, ts) {
   return `unparsed_${safe(meta.vendor)}_${safe(meta.tool)}_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}.txt`;
 }
 
+const DOMAIN_KW_RESIDUAL_RE = /\b(?:domain-name|domain|dns-domain|search-domain|domain-list|fqdn)\b(?:\s+|\s*[=:]\s*)"?(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}\b/i;
+const INTERNAL_DOMAIN_RE = /\b(?:[A-Za-z0-9-]+\.)+(?:local|lan|corp|internal|intra|intranet|localdomain|home|priv|private)(?![\w.-])/i;
 function checkResidual(text) {
   const warnings = [];
   const lines = text.split('\n');
@@ -3303,6 +3348,11 @@ function checkResidual(text) {
     // 不像上面 IP/MAC/IPv6 需要排除已正確匿名化的輸出格式
     const emailMatches = t.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g);
     if (emailMatches && emailMatches.length) {
+      warnings.push({ line: lineNum, text: t });
+    }
+    // 網域名稱殘留（2026-09-29 新增，RB）：只在「domain-name 類關鍵字後」或「內部網域結尾」時示警，
+    // 公開網域（如 pool.ntp.org、廠牌更新伺服器）不列入，避免各廠牌模式大量誤報
+    if (!/REDACTED/.test(t) && (DOMAIN_KW_RESIDUAL_RE.test(t) || INTERNAL_DOMAIN_RE.test(t))) {
       warnings.push({ line: lineNum, text: t });
     }
     if (COMPANY_DOMAIN_SUFFIX && t.toLowerCase().includes(COMPANY_DOMAIN_SUFFIX.toLowerCase())) {
@@ -4129,7 +4179,8 @@ function renderVendorCandidates() {
 //取消忽略），只有 getActiveResidualWarnings()（匯出前的確認攔截用）會濾掉已忽略項目
 // 回報區塊 UI（2026-09-29 新增）：純函式見 reportBlockReason() 等（checkResidual() 上方）
 function currentReportMeta() {
-  return STATE.reportMeta || sanitizeReportMeta({ tool: 'config_anonymizer', trigger: STATE.vendor === 'unknown' ? 'unknown_vendor' : 'manual', vendor: STATE.vendor });
+  const m = STATE.reportMeta || sanitizeReportMeta({ tool: 'config_anonymizer', trigger: STATE.vendor === 'unknown' ? 'unknown_vendor' : 'manual', vendor: STATE.vendor });
+  return STATE.reportHash ? { ...m, hash: STATE.reportHash } : m;
 }
 function currentReportForm() {
   return { reason: document.getElementById('report-reason').value.trim(), model: document.getElementById('report-model').value.trim() };
@@ -4139,11 +4190,21 @@ function renderReportSection(resetConfirm) {
   if (!sec) return;
   sec.style.display = STATE.anonymized ? '' : 'none';
   // 每次重新去識別化都需要重新確認與重看差異（內容可能已不同）；切換語言只重繪文字不重設
-  if (resetConfirm) { document.getElementById('report-confirm').checked = false; STATE.reportDiffViewed = false; }
+  if (resetConfirm) {
+    document.getElementById('report-confirm').checked = false; STATE.reportDiffViewed = false;
+    // 去識別化內容的 SHA-256（RE）：非同步計算，算完才帶入回報；crypto.subtle 不可用時（非安全
+    // 環境）略過，不影響回報流程。以內容比對避免舊結果晚到時覆蓋新內容
+    STATE.reportHash = '';
+    const content = STATE.anonymized;
+    if (content && typeof crypto !== 'undefined' && crypto.subtle) {
+      sha256Hex(content).then(h => { if (STATE.anonymized === content) { STATE.reportHash = h; renderReportSection(false); } }).catch(() => {});
+    }
+  }
   const m = currentReportMeta();
   const st = _reportStatsText(m.stats);
   document.getElementById('report-meta').textContent = tr('report.meta').replace('{tool}', m.tool)
-    .replace('{trigger}', tr('report.trigger_' + m.trigger)).replace('{vendor}', m.vendor) + (st ? '（' + st + '）' : '');
+    .replace('{trigger}', tr('report.trigger_' + m.trigger)).replace('{vendor}', m.vendor) + (st ? '（' + st + '）' : '')
+    + (m.hash ? '　#' + m.hash.slice(0, 8) : '');
   updateReportState();
 }
 function updateReportState() {

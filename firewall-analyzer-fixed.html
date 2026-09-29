@@ -769,6 +769,15 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
       <div style="font-size:11px;color:var(--text-dim);margin-bottom:16px" data-i18n="diff.ha_mode_hint">HA 主備正常應完全同步，此模式僅排除常見的裝置別註記（comment）欄位差異，其餘欄位若仍有差異即代表兩台設定不同步</div>
       <button class="btn-analyze" id="diff-btn-go" onclick="runDiffCompare()" disabled>⚖️ <span data-i18n="diff.btn_compare">執行比對</span></button>
       <div id="diff-result" style="margin-top:24px"></div>
+      <!-- 批次查詢跨版本比對（2026-09-29 新增，FE）：執行比對後顯示，沿用批次查詢 CSV 格式 -->
+      <div id="diff-batch" style="display:none;margin-top:24px;padding-top:18px;border-top:1px solid var(--border)">
+        <h3 style="margin:0 0 6px;font-size:15px" data-i18n="bdiff.title">批次查詢比對</h3>
+        <p style="color:var(--text-dim);margin:0 0 10px;font-size:12px" data-i18n="bdiff.hint"></p>
+        <textarea id="diff-batch-input" rows="5" spellcheck="false" placeholder="src,dst,proto,port&#10;192.168.1.10,10.0.0.5,TCP,443"
+          style="width:100%;max-width:640px;padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-family:monospace;font-size:12px;box-sizing:border-box"></textarea>
+        <div style="margin-top:8px"><button type="button" class="btn btn-ghost btn-sm" onclick="_runBatchDiff()">▶ <span data-i18n="bdiff.run">執行批次查詢比對</span></button></div>
+        <div id="diff-batch-result" style="margin-top:12px"></div>
+      </div>
     </div>
   </div>
 </div>
