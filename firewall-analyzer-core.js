@@ -185,6 +185,40 @@ function _policyAddrResolve(addrStr, targetInt, addrList) {
 // 欄名時視為表頭、依欄名對應（順序不拘）；否則依上述固定順序。# 開頭與空白列略過。
 // expect 選填 accept/allow 或 deny/drop/block，有填時比對實際結果（implicit deny 也算 deny）。
 const BATCH_QUERY_MAX_ROWS = 1000;
+// 來源／目的支援 CIDR 與範圍（2026-09-29 新增，FF）：展開成逐一位址實際查詢，不抽代表位址猜結果；
+// 每列展開後的「來源×目的」組合數上限 BATCH_EXPAND_MAX，超過列為錯誤 'range'
+const BATCH_EXPAND_MAX = 256;
+function _strictIpInt(s) {
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(s)) return null;
+  const p = s.split('.').map(Number);
+  if (p.some(n => n > 255)) return null;
+  return ((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]) >>> 0;
+}
+const _intToIpStr = n => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+// 回傳位址字串陣列；格式錯誤回傳 null；超過上限回傳 'too_large'
+function _expandBatchAddr(str) {
+  const t = String(str || '').trim();
+  let lo, hi;
+  const cidr = t.match(/^([\d.]+)\/(\d{1,2})$/);
+  const range = t.match(/^([\d.]+)\s*-\s*([\d.]+)$/);
+  if (cidr) {
+    const base = _strictIpInt(cidr[1]), bits = +cidr[2];
+    if (base === null || bits > 32) return null;
+    const size = 2 ** (32 - bits);
+    if (size > BATCH_EXPAND_MAX) return 'too_large';
+    lo = Math.floor(base / size) * size; hi = lo + size - 1;
+  } else if (range) {
+    lo = _strictIpInt(range[1]); hi = _strictIpInt(range[2]);
+    if (lo === null || hi === null || hi < lo) return null;
+    if (hi - lo + 1 > BATCH_EXPAND_MAX) return 'too_large';
+  } else {
+    const n = _strictIpInt(t);
+    return n === null ? null : [t];
+  }
+  const out = [];
+  for (let n = lo; n <= hi; n++) out.push(_intToIpStr(n));
+  return out;
+}
 function _splitCsvLine(line) {
   const out = []; let cur = '', q = false;
   for (let i = 0; i < line.length; i++) {
@@ -222,25 +256,38 @@ function parseBatchQueryCSV(text) {
     let expect = '';
     if (exp === 'accept' || exp === 'allow') expect = 'accept';
     else if (exp === 'deny' || exp === 'drop' || exp === 'block') expect = 'deny';
-    if (_ipToInt(src) === null || _ipToInt(dst) === null) { errors.push({ line: lineNo, reason: 'ip' }); return; }
+    const srcList = _expandBatchAddr(src), dstList = _expandBatchAddr(dst);
+    if (srcList === null || dstList === null) { errors.push({ line: lineNo, reason: 'ip' }); return; }
+    if (srcList === 'too_large' || dstList === 'too_large' || srcList.length * dstList.length > BATCH_EXPAND_MAX) { errors.push({ line: lineNo, reason: 'range' }); return; }
     if (!['any', 'TCP', 'UDP', 'ICMP'].includes(proto)) { errors.push({ line: lineNo, reason: 'proto' }); return; }
     if (port && !(/^\d+$/.test(port) && +port >= 1 && +port <= 65535)) { errors.push({ line: lineNo, reason: 'port' }); return; }
     if (exp && !expect) { errors.push({ line: lineNo, reason: 'expect' }); return; }
     if (rows.length >= BATCH_QUERY_MAX_ROWS) { errors.push({ line: lineNo, reason: 'max' }); return; }
-    rows.push({ line: lineNo, src, dst, proto, port, expect });
+    rows.push({ line: lineNo, src, dst, proto, port, expect, srcList, dstList });
   });
   return { rows, errors };
 }
-// 回傳每列 {…row, action:'accept'|'deny'|'implicit_deny', policyId, policyName, hasFqdn, check}；
-// check：未填 expect 為 null，否則 true（符合）／false（不符）
+// 回傳每列 {…row, action, policyId, policyName, hasFqdn, combos, acceptCount, check}。CIDR／範圍列
+// 會逐一查詢每個來源×目的組合後彙總：全部結果相同→該結果；全部不允許但拒絕方式不同→'deny'；
+// 有允許也有不允許→'mixed'。命中規則只有一條時帶出 ID／名稱，多條時 policyId 為以 ; 串接的 ID。
+// check：未填 expect 為 null；accept 需全部允許、deny 需全部不允許
 function runBatchPolicyQuery(rows, vdomFilter, PARSED) {
   return rows.map(r => {
-    const res = _runPolicyQuery(r.src, r.dst, r.proto, r.port, vdomFilter, PARSED) || { matched: null, action: 'implicit_deny', trace: [] };
-    const m = res.matched;
-    const mt = (res.trace || []).find(t => t.result === 'match');
-    const allowed = res.action === 'accept';
-    return { ...r, action: res.action, policyId: m ? m.id : '', policyName: m ? (m.name || '') : '',
-      hasFqdn: !!(mt && mt.hasFqdn), check: r.expect ? (r.expect === 'accept') === allowed : null };
+    const srcs = r.srcList || [r.src], dsts = r.dstList || [r.dst];
+    const results = [];
+    srcs.forEach(s => dsts.forEach(d => {
+      const res = _runPolicyQuery(s, d, r.proto, r.port, vdomFilter, PARSED) || { matched: null, action: 'implicit_deny', trace: [] };
+      const mt = (res.trace || []).find(t => t.result === 'match');
+      results.push({ action: res.action, policy: res.matched, hasFqdn: !!(mt && mt.hasFqdn) });
+    }));
+    const acceptCount = results.filter(x => x.action === 'accept').length;
+    const actions = [...new Set(results.map(x => x.action))];
+    const action = actions.length === 1 ? actions[0] : (acceptCount === 0 ? 'deny' : 'mixed');
+    const pols = [...new Map(results.filter(x => x.policy).map(x => [String(x.policy.id), x.policy])).values()];
+    const single = pols.length === 1 && results.every(x => x.policy) ? pols[0] : null;
+    const check = r.expect ? (r.expect === 'accept' ? acceptCount === results.length : acceptCount === 0) : null;
+    return { ...r, action, policyId: single ? single.id : pols.map(p => p.id).join(';'), policyName: single ? (single.name || '') : '',
+      hasFqdn: results.some(x => x.hasFqdn), combos: results.length, acceptCount, check };
   });
 }
 // 批次查詢跨版本比對（2026-09-29 新增，FE）：同一批查詢對新舊兩份設定各跑一次。
@@ -249,11 +296,11 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED) {
 function compareBatchQuery(rows, oldParsed, newParsed) {
   const o = runBatchPolicyQuery(rows, '__all__', oldParsed);
   const n = runBatchPolicyQuery(rows, '__all__', newParsed);
-  const pick = r => ({ action: r.action, policyId: r.policyId, policyName: r.policyName });
+  const pick = r => ({ action: r.action, policyId: r.policyId, policyName: r.policyName, acceptCount: r.acceptCount, combos: r.combos });
   return rows.map((row, i) => {
     const a = o[i], b = n[i];
-    const allowA = a.action === 'accept', allowB = b.action === 'accept';
-    const change = allowA !== allowB ? 'action' : (String(a.policyId) !== String(b.policyId) ? 'policy' : '');
+    // 以「允許的組合數」判斷結果是否改變（單一位址時即允許與否；CIDR／範圍時部分允許的比例變化也算）
+    const change = a.acceptCount !== b.acceptCount ? 'action' : (String(a.policyId) !== String(b.policyId) ? 'policy' : '');
     return { ...row, old: pick(a), new: pick(b), change };
   });
 }
