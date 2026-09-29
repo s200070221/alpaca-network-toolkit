@@ -114,6 +114,16 @@ const App = (() => {
     return (text.match(/^set\s+\S/gm) || []).length >= 3;
   }
 
+  // 自動偵測上傳（PC，2026-09-29 新增）：依 detectFwVendor() 結果決定放進哪個廠牌欄位；
+  // ciscoasa 簽章同時涵蓋 FTD（NGFW Version banner），有該 banner 時放 FTD 欄位。認不出回傳 ''
+  const FW_DETECT_SLOT={fortigate:'f',sophos:'s',checkpoint:'c',paloalto:'p',juniper:'j',pfsense:'x',sonicwall:'w',mikrotik:'m',ciscoasa:'a',zyxel:'z',edgerouter:'r',openwrt:'u',watchguard:'g'};
+  function fwSlotForText(text){
+    const v=detectFwVendor(text||'');
+    if(v==='unknown')return '';
+    if(v==='ciscoasa'&&/^NGFW Version\s+\S+/m.test(text))return 't';
+    return FW_DETECT_SLOT[v]||'';
+  }
+
   function pickFile(v,inp){
     if(!inp.files.length)return;
     const f=inp.files[0]; ST[v]=f;
@@ -137,6 +147,39 @@ const App = (() => {
     ST[v]=f; $(nameMap[v]).textContent=`${f.name} (${sz(f.size)})`; $(chipMap[v]).style.display='flex'; updBtn();
   }
   window.handleDrop=handleDrop;
+
+  const FW_SLOT_NAMES={f:'FortiGate',s:'Sophos XG/XGS',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense/OPNsense',w:'SonicWall',m:'MikroTik RouterOS',a:'Cisco ASA',t:'Cisco Firepower/FTD',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',u:'OpenWrt (UCI)',g:'WatchGuard Firebox'};
+  let AUTO_UNKNOWN=[];
+  function setSlotFile(v,f){ ST[v]=f; ST.raw[v]=''; $(nameMap[v]).textContent=`${f.name} (${sz(f.size)})`; $(chipMap[v]).style.display='flex'; }
+  function renderAutoMsg(placed){
+    const el=$('auto-msg'); if(!el)return;
+    let h=placed.length?`<div style="color:var(--green)">✓ ${esc(tr('upload.auto_placed'))}${placed.map(x=>esc(`${FW_SLOT_NAMES[x.v]}（${x.name}）`)).join('、')}</div>`:'';
+    const opts=Object.keys(FW_SLOT_NAMES).map(v=>`<option value="${v}">${esc(FW_SLOT_NAMES[v])}</option>`).join('');
+    AUTO_UNKNOWN.forEach((f,i)=>{
+      h+=`<div style="color:var(--yellow);margin-top:4px">⚠ ${esc(tr('upload.auto_unknown').replace('{name}',f.name))} <select id="auto-sel-${i}" aria-label="${esc(tr('upload.auto_unknown').replace('{name}',f.name))}">${opts}</select> <button class="btn-sm" onclick="_autoAssign(${i})">${esc(tr('upload.auto_assign'))}</button></div>`;
+    });
+    el.innerHTML=h;
+  }
+  async function autoDetectFiles(files){
+    const placed=[]; AUTO_UNKNOWN=[];
+    for(const f of Array.from(files||[])){
+      let text=''; try{ text=await readFile(f); }catch(e){}
+      const v=fwSlotForText(text);
+      if(v){ setSlotFile(v,f); placed.push({v,name:f.name}); } else AUTO_UNKNOWN.push(f);
+    }
+    updBtn(); renderAutoMsg(placed);
+  }
+  window.autoDetectFiles=autoDetectFiles;
+  window.handleAutoDrop=function(e){
+    e.preventDefault();e.stopPropagation();
+    $('autoc').classList.remove('drag-over');
+    autoDetectFiles(e.dataTransfer.files);
+  };
+  window._autoAssign=function(i){
+    const f=AUTO_UNKNOWN[i], sel=$(`auto-sel-${i}`); if(!f||!sel)return;
+    const v=sel.value; setSlotFile(v,f); AUTO_UNKNOWN.splice(i,1); updBtn();
+    renderAutoMsg([{v,name:f.name}]);
+  };
 
   function updBtn(){
     const ok=ST.f||ST.s||ST.c||ST.p||ST.j||ST.x||ST.w||ST.m||ST.a||ST.t||ST.z||ST.r||ST.u||ST.g;
@@ -2832,6 +2875,13 @@ function startMatrixRain(){
   // 測試注入：直接設定 PARSED 並觸發 onParsed（供自動化測試）
   window._injectParsed = function(d) { PARSED = d; onParsed(); };
   // 入口頁拖入自動載入
+  // 內建範例（PD，2026-09-29 新增）：第一次使用可一鍵試用；只用 RFC 5737 文件用 IP，並刻意含幾項稽核會標出的問題
+  const FW_SAMPLE_CONFIG = "#config-version=FGT60F-7.2.5-FW-build1517-230606:opmode=0:vdom=0\nconfig system global\n    set hostname \"SAMPLE-FW01\"\nend\nconfig system interface\n    edit \"wan1\"\n        set vdom \"root\"\n        set ip 203.0.113.2 255.255.255.248\n        set allowaccess ping https ssh\n    next\n    edit \"internal\"\n        set vdom \"root\"\n        set ip 192.0.2.1 255.255.255.0\n        set allowaccess ping https\n    next\nend\nconfig firewall address\n    edit \"LAN_NET\"\n        set subnet 192.0.2.0 255.255.255.0\n    next\n    edit \"WEB_SRV\"\n        set subnet 198.51.100.10 255.255.255.255\n    next\n    edit \"UNUSED_HOST\"\n        set subnet 198.51.100.99 255.255.255.255\n    next\nend\nconfig firewall policy\n    edit 1\n        set name \"LAN-to-Internet\"\n        set srcintf \"internal\"\n        set dstintf \"wan1\"\n        set srcaddr \"LAN_NET\"\n        set dstaddr \"all\"\n        set action accept\n        set schedule \"always\"\n        set service \"ALL\"\n        set nat enable\n    next\n    edit 2\n        set name \"Temp-Any-Any\"\n        set srcintf \"wan1\"\n        set dstintf \"internal\"\n        set srcaddr \"all\"\n        set dstaddr \"all\"\n        set action accept\n        set schedule \"always\"\n        set service \"ALL\"\n    next\n    edit 3\n        set name \"Web-Inbound\"\n        set srcintf \"wan1\"\n        set dstintf \"internal\"\n        set srcaddr \"all\"\n        set dstaddr \"WEB_SRV\"\n        set action accept\n        set schedule \"always\"\n        set service \"HTTPS\"\n    next\nend\nconfig router static\n    edit 1\n        set gateway 203.0.113.1\n        set device \"wan1\"\n    next\nend\n";
+  // 先清空全部欄位，避免已選的檔案與範例一起合併分析（或已選的 FortiGate 檔覆蓋範例內容）
+  window._loadSampleConfig = function(){
+    Object.keys(inpMap).forEach(v=>{ ST[v]=null; ST.raw[v]=''; $(inpMap[v]).value=''; $(chipMap[v]).style.display='none'; });
+    ST.raw.f = FW_SAMPLE_CONFIG; updBtn(); analyze();
+  };
   window._loadFromPending = function(text, vendor) { ST.raw[vendor] = text; analyze(); };
   // Phase 4 第 18 項：把目前已上傳的原始設定文字（可能有多台裝置分別掛在不同 slot）串接後
   // 送去 config_anonymizer 去識別化，補齊本工具原本只能被動接收 config_anonymizer 轉送
