@@ -563,11 +563,18 @@ function buildQuerySectionHtml(qvdoms){
 }
 // 批次查詢結果表格（2026-09-29 新增）：results 為 runBatchPolicyQuery() 輸出，errors 為
 // parseBatchQueryCSV() 無法解析的列；純字串組裝，DOM 寫入由 app.js _runBatchQuery() 負責
+// CIDR／範圍列部分允許時的結果文字（2026-09-29 新增，FF），批次查詢與跨版本比對共用
+function batchActionLabel(r){
+  if(r.action==='mixed') return tr('batch.result_mixed').replace('{accept}',r.acceptCount).replace('{total}',r.combos);
+  const lbl={accept:tr('query.result_accept'),deny:tr('query.result_deny'),implicit_deny:tr('query.result_implicit')}[r.action]||r.action;
+  return r.combos>1 ? lbl+' ×'+r.combos : lbl;
+}
 function buildBatchQueryResultHtml(results, errors){
-  const actLbl={accept:tr('query.result_accept'),deny:tr('query.result_deny'),implicit_deny:tr('query.result_implicit')};
   const nAccept=results.filter(r=>r.action==='accept').length;
+  const nMixed=results.filter(r=>r.action==='mixed').length;
   const nMis=results.filter(r=>r.check===false).length;
-  const summary=tr('batch.summary').replace('{total}',results.length).replace('{accept}',nAccept).replace('{deny}',results.length-nAccept).replace('{mismatch}',nMis);
+  const summary=tr('batch.summary').replace('{total}',results.length).replace('{accept}',nAccept).replace('{deny}',results.length-nAccept-nMixed).replace('{mismatch}',nMis)
+    +(nMixed?tr('batch.summary_mixed').replace('{mixed}',nMixed):'');
   let h=`<div style="font-size:13px;margin-bottom:8px;color:${nMis?'var(--red)':'var(--text)'}">${esc(summary)}</div>`;
   if(errors.length) h+=`<div style="font-size:12px;color:var(--orange);margin-bottom:8px">${esc(tr('batch.errors').replace('{items}',errors.map(e=>e.line+'('+e.reason+')').join(', ')))}</div>`;
   if(!results.length) return h+`<div class="nodata">${tr('batch.empty')}</div>`;
@@ -576,7 +583,7 @@ function buildBatchQueryResultHtml(results, errors){
   results.forEach(r=>{
     const chk=r.check===null?'':(r.check?`<span style="color:var(--green)">✓ ${tr('batch.check_ok')}</span>`:`<span style="color:var(--red);font-weight:600">✗ ${tr('batch.check_bad')}</span>`);
     h+=`<tr${r.check===false?' style="background:rgba(239,83,80,.08)"':''}><td class="mono">${r.line}</td><td class="mono">${esc(r.src)}</td><td class="mono">${esc(r.dst)}</td><td>${esc(r.proto==='any'?tr('query.any_proto'):r.proto)}</td><td class="mono">${esc(r.port||'-')}</td>`
-      +`<td>${esc(actLbl[r.action]||r.action)}${r.hasFqdn?` <span style="font-size:11px;color:var(--orange)">(${tr('query.fqdn_note')})</span>`:''}</td>`
+      +`<td>${esc(batchActionLabel(r))}${r.hasFqdn?` <span style="font-size:11px;color:var(--orange)">(${tr('query.fqdn_note')})</span>`:''}</td>`
       +`<td class="mono">${esc(r.policyId===''?'-':String(r.policyId))}${r.policyName?' '+esc(r.policyName):''}</td><td>${esc(r.expect||'-')}</td><td>${chk}</td></tr>`;
   });
   return h+'</tbody></table></div>';
@@ -882,7 +889,6 @@ window.buildQuerySectionHtml=buildQuerySectionHtml;
 window.buildBatchQueryResultHtml=buildBatchQueryResultHtml;
 // 批次查詢跨版本比對結果（2026-09-29 新增，FE）：results 為 compareBatchQuery() 輸出；預設只列有改變的列
 function buildBatchDiffResultHtml(results, errors){
-  const actLbl={accept:tr('query.result_accept'),deny:tr('query.result_deny'),implicit_deny:tr('query.result_implicit')};
   const nAct=results.filter(r=>r.change==='action').length, nPol=results.filter(r=>r.change==='policy').length;
   let h=`<div style="font-size:13px;margin-bottom:8px;color:${nAct?'var(--red)':'var(--text)'}">${esc(tr('bdiff.summary').replace('{total}',results.length).replace('{action}',nAct).replace('{policy}',nPol))}</div>`;
   if(errors.length) h+=`<div style="font-size:12px;color:var(--orange);margin-bottom:8px">${esc(tr('batch.errors').replace('{items}',errors.map(e=>e.line+'('+e.reason+')').join(', ')))}</div>`;
@@ -890,7 +896,7 @@ function buildBatchDiffResultHtml(results, errors){
   h+=`<button type="button" class="btn btn-ghost btn-sm" style="margin-bottom:8px" onclick="doExport('csv-batch-diff')">⬇ ${tr('batch.export')}</button>`;
   const changed=results.filter(r=>r.change);
   if(!changed.length) return h+`<div class="nodata" style="color:var(--green)">${tr('bdiff.none')}</div>`;
-  const cell=x=>`${esc(actLbl[x.action]||x.action)}<br><span class="mono" style="font-size:11px;color:var(--text-dim)">${esc(x.policyId===''?'-':String(x.policyId))}${x.policyName?' '+esc(x.policyName):''}</span>`;
+  const cell=x=>`${esc(batchActionLabel(x))}<br><span class="mono" style="font-size:11px;color:var(--text-dim)">${esc(x.policyId===''?'-':String(x.policyId))}${x.policyName?' '+esc(x.policyName):''}</span>`;
   h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>#</th><th>${tr('query.src_ip')}</th><th>${tr('query.dst_ip')}</th><th>${tr('query.proto')}</th><th>${tr('query.port')}</th><th>${tr('bdiff.col_old')}</th><th>${tr('bdiff.col_new')}</th><th>${tr('bdiff.col_change')}</th></tr></thead><tbody>`;
   changed.forEach(r=>{
     const isAct=r.change==='action';

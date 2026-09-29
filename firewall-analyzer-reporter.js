@@ -302,8 +302,9 @@ const Reporter = (() => {
   // 批次查詢結果（2026-09-29 新增）：runBatchPolicyQuery() 輸出攤平，expect/check 未填時留空
   function exportBatchQueryCSV(results) {
     if (!results || !results.length) return null;
-    const headers = ['line','src','dst','proto','port','result','policy_id','policy_name','fqdn','expect','check'];
-    const rows = results.map(r => [r.line, r.src, r.dst, r.proto, r.port, r.action, r.policyId, r.policyName,
+    // combos／accept_count：CIDR／範圍列展開的組合數與其中允許的數量（2026-09-29 新增，FF）
+    const headers = ['line','src','dst','proto','port','result','policy_id','policy_name','combos','accept_count','fqdn','expect','check'];
+    const rows = results.map(r => [r.line, r.src, r.dst, r.proto, r.port, r.action, r.policyId, r.policyName, r.combos, r.acceptCount,
       r.hasFqdn ? 'yes' : '', r.expect, r.check === null ? '' : (r.check ? 'ok' : 'mismatch')]);
     return toCSV(rows, headers);
   }
@@ -311,9 +312,9 @@ const Reporter = (() => {
   // 批次查詢跨版本比對（2026-09-29 新增，FE）：輸出全部列（含未改變者），change 欄為 action／policy／空白
   function exportBatchDiffCSV(results) {
     if (!results || !results.length) return null;
-    const headers = ['line','src','dst','proto','port','old_result','old_policy_id','old_policy_name','new_result','new_policy_id','new_policy_name','change'];
-    const rows = results.map(r => [r.line, r.src, r.dst, r.proto, r.port, r.old.action, r.old.policyId, r.old.policyName,
-      r.new.action, r.new.policyId, r.new.policyName, r.change]);
+    const headers = ['line','src','dst','proto','port','combos','old_result','old_accept_count','old_policy_id','old_policy_name','new_result','new_accept_count','new_policy_id','new_policy_name','change'];
+    const rows = results.map(r => [r.line, r.src, r.dst, r.proto, r.port, r.old.combos, r.old.action, r.old.acceptCount, r.old.policyId, r.old.policyName,
+      r.new.action, r.new.acceptCount, r.new.policyId, r.new.policyName, r.change]);
     return toCSV(rows, headers);
   }
 

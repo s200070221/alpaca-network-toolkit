@@ -2090,7 +2090,7 @@ function onParsed(){
     rd.readAsText(f);
   };
   window._downloadBatchSample = function() {
-    Reporter.download('src,dst,proto,port,expect\r\n192.168.1.10,10.0.0.5,TCP,443,accept\r\n192.168.1.10,10.0.0.5,TCP,22,deny\r\n10.0.0.8,8.8.8.8,UDP,53,\r\n', 'fw_batch_query_sample.csv', 'text/csv');
+    Reporter.download('src,dst,proto,port,expect\r\n192.168.1.10,10.0.0.5,TCP,443,accept\r\n192.168.1.10,10.0.0.5,TCP,22,deny\r\n10.0.0.8,8.8.8.8,UDP,53,\r\n192.168.1.0/30,10.0.0.5,TCP,443,accept\r\n', 'fw_batch_query_sample.csv', 'text/csv');
   };
 
   // ── 無法解析設定檔回報（2026-09-29 新增）：提示列與轉送 config_anonymizer ──────
