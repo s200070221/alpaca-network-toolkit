@@ -29,6 +29,7 @@ function _onLangChange() {
   if (typeof currentView !== 'undefined' && currentView && currentView !== 'upload' && typeof navGo === 'function') {
     navGo(currentView);
   }
+  if (typeof renderReportBar === 'function') renderReportBar();
   if (typeof parsed !== 'undefined' && parsed && typeof buildSumCards === 'function') {
     buildSumCards();
   }

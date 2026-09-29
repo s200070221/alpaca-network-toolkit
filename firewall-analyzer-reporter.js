@@ -299,6 +299,15 @@ const Reporter = (() => {
     return toCSV(rows, headers);
   }
 
+  // 批次查詢結果（2026-09-29 新增）：runBatchPolicyQuery() 輸出攤平，expect/check 未填時留空
+  function exportBatchQueryCSV(results) {
+    if (!results || !results.length) return null;
+    const headers = ['line','src','dst','proto','port','result','policy_id','policy_name','fqdn','expect','check'];
+    const rows = results.map(r => [r.line, r.src, r.dst, r.proto, r.port, r.action, r.policyId, r.policyName,
+      r.hasFqdn ? 'yes' : '', r.expect, r.check === null ? '' : (r.check ? 'ok' : 'mismatch')]);
+    return toCSV(rows, headers);
+  }
+
   // 新舊設定檔比對：added/removed/changed 攤平成單一表格，四種實體型別共用同一欄位形狀
   function exportDiffCSV(result) {
     if (!result) return null;
@@ -1007,7 +1016,7 @@ ${(parsed.schedules&&parsed.schedules.length)?`<div class="section" id="sec-sche
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 500);
   }
 
-  return { exportCSV, exportZoneMatrixCSV, exportQueryTraceCSV, exportDiffCSV, exportComplianceDiffCSV, exportJSON, exportHTML, download };
+  return { exportCSV, exportZoneMatrixCSV, exportQueryTraceCSV, exportBatchQueryCSV, exportDiffCSV, exportComplianceDiffCSV, exportJSON, exportHTML, download };
 })();
 
 

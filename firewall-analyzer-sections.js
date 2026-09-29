@@ -545,7 +545,41 @@ function buildQuerySectionHtml(qvdoms){
         </button>
       </div>
       <div id="query-result" style="margin-top:20px"></div>
+      <div style="margin-top:28px;padding-top:20px;border-top:1px solid var(--border)">
+        <h2 style="margin:0 0 6px;font-size:16px">${tr('batch.title')}</h2>
+        <p style="color:var(--text-dim);margin:0 0 10px;font-size:12px">${tr('batch.hint')}</p>
+        <textarea id="batch-input" rows="6" spellcheck="false" placeholder="src,dst,proto,port,expect&#10;192.168.1.10,10.0.0.5,TCP,443,accept"
+          style="width:100%;max-width:640px;padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-family:monospace;font-size:12px;box-sizing:border-box"></textarea>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('batch-file').click()">📂 ${tr('batch.load_file')}</button>
+          <input type="file" id="batch-file" accept=".csv,.txt" style="display:none" onchange="_loadBatchFile(this)">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="_downloadBatchSample()">📄 ${tr('batch.sample')}</button>
+          <button type="button" onclick="_runBatchQuery()"
+            style="padding:7px 20px;border-radius:6px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600;font-size:13px">▶ ${tr('batch.run')}</button>
+        </div>
+        <div id="batch-result" style="margin-top:14px"></div>
+      </div>
     </div>`;
+}
+// 批次查詢結果表格（2026-09-29 新增）：results 為 runBatchPolicyQuery() 輸出，errors 為
+// parseBatchQueryCSV() 無法解析的列；純字串組裝，DOM 寫入由 app.js _runBatchQuery() 負責
+function buildBatchQueryResultHtml(results, errors){
+  const actLbl={accept:tr('query.result_accept'),deny:tr('query.result_deny'),implicit_deny:tr('query.result_implicit')};
+  const nAccept=results.filter(r=>r.action==='accept').length;
+  const nMis=results.filter(r=>r.check===false).length;
+  const summary=tr('batch.summary').replace('{total}',results.length).replace('{accept}',nAccept).replace('{deny}',results.length-nAccept).replace('{mismatch}',nMis);
+  let h=`<div style="font-size:13px;margin-bottom:8px;color:${nMis?'var(--red)':'var(--text)'}">${esc(summary)}</div>`;
+  if(errors.length) h+=`<div style="font-size:12px;color:var(--orange);margin-bottom:8px">${esc(tr('batch.errors').replace('{items}',errors.map(e=>e.line+'('+e.reason+')').join(', ')))}</div>`;
+  if(!results.length) return h+`<div class="nodata">${tr('batch.empty')}</div>`;
+  h+=`<button type="button" class="btn btn-ghost btn-sm" style="margin-bottom:8px" onclick="doExport('csv-batch-query')">⬇ ${tr('batch.export')}</button>`;
+  h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>#</th><th>${tr('query.src_ip')}</th><th>${tr('query.dst_ip')}</th><th>${tr('query.proto')}</th><th>${tr('query.port')}</th><th>${tr('batch.col_result')}</th><th>${tr('batch.col_policy')}</th><th>${tr('batch.col_expect')}</th><th>${tr('batch.col_check')}</th></tr></thead><tbody>`;
+  results.forEach(r=>{
+    const chk=r.check===null?'':(r.check?`<span style="color:var(--green)">✓ ${tr('batch.check_ok')}</span>`:`<span style="color:var(--red);font-weight:600">✗ ${tr('batch.check_bad')}</span>`);
+    h+=`<tr${r.check===false?' style="background:rgba(239,83,80,.08)"':''}><td class="mono">${r.line}</td><td class="mono">${esc(r.src)}</td><td class="mono">${esc(r.dst)}</td><td>${esc(r.proto==='any'?tr('query.any_proto'):r.proto)}</td><td class="mono">${esc(r.port||'-')}</td>`
+      +`<td>${esc(actLbl[r.action]||r.action)}${r.hasFqdn?` <span style="font-size:11px;color:var(--orange)">(${tr('query.fqdn_note')})</span>`:''}</td>`
+      +`<td class="mono">${esc(r.policyId===''?'-':String(r.policyId))}${r.policyName?' '+esc(r.policyName):''}</td><td>${esc(r.expect||'-')}</td><td>${chk}</td></tr>`;
+  });
+  return h+'</tbody></table></div>';
 }
 
 // WiFi Analysis Renderer（原封不動從 app.js 搬移，本來就是零 PARSED/ST/document. 依賴的
@@ -845,6 +879,7 @@ window.buildWwanSectionHtml=buildWwanSectionHtml;
 window.buildWlanSectionHtml=buildWlanSectionHtml;
 window.buildFortiswitchSectionHtml=buildFortiswitchSectionHtml;
 window.buildQuerySectionHtml=buildQuerySectionHtml;
+window.buildBatchQueryResultHtml=buildBatchQueryResultHtml;
 window.renderWifiSection=renderWifiSection;
 window.buildSdwanSectionHtml=buildSdwanSectionHtml;
 })();
