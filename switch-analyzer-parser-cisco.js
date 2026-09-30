@@ -245,21 +245,32 @@ function parseCiscoVRFs(cfg,vendor){
 
 // ── Users ─────────────────────────────────────────────────────
 function parseCiscoUsers(cfg){
-  const users=[];let m;
-  // "username NAME privilege N secret|password N HASH"
-  const re=/^username\s+(\S+)\s+privilege\s+(\d+)\s+(?:secret|password)\s+\d+\s+(\S+)/gm;
-  while((m=re.exec(cfg))!==null){
-    // Fix 4: Determine password strength (type 0=plain, 7=weak, 5/8/9=strong)
-    const pwdLevel=(m[0].match(/(?:secret|password)\s+(\d+)/)||[])[1]||'0';
-    const pwdWeak=['0','7'].includes(pwdLevel);
-    const pwdType=pwdLevel==='5'?'md5':pwdLevel==='9'?'scrypt':pwdLevel==='8'?'pbkdf2':pwdLevel==='7'?'type7-weak':pwdLevel==='0'?'plaintext':'set';
-    users.push({name:m[1],role:'privilege-'+m[2],service:'ssh/console',hasPwd:true,privilege:m[2],pwdType,pwdWeak,pwdLevel});
+  // 逐行解析 username（Cisco／Arista／Ruijie／Planet 共用）。關鍵字順序不固定：
+  //   Cisco  username NAME [privilege N] secret|password [0|5|7|8|9] PWD
+  //   Arista username NAME privilege N role ROLE secret [0|5|sha512] PWD／username NAME ... nopassword
+  // （2026-09-30 修正：原本規則要求 privilege 後面緊接 secret，Arista 夾了 role 時整筆漏抓；
+  //  secret sha512、nopassword 也認不出。密碼型別：0 明碼、7 可還原、5 MD5、8 PBKDF2、9 scrypt、
+  //  sha512 為 Arista 的 SHA-512，官方 EOS User Security 文件確認）
+  const users=[];
+  for(const line of cfg.split('\n')){
+    const m=line.match(/^username\s+(\S+)\s+(.*)$/);
+    if(!m)continue;
+    const rest=m[2];
+    const priv=(rest.match(/\bprivilege\s+(\d+)/)||[])[1];
+    const pm=rest.match(/\b(?:secret|password)\s+(?:(\d+|sha512)\s+)?(\S+)/);
+    if(!priv&&!pm&&!/\bnopassword\b/.test(rest))continue; // 例如只有 role／view 等其他屬性的行
+    if(users.find(u=>u.name===m[1]))continue;
+    const u={name:m[1],role:'privilege-'+(priv||'1'),service:'ssh/console',hasPwd:!!pm,privilege:priv||'1'};
+    if(pm&&pm[1]){
+      const lv=pm[1];
+      u.pwdLevel=lv;
+      u.pwdWeak=['0','7'].includes(lv);
+      u.pwdType=lv==='5'?'md5':lv==='9'?'scrypt':lv==='8'?'pbkdf2':lv==='7'?'type7-weak':lv==='0'?'plaintext':lv==='sha512'?'sha512':'set';
+    }else if(!pm){
+      u.pwdType='none';
+    }
+    users.push(u);
   }
-  // "username NAME privilege N secret plaintext" (no hash level)
-  const re2=/^username\s+(\S+)\s+privilege\s+(\d+)\s+(?:secret|password)\s+(\S+)/gm;
-  while((m=re2.exec(cfg))!==null)
-    if(!users.find(u=>u.name===m[1]))
-      users.push({name:m[1],role:'privilege-'+m[2],service:'ssh/console',hasPwd:true,privilege:m[2]});
   return users;
 }
 

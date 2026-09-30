@@ -3952,8 +3952,10 @@ function renderExplainCard(){
     </div>`;
   if(exResult){
     const hit=exResult.rows.filter(r=>r.id).length,total=exResult.rows.filter(r=>r.text.trim()).length;
-    const vname={cisco:'Cisco IOS／IOS-XE',comware:'Comware (H3C)',fortigate:'FortiGate'}[exResult.vendor]||exResult.vendor;
+    const vname={cisco:'Cisco IOS／IOS-XE',comware:'Comware (H3C)',fortigate:'FortiGate／FortiSwitch'}[exResult.vendor]||exResult.vendor;
     h+=`<div style="font-size:12px;margin-bottom:8px">${esc(tr('ex.vendor').replace('{vendor}',vname))}｜${esc(tr('ex.summary').replace('{total}',total).replace('{hit}',hit))}</div>`;
+    if(exResult.vendor==='cisco'&&exResult.devVendor&&!['cisco','unknown'].includes(exResult.devVendor))
+      h+=`<div style="font-size:12px;margin-bottom:8px;padding:6px 10px;border-left:3px solid var(--yellow);background:var(--surface2)">${esc(tr('ex.approx').replace('{vendor}',exResult.devVendor))}</div>`;
     const rows=exResult.rows.filter(r=>r.text.trim()&&(!exOnly||r.id));
     h+=`<table class="data-tbl" id="ex-table"><thead><tr><th style="width:50px">${esc(tr('ex.col_line'))}</th><th>${esc(tr('ex.col_code'))}</th><th>${esc(tr('ex.col_explain'))}</th></tr></thead><tbody>`;
     h+=rows.map(r=>`<tr><td style="color:var(--text-muted)">${r.line}</td><td style="font-family:Menlo,'Courier New',monospace;font-size:11px;white-space:pre-wrap">${esc(r.text)}</td><td style="font-size:12px">${r.id?esc(tr('ex.'+r.id)):''}</td></tr>`).join('');
@@ -3964,7 +3966,9 @@ function renderExplainCard(){
 function exRun(){
   const el=document.getElementById('ex-text');exText=el?el.value:'';
   if(!exText.trim()){exResult=null;alert(tr('ex.empty'));return;}
-  exResult={vendor:exDetectSyntax(exText),rows:explainConfigLines(exText)};
+  // 規則只涵蓋 Cisco／Comware／FortiGate（含同源的 FortiSwitch）；其他廠牌落到 Cisco 規則近似比對，畫面加提醒（2026-09-30）
+  let dv='';try{dv=detectVendor(exText)||'';}catch(e){dv='';}
+  exResult={vendor:exDetectSyntax(exText),devVendor:dv,rows:explainConfigLines(exText)};
   navGo('explain');
 }
 // exRun() 以輸入框內容為準，所以先把已載入的設定寫進輸入框
