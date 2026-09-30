@@ -177,6 +177,59 @@ const App = (() => {
     const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = host.replace(/[^\w.\-]/g, '_') + '_cleanup.txt'; a.click(); URL.revokeObjectURL(a.href);
   }
   window._fwCleanupToggle = _fwCleanupToggle;
+  // ── 規則命中數匯入（FortiGate，2026-09-30 新增，第八輪 XF）──────────────────
+  // 解析與比對在 firewall-analyzer-audit.js 的 parseFortiHitCounts()／analyzeFortiHitCounts()（純函式）；
+  // 貼上的內容只留在記憶體，不存 localStorage
+  const _fwHit = { text: '', days: 90, res: null, hc: null };
+  function _fwHitResultHtml() {
+    const r = _fwHit.res, hc = _fwHit.hc;
+    if (!hc) return '';
+    if (!hc.format) return `<div style="font-size:12px;color:var(--red)">${esc(tr('hit.unrecognized'))}</div>`;
+    const fmt = d => d ? new Date(d).toLocaleString() : '—';
+    let h = `<div style="font-size:12px;margin:6px 0">${esc(tr('hit.summary').replace('{fmt}', hc.format === 'json' ? 'REST API JSON' : 'CLI iprope').replace('{n}', hc.items.length)
+      .replace('{zero}', r.zero).replace('{stale}', r.stale).replace('{days}', _fwHit.days))}</div>`;
+    const notes = [];
+    if (r.missing.length) notes.push(tr('hit.missing').replace('{list}', r.missing.slice(0, 20).join(', ') + (r.missing.length > 20 ? '…' : '')));
+    if (r.unknown.length) notes.push(tr('hit.unknown').replace('{list}', r.unknown.slice(0, 20).join(', ')));
+    if (r.ambiguous.length) notes.push(tr('hit.ambiguous').replace('{list}', r.ambiguous.join(', ')));
+    if (notes.length) h += `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${notes.map(esc).join('<br>')}</div>`;
+    const list = r.rows.filter(x => x.kind !== 'ok');
+    if (!list.length) return h + `<div style="font-size:12px;color:var(--green)">${esc(tr('hit.none'))}</div>`;
+    h += `<table class="data-tbl"><thead><tr><th>ID</th><th>${esc(tr('hit.col_name'))}</th>${PARSED._isMultiVdom ? '<th>VDOM</th>' : ''}<th>${esc(tr('hit.col_action'))}</th><th>${esc(tr('hit.col_hits'))}</th><th>${esc(tr('hit.col_last'))}</th><th>${esc(tr('hit.col_result'))}</th></tr></thead><tbody>` +
+      list.map(x => `<tr><td>${esc(x.id)}</td><td>${esc(x.name)}</td>${PARSED._isMultiVdom ? `<td>${esc(x.vdom)}</td>` : ''}<td>${esc(x.action)}</td><td>${x.hits}</td><td>${esc(fmt(x.lastUsed))}</td><td>${pill(tr(x.kind === 'zero' ? 'hit.kind_zero' : 'hit.kind_stale').replace('{days}', _fwHit.days), x.kind === 'zero' ? 'p-warn' : 'p-info')}</td></tr>`).join('') +
+      '</tbody></table>' +
+      `<div style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="window._fwHitCsv()">${esc(tr('hit.csv_btn'))}</button></div>`;
+    return h;
+  }
+  function _fwHitCardHtml() {
+    return `<div id="hit-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px">📈 ${esc(tr('hit.title'))}</div>
+      <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--accent)">${esc(tr('hit.hint'))}</div>
+      <textarea id="hit-text" spellcheck="false" aria-label="${esc(tr('hit.title'))}" placeholder="${esc(tr('hit.ph'))}" style="width:100%;height:120px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px">${esc(_fwHit.text)}</textarea>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px;font-size:12px">
+        <label style="display:flex;gap:4px;align-items:center">${esc(tr('hit.days_label'))}<input id="hit-days" type="number" min="1" max="3650" value="${_fwHit.days}" style="width:70px"></label>
+        <button class="btn btn-ghost btn-sm" onclick="window._fwHitRun()">${esc(tr('hit.run_btn'))}</button>
+      </div>
+      <div id="hit-result">${_fwHitResultHtml()}</div>
+    </div>`;
+  }
+  window._fwHitRun = function() {
+    const ta = document.getElementById('hit-text'), d = document.getElementById('hit-days');
+    _fwHit.text = ta ? ta.value : '';
+    _fwHit.days = Math.max(1, parseInt(d && d.value, 10) || 90);
+    _fwHit.hc = parseFortiHitCounts(_fwHit.text);
+    _fwHit.res = _fwHit.hc.format ? analyzeFortiHitCounts(PARSED, _fwHit.hc, { days: _fwHit.days }) : null;
+    const box = document.getElementById('hit-result');
+    if (box) box.innerHTML = _fwHitResultHtml();
+  };
+  window._fwHitCsv = function() {
+    if (!_fwHit.res) return;
+    const rows = _fwHit.res.rows.map(x => [x.id, x.name, x.vdom, x.action, x.hits, x.lastUsed ? new Date(x.lastUsed).toISOString() : '',
+      x.kind === 'ok' ? '' : tr(x.kind === 'zero' ? 'hit.kind_zero' : 'hit.kind_stale').replace('{days}', _fwHit.days)]);
+    const headers = ['ID', tr('hit.col_name'), 'VDOM', tr('hit.col_action'), tr('hit.col_hits'), tr('hit.col_last'), tr('hit.col_result')];
+    const host = (PARSED.deviceInfo && PARSED.deviceInfo.hostname && PARSED.deviceInfo.hostname !== '-') ? PARSED.deviceInfo.hostname : 'fortigate';
+    Reporter.download(Reporter.toCSV(rows, headers), host.replace(/[^\w.\-]/g, '_') + '_policy_hits.csv', 'text/csv');
+  };
   window._fwCleanupCopy = _fwCleanupCopy;
   window._fwCleanupDownload = _fwCleanupDownload;
   // ── 開通需求檢查（FortiGate，2026-09-29 新增，第六輪 WI）──────────────────
@@ -1309,6 +1362,7 @@ function onParsed(){
         }
         $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules())
           + (PARSED.vendor === 'FortiGate' ? _fwCleanupCardHtml() : '')
+          + (PARSED.vendor === 'FortiGate' ? _fwHitCardHtml() : '')
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
               <div id="health-result" style="margin-top:12px"></div>
