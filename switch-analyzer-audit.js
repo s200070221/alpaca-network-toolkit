@@ -678,7 +678,9 @@ function buildSwitchAuditEvidence(text,findings){
     const addBlock=i=>{add(i);if(sub)_evBlock(lines,i).forEach(k=>{if(sub.test(lines[k]))add(k);});};
     (f.items||[]).forEach(item=>{
       if(kind==='iface'){
-        const re=_evNameRe(item);
+        // Brocade／Ruckus 稽核項目用簡寫 e1/1/1，設定檔是 interface ethernet 1/1/1（2026-09-30 補上）
+        const bm=String(item).match(/^e(\d[\d\/:]*)$/i);
+        const re=bm?new RegExp('(^|[\\s"\'])(e|ethernet\\s+)'+_evEsc(bm[1])+'($|[\\s"\';{,:])','i'):_evNameRe(item);
         let head=lines.findIndex(l=>re.test(l)&&/^\s*(interface|edit|set\s+interfaces|\/interface|port|config)\b/i.test(l));
         if(head<0)head=lines.findIndex(l=>re.test(l));
         if(head<0)return;
@@ -686,16 +688,22 @@ function buildSwitchAuditEvidence(text,findings){
         else addBlock(head);
       }else if(kind==='user'){
         const re=_evNameRe(item);
-        lines.forEach((l,k)=>{if(re.test(l)&&/^\s*(username|local-user|user|create account|set system login user|edit|\/user|aaa authentication local-user|password|account|admin)\b/i.test(l))addBlock(k);});
+        lines.forEach((l,k)=>{if(re.test(l)&&/^\s*(->\s*)?(username|local-user|user|create account|set system login user|edit|\/user|aaa authentication local-user|password|account|admin)\b/i.test(l))addBlock(k);});
       }else if(kind==='snmp'){
         const re=_evNameRe(item);
-        lines.forEach((l,k)=>{if(re.test(l)&&/snmp|community/i.test(l))add(k);});
+        // SONiC config_db.json：community 是 SNMP_COMMUNITY 表格底下的 key，那一行本身沒有 snmp 字樣（2026-09-30 補上）
+        const jsonKey=new RegExp('^\\s*"'+_evEsc(item)+'"\\s*:');
+        lines.forEach((l,k)=>{if(re.test(l)&&/snmp|community/i.test(l))add(k);
+          else if(jsonKey.test(l)&&lines.slice(Math.max(0,k-5),k).some(x=>/SNMP_COMMUNITY/.test(x)))add(k);});
       }else if(kind==='telnet'){
         lines.forEach((l,k)=>{if(/telnet|transport input/i.test(l)&&!/^\s*(no|undo)\s/i.test(l))add(k);});
       }else if(kind==='routing'){
         // 只取協定本身的宣告行（router ospf 1／ospf 1／bgp 65000／set protocols ospf…），不含介面下的 ospf 子指令
         const re=new RegExp('^\\s*(set\\s+protocols\\s+'+item+'\\b|((router|protocols|configure)\\s+)?'+item+'(\\s+\\d+|\\s*\\{|\\s*$))','i');
-        lines.forEach((l,k)=>{if(re.test(l))add(k);});
+        // 另收不縮排的全域寫法：Alcatel「-> ip ospf …」、Extreme「configure／enable／create ospf …」、
+        // FortiSwitch「config router ospf」（2026-09-30 補上；縮排的介面子指令如 Cisco「 ip ospf cost」仍排除）
+        const re2=new RegExp('^(->\\s*)?(ip|enable|configure|create|config\\s+router)\\s+'+item+'\\b','i');
+        lines.forEach((l,k)=>{if(re.test(l)||re2.test(l))add(k);});
       }else if(kind==='acl'){
         const [name,seq]=String(item).split('#');
         const re=_evNameRe(name);
@@ -708,7 +716,11 @@ function buildSwitchAuditEvidence(text,findings){
         });
       }else if(kind==='vlan'){
         const re=new RegExp('^\\s*(vlan|create vlan|vlan database)\\b.*(^|[\\s,;"])'+_evEsc(item)+'($|[\\s,;"-])','i');
-        lines.forEach((l,k)=>{if(re.test(l))add(k);});
+        // 另收 trunk 允許清單（allowed vlan／allowed-vlans／permit vlan／tagged）、interface vlan N 與 SONiC 的 "VlanN"（2026-09-30 補上）
+        const inList=new RegExp('(allowed[- ]vlans?|permit vlan|tagged)\\b.*(^|[\\s,;"])'+_evEsc(item)+'($|[\\s,;"])','i');
+        const ifVlan=new RegExp('^\\s*interface\\s+vlan\\s*'+_evEsc(item)+'\\s*$','i');
+        const sonic=new RegExp('"Vlan'+_evEsc(item)+'[|"]');
+        lines.forEach((l,k)=>{if(re.test(l)||inList.test(l)||ifVlan.test(l)||sonic.test(l))add(k);});
       }
     });
     res[f.id]=[...hit].sort((a,b)=>a-b).map(k=>({line:k+1,text:_evMaskSecret(lines[k].replace(/\s+$/,''))}));

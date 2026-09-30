@@ -1771,12 +1771,25 @@
               return;
             }
             const re = it.name ? _fwEvNameRe(it.name) : _fwEvNameRe(it.id);
-            const k = L.findIndex(l => re.test(l) && /rule|policy|entry|edit|name|access-list|filter|term|set/i.test(l));
+            // 2026-09-30：關鍵字補上 MikroTik 的 add／chain（規則行為 add action=… chain=… comment="…"）
+            let k = L.findIndex(l => re.test(l) && /rule|policy|entry|edit|name|access-list|filter|term|set|chain|^\s*add\b/i.test(l));
+            // EdgeRouter 合成名稱「規則集-序號」（如 WAN_LOCAL-10）：找 name WAN_LOCAL { 之後的 rule 10 {
+            const er = it.name && String(it.name).match(/^(\S+)-(\d+)$/);
+            if (k < 0 && er) {
+              const n = L.findIndex(l => new RegExp('^\\s*name\\s+"?' + _fwEvEsc(er[1]) + '"?\\s*\\{').test(l));
+              if (n >= 0) k = L.findIndex((l, i) => i > n && new RegExp('^\\s*rule\\s+' + er[2] + '\\s*\\{').test(l));
+            }
+            // 名稱只出現在說明文字（EdgeRouter description "…"）：往上找所屬的 rule N { 區塊開頭
+            if (k < 0 && it.name) {
+              const d = L.findIndex(l => l.includes(String(it.name)));
+              if (d >= 0) { k = d; for (let u = d - 1; u >= Math.max(0, d - 15); u--) if (/^\s*rule\s+\d+\s*\{/.test(L[u])) { k = u; break; } }
+            }
             if (k >= 0) addBlock(k);
             return;
           }
           if (!it.name) return;
-          const re = _fwEvNameRe(it.name);
+          // Cisco ASA／FTD 的 VPN 名稱是合成的「crypto map 名稱@對端 IP」，設定檔只有 crypto map 名稱（2026-09-30）
+          const re = _fwEvNameRe(it.kind === 'vpn' && /@/.test(it.name) ? String(it.name).split('@')[0] : it.name);
           // 先找物件宣告行（edit／<entry>），再找其他常見開頭，最後才是任何含此名稱的行
           let k = L.findIndex(l => re.test(l) && /^\s*(edit|<entry)\b/i.test(l));
           if (k < 0) k = L.findIndex(l => re.test(l) && /^\s*(set|username|user|<name>|interface|crypto|tunnel-group|community|snmp|add|\/)/i.test(l));

@@ -216,9 +216,14 @@ function parseNXOS(cfg) {
   function parseUsers() {
     const users=[];
     for (const line of cfg.split('\n')) {
-      const m=line.match(/^username\s+(\S+)\s+password\s+\d+\s+\S+\s+role\s+(\S+)/);
+      // username NAME password [0|5] PWD [role ROLE]：0 為明碼、5 為加密（官方 Command Reference：
+      // SHA-256 加鹽雜湊）；role 可省略（2026-09-30 修正：原本未記錄密碼型別，明碼帳號未被稽核標出，
+      // 且沒寫 role 的帳號整筆漏抓）
+      const m=line.match(/^username\s+(\S+)\s+password\s+(?:(\d)\s+)?(\S+)(?:.*?\srole\s+(\S+))?/);
       if (!m) continue;
-      users.push({ name:m[1], role:m[2], type:'local', groups:[] });
+      const lv=m[2]||'0';
+      users.push({ name:m[1], role:m[4]||'', type:'local', groups:[], hasPwd:true, pwdLevel:lv,
+        pwdType: lv==='0'?'plaintext':lv==='5'?'hash':'set', pwdWeak: lv==='0' });
     }
     return users;
   }
