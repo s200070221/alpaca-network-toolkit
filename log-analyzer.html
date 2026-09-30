@@ -6246,6 +6246,20 @@ async function doAnalyze() {
       const _name = (FILE_METADATA && FILE_METADATA.names) ? FILE_METADATA.names : '';
       _hist.unshift({ tool: 'log_analyzer', name: _name, vendor: null, ts: Date.now() });
       localStorage.setItem('_netAnalyzer_activityHistory', JSON.stringify(_hist.slice(0, 5)));
+      // 綜合健檢報告（2026-09-30 新增，第八輪 XA）：`_netAnalyzer_summaries` 同一工具＋名稱只留最新一筆、最多 20 筆；
+      // 只存事件數、問題數（高／中風險、未處理）與前三項問題名稱，不存 log 原文
+      let _sum = [];
+      try { _sum = JSON.parse(localStorage.getItem('_netAnalyzer_summaries') || '[]'); } catch(e) { _sum = []; }
+      if (!Array.isArray(_sum)) _sum = [];
+      const _top = ISSUES.slice().sort((a, b) => SEV_RANK[a.severityNorm] - SEV_RANK[b.severityNorm] || b.count - a.count).slice(0, 3)
+        .map(is => ({ label: issueCategoryLabel(is.category), count: is.count, sev: is.severityNorm }));
+      const _entry = { tool: 'log_analyzer', name: _name, vendor: null, ts: Date.now(), events: EVENTS.length, n: ISSUES.length,
+        crit: ISSUES.filter(is => is.severityNorm === 'Critical' || is.severityNorm === 'High').length,
+        warn: ISSUES.filter(is => is.severityNorm === 'Medium').length,
+        open: ISSUES.filter(is => issueStatusOf(_baselineDiffKey(is)) === 'open').length, top: _top };
+      _sum = _sum.filter(x => !(x && x.tool === 'log_analyzer' && x.name === _name));
+      _sum.unshift(_entry);
+      localStorage.setItem('_netAnalyzer_summaries', JSON.stringify(_sum.slice(0, 20)));
     } catch(e) { /* localStorage 滿了或被封鎖時靜默略過，不影響分析主流程 */ }
   } finally {
     if (myGen === _analyzeGen) { hideProgress(); if (btn) btn.disabled = false; }

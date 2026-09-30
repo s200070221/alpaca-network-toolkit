@@ -255,6 +255,7 @@ function doAnalyze(){
   window._workTimer60 = setTimeout(()=>_showSwitchToast(tr('egg.work_60min'),5000), 3600000);
   setLang(_lang);
   recordSwitchActivity(parsed);
+  recordSwitchSummary(parsed);
 }
 // 跨工具活動時間軸（2026-09-24 新增）：寫入 `_netAnalyzer_activityHistory` rolling-history
 // （持續累積歷史，無 TTL，比照 log_analyzer／switch_config_generator 既有寫入端），
@@ -268,6 +269,29 @@ function recordSwitchActivity(p){
     _hist.unshift({tool:'switch_analyzer',name:(p&&p.sys&&p.sys.hostname)||'',vendor:(p&&p.vendor)||null,ts:Date.now()});
     localStorage.setItem('_netAnalyzer_activityHistory',JSON.stringify(_hist.slice(0,5)));
   }catch(e){/* localStorage 滿了或被封鎖時靜默略過，不影響分析主流程 */}
+}
+// 綜合健檢報告（2026-09-30 新增，第八輪 XA）：寫入 `_netAnalyzer_summaries` rolling-history
+// （持續累積、無 TTL，比照 `_netAnalyzer_activityHistory`），同一工具＋同一名稱只留最新一筆、最多 20 筆，
+// 供 network_analyzer hub 彙整成綜合健檢報告。只存等級、分數、風險數與前三項問題名稱，不存設定原文
+function _pushToolSummary(entry){
+  try{
+    let a=[];
+    try{a=JSON.parse(localStorage.getItem('_netAnalyzer_summaries')||'[]');}catch(e){a=[];}
+    if(!Array.isArray(a))a=[];
+    a=a.filter(x=>!(x&&x.tool===entry.tool&&x.name===entry.name));
+    a.unshift(entry);
+    localStorage.setItem('_netAnalyzer_summaries',JSON.stringify(a.slice(0,20)));
+  }catch(e){/* localStorage 滿了或被封鎖時靜默略過 */}
+}
+function recordSwitchSummary(p){
+  try{
+    const h=computeSwitchHealth(p);
+    const RANK={crit:0,warn:1,info:2};
+    const act=h.issues.filter(i=>!i.accepted);
+    _pushToolSummary({tool:'switch_analyzer',name:(p.sys&&p.sys.hostname)||'',vendor:p.vendor||null,ts:Date.now(),
+      score:h.score,grade:h.grade,n:act.length,crit:act.filter(i=>i.sev==='crit').length,warn:act.filter(i=>i.sev==='warn').length,
+      top:act.slice().sort((x,y)=>(RANK[x.sev]??3)-(RANK[y.sev]??3)||y.count-x.count).slice(0,3).map(i=>({label:i.label,count:i.count,sev:i.sev}))});
+  }catch(e){}
 }
 function showResultViews(){
   document.getElementById('view-upload').classList.remove('show');
