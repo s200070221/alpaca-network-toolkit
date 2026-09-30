@@ -87,7 +87,7 @@ body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans TC',syste
 .btn-accent:disabled{opacity:.4;cursor:not-allowed;transform:none}
 .btn-danger{background:rgba(239,68,68,.1);color:var(--red);border-color:rgba(239,68,68,.3)}
 .btn-danger:hover{background:rgba(239,68,68,.18)}
-.lang-switcher{display:flex;gap:3px;margin-right:8px}
+.lang-switcher{display:flex;flex-wrap:wrap;gap:3px;margin-right:8px;max-width:100%}
 .lang-btn{padding:3px 7px;border-radius:4px;border:1px solid var(--border2);background:transparent;color:var(--text-dim);cursor:pointer;font-size:10px;font-family:inherit;transition:all .15s}
 .lang-btn.active{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
 #lang-klingon{border-color:#c0392b;color:#e74c3c}
@@ -187,6 +187,13 @@ input[type=file]{display:none}
 #tab-content>.tbl-wrap{flex:1 1 auto;min-height:260px}
 /* 直接放在分頁容器下的統計卡片列比照上方總覽卡片加左右內距（原本貼齊左邊界） */
 #tab-content>.sum-cards{padding:12px 18px 0}
+/* 窄或矮螢幕：頂部列與統計卡片會佔掉大半畫面，內容區被壓到剩約 100px（手機上幾乎看不到）。
+   改為整個結果區一起捲動，內容區依內容自然展開 */
+@media(max-width:899px),(max-height:700px){
+  #view-result{overflow-y:auto}
+  #view-result>*{flex-shrink:0}
+  #tab-content{flex:0 0 auto!important;overflow:visible!important}
+}
 .data-tbl{width:100%;border-collapse:collapse;font-size:12px}
 .data-tbl th{background:var(--surface2);padding:8px 12px;text-align:left;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.7px;color:var(--text-dim);border-bottom:1px solid var(--border);white-space:nowrap;position:sticky;top:0;z-index:2;font-family:'JetBrains Mono',monospace;cursor:pointer;user-select:none;transition:color .15s}
 .data-tbl th:hover{color:var(--accent)}
@@ -382,6 +389,8 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
   #sidebar .sb-titles,.sb-foot,.nav-grp-lbl,.nav-lbl,.cnt{display:none;}
   #sidebar .nav-item{justify-content:center;padding:9px;}
   #sidebar .sb-toggle{margin:0 auto;}
+  /* 側欄固定 52px 時 Logo 列改直向排列（原本橫向排列，收合按鈕被擠到欄外看不到） */
+  #sidebar .sb-logo{padding:8px 0;flex-direction:column;gap:4px;align-items:center}
   #view-upload{padding:16px;}
   .up-card{padding:16px;}
   .dropzone{padding:14px;}
@@ -394,7 +403,7 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
 
 /* ≤599px — phone */
 @media(max-width:599px){
-  #sidebar{display:none !important;}
+  /* 手機版保留 ≤899px 的 52px 圖示導覽列（原本整個隱藏，手機上完全無法切換頁面，只能看總覽） */
   /* 手機版（2026-09-29，UC）：頂部列換行，避免右側主題／工具按鈕被擠出畫面 */
   #topbar{flex-wrap:wrap;row-gap:6px}
   .lang-btn{white-space:nowrap}
@@ -426,7 +435,7 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
 /* ≤380px — extra small */
 @media(max-width:380px){
   .vc{font-size:10px;padding:4px 8px;}
-  #topbar .tb-right .btn:not(.btn-danger){display:none;}
+  /* 原本在此隱藏清除以外的所有頂部按鈕（匯出、報表等在 375px 手機上完全無法使用）；頂部列本來就會換行，改為保留 */
 }
 /* ═════════ 壓制 JavaScript 動態高度 ═════════ */
 

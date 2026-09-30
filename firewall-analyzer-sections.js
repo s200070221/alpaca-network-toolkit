@@ -669,7 +669,7 @@ function renderWifiSection(w) {
 
   html += `<div style="margin-bottom:16px">
     <div style="font-size:12px;font-weight:700;margin-bottom:8px;color:var(--text-dim)">📶 ${tr('wifi.ssid_analysis')}</div>
-    <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">
+    <div style="border:1px solid var(--border);border-radius:8px;overflow-x:auto">
       <div class="ssid-row hdr">
         <div>${tr('wifi.ssid_name')}</div><div>${tr('wifi.sec_mode')}</div><div>${tr('wifi.sec_grade')}</div><div>Captive</div><div>VLAN</div><div>PMF</div><div>${tr('wifi.ap_deploy')}</div>
       </div>`;
@@ -703,7 +703,7 @@ function renderWifiSection(w) {
   if (w.wtps.length) {
     html += `<div style="margin-bottom:16px">
       <div style="font-size:12px;font-weight:700;margin-bottom:8px;color:var(--text-dim)">🏢 ${tr('wifi.managed_ap_list')}</div>
-      <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">
+      <div style="border:1px solid var(--border);border-radius:8px;overflow-x:auto">
         <div class="ap-row hdr">
           <div>${tr('wifi.col_serial')}</div><div>${tr('col.name')}</div><div>${tr('wifi.col_location')}</div><div>${tr('wifi.col_profile')}</div><div>${tr('col.status')}</div>
         </div>`;
@@ -721,7 +721,7 @@ function renderWifiSection(w) {
 
   html += `<div style="margin-bottom:16px">
     <div style="font-size:12px;font-weight:700;margin-bottom:8px;color:var(--text-dim)">📻 ${tr('wifi.ap_profile_config')}</div>
-    <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">`;
+    <div style="border:1px solid var(--border);border-radius:8px;overflow-x:auto">`;
   w.wtpProfiles.slice(0, 15).forEach((p, idx) => {
     const genBadge = p.wifiGen.includes('Wi-Fi 6') ? `<span class="wifi6-badge">Wi-Fi 6</span>` : `<span class="wifi5-badge">Wi-Fi 5</span>`;
     html += `<div style="padding:8px 12px;${idx>0?'border-top:1px solid var(--border)':''}">
