@@ -526,15 +526,30 @@ function parseSyslog(cfg, vendor){
 // 關閉），為求風險判斷貼近真實曝險，對「已查證預設為開放 telnet」的廠牌採「除非明確關閉
 // 否則視為開放」；對「已查證預設關閉」或「預設未知」的廠牌則採「只認明確開啟」，避免無佐證
 // 臆測導致誤報。ssh 欄位僅供輔助資訊，稽核檢查本身只判斷 telnet。
+// 逐組 vty 線路（標題行＋其後縮排的子指令）取出，供 Cisco／Ruijie／Comware 逐組判斷；
+// 原本只看整份設定的第一個 transport input／protocol inbound，`line vty 0 4` 限 SSH、
+// `line vty 5 15` 開 telnet 這種常見寫法會漏報。同一範圍重複進入（如後段再補 access-class）
+// 屬同一組線路，依標題合併子指令
+function _vtyBlocks(cfg, headRe){
+  const byHead=new Map(); const re=new RegExp('^((?:'+headRe+')[^\\n]*)\\n((?:[ \\t][^\\n]*(?:\\n|$))*)','gm'); let m;
+  while((m=re.exec(cfg))!==null){ const k=m[1].trim().replace(/\s+/g,' '); byHead.set(k,(byHead.get(k)||'')+m[2]); }
+  return [...byHead.values()];
+}
 function parseMgmtAccess(cfg, vendor){
   let telnet=false, ssh=false;
   if(vendor==='comware'){
-    // 官方 H3C Login Management Commands 查證：user-interface vty 下 protocol inbound
-    // {telnet|ssh|all}，未設定時預設 all（兩者皆開放）
-    const hasVty=/^user-interface\s+vty\b/m.test(cfg);
-    const pm=/protocol inbound\s+(telnet|ssh|all)/i.exec(cfg);
-    if(pm){ const v=pm[1].toLowerCase(); telnet=(v==='telnet'||v==='all'); ssh=(v==='ssh'||v==='all'); }
-    else if(hasVty){ telnet=true; ssh=true; }
+    // 官方 H3C Login Management Commands 查證：user-interface vty（V7 為 line vty）下
+    // protocol inbound {telnet|ssh|all}，未設定時預設 all（兩者皆開放）；任一 vty 區塊允許即算開放。
+    // 明確 `undo telnet server enable` 代表 telnet 服務本身已關閉
+    const blocks=_vtyBlocks(cfg,'user-interface\\s+vty|line\\s+vty');
+    if(blocks.length){
+      blocks.forEach(b=>{ const pm=/protocol inbound\s+(telnet|ssh|all)/i.exec(b); const v=pm?pm[1].toLowerCase():'all';
+        if(v==='telnet'||v==='all')telnet=true; if(v==='ssh'||v==='all')ssh=true; });
+    }else{
+      const pm=/protocol inbound\s+(telnet|ssh|all)/i.exec(cfg);
+      if(pm){ const v=pm[1].toLowerCase(); telnet=(v==='telnet'||v==='all'); ssh=(v==='ssh'||v==='all'); }
+    }
+    if(/^\s*undo telnet server enable\b/m.test(cfg))telnet=false;
   }else if(vendor==='fortiswitch'){
     // 官方文件僅查得逐 interface allowaccess 清單語法，無單一全域開關；任一介面
     // allowaccess 含 telnet/ssh 即視為該介面開放（沿用 firewall_analyzer http-mgmt 慣例）
@@ -552,10 +567,15 @@ function parseMgmtAccess(cfg, vendor){
     // 官方 Cisco IOS-XE 查證：line vty 下 transport input {telnet|ssh|all|none}，
     // 未設定時原廠預設 all（兩者皆開放）。Ruijie RGOS 管理線路語法與 Cisco 同源，
     // 尚無真實範例逐字驗證，先併入同一套邏輯，信心度較低
-    const hasVty=/^line vty\b/m.test(cfg);
-    const tm=/transport input\s+([^\n]+)/i.exec(cfg);
-    if(tm){ const v=tm[1].toLowerCase(); telnet=/\btelnet\b|\ball\b/.test(v); ssh=/\bssh\b|\ball\b/.test(v); }
-    else if(hasVty){ telnet=true; ssh=true; }
+    // 任一 vty 區塊允許即算開放（區塊內無 transport input 時依原廠預設 all）
+    const blocks=_vtyBlocks(cfg,'line vty');
+    if(blocks.length){
+      blocks.forEach(b=>{ const tm=/transport input\s+([^\n]+)/i.exec(b); const v=tm?tm[1].toLowerCase():'all';
+        if(/\btelnet\b|\ball\b/.test(v))telnet=true; if(/\bssh\b|\ball\b/.test(v))ssh=true; });
+    }else{
+      const tm=/transport input\s+([^\n]+)/i.exec(cfg);
+      if(tm){ const v=tm[1].toLowerCase(); telnet=/\btelnet\b|\ball\b/.test(v); ssh=/\bssh\b|\ball\b/.test(v); }
+    }
   }else if(vendor==='dell-os10'){
     // 官方 Dell KB 查證：telnet 預設關閉、ssh 預設開啟，須明確 enable 才視為開放
     telnet=/^\s*ip telnet server enable\b/m.test(cfg);

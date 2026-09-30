@@ -2621,6 +2621,17 @@ function validateForm(){
       errors.push(`⚠️ VLAN ${i+1}：${tr('val.invalid').replace('{item}','IP (CIDR)')}`);
       markInvalid(vlanRows[i]?.querySelector('.v-ip'));
     }
+    // VLAN 名稱：雙引號在以引號包住名稱的廠牌（FortiSwitch／Juniper／Alcatel／Extreme／ProCurve／
+    // EdgeSwitch 等）會產生引號不成對的語法；Juniper／Extreme／Brocade 的 VLAN 名稱是識別字
+    // （Extreme 後續指令以名稱引用、Brocade 名稱後接 by port），含空白會被拒絕或誤讀
+    if(v.name&&v.name.includes('"')){
+      errors.push(`❌ VLAN ${v.id}：${tr('val.no_dquote').replace('{item}',tr('val.field_name'))}`);
+      markInvalid(vlanRows[i]?.querySelector('.v-name'));
+    }else if(v.name&&/\s/.test(v.name)&&['juniper','extreme','brocade'].includes(model.vendor)){
+      const vl=document.querySelector('#vendor option[value="'+model.vendor+'"]')?.textContent||model.vendor;
+      errors.push(`❌ ${tr('val.vlan_name_space').replace('{id}',v.id).replace('{vendor}',vl)}`);
+      markInvalid(vlanRows[i]?.querySelector('.v-name'));
+    }
   });
 
   // 3. Interface 驗證
@@ -2651,6 +2662,11 @@ function validateForm(){
     // 檢查同樣要求 model.vlans.length>0 才檢查（避免使用者尚未建立 VLAN 表格時整批誤報）
     if(iface.mode==='access'&&iface.accessVlan&&/^\d+$/.test(iface.accessVlan)&&!vlanIds.has(iface.accessVlan)&&model.vlans.length>0){
       warnings.push(`⚠️ ${tr('val.access_vlan_not_in_list').replace('{name}',iface.name).replace('{vlan}',iface.accessVlan)}`);
+    }
+
+    if(iface.desc&&iface.desc.includes('"')){
+      errors.push(`❌ Interface ${iface.name}：${tr('val.no_dquote').replace('{item}','Description')}`);
+      markInvalid(ifaceRows[i]?.querySelector('.i-desc'));
     }
 
     // Hybrid 港口檢查（僅 Comware／Ruijie／Planet 支援）
@@ -4204,6 +4220,15 @@ function processBulkCSV(){
       }
       if(!BULK_CSV_VALID_VENDORS.includes(row.vendor)){
         results.push({name:row.devicename,status:tr('msg.bulkInvalidVendor').replace('{vendor}',row.vendor),color:'var(--red)'});
+        continue;
+      }
+      // 批次產生不經過 validateForm()，每列自己的覆寫值另外檢查（規則同表單驗證），不合法時略過該列
+      const bulkErr=!/^[a-zA-Z0-9\-_]{1,32}$/.test(row.hostname)?tr('val.hostname_format')
+        :(row.vlanname||'').includes('"')?'VLAN '+tr('val.no_dquote').replace('{item}',tr('val.field_name'))
+        :(row.vlanname&&/\s/.test(row.vlanname)&&['juniper','extreme','brocade'].includes(row.vendor))?tr('val.vlan_name_space').replace('{id}',row.vlanid||originalVlanId||'').replace('{vendor}',row.vendor)
+        :(row.ifacedesc||'').includes('"')?tr('val.no_dquote').replace('{item}','Description'):'';
+      if(bulkErr){
+        results.push({name:row.devicename,status:bulkErr,color:'var(--red)'});
         continue;
       }
 
