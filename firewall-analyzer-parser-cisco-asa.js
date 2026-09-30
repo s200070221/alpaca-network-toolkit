@@ -57,10 +57,14 @@ const CiscoASAParser = (() => {
   function parsePolicies(text, addrTypeMap) {
     const policies = [];
     let id = 1;
+    // crypto map 引用的 ACL（crypto map NAME SEQ match address ACL）只用來定義 VPN 加密流量，
+    // 不是介面上的存取控制規則，排除以免計入稽核與健康度（VPN 分頁另由 aclMap 讀取，不受影響）
+    const cryptoAcls = new Set([...text.matchAll(/^crypto\s+map\s+\S+\s+\d+\s+match\s+address\s+(\S+)/gm)].map(x => x[1]));
     for (const line of text.split('\n')) {
       const m = line.match(/^access-list\s+(\S+)\s+extended\s+(permit|deny)\s+(\S+)\s+(.+)/);
       if (!m) continue;
       const [, aclName, rawAction, proto, rest] = m;
+      if (cryptoAcls.has(aclName)) continue;
       const action = rawAction === 'permit' ? 'accept' : 'deny';
       const parts = rest.trim().split(/\s+/);
       let src='any', dst='any', svc=proto, i=0;
@@ -255,18 +259,22 @@ const CiscoASAParser = (() => {
 
     // Parse crypto map entries: keyed by seq (mapName+seq) to avoid peer-collision overwrite
     const mapEntries = {};
-    let lastSeqKey = '';
+    // 以「map 名稱-序號」為鍵，任一子指令先出現都建立項目：ASA running-config 慣例是
+    // match address 排在 set peer 之前，原本只有 set peer 會建立項目，先出現的 match address
+    // 找不到項目而被丟棄，VPN 加密網段一律顯示 "-"；另原本以 endsWith('-'+序號) 找項目，
+    // 不同 map 名稱同序號時會對錯
+    const entryOf = (name, seq) => { const k = `${name}-${seq}`; return mapEntries[k] = mapEntries[k] || { name, seq }; };
     for (const line of lines) {
       const mPeer = line.match(/^crypto map\s+(\S+)\s+(\d+)\s+set peer\s+(\S+)/);
-      if (mPeer) { const k=`${mPeer[1]}-${mPeer[2]}`; lastSeqKey=k; if(!mapEntries[k])mapEntries[k]={name:mPeer[1],seq:mPeer[2],peer:mPeer[3]}; else mapEntries[k].peer=mPeer[3]; continue; }
-      const mMatch = line.match(/^crypto map\s+\S+\s+(\d+)\s+match address\s+(\S+)/);
-      if (mMatch) { const k=Object.keys(mapEntries).find(x=>x.endsWith('-'+mMatch[1])); if(k)mapEntries[k].acl=mMatch[2]; continue; }
-      const mXf = line.match(/^crypto map\s+\S+\s+(\d+)\s+set transform-set\s+(\S+)/);
-      if (mXf) { const k=Object.keys(mapEntries).find(x=>x.endsWith('-'+mXf[1])); if(k)mapEntries[k].xform=mXf[2]; continue; }
-      const mLt = line.match(/^crypto map\s+\S+\s+(\d+)\s+set security-association lifetime seconds\s+(\d+)/);
-      if (mLt) { const k=Object.keys(mapEntries).find(x=>x.endsWith('-'+mLt[1])); if(k)mapEntries[k].p2lt=mLt[2]; continue; }
-      const mIkev2 = line.match(/^crypto map\s+\S+\s+(\d+)\s+set ikev(\d)/);
-      if (mIkev2) { const k=Object.keys(mapEntries).find(x=>x.endsWith('-'+mIkev2[1])); if(k)mapEntries[k].ikever=mIkev2[2]; continue; }
+      if (mPeer) { entryOf(mPeer[1], mPeer[2]).peer = mPeer[3]; continue; }
+      const mMatch = line.match(/^crypto map\s+(\S+)\s+(\d+)\s+match address\s+(\S+)/);
+      if (mMatch) { entryOf(mMatch[1], mMatch[2]).acl = mMatch[3]; continue; }
+      const mXf = line.match(/^crypto map\s+(\S+)\s+(\d+)\s+set transform-set\s+(\S+)/);
+      if (mXf) { entryOf(mXf[1], mXf[2]).xform = mXf[3]; continue; }
+      const mLt = line.match(/^crypto map\s+(\S+)\s+(\d+)\s+set security-association lifetime seconds\s+(\d+)/);
+      if (mLt) { entryOf(mLt[1], mLt[2]).p2lt = mLt[3]; continue; }
+      const mIkev2 = line.match(/^crypto map\s+(\S+)\s+(\d+)\s+set ikev(\d)/);
+      if (mIkev2) { entryOf(mIkev2[1], mIkev2[2]).ikever = mIkev2[3]; continue; }
     }
 
     // Parse tunnel-groups: peer → {hasPsk, type, defaultGroupPolicy}

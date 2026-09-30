@@ -241,6 +241,8 @@ function doAnalyze(){
   const cfg=document.getElementById('paste-area').value.trim();
   if(!cfg){alert(tr('msg.no_config'));return;}
   const forceVendor=document.getElementById('force-vendor-select')?.value||'';
+  // 設定檔說明頁若沿用上一份載入內容（未自行貼上其他文字），換檔時一併重置，避免顯示舊設定的逐行說明
+  if(exText===null||exText===rawCfgText){exText=null;exResult=null;}
   rawCfgText=cfg;
   parsed=parseAny(cfg,forceVendor);
   const lldpText=(document.getElementById('lldp-area')?.value||'').trim();
@@ -626,6 +628,7 @@ function doGlobalSearch(){
   if(inp){inp.value=raw;onSearchInput();}
 }
 function resetAll(){
+  if(exText===null||exText===rawCfgText){exText=null;exResult=null;}
   parsed=null;currentView='upload';
   document.getElementById('view-upload').classList.add('show');
   document.getElementById('view-result').style.display='none';
@@ -1527,12 +1530,13 @@ function renderLLDP(){
 // \u63CF\u8FF0/VLAN \u540D\u7A31\u525B\u597D\u662F\u9019\u985E\u5B57\u4E32\uFF09\uFF0C\u55AE\u7D14\u8DF3\u812B\u96D9\u5F15\u865F\u7121\u6CD5\u9632\u7BC4\uFF1B\u88DC\u4E0A\u958B\u982D\u5B57\u5143\u4E2D\u548C\u2014\u2014\u547D\u4E2D\u6642\u524D\u7DB4\u4E00\u500B
 // \u55AE\u5F15\u865F\u5F37\u5236\u8996\u70BA\u7D14\u6587\u5B57\uFF0CExcel \u986F\u793A\u6642\u6703\u81EA\u52D5\u96B1\u85CF\u9019\u500B\u524D\u7DB4\u55AE\u5F15\u865F\u3002
 function csvCell(c){
-  let s=String(c||'');
+  // 用 ==null 判斷，避免數值 0（如 STP priority 0、cost 0）被當成空值匯出成空白
+  let s=String(c==null?'':c);
   if(/^[=+\-@\t\r]/.test(s))s="'"+s;
   return `"${s.replace(/"/g,'""')}"`;
 }
 function dlCSV(rows,hdrs,fn){
-  const lines=[hdrs.join(','),...rows.map(r=>r.map(csvCell).join(','))];
+  const lines=[hdrs.map(csvCell).join(','),...rows.map(r=>r.map(csvCell).join(','))];
   const b=new Blob(['\uFEFF'+lines.join('\n')],{type:'text/csv;charset=utf-8;'});
   const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);
 }

@@ -2379,6 +2379,8 @@ function loadTemplate(name){
   const t=templates[name];
   if(!t){ showTemplateMsg(tr('msg.templateNotFound'),true); return; }
   applyModelToForm(t.model);
+  // 載入模板後表單已不是匯入當下的內容，清除匯入快照，避免增量指令／變更計畫與舊匯入比對
+  clearImportedModel();
   generate(true);
   showTemplateMsg(tr('msg.templateLoaded'),false);
 }
@@ -3081,6 +3083,11 @@ function snapshotImportedModel(){
   try{_importedModel=JSON.parse(JSON.stringify(collectModel()));}catch(e){_importedModel=null;}
   const b=document.getElementById('delta-btn');
   if(b)b.style.display=_importedModel?'':'none';
+}
+function clearImportedModel(){
+  _importedModel=null;
+  const b=document.getElementById('delta-btn');if(b)b.style.display='none';
+  const box=document.getElementById('delta-result');if(box){box.style.display='none';box.innerHTML='';}
 }
 function toggleDeltaCommands(){
   const box=document.getElementById('delta-result');

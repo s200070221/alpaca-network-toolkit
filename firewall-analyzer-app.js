@@ -511,7 +511,7 @@ const App = (() => {
       async function parseWithYield(vendor, text) {
         await ms(0); // yield to browser
         // 統一在此正規化 CRLF，避免各廠牌解析器內上百處逐行正則因 \r 悄悄漏抓或污染擷取值
-        text = text.replace(/\r\n/g, '\n');
+        text = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
         const parsers = {
           fortigate:  () => FortigateParser.parse(text),
           sophos:     () => SophosParser.parse(text),
@@ -729,6 +729,8 @@ const App = (() => {
 function showEc(id, cond){ const el=$(id); if(el) el.style.display = cond ? '' : 'none'; }
 
 function onParsed(){
+    // 命中數比對結果屬於上一份設定檔，換檔後清除，避免規則 ID 對到不同設定
+    _fwHit.text=''; _fwHit.res=null; _fwHit.hc=null;
     const d=PARSED, info=d.deviceInfo;
     $('tb-title').textContent=`${info.vendor} — ${info.hostname}`;
     $('tb-meta').textContent=`${info.firmware} · ${new Date().toLocaleString('zh-TW')}`;
@@ -3011,6 +3013,7 @@ function startMatrixRain(){
 
   function resetAll(){
     LAST_QUERY_TRACE = null;
+    _fwHit.text = ''; _fwHit.res = null; _fwHit.hc = null;
     REPORT_UNKNOWN_SLOTS = [];
     if($('report-bar')){$('report-bar').style.display='none';$('report-bar').innerHTML='';}
     WIFI_DATA = null;

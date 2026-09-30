@@ -299,9 +299,12 @@ const JuniperParser = (() => {
       const zm = zoneKey.match(/from-zone\s+(\S+)\s+to-zone\s+(\S+)/);
       if (!zm) return;
       const srcZone = zm[1], dstZone = zm[2];
+      // Junos 以 deactivate 停用的陳述式在大括號格式中顯示為「inactive: 陳述式 {」前綴
+      const zoneInactive = /^inactive:\s*/.test(zoneKey);
 
       Object.entries(zoneNode._children).forEach(([polKey, polNode]) => {
-        const polName = polKey.replace(/^policy\s+/, '');
+        const polInactive = /^inactive:\s*/.test(polKey);
+        const polName = polKey.replace(/^inactive:\s*/, '').replace(/^policy\s+/, '');
         const matchNode = path(polNode, ['match']);
         const thenNode  = path(polNode, ['then']);
 
@@ -355,7 +358,7 @@ const JuniperParser = (() => {
           }
         }
 
-        const disabled = polNode._values.includes('inactive') || polNode._values.includes('deactivate');
+        const disabled = zoneInactive || polInactive || polNode._values.includes('inactive') || polNode._values.includes('deactivate');
 
         policies.push({
           id: String(id++), name: polName,
