@@ -13,7 +13,7 @@
 // 匿名化完成後轉送的獨立 key `_netAnalyzer_anonResult`（原本兩者共用 `_netAnalyzer_pending`，
 // 有搶寫/誤讀風險，已拆開）。
 (function(){
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000};
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000};
   var parsed = {};
   Object.keys(TTL).forEach(function(k){
     var raw = localStorage.getItem(k);
@@ -28,6 +28,12 @@
   if (d) {
     localStorage.removeItem(parsed['_netAnalyzer_pending'] ? '_netAnalyzer_pending' : '_netAnalyzer_anonResult');
     if (window._loadFromPending) window._loadFromPending(d.text, d.vendor || 'f');
+  }
+  // log → 防火牆反查（XB）：查詢條件先交給 app.js 暫存，載入設定後自動執行
+  var q = parsed['_netAnalyzer_fwQuery'];
+  if (q) {
+    localStorage.removeItem('_netAnalyzer_fwQuery');
+    if (window._fwSetPendingQuery) window._fwSetPendingQuery(q);
   }
 })();
 

@@ -797,6 +797,7 @@ function onParsed(){
     buildVdomBar(PARSED);
     buildRefIndex(PARSED);
     showSection('policies');
+    _applyPendingFwQuery();
   }
 
   function buildVdomBar(parsed) {
@@ -3000,6 +3001,34 @@ function startMatrixRain(){
     ST.raw.f = FW_SAMPLE_CONFIG; updBtn(); analyze();
   };
   window._loadFromPending = function(text, vendor) { ST.raw[vendor] = text; analyze(); };
+  // log → 防火牆反查（2026-09-30 新增，第八輪 XB）：log_analyzer 以一次性 key `_netAnalyzer_fwQuery`
+  // 帶來查詢條件（eggs.js 開頁時取出並清除後呼叫 _fwSetPendingQuery），先暫存在記憶體並顯示提示列；
+  // 使用者載入設定檔、onParsed() 完成後切到「規則查詢」頁填入條件並自動執行。不寫回 localStorage
+  let _fwPendingQuery = null;
+  function renderFwqBar() {
+    const b = $('fwq-bar'); if (!b) return;
+    if (!_fwPendingQuery) { b.style.display = 'none'; b.innerHTML = ''; return; }
+    const q = _fwPendingQuery;
+    const cond = `${q.src} → ${q.dst}${q.port ? ':' + q.port : ''}${q.proto && q.proto !== 'any' ? ' ' + q.proto : ''}`;
+    b.style.display = 'block';
+    b.innerHTML = esc(tr('fwq.pending').replace('{cond}', cond).replace('{page}', tr('nav.query'))) +
+      ` <button class="btn btn-ghost btn-sm" onclick="_fwClearPendingQuery()">${esc(tr('fwq.cancel'))}</button>`;
+  }
+  window._fwSetPendingQuery = function(q) {
+    if (!q || !q.src || !q.dst) return;
+    _fwPendingQuery = { src: String(q.src), dst: String(q.dst), port: String(q.port || ''), proto: ['TCP','UDP','ICMP'].includes(q.proto) ? q.proto : 'any' };
+    renderFwqBar();
+    if (PARSED && PARSED.policies) _applyPendingFwQuery();
+  };
+  window._fwClearPendingQuery = function() { _fwPendingQuery = null; renderFwqBar(); };
+  function _applyPendingFwQuery() {
+    if (!_fwPendingQuery) return;
+    const q = _fwPendingQuery; _fwPendingQuery = null; renderFwqBar();
+    showSection('query');
+    const set = (id, v) => { const e = $(id); if (e) e.value = v; };
+    set('q-src', q.src); set('q-dst', q.dst); set('q-proto', q.proto); set('q-port', q.port);
+    window._runQuery();
+  }
   // Phase 4 第 18 項：把目前已上傳的原始設定文字（可能有多台裝置分別掛在不同 slot）串接後
   // 送去 config_anonymizer 去識別化，補齊本工具原本只能被動接收 config_anonymizer 轉送
   // （`_netAnalyzer_anonResult`）、無法主動送出的單向缺口；沿用既有 `_netAnalyzer_pending`

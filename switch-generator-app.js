@@ -5048,7 +5048,7 @@ function _focusRemediationField(findingId){
 // access/trunk，見 `parseAndImport()`）。`_netAnalyzer_anonThenOpen` 本工具仍非其消費目標，
 // 僅在過期時順手清掉。
 (function(){
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000};
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000};
   var parsed = {};
   Object.keys(TTL).forEach(function(k){
     var raw = localStorage.getItem(k);

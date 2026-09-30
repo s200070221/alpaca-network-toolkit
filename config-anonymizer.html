@@ -4551,7 +4551,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 「匿名化完成後轉送給下一個工具」改寫入獨立 key `_netAnalyzer_anonResult`（見 _sendToAnalysisTool()），
   // 不再沿用 `_netAnalyzer_pending`，避免與 hub 直接轉送的寫入互相搶寫/誤讀（故此處不消費該 key）。
   (function(){
-    var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000};
+    var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000};
     var parsed = {};
     Object.keys(TTL).forEach(function(k){
       var raw = localStorage.getItem(k);

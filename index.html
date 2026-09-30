@@ -1382,7 +1382,7 @@ function _dispatchWithAnon(toolIdx, vendor) {
 // 使用者沒有理它），繞回首頁時不需要專屬處理程序也能清掉殘留，縮小明碼內容的曝險窗口。本頁本身
 // 是這些 key 的生產端、不消費任何一個，故只做過期即清，不讀取 .text 內容。
 (function(){
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000};
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000};
   Object.keys(TTL).forEach(function(k){
     var raw = localStorage.getItem(k);
     if (!raw) return;
