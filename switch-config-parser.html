@@ -70,7 +70,14 @@ body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans TC',syste
 #topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:9px 20px;display:flex;align-items:center;gap:10px;flex-shrink:0}
 .tb-title{font-size:13px;font-weight:700;color:var(--text)}
 .tb-meta{font-size:11px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;margin-left:4px}
-.tb-right{margin-left:auto;display:flex;gap:6px;align-items:center}
+.tb-right{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+/* 頂部列跑版修正（2026-09-30）：原本只在手機寬度（≤540px）換行，桌機寬度不足時（彩蛋語言圖示全開、
+   廠牌標籤、瀏覽器縮放 125%）各元素被壓縮，按鈕文字變成直排；改為所有寬度皆可換行，按鈕、標題與
+   廠牌標籤不壓縮，只有主機名稱允許省略（比照 firewall_analyzer 同日修正） */
+#topbar{flex-wrap:wrap;row-gap:6px}
+.lang-switcher,#theme-btn,#tools-nav-btn,#tb-vendor{flex-shrink:0}
+.lang-btn,.tb-right .btn,.tb-title,#tb-vendor{white-space:nowrap}
+.tb-meta{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1 1 120px}
 .btn{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:7px;font-size:12px;cursor:pointer;transition:all .2s;border:1px solid transparent;font-family:'IBM Plex Sans TC',sans-serif;font-weight:500}
 .btn-ghost{background:transparent;color:var(--text-dim);border-color:var(--border)}
 .btn-ghost:hover{color:var(--text);border-color:var(--border2)}

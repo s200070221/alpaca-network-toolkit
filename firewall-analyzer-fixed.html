@@ -56,7 +56,14 @@ body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans TC',syste
 #tb-meta{cursor:pointer}
 #tb-meta::after{content:'  ✦';font-size:8px;opacity:0;transition:opacity .3s;color:var(--accent)}
 #tb-meta:hover::after{opacity:.45}
-.topbar-actions{margin-left:auto;display:flex;gap:6px}
+.topbar-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+/* 頂部列跑版修正（2026-09-30）：原本只在手機寬度（≤540px）換行，桌機寬度不足時（例如彩蛋語言圖示全開、
+   主機名稱較長、瀏覽器縮放 125%）各元素被壓縮，語言按鈕與動作按鈕文字變成直排；改為所有寬度皆可換行，
+   按鈕與標題不壓縮，只有版本／時間資訊允許省略 */
+#topbar{flex-wrap:wrap;row-gap:6px}
+.lang-switcher,#theme-btn,#tools-nav-btn{flex-shrink:0}
+.lang-btn,.topbar-actions .btn,.topbar-title{white-space:nowrap}
+.topbar-meta{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1 1 220px}
 .btn{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:7px;font-size:12px;cursor:pointer;transition:all .2s;border:1px solid transparent;font-family:'IBM Plex Sans TC',sans-serif;font-weight:500;}
 .btn-ghost{background:transparent;color:var(--text-dim);border-color:var(--border)}
 .btn-ghost:hover{color:var(--text);border-color:var(--border2)}
