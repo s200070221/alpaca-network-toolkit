@@ -1434,6 +1434,22 @@
   // 即時計算（比照 buildSarifAuditReport() 慣例，不依賴稽核分頁渲染快取）；各區塊命中數與稽核頁
   // 摘要卡片同一組函式，合規檢查與健康度問題另列明細表
   function _mdCell(v) { return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' '); }
+  function buildFirewallExecSummary(host,health){
+    // 主管摘要（2026-09-30 新增，第八輪 XG）：報表開頭一段白話文字，給不看細節的主管或客戶。
+    // 只用 computeFirewallHealth() 已算好的結果（等級、各項扣分），不另外計算；已標記接受風險者不列入待改善，另行註明
+    const active=health.issues.filter(i=>!i.accepted);
+    const accepted=health.issues.length-active.length;
+    const RANK={crit:0,warn:1,info:2};
+    const lines=[tr('exec.grade').replace('{host}',host||'-').replace('{score}',health.score).replace('{grade}',health.grade)+tr('exec.grade_'+health.grade)];
+    if(!active.length)lines.push(tr('exec.none'));
+    else{
+      lines.push(tr('exec.found').replace('{n}',active.length).replace('{crit}',active.filter(i=>i.sev==='crit').length).replace('{warn}',active.filter(i=>i.sev==='warn').length));
+      const top=active.slice().sort((a,b)=>(RANK[a.sev]??3)-(RANK[b.sev]??3)||b.count-a.count).slice(0,3);
+      lines.push(tr('exec.top').replace('{list}',top.map(i=>tr('exec.item').replace('{label}',i.label).replace('{count}',i.count)).join(tr('exec.sep'))));
+    }
+    if(accepted)lines.push(tr('exec.accepted').replace('{n}',accepted));
+    return lines;
+  }
   function buildFirewallAuditMarkdown(parsed, opts) {
     const pol = parsed.policies || [];
     const info = parsed.deviceInfo || {};
@@ -1459,6 +1475,10 @@
       `- ${tr('md.vendor')}: ${parsed.vendor || info.vendor || '-'}`,
       `- ${tr('md.generated')}: ${new Date().toISOString()}`,
       `- ${tr('md.health')}: ${health.score} (${health.grade})`,
+      '',
+      `## ${tr('exec.title')}`,
+      '',
+      ...buildFirewallExecSummary(info.hostname, health).map(x => '- ' + x),
       '',
       `## ${tr('md.summary')}`,
       '',

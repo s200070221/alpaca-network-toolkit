@@ -176,7 +176,7 @@ function invDeviceAddrs(parsed) {
   return out;
 }
 function invConsistency(entries) {
-  const res = { vlanNames: [], dupIps: [], overlaps: [] };
+  const res = { vlanNames: [], dupIps: [], overlaps: [], versions: [] };
   // VLAN 名稱
   const byId = {};
   entries.forEach(e => (e.parsed.vlans || []).forEach(v => {
@@ -208,7 +208,31 @@ function invConsistency(entries) {
       res.overlaps.push({ a: { host: big.host, iface: big.iface, cidr: big.text + '/' + big.len }, b: { host: small.host, iface: small.iface, cidr: small.text + '/' + small.len } });
     }
   }
+  res.versions = invVersionMismatch(entries);
   return res;
+}
+
+// 同型號韌體版本不一致（2026-09-30 新增，第八輪 XE）：同廠牌＋同型號卻有兩種以上版本，通常代表有設備漏升級。
+// 型號／版本沿用清冊欄位的取法（invModel()／sys.version），版本依設定檔原文比對不做正規化；
+// 型號或版本讀不出來的設備不列入。回傳 [{vendor, model, versions:[{version, hosts, majority}]}]，
+// versions 依設備數由多到少排序，設備數最多且唯一者標 majority（平手則都不標）
+function invVersionMismatch(entries) {
+  const groups = {};
+  entries.forEach(e => {
+    const model = invModel(e.parsed);
+    const ver = String((e.parsed.sys || {}).version || '').trim();
+    if (!model || !/\d/.test(ver)) return; // 無數字者是 OS 名稱（如 ArubaOS-CX、RGOS）非版本
+    const key = (e.parsed.vendor || '') + '|' + model;
+    const g = (groups[key] = groups[key] || { vendor: e.parsed.vendor || '', model, byVer: {} });
+    (g.byVer[ver] = g.byVer[ver] || []);
+    if (!g.byVer[ver].includes(e.hostname)) g.byVer[ver].push(e.hostname);
+  });
+  return Object.values(groups).filter(g => Object.keys(g.byVer).length > 1).map(g => {
+    const versions = Object.keys(g.byVer).map(v => ({ version: v, hosts: g.byVer[v], majority: false }))
+      .sort((a, b) => b.hosts.length - a.hosts.length || a.version.localeCompare(b.version));
+    if (versions[0].hosts.length > versions[1].hosts.length) versions[0].majority = true;
+    return { vendor: g.vendor, model: g.model, versions };
+  }).sort((a, b) => (a.vendor + a.model).localeCompare(b.vendor + b.model));
 }
 
 // ── 帳號與密碼保存方式盤點（2026-09-29 新增，第七輪 AD） ────────────────────
