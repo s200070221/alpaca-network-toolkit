@@ -386,6 +386,59 @@ function buildIncrementalCommands(oldModel,newModel,vendor){
   return {text:[...head,...tail,'',...(out.length?body:[]),''].join('\n'),counts,unsupported,total,risks};
 }
 
+// ── 變更計畫書（MOP，2026-09-30 新增，第八輪 XC）─────────────────────────────
+// 把差異指令擴充成一份可交付的變更單（Markdown）：摘要與斷線風險 → 預檢 → 變更 → 驗證與存檔 → 回退。
+// 回退指令以同一個 buildIncrementalCommands() 反向計算（新 → 舊），只涵蓋差異指令本身支援的範圍；
+// 預檢／驗證只用唯讀的 show／display 指令，並依實際有變動的項目挑選：
+//   Cisco：show vlan brief／show interfaces status／show interfaces trunk／show ip interface brief／
+//          show ip route static／show etherchannel summary，存檔 copy running-config startup-config
+//   Comware（H3C Comware V7 指令手冊）：display vlan brief／display interface brief／display port trunk／
+//          display ip interface brief／display ip routing-table protocol static／display link-aggregation summary，
+//          存檔 save force（存到既有的下次啟動設定檔，不詢問）
+function buildChangePlan(oldModel,newModel,vendor){
+  const isCw=vendor==='comware';
+  const fwd=buildIncrementalCommands(oldModel,newModel,vendor);
+  if(!fwd.total&&!fwd.unsupported.length)return null;
+  const back=buildIncrementalCommands(newModel,oldModel,vendor);
+  const body=t=>t.split('\n').filter(l=>l&&!/^[!#] /.test(l)).join('\n');
+  const changed=[...new Set((fwd.text.match(/^interface \S+/gm)||[]).map(l=>l.slice(10)))];
+  const c=fwd.counts;
+  const vlanChg=c.vlanAdd+c.vlanDel+c.vlanMod>0, ifChg=c.ifaceMod>0, rtChg=c.routeAdd+c.routeDel>0;
+  const trunkChg=/trunk/.test(fwd.text);
+  const sviChg=/^interface (Vlan|Vlan-interface)\d+/m.test(fwd.text)||/^(no|undo) interface (Vlan|Vlan-interface)\d+/m.test(fwd.text);
+  // 只有變動的介面本身是聚合成員時才列聚合狀態檢查
+  const lagMembers=new Set([...(oldModel.lacp||[]),...(newModel.lacp||[])].flatMap(l=>(l.members||[]).map(_deltaKey)));
+  const lagRisk=changed.some(n=>lagMembers.has(_deltaKey(n)));
+  const pick=(cisco,comware)=>isCw?comware:cisco;
+  const checks=[pick('show running-config','display current-configuration')];
+  if(vlanChg)checks.push(pick('show vlan brief','display vlan brief'));
+  if(ifChg)checks.push(pick('show interfaces status','display interface brief'));
+  if(trunkChg)checks.push(pick('show interfaces trunk','display port trunk'));
+  if(sviChg)checks.push(pick('show ip interface brief','display ip interface brief'));
+  if(rtChg)checks.push(pick('show ip route static','display ip routing-table protocol static'));
+  if(lagRisk)checks.push(pick('show etherchannel summary','display link-aggregation summary'));
+  const verify=checks.slice(1).concat(changed.slice(0,10).map(n=>pick(`show running-config interface ${n}`,`display current-configuration interface ${n}`)));
+  const save=pick('copy running-config startup-config','save force');
+  const host=newModel.sysname||oldModel.sysname||'-';
+  const L=[`# ${tr('mop.title')} — ${host}`,'',
+    `- ${tr('mop.vendor')}: ${isCw?'H3C Comware':'Cisco IOS-XE'}`,
+    `- ${tr('mop.generated')}: ${new Date().toISOString()}`,
+    `- ${tr('mop.counts').replace('{vlanAdd}',c.vlanAdd).replace('{vlanDel}',c.vlanDel).replace('{vlanMod}',c.vlanMod).replace('{ifaceMod}',c.ifaceMod).replace('{routeAdd}',c.routeAdd).replace('{routeDel}',c.routeDel)}`,
+    '',`> ${tr('notice.disclaimer')}`,''];
+  L.push(`## 1. ${tr('mop.sec_risk')}`,'');
+  if(fwd.risks&&fwd.risks.length)fwd.risks.forEach(w=>L.push('- ⚠ '+deltaRiskText(w)));
+  else L.push(tr('mop.no_risk'));
+  if(fwd.unsupported.length){L.push('',tr('mop.manual_hint'),'');fwd.unsupported.forEach(u=>L.push('- '+u));}
+  L.push('',`## 2. ${tr('mop.sec_precheck')}`,'',tr('mop.precheck_hint'),'','```',...checks,'```','');
+  L.push(`## 3. ${tr('mop.sec_change')}`,'');
+  if(fwd.total)L.push('```',body(fwd.text),'```','');else L.push(tr('mop.nothing'),'');
+  L.push(`## 4. ${tr('mop.sec_verify')}`,'',tr('mop.verify_hint'),'','```',...verify,'```','',tr('mop.save_hint'),'','```',save,'```','');
+  L.push(`## 5. ${tr('mop.sec_rollback')}`,'',tr('mop.rollback_hint'),'');
+  if(back.total)L.push('```',body(back.text),'```','');else L.push(tr('mop.nothing'),'');
+  if(back.unsupported.length){L.push(tr('mop.manual_hint'),'');back.unsupported.forEach(u=>L.push('- '+u));L.push('');}
+  return {text:L.join('\n'),checks,verify,rollback:back};
+}
+
 // ── 差異指令的斷線風險提示（2026-09-29 新增，第七輪 ND）──────────────────────
 // 比較匯入快照與目前表單，找出可能造成斷線的變更，回傳 [{kind, target, extra}]：
 //   uplink   上行／聚合相關介面有變動：原本是 trunk、描述像上聯（uplink／core／to-／上聯…）或是 LACP 成員
