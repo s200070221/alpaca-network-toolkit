@@ -3096,10 +3096,20 @@ function toggleDeltaCommands(){
     html=`<div style="font-weight:600;margin-bottom:6px">${escapeHtml(tr('delta.title'))}</div><div style="margin-bottom:6px;color:var(--text-dim);font-family:inherit">${escapeHtml(tr('delta.hint'))}</div>`
       +(r.risks&&r.risks.length?`<div style="border:1px solid var(--yellow,#f59e0b);background:rgba(245,158,11,.1);border-radius:6px;padding:8px 10px;margin-bottom:8px"><div style="font-weight:600;margin-bottom:4px">⚠ ${escapeHtml(tr('delta.risk_title'))}</div><ul style="margin:0 0 4px 18px;padding:0">${r.risks.map(w=>`<li>${escapeHtml(deltaRiskText(w))}</li>`).join('')}</ul><div style="font-size:11px;color:var(--text-dim)">${escapeHtml(tr('delta.risk_hint'))}</div></div>`:'')
       +(r.text?`<textarea id="delta-text" readonly aria-label="${escapeHtml(tr('delta.title'))}" style="width:100%;height:220px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${escapeHtml(r.text)}</textarea>
-        <button class="act-btn" style="margin-top:6px" onclick="copyDeltaCommands(this)">${escapeHtml(tr('delta.copy'))}</button>`:`<div>${escapeHtml(tr('delta.none'))}</div>`);
+        <button class="act-btn" style="margin-top:6px" onclick="copyDeltaCommands(this)">${escapeHtml(tr('delta.copy'))}</button>
+        <button class="act-btn" style="margin-top:6px" onclick="downloadChangePlan()" title="${escapeHtml(tr('mop.btn_tip'))}">${escapeHtml(tr('mop.btn'))}</button>`:`<div>${escapeHtml(tr('delta.none'))}</div>`);
   }
   box.innerHTML=html;
   box.style.display='block';
+}
+// 變更計畫書（XC）：buildChangePlan() 在 switch-generator-core.js，這裡只負責下載
+function downloadChangePlan(){
+  if(!_importedModel)return;
+  const model=collectModel();
+  const plan=buildChangePlan(_importedModel,model,model.vendor);
+  if(!plan)return;
+  const name=(model.sysname||'switch').replace(/[^\w.-]+/g,'_');
+  dlTxt(plan.text,`${name}_change_plan.md`);
 }
 function copyDeltaCommands(btn){
   const ta=document.getElementById('delta-text');if(!ta)return;
