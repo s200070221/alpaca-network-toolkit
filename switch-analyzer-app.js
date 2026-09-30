@@ -302,7 +302,7 @@ function showResultViews(){
     irfLbl.textContent=parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('nav.irf.cisco'):parsed.vendor==='nxos'?tr('nav.irf.cisco'):parsed.vendor==='comware'?tr('nav.irf.comware'):parsed.vendor==='aruba'?tr('nav.irf.aruba'):parsed.vendor==='procurve'?tr('nav.irf.default'):parsed.vendor==='fortiswitch'?tr('nav.irf.forti'):parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?'Virtual Chassis':parsed.vendor==='juniper'&&parsed.stack?.type==='MC-LAG'?'Juniper MC-LAG':parsed.vendor==='alcatel'&&parsed.stack?'Alcatel Stack':parsed.vendor==='extreme'&&parsed.stack?'ExtremeStack':parsed.vendor==='brocade'&&parsed.stack?tr('nav.irf.brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('nav.irf.dell_vlt'):parsed.vendor==='dell-os10'&&parsed.stack?tr('nav.irf.dell_stack'):tr('nav.irf.default');
   }
   // Show nav items
-  ['lbl-result','nav-overview','nav-irf','nav-vlans','nav-vlan-matrix','nav-ports','nav-lacp','nav-routes','nav-routing','nav-vrrp','nav-vxlan','nav-vrfs','nav-dhcp','nav-users','nav-lldp','nav-stp','nav-acl','nav-security','nav-qos','nav-snmp','nav-audit'].forEach(id=>{
+  ['lbl-result','nav-overview','nav-irf','nav-vlans','nav-vlan-matrix','nav-ports','nav-lacp','nav-routes','nav-routing','nav-vrrp','nav-vxlan','nav-vrfs','nav-dhcp','nav-users','nav-lldp','nav-cabling','nav-stp','nav-acl','nav-security','nav-qos','nav-snmp','nav-audit'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.style.display='';
   });
   // LLDP badge
@@ -510,6 +510,43 @@ function renderLACP(){
     `<div class="tbl-wrap">${html}</div>
      <div class="tbl-foot"><span>${count} / ${total} ${tr('unit.count')}</span></div>`;
 }
+// 配線表（XD）：epBuildCablingSheet() 在 switch-analyzer-endpoint.js；終端 MAC／IP 需先在「終端定位」頁
+// 貼上同一台（主機名稱相同）的 show 輸出，沒對上時只列設定與 LLDP 欄位
+function _cablingEndpointsText(r){
+  if(r.uplink)return r.macCount?tr('cab.uplink_n').replace('{n}',r.macCount):tr('ep.uplink');
+  return r.endpoints.map(e=>epFmtMac(e.mac)+(e.ip?' '+e.ip:'')).join('; ');
+}
+function renderCabling(){
+  const sheet=epBuildCablingSheet(parsed,epModel);
+  const rows=sheet.rows.map(r=>({...r,
+    admin:r.shutdown?tr('cab.admin_down'):tr('cab.admin_up'),
+    ep:_cablingEndpointsText(r),
+    port_html:`<span class="mono" style="font-weight:700">${esc(r.port)}</span>`,
+    admin_html:r.shutdown?pill('down',tr('cab.admin_down')):'<span style="color:var(--text-muted)">'+esc(tr('cab.admin_up'))+'</span>',
+    link_html:esc(r.link||'—'),
+    ep_html:r.uplink?pill('warn',_cablingEndpointsText(r)):`<span class="mono">${r.endpoints.map(e=>esc(epFmtMac(e.mac))+(e.ip?' <span style="color:var(--text-dim)">'+esc(e.ip)+'</span>':'')).join('<br>')}</span>`,
+  }));
+  const hdrs=[
+    {key:'port',label:tr('cab.col_port')},{key:'desc',label:tr('cab.col_desc')},{key:'mode',label:tr('cab.col_mode')},
+    {key:'vlan',label:'VLAN'},{key:'admin',label:tr('cab.col_admin')},{key:'link',label:tr('cab.col_link')},
+    {key:'neighbor',label:tr('cab.col_neighbor')},{key:'ep',label:tr('cab.col_endpoints')},
+  ];
+  tableData=rows; tableKeys=hdrs.map(h=>h.key);
+  const {html,count,total}=renderTable(hdrs,rows,null);
+  const note=(sheet.device?tr('cab.ep_matched').replace('{dev}',sheet.device):tr('cab.ep_none')).replace('{page}',tr('nav.endpoint'));
+  return `<div style="padding:12px 18px 0"><div style="font-size:14px;font-weight:600;margin-bottom:4px">${esc(tr('cab.title'))}</div>
+    <div style="font-size:12px;color:var(--text-dim)">${esc(tr('cab.hint'))} ${esc(note)}</div></div>`+
+    mkTbar('search-inp',null,'exportCablingCSV')+
+    `<div class="tbl-wrap">${html}</div>
+     <div class="tbl-foot"><span>${count} / ${total} ${tr('unit.count')}</span></div>`;
+}
+function exportCablingCSV(){
+  if(!parsed){alert(tr('msg.no_config'));return;}
+  const sheet=epBuildCablingSheet(parsed,epModel);
+  dlCSV(sheet.rows.map(r=>[r.port,r.desc,r.mode,r.vlan,r.shutdown?tr('cab.admin_down'):tr('cab.admin_up'),r.link,r.neighbor,_cablingEndpointsText(r)]),
+    [tr('cab.col_port'),tr('cab.col_desc'),tr('cab.col_mode'),'VLAN',tr('cab.col_admin'),tr('cab.col_link'),tr('cab.col_neighbor'),tr('cab.col_endpoints')],
+    (parsed.sys.hostname||'switch')+'_cabling.csv');
+}
 function setC(id,v){const el=document.getElementById(id);if(el)el.textContent=v;}
 function buildSumCards(){
   if(!parsed)return;
@@ -576,7 +613,7 @@ function resetAll(){
   document.getElementById('file-chip').style.display='none';
   document.getElementById('nc-irf').textContent='0';
   const vbE=document.getElementById('tb-vendor');if(vbE)vbE.innerHTML='';
-  ['lbl-result','nav-overview','nav-irf','nav-vlans','nav-vlan-matrix','nav-ports','nav-lacp','nav-routes','nav-routing','nav-vrrp','nav-vxlan','nav-vrfs','nav-users','nav-lldp','nav-stp','nav-acl','nav-security','nav-qos','nav-snmp','nav-audit'].forEach(id=>{
+  ['lbl-result','nav-overview','nav-irf','nav-vlans','nav-vlan-matrix','nav-ports','nav-lacp','nav-routes','nav-routing','nav-vrrp','nav-vxlan','nav-vrfs','nav-users','nav-lldp','nav-cabling','nav-stp','nav-acl','nav-security','nav-qos','nav-snmp','nav-audit'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.style.display='none';
   });
   document.getElementById('nav-upload').classList.add('active');
@@ -615,6 +652,7 @@ function renderView(view){
     case'vrfs':     tc.innerHTML=renderVRFs();break;
     case'users':    tc.innerHTML=renderUsers();break;
     case'lldp':     tc.innerHTML=renderLLDP();break;
+    case'cabling':  tc.innerHTML=renderCabling();break;
     case'stp':      tc.innerHTML=renderSTP();break;
     case'snmp':     tc.innerHTML=renderSNMPSyslog();break;
     case'acl':      tc.innerHTML=renderACL();break;

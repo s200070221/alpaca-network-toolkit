@@ -243,3 +243,40 @@ function epFreePorts(model, cfgByDevice) {
   }
   return { rows, stats };
 }
+
+// ── 配線表（2026-09-30 新增，第八輪 XD） ───────────────────────────────────
+// 每個實體／聚合介面一列：描述、模式、VLAN、管理狀態，加上已解析的 LLDP／CDP 鄰居（parsed.lldp），
+// 以及終端定位資料（epModel，選填）中「主機名稱與設定檔相同」那台的連線狀態與該埠學到的 MAC／IP。
+// 同一埠學到的 MAC 達 EP_UPLINK_MAC_MIN 個、或是 trunk／聚合埠時不逐一列出，只標上行與數量。
+// 介面名稱一律經 epNormIface() 比對（設定檔全名、LLDP 與 show 輸出的縮寫可互相對上）。
+// 回傳 { rows, device }，device 為對上的終端定位裝置名稱（沒對上為空字串）。
+function epBuildCablingSheet(parsed, epModel) {
+  const host = String((parsed && parsed.sys && parsed.sys.hostname) || '').toLowerCase();
+  const dev = host && epModel && epModel.devices ? epModel.devices.find(d => d.name.toLowerCase() === host) : null;
+  const macCnt = dev ? epMacCountByPort(dev) : {};
+  const ipByMac = {};
+  if (epModel && epModel.devices) epModel.devices.forEach(d => d.arps.forEach(a => { if (!ipByMac[a.mac]) ipByMac[a.mac] = a.ip; }));
+  const lldp = (parsed && parsed.lldp) || [];
+  const rows = ((parsed && parsed.interfaces) || [])
+    .filter(i => i.type !== 'svi' && i.type !== 'loopback' && !/^(vlan|lo|mgmt)\d/.test(epNormIface(i.name)))
+    .map(i => {
+      const k = epNormIface(i.name);
+      let vlan = '';
+      if (i.mode === 'access') vlan = String(i.vlans || '');
+      else if (i.mode === 'trunk') vlan = String(i.vlans || 'all') + (i.nativeVlan ? ` (native ${i.nativeVlan})` : '');
+      else if (i.mode === 'hybrid' && i.hybrid) vlan = 'PVID ' + (i.hybrid.pvid || '-');
+      else if (i.ip) vlan = i.ip;
+      const nb = lldp.filter(n => epNormIface(n.localPort) === k).map(n => n.neighbor + (n.remotePort ? ' ' + n.remotePort : ''));
+      const st = dev ? epPortInfo(dev, i.name) : null;
+      const macs = dev ? dev.macs.filter(m => epNormIface(m.port) === k) : [];
+      const uplink = (macCnt[k] || 0) >= EP_UPLINK_MAC_MIN || epIsAggregate(i.name) || i.mode === 'trunk';
+      return {
+        port: i.name, desc: i.desc || '', mode: i.mode || (i.ip ? 'routed' : ''), vlan,
+        shutdown: !!i.shutdown, link: st ? st.status : '',
+        neighbor: nb.join('; '),
+        macCount: macCnt[k] || 0, uplink,
+        endpoints: uplink ? [] : macs.map(m => ({ mac: m.mac, ip: ipByMac[m.mac] || '', vlan: m.vlan })),
+      };
+    });
+  return { rows, device: dev ? dev.name : '' };
+}
