@@ -555,6 +555,7 @@ const App = (() => {
       onParsed();
       renderReportBar();
       recordFirewallActivity(PARSED);
+      recordFirewallSummary(PARSED);
       checkAnalyzeEggs(PARSED);
       clearTimeout(window._workTimer30); clearTimeout(window._workTimer60);
       window._workTimer30 = setTimeout(()=>showEggToast(tr('egg.work_30min'),5000), 1800000);
@@ -569,6 +570,27 @@ const App = (() => {
   // 跨工具活動時間軸（2026-09-24 新增）：寫入 `_netAnalyzer_activityHistory` rolling-history
   // （持續累積歷史，無 TTL，比照 log_analyzer／switch_config_generator 既有寫入端），
   // 供 network_analyzer hub 合併顯示；多台裝置合併分析時 hostname/vendor 沿用 merge() 串接結果
+  // 綜合健檢報告（2026-09-30 新增，第八輪 XA）：寫入 `_netAnalyzer_summaries` rolling-history
+  // （持續累積、無 TTL，比照 `_netAnalyzer_activityHistory`），同一工具＋同一名稱只留最新一筆、最多 20 筆，
+  // 供 network_analyzer hub 彙整成綜合健檢報告。只存等級、分數、風險數與前三項問題名稱，不存設定原文
+  function recordFirewallSummary(p){
+    try{
+      const h=computeFirewallHealth(p,{acceptedRisks:_loadAcceptedRisks()});
+      const RANK={crit:0,warn:1,info:2};
+      const act=h.issues.filter(i=>!i.accepted);
+      const host=p&&p.deviceInfo&&p.deviceInfo.hostname;
+      const entry={tool:'firewall_analyzer',name:(host&&host!=='-')?host:'',vendor:(p&&p.vendor)||null,ts:Date.now(),
+        score:h.score,grade:h.grade,n:act.length,crit:act.filter(i=>i.sev==='crit').length,warn:act.filter(i=>i.sev==='warn').length,
+        accepted:h.issues.length-act.length,
+        top:act.slice().sort((x,y)=>(RANK[x.sev]??3)-(RANK[y.sev]??3)||y.count-x.count).slice(0,3).map(i=>({label:i.label,count:i.count,sev:i.sev}))};
+      let a=[];
+      try{a=JSON.parse(localStorage.getItem('_netAnalyzer_summaries')||'[]');}catch(e){a=[];}
+      if(!Array.isArray(a))a=[];
+      a=a.filter(x=>!(x&&x.tool===entry.tool&&x.name===entry.name));
+      a.unshift(entry);
+      localStorage.setItem('_netAnalyzer_summaries',JSON.stringify(a.slice(0,20)));
+    }catch(e){/* localStorage 滿了或被封鎖時靜默略過 */}
+  }
   function recordFirewallActivity(p){
     try{
       let _hist=[];
