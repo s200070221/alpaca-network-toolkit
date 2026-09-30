@@ -966,6 +966,9 @@ function onParsed(){
   const SEC_LABELS={interfaces:()=>tr('sec.interfaces'),policies:()=>tr('sec.policies'),routes:()=>tr('sec.routes'),vpn:()=>tr('sec.vpn'),nat:()=>tr('sec.nat'),addresses:()=>tr('sec.addresses'),services:()=>tr('sec.services'),schedules:()=>tr('sec.schedules'),users:()=>tr('sec.users'),audit:()=>tr('nav.audit'),query:()=>tr('nav.query'),fortiswitch:()=>tr('nav.fortiswitch')};
 
   function renderSection(sec){
+    // 這幾頁是直接把標題／說明／多個區塊寫進 #tbl-wrap，本身沒有左右內距（原本貼齊左邊界）；
+    // 其他頁面各自已有內距或是單一表格，維持原樣
+    $('tbl-wrap').style.padding=['snmp','log','audit','query'].includes(sec)?'12px 18px':'';
     $('tbl-section-label').textContent=(typeof SEC_LABELS[sec]==='function'?SEC_LABELS[sec]():SEC_LABELS[sec])||sec;
     const d=PARSED;
     let data,sumCards,thead,rowFn,_extraHtml='';

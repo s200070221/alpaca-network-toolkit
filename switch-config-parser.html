@@ -180,6 +180,13 @@ input[type=file]{display:none}
 
 /* Table */
 .tbl-wrap{flex:1;overflow:auto}
+/* 分頁內容容器可捲動：原本 overflow:hidden，稽核／SNMP／VLAN 矩陣／DHCP／總覽等多區塊頁面
+   超出視窗高度的內容被裁掉或互相重疊。除單一表格頁直接放在容器下的 .tbl-wrap（維持表格內
+   捲動、保留最小高度）外，其他區塊一律不壓縮，改由整頁捲動 */
+#tab-content>*{flex-shrink:0}
+#tab-content>.tbl-wrap{flex:1 1 auto;min-height:260px}
+/* 直接放在分頁容器下的統計卡片列比照上方總覽卡片加左右內距（原本貼齊左邊界） */
+#tab-content>.sum-cards{padding:12px 18px 0}
 .data-tbl{width:100%;border-collapse:collapse;font-size:12px}
 .data-tbl th{background:var(--surface2);padding:8px 12px;text-align:left;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.7px;color:var(--text-dim);border-bottom:1px solid var(--border);white-space:nowrap;position:sticky;top:0;z-index:2;font-family:'JetBrains Mono',monospace;cursor:pointer;user-select:none;transition:color .15s}
 .data-tbl th:hover{color:var(--accent)}
@@ -727,7 +734,7 @@ Cisco IOS/IOS-XE：hostname、switchport mode trunk、ip route..."></textarea>
       <div class="sum-wrap" id="sum-wrap"></div>
       <!-- Tab content -->
       <div id="print-header"></div>
-      <div id="tab-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"></div>
+      <div id="tab-content" style="flex:1;display:flex;flex-direction:column;overflow:auto;min-height:0"></div>
     </div>
   </div>
 </div>

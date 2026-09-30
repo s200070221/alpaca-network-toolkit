@@ -1239,7 +1239,7 @@ document.addEventListener('mouseleave',_hmHide);
 function renderPorts(){
   const ph=parsed.interfaces.filter(i=>i.type!=='null');
   const btnStyle=active=>`padding:5px 14px;border:none;border-radius:6px;cursor:pointer;font-size:12px;background:${active?'var(--accent)':'var(--surface2)'};color:${active?'#fff':'var(--text-dim)'}`;
-  const toggleHtml=`<div style="display:flex;gap:6px;margin-bottom:10px">
+  const toggleHtml=`<div style="display:flex;gap:6px;margin-bottom:10px;padding:12px 18px 0">
     <button onclick="portView='table';navGo('ports')" style="${btnStyle(portView==='table')}">${tr('port.view_table')}</button>
     <button onclick="portView='heatmap';navGo('ports')" style="${btnStyle(portView==='heatmap')}">${tr('port.view_heatmap')}</button>
   </div>`;
@@ -1854,13 +1854,14 @@ function renderAudit(){
   fmtRows.forEach(r=>{r.check_html=esc(r.check);r.value_html=r.value;r.risk_html=r.risk;r.detail_html=r.detail;r.standards_html=r.standards;r.action_html=r.action;r.status_html=r.status;});
   tableData=findings; tableKeys=['check','value','risk','detail','standards','action','status'];
   const {html}=renderTable(hdrs,fmtRows,null);
-  return `<div style="font-size:13px;font-weight:600;color:var(--purple);margin-bottom:6px">${tr('audit.sw_title')}</div>`
+  // 表格以外的區塊比照其他頁面加上左右內距（原本標題、卡片、說明與按鈕列貼齊左邊界）
+  return `<div style="padding:12px 18px 0"><div style="font-size:13px;font-weight:600;color:var(--purple);margin-bottom:6px">${tr('audit.sw_title')}</div>`
     +cards+disclaimer
-    +`<div style="display:flex;gap:6px;margin:6px 0 8px"><button class="btn btn-ghost btn-sm" onclick="exportAuditSARIF()">🧾 ${esc(tr('audit.export_sarif'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditMarkdown()">📝 ${esc(tr('audit.export_md'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditWorkpaper()">📋 ${esc(tr('wp.export_btn'))}</button><button class="btn btn-ghost btn-sm" onclick="saveSwitchAuditBaseline()">💾 ${esc(tr('swbase.save_btn'))}</button><label class="btn btn-ghost btn-sm" style="cursor:pointer">📂 ${esc(tr('swbase.compare_btn'))}<input type="file" accept=".json" onchange="compareSwitchAuditBaseline(this)"></label><input id="sw-audit-reviewer" value="${esc(swAuditReviewer())}" placeholder="${esc(tr('wp.reviewer_ph'))}" aria-label="${esc(tr('wp.col_reviewer'))}" onchange="swSetAuditReviewer(this.value)" style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);width:140px"></div><div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">${esc(tr('wp.hint'))}</div>`
-    +`<div id="sw-baseline-result"></div>`
+    +`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px"><button class="btn btn-ghost btn-sm" onclick="exportAuditSARIF()">🧾 ${esc(tr('audit.export_sarif'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditMarkdown()">📝 ${esc(tr('audit.export_md'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditWorkpaper()">📋 ${esc(tr('wp.export_btn'))}</button><button class="btn btn-ghost btn-sm" onclick="saveSwitchAuditBaseline()">💾 ${esc(tr('swbase.save_btn'))}</button><label class="btn btn-ghost btn-sm" style="cursor:pointer">📂 ${esc(tr('swbase.compare_btn'))}<input type="file" accept=".json" onchange="compareSwitchAuditBaseline(this)"></label><input id="sw-audit-reviewer" value="${esc(swAuditReviewer())}" placeholder="${esc(tr('wp.reviewer_ph'))}" aria-label="${esc(tr('wp.col_reviewer'))}" onchange="swSetAuditReviewer(this.value)" style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);width:140px"></div><div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">${esc(tr('wp.hint'))}</div>`
+    +`<div id="sw-baseline-result"></div></div>`
     +`<div style="overflow-x:auto"><div class="tbl-wrap">${html}</div></div>`
-    +buildShutdownConfiguredCard(analyzeShutdownConfigured(parsed))
-    +`<div id="sw-health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
+    +`<div style="padding:0 18px">`+buildShutdownConfiguredCard(analyzeShutdownConfigured(parsed))+`</div>`
+    +`<div id="sw-health-section" style="margin-top:18px;padding:14px 18px 12px;border-top:1px solid var(--border)">
         <button id="sw-health-btn" onclick="_doSwitchHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
         <div id="sw-health-result" style="margin-top:12px"></div>
        </div>`;
@@ -2045,7 +2046,7 @@ function renderSNMPSyslog(){
     :syslogUnsupported?`<div class="nodata" style="padding:12px;font-size:12px">⚠️ ${tr('snmp.syslog_unsupported')}</div>`:`<div class="nodata" style="padding:12px">-</div>`;
   return cards+
     `<div class="ov-card" style="margin-top:12px"><div class="ov-card-title">SNMP Community</div>${nameTbl(snmp.communities)}</div>`+
-    `<div class="ov-card" style="margin-top:12px"><div class="ov-card-title">SNMPv3 ${tr('snmp.v3users')}</div>${nameTbl(snmp.v3Users)}</div>`+
+    `<div class="ov-card" style="margin-top:12px"><div class="ov-card-title">${tr('snmp.v3users')}</div>${nameTbl(snmp.v3Users)}</div>`+
     `<div class="ov-card" style="margin-top:12px"><div class="ov-card-title">SNMP ${tr('snmp.hosts')}</div>${hostTbl(snmp.hosts)}</div>`+
     `<div class="ov-card" style="margin-top:12px"><div class="ov-card-title">${tr('snmp.syslog_servers')}</div>${syslogTbl(syslog.servers)}</div>`;
 }
@@ -2096,7 +2097,7 @@ function renderSTP(){
   </div>`;
   let instTable='';
   if(s.instances.length){
-    instTable=`<h3 style="margin:16px 0 8px;font-size:14px;color:var(--text)">${tr('stp.col_vlan')} / Instance</h3>
+    instTable=`<h3 style="margin:16px 18px 8px;font-size:14px;color:var(--text)">${tr('stp.col_vlan')} / Instance</h3>
     <div class="tbl-wrap"><table class="data-table"><thead><tr>
       <th>${tr('stp.col_vlan')}</th><th>${tr('stp.col_prio')}</th>
     </tr></thead><tbody>
@@ -2108,7 +2109,7 @@ function renderSTP(){
   }
   let portTable='';
   if(s.ports.length){
-    portTable=`<h3 style="margin:16px 0 8px;font-size:14px;color:var(--text)">${tr('stp.col_port')}</h3>
+    portTable=`<h3 style="margin:16px 18px 8px;font-size:14px;color:var(--text)">${tr('stp.col_port')}</h3>
     <div class="search-wrap"><span class="search-ico">🔍</span><input class="search-inp" id="search-inp" placeholder="${tr('search.placeholder')}" oninput="debouncedRenderView('stp')"></div>
     <div class="tbl-wrap"><table class="data-table"><thead><tr>
       <th>${tr('stp.col_port')}</th>
@@ -4084,7 +4085,7 @@ function epExportCSV(){
 // renderPorts()/portView 慣例，不發明新的 UI 模式
 function renderDiffCard(){
   const btnStyle=active=>`padding:5px 14px;border:none;border-radius:6px;cursor:pointer;font-size:12px;background:${active?'var(--accent)':'var(--surface2)'};color:${active?'#fff':'var(--text-dim)'}`;
-  return `<div>
+  return `<div style="padding:16px 18px">
     <h2 style="margin:0 0 16px">${tr('diff.title')}</h2>
     <div style="display:flex;gap:6px;margin-bottom:12px">
       <button onclick="diffMode='text';navGo('diff')" style="${btnStyle(diffMode==='text')}">${esc(tr('diff.mode_text'))}</button>
