@@ -57,6 +57,22 @@ const Converter = (() => {
     }
     return (a.ip&&a.ip!=='-'&&a.ip!=='DHCP')?a.ip+'/32':'0.0.0.0/0';
   }
+  // VPN phase2 子網等欄位可能是「IP/前綴」「IP/點分遮罩」或「IP 空白 點分遮罩」，統一轉成合法
+  // 「IP/前綴」；原本各轉換函式直接把空白換成斜線（產生 IP/255.255.255.0）或把點分遮罩當前綴
+  // 換算（產生 255.255.255.254），目標廠牌會拒絕或解讀成錯誤網段
+  function subCidr(sub){
+    const t=String(sub||'').trim();
+    if(t.includes('/')){ const [ip,p]=t.split('/'); return ip+'/'+(p.includes('.')?bits(p):p); }
+    const p=t.split(/\s+/);
+    return p.length>=2?cidr(p[0],p[1]):t+'/32';
+  }
+  // 規則名稱去重：Cisco ASA 等來源同一個 ACL 名稱底下有多筆 ACE，轉成 Sophos／Palo Alto／Juniper
+  // 這類「規則名稱必須唯一」的目標時，同名規則讀回會互相覆蓋或被裝置拒絕。第一次出現沿用原名，
+  // 之後依序加 _2、_3 後綴；回傳與 policies 同長度的名稱陣列
+  function uniqPolicyNames(policies){
+    const seen={};
+    return (policies||[]).map(p=>{ const n=String(p.name==null?'':p.name); seen[n]=(seen[n]||0)+1; return seen[n]===1?n:`${n}_${seen[n]}`; });
+  }
   // 各廠牌路由的網段+遮罩來源形狀不一（CIDR「IP/prefix」、CIDR-with-dotted-mask「IP/255.x」、
   // 空白分隔「網段 遮罩」、獨立欄位 r.mask），統一還原成 {net,mask}（dotted mask）
   function netMaskOf(dst, maskField) {
@@ -488,8 +504,8 @@ const Converter = (() => {
           L.push(`        set pfs ${p2.pfs==='enable'?'enable':'disable'}`);
           if(p2.dhgrp&&p2.dhgrp!=='-') L.push(`        set dhgrp ${normDH(p2.dhgrp,'fortigate')}`);
           if(p2.lifetime&&p2.lifetime!=='-') L.push(`        set keylifeseconds ${p2.lifetime}`);
-          if(p2.localSub&&p2.localSub!=='-') { const s=p2.localSub.includes('/')?p2.localSub.replace('/',` ${maskOf(p2.localSub.split('/')[1])}`):p2.localSub; L.push(`        set src-subnet ${s}`); }
-          if(p2.remoteSub&&p2.remoteSub!=='-') { const s=p2.remoteSub.includes('/')?p2.remoteSub.replace('/',` ${maskOf(p2.remoteSub.split('/')[1])}`):p2.remoteSub; L.push(`        set dst-subnet ${s}`); }
+          if(p2.localSub&&p2.localSub!=='-') { const [ip,b]=subCidr(p2.localSub).split('/'); const s=`${ip} ${maskOf(b)}`; L.push(`        set src-subnet ${s}`); }
+          if(p2.remoteSub&&p2.remoteSub!=='-') { const [ip,b]=subCidr(p2.remoteSub).split('/'); const s=`${ip} ${maskOf(b)}`; L.push(`        set dst-subnet ${s}`); }
           L.push('    next');
         });
       });
@@ -708,8 +724,8 @@ const Converter = (() => {
           L.push(`        <Encryption>${normEnc(pe,'sophos')}</Encryption>`);
           L.push(`        <Authentication>${normHash(ph,'sophos')}</Authentication>`);
           L.push(`        <DHGroup>${normDH(p2.dhgrp||v.dhgrp,'sophos')}</DHGroup>`);
-          if(p2.localSub&&p2.localSub!=='-') L.push(`        <LocalNetwork>${esc(p2.localSub.includes('/')?p2.localSub:p2.localSub.replace(/\s+/,'/'))}</LocalNetwork>`);
-          if(p2.remoteSub&&p2.remoteSub!=='-') L.push(`        <RemoteNetwork>${esc(p2.remoteSub.includes('/')?p2.remoteSub:p2.remoteSub.replace(/\s+/,'/'))}</RemoteNetwork>`);
+          if(p2.localSub&&p2.localSub!=='-') L.push(`        <LocalNetwork>${esc(subCidr(p2.localSub))}</LocalNetwork>`);
+          if(p2.remoteSub&&p2.remoteSub!=='-') L.push(`        <RemoteNetwork>${esc(subCidr(p2.remoteSub))}</RemoteNetwork>`);
           L.push(`        <KeyLife>${esc(p2.lifetime||'3600')}</KeyLife>`);
           L.push(`        <PFS>${esc(p2.pfs==='enable'?'enable':'disable')}</PFS>`);
           L.push('      </Phase2>');
@@ -755,10 +771,11 @@ const Converter = (() => {
     // Firewall rules
     if(parsed.policies.length) {
       L.push('  <FirewallRules>');
+      const polNames=uniqPolicyNames(parsed.policies);
       parsed.policies.forEach((p,i)=>{
         L.push('    <FirewallRule>');
         L.push(`      <Id>${i+1}</Id>`);
-        L.push(`      <Name>${esc(p.name)}</Name>`);
+        L.push(`      <Name>${esc(polNames[i])}</Name>`);
         L.push(`      <SourceZone>${esc(mapZone(p.srcIntf,'sophos'))}</SourceZone>`);
         L.push(`      <DestinationZone>${esc(mapZone(p.dstIntf,'sophos'))}</DestinationZone>`);
         sl(p.srcAddr).forEach(a=>L.push(`      <SourceNetworks>${esc(a)}</SourceNetworks>`));
@@ -963,7 +980,7 @@ const Converter = (() => {
       ivpns.forEach(v=>{ const [e,h]=splitProp(v.proposal); L.push(`        <entry name="${esc('IKE-'+v.name)}"><peer-address><ip>${esc(v.remote||'0.0.0.0')}</ip></peer-address><interface>${esc(v.iface||'ethernet1/1')}</interface><authentication><pre-shared-key><key>CHANGE_ME</key></pre-shared-key></authentication><version>${v.ikeVer==='2'?'ikev2':'ikev1'}</version><nat-traversal><enable>${v.natTraversal==='enable'?'yes':'no'}</enable></nat-traversal></entry>`); });
       L.push('      </gateway></ike>');
       L.push('      <ipsec><tunnel>');
-      ivpns.forEach(v=>{ L.push(`        <entry name="${esc(v.name)}"><auto-key><ike-gateway><entry name="${esc('IKE-'+v.name)}"/></ike-gateway>${v.phase2&&v.phase2.length?v.phase2.map(p2=>`<proxy-id><entry name="${esc(p2.name||'proxy1')}">${p2.localSub&&p2.localSub!=='-'?`<local>${esc(p2.localSub.replace(/\s+/,'/'))}</local>`:''}${p2.remoteSub&&p2.remoteSub!=='-'?`<remote>${esc(p2.remoteSub.replace(/\s+/,'/'))}</remote>`:''}</entry></proxy-id>`).join(''):''}</auto-key></entry>`); });
+      ivpns.forEach(v=>{ L.push(`        <entry name="${esc(v.name)}"><auto-key><ike-gateway><entry name="${esc('IKE-'+v.name)}"/></ike-gateway>${v.phase2&&v.phase2.length?v.phase2.map(p2=>`<proxy-id><entry name="${esc(p2.name||'proxy1')}">${p2.localSub&&p2.localSub!=='-'?`<local>${esc(subCidr(p2.localSub))}</local>`:''}${p2.remoteSub&&p2.remoteSub!=='-'?`<remote>${esc(subCidr(p2.remoteSub))}</remote>`:''}</entry></proxy-id>`).join(''):''}</auto-key></entry>`); });
       L.push('      </tunnel></ipsec>');
     }
     L.push('    </network>');
@@ -1015,7 +1032,8 @@ const Converter = (() => {
     // Security rules
     if(parsed.policies.length) {
       L.push('      <security><rules>');
-      parsed.policies.forEach(p=>{ L.push(`        <entry name="${esc(p.name)}"${p.status==='disable'?' disabled="yes"':''}>`); const srcZ=typeof p.srcIntf==='string'?p.srcIntf.split(','):['trust']; const dstZ=typeof p.dstIntf==='string'?p.dstIntf.split(','):['untrust']; L.push(`          <from>${srcZ.map(z=>`<member>${esc(mapZone(z.trim(),'paloalto'))}</member>`).join('')||'<member>any</member>'}</from>`); L.push(`          <to>${dstZ.map(z=>`<member>${esc(mapZone(z.trim(),'paloalto'))}</member>`).join('')||'<member>any</member>'}</to>`); const sa2=sl(p.srcAddr); const da2=sl(p.dstAddr); const sv2=sl(p.service); L.push(`          <source>${sa2.length?sa2.map(a=>`<member>${esc(a)}</member>`).join(''):'<member>any</member>'}</source>`); L.push(`          <destination>${da2.length?da2.map(a=>`<member>${esc(a)}</member>`).join(''):'<member>any</member>'}</destination>`); L.push(`          <service>${sv2.length?sv2.map(s=>`<member>${esc(s)}</member>`).join(''):'<member>any</member>'}</service>`); L.push(`          <application><member>any</member></application>`); L.push(`          <action>${mapAction(p.action,'paloalto')}</action>`); if(p.logtraffic&&p.logtraffic!=='disable') L.push('          <log-end>yes</log-end>'); if(p.schedule&&p.schedule!=='always'&&p.schedule!=='-') L.push(`          <schedule>${esc(p.schedule)}</schedule>`); if(p.utm) { if(p.utm.av&&p.utm.av!=='-') L.push(`          <profile-setting><virus>${esc(p.utm.av)}</virus></profile-setting>`); } if(p.comments&&p.comments!=='-') L.push(`          <description>${esc(p.comments)}</description>`); L.push('        </entry>'); });
+      const polNames=uniqPolicyNames(parsed.policies);
+      parsed.policies.forEach((p,pi)=>{ L.push(`        <entry name="${esc(polNames[pi])}"${p.status==='disable'?' disabled="yes"':''}>`); const srcZ=typeof p.srcIntf==='string'?p.srcIntf.split(','):['trust']; const dstZ=typeof p.dstIntf==='string'?p.dstIntf.split(','):['untrust']; L.push(`          <from>${srcZ.map(z=>`<member>${esc(mapZone(z.trim(),'paloalto'))}</member>`).join('')||'<member>any</member>'}</from>`); L.push(`          <to>${dstZ.map(z=>`<member>${esc(mapZone(z.trim(),'paloalto'))}</member>`).join('')||'<member>any</member>'}</to>`); const sa2=sl(p.srcAddr); const da2=sl(p.dstAddr); const sv2=sl(p.service); L.push(`          <source>${sa2.length?sa2.map(a=>`<member>${esc(a)}</member>`).join(''):'<member>any</member>'}</source>`); L.push(`          <destination>${da2.length?da2.map(a=>`<member>${esc(a)}</member>`).join(''):'<member>any</member>'}</destination>`); L.push(`          <service>${sv2.length?sv2.map(s=>`<member>${esc(s)}</member>`).join(''):'<member>any</member>'}</service>`); L.push(`          <application><member>any</member></application>`); L.push(`          <action>${mapAction(p.action,'paloalto')}</action>`); if(p.logtraffic&&p.logtraffic!=='disable') L.push('          <log-end>yes</log-end>'); if(p.schedule&&p.schedule!=='always'&&p.schedule!=='-') L.push(`          <schedule>${esc(p.schedule)}</schedule>`); if(p.utm) { if(p.utm.av&&p.utm.av!=='-') L.push(`          <profile-setting><virus>${esc(p.utm.av)}</virus></profile-setting>`); } if(p.comments&&p.comments!=='-') L.push(`          <description>${esc(p.comments)}</description>`); L.push('        </entry>'); });
       L.push('      </rules></security>');
     }
     L.push('    </entry></vsys>');
@@ -1156,12 +1174,14 @@ const Converter = (() => {
     // policies
     if(parsed.policies.length){
       const pg={};
+      const polNameOf=new Map(uniqPolicyNames(parsed.policies).map((n,i)=>[parsed.policies[i],n]));
       parsed.policies.forEach(p=>{ const s=mapZone(p.srcIntf,'juniper')||'trust', dt=mapZone(p.dstIntf,'juniper')||'untrust'; const k=`from-zone ${s} to-zone ${dt}`; (pg[k]=pg[k]||[]).push(p); });
       L.push(`${I(1)}policies {`);
       Object.entries(pg).forEach(([zk,pols])=>{
         L.push(`${I(2)}${zk} {`);
         pols.forEach(p=>{
-          L.push(`${I(3)}policy ${p.name.replace(/[\s"]/g,'-')} {`);
+          // 停用規則用 Junos 的「inactive:」前綴（deactivate 後的顯示格式）
+          L.push(`${I(3)}${p.status==='disable'?'inactive: ':''}policy ${polNameOf.get(p).replace(/[\s"]/g,'-')} {`);
           L.push(`${I(4)}match {`);
           (sl(p.srcAddr).length?sl(p.srcAddr):['any']).forEach(a=>L.push(`${I(5)}source-address ${a};`));
           (sl(p.dstAddr).length?sl(p.dstAddr):['any']).forEach(a=>L.push(`${I(5)}destination-address ${a};`));
@@ -1171,7 +1191,6 @@ const Converter = (() => {
           if(p.action==='accept'){L.push(`${I(5)}permit;`);}else{L.push(`${I(5)}deny;`);}
           if(p.logtraffic&&p.logtraffic!=='disable') L.push(`${I(5)}log { session-close; }`);
           L.push(`${I(4)}}`);
-          if(p.status==='disable') L.push(`${I(4)}inactive: true;`);
           L.push(`${I(3)}}`);
         });
         L.push(`${I(2)}}`);
@@ -1208,7 +1227,7 @@ const Converter = (() => {
           L.push(`${I(2)}proposal isp-${vi}-${pi} { protocol esp; authentication-algorithm ${normHash(ph2,'juniper')}; encryption-algorithm ${normEnc(pe2,'juniper')}; lifetime-seconds ${p2.lifetime||'3600'}; }`);
           L.push(`${I(2)}policy isppol-${vi}-${pi} { perfect-forward-secrecy { keys ${normDH(p2.dhgrp||v.dhgrp,'juniper')}; } proposals isp-${vi}-${pi}; }`);
           L.push(`${I(2)}vpn ${v.name} { bind-interface st0.${vi}; ike { gateway ikg-${vi}; ipsec-policy isppol-${vi}-${pi}; }`);
-          if(p2.localSub&&p2.localSub!=='-'){const ls=p2.localSub.replace(/\s+/,'/'); const rs=(p2.remoteSub||'').replace(/\s+/,'/'); L.push(`${I(3)}traffic-selector ts0 { local-ip ${ls}; remote-ip ${rs||'0.0.0.0/0'}; }`);}
+          if(p2.localSub&&p2.localSub!=='-'){const ls=subCidr(p2.localSub); const rs=p2.remoteSub&&p2.remoteSub!=='-'?subCidr(p2.remoteSub):''; L.push(`${I(3)}traffic-selector ts0 { local-ip ${ls}; remote-ip ${rs||'0.0.0.0/0'}; }`);}
           L.push(`${I(2)}}`);
         });
       });
@@ -1370,8 +1389,8 @@ const Converter = (() => {
         L.push(`    <phase1><ikeid>${vi+1}</ikeid><interface>wan</interface><remote-gateway>${esc(v.remote||'-')}</remote-gateway><authentication_method>${v.authMethod==='psk'?'pre_shared_key':'cert'}</authentication_method><encryption-algorithm>${normEnc(e3,'pfsense')}</encryption-algorithm><hash-algorithm>${normHash(h3,'pfsense')}</hash-algorithm><dhgroup>${normDH(v.dhgrp,'pfsense')}</dhgroup><lifetime>${v.lifetime||'28800'}</lifetime><iketype>${v.ikeVer==='2'?'ikev2':'ikev1'}</iketype><mode>${v.mode||'main'}</mode></phase1>`);
         (v.phase2||[]).forEach(p2=>{
           const [p2e,p2h]=splitProp(p2.proposal||v.proposal);
-          const ls2=p2.localSub&&p2.localSub!=='-'?p2.localSub.split(/[\/\s]/):['0.0.0.0','24'];
-          const rs2=p2.remoteSub&&p2.remoteSub!=='-'?p2.remoteSub.split(/[\/\s]/):['0.0.0.0','24'];
+          const ls2=p2.localSub&&p2.localSub!=='-'?subCidr(p2.localSub).split('/'):['0.0.0.0','24'];
+          const rs2=p2.remoteSub&&p2.remoteSub!=='-'?subCidr(p2.remoteSub).split('/'):['0.0.0.0','24'];
           L.push(`    <phase2><ikeid>${vi+1}</ikeid><encryption-algorithm>${normEnc(p2e,'pfsense')}</encryption-algorithm><hash-algorithm>${normHash(p2h,'pfsense')}</hash-algorithm><pfsgroup>${normDH(p2.dhgrp||v.dhgrp,'pfsense')}</pfsgroup><lifetime>${p2.lifetime||'3600'}</lifetime><localid><network>${ls2[0]}</network><subnet>${ls2[1]||'24'}</subnet></localid><remoteid><network>${rs2[0]}</network><subnet>${rs2[1]||'24'}</subnet></remoteid></phase2>`);
         });
       });
@@ -1395,13 +1414,29 @@ const Converter = (() => {
   function toCiscoASA(parsed) {
     const L=[], d=parsed.deviceInfo;
     // Local helpers — turn a policy's service/address strings into ASA ACL syntax
+    // 具名服務：先查設定檔自己的服務物件（各廠牌分類名稱不同，custom／service 皆收），再查常見
+    // 服務名稱；原本查不到就退成不帶埠的 tcp，HTTPS 規則會變成 permit tcp any any（放寬）。
+    // 仍查不到時標記 unresolved，由呼叫端輸出成停用規則並加 remark，不做靜默放寬
+    const WELL_KNOWN_SVC={http:['tcp','80'],https:['tcp','443'],ssh:['tcp','22'],telnet:['tcp','23'],smtp:['tcp','25'],smtps:['tcp','465'],
+      ftp:['tcp','21'],dns:['udp','53'],ntp:['udp','123'],snmp:['udp','161'],rdp:['tcp','3389'],pop3:['tcp','110'],pop3s:['tcp','995'],
+      imap:['tcp','143'],imaps:['tcp','993'],ldap:['tcp','389'],ping:['icmp',null],icmp:['icmp',null],all_icmp:['icmp',null]};
     const svcOf = svc => {
-      const first=(sl(svc)[0]||'any').toLowerCase();
-      if(!first||first==='any'||first==='all'||first==='-') return {proto:'ip',port:null};
-      const m=first.match(/^(tcp|udp|icmp)\/?(\d+)?$/);
+      const raw=sl(svc)[0]||'any', first=raw.toLowerCase();
+      if(!first||first==='any'||first==='all'||first==='-'||first==='ip') return {proto:'ip',port:null};
+      const m=first.match(/^(tcp|udp|icmp)(?:\/(\d+(?:-\d+)?))?$/);
       if(m) return {proto:m[1],port:m[2]||null};
       if(/^\d+$/.test(first)) return {proto:'tcp',port:first};
-      return {proto:'tcp',port:null};
+      const obj=(parsed.services||[]).find(o=>(o.category==='custom'||o.category==='service')&&o.name===raw);
+      if(obj){
+        const pr=(obj.proto||'').toLowerCase();
+        const proto=pr.includes('icmp')?'icmp':(pr.includes('udp')&&!pr.includes('tcp'))?'udp':'tcp';
+        const port=proto==='udp'?obj.udpPorts:obj.tcpPorts;
+        if(proto==='icmp') return {proto,port:null};
+        if(port&&/^\d+(-\d+)?$/.test(port)) return {proto,port};
+      }
+      const wk=WELL_KNOWN_SVC[first];
+      if(wk) return {proto:wk[0],port:wk[1]};
+      return {proto:'ip',port:null,unresolved:raw};
     };
     const addrOf = addr => {
       const first=sl(addr)[0]||'any';
@@ -1500,9 +1535,9 @@ const Converter = (() => {
       L.push(`crypto ipsec transform-set ${xform} esp-${normEnc(pe,'ciscoasa')} esp-${normHash(ph,'ciscoasa')}-hmac`);
       const aclName=`${v.name}-acl`;
       if(p2&&p2.localSub&&p2.localSub!=='-'&&p2.remoteSub&&p2.remoteSub!=='-') {
-        const [lnet,lpfx]=p2.localSub.includes('/')?p2.localSub.split('/'):p2.localSub.split(/\s+/);
-        const [rnet,rpfx]=p2.remoteSub.includes('/')?p2.remoteSub.split('/'):p2.remoteSub.split(/\s+/);
-        L.push(`access-list ${aclName} extended permit ip ${lnet} ${maskOf(lpfx||'24')} ${rnet} ${maskOf(rpfx||'24')}`);
+        const [lnet,lpfx]=subCidr(p2.localSub).split('/');
+        const [rnet,rpfx]=subCidr(p2.remoteSub).split('/');
+        L.push(`access-list ${aclName} extended permit ip ${lnet} ${maskOf(lpfx)} ${rnet} ${maskOf(rpfx)}`);
       }
       const mapName='OUTSIDE-MAP';
       L.push(`crypto map ${mapName} ${polNum} match address ${aclName}`);
@@ -1530,10 +1565,11 @@ const Converter = (() => {
     parsed.policies.forEach(p=>{
       const intf=intfOf(p.srcIntf);
       const aclName=`${intf}_access_in`;
-      const {proto,port}=svcOf(p.service);
+      const {proto,port,unresolved}=svcOf(p.service);
+      if(unresolved) L.push(`access-list ${aclName} remark UNRESOLVED service ${String(unresolved).replace(/[\r\n]/g,'')} - rule below set inactive, please review`);
       let line=`access-list ${aclName} extended ${mapAction(p.action,'ciscoasa')} ${proto} ${addrOf(p.srcAddr)} ${addrOf(p.dstAddr)}`;
-      if(port) line+=` eq ${port}`;
-      if(p.status==='disable') line+=' inactive';
+      if(port) line+=port.includes('-')?` range ${port.replace('-',' ')}`:` eq ${port}`;
+      if(p.status==='disable'||unresolved) line+=' inactive';
       L.push(line);
       boundIntf.add(intf);
     });
