@@ -73,8 +73,8 @@ td input.i-name{min-width:170px}
 /* 「產生設定」按鈕卡片改為固定懸浮在畫面下方，避免長表單捲動時找不到按鈕；
    z-index 低於 .validation-panel(5000)/.mini-alpaca(9999)，避免懸浮元件互相遮擋 */
 #generate-card{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:4000;width:auto;max-width:calc(100vw - 32px);margin:0;box-shadow:0 6px 20px rgba(0,0,0,.35)}
-.out-actions{display:flex;gap:8px;margin-bottom:10px}
-.act-btn{background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer;padding:6px 14px;font-size:12px;font-family:inherit}
+.out-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.act-btn{background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer;padding:6px 14px;font-size:12px;font-family:inherit;white-space:nowrap}
 .act-btn:hover{border-color:var(--accent);color:var(--accent)}
 #output{width:100%;height:280px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:Menlo,'Courier New',monospace;font-size:12px;padding:12px;resize:vertical}
 .footer{text-align:center;padding:14px;color:var(--text-dim);font-size:11px;font-family:Menlo,'Courier New',monospace}
