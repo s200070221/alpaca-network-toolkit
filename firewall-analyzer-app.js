@@ -59,7 +59,7 @@ const App = (() => {
   // 簽章（unknown）維持現狀不提示，避免對合法但精簡的匯出檔誤報。
   const FW_VENDOR_SIGS = {
     fortigate:  { p:[/^#config-version=/m, /^config system global/m, /FortiGate-/i], min:1 },
-    paloalto:   { p:[/^set deviceconfig system/m, /^set vsys vsys/m, /Palo Alto Networks/i], min:1 },
+    paloalto:   { p:[/^set deviceconfig system/m, /^set vsys vsys/m, /Palo Alto Networks/i, /<config\b[^>]*>[\s\S]{0,300}<devices>/], min:1 },
     // Junos 設定檔有兩種輸出風格：扁平 "set" 格式（config_anonymizer 原始簽章僅涵蓋此
     // 風格）與階層式大括號格式（"system { host-name X; }"）；JuniperParser 本身兩種皆
     // 支援解析，簽章比對若只認 set 格式會對大括號格式真實匯出檔誤判為 unknown，已補上

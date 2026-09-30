@@ -1217,7 +1217,8 @@ const VENDOR_SIGS = {
   fortiswitch: { p:[/^config system global/m, /^config switch physical-port/m], min:2 },
   fortigate:   { p:[/^#config-version=/m, /^config system global/m, /FortiGate-/i], min:1 },
   comware:     { p:[/^\s*sysname\s+\S/m, /HPE Comware|H3C Comware/i, /^\s*version\s+\d+[\d.]+,\s*Release/m], min:1 },
-  paloalto:    { p:[/^set deviceconfig system/m, /^set vsys vsys/m, /Palo Alto Networks/i], min:1 },
+  // XML 匯出檔（running-config.xml）根標籤帶屬性 <config version="…" urldb=…>，後接 <devices>
+  paloalto:    { p:[/^set deviceconfig system/m, /^set vsys vsys/m, /Palo Alto Networks/i, /<config\b[^>]*>[\s\S]{0,300}<devices>/], min:1 },
   // Junos 設定檔有兩種輸出風格：扁平 "set" 格式與階層式大括號格式（"system { host-name X; }"）；
   // 原本簽章只認 set 格式，對大括號格式真實匯出檔會誤判為 unknown（比照 firewall_analyzer
   // FW_VENDOR_SIGS.juniper 已修復的落差補上對應訊號，2026-07-21 查核發現此處從未同步修正）
@@ -1330,7 +1331,9 @@ function isValidIPv4(s) {
 
 function classifyIP(ip) {
   const [a, b] = ip.split('.').map(Number);
-  if (a === 127 || a >= 224) return 'skip';
+  // 0 開頭（0.0.0.0 預設路由／遮罩、0.0.0.255 這類 ACL／OSPF 萬用遮罩）不是主機位址，保留原樣；
+  // 原本會被換成假 IP，去識別化後預設路由與萬用遮罩全部失真
+  if (a === 0 || a === 127 || a >= 224) return 'skip';
   if (a === 10) return 'n2';
   if (a === 172 && b >= 16 && b <= 31) return 'n3';
   if (a === 192 && b === 168) return 'n1';
@@ -1451,6 +1454,16 @@ function anonUser(name) {
   mappings.user.set(key, mapped);
   stats.user++;
   return mapped;
+}
+// 引用既有帳號的欄位（群組成員等）：只替換已在對照表中的帳號，避免把非帳號的值誤當帳號
+function anonKnownUser(name) {
+  const key = String(name || '').trim();
+  return mappings.user.has(key) ? mappings.user.get(key) : name;
+}
+// 電子郵件：帳號部分沿用帳號對照、網域改為保留給文件用途的 example.com
+function anonEmail(addr) {
+  const m = String(addr || '').match(/^([^@\s]+)@\S+$/);
+  return m ? anonUser(m[1]) + '@example.com' : addr;
 }
 
 // 匯入既有對照表（跨工具聯動，見 log_analyzer 對應的 applyImportedMappings()，各自維護
@@ -1635,6 +1648,7 @@ function anonFortiGate(text, opts) {
   const out = [];
   const stack = [];
   let inSysAdmin = false, inSysGlobal = false, inWifiVap = false;
+  let inUserLocal = false, inUserGroup = false; // config user local／config user group
   let inGlobal = false;        // multivdom 的 config global（hostname 直接在此）
   let inSnmpCommunity = false; // config system snmp community（set name = community string）
   // VDOM tracking：depth=0 時 edit 行才是 VDOM 名稱
@@ -1647,6 +1661,8 @@ function anonFortiGate(text, opts) {
     if (/^config\s/.test(t)) {
       stack.push(t);
       if (t === 'config system admin')            inSysAdmin = true;
+      if (t === 'config user local')              inUserLocal = true;
+      if (t === 'config user group')              inUserGroup = true;
       if (t === 'config system global')           inSysGlobal = true;
       if (t === 'config wireless-controller vap') inWifiVap = true;
       if (t === 'config global')                  inGlobal = true;
@@ -1656,6 +1672,8 @@ function anonFortiGate(text, opts) {
     } else if (t === 'end' && stack.length) {
       const s = stack.pop();
       if (s === 'config system admin')            inSysAdmin = false;
+      if (s === 'config user local')              inUserLocal = false;
+      if (s === 'config user group')              inUserGroup = false;
       if (s === 'config system global')           inSysGlobal = false;
       if (s === 'config wireless-controller vap') inWifiVap = false;
       if (s === 'config global')                  inGlobal = false;
@@ -1738,9 +1756,15 @@ function anonFortiGate(text, opts) {
 
     // ── Username (admin / PPPoE / WWAN) ───────────────────
     if (opts.user) {
-      if (inSysAdmin) {
+      // 管理者帳號與本機使用者帳號（config user local，原本未處理，帳號名稱原樣留在輸出中）
+      if (inSysAdmin || inUserLocal) {
         line = line.replace(/^(\s*edit\s+)"([^"]+)"/, (m, p, n) => p + '"' + anonUser(n) + '"');
       }
+      // 使用者群組成員引用上方已替換的本機帳號
+      if (inUserGroup) {
+        line = line.replace(/^(\s*set\s+member\s+)(.+)$/, (m, p, rest) => p + rest.replace(/"([^"]+)"/g, (mm, n) => '"' + anonKnownUser(n) + '"'));
+      }
+      line = line.replace(/^(\s*set\s+email-to\s+")([^"]+)(")/, (m, p, e, c) => p + anonEmail(e) + c);
       // PPPoE / WWAN / LTE modem username（set username "user@carrier"）
       const uR = line.replace(/^(\s*set\s+username\s+"?)([^"\n]+)("?)$/, (m, p, n, s) => {
         if (!n.trim()) return m;  // 空字串保留
@@ -1878,8 +1902,17 @@ function anonSophosXML(text, opts) {
   stats.community += (text.match(/REDACTED_COMMUNITY/g) || []).length;
 
   if (opts.hostname) {
-    text = text.replace(/(<HostName>)(<!\[CDATA\[)?([^\]<]+?)(\]\]>)?(<\/HostName>)/g, (m, o, cd, name, ce, c) =>
+    // DeviceName：SophosParser.parseDeviceInfo() 優先讀取的主機名稱標籤，原本未處理
+    text = text.replace(/(<(HostName|DeviceName)>)(<!\[CDATA\[)?([^\]<]+?)(\]\]>)?(<\/\2>)/g, (m, o, t2, cd, name, ce, c) =>
       o + (cd||'') + anonHostname(name.trim(), 'fw', opts) + (ce||'') + c);
+  }
+  // 本機／管理者帳號與群組成員（標籤依 SophosParser.parseUsers()）；原本完全未處理
+  if (opts.user) {
+    text = text.replace(/<(User|Administrator|AdminUser)>([\s\S]*?)<\/\1>/g, (m, tag, body) =>
+      `<${tag}>` + body.replace(/(<(Name|Username)>)([^<]+)(<\/\2>)/g, (mm, o, t2, n, c) => o + anonUser(n.trim()) + c)
+        .replace(/(<(Email|EmailAddress)>)([^<]+)(<\/\2>)/g, (mm, o, t2, e, c) => o + anonEmail(e.trim()) + c) + `</${tag}>`);
+    text = text.replace(/<(Group|UserGroup)>([\s\S]*?)<\/\1>/g, (m, tag, body) =>
+      `<${tag}>` + body.replace(/(<(Member|User)>)([^<]+)(<\/\2>)/g, (mm, o, t2, n, c) => o + anonKnownUser(n.trim()) + c) + `</${tag}>`);
   }
   if (opts.ip) {
     // 標籤清單依官方 Sophos Firewall API 文件（docs.sophos.com/nsg/sophos-firewall；
@@ -1932,12 +1965,13 @@ function anonCheckPoint(text, opts) {
     if (opts.hostname) {
       line = line.replace(/^(set\s+hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'fw', opts));
     }
+    // 密碼雜湊與明碼密碼（set user NAME password VALUE，原本未遮蔽，明碼原樣留在輸出中）
+    const pR = line.replace(/^(set\s+user\s+\S+\s+password-hash\s+)(\S+)/, '$1REDACTED_HASH').replace(/^(set\s+user\s+\S+\s+password\s+)(\S+)/, '$1REDACTED_PASSWORD');
+    if (pR !== line) { stats.password++; line = pR; }
     if (opts.user) {
-      line = line.replace(/^(set\s+user\s+)(\S+)(\s+password-hash\s+)(\S+)/, (m, p, n, mid, h) => p + anonUser(n) + mid + 'REDACTED_HASH');
-      line = line.replace(/^(set\s+user\s+)(\S+)(\s+realname\s+)(.+)/, (m, p, n, mid, rn) => p + anonUser(n) + mid + '"REDACTED"');
-    } else {
-      const pR = line.replace(/^(set\s+user\s+\S+\s+password-hash\s+)(\S+)/, '$1REDACTED_HASH');
-      if (pR !== line) { stats.password++; line = pR; }
+      line = line.replace(/^(set\s+user\s+\S+\s+realname\s+)(.+)/, '$1"REDACTED"');
+      // 同一帳號的 uid／role-name／shell 等每一行都要一致替換帳號名稱（原本只處理 password-hash 與 realname）
+      line = line.replace(/^(set\s+user\s+)(\S+)/, (m, p, n) => p + anonUser(n));
     }
     const comR = line.replace(/^(set\s+snmp\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
     if (comR !== line) { stats.community++; line = comR; }
@@ -1989,12 +2023,11 @@ function anonPaloAlto(text, opts) {
     if (opts.hostname) {
       line = line.replace(/^(set\s+deviceconfig\s+system\s+hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'fw', opts));
     }
-    if (opts.user) {
-      line = line.replace(/^(set\s+mgt-config\s+users\s+)(\S+)(\s+phash\s+)(\S+)/, (m, p, n, mid, h) => p + anonUser(n) + mid + 'REDACTED_HASH');
-    } else {
-      const pR = line.replace(/^(set\s+mgt-config\s+users\s+\S+\s+phash\s+)(\S+)/, '$1REDACTED_HASH');
-      if (pR !== line) { stats.password++; line = pR; }
-    }
+    // 帳號名稱：同一帳號的 permissions／public-key 等其他行也要一致替換，原本只處理 phash 那一行，
+    // 其餘行留下原始帳號名稱（外洩），解析時還會多出一個帳號
+    if (opts.user) line = line.replace(/^(set\s+mgt-config\s+users\s+)(\S+)/, (m, p, n) => p + anonUser(n));
+    const pR = line.replace(/^(set\s+mgt-config\s+users\s+\S+\s+phash\s+)(\S+)/, '$1REDACTED_HASH');
+    if (pR !== line) { stats.password++; line = pR; }
     const pskR = line.replace(/^(set\s+network\s+ike\s+gateway\s+\S+\s+pre-shared-key\s+key\s+)(\S+)/, '$1REDACTED_PSK');
     if (pskR !== line) { stats.key++; line = pskR; }
     // SNMP community（允許 community 在行尾，移除必要尾端空白）
@@ -2147,6 +2180,15 @@ function anonSonicWall(text, opts) {
       text = replaceTagIP(text, tag, opts);
     }
   }
+  // 本機帳號與群組成員（標籤依 SonicWallParser.parseUsers()：User／LocalUser／UserEntry 的
+  // Name／UserName／Email，UserGroup／UserGroupEntry 的 Member／MemberName）；原本完全未處理
+  if (opts.user) {
+    text = text.replace(/<(User|LocalUser|UserEntry)>([\s\S]*?)<\/\1>/g, (m, tag, body) =>
+      `<${tag}>` + body.replace(/(<(Name|UserName)>)([^<]+)(<\/\2>)/g, (mm, o, t2, n, c) => o + anonUser(n.trim()) + c)
+        .replace(/(<(Email|EmailAddress)>)([^<]+)(<\/\2>)/g, (mm, o, t2, e, c) => o + anonEmail(e.trim()) + c) + `</${tag}>`);
+    text = text.replace(/<(UserGroup|UserGroupEntry)>([\s\S]*?)<\/\1>/g, (m, tag, body) =>
+      `<${tag}>` + body.replace(/(<(Member|MemberName)>)([^<]+)(<\/\2>)/g, (mm, o, t2, n, c) => o + anonKnownUser(n.trim()) + c) + `</${tag}>`);
+  }
   if (opts.mac) text = replaceMACsInLine(text, opts);
   // 已知缺口：官方 .exp 匯出是否包含管理者密碼／VPN 預先共用金鑰(PSK)／RADIUS-TACACS 密鑰
   // 的明碼欄位，目前查無官方文件或真實 fixture 佐證——SonicWallParser 的 parseVPN()／
@@ -2163,14 +2205,15 @@ function anonSonicWall(text, opts) {
 function anonMikroTik(text, opts) {
   const lines = text.split('\n');
   const out = [];
-  let inSystemIdentity = false, inSnmpCommunity = false;
+  let inSystemIdentity = false, inSnmpCommunity = false, inUser = false;
 
   for (let line of lines) {
     const t = line.trim();
     // 追蹤 /system identity 區塊
-    if (/^\/system\s+identity\s*$/.test(t)) { inSystemIdentity = true; inSnmpCommunity = false; }
-    else if (/^\/snmp\s+community\s*$/.test(t)) { inSnmpCommunity = true; inSystemIdentity = false; }
-    else if (/^\//.test(t)) { inSystemIdentity = false; inSnmpCommunity = false; }
+    if (/^\/system\s+identity\s*$/.test(t)) { inSystemIdentity = true; inSnmpCommunity = false; inUser = false; }
+    else if (/^\/snmp\s+community\s*$/.test(t)) { inSnmpCommunity = true; inSystemIdentity = false; inUser = false; }
+    else if (/^\/user\s*$/.test(t)) { inUser = true; inSystemIdentity = false; inSnmpCommunity = false; }
+    else if (/^\//.test(t)) { inSystemIdentity = false; inSnmpCommunity = false; inUser = false; }
 
     // Hostname: 單行 /system identity set name=xxx，或區塊內的 set name=
     if (opts.hostname) {
@@ -2187,6 +2230,8 @@ function anonMikroTik(text, opts) {
     // 欄位數寫法（(?:\s+\S+)* 允許 0 個或多個中介欄位），兩種格式皆可正確命中。
     if (opts.user) {
       line = line.replace(/\bname=(\S+)((?:\s+\S+)*\s+password=)(\S+)/, (m, n, mid, h) => 'name=' + anonUser(n) + mid + 'REDACTED_PASSWORD');
+      // /user 區塊的帳號（RouterOS 匯出不含密碼，原本因沒有 password= 而整筆未處理）
+      if (inUser) line = line.replace(/^(\s*add\s+(?:.*\s)?name=)(\S+)/, (m, p, n) => p + (/^user-\d{3}$/.test(n) ? n : anonUser(n)));
     }
     const pR = line.replace(/\bpassword=(\S+)/, 'password=REDACTED_PASSWORD');
     if (pR !== line) { stats.password++; line = pR; }
@@ -2257,6 +2302,8 @@ function anonZyxel(text, opts) {
     // 管理者密碼（2026-08-31 新增）：`username NAME password PW user-type ...`
     const pwR = line.replace(/^(\s*username\s+\S+\s+password\s+)\S+/, '$1REDACTED_PASSWORD');
     if (pwR !== line) { stats.password++; line = pwR; }
+    // 帳號名稱（原本只遮密碼，帳號名稱原樣留在輸出中）
+    if (opts.user) line = line.replace(/^(\s*username\s+)(\S+)(?=\s+(?:password|nopassword|user-type)\b)/, (m, p, n) => p + anonUser(n));
     // VPN PSK（2026-08-31 新增）：`isakmp policy NAME` 子模式內裸 `keystring VALUE`
     const pskR = line.replace(/^(\s*keystring\s+)\S+$/, '$1REDACTED_PSK');
     if (pskR !== line) { stats.key++; line = pskR; }
@@ -2307,6 +2354,8 @@ function anonEdgeRouter(text, opts) {
     // VPN PSK（2026-08-31 新增）：站對站 IPSec／L2TP remote-access 共用同一關鍵字
     const pskR = line.replace(/^(\s*pre-shared-secret\s+)\S+$/, '$1REDACTED_PSK');
     if (pskR !== line) { stats.key++; line = pskR; }
+    // 帳號名稱：system login 的 `user NAME {` 與 L2TP／VPN local-users 的 `username NAME {`
+    if (opts.user) line = line.replace(/^(\s*(?:user|username)\s+)(\S+)(\s*\{)/, (m, p, n, c) => p + anonUser(n) + c);
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
     out.push(line);
@@ -2470,6 +2519,11 @@ function anonCiscoIOS(text, opts) {
     if (opts.hostname) {
       line = line.replace(/^(hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'sw', opts));
     }
+    // 設定檔開頭 `! Last configuration change at … by 帳號`／`! NVRAM config last updated at … by 帳號`
+    // 會帶出最後修改者的帳號名稱，原本未處理
+    if (opts.user) {
+      line = line.replace(/^(!\s*(?:Last configuration change|NVRAM config last updated)\b.*\bby\s+)(\S+)/, (m, p, n) => p + anonUser(n));
+    }
     // enable secret/password
     const enR = line.replace(/^(enable\s+(?:secret|password)\s+(?:\d+\s+)?)(\S+)/, '$1REDACTED_HASH');
     if (enR !== line) { stats.password++; line = enR; }
@@ -2560,6 +2614,8 @@ function anonCiscoNXOS(text, opts) {
   return text.split('\n').map(line => {
     if (opts.hostname) {
       line = line.replace(/^(hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'sw', opts));
+      // 預設 VDC 名稱即主機名稱（`vdc NAME id 1`），沿用同一個對照
+      line = line.replace(/^(vdc\s+)(\S+)(\s+id\s+\d+)/, (m, p, n, r) => p + anonHostname(n, 'sw', opts) + r);
     }
     if (opts.user) {
       line = line.replace(/^(username\s+)(\S+)(\s+password\s+\d+\s+)(\S+)/, (m, p, n, mid, h) => p + anonUser(n) + mid + 'REDACTED_HASH');
@@ -2781,9 +2837,10 @@ function anonExtreme(text, opts) {
         else {
           const aD = line.replace(/^(create\s+account\s+\S+\s+)"([^"]+)"\s+"([^"]+)"$/, (m, p, n, h) => { stats.password++; return p + '"' + anonUser(n) + '" "REDACTED_HASH"'; });
           if (aD !== line) { line = aD; }
-          // 格式 C: create account <role> "plaintext"（僅密碼，無帳號）
+          // 格式 C: create account <role> "name"（官方語法第三個 token 是帳號名稱，密碼另以
+          // encrypted 或互動輸入；原本誤當成明碼密碼換成 REDACTED_HASH，多個帳號會變成同名）
           else {
-            const aC = line.replace(/^(create\s+account\s+\S+\s+)"([^"]+)"$/, (m, p, h) => { stats.password++; return p + '"REDACTED_HASH"'; });
+            const aC = line.replace(/^(create\s+account\s+\S+\s+)"([^"]+)"$/, (m, p, n) => p + '"' + anonUser(n) + '"');
             if (aC !== line) line = aC;
           }
         }
@@ -2794,13 +2851,10 @@ function anonExtreme(text, opts) {
       if (pR !== line) { stats.password++; line = pR; }
       // 格式 D: create account <role> "name" "plaintext"
       else {
-        const pD = line.replace(/^(create\s+account\s+\S+\s+)"[^"]+"\s+"([^"]+)"$/, '$1"ANON_USER" "REDACTED_HASH"');
+        // 未勾選帳號匿名化：帳號名稱維持原樣，只遮蔽密碼
+        const pD = line.replace(/^(create\s+account\s+\S+\s+"[^"]+"\s+)"([^"]+)"$/, '$1"REDACTED_HASH"');
         if (pD !== line) { stats.password++; line = pD; }
-        // 格式 C: 單一明文
-        else {
-          const pC = line.replace(/^(create\s+account\s+\S+\s+)"([^"]+)"$/, '$1"REDACTED_HASH"');
-          if (pC !== line) { stats.password++; line = pC; }
-        }
+        // 格式 C（create account <role> "name"）只有帳號名稱，未勾選帳號匿名化時維持原樣
       }
     }
     // SNMP community-name（引號與非引號格式）
@@ -3018,6 +3072,11 @@ function anonProCurve(text, opts) {
     // 原本完全沒有對應處理，雜湊值直接外洩）
     const aaaR = line.replace(/^(aaa authentication local-user\s+.*?sha1\s+)"?[0-9a-fA-F]+"?/, (m, p) => p + '"REDACTED_HASH"');
     if (aaaR !== line) { stats.password++; line = aaaR; }
+    // 帳號名稱：`password … user-name "NAME"` 與 `aaa authentication local-user "NAME"`（原本只遮雜湊）
+    if (opts.user) {
+      line = line.replace(/^(password\s+(?:manager|operator)\s+user-name\s+)"?([^"\s]+)"?/, (m, p, n) => p + '"' + anonUser(n) + '"')
+                 .replace(/^(aaa authentication local-user\s+)"?([^"\s]+)"?/, (m, p, n) => p + '"' + anonUser(n) + '"');
+    }
     // snmp-server community "STR" or bare STR（互斥判斷）
     let comR = line;
     if (/^snmp-server\s+community\s+"/.test(line)) {
