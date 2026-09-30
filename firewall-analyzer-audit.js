@@ -1839,3 +1839,74 @@
     });
     return { headers, rows };
   }
+
+  // ── 規則命中數匯入（FortiGate，2026-09-30 新增，第八輪 XF）──────────────────
+  // 設定檔本身沒有命中統計，需另外從設備取得後貼上，支援兩種來源（皆依 Fortinet 官方文件／KB 的欄位名稱）：
+  //   1. REST API：GET /api/v2/monitor/firewall/policy 的 JSON 回應——{vdom?, results:[{policyid, hit_count,
+  //      last_used(Unix 秒), first_used, bytes, ...}]}；也接受直接貼 results 陣列或多個回應物件的陣列
+  //   2. CLI：diagnose firewall iprope show 00100004 <policy id...> 的輸出，新版多行（idx:1／hit count:N (...)／
+  //      first hit:YYYY-MM-DD hh:mm:ss last hit:...）與舊版單行（idx=1 pkts/bytes=... hit count:N、first:... last:...）
+  //      皆以寬鬆比對讀取；CLI 輸出不含 VDOM 資訊，時間以瀏覽器本地時區解讀
+  // 回傳 {format:'json'|'cli'|'', vdom:'', items:[{id, hits, lastUsed(ms|null), firstUsed(ms|null), bytes|null}]}
+  function parseFortiHitCounts(text) {
+    const t = String(text || '').trim();
+    const res = { format: '', vdom: '', items: [] };
+    if (!t) return res;
+    if (/^[\[{]/.test(t)) {
+      let data = null;
+      try { data = JSON.parse(t); } catch (e) { return res; }
+      const resps = Array.isArray(data) && data.length && data[0] && Array.isArray(data[0].results) ? data : [data];
+      resps.forEach(r => {
+        const list = Array.isArray(r) ? r : (r && Array.isArray(r.results) ? r.results : []);
+        if (r && typeof r.vdom === 'string' && !res.vdom) res.vdom = r.vdom;
+        list.forEach(x => {
+          if (!x || x.policyid === undefined || x.hit_count === undefined) return;
+          const sec = v => (Number(v) > 0 ? Number(v) * 1000 : null);
+          res.items.push({ id: String(x.policyid), hits: Number(x.hit_count) || 0, lastUsed: sec(x.last_used), firstUsed: sec(x.first_used),
+            bytes: x.bytes !== undefined ? Number(x.bytes) : null });
+        });
+      });
+      if (res.items.length) res.format = 'json';
+      return res;
+    }
+    const toMs = s => { const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/); return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : null; };
+    // 以 idx 切段，每段取 hit count 與首／末次命中時間
+    const parts = t.split(/(?=^\s*idx\s*[:=]\s*\d+)/m);
+    parts.forEach(p => {
+      const im = p.match(/^\s*idx\s*[:=]\s*(\d+)/m);
+      const hm = p.match(/hit count\s*:\s*(\d+)/i);
+      if (!im || !hm) return;
+      const lm = p.match(/last(?: hit)?\s*:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
+      const fm = p.match(/first(?: hit)?\s*:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
+      const bm = p.match(/pkts\/bytes\s*=\s*\d+\/(\d+)/) || p.match(/^\s*bytes\s*:\s*(\d+)/m);
+      res.items.push({ id: im[1], hits: Number(hm[1]), lastUsed: lm ? toMs(lm[1]) : null, firstUsed: fm ? toMs(fm[1]) : null, bytes: bm ? Number(bm[1]) : null });
+    });
+    if (res.items.length) res.format = 'cli';
+    return res;
+  }
+  // 依 policy ID 對上已解析的 FortiGate 規則（只看啟用中的規則）：命中 0 次、或最後命中超過 days 天。
+  // 多 VDOM 設定：命中資料有 vdom（REST API）時只比對該 VDOM；沒有時，ID 在多個 VDOM 重複的規則無法判斷，列入 ambiguous 不下結論。
+  // opts: {days=90, now=Date.now()}；回傳 {rows:[{id,name,vdom,action,hits,lastUsed,kind:'zero'|'stale'|'ok'}], zero, stale, missing:[沒有命中資料的啟用規則 ID], ambiguous:[ID], unknown:[命中資料有但設定檔沒有的 ID]}
+  function analyzeFortiHitCounts(parsed, hc, opts) {
+    const days = (opts && opts.days) || 90, now = (opts && opts.now) || Date.now();
+    // 只比對 IPv4 規則：REST /firewall/policy 與 iprope 00100004 皆為 IPv4 規則表，IPv6（parser 以 v6/ 前綴區分）不列入
+    const pols = (parsed.policies || []).filter(p => !_isDisabledStatus(p) && !/^v6\//.test(String(p.id)) && (!hc.vdom || !p._vdom || p._vdom === hc.vdom));
+    const byId = {};
+    pols.forEach(p => { (byId[String(p.id)] = byId[String(p.id)] || []).push(p); });
+    const out = { rows: [], zero: 0, stale: 0, missing: [], ambiguous: [], unknown: [] };
+    const seen = new Set();
+    hc.items.forEach(it => {
+      const ps = byId[it.id];
+      if (!ps) { if (!out.unknown.includes(it.id)) out.unknown.push(it.id); return; }
+      seen.add(it.id);
+      if (ps.length > 1) { if (!out.ambiguous.includes(it.id)) out.ambiguous.push(it.id); return; }
+      const p = ps[0];
+      const kind = it.hits === 0 ? 'zero' : (it.lastUsed && now - it.lastUsed > days * 86400000 ? 'stale' : 'ok');
+      if (kind === 'zero') out.zero++; else if (kind === 'stale') out.stale++;
+      out.rows.push({ id: String(p.id), name: p.name || '', vdom: p._vdom || '', action: p.action || '', hits: it.hits, lastUsed: it.lastUsed, kind });
+    });
+    Object.keys(byId).forEach(id => { if (!seen.has(id)) out.missing.push(id); });
+    const rank = { zero: 0, stale: 1, ok: 2 };
+    out.rows.sort((a, b) => rank[a.kind] - rank[b.kind] || (a.lastUsed || 0) - (b.lastUsed || 0));
+    return out;
+  }
