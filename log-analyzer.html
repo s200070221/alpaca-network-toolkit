@@ -4254,7 +4254,9 @@ function isValidIPv4(s) {
 }
 function classifyIP(ip) {
   const [a, b] = ip.split('.').map(Number);
-  if (a === 127 || a >= 224) return 'skip';
+  // 0 開頭（0.0.0.0＝未指定／任意位址，常見於 Palo Alto CSV 的 NAT 欄位、防火牆 any 規則）不是
+  // 主機位址，保留原樣；config_anonymizer 同名函式 2026-09-30 已修正，這份副本未同步（2026-10-01）
+  if (a === 0 || a === 127 || a >= 224) return 'skip';
   if (a === 10) return 'n2';
   if (a === 172 && b >= 16 && b <= 31) return 'n3';
   if (a === 192 && b === 168) return 'n1';
@@ -4637,7 +4639,8 @@ function checkResidualLog(text) {
   text.split('\n').forEach((line, i) => {
     if (!line.trim()) return;
     const ipMatches = line.match(new RegExp(ipLike.source, 'g'));
-    if (ipMatches && ipMatches.some(m => !/^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(m))) warnings.push({ line: i + 1, text: line.trim() });
+    // 去識別化刻意保留的位址（0.x 未指定、127.x 迴路、224 以上群播／保留，見 classifyIP()）不算殘留
+    if (ipMatches && ipMatches.some(m => !/^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(m) && !(isValidIPv4(m) && classifyIP(m) === 'skip'))) warnings.push({ line: i + 1, text: line.trim() });
     // 2026-08-09 稽核修復：先前只檢查 IPv4，救援網對 IPv6 完全沒有偵測能力
     const ip6Matches = line.match(new RegExp(IPv6_RE.source, 'g'));
     if (ip6Matches && ip6Matches.some(m => !/^2001:db8::/i.test(m) && !MAC_SHAPE_RE.test(m))) warnings.push({ line: i + 1, text: line.trim() });

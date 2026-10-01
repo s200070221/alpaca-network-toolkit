@@ -136,9 +136,15 @@ function detectVendor(cfg){
   }
   if(/^\s*sysname\s+|irf domain|port link-type|undo shutdown|ip route-static|ip vpn-instance/m.test(cfg))return'comware';
   // ProCurve/ArubaOS-Switch: ; J9xxx header, oobm keyword, or trunk X trk1 lacp syntax
-  if(/^;\s*(?:HP\s|Aruba\s|J\d{4}[A-Z])/m.test(cfg)||/^oobm$/m.test(cfg)||/^trunk\s+[\dA-Za-z,\/\-]+\s+[Tt]rk\d+/m.test(cfg))return'procurve';
+  // 2026-10-01：另認「帶引號的 hostname＋VLAN 區塊內以埠號開頭的 untagged／tagged」組合——沒有
+  // `; J9xxxA` 檔頭的設定（產生器輸出、手動整理過的片段）原本被判成 Cisco，VLAN 成員與介面模式全部遺失
+  if(/^;\s*(?:HP\s|Aruba\s|J\d{4}[A-Z])/m.test(cfg)||/^oobm$/m.test(cfg)||/^trunk\s+[\dA-Za-z,\/\-]+\s+[Tt]rk\d+/m.test(cfg)||
+     (/^hostname\s+"[^"\n]*"\s*$/m.test(cfg)&&/^\s+(?:un)?tagged\s+[A-Z]?\d/m.test(cfg)))return'procurve';
   // NX-OS: feature command + Nexus/VDC/jumbomtu identifier (must be before cisco IOS)
-  if(/^feature\s+\w+/m.test(cfg)&&(/Cisco\s+Nexus/i.test(cfg)||/^vdc\s+\S+\s+id\s+\d+/m.test(cfg)||/^system\s+jumbomtu\s+\d+/m.test(cfg)))return'nxos';
+  // 2026-10-01：另認 NX-OS 專屬的 `version 9.3(8)` 版本格式（IOS 為 `version 15.2`）、`!Command: show
+  // running-config` 檔頭與產生器的 NX-OS 檔頭——未啟用任何 feature 的設定原本被判成 Cisco IOS
+  if((/^feature\s+\w+/m.test(cfg)&&(/Cisco\s+Nexus/i.test(cfg)||/^vdc\s+\S+\s+id\s+\d+/m.test(cfg)||/^system\s+jumbomtu\s+\d+/m.test(cfg)))||
+     /^version\s+\d+\.\d+\(\d+\)/m.test(cfg)||/^!Command:\s*show running-config/m.test(cfg)||/^!\s*Cisco Nexus Operating System \(NX-OS\)/m.test(cfg))return'nxos';
   if(/^vsf\s*$|vlan trunk allowed|vlan trunk native|vlan access\s+\d|vrf attach\s/m.test(cfg))return'aruba';
   if(/^config system global/m.test(cfg) || /^config switch physical-port/m.test(cfg) || /^config router ospf/m.test(cfg))return'fortiswitch';
   // Brocade FastIron/ICX: "vlan N by port", "tagged"/"untagged" under vlan, "stack unit"

@@ -11,15 +11,20 @@ function parseRouterOSVLANs(cfg){
   const seen=new Map();
   const block=cfg.match(/^\/interface\s+bridge\s+vlan\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
   (block?block[1].split('\n'):[]).filter(l=>/^\s*add\s/.test(l)).forEach(l=>{
-    const idM=l.match(/vlan-id=(\d+)/);
+    // 官方屬性名稱是 vlan-ids（複數，可為清單或範圍，如 vlan-ids=10,20,30-35），真實匯出檔皆為此寫法；
+    // 原本只認 vlan-id=單一數字，真實匯出檔的 bridge VLAN 全部解析不到（2026-10-01）。仍相容舊寫法
+    const idM=l.match(/\bvlan-ids?=([\d,\-]+)/);
     if(!idM)return;
-    const id=parseInt(idM[1]);
+    const ids=[];
+    idM[1].split(',').filter(Boolean).forEach(t=>{const r=t.split('-').map(Number);if(r.length===2&&r[0]<=r[1]&&r[1]-r[0]<4094){for(let i=r[0];i<=r[1];i++)ids.push(i);}else if(r[0])ids.push(r[0]);});
     const tagged=(l.match(/\btagged=([^\s]+)/)||[])[1]||'';
     const untagged=(l.match(/\buntagged=([^\s]+)/)||[])[1]||'';
-    if(!seen.has(id))seen.set(id,{id,name:`VLAN${id}`,ports:[],status:'active',tagged:[],untagged:[]});
-    const v=seen.get(id);
-    if(tagged)v.tagged.push(...tagged.split(','));
-    if(untagged)v.untagged.push(...untagged.split(','));
+    ids.forEach(id=>{
+      if(!seen.has(id))seen.set(id,{id,name:`VLAN${id}`,ports:[],status:'active',tagged:[],untagged:[]});
+      const v=seen.get(id);
+      if(tagged)v.tagged.push(...tagged.split(','));
+      if(untagged)v.untagged.push(...untagged.split(','));
+    });
   });
   return [...seen.values()].map(v=>({id:v.id,name:v.name,ports:v.ports,status:v.status,tagged:v.tagged.join(','),untagged:v.untagged.join(',')}));
 }
