@@ -1230,8 +1230,9 @@ function detectTool(text) {
   if (/^!\s*device:\s*\S+.*\(Arista\s/m.test(t) || /^!\s*Software image version:\s*EOS/m.test(t) ||
       (/^interface\s+Ethernet\d+(?:\/\d+)*\s*$/m.test(t) && /^ip routing$/m.test(t)))
     return {idx:1, vendor:'arista'};
-  if (/^feature\s+\w+/m.test(t) && (/Cisco\s+Nexus/i.test(t)||/^vdc\s+\S+\s+id/m.test(t))) return {idx:1, vendor:null};
-  if (/^;\s*(?:HP\s|Aruba\s|J\d{4}[A-Z])/m.test(t)||/^oobm$/m.test(t)||/^trunk\s+\S+\s+[Tt]rk\d+/m.test(t)) return {idx:1, vendor:null};
+  // NX-OS／ProCurve 另認的訊號與 switch_analyzer detectVendor() 同步（2026-10-01）
+  if ((/^feature\s+\w+/m.test(t) && (/Cisco\s+Nexus/i.test(t)||/^vdc\s+\S+\s+id/m.test(t))) || /^version\s+\d+\.\d+\(\d+\)/m.test(t) || /^!Command:\s*show running-config/m.test(t) || /^!\s*Cisco Nexus Operating System \(NX-OS\)/m.test(t)) return {idx:1, vendor:null};
+  if (/^;\s*(?:HP\s|Aruba\s|J\d{4}[A-Z])/m.test(t)||/^oobm$/m.test(t)||/^trunk\s+\S+\s+[Tt]rk\d+/m.test(t)||(/^hostname\s+"[^"\n]*"\s*$/m.test(t)&&/^\s+(?:un)?tagged\s+[A-Z]?\d/m.test(t))) return {idx:1, vendor:null};
   if (/feature\s+(vpc|lacp)|vlan database/i.test(t))                        return {idx:1, vendor:null};
   if (/sysname\s+\w|irf domain/i.test(t))                                   return {idx:1, vendor:null};
   // MikroTik RouterOS 純交換器訊號（VLAN filtering／橋接，無 /ip firewall 規則時走到這裡）
@@ -1351,8 +1352,8 @@ function _detectToolReasons(text) {
     { reason: '命中 EdgeRouter EdgeOS `ethernet ethN {` + `outbound-interface`', test: () => /ethernet\s+eth\d+\s*\{/m.test(t) && /outbound-interface\s+\S+/m.test(t) },
     { reason: '命中 OpenWrt UCI `config interface` + `package network/firewall/dhcp`', test: () => /^config\s+interface(\s|$)/m.test(t) && /^package\s+(network|firewall|dhcp)/m.test(t) },
     { reason: '命中 Arista EOS 裝置字樣，或 Ethernet 介面命名 + `ip routing`', test: () => /^!\s*device:\s*\S+.*\(Arista\s/m.test(t) || /^!\s*Software image version:\s*EOS/m.test(t) || (/^interface\s+Ethernet\d+(?:\/\d+)*\s*$/m.test(t) && /^ip routing$/m.test(t)) },
-    { reason: '命中 Cisco NX-OS `feature` 指令 + Nexus/vdc 字樣', test: () => /^feature\s+\w+/m.test(t) && (/Cisco\s+Nexus/i.test(t) || /^vdc\s+\S+\s+id/m.test(t)) },
-    { reason: '命中 HP/Aruba ProCurve 註解表頭或 `trunk ... TrkN` 語法', test: () => /^;\s*(?:HP\s|Aruba\s|J\d{4}[A-Z])/m.test(t) || /^oobm$/m.test(t) || /^trunk\s+\S+\s+[Tt]rk\d+/m.test(t) },
+    { reason: '命中 Cisco NX-OS `feature` 指令 + Nexus/vdc 字樣、`version N.N(N)` 版本格式或 `!Command: show running-config` 檔頭', test: () => (/^feature\s+\w+/m.test(t) && (/Cisco\s+Nexus/i.test(t) || /^vdc\s+\S+\s+id/m.test(t))) || /^version\s+\d+\.\d+\(\d+\)/m.test(t) || /^!Command:\s*show running-config/m.test(t) || /^!\s*Cisco Nexus Operating System \(NX-OS\)/m.test(t) },
+    { reason: '命中 HP/Aruba ProCurve 註解表頭、`trunk ... TrkN` 語法，或帶引號 hostname＋VLAN 內以埠號開頭的 untagged／tagged', test: () => /^;\s*(?:HP\s|Aruba\s|J\d{4}[A-Z])/m.test(t) || /^oobm$/m.test(t) || /^trunk\s+\S+\s+[Tt]rk\d+/m.test(t) || (/^hostname\s+"[^"\n]*"\s*$/m.test(t) && /^\s+(?:un)?tagged\s+[A-Z]?\d/m.test(t)) },
     { reason: '命中 `feature vpc/lacp` 或 `vlan database`', test: () => /feature\s+(vpc|lacp)|vlan database/i.test(t) },
     { reason: '命中 HPE Comware `sysname` 或 `irf domain`', test: () => /sysname\s+\w|irf domain/i.test(t) },
     { reason: '命中 MikroTik RouterOS 橋接區塊 `/interface bridge`（無防火牆規則，判定為純交換器）', test: () => /\/interface bridge/i.test(t) },

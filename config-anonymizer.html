@@ -1223,7 +1223,7 @@ const anonOutputIPs = new Set();
 // [2] VENDOR DETECTION
 // ============================================================
 const VENDOR_SIGS = {
-  cisco_nxos:  { p:[/Cisco Nexus/i, /^feature\s+\w+/m, /^vdc\s+\S+\s+id\s+\d+/m], min:1 },
+  cisco_nxos:  { p:[/Cisco Nexus/i, /^feature\s+\w+/m, /^vdc\s+\S+\s+id\s+\d+/m, /^version\s+\d+\.\d+\(\d+\)/m, /^!Command:\s*show running-config/m], min:1 },
   fortiswitch: { p:[/^config system global/m, /^config switch physical-port/m], min:2 },
   fortigate:   { p:[/^#config-version=/m, /^config system global/m, /FortiGate-/i], min:1 },
   comware:     { p:[/^\s*sysname\s+\S/m, /HPE Comware|H3C Comware/i, /^\s*version\s+\d+[\d.]+,\s*Release/m], min:1 },
@@ -1248,7 +1248,8 @@ const VENDOR_SIGS = {
   brocade:     { p:[/^vlan\s+\d+\s+(?:name\s+\S+\s+)?by\s+port/m, /^stack unit\s+\d+/m, /FastIron|ICX/i], min:1 },
   // min 由 1 提高為 2：單靠字面 "Aruba" 一個訊號太寬鬆，理由同 sophos
   aruba_cx:    { p:[/vlan trunk (?:allowed|native)/m, /^vsf\s*$/m, /Aruba/i], min:2 },
-  procurve:    { p:[/^;\s*(?:HP\s|Aruba\s|J\d{4}[A-Z])/m, /^oobm$/m, /^trunk\s+[\dA-Za-z,\/\-]+\s+[Tt]rk\d+/m], min:1 },
+  // 第 4 條：帶引號 hostname 之後出現以埠號開頭的 untagged／tagged（無 `; J9xxxA` 檔頭時，與 switch_analyzer 同步，2026-10-01）
+  procurve:    { p:[/^;\s*(?:HP\s|Aruba\s|J\d{4}[A-Z])/m, /^oobm$/m, /^trunk\s+[\dA-Za-z,\/\-]+\s+[Tt]rk\d+/m, /^hostname\s+"[^"\n]*"\s*$[\s\S]*?^\s+(?:un)?tagged\s+[A-Z]?\d/m], min:1 },
   dell_os10:   { p:[/^interface\s+ethernet\d+\/\d+\/\d+/m, /^vlt-domain\s+\d+/m, /Dell.*OS10/i], min:1 },
   // ASA Version／NGFW Version banner、nameif、獨立一行 failover 皆為 ASA/FTD 專屬語法，
   // Cisco IOS 交換器不會出現；NGFW Version 讓沿用同一套 Lina CLI 語法的 FTD 也一併命中，
@@ -3630,7 +3631,9 @@ function checkResidual(text) {
     // 一行可能有多個 IP（如 NAT/ACL 常見的 src/dst 對），須逐一檢查每個相符項目，
     // 不能只驗證第一個就判定整行安全（`.match()` 不加 g 只會回傳第一個匹配）
     const ipMatches = t.match(new RegExp(ipLike.source, 'g'));
-    if (ipMatches && ipMatches.some(m => !/^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(m))) {
+    // 去識別化刻意保留的位址（0.x 預設路由／萬用遮罩、127.x、224 以上的群播與子網路遮罩，見 classifyIP()）
+    // 不算殘留；原本每條預設路由、ACL 萬用遮罩都被列為殘留，匯出時一再跳出確認（2026-10-01）
+    if (ipMatches && ipMatches.some(m => !/^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(m) && !(isValidIPv4(m) && classifyIP(m) === 'skip'))) {
       warnings.push({ line: lineNum, text: t });
     }
     // IPv6 殘留檢查（2026-07-27 補上）：先前 ipLike 只認 IPv4，checkResidual 對 IPv6 完全

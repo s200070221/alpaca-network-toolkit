@@ -30,7 +30,8 @@ function renderRouterOSVLANs(vlans,interfaces,lacpList){
     let line=`add bridge=${ROUTEROS_BRIDGE}`;
     if(tagged.length)line+=` tagged=${tagged.join(',')}`;
     if(untagged.length)line+=` untagged=${untagged.join(',')}`;
-    line+=` vlan-id=${v.id}`;
+    // 官方屬性名稱為 vlan-ids（2026-10-01，原本輸出 vlan-id）
+    line+=` vlan-ids=${v.id}`;
     lines.push(line);
   });
   return lines.length>1?lines.join('\n'):'';

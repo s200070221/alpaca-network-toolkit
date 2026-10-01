@@ -91,13 +91,32 @@ function _ipInRange(targetInt, startStr, endStr) {
   const si = _ipToInt(startStr), ei = _ipToInt(endStr);
   return si !== null && ei !== null && targetInt >= si && targetInt <= ei;
 }
+// 規則欄位直接寫位址而非物件名稱時的比對（2026-10-01）：ASA／FTD（`10.0.0.0 255.0.0.0`、裸 IP）、
+// MikroTik（`192.168.1.0/24`、`@清單名稱`、`!` 反向）、OpenWrt、pfSense 的規則欄位本來就是字面值，
+// 原本找不到同名物件一律回傳 null（無法判斷，被當成可能命中），查詢會停在第一條不相干的規則。
+// 先查物件（FortiGate 常把物件命名為 10.0.0.0/8 這種形狀），找不到才當字面值；回傳 undefined 表示不是字面值
+function _literalAddrMatch(raw, targetInt, addrList, seen) {
+  const t = raw.trim();
+  if (t.startsWith('!')) { const r = _addrMatchesIp(t.slice(1), targetInt, addrList, seen); return r === null ? null : !r; }
+  if (t.startsWith('@')) return _addrMatchesIp(t.slice(1), targetInt, addrList, seen);
+  const lc = t.toLowerCase();
+  if (lc === 'any4') return typeof targetInt !== 'object';
+  if (lc === 'any6') return typeof targetInt === 'object';
+  const a = t.replace(/^host\s+/i, '');
+  const v4 = '\\d{1,3}(?:\\.\\d{1,3}){3}';
+  if (new RegExp('^' + v4 + '(?:\\s*/\\s*\\d{1,2}|\\s+' + v4 + ')?$').test(a)) return _ipInSubnet(targetInt, a.replace(/\s*\/\s*/, '/'));
+  const rg = a.match(new RegExp('^(' + v4 + ')\\s*-\\s*(' + v4 + ')$'));
+  if (rg) return _ipInRange(targetInt, rg[1], rg[2]);
+  if (/^[0-9a-f:]+(?:\/\d{1,3})?$/i.test(a) && a.includes(':') && _ipv6ToBig(a.split('/')[0]) !== null) return _ipInSubnet(targetInt, a);
+  return undefined;
+}
 function _addrMatchesIp(name, targetInt, addrList, seen) {
   const nm = name.trim().toLowerCase();
   if (nm==='all'||nm==='any') return true;
   if (seen.has(nm)) return false;
   seen.add(nm);
   const obj = addrList.find(a => a.name.toLowerCase()===nm);
-  if (!obj) return null;
+  if (!obj) { const lit = _literalAddrMatch(name, targetInt, addrList, seen); return lit === undefined ? null : lit; }
   if ((obj.type==='ipmask'||obj.type==='ipprefix') && obj.subnet && obj.subnet!=='-')
     return _ipInSubnet(targetInt, obj.subnet);
   if (obj.type==='iprange')
@@ -125,10 +144,30 @@ function _policyAddrMatches(addrStr, targetInt, addrList) {
   }
   return fqdn ? null : false;
 }
+// 多個埠以逗號或空白分隔（EdgeRouter／MikroTik `80, 443`、FortiGate `set tcp-portrange 80 443`），
+// FortiGate 的「目的:來源」寫法取冒號前的目的埠；原本只比對第一段（2026-10-01）
 function _portInRange(port, rangeStr) {
   if (!rangeStr||rangeStr==='-') return false;
-  const p = rangeStr.split('-');
-  return port >= parseInt(p[0]) && port <= (p[1]?parseInt(p[1]):parseInt(p[0]));
+  return String(rangeStr).split(/[\s,]+/).filter(Boolean).some(seg => {
+    const p = seg.split(':')[0].split('-');
+    return port >= parseInt(p[0]) && port <= (p[1]?parseInt(p[1]):parseInt(p[0]));
+  });
+}
+// 規則欄位直接寫服務（ASA／EdgeRouter／OpenWrt／MikroTik 的 `tcp/443`、`udp/68`、`tcp/80-90`、`ip`、
+// `icmp`、只寫埠號的 `443`）：原本找不到同名物件一律視為符合（2026-10-01）；其餘無法辨識的名稱維持視為符合
+function _literalSvcMatches(raw, proto, port) {
+  const t = raw.trim().toLowerCase();
+  if (!proto || proto === 'any' || t === 'ip') return true;
+  const q = proto.toUpperCase();
+  if (/^icmp6?$|^ipv6-icmp$/.test(t)) return q === 'ICMP';
+  let m = t.match(/^(tcp|udp|tcp\/udp|tcp-udp)\/(\d+(?:-\d+)?)$/);
+  if (m) {
+    const lp = m[1] === 'tcp' ? ['TCP'] : m[1] === 'udp' ? ['UDP'] : ['TCP', 'UDP'];
+    const protoOk = q === 'TCP/UDP' ? true : lp.includes(q);
+    return protoOk && (!port || _portInRange(port, m[2]));
+  }
+  if (/^\d+(?:-\d+)?$/.test(t)) return q !== 'ICMP' && (!port || _portInRange(port, t));
+  return true;
 }
 function _svcMatches(name, proto, port, svcList, seen) {
   const nm = name.trim().toUpperCase();
@@ -136,7 +175,7 @@ function _svcMatches(name, proto, port, svcList, seen) {
   if (seen.has(nm)) return false;
   seen.add(nm);
   const obj = svcList.find(s=>s.name.toUpperCase()===nm);
-  if (!obj) return true;
+  if (!obj) return _literalSvcMatches(name, proto, port);
   if (obj.category==='group') {
     const mems = (obj.members||'').split(',').map(s=>s.trim()).filter(Boolean);
     return mems.some(m=>_svcMatches(m, proto, port, svcList, seen));
@@ -198,7 +237,13 @@ function _addrResolvePath(name, targetInt, addrList, seen, pathPfx) {
   seen.add(nm);
   const path = pathPfx ? pathPfx + ' → ' + raw : raw;
   const obj = addrList.find(a=>a.name.toLowerCase()===nm);
-  if (!obj) return {match:null, display:path, detail:'(unresolved)'};
+  if (!obj) {
+    if (raw.startsWith('@')) return _addrResolvePath(raw.slice(1), targetInt, addrList, seen, pathPfx);
+    const lit = _literalAddrMatch(raw, targetInt, addrList, new Set(seen));
+    if (lit === true) return {match:true, display:path, detail:'(literal)'};
+    if (lit === false) return {match:false};
+    return {match:null, display:path, detail:'(unresolved)'};
+  }
   if ((obj.type==='ipmask'||obj.type==='ipprefix')&&obj.subnet&&obj.subnet!=='-') {
     const r=_ipInSubnet(targetInt,obj.subnet);
     if (r===true)  return {match:true,  display:path, detail:obj.subnet};
