@@ -353,7 +353,8 @@ function parseFortiSwitch(cfg){
   // Link VLAN IP to VLANs
   vlans.forEach(v=>{
     const iface=interfaces.find(i=>i.vlans===v.id && i.ip);
-    if(iface)v.ipSubnets.push(iface.ip);
+    // 其餘廠牌與所有畫面皆為 {cidr} 物件，原本推入字串，VLAN 頁與總覽顯示 undefined（2026-10-01）
+    if(iface)v.ipSubnets.push({cidr:iface.ip});
   });
 
   const lacpFt=parseLACP(cfg,'fortiswitch');

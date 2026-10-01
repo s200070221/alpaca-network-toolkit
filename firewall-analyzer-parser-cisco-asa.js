@@ -60,6 +60,13 @@ const CiscoASAParser = (() => {
     // crypto map 引用的 ACL（crypto map NAME SEQ match address ACL）只用來定義 VPN 加密流量，
     // 不是介面上的存取控制規則，排除以免計入稽核與健康度（VPN 分頁另由 aclMap 讀取，不受影響）
     const cryptoAcls = new Set([...text.matchAll(/^crypto\s+map\s+\S+\s+\d+\s+match\s+address\s+(\S+)/gm)].map(x => x[1]));
+    // ACL 套用的介面（2026-10-01，YA）：`access-group ACL {in|out} interface IF`、`access-group ACL global`。
+    // in → 來源介面、out → 目的介面、global → any；沒有 access-group 的 ACL 維持 '-'（未套用到任何介面）
+    const aclIn = {}, aclOut = {};
+    for (const g of text.matchAll(/^access-group\s+(\S+)\s+(?:(in|out)\s+interface\s+(\S+)|global)/gm)) {
+      const map = g[2] === 'out' ? aclOut : aclIn;
+      (map[g[1]] = map[g[1]] || []).push(g[2] ? g[3] : 'any');
+    }
     for (const line of text.split('\n')) {
       const m = line.match(/^access-list\s+(\S+)\s+extended\s+(permit|deny)\s+(\S+)\s+(.+)/);
       if (!m) continue;
@@ -95,7 +102,7 @@ const CiscoASAParser = (() => {
       // 避免 exportCSV('policies') 讀取 r.utm.av 時因 utm 為 undefined 而拋例外。
       const status = /\binactive\b/.test(rest) ? 'disable' : 'enable';
       const logtraffic = /\blog\s+disable\b/.test(rest) ? 'disable' : 'all';
-      policies.push({ id:id++, name:aclName, srcIntf:'-', dstIntf:'-', srcAddr:src, dstAddr:dst, srcAddr4:srcAddrSplit.v4, srcAddr6:srcAddrSplit.v6, dstAddr4:dstAddrSplit.v4, dstAddr6:dstAddrSplit.v6, service:svc, action, schedule:'-', nat:'disable', ippool:'disable', poolname:'-', logtraffic, logstart:'-', utm:{av:'-',webfilter:'-',ips:'-',ssl:'-',appctrl:'-'}, status, comments:'-', users:'-', groups:'-', vdom:aclName, enabled: status==='enable', color:'0' });
+      policies.push({ id:id++, name:aclName, srcIntf:(aclIn[aclName]||['-']).join(','), dstIntf:(aclOut[aclName]||['-']).join(','), srcAddr:src, dstAddr:dst, srcAddr4:srcAddrSplit.v4, srcAddr6:srcAddrSplit.v6, dstAddr4:dstAddrSplit.v4, dstAddr6:dstAddrSplit.v6, service:svc, action, schedule:'-', nat:'disable', ippool:'disable', poolname:'-', logtraffic, logstart:'-', utm:{av:'-',webfilter:'-',ips:'-',ssl:'-',appctrl:'-'}, status, comments:'-', users:'-', groups:'-', vdom:aclName, enabled: status==='enable', color:'0' });
     }
     return policies;
   }
