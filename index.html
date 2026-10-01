@@ -1111,13 +1111,28 @@ document.getElementById('logo-btn').addEventListener('click', () => {
 const VENDOR_NAMES = {f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',u:'OpenWrt (UCI)',sonic:'SONiC',g:'WatchGuard Firebox',
   // 2026-08-19 新增：log_analyzer 拖放偵測的格式標籤（非廠牌，沿用同一份對照表顯示於拖放
   // 提示 chip），key 與 detectTool() 回傳的 vendor 字串一致
-  rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log'};
+  rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log',
+  ciscoios:'Cisco IOS Log', comwarelog:'Comware Log', isosyslog:'Syslog（ISO 時間）', w3c:'IIS W3C Log', weblog:'Web Access Log', mikrotiklog:'MikroTik Log'};
 let _dropPending = null;
 // 快速連續拖放/選檔的競態防呆：每次啟動新的 FileReader 讀取時遞增，onload 觸發時比對
 // 是否仍是最新一次讀取的世代號，避免較舊、讀取較慢（如檔案較大）的結果晚於較新的讀取
 // 完成，反而覆蓋畫面上顯示/寫入 _dropPending 的較新結果
 let _dropGen = 0;
 
+const LOG_JSON_KEYS = ['message','msg','severity','timestamp','@timestamp','log'];
+function _isLogJsonObj(o) { return !!(o && typeof o === 'object' && !Array.isArray(o) && LOG_JSON_KEYS.some(k => k in o)); }
+function _isLogJsonHead(trimmed) {
+  try { const d = JSON.parse(trimmed); return Array.isArray(d) && _isLogJsonObj(d[0]); } catch(e) { /* 不是單一 JSON 文件 */ }
+  try { return trimmed.charAt(0) === '{' && _isLogJsonObj(JSON.parse(trimmed.split('\n')[0].trim())); } catch(e) { return false; }
+}
+const LOG_HEAD_SIGS = [
+  [/^(?:<\d{1,3}>)?(?:\d+:\s+)?(?:[*.]?(?:(?:[A-Z][a-z]{2}\s+\d{1,2}(?:\s+\d{4})?\s+)?\d{1,2}:\d{2}:\d{2}(?:\.\d+)?(?:\s+[A-Za-z]{2,5})?|\d+[ywdh]\d+[ywdhm](?:\d+[dhm])?)\s*:\s*)?%[A-Z][A-Z0-9_]*-\d-[A-Z0-9_]+:/m, 'ciscoios'],
+  [/^(?:<\d{1,3}>)?%?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}(?::\d{1,3})?\s+\d{4}\s+\S+\s+(?:%%\d{2})?[A-Z][A-Z0-9_]*\/\d\/[A-Z0-9_]+(?:\([a-z]\))?:/m, 'comwarelog'],
+  [/^(?:<\d{1,3}>)?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})\s+\S+\s/m, 'isosyslog'],
+  [/^#Fields:\s/m, 'w3c'],
+  [/^\S+ \S+ \S+ \[\d{2}\/[A-Z][a-z]{2}\/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4}\] "/m, 'weblog'],
+  [/^(?:<\d{1,3}>)?(?:(?:\d{4}-\d{2}-\d{2}|\d{2}-\d{2}|[A-Za-z]{3}\/\d{2}(?:\/\d{4})?)\s+)?\d{2}:\d{2}:\d{2}\s+[a-z][a-z0-9-]*(?:,[a-z][a-z0-9-]*)*,(?:critical|error|warning|info|debug)\b|^(?:<\d{1,3}>)?(?:(?:\d{4}-\d{2}-\d{2}|\d{2}-\d{2}|[A-Za-z]{3}\/\d{2}(?:\/\d{4})?)\s+)?\d{2}:\d{2}:\d{2}\s+(?:critical|error|warning|info|debug)(?:,[a-z][a-z0-9-]*)*\s/m, 'mikrotiklog'],
+];
 function detectTool(text) {
   const t = text.slice(0, 8000);
   // 2026-08-09 稽核修復：SONiC（config_db.json 純 JSON，非文字 CLI）先前完全沒有偵測規則，
@@ -1138,6 +1153,9 @@ function detectTool(text) {
             ['message','msg','severity','timestamp','@timestamp','log'].some(k => k in obj)) return {idx:4, vendor:'json'};
       } catch(e) { /* 非合法 JSON，繼續往下走既有文字 CLI 判斷鏈 */ }
     }
+    // 2026-10-01：多筆 NDJSON（每行一個物件，整段 JSON.parse 必定失敗）與 JSON 事件陣列原本
+    // 都落到「無法自動識別」，改以第一行／第一個元素判斷，欄位條件與上方單筆事件相同
+    if (_isLogJsonHead(trimmedFull)) return {idx:4, vendor:'json'};
   }
   // 2026-09 全功能審查發現：log_analyzer 已支援 Windows Event Log（wevtutil XML 匯出，
   // parseWinEventLogEvents() 判斷簽章），但這份獨立維護的拖放偵測規則從未同步補上，訊號
@@ -1157,6 +1175,11 @@ function detectTool(text) {
   if (/^(?:<\d{1,3}>\s*)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}:\s*%ASA-\d-\d+:/m.test(t)) return {idx:4, vendor:'asa'};
   if (/^date=\d{4}-\d{2}-\d{2}\s+time=\d{2}:\d{2}:\d{2}\b/m.test(t) && /\blogid=/.test(t)) return {idx:4, vendor:'fortigate'};
   if (/^(?:<\d{1,3}>)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s/m.test(t))            return {idx:4, vendor:'rfc3164'};
+  // 2026-10-01：log_analyzer 後續新增的格式（WC／BA／BB 與 MikroTik）未同步到這裡——Cisco IOS／
+  // Comware 設備 log 內文的 "Interface GigabitEthernet…" 會被下方交換器 fallback 規則攔截、誤送到
+  // 交換器分析；其餘格式則判定為無法識別。判斷式逐字沿用 log_analyzer 的 CISCO_IOS_LOG_RE／
+  // COMWARE_LOG_RE／ISO_SYSLOG_LINE_RE／WEB_ACCESS_RE／MikroTik topics 規則（去掉行尾擷取）
+  for (const [re, v] of LOG_HEAD_SIGS) if (re.test(t)) return {idx:4, vendor:v};
   if (/config firewall policy|config vdom/i.test(t))                        return {idx:0, vendor:'f'};
   // 2026-08-20 稽核修復：原本只認扁平 `set security policies` 語法，Junos 階層式大括號
   // 格式（`security { policies { from-zone X to-zone Y { ... } } }`，juniper_srx_test.conf
@@ -1300,6 +1323,7 @@ function _detectToolReasons(text) {
           return !!(obj && typeof obj === 'object' && !Array.isArray(obj) && ['message','msg','severity','timestamp','@timestamp','log'].some(k => k in obj));
         } catch(e) { return false; }
       } },
+    { reason: '多筆 NDJSON 第一行或 JSON 陣列第一個元素含常見 log 欄位 → JSON/NDJSON Log', test: () => { const tf = text.trim(); return (tf.charAt(0) === '{' || tf.charAt(0) === '[') && _isLogJsonHead(tf); } },
     { reason: '命中 Windows Event Log XML 匯出的 xmlns 屬性簽章', test: () => /<Event[\s>][\s\S]*?xmlns=["']http:\/\/schemas\.microsoft\.com\/win\/2004\/08\/events\/event["']/.test(text) },
     { reason: '命中 Syslog RFC5424 表頭格式 `<PRI>1 `', test: () => /^<\d{1,3}>1\s/m.test(t) },
     { reason: '命中 CEF `CEF:0|...` 表頭', test: () => /^(?:<\d{1,3}>\s*)?CEF:\d+\|/m.test(t) },
@@ -1308,6 +1332,7 @@ function _detectToolReasons(text) {
     { reason: '命中 Cisco ASA Syslog `%ASA-X-XXXXXX:` 格式', test: () => /^(?:<\d{1,3}>\s*)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}:\s*%ASA-\d-\d+:/m.test(t) },
     { reason: '命中 FortiGate 原生 log（`date=... time=...` + `logid=`）', test: () => /^date=\d{4}-\d{2}-\d{2}\s+time=\d{2}:\d{2}:\d{2}\b/m.test(t) && /\blogid=/.test(t) },
     { reason: '命中標準 Syslog RFC3164 表頭', test: () => /^(?:<\d{1,3}>)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s/m.test(t) },
+    ...LOG_HEAD_SIGS.map(([re, v]) => ({ reason: '命中 ' + VENDOR_NAMES[v] + ' 行首格式（與 log_analyzer 判斷式相同）', test: () => re.test(t) })),
     { reason: '命中 FortiGate 設定檔關鍵字 `config firewall policy`／`config vdom`', test: () => /config firewall policy|config vdom/i.test(t) },
     { reason: '命中 Juniper SRX 安全政策關鍵字（`set security policies` 或階層式 `from-zone ... to-zone ...`）', test: () => /set security policies/i.test(t) || /^\s*from-zone\s+\S+\s+to-zone\s+\S+/m.test(t) },
     { reason: '命中 Check Point Gaia `set hostname` + `set interface ... ipv4-address`', test: () => /^set hostname\s+\S+/m.test(t) && /^set interface\s+\S+\s+ipv4-address/m.test(t) },
