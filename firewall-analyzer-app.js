@@ -848,8 +848,8 @@ function onParsed(){
         // 與 case 'audit' 的 tbl-cnt 用同一套算法（原本漏算 analyzeDenyBlocking()／
         // analyzeMergeSuggestions()，會讓側邊欄徽章顯示綠色「0」但實際打開稽核頁卻有紅色
         // 警示，2026-09 全功能審查發現）
-        const _sh = analyzeRuleShadowing(d.policies || []);
-        const _db = analyzeDenyBlocking(d.policies || []);
+        const _sh = analyzeRuleShadowing(d.policies || [], d.addresses);
+        const _db = analyzeDenyBlocking(d.policies || [], d.addresses);
         const _mg = analyzeMergeSuggestions(d.policies || []);
         const _un = analyzeUnusedObjects(d);
         const _co = analyzeCompliance(d);
@@ -981,7 +981,7 @@ function onParsed(){
         break;
       case 'policies':
         data=d.policies;$('filter-action').style.display='';
-        const _shadowMap = buildShadowMap(data);
+        const _shadowMap = buildShadowMap(data, d.addresses);
         // Reverse map: shadowedRuleId → earlyRuleId (first match wins)
         const _reverseShadow = {};
         Object.entries(_shadowMap).forEach(([earlyId, sids]) => sids.forEach(sid => { if(!_reverseShadow[sid]) _reverseShadow[sid]=earlyId; }));
@@ -1333,8 +1333,8 @@ function onParsed(){
         $('filter-action').style.display = 'none';
         $('filter-type').style.display   = 'none';
         if (!PARSED) { $('tbl-wrap').innerHTML = '<div class="nodata">'+tr('msg.no_data_yet')+'</div>'; return; }
-        const _sh  = analyzeRuleShadowing(PARSED.policies || []);
-        const _db  = analyzeDenyBlocking(PARSED.policies || []);
+        const _sh  = analyzeRuleShadowing(PARSED.policies || [], PARSED.addresses);
+        const _db  = analyzeDenyBlocking(PARSED.policies || [], PARSED.addresses);
         const _mg  = analyzeMergeSuggestions(PARSED.policies || []);
         const _un  = analyzeUnusedObjects(PARSED);
         const _co  = analyzeCompliance(PARSED);
@@ -1395,7 +1395,9 @@ function onParsed(){
           return;
         }
         const _qvdoms = [...new Set((PARSED.policies||[]).map(p=>p._vdom).filter(Boolean))];
-        $('tbl-wrap').innerHTML = buildQuerySectionHtml(_qvdoms, PARSED.vendor === 'FortiGate');
+        const _qintfs = [...new Set((PARSED.policies || []).flatMap(p => (p._chain && p.srcIntf === p._chain) ? [] : String(p.srcIntf || '').split(/\s*,\s*/))
+          .map(s => s.trim()).filter(s => s && s !== '-' && !/^(any|all)$/i.test(s)))].sort();
+        $('tbl-wrap').innerHTML = buildQuerySectionHtml(_qvdoms, PARSED.vendor === 'FortiGate', _qintfs);
         $('tbl-section-label').textContent = tr('nav.query');
         if (_sv.src) { const _e=$('q-src'); if(_e) _e.value=_sv.src; }
         if (_sv.dst) { const _e=$('q-dst'); if(_e) _e.value=_sv.dst; }
@@ -1946,8 +1948,8 @@ function onParsed(){
     // Audit 分析結果：analyzeRuleShadowing()/analyzeUnusedObjects()/analyzeCompliance()
     // 皆為純函式，直接在匯出當下用目前的 d（=PARSED）即時計算，不依賴使用者是否切過
     // Audit 分頁的渲染快取——這樣「尚未分析」與「分析過但 0 筆」不會混淆成同一種空白結果
-    'shadow': d => analyzeRuleShadowing(d.policies||[]),
-    'deny-blocking': d => analyzeDenyBlocking(d.policies||[]),
+    'shadow': d => analyzeRuleShadowing(d.policies||[], d.addresses),
+    'deny-blocking': d => analyzeDenyBlocking(d.policies||[], d.addresses),
     'merge-suggest': d => analyzeMergeSuggestions(d.policies||[]),
     'exact-duplicates': d => analyzeExactDuplicates(d.policies||[]),
     'unused-addr': d => analyzeUnusedObjects(d).unusedAddrs,
@@ -2322,7 +2324,7 @@ function onParsed(){
     const el = $('batch-result'); if (!el) return;
     const { rows, errors } = parseBatchQueryCSV(($('batch-input')||{}).value||'');
     const vdom = $('q-vdom') ? $('q-vdom').value : '__all__';
-    LAST_BATCH_RESULTS = runBatchPolicyQuery(rows, vdom, PARSED);
+    LAST_BATCH_RESULTS = runBatchPolicyQuery(rows, vdom, PARSED, _queryOpts(false));
     el.innerHTML = buildBatchQueryResultHtml(LAST_BATCH_RESULTS, errors);
   };
   window._loadBatchFile = function(input) {
@@ -2363,6 +2365,12 @@ function onParsed(){
   };
 
   // ── IP/Policy Query: run ────────────────────────────────────────────────
+  // 查詢選項（2026-10-01，YC／YA）：只看新連線（預設勾選）、進入介面／區域；批次查詢共用「只看新連線」，
+  // 介面則由 CSV 的 srcintf 欄逐列指定
+  function _queryOpts(withIntf = true) {
+    const nb = $('q-newonly'), it = $('q-srcintf');
+    return { newOnly: nb ? nb.checked : true, srcIntf: withIntf && it ? it.value.trim() : '' };
+  }
   window._runQuery = function() {
     const src  = ($('q-src')||{}).value||'';
     const dst  = ($('q-dst')||{}).value||'';
@@ -2372,7 +2380,7 @@ function onParsed(){
     const el = $('query-result');
     if (!el) return;
 
-    const res = _runPolicyQuery(src.trim(), dst.trim(), proto, port, vdom, PARSED);
+    const res = _runPolicyQuery(src.trim(), dst.trim(), proto, port, vdom, PARSED, _queryOpts());
     if (!res) { el.innerHTML = '<div class="nodata">'+tr('query.no_policy')+'</div>'; LAST_QUERY_TRACE = null; return; }
     if (res.error === 'invalid_ip') {
       el.innerHTML = `<div style="color:var(--red);padding:10px 0">${tr('query.invalid_ip')}</div>`; LAST_QUERY_TRACE = null; return;
@@ -2435,6 +2443,8 @@ function onParsed(){
       else if (isMatch) statusCell = `<span style="color:var(--green);font-weight:600">${tr('query.trace_match')}</span>`;
       else if (t.reason==='src_addr'||t.reason==='dst_addr') statusCell = `<span style="color:var(--text-dim)">${tr('query.trace_skip_addr')}</span>`;
       else if (t.reason==='service') statusCell = `<span style="color:var(--text-dim)">${tr('query.trace_skip_svc')}</span>`;
+      else if (t.reason==='state') statusCell = `<span style="color:var(--text-dim)">${tr('query.trace_skip_state')}</span>`;
+      else if (t.reason==='intf') statusCell = `<span style="color:var(--text-dim)">${tr('query.trace_skip_intf')}</span>`;
       const act = t.policy.action==='accept'
         ? `<span class="badge badge-allow">ACCEPT</span>`
         : `<span class="badge badge-deny">DENY</span>`;

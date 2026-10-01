@@ -39,19 +39,86 @@
     const parts = new Set(v.split(/,\s*/).map(x => x.trim().toLowerCase()));
     return (v === 'any' || v === 'all' || parts.has('any') || parts.has('all')) ? 'any' : parts;
   }
-  function _shadowPrep(active) {
+  // 位址欄位展開成範圍（2026-10-01，第九輪發想 YB）：物件（ipmask／ipprefix／iprange／群組遞迴）與字面位址
+  // （IP、CIDR、IP＋點分遮罩、範圍、IPv6 前綴、host X、MikroTik @清單）轉成 {f:4|6, lo, hi}（BigInt），
+  // 任一成員無法確定範圍（FQDN、介面型物件、! 反向、找不到的名稱）即回傳 null，該欄位退回原本的字串比對
+  const _V4_FULL = { f: 4, lo: 0n, hi: 0xFFFFFFFFn }, _V6_FULL = { f: 6, lo: 0n, hi: (1n << 128n) - 1n };
+  function _rangeOfLiteral(t) {
+    const a = t.replace(/^host\s+/i, '').trim();
+    let m = a.match(/^(\d{1,3}(?:\.\d{1,3}){3})\s*-\s*(\d{1,3}(?:\.\d{1,3}){3})$/);
+    if (m) { const lo = _strictIpInt(m[1]), hi = _strictIpInt(m[2]); return lo === null || hi === null || lo > hi ? null : { f: 4, lo: BigInt(lo), hi: BigInt(hi) }; }
+    m = a.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?:\s*\/\s*(\d{1,2})|\s+(\d{1,3}(?:\.\d{1,3}){3}))?$/);
+    if (m) {
+      const ip = _strictIpInt(m[1]); if (ip === null) return null;
+      const bits = m[2] !== undefined ? +m[2] : (m[3] !== undefined ? _cidrPrefixLen(m[3]) : 32);
+      if (bits === null || bits > 32) return null;
+      const size = 1n << BigInt(32 - bits), lo = (BigInt(ip) / size) * size;
+      return { f: 4, lo, hi: lo + size - 1n };
+    }
+    m = a.match(/^([0-9a-f:]+)(?:\/(\d{1,3}))?$/i);
+    if (m && a.includes(':')) {
+      const base = _ipv6ToBig(m[1]), bits = m[2] !== undefined ? +m[2] : 128;
+      if (base === null || bits > 128) return null;
+      const size = 1n << BigInt(128 - bits), lo = (base / size) * size;
+      return { f: 6, lo, hi: lo + size - 1n };
+    }
+    return null;
+  }
+  function _rangesOfName(name, addrs, vdom, seen) {
+    const raw = name.trim(), nm = raw.toLowerCase();
+    if (nm === 'all' || nm === 'any' || nm === '0.0.0.0/0' || nm === '0.0.0.0 0.0.0.0') return [_V4_FULL, _V6_FULL];
+    if (nm === 'any4') return [_V4_FULL];
+    if (nm === 'any6') return [_V6_FULL];
+    if (seen.has(nm)) return [];
+    seen.add(nm);
+    const obj = addrs.find(a => a.name && a.name.toLowerCase() === nm && (!vdom || !a._vdom || a._vdom === vdom)) || addrs.find(a => a.name && a.name.toLowerCase() === nm);
+    if (obj) {
+      if ((obj.type === 'ipmask' || obj.type === 'ipprefix') && obj.subnet && obj.subnet !== '-') { const r = _rangeOfLiteral(obj.subnet); return r ? [r] : null; }
+      if (obj.type === 'iprange') { const r = _rangeOfLiteral(`${obj.startIp}-${obj.endIp}`) || _rangeOfLiteral(obj.startIp); return r ? [r] : null; }
+      if (obj.type === 'group' || obj.category === 'address-group') {
+        const out = [];
+        for (const mem of String(obj.members || '').split(',').map(x => x.trim()).filter(x => x && x !== '-')) {
+          const r = _rangesOfName(mem, addrs, vdom, seen); if (!r) return null; out.push(...r);
+        }
+        return out;
+      }
+      return null;
+    }
+    if (raw.startsWith('@')) return _rangesOfName(raw.slice(1), addrs, vdom, seen);
+    const r = _rangeOfLiteral(raw);
+    return r ? [r] : null;
+  }
+  function _shadowAddrRanges(str, addrs, vdom) {
+    if (!addrs) return null;
+    const toks = String(str || '').split(/,\s*/).map(x => x.trim()).filter(x => x && x !== '-');
+    if (!toks.length) return null;
+    const out = [];
+    for (const t of toks) { const r = _rangesOfName(t, addrs, vdom, new Set()); if (!r) return null; out.push(...r); }
+    // 同家族相鄰／重疊範圍合併，涵蓋判斷只需比對單一合併後區間
+    const merged = [];
+    out.sort((x, y) => (x.f - y.f) || (x.lo < y.lo ? -1 : x.lo > y.lo ? 1 : 0)).forEach(r => {
+      const last = merged[merged.length - 1];
+      if (last && last.f === r.f && r.lo <= last.hi + 1n) { if (r.hi > last.hi) last.hi = r.hi; }
+      else merged.push({ f: r.f, lo: r.lo, hi: r.hi });
+    });
+    return merged;
+  }
+  const _rangesCover = (E, L) => !!(E && L && L.length && L.every(l => E.some(e => e.f === l.f && e.lo <= l.lo && l.hi <= e.hi)));
+  // addresses（選填）：提供時位址欄位另以範圍包含判斷涵蓋；未提供時維持原本只比對字串相同或 any
+  function _shadowPrep(active, addresses) {
     return active.map(p => {
       const src = _shadowToSet(p.srcAddr), dst = _shadowToSet(p.dstAddr), svc = _shadowToSet(p.service);
       return { src, dst, svc, srcW: _shadowIsWild(src), dstW: _shadowIsWild(dst), svcW: _shadowIsWild(svc),
-        si: _shadowIntfPrep(p.srcIntf), di: _shadowIntfPrep(p.dstIntf) };
+        si: _shadowIntfPrep(p.srcIntf), di: _shadowIntfPrep(p.dstIntf),
+        srcR: _shadowAddrRanges(p.srcAddr, addresses, p._vdom), dstR: _shadowAddrRanges(p.dstAddr, addresses, p._vdom) };
     });
   }
   // 以預先整理的資料判斷 e（較早規則）是否涵蓋 l（較晚規則）：介面涵蓋，且 src/dst/service
-  // 各欄位 earlier 為萬用字元或與 later 完全相同
+  // 各欄位 earlier 為萬用字元、與 later 完全相同，或（位址欄位）earlier 的範圍包含 later 的範圍
   function _shadowPrepCovers(e, l) {
     const intfOk = (ei, li) => ei === null || li === null || ei === 'any' || (li !== 'any' && [...li].every(x => ei.has(x)));
-    const fieldOk = (eS, eW, lS) => eW || (eS.size === lS.size && [...eS].every(v => lS.has(v)));
-    return intfOk(e.si, l.si) && intfOk(e.di, l.di) && fieldOk(e.src, e.srcW, l.src) && fieldOk(e.dst, e.dstW, l.dst) && fieldOk(e.svc, e.svcW, l.svc);
+    const fieldOk = (eS, eW, lS, eR, lR) => eW || (eS.size === lS.size && [...eS].every(v => lS.has(v))) || _rangesCover(eR, lR);
+    return intfOk(e.si, l.si) && intfOk(e.di, l.di) && fieldOk(e.src, e.srcW, l.src, e.srcR, l.srcR) && fieldOk(e.dst, e.dstW, l.dst, e.dstR, l.dstR) && fieldOk(e.svc, e.svcW, l.svc);
   }
 
   // ── 新舊設定檔結構化比對（單一設備）────────────────────────────
@@ -155,11 +222,11 @@
     };
   }
 
-  function analyzeRuleShadowing(policies) {
+  function analyzeRuleShadowing(policies, addresses) {
     const results = [];
     const eq = (a, b) => a.size === b.size && [...a].every(v => b.has(v));
     const active = policies.filter(p => !_isDisabledStatus(p));
-    const prep = _shadowPrep(active);
+    const prep = _shadowPrep(active, addresses);
     for (let i = 0; i < active.length; i++) {
       const later = active[i];
       const { src: lSrc, dst: lDst, svc: lSvc } = prep[i];
@@ -180,11 +247,11 @@
     return results;
   }
 
-  function buildShadowMap(policies) {
+  function buildShadowMap(policies, addresses) {
     // 建立每個規則遮蔽的下游規則清單（用於流程排序顯示）
     const map = {};
     const active = policies.filter(p => !_isDisabledStatus(p));
-    const prep = _shadowPrep(active);
+    const prep = _shadowPrep(active, addresses);
     active.forEach(p => map[p.id] = []);
     for (let i = 0; i < active.length; i++) {
       const earlier = active[i];
@@ -206,10 +273,10 @@
   // 不與 analyzeRuleShadowing 合併，避免混淆兩種問題的語意與後續建議動作。全專案 12 家廠牌的
   // policies 正規化模型 action 欄位只有二元值 accept/deny（見 firewall-analyzer-parser-fortigate.js
   // 的 `gv(t,'action')||'deny'` 預設值慣例），不需處理 vendor 專屬的 drop/reject 同義詞。
-  function analyzeDenyBlocking(policies) {
+  function analyzeDenyBlocking(policies, addresses) {
     const results = [];
     const active = policies.filter(p => !_isDisabledStatus(p));
-    const prep = _shadowPrep(active);
+    const prep = _shadowPrep(active, addresses);
     for (let i = 0; i < active.length; i++) {
       const later = active[i];
       if (later.action !== 'accept') continue;   // 只關心「本該生效的 accept 規則」被擋住的情境
@@ -809,10 +876,10 @@
   function buildSarifAuditReport(parsed, sources) {
     const results = [];
     const push = (ruleId, level, message, properties) => results.push({ ruleId, level, message: { text: message }, properties: properties || {} });
-    analyzeRuleShadowing(parsed.policies || []).forEach(r => {
+    analyzeRuleShadowing(parsed.policies || [], parsed.addresses).forEach(r => {
       push('rule-shadowing', 'warning', `${tr('audit.shadow_title')}: ${r.shadowedId} ${tr(r.reason)} ${r.shadowingId}`, { shadowedId: r.shadowedId, shadowedName: r.shadowedName, shadowingId: r.shadowingId, shadowingName: r.shadowingName, tier: r.tier });
     });
-    analyzeDenyBlocking(parsed.policies || []).forEach(r => {
+    analyzeDenyBlocking(parsed.policies || [], parsed.addresses).forEach(r => {
       push('deny-blocking', 'warning', `${tr('audit.deny_block_title')}: ${r.blockedId} (${r.blockedName||'-'}) blocked by ${r.blockingId} (${r.blockingName||'-'})`, { blockedId: r.blockedId, blockingId: r.blockingId });
     });
     analyzeMergeSuggestions(parsed.policies || []).forEach(r => {
@@ -1241,11 +1308,11 @@
     const broadNetwork = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && (healthIsBroad(p.srcAddr, p._vdom) || healthIsBroad(p.dstAddr, p._vdom)));
     if (broadNetwork.length) deduct('health.broad_network', 'warn', broadNetwork.length, broadNetwork.length * 10, 10);
     // T2: shadowed rules
-    const shadowMap = buildShadowMap(policies);
+    const shadowMap = buildShadowMap(policies, parsed.addresses);
     const shadowCount = Object.values(shadowMap).reduce((s, arr) => s + arr.length, 0);
     if (shadowCount) deduct('health.shadowed', 'warn', shadowCount, shadowCount * 5, 5);
     // T2b: rules blocked by an earlier deny rule（同 T2 權重，皆屬「規則永不生效」類問題）
-    const denyBlockedCount = analyzeDenyBlocking(policies).length;
+    const denyBlockedCount = analyzeDenyBlocking(policies, parsed.addresses).length;
     if (denyBlockedCount) deduct('health.deny_blocked', 'warn', denyBlockedCount, denyBlockedCount * 5, 5);
     // T3: disabled rules（欄位值一律是 'disable'，非 'disabled'，見 _runPolicyQuery()/各 assemble 函式既有慣例；
     // 大小寫不敏感比對改用共用 _isDisabledStatus()，先前純小寫比對會 undercount Sophos 等大寫來源，
@@ -1458,8 +1525,8 @@
     const health = computeFirewallHealth(parsed, opts);
     const riskLabel = { high: tr('audit.risk_high'), medium: tr('audit.risk_mid'), low: tr('audit.risk_low') };
     const summary = [
-      [tr('audit.sum_shadow'), analyzeRuleShadowing(pol).length],
-      [tr('audit.sum_deny_block'), analyzeDenyBlocking(pol).length],
+      [tr('audit.sum_shadow'), analyzeRuleShadowing(pol, parsed.addresses).length],
+      [tr('audit.sum_deny_block'), analyzeDenyBlocking(pol, parsed.addresses).length],
       [tr('audit.sum_merge'), analyzeMergeSuggestions(pol).length],
       [tr('audit.sum_duplicate'), analyzeExactDuplicates(pol).length],
       [tr('audit.sum_unused_addr'), un.unusedAddrs.length],
@@ -1554,7 +1621,7 @@
       const vp = pols.filter(p => (p._vdom || '') === vd);
       const delPol = new Map(); // id → 原因
       if (o.disabled) vp.filter(p => _isDisabledStatus(p)).forEach(p => { delPol.set(p.id, 'disabled'); });
-      if (o.shadowed) analyzeRuleShadowing(vp).forEach(r => { if (!delPol.has(r.shadowedId)) delPol.set(r.shadowedId, 'shadowed'); });
+      if (o.shadowed) analyzeRuleShadowing(vp, parsed.addresses).forEach(r => { if (!delPol.has(r.shadowedId)) delPol.set(r.shadowedId, 'shadowed'); });
       const v4 = [], v6 = [];
       delPol.forEach((why, id) => {
         counts[why]++;

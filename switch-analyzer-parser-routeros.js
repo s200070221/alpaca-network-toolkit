@@ -52,7 +52,8 @@ function parseRouterOSInterfaces(cfg){
         if(type==='sfp-sfpplus')portType='SFP+',speed='10G';
         else if(type==='qsfp28')portType='QSFP28',speed='40G';
         else if(type==='ethernet')portType='Ethernet',speed=addM[2]||'1G';
-        intfs.push({name,status:'up',speed,portType,description:'',mode:'',vlans:''});
+        // type／member／desc：埠頁共用欄位（原本缺少，顯示 Mundefined／undefined，2026-10-01）
+        intfs.push({name,status:'up',speed,portType,description:'',desc:'',type:'physical',member:'1',mode:'',vlans:''});
       }
     }
   }
@@ -259,7 +260,8 @@ function parseRouterOSBridgeSTP(cfg){
   const mode=modeM?modeM[1]:'rstp'; // RouterOS 預設 protocol-mode 即為 rstp
   const prioM=body.match(/priority=(0x[0-9a-fA-F]+|\d+)/);
   const priority=prioM?parseInt(prioM[1],prioM[1].toLowerCase().startsWith('0x')?16:10):32768;
-  return{mode,instances:[{id:'0',priority}],ports:[],rootMode:'',timers:{}};
+  // vlan：STP 頁第一欄顯示用，比照其餘廠牌單一全域實例寫 'Global'（原本缺欄位顯示 undefined，2026-10-01）
+  return{mode,instances:[{id:'0',vlan:'Global',priority}],ports:[],rootMode:'',timers:{}};
 }
 // 2026-07-24 對外查證官方 help.mikrotik.com「DHCP」/「IP Pools」/「DNS」文件後整段重寫：原本
 // 回傳的資料形狀 {name,interface,status,leaseTime,type} 與其餘 12 廠牌共用的
@@ -382,7 +384,8 @@ function parseRouterOSUsers(cfg){
     if(!inUser)continue;
     const nm=line.match(/add\s+name=([^\s]+)/);
     const gm=line.match(/group=([^\s]+)/);
-    if(nm)users.push({username:nm[1],group:gm?gm[1]:'full',privilege:''});
+    // name／role：帳號頁與其餘廠牌共用欄位（原本只有 username／group，帳號頁顯示 undefined）；username／group 保留給產生器匯入（2026-10-01）
+    if(nm)users.push({username:nm[1],group:gm?gm[1]:'full',privilege:'',name:nm[1],role:gm?gm[1]:'full'});
   }
   return users;
 }
@@ -490,7 +493,7 @@ function _parseRouterOSVlanInterfaces(cfg){
     if(ifaceM&&addrM)ipByIface[ifaceM[1]]=addrM[1];
   });
   return vlanIfaces.filter(v=>ipByIface[v.name]).map(v=>({
-    name:v.name,status:'up',speed:'-',portType:'vlan',description:'',
+    name:v.name,status:'up',speed:'-',portType:'vlan',description:'',desc:'',member:'1',
     mode:'',vlans:v.vid,type:'svi',ip:ipByIface[v.name],
   }));
 }

@@ -2871,6 +2871,14 @@ function validateForm(){
       if(d.gateway&&!isValidIPv4(d.gateway)){
         errors.push(`⚠️ DHCP Pool「${d.name||i+1}」：${tr('val.format_invalid').replace('{item}','Gateway IP')}`);
       }
+      // 位址範圍必須是「起-迄」兩個 IP（2026-10-01）：原本不驗證，以空白分隔或只填一個位址時，
+      // 各廠牌以 '-' 拆分後迄位址為 undefined，產出 `address range A undefined`、`high undefined;` 等無效語法
+      if(d.range){
+        const rp=d.range.split(/\s*-\s*/);
+        if(rp.length!==2||!isValidIPv4(rp[0])||!isValidIPv4(rp[1])){
+          errors.push(`⚠️ DHCP Pool「${d.name||i+1}」：${tr('val.format_invalid').replace('{item}','Range')} (${tr('val.example').replace('{example}','10.0.0.10-10.0.0.100')})`);
+        }
+      }
     }else if(d.type==='relay'&&d.relayServer&&!isValidIPv4(d.relayServer)){
       errors.push(`⚠️ DHCP Relay ${i+1}：${tr('val.format_invalid').replace('{item}','Server IP')}`);
     }

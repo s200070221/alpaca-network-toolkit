@@ -143,7 +143,9 @@ const ZyxelParser = (() => {
         srcIntf: from, dstIntf: to, srcAddr, dstAddr,
         srcAddr4: srcAddrSplit.v4, srcAddr6: srcAddrSplit.v6, dstAddr4: dstAddrSplit.v4, dstAddr6: dstAddrSplit.v6,
         service, schedule: 'always',
-        action: /^(allow)$/i.test(actionRaw) ? 'accept' : actionRaw.toLowerCase(),
+        // 正規化為 accept／deny（ZLD 另有 reject）：稽核與健康度皆假設只有這兩種值，reject 原本被 deny 類檢查漏掉；比照 Check Point 解析器（2026-10-01）
+        action: /^(allow)$/i.test(actionRaw) ? 'accept' : 'deny',
+        actionRaw: actionRaw.toLowerCase(),
         nat: 'disable', ippool: 'disable', poolname: '-',
         logtraffic: /^log\b/m.test(body) ? 'all' : 'disable',
         utm: { av: '-', ips: '-', webfilter: '-', appctrl: '-' },

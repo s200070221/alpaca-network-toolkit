@@ -193,7 +193,29 @@ function _policySvcMatches(svcStr, proto, port, svcList) {
   const names = (svcStr||'ALL').split(',').map(s=>s.trim()).filter(Boolean);
   return names.some(n=>_svcMatches(n, proto, port, svcList, new Set()));
 }
-function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED) {
+// 連線狀態條件（2026-10-01，YC）：EdgeRouter `state {…}`、MikroTik `connection-state=` 解析為 connState 陣列。
+// 「只看新連線」時，只比對既有連線（established／related／invalid／untracked）的規則不適用於新連線，略過；
+// 沒有狀態條件、含 new，或使用反向寫法（如 !invalid，除 !new 外）的規則仍比對
+function _ruleAppliesToNew(p) {
+  const st = Array.isArray(p.connState) ? p.connState : [];
+  if (!st.length) return true;
+  if (st.includes('new')) return true;
+  const neg = st.filter(x => x.startsWith('!'));
+  return neg.length > 0 && !neg.includes('!new') && neg.length === st.length;
+}
+// 進入介面／區域條件（2026-10-01，YA）：只保留來源介面為該名稱、any／all 或未解析（-、空白）的規則；
+// MikroTik 沒有介面條件時 srcIntf 會回填 chain 名稱（forward／input），視同不限介面
+function _queryIntfMatch(p, name) {
+  if (!name) return true;
+  const raw = (p._chain && p.srcIntf === p._chain) ? '-' : String(p.srcIntf || '-');
+  const items = raw.split(/\s*,\s*/).map(s => s.trim().toLowerCase());
+  return items.some(s => s === 'any' || s === 'all' || s === '-' || s === '' || s === name.trim().toLowerCase());
+}
+// opts.newOnly：預設 true（查詢「新連線會不會被放行」）；false 時沿用舊行為，狀態規則一律視為可能符合
+// opts.srcIntf：選填，進入介面／區域名稱
+function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) {
+  const newOnly = !opts || opts.newOnly !== false;
+  const qIntf = opts && opts.srcIntf ? String(opts.srcIntf).trim() : '';
   if (!PARSED||!PARSED.policies) return null;
   const srcInt=_parseQueryIp(srcStr), dstInt=_parseQueryIp(dstStr);
   if (srcInt===null||dstInt===null) return {error:'invalid_ip'};
@@ -215,6 +237,8 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED) {
   const trace=[];
   for (const p of pols) {
     if (p.status==='disable') { trace.push({policy:p,result:'disabled'}); continue; }
+    if (newOnly && !_ruleAppliesToNew(p)) { trace.push({policy:p,result:'skip',reason:'state'}); continue; }
+    if (!_queryIntfMatch(p, qIntf)) { trace.push({policy:p,result:'skip',reason:'intf'}); continue; }
     const pSrc=addrField(p,'srcAddr'), pDst=addrField(p,'dstAddr');
     const sm=_policyAddrMatches(pSrc,srcInt,addrs);
     if (sm===false) { trace.push({policy:p,result:'skip',reason:'src_addr'}); continue; }
@@ -386,7 +410,8 @@ function parseBatchQueryCSV(text) {
     if (port && !(/^\d+$/.test(port) && +port >= 1 && +port <= 65535)) { errors.push({ line: lineNo, reason: 'port' }); return; }
     if (exp && !expect) { errors.push({ line: lineNo, reason: 'expect' }); return; }
     if (rows.length >= BATCH_QUERY_MAX_ROWS) { errors.push({ line: lineNo, reason: 'max' }); return; }
-    rows.push({ line: lineNo, src, dst, proto, port, expect, srcList, dstList });
+    // srcintf：選填欄位（需有表頭），進入介面／區域名稱（2026-10-01，YA）
+    rows.push({ line: lineNo, src, dst, proto, port, expect, srcList, dstList, srcIntf: get('srcintf') });
   });
   return { rows, errors };
 }
@@ -394,12 +419,12 @@ function parseBatchQueryCSV(text) {
 // 會逐一查詢每個來源×目的組合後彙總：全部結果相同→該結果；全部不允許但拒絕方式不同→'deny'；
 // 有允許也有不允許→'mixed'。命中規則只有一條時帶出 ID／名稱，多條時 policyId 為以 ; 串接的 ID。
 // check：未填 expect 為 null；accept 需全部允許、deny 需全部不允許
-function runBatchPolicyQuery(rows, vdomFilter, PARSED) {
+function runBatchPolicyQuery(rows, vdomFilter, PARSED, opts) {
   return rows.map(r => {
     const srcs = r.srcList || [r.src], dsts = r.dstList || [r.dst];
     const results = [];
     srcs.forEach(s => dsts.forEach(d => {
-      const res = _runPolicyQuery(s, d, r.proto, r.port, vdomFilter, PARSED) || { matched: null, action: 'implicit_deny', trace: [] };
+      const res = _runPolicyQuery(s, d, r.proto, r.port, vdomFilter, PARSED, Object.assign({}, opts, r.srcIntf ? { srcIntf: r.srcIntf } : {})) || { matched: null, action: 'implicit_deny', trace: [] };
       const mt = (res.trace || []).find(t => t.result === 'match');
       results.push({ action: res.action, policy: res.matched, hasFqdn: !!(mt && mt.hasFqdn) });
     }));
@@ -416,9 +441,9 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED) {
 // 批次查詢跨版本比對（2026-09-29 新增，FE）：同一批查詢對新舊兩份設定各跑一次。
 // change：'action'＝允許／拒絕結果改變（implicit deny 視同 deny）；'policy'＝結果相同但命中的
 // 規則 ID 不同；''＝完全相同。回傳 [{...row, old:{action,policyId,policyName}, new:{...}, change}]
-function compareBatchQuery(rows, oldParsed, newParsed) {
-  const o = runBatchPolicyQuery(rows, '__all__', oldParsed);
-  const n = runBatchPolicyQuery(rows, '__all__', newParsed);
+function compareBatchQuery(rows, oldParsed, newParsed, opts) {
+  const o = runBatchPolicyQuery(rows, '__all__', oldParsed, opts);
+  const n = runBatchPolicyQuery(rows, '__all__', newParsed, opts);
   const pick = r => ({ action: r.action, policyId: r.policyId, policyName: r.policyName, acceptCount: r.acceptCount, combos: r.combos });
   return rows.map((row, i) => {
     const a = o[i], b = n[i];

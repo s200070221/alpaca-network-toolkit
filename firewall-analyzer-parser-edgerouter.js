@@ -242,6 +242,10 @@ const EdgeRouterParser = (() => {
         const protocol = val(rNode, 'protocol') || 'all';
         const actionRaw = (val(rNode, 'action') || 'drop').toLowerCase();
         const desc = val(rNode, 'description') || '';
+        // 連線狀態條件 `state { established enable; related enable; new enable; invalid enable }`（2026-10-01，
+        // 供 IP/Policy 查詢「只看新連線」略過僅比對既有連線的規則）
+        const stNode = child(rNode, 'state');
+        const connState = stNode ? ['new', 'established', 'related', 'invalid'].filter(k => val(stNode, k) === 'enable') : [];
         idx++;
         // 2026-08-10 稽核修復：先前完全沒有呼叫 _splitAddr()，srcAddr6/dstAddr6 恆為 '-'，
         // 不論規則引用的 group 實際是否含 IPv6 成員
@@ -260,7 +264,7 @@ const EdgeRouterParser = (() => {
           logtraffic: val(rNode, 'log') === 'enable' ? 'all' : 'disable',
           utm: { av: '-', ips: '-', webfilter: '-', appctrl: '-' },
           status: hasFlag(rNode, 'disable') ? 'disable' : 'enable',
-          users: '-', groups: '-', comments: desc, _vdom: '',
+          users: '-', groups: '-', comments: desc, _vdom: '', connState,
         });
       });
     });

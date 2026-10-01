@@ -1245,11 +1245,12 @@ function renderPorts(){
   </div>`;
   if(portView==='heatmap') return toggleHtml+renderPortHeatmap(ph);
   const rows=ph.map(i=>({
-    name:i.name,member:i.member,type:i.type,desc:i.desc,
+    name:i.name,member:i.member??'—',type:i.type,desc:i.desc,
     mode:i.mode||i.type,vlans:i.vlans||'—',native:i.nativeVlan||'—',
     ip:i.ip||'—',ip6:i.ip6||'—',secondaryIp:(i.secondaryIps&&i.secondaryIps.length)?i.secondaryIps.join(', '):'—',vrf:i.vrf||'—',_shutdown:!!i.shutdown,status:i.shutdown?tr('val.disabled'):tr('val.enabled'),
     name_html:`<span class="mono" style="color:var(--accent3)">${esc(i.name)}</span>`,
-    member_html:`<span class="pill p-stack">M${i.member}</span>`,
+    // 無堆疊成員資訊的廠牌（ProCurve 等）原本顯示 Mundefined（2026-10-01）
+    member_html:i.member!=null?`<span class="pill p-stack">M${esc(i.member)}</span>`:'<span style="color:var(--text-muted)">—</span>',
     type_html:`<span class="pill p-${i.type==='svi'?'svi':i.type==='stack'?'stack':'info'}">${i.type==='stack'?tr('port.type_stack'):i.type}</span>`,
     mode_html:i.type==='stack'?`<span class="pill p-stack">${tr('port.type_stack')}</span>`:i.mode?`<span class="pill p-${i.mode==='trunk'?'trunk':i.mode==='hybrid'?'hybrid':'access'}">${i.mode}</span>`:`<span class="pill p-${i.type==='svi'?'svi':'gray'}">${i.type}</span>`,
     vlans_html:i.vlans?`<span class="pill p-vlan">${esc(i.vlans.substring(0,26)+(i.vlans.length>26?'…':''))}</span>`:'<span style="color:var(--text-muted)">—</span>',
@@ -1298,7 +1299,8 @@ function renderRoutes(){
     gwIsInterface:r.gwIsInterface,
     dst_html:`<span class="pill p-route">${esc(r.dst)}</span>`,
     gw_html:r.gwIsInterface?`<span class="mono" style="color:var(--orange)">${esc(r.gw)} <span style="font-size:9px;opacity:.7">${tr('route.iface_gw')}</span></span>`:`<span class="mono" style="color:var(--green)">${esc(r.gw)}</span>`,
-    vrf_html:r.vrf!=='__main__'?`<span class="pill p-vrf">${esc(r.vrf)}</span>`:`<span style="color:var(--text-muted)">${tr('filter.main_rt')}</span>`,
+    // 2026-10-01：沒有 vrf 欄位的廠牌（FortiSwitch／RouterOS）原本顯示 undefined，改用上方已補預設值的 vrf
+    vrf_html:(r.vrf&&r.vrf!=='__main__')?`<span class="pill p-vrf">${esc(r.vrf)}</span>`:`<span style="color:var(--text-muted)">${tr('filter.main_rt')}</span>`,
   }));
   tableData=rows;tableKeys=['dst','gw','vrf'];
   const fSel=document.getElementById('filter-sel');

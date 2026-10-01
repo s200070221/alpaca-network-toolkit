@@ -409,6 +409,8 @@ const MikrotikParser = (() => {
         comments: p['comment'] || '',
         // MikroTik-specific extras
         _chain: chain, _connState: connState,
+        // 正規化連線狀態陣列（與 EdgeRouter 相同欄位，供查詢「只看新連線」使用，2026-10-01）
+        connState: connState ? connState.split(',').map(x => x.trim().toLowerCase()).filter(Boolean) : [],
         _proto: proto, _dport: dport,
         _vdom: '',
       });

@@ -478,7 +478,8 @@ function buildFortiswitchSectionHtml(fSwitches, fPorts, fMacPolicies, fNacPolici
   return { sumHtml, html };
 }
 
-function buildQuerySectionHtml(qvdoms, isFortiGate){
+// qintfs（2026-10-01，YA）：規則實際使用的來源介面／區域名稱，給「進入介面」欄位的建議清單
+function buildQuerySectionHtml(qvdoms, isFortiGate, qintfs){
   const qvdomOpts = `<option value="__all__">${tr('query.all_vdom')}</option>`
     + qvdoms.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
   const qVdomSel = qvdoms.length > 1
@@ -538,12 +539,21 @@ function buildQuerySectionHtml(qvdoms, isFortiGate){
             onkeydown="if(event.key==='Enter')_runQuery()">
         </label>
         ${qVdomSel}
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:12px" data-tip="${esc(tr('query.src_intf_hint'))}">${tr('query.src_intf')}
+          <input id="q-srcintf" type="text" list="q-srcintf-list" placeholder="outside / lan / trust"
+            style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-family:monospace;width:150px"
+            onkeydown="if(event.key==='Enter')_runQuery()">
+          <datalist id="q-srcintf-list">${(qintfs || []).map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+        </label>
         <button type="button" onclick="_runQuery()"
           style="padding:7px 20px;border-radius:6px;background:var(--accent);
                  color:#fff;border:none;cursor:pointer;font-weight:600;font-size:13px;margin-bottom:0;align-self:flex-end">
           🔍 ${tr('query.btn')}
         </button>
       </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:10px;color:var(--text-dim)">
+        <input type="checkbox" id="q-newonly" checked> ${tr('query.new_only')}
+      </label>
       <div id="query-result" style="margin-top:20px"></div>
       <div style="margin-top:28px;padding-top:20px;border-top:1px solid var(--border)">
         <h2 style="margin:0 0 6px;font-size:16px">${tr('batch.title')}</h2>
@@ -826,6 +836,7 @@ function buildSdwanSectionHtml(sd, filterByVdom){
     const m={'ping':'p-info','http':'p-allow','https':'p-allow','dns':'p-purple','tcp-echo':'p-warn','udp-echo':'p-warn'};
     return pill(p,m[p]||'p-dim');
   };
+  // passwordAuth／threshold 只有 FortiGate 解析；其他廠牌缺欄位時原本顯示「密碼驗證 ✓」與 undefined（2026-10-01）
   (filterByVdom(sd.healthChecks)).forEach(hc=>{
     const slaStr=hc.slaThresholds.map(s=>`SLA-${s.id}: L≤${s.latency}ms J≤${s.jitter}ms PL≤${s.packetLoss}%`).join(' | ')||'-';
     html+=`<tr>
@@ -838,8 +849,8 @@ function buildSdwanSectionHtml(sd, filterByVdom){
       <td class="mono" style="color:${parseInt(hc.failtime)<=3?'var(--red)':'var(--text-dim)'}">${esc(hc.failtime)}</td>
       <td class="mono" style="color:var(--text-dim)">${esc(hc.recoverytime)}</td>
       <td class="mono">${pill(hc.detectMode||'active',hc.detectMode==='active'?'p-allow':'p-dim')}</td>
-      <td class="mono">${hc.passwordAuth!=='disable'?pill('✓','p-warn'):'—'}</td>
-      <td class="mono" style="color:var(--text-dim)">${hc.threshold}</td>
+      <td class="mono">${hc.passwordAuth&&hc.passwordAuth!=='disable'?pill('✓','p-warn'):'—'}</td>
+      <td class="mono" style="color:var(--text-dim)">${esc(hc.threshold||'-')}</td>
       <td style="color:var(--text-dim)">${esc(hc.members)}</td>
       <td style="font-size:11px;color:var(--text-dim)">${esc(slaStr)}</td>
     </tr>`;
