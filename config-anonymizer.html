@@ -1242,7 +1242,7 @@ const VENDOR_SIGS = {
   pfsense:     { p:[/<pfsense>/i, /pfSense|OPNsense/i, /<version>[\d.]+<\/version>/], min:1 },
   sonicwall:   { p:[/<SonicWALLconfig/i, /SonicWall|SonicOS/i], min:1 },
   mikrotik:    { p:[/^\/ip\s+(?:firewall|address|route)/m, /^\/system\s+identity/m, /RouterOS/i], min:1 },
-  arista:      { p:[/^! device:.* EOS/m, /Arista Networks/i, /^management api http-commands/m], min:1 },
+  arista:      { p:[/^! device:.* EOS/m, /Arista Networks/i, /^management api http-commands/m, /^!\s*Software image version:\s*EOS/m, /^!\s*device:\s*\S+.*\(Arista\s/m], min:1 },
   extreme:     { p:[/^create vlan\s+/m, /^configure sys-name/m, /ExtremeXOS|ExtremeEOS/i], min:1 },
   alcatel:     { p:[/^(?:->\s*)?system name\s+/m, /^stack set slot\s+/m, /OmniSwitch/i], min:1 },
   brocade:     { p:[/^vlan\s+\d+\s+(?:name\s+\S+\s+)?by\s+port/m, /^stack unit\s+\d+/m, /FastIron|ICX/i], min:1 },
@@ -1736,7 +1736,8 @@ function anonFortiGate(text, opts) {
     // 雲端 API 憑證），先前完全沒有遮蔽規則涵蓋
     // secondary-/tertiary- 前綴（2026-10-01）：config user radius 的 secondary-secret／tertiary-secret 與
     // config user tacacs+ 的 secondary-key／tertiary-key 是備援伺服器的共用金鑰，原本未遮蔽
-    const keyR = line.replace(/^(\s*set\s+(?:(?:secondary-|tertiary-)?(?:key|secret)|api-key|auth-password|priv-password|sim-pin|auth-pwd|priv-pwd)\s+"?)[^"\n]+("?)$/, '$1REDACTED_KEY$2');
+    // passphrase：wireless-controller vap 的 WiFi 密碼（2026-10-01 原本未遮蔽）
+    const keyR = line.replace(/^(\s*set\s+(?:(?:secondary-|tertiary-)?(?:key|secret)|api-key|auth-password|priv-password|sim-pin|auth-pwd|priv-pwd|passphrase)\s+"?)[^"\n]+("?)$/, '$1REDACTED_KEY$2');
     if (keyR !== line) { stats.key++; line = keyR; }
     // OSPF MD5 認證金鑰（2026-08-24 新增）：舊版 config router ospf > config ospf-interface >
     // set md5-key <id> <key>；FortiOS 7.0+ 改用 config router key-chain > config key >
@@ -2119,8 +2120,11 @@ function anonPfSense(text, opts) {
     const pR = line.replace(/(<(?:password|bcrypt-hash|md5-hash)>)([^<]*)(<\/[^>]+>)/, '$1REDACTED_HASH$3');
     if (pR !== line) { stats.password++; line = pR; }
     // PSK：支援 <preshared_key> 與 <pre-shared-key>（連字號格式）
-    const pskR = line.replace(/(<(?:preshared_key|pre-shared-key)>)([^<]*)(<\/[^>]+>)/, '$1REDACTED_PSK$3');
+    // <passphrase>：無線 <wireless><wpa><passphrase>（2026-10-01 原本未遮蔽）
+    const pskR = line.replace(/(<(?:preshared_key|pre-shared-key|passphrase)>)([^<]*)(<\/[^>]+>)/, '$1REDACTED_PSK$3');
     if (pskR !== line) { stats.key++; line = pskR; }
+    // 無線 SSID（比照 FortiGate VAP，歸在主機名稱選項下）
+    if (opts.hostname) line = line.replace(/(<ssid>)([^<]+)(<\/ssid>)/, (m, o, n, c) => o + anonSSID(n) + c);
     // shared_key（OpenVPN Static Key 模式）／tls（tls-auth/tls-crypt 金鑰）：先嘗試同一行
     // 內完整標籤（沿用既有簡單 case，涵蓋人工精簡過或單行匯出的情況），比對不到才檢查
     // 「這行只有開始標籤、沒有收尾標籤」的跨行起點情形，後續行交給上面的 multilineKeyTag
@@ -2269,11 +2273,17 @@ function anonMikroTik(text, opts) {
       // /user 區塊的帳號（RouterOS 匯出不含密碼，原本因沒有 password= 而整筆未處理）
       if (inUser) line = line.replace(/^(\s*add\s+(?:.*\s)?name=)(\S+)/, (m, p, n) => p + (/^user-\d{3}$/.test(n) ? n : anonUser(n)));
     }
-    const pR = line.replace(/\bpassword=(\S+)/, 'password=REDACTED_PASSWORD');
+    // 全域比對（2026-10-01）：/snmp community 同一行有 authentication-password= 與 encryption-password=，
+    // 原本只替換第一個
+    const pR = line.replace(/\bpassword=(\S+)/g, 'password=REDACTED_PASSWORD');
     if (pR !== line) { stats.password++; line = pR; }
     // PSK / IPsec
-    const pskR = line.replace(/\bpreshared-key=(\S+)/, 'preshared-key=REDACTED_PSK');
+    // 另含無線 security-profiles 的 wpa-pre-shared-key=／wpa2-pre-shared-key=（原本未遮蔽）
+    // 另含 RouterOS v7 /interface wifi 的 security.passphrase=
+    const pskR = line.replace(/\b((?:wpa2?-)?pre-?shared-key=|(?:security\.)?passphrase=)("[^"]*"|\S+)/g, '$1REDACTED_PSK');
     if (pskR !== line) { stats.key++; line = pskR; }
+    // SSID：舊版 /interface wireless 的 ssid=、v7 /interface wifi 的 configuration.ssid=（比照 FortiGate VAP 歸在主機名稱選項下）
+    if (opts.hostname) line = line.replace(/((?<![\w-])(?:configuration\.)?ssid=)("([^"]*)"|([^\s"]+))/g, (m, p, all, q, b) => p + (q !== undefined ? '"' + anonSSID(q) + '"' : anonSSID(b)));
     const secR = line.replace(/\bsecret=(\S+)/, 'secret=REDACTED_KEY');
     if (secR !== line) { stats.key++; line = secR; }
     // OSPF/BGP MD5 認證金鑰（2026-08-24 新增，官方文件 authentication-key／tcp-md5-key 皆標記
@@ -2286,7 +2296,8 @@ function anonMikroTik(text, opts) {
     if (comR !== line) { stats.community++; line = comR; }
     // 區塊模式：/snmp community 後跟 set [N] name=VALUE
     if (inSnmpCommunity) {
-      const comR2 = line.replace(/^(set\s+(?:\d+\s+)?name=)(\S+)/, '$1REDACTED_COMMUNITY');
+      // 真實 /export 為 `set [ find default=yes ] … name=public`、`add addresses=… name=X`，name= 不一定緊接 set
+      const comR2 = /^(?:set|add)\s/.test(line) ? line.replace(/\b(name=)("[^"]*"|\S+)/, '$1REDACTED_COMMUNITY') : line;
       if (comR2 !== line) { stats.community++; line = comR2; }
     }
     // IPv4 in key=value (address=, gateway=, etc.) - handle separately before generic replaceIPsInLine
@@ -2423,6 +2434,8 @@ function anonOpenWrt(text, opts) {
   const out = [];
   for (let line of lines) {
     line = line.replace(/^(\s*option\s+key\s+)(['"]?)([^'"\n]*)(\2)\s*$/, (m, p, q, v, q2) => p + q + 'REDACTED_PSK' + q2);
+    // wifi-iface 的 SSID（比照 FortiGate VAP，歸在主機名稱選項下；2026-10-01 原本未處理）
+    if (opts.hostname) line = line.replace(/^(\s*option\s+ssid\s+)(['"]?)([^'"\n]+)(\2)\s*$/, (m, p, q, v, q2) => p + q + anonSSID(v) + q2);
     line = line.replace(/^(\s*option\s+password\s+)(['"]?)([^'"\n]*)(\2)\s*$/, (m, p, q, v, q2) => p + q + 'REDACTED_PASSWORD' + q2);
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
@@ -2457,7 +2470,9 @@ function anonComware(text, opts) {
     const pR = line.replace(/^(\s+password\s+(?:cipher|hash|simple)\s+)(\S+)/, '$1REDACTED_HASH');
     if (pR !== line) { stats.password++; line = pR; }
     // key cipher / shared-key cipher — 允許出現在行中間（如 primary authentication IP port key cipher VALUE）
-    const kR = line.replace(/\b((?:key|shared-key)\s+cipher\s+)(\S+)/, '$1REDACTED_KEY');
+    // 2026-10-01：radius／hwtacacs scheme 視圖的 `key {authentication|accounting|authorization} {cipher|simple} VALUE`
+    // （Comware V7）原本只認 `key cipher`，用途關鍵字與明碼 simple 格式皆漏遮
+    const kR = line.replace(/\b((?:key|shared-key)\s+(?:(?:authentication|accounting|authorization)\s+)?(?:cipher|simple)\s+)(\S+)/, '$1REDACTED_KEY');
     if (kR !== line) { stats.key++; line = kR; }
     // community-name cipher/plain（snmp-agent community string in user/snmp context）
     const comNameR = line.replace(/^(\s+community-name\s+(?:cipher|plain)\s+)(\S+)/, '$1REDACTED_COMMUNITY');
@@ -2472,8 +2487,14 @@ function anonComware(text, opts) {
       // 不帶引號格式
       line = line.replace(/(\bauth\s+\S+\s+)(\S+)(\s+priv)/, '$1REDACTED_KEY$3');
       line = line.replace(/(\bpriv\s+\S+\s+)(\S+)$/, '$1REDACTED_KEY');
+      // V7 語法 `{cipher|simple} authentication-mode sha PW privacy-mode aes128 PW`
+      line = line.replace(/(\bauthentication-mode\s+\S+\s+)(\S+)/, '$1REDACTED_KEY');
+      line = line.replace(/(\bprivacy-mode\s+\S+\s+)(\S+)/, '$1REDACTED_KEY');
       stats.key++;
     }
+    // super password [role R] {hash|simple|cipher} VALUE（切換角色用密碼）
+    const superR = line.replace(/^(\s*super\s+password\s+(?:role\s+\S+\s+)?(?:hash|simple|cipher)\s+)(\S+)/, '$1REDACTED_HASH');
+    if (superR !== line) { stats.password++; line = superR; }
     const authR = line.replace(/^(\s+authentication-string\s+cipher\s+)(\S+)/, '$1REDACTED_HASH');
     if (authR !== line) { stats.password++; line = authR; }
     // OSPF/BGP MD5 認證金鑰（2026-08-24 新增，官方 H3C OSPF/BGP Commands 查證，高信心度）：
@@ -2511,7 +2532,8 @@ const CISCO_STYLE_SECRET_RULES = [
   { re: /^((?:tacacs-server|radius-server)\s+host\s+\S+.*?\s+key\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
   // aaa group server 內的 server-private ... key
   { re: /^(\s*server-private\s+\S+.*?\s+key\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
-  { re: /^(ntp\s+authentication-key\s+\d+\s+md5\s+)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
+  // Arista 寫法 `md5 7 VALUE`（型別在值前）；Cisco IOS 是 `md5 VALUE 7`（型別在值後），單一數字跳過不影響後者
+  { re: /^(ntp\s+authentication-key\s+\d+\s+md5\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
   // HSRP／VRRP 認證：md5 key-string、text、舊版不帶關鍵字的純字串（md5 key-chain 為名稱，不遮）
   { re: /^(\s+(?:standby|vrrp)\s+(?:\d+\s+)?authentication\s+(?:md5\s+key-string\s+(?:\d\s+)?|text\s+))(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
   { re: /^(\s+(?:standby|vrrp)\s+(?:\d+\s+)?authentication\s+)(?!md5\b|text\b)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
@@ -2519,7 +2541,8 @@ const CISCO_STYLE_SECRET_RULES = [
   { re: /^(\s+pre-shared-key\s+(?:(?:local|remote)\s+|address\s+\S+(?:\s+\S+)?\s+key\s+|hostname\s+\S+\s+key\s+)?(?:\d\s+)?)(\S+)/, tag: 'REDACTED_PSK', stat: 'key' },
   { re: /^(\s+ppp\s+chap\s+password\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_PASSWORD', stat: 'password' },
   { re: /^(\s+ppp\s+pap\s+sent-username\s+\S+\s+password\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_PASSWORD', stat: 'password' },  // 以下原本只寫在 anonCiscoIOS()，Arista／Ruijie／Planet／NX-OS 各自的函式缺漏，改為共用
-  { re: /^(enable\s+(?:secret|password)\s+(?:level\s+\d+\s+)?(?:\d\s+)?)(\S+)/, tag: 'REDACTED_HASH', stat: 'password' },
+  // sha512：Arista `enable password sha512 $6$…`
+  { re: /^(enable\s+(?:secret|password)\s+(?:level\s+\d+\s+)?(?:\d\s+|sha512\s+)?)(\S+)/, tag: 'REDACTED_HASH', stat: 'password' },
   { re: /^(username\s+\S+\s+.*?\b(?:secret|password)\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_HASH', stat: 'password' },
   { re: /^((?:tacacs-server|radius-server)\s+key\s+(?:\d\s+)?)(\S+)/, tag: 'REDACTED_KEY', stat: 'key' },
   { re: /^(\s+key\s+(?:\d\s+)?)([A-Za-z]\S*)$/, tag: 'REDACTED_KEY', stat: 'key' },
@@ -2632,6 +2655,11 @@ function anonCiscoASA(text, opts) {
     if (comR !== line) { stats.community++; line = comR; }
     const comHostR = line.replace(/^(snmp-server\s+host\s+\S+\s+\S+\s+(?:community\s+)?)(\S+)/, '$1REDACTED_COMMUNITY');
     if (comHostR !== line) { stats.community++; line = comHostR; }
+    // SNMPv3 `snmp-server user U G v3 [encrypted] auth {md5|sha} PW priv {des|3des|aes N} PW`（2026-10-01，原本未遮蔽）
+    if (/^snmp-server\s+user\s/.test(line)) {
+      const v3R = line.replace(/(\bauth\s+\S+\s+)(\S+)/, '$1REDACTED_KEY').replace(/(\bpriv\s+\S+(?:\s+\d+)?\s+)(\S+)/, '$1REDACTED_KEY');
+      if (v3R !== line) { stats.key++; line = v3R; }
+    }
     // TACACS/RADIUS key（與 IOS 同語法）
     const kR = line.replace(/^((?:tacacs-server|radius-server)\s+key\s+(?:\d+\s+)?)(\S+)/, '$1REDACTED_KEY')
                    .replace(/^(\s+key\s+\d+\s+)(\S+)/, '$1REDACTED_KEY');
@@ -2711,7 +2739,9 @@ function anonJuniper(text, opts) {
     if (comR === line) comR = line.replace(/^(\s*community\s+)"([^"]+)"/, '$1"REDACTED_COMMUNITY"');
     if (comR !== line) { stats.community++; line = comR; }
     // SNMPv3 authentication-password / privacy-password
-    const snmpV3R = line.replace(/(\b(?:authentication-password|privacy-password)\s+)"([^"]+)"/, '$1"REDACTED_KEY"');
+    // 設定檔實際儲存的是加密後的 authentication-key／privacy-key "$9$…"（-password 是輸入時的明碼寫法），
+    // set 格式原本只認 -password（2026-10-01）
+    const snmpV3R = line.replace(/(\b(?:authentication-password|privacy-password|authentication-key|privacy-key)\s+)"([^"]+)"/, '$1"REDACTED_KEY"');
     if (snmpV3R !== line) { stats.key++; line = snmpV3R; }
     // IKE PSK
     let pskR = line.replace(/^(set\s+security\s+ike\s+.+\s+pre-shared-key\s+ascii-text\s+)"([^"]+)"/, '$1"REDACTED_PSK"');
@@ -2753,7 +2783,8 @@ function anonArista(text, opts) {
         return p + anonUser(n) + mid + 'REDACTED_HASH';
       });
     } else {
-      const uR = line.replace(/^(username\s+\S+\s+.+?(?:secret|password)\s+\d+\s+)(\S+)$/, '$1REDACTED_HASH');
+      // secret sha512 <雜湊>（Arista 標準寫法）原本只認數字型別，未勾選帳號匿名化時雜湊原樣留下
+      const uR = line.replace(/^(username\s+\S+\s+.+?(?:secret|password)\s+(?:\d+|sha512)\s+)(\S+)$/, '$1REDACTED_HASH');
       if (uR !== line) { stats.password++; line = uR; }
     }
     const comR = line.replace(/^(snmp-server\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
@@ -2798,8 +2829,12 @@ function anonArubaCX(text, opts) {
     }
     const comR = line.replace(/^(snmp-server\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
     if (comR !== line) { stats.community++; line = comR; }
-    const kR = line.replace(/^((?:radius-server|tacacs-server)\s+host\s+\S+\s+key\s+)(\S+)/, '$1REDACTED_KEY');
+    // AOS-CX 金鑰前有 ciphertext／plaintext 修飾詞，原本把修飾詞當成金鑰值、真正的值原樣留下（2026-10-01）
+    const kR = line.replace(/^((?:radius-server|tacacs-server)\s+host\s+\S+\s+(?:.*?\s)?key\s+(?:ciphertext\s+|plaintext\s+)?)(\S+)/, '$1REDACTED_KEY');
     if (kR !== line) { stats.key++; line = kR; }
+    // snmpv3 user U auth sha auth-pass {ciphertext|plaintext} PW priv aes priv-pass {ciphertext|plaintext} PW
+    const v3R = line.replace(/(\b(?:auth|priv)-pass\s+(?:ciphertext\s+|plaintext\s+)?)(\S+)/g, '$1REDACTED_KEY');
+    if (v3R !== line) { stats.key++; line = v3R; }
     // OSPF/BGP MD5 認證金鑰（2026-08-24 新增，官方 HPE Aruba Networking AOS-CX CLI Reference
     // 查證，高信心度，官方範例逐字確認）：`ip ospf message-digest-key <id> md5
     // [ciphertext|plaintext] <key>`；`neighbor <ip|group> password [ciphertext|plaintext]
@@ -2821,18 +2856,20 @@ function anonDellOS10(text, opts) {
     if (opts.hostname) {
       line = line.replace(/^(hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'sw', opts));
     }
-    if (opts.user) {
-      line = line.replace(/^(username\s+)(\S+)(\s+password\s+\d+\s+)(\S+)/, (m, p, n, mid, h) => p + anonUser(n) + mid + 'REDACTED_HASH');
-      line = line.replace(/^(username\s+)(\S+)(\s+privilege\s+\d+\s+secret\s+\d+\s+)(\S+)/, (m, p, n, mid, h) => p + anonUser(n) + mid + 'REDACTED_HASH');
-    } else {
-      const pR = line.replace(/^(username\s+\S+\s+(?:password|privilege\s+\d+\s+secret)\s+\d+\s+)(\S+)/, '$1REDACTED_HASH');
-      if (pR !== line) { stats.password++; line = pR; }
-    }
+    // 密碼型別數字改為選填（2026-10-01）：OS10 官方語法是 `username NAME password PWD role ROLE
+    // [priv-lvl N]`，running-config 通常直接接 $6$ 雜湊、沒有型別數字，原本規則要求
+    // `password <數字> <值>`，這種寫法整行原樣輸出；另涵蓋 OS9 `username N privilege P password T V`
+    const userPwRe = /^(username\s+)(\S+)(\s+(?:privilege\s+\d+\s+)?(?:password|secret)\s+(?:\d\s+)?)(\S+)/;
+    const pR = line.replace(userPwRe, (m, p, n, mid, h) => p + (opts.user ? anonUser(n) : n) + mid + 'REDACTED_HASH');
+    if (pR !== line) { stats.password++; line = pR; }
     const comR = line.replace(/^(snmp-server\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
     if (comR !== line) { stats.community++; line = comR; }
     // radius/tacacs host key（允許中間插入 auth-port/acct-port）
-    const kR = line.replace(/^((?:radius-server|tacacs-server)\s+host\s+\S+.*?\s+key\s+)(\S+)/, '$1REDACTED_KEY');
+    // 型別數字（OS10 `key 9 <加密值>`／`key 0 <明碼>`）原本被當成金鑰值，真正的值原樣留下（2026-10-01）
+    const kR = line.replace(/^((?:radius-server|tacacs-server)\s+host\s+\S+.*?\s+key\s+(?:\d\s+)?)(\S+)/, '$1REDACTED_KEY');
     if (kR !== line) { stats.key++; line = kR; }
+    const enR = line.replace(/^(enable\s+password\s+(?:\d\s+)?)(\S+)/, '$1REDACTED_HASH');
+    if (enR !== line) { stats.password++; line = enR; }
     // OSPF/BGP MD5 認證金鑰（2026-08-24 新增，官方 Dell SmartFabric OS10 User Guide 查證）：
     // OSPF `ip ospf message-digest-key <id> md5 <key-string>`（中信心度，未查得 cipher/
     // plaintext 修飾詞是否存在，保守比對 md5 之後整段裸值）；BGP `router bgp` neighbor 子模式
@@ -2897,7 +2934,8 @@ function anonExtreme(text, opts) {
     const comR = line.replace(/(\bcommunity-name\s+)"?([^"\s]+)"?/, '$1"REDACTED_COMMUNITY"');
     if (comR !== line) { stats.community++; line = comR; }
     // 通用 community 替換（configure snmp add trapreceiver ... community "VALUE"）
-    const comR2 = line.replace(/(\bcommunity\s+)"([^"]+)"/, '$1"REDACTED_COMMUNITY"');
+    // 另含 `configure snmp add community {readonly|readwrite} [encrypted] "…"`（原本 readonly 擋在中間不命中）
+    const comR2 = line.replace(/(\bcommunity\s+(?:(?:readonly|readwrite)\s+)?(?:encrypted\s+)?)"([^"]+)"/, '$1"REDACTED_COMMUNITY"');
     if (comR2 !== line) { stats.community++; line = comR2; }
     // SNMPv3 user auth/priv：configure snmpv3 add user ... authentication <type> "<pass>" privacy <type> "<pass>"
     if (/snmpv3.*user/.test(line)) {
@@ -2906,7 +2944,8 @@ function anonExtreme(text, opts) {
       stats.key++;
     }
     // shared-secret（引號與非引號格式）
-    const kR = line.replace(/(\bshared-secret\s+)"?([^"\s]+)"?/, '$1"REDACTED_KEY"');
+    // `shared-secret encrypted "…"`：原本把 encrypted 當成值（2026-10-01）
+    const kR = line.replace(/(\bshared-secret\s+(?:encrypted\s+)?)"?([^"\s]+)"?/, '$1"REDACTED_KEY"');
     if (kR !== line) { stats.key++; line = kR; }
     // OSPF md5-key：configure ospf ... md5-key N "VALUE"
     const ospfR = line.replace(/(\bmd5-key\s+\d+\s+)"([^"]+)"/, '$1"REDACTED_KEY"');
@@ -2941,7 +2980,9 @@ function anonAlcatel(text, opts) {
       if (pR !== out) { stats.password++; out = pR; }
     }
     // SNMP community（含引號格式）
-    const comR = out.replace(/(snmp\s+community\s+map\s+community-name\s+)"?([^"\s]+)"?/, '$1"REDACTED_COMMUNITY"');
+    // AOS Release 8 寫法 `snmp community-map "STR" user "U" {enable|disable}`（原本只認舊式 community map community-name）
+    const comR = out.replace(/(snmp\s+community\s+map\s+community-name\s+)"?([^"\s]+)"?/, '$1"REDACTED_COMMUNITY"')
+                    .replace(/(snmp\s+community-map\s+)"?([^"\s]+)"?/, '$1"REDACTED_COMMUNITY"');
     if (comR !== out) { stats.community++; out = comR; }
     // SNMPv3 user: snmp user <name> <auth_type> "<auth_pass>" <priv_type> "<priv_pass>"
     if (/\bsnmp\s+user\b/.test(out)) {
@@ -2968,30 +3009,24 @@ function anonBrocade(text, opts) {
     if (opts.hostname) {
       line = line.replace(/^(hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'sw', opts));
     }
-    if (opts.user) {
-      // 格式 A: username <name> privilege N password N <hash>
-      line = line.replace(/^(username\s+)(\S+)(\s+privilege\s+\d+\s+password\s+\d+\s+)(\S+)/, (m, p, n, mid, h) => p + anonUser(n) + mid + 'REDACTED_HASH');
-      // 格式 B: username <name> password <hash> [privilege N]
-      line = line.replace(/^(username\s+)(\S+)(\s+password\s+)(\S+)/, (m, p, n, mid, h) => p + anonUser(n) + mid + 'REDACTED_HASH');
-    } else {
-      // 格式 A
-      const pA = line.replace(/^(username\s+\S+\s+privilege\s+\d+\s+password\s+\d+\s+)(\S+)/, '$1REDACTED_HASH');
-      if (pA !== line) { stats.password++; line = pA; }
-      else {
-        // 格式 B
-        const pB = line.replace(/^(username\s+\S+\s+password\s+)(\S+)/, '$1REDACTED_HASH');
-        if (pB !== line) { stats.password++; line = pB; }
-      }
-    }
+    // username <name> [privilege N] password [型別] <值>（2026-10-01 合併原格式 A／B）：原本格式 A
+    // 要求型別數字、格式 B 不認型別數字，`username X password 8 $1$…`（FastIron 常見）只把型別
+    // 數字 8 換掉、雜湊原樣留下，`username X privilege 4 password 明碼` 則兩條都不命中
+    const pR = line.replace(/^(username\s+)(\S+)(\s+(?:privilege\s+\d+\s+)?password\s+(?:\d\s+)?)(\S+)/, (m, p, n, mid, h) => p + (opts.user ? anonUser(n) : n) + mid + 'REDACTED_HASH');
+    if (pR !== line) { stats.password++; line = pR; }
     // BGP neighbor password（無數字前綴）
     const bgpR = line.replace(/^(\s+neighbor\s+\S+\s+password\s+(?:\d+\s+)?)(\S+)/, '$1REDACTED_PASSWORD');
     if (bgpR !== line) { stats.password++; line = bgpR; }
     // SNMP community
-    const comR = line.replace(/^(snmp-server\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
+    // FastIron 加密儲存時在值前加型別數字（`snmp-server community 2 $… ro`、`key 2 $…`、
+    // `enable super-user-password 8 $1$…`），原本把型別數字當成值、真正的值原樣留下（2026-10-01）
+    const comR = line.replace(/^(snmp-server\s+community\s+(?:\d\s+)?)(\S+)/, '$1REDACTED_COMMUNITY');
     if (comR !== line) { stats.community++; line = comR; }
-    // radius/tacacs-server host ... [auth-port N] [acct-port N] [default] key VALUE
-    const kR = line.replace(/^((?:radius|tacacs)-server\s+host\s+\S+.*?\s+key\s+)(\S+)/, '$1REDACTED_KEY');
+    // radius/tacacs-server host ... [auth-port N] [acct-port N] [default] key [型別] VALUE，另含全域 key
+    const kR = line.replace(/^((?:radius|tacacs)-server\s+(?:host\s+\S+.*?\s+)?key\s+(?:\d\s+)?)(\S+)/, '$1REDACTED_KEY');
     if (kR !== line) { stats.key++; line = kR; }
+    const enR = line.replace(/^(enable\s+(?:super-user-password|port-config-password|read-only-password)\s+(?:\d\s+)?)(\S+)/, '$1REDACTED_HASH');
+    if (enR !== line) { stats.password++; line = enR; }
     // OSPF MD5 auth
     const ospfR = line.replace(/^(\s+ip\s+ospf\s+(?:authentication-key|message-digest-key\s+\d+\s+md5)\s+)(\S+)/, '$1REDACTED_KEY');
     if (ospfR !== line) { stats.key++; line = ospfR; }
@@ -3102,11 +3137,11 @@ function anonProCurve(text, opts) {
     }
     // password manager/operator [user-name "NAME"] sha1 "HASH"：user-name 子句可省略，
     // 用非貪婪跳過任意中間內容直接鎖定 sha1 後的雜湊值本身
-    const pwR = line.replace(/^(password\s+(?:manager|operator)\s+.*?sha1\s+)"?[0-9a-fA-F]+"?/, (m, p) => p + '"REDACTED_HASH"');
+    const pwR = line.replace(/^(password\s+(?:manager|operator)\s+.*?sha1\s+)"?[^"\s]+"?/, (m, p) => p + '"REDACTED_HASH"');
     if (pwR !== line) { stats.password++; line = pwR; }
     // aaa authentication local-user "NAME" group "GROUP" password sha1 "HASH"（新式 AAA 本機帳號，
     // 原本完全沒有對應處理，雜湊值直接外洩）
-    const aaaR = line.replace(/^(aaa authentication local-user\s+.*?sha1\s+)"?[0-9a-fA-F]+"?/, (m, p) => p + '"REDACTED_HASH"');
+    const aaaR = line.replace(/^(aaa authentication local-user\s+.*?sha1\s+)"?[^"\s]+"?/, (m, p) => p + '"REDACTED_HASH"');
     if (aaaR !== line) { stats.password++; line = aaaR; }
     // 帳號名稱：`password … user-name "NAME"` 與 `aaa authentication local-user "NAME"`（原本只遮雜湊）
     if (opts.user) {
@@ -3125,9 +3160,15 @@ function anonProCurve(text, opts) {
     // 不含使用者機敏資料，但屬裝置唯一識別碼，比照既有 MAC/序號類慣例一併遮罩
     const engR = line.replace(/^(snmpv3\s+engineid\s+)"?[0-9a-fA-F:]+"?/, (m, p) => p + '"REDACTED_ENGINEID"');
     if (engR !== line) { line = engR; }
-    // radius/tacacs key
-    const kR = line.replace(/^((?:radius|tacacs)\s+[\s\S]*?key\s+)(\S+)/, '$1REDACTED_KEY');
+    // radius/tacacs key：原規則寫成 `radius\s+…`，真實指令是 `radius-server host X key "…"`／
+    // `tacacs-server key "…"`（帶連字號），從未命中（2026-10-01）
+    const kR = line.replace(/^((?:radius|tacacs)(?:-server)?\s+(?:.*?\s)?(?:encrypted-)?key\s+)("[^"]*"|\S+)/, (m, p, v) => p + (v[0] === '"' ? '"REDACTED_KEY"' : 'REDACTED_KEY'));
     if (kR !== line) { stats.key++; line = kR; }
+    // snmpv3 user "U" auth {md5|sha} "PW" priv {des|aes} "PW"（原本未遮蔽）
+    if (/^snmpv3\s+user\s/.test(line)) {
+      const v3R = line.replace(/(\bauth\s+\S+\s+)("[^"]*"|\S+)/, '$1"REDACTED_KEY"').replace(/(\bpriv\s+\S+\s+)("[^"]*"|\S+)/, '$1"REDACTED_KEY"');
+      if (v3R !== line) { stats.key++; line = v3R; }
+    }
     line = replaceDescLine(line, opts);
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
@@ -3210,6 +3251,7 @@ function anonNetgear(text, opts) {
     if (comR !== line) { stats.community++; line = comR; }
     const vrrpKeyR = line.replace(/^(\s*authentication\s+simple\s+)(\S+)/, '$1REDACTED_KEY');
     if (vrrpKeyR !== line) { stats.key++; line = vrrpKeyR; }
+    line = anonIcosSecrets(line);
     line = replaceDescLine(line, opts);
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
@@ -3234,11 +3276,28 @@ function anonEdgeSwitch(text, opts) {
     }
     const comR = line.replace(/^(\s*snmp-server\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
     if (comR !== line) { stats.community++; line = comR; }
+    line = anonIcosSecrets(line);
     line = replaceDescLine(line, opts);
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
     return line;
   }).join('\n');
+}
+
+// Netgear／EdgeSwitch（同為 Broadcom ICOS）共用的金鑰與 enable 密碼遮蔽（2026-10-01，原本兩家皆未處理）：
+// `radius server key {auth|acct} IP [encrypted] KEY`、tacacs-server host 子模式的 `key [encrypted] KEY`、
+// `enable {password|passwd} [encrypted] PW`
+function anonIcosSecrets(line) {
+  const rules = [
+    [/^(\s*radius\s+server\s+key\s+(?:auth|acct)\s+\S+\s+(?:encrypted\s+)?)(\S+)/, 'REDACTED_KEY', 'key'],
+    [/^(\s+key\s+(?:encrypted\s+)?)(\S+)$/, 'REDACTED_KEY', 'key'],
+    [/^(\s*enable\s+pass(?:word|wd)\s+(?:encrypted\s+)?)(\S+)/, 'REDACTED_HASH', 'password'],
+  ];
+  for (const [re, tag, st] of rules) {
+    const r = line.replace(re, '$1' + tag);
+    if (r !== line) { stats[st]++; line = r; }
+  }
+  return line;
 }
 
 // ---- WatchGuard Firebox (config.xml) ----
