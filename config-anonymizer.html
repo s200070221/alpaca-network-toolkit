@@ -1648,6 +1648,18 @@ function replaceIPCIDR(val, opts) {
   });
 }
 
+// XML 類廠牌 IP 補掃（2026-10-01）：pfSense／OPNsense、SonicWall、Sophos、WatchGuard 原本只替換
+// 標籤白名單內的 IP，白名單外的元素照原樣輸出（實測 OPNsense DHCP <start_addr>/<end_addr>、
+// pfSense HA <synchronizetoip>、SonicWall NAT <TranslatedDestination> 與監控 <Target>）。
+// 比照 anonPaloAltoXML() 全文掃描；標籤名稱或屬性含 version 的元素跳過，避免
+// <FirmwareVersion>6.5.4.4</FirmwareVersion> 這類四段版本號被當成 IP 替換。
+const XML_VERSION_ELEM_RE = /(<([\w.:-]*version[\w.:-]*)\b[^>]*>[^<]*<\/\2>)/i;
+function replaceIPsInXmlText(text, opts) {
+  return text.split(new RegExp(XML_VERSION_ELEM_RE.source, 'gi'))
+    .map((seg, i) => (i % 3 === 0 ? replaceIPsInLine(seg, opts) : (i % 3 === 1 ? seg : '')))
+    .join('');
+}
+
 // ============================================================
 // [4] VENDOR ANONYMIZERS
 // ============================================================
@@ -1722,7 +1734,9 @@ function anonFortiGate(text, opts) {
     // api-key（2026-09 新增）：config system sdn-connector 子區塊 set api-key "..."，真實
     // FortiOS 語法（AWS/Azure/GCP/Kubernetes 等 SDN connector 皆用同一個 api-key 欄位存取
     // 雲端 API 憑證），先前完全沒有遮蔽規則涵蓋
-    const keyR = line.replace(/^(\s*set\s+(?:key|api-key|secret|auth-password|priv-password|sim-pin|auth-pwd|priv-pwd)\s+"?)[^"\n]+("?)$/, '$1REDACTED_KEY$2');
+    // secondary-/tertiary- 前綴（2026-10-01）：config user radius 的 secondary-secret／tertiary-secret 與
+    // config user tacacs+ 的 secondary-key／tertiary-key 是備援伺服器的共用金鑰，原本未遮蔽
+    const keyR = line.replace(/^(\s*set\s+(?:(?:secondary-|tertiary-)?(?:key|secret)|api-key|auth-password|priv-password|sim-pin|auth-pwd|priv-pwd)\s+"?)[^"\n]+("?)$/, '$1REDACTED_KEY$2');
     if (keyR !== line) { stats.key++; line = keyR; }
     // OSPF MD5 認證金鑰（2026-08-24 新增）：舊版 config router ospf > config ospf-interface >
     // set md5-key <id> <key>；FortiOS 7.0+ 改用 config router key-chain > config key >
@@ -1828,7 +1842,7 @@ function anonFortiSwitch(text, opts) {
       if (pR !== line) { stats.password++; line = pR; }
     }
     // key / secret / auth-pwd / priv-pwd（同 FortiGate）
-    const keyR = line.replace(/^(\s*set\s+(?:key|secret|auth-password|priv-password|auth-pwd|priv-pwd)\s+"?)[^"\n]+("?)$/, '$1REDACTED_KEY$2');
+    const keyR = line.replace(/^(\s*set\s+(?:(?:secondary-|tertiary-)?(?:key|secret)|auth-password|priv-password|auth-pwd|priv-pwd)\s+"?)[^"\n]+("?)$/, '$1REDACTED_KEY$2');
     if (keyR !== line) { stats.key++; line = keyR; }
     // OSPF MD5 認證金鑰（2026-08-24 新增，同 FortiGate）：config router key-chain > config key >
     // set key-string <key>（BGP neighbor password 已被上方通用 set password 規則涵蓋，非缺口）
@@ -1944,6 +1958,8 @@ function anonSophosXML(text, opts) {
     // IP/CIDR，用 replaceIPCIDR() 只替換符合 IP 格式的內容，物件參照原樣保留不誤傷
     text = text.replace(/(<Resource>)(<!\[CDATA\[)?([^\]<]+?)(\]\]>)?(<\/Resource>)/g, (m, o, cd, val, ce, c) =>
       o + (cd||'') + replaceIPCIDR(val, opts) + (ce||'') + c);
+    // 白名單外的元素補掃（CDATA 內容同樣在掃描範圍內）
+    text = replaceIPsInXmlText(text, opts);
   }
   // 2026-08-09 稽核修復：anonSophosXML() 先前完全沒有處理 MAC 位址，即使 opts.mac 已勾選；
   // SophosParser.parseInterfaces() 已驗證真實欄位 <MACAddress> 存在（介面實體 MAC），比照
@@ -1982,6 +1998,12 @@ function anonCheckPoint(text, opts) {
       line = line.replace(/^(set\s+user\s+\S+\s+realname\s+)(.+)/, '$1"REDACTED"');
       // 同一帳號的 uid／role-name／shell 等每一行都要一致替換帳號名稱（原本只處理 password-hash 與 realname）
       line = line.replace(/^(set\s+user\s+)(\S+)/, (m, p, n) => p + anonUser(n));
+      // 2026-10-01：objects 匯出的 :AdminInfo 區塊 `:login (NAME)` 與 `set access-role R users A,B`
+      // 的帳號清單原本未處理，勾選帳號匿名化後仍留下原帳號
+      line = line.replace(/^(\s*:login\s+\()([^)\s]+)(\))/, (m, p, n, c) => p + anonUser(n) + c);
+      line = line.replace(/^(set\s+access-role\s+\S+\s+users\s+)(\S+)/, (m, p, list) => p + list.split(',').map(n => (n ? anonUser(n) : n)).join(','));
+      // SNMPv3 帳號（比照 Cisco snmp-server user 的處理）
+      line = line.replace(/^(set\s+snmp\s+v3\s+user\s+)("?)([^"\s]+)("?)/, (m, p, q1, n, q2) => p + q1 + anonUser(n) + q2);
     }
     const comR = line.replace(/^(set\s+snmp\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
     if (comR !== line) { stats.community++; line = comR; }
@@ -2147,6 +2169,8 @@ function anonPfSense(text, opts) {
       line = line.replace(/(<(?:network|address|destination|source|tunnel_network|local_network|target)>)([^<]+)(<\/[^>]+>)/, (m, o, val, c) => {
         return o + replaceIPCIDR(val, opts) + c;
       });
+      // 白名單外的元素（DHCP start_addr/end_addr、synchronizetoip 等）補掃
+      line = replaceIPsInXmlText(line, opts);
     }
     // MAC address（staticmap 靜態 DHCP／ARP 綁定等）：原本完全未接線，static-map 的
     // <mac>aa:bb:cc:dd:ee:ff</mac> 不論 opts.mac 開關為何皆會明碼外洩
@@ -2189,6 +2213,8 @@ function anonSonicWall(text, opts) {
                         'TrapServer1', 'TrapServer2', 'TrapServer3', 'TrapServer']) {
       text = replaceTagIP(text, tag, opts);
     }
+    // 白名單外的元素（NAT TranslatedDestination、WAN 監控 Target 等）補掃
+    text = replaceIPsInXmlText(text, opts);
   }
   // 本機帳號與群組成員（標籤依 SonicWallParser.parseUsers()：User／LocalUser／UserEntry 的
   // Name／UserName／Email，UserGroup／UserGroupEntry 的 Member／MemberName）；原本完全未處理
@@ -3244,6 +3270,8 @@ function anonWatchGuard(text, opts) {
         line = line.replace(new RegExp(`(<${tag}>)([^<]+)(</${tag}>)`), (m, o, v, c) =>
           (isValidIPv4(v) && classifyIP(v) !== 'skip') ? o + anonIP(v, opts) + c : m);
       }
+      // 白名單外的元素與 IPv6／CIDR 值補掃
+      line = replaceIPsInXmlText(line, opts);
     }
     if (opts.mac) line = replaceMACsInLine(line, opts);
     return line;
@@ -3343,7 +3371,38 @@ function anonymize(text, vendor, opts, keepState) {
   }
 
   const fn = VENDOR_FNS[vendor] || anonGeneric;
-  return fn(text, opts);
+  return anonContactInfo(fn(text, opts));
+}
+
+// 聯絡資訊補掃（2026-10-01）：通用模式（anonGeneric）一律遮蔽 email 與 SNMP 位置／聯絡人（個人資料），
+// 但各廠牌專屬函式多數沒有對應規則，實測 11 家廠牌範例去識別化後仍留下 noc@acme-corp.com、
+// 「Server Room B2, ACME HQ Taipei」等內容。改在派送後統一補掃，各廠牌行為與通用模式一致。
+// 已是 @example.com 的位址（anonEmail() 的輸出）不再處理，避免帳號對照被重複替換。
+const CONTACT_LINE_RES = [
+  /^(\s*snmp-server\s+(?:location|contact)\s+)(.+)$/i,                        // Cisco 家族／ASA／ProCurve
+  /^(\s*snmp-agent\s+sys-info\s+(?:location|contact)\s+)(.+)$/i,              // Comware
+  /^(\s*(?:->\s*)?system\s+(?:location|contact)\s+)(.+)$/i,                   // Alcatel
+  /^(\s*configure\s+(?:snmp\s+)?sys-?(?:location|contact)\s+)(.+)$/i,         // Extreme
+  /^(\s*set\s+contact-info\s+)(.+)$/i,                                        // FortiGate／FortiSwitch
+  /^(\s*set\s+(?:.*\s)?snmp(?:-system)?\s+(?:location|contact)\s+)(.+)$/i,    // Juniper／Check Point／Palo Alto set
+  /^(\s*(?:location|contact)\s+)("[^"]*")(\s*;\s*)$/i                         // Junos 階層式 snmp { location "…"; }
+];
+function anonContactInfo(text) {
+  return text.split('\n').map(line => {
+    if (!/REDACTED/.test(line)) {
+      for (const re of CONTACT_LINE_RES) {
+        const r = line.replace(re, (m, pre, val, tail) => pre + (val[0] === '"' ? '"REDACTED_COMMENT"' : 'REDACTED_COMMENT') + (tail || ''));
+        if (r !== line) { stats.comment++; line = r; break; }
+      }
+      // MikroTik /snmp set contact=… location=…
+      if (/\bcontact=/.test(line)) {
+        line = line.replace(/\b(contact|location)=("[^"]*"|\S+)/g, (m, k, v) => { stats.comment++; return k + '=' + (v[0] === '"' ? '"REDACTED_COMMENT"' : 'REDACTED_COMMENT'); });
+      }
+      // XML：pfSense <syscontact>/<syslocation>、SonicWall <Contact>
+      line = line.replace(/(<(syscontact|syslocation|Contact)>)([^<]+)(<\/\2>)/g, (m, o, t, v, c) => { stats.comment++; return o + 'REDACTED_COMMENT' + c; });
+    }
+    return line.replace(EMAIL_RE, e => (/@example\.com$/i.test(e) ? e : anonEmail(e)));
+  }).join('\n');
 }
 
 // ============================================================
