@@ -1,3 +1,77 @@
+// Junos `show configuration | display set` 扁平格式轉回括號階層格式（2026-10-02，第九輪發想 YJ）：
+// 解析器是以括號區塊與「關鍵字 值;」比對運作，這裡先把 set 行組成樹再輸出成 Junos 慣用的括號格式。
+// 哪些關鍵字後面接名稱（如 unit 0、family inet、area 0.0.0.0）需要知道語法，JUNOS_NAMED_KW 收錄
+// 解析器會讀到的部分；from-zone X to-zone Y 合為一個節點。輸出規則比照 Junos：只有一個值的節點寫成
+// 「關鍵字 值;」、同一關鍵字多個值寫成「關鍵字 [ a b ];」，具名清單關鍵字則逐一列出。
+// deactivate／delete 等非 set 行忽略
+const JUNOS_SET_TOP = /^set\s+(?:system|interfaces|vlans|protocols|routing-options|routing-instances|chassis|virtual-chassis|security|snmp|firewall|policy-options|forwarding-options|ethernet-switching-options|switch-options|class-of-service|poe|access|applications|services|version|groups|apply-groups|event-options|multi-chassis)\b/;
+const JUNOS_NAMED_KW = new Set(['unit', 'family', 'area', 'group', 'neighbor', 'interface', 'user', 'route', 'rib', 'fpc', 'pic', 'port', 'member',
+  'filter', 'term', 'instance', 'policy-statement', 'community', 'prefix-list', 'address', 'address-set', 'application', 'application-set',
+  'security-zone', 'functional-zone', 'policy', 'rule-set', 'rule', 'pool', 'gateway', 'proposal', 'vpn', 'server', 'host', 'tacplus-server',
+  'radius-server', 'trap-group', 'md5', 'interface-range', 'client', 'peer', 'dynamic-profile', 'scheduler', 'scheduler-map', 'forwarding-class',
+  'classifier', 'destination-prefix', 'static-route', 'node', 'redundancy-group', 'traffic-selector', 'security-profile']);
+// 只放旗標的容器（then { permit; }、services { ssh; }）即使只有一個值也寫成區塊；
+// 多個值用 [ ] 清單的只有 JUNOS_LIST_KW，其餘多值一律寫成區塊內逐行
+const JUNOS_FLAG_KW = new Set(['then', 'services', 'lacp', 'system-services', 'protocols', 'host-inbound-traffic', 'storm-control', 'count', 'log', 'traceoptions', 'ssh', 'web-management',
+  'interfaces', 'source-nat', 'destination-nat', 'static-nat']);
+// 這幾個敘述底下只有一條長度 ≤2 的單線到值時，Junos 寫在同一行：address A 10.0.0.0/24;、node 0 priority 100;、
+// route 0.0.0.0/0 next-hop X;、radius-server X secret "…";、from zone trust;（其餘如 neighbor X { peer-as N; } 仍為區塊）
+const JUNOS_ONELINE_KW = new Set(['address', 'node', 'route', 'tacplus-server', 'radius-server', 'from', 'to']);
+const JUNOS_LIST_KW = new Set(['members', 'source-address', 'destination-address', 'application', 'proposals', 'targets', 'apply-groups', 'vlan-id-list',
+  'source-address-excluded', 'destination-address-excluded', 'import', 'export', 'source-identity', 'dynamic-application']);
+function junosIsDisplaySet(text) {
+  if (!text || /\{/.test(text)) return false;
+  const sets = String(text).match(/^set\s+\S.*$/gm) || [];
+  const junos = sets.filter(l => JUNOS_SET_TOP.test(l)).length;
+  return junos >= 3 && junos * 2 >= sets.length;
+}
+function junosSetToCurly(text) {
+  const root = { kids: new Map() };
+  const tok = s => s.match(/"(?:[^"\\]|\\.)*"|\S+/g) || [];
+  for (const raw of String(text).split('\n')) {
+    const line = raw.trim();
+    if (!/^set\s/.test(line)) continue;
+    const t = tok(line).slice(1);
+    let node = root;
+    for (let i = 0; i < t.length; i++) {
+      let key = t[i];
+      if (JUNOS_NAMED_KW.has(key) && i + 1 < t.length) key += ' ' + t[++i];
+      else if (key === 'from-zone' && i + 1 < t.length) {
+        key += ' ' + t[++i];
+        if (t[i + 1] === 'to-zone' && i + 2 < t.length) { key += ' to-zone ' + t[i + 2]; i += 2; }
+      }
+      if (!node.kids.has(key)) node.kids.set(key, { kids: new Map() });
+      node = node.kids.get(key);
+    }
+  }
+  const out = [];
+  const isLeaf = n => n.kids.size === 0;
+  const emit = (node, depth) => {
+    const pad = '    '.repeat(depth);
+    for (const [key, n] of node.kids) {
+      const kw = key.split(' ')[0];
+      if (isLeaf(n)) { out.push(`${pad}${key};`); continue; }
+      if (JUNOS_ONELINE_KW.has(kw)) {
+        const chain = [];
+        let c = n;
+        while (c.kids.size === 1 && chain.length < 3) { const [k, next] = [...c.kids.entries()][0]; chain.push(k); c = next; }
+        if (isLeaf(c) && chain.length >= 1 && chain.length <= 2 && !chain.some(k => JUNOS_NAMED_KW.has(k.split(' ')[0]) || JUNOS_FLAG_KW.has(k.split(' ')[0]))) { out.push(`${pad}${key} ${chain.join(' ')};`); continue; }
+      }
+      const kids = [...n.kids.entries()];
+      if (kids.every(([, c]) => isLeaf(c)) && !JUNOS_NAMED_KW.has(kw) && !JUNOS_FLAG_KW.has(kw)) {
+        const vals = kids.map(([k]) => k);
+        if (vals.length === 1) { out.push(`${pad}${key} ${vals[0]};`); continue; }
+        if (JUNOS_LIST_KW.has(kw)) { out.push(`${pad}${key} [ ${vals.join(' ')} ];`); continue; }
+      }
+      out.push(`${pad}${key} {`);
+      emit(n, depth + 1);
+      out.push(`${pad}}`);
+    }
+  };
+  emit(root, 0);
+  return out.join('\n') + '\n';
+}
+
 function junosBlock(cfg, keyword){
   const escaped=keyword.replace(/[.+*?^${}()|[\]\\]/g,'\\$&').replace(/\\\-/g,'[-]');
   const re=new RegExp('^[ \\t]*'+escaped+'\\s*\\{','m');

@@ -62,6 +62,7 @@ function _onLangChange() {
     navGo(currentView);
   }
   if (typeof renderReportBar === 'function') renderReportBar();
+  if (typeof renderSwqBar === 'function') renderSwqBar();
   if (typeof parsed !== 'undefined' && parsed && typeof buildSumCards === 'function') {
     buildSumCards();
   }
@@ -2173,6 +2174,8 @@ const LLDPParser = (() => {
 function parseAny(cfg,forceVendor){
   // 統一在此正規化 CRLF，避免各廠牌逐行正則（如 stack unit 區塊）因 \r 悄悄比對失敗
   cfg=cfg.replace(/\r\n/g,'\n');
+  // Junos display set 扁平格式先轉回括號格式（YJ，轉換器在 switch-analyzer-parser-juniper.js）
+  if(typeof junosIsDisplaySet==='function'&&junosIsDisplaySet(cfg))cfg=junosSetToCurly(cfg);
   // forceVendor：使用者手動指定廠牌時略過 detectVendor() 自動判斷，直接用指定值派送
   // （detectVendor() 誤判時的 fallback，2026-07-30 新增）
   const vendor=forceVendor||detectVendor(cfg);

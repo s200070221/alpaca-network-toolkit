@@ -67,7 +67,12 @@ const CiscoASAParser = (() => {
       const map = g[2] === 'out' ? aclOut : aclIn;
       (map[g[1]] = map[g[1]] || []).push(g[2] ? g[3] : 'any');
     }
+    // ACL 內行號（2026-10-02，YI）：`show access-list` 的 line N 依 ACL 內順序編號，remark 也占一行，
+    // 用來把命中數對回規則；每個 ACL 各自從 1 起算
+    const aclLineNo = {};
     for (const line of text.split('\n')) {
+      const am = line.match(/^access-list\s+(\S+)\s+(?:extended|standard|remark|webtype|ethertype)\b/);
+      if (am) aclLineNo[am[1]] = (aclLineNo[am[1]] || 0) + 1;
       const m = line.match(/^access-list\s+(\S+)\s+extended\s+(permit|deny)\s+(\S+)\s+(.+)/);
       if (!m) continue;
       const [, aclName, rawAction, proto, rest] = m;
@@ -102,7 +107,7 @@ const CiscoASAParser = (() => {
       // 避免 exportCSV('policies') 讀取 r.utm.av 時因 utm 為 undefined 而拋例外。
       const status = /\binactive\b/.test(rest) ? 'disable' : 'enable';
       const logtraffic = /\blog\s+disable\b/.test(rest) ? 'disable' : 'all';
-      policies.push({ id:id++, name:aclName, srcIntf:(aclIn[aclName]||['-']).join(','), dstIntf:(aclOut[aclName]||['-']).join(','), srcAddr:src, dstAddr:dst, srcAddr4:srcAddrSplit.v4, srcAddr6:srcAddrSplit.v6, dstAddr4:dstAddrSplit.v4, dstAddr6:dstAddrSplit.v6, service:svc, action, schedule:'-', nat:'disable', ippool:'disable', poolname:'-', logtraffic, logstart:'-', utm:{av:'-',webfilter:'-',ips:'-',ssl:'-',appctrl:'-'}, status, comments:'-', users:'-', groups:'-', vdom:aclName, enabled: status==='enable', color:'0' });
+      policies.push({ id:id++, name:aclName, aclLine:aclLineNo[aclName], srcIntf:(aclIn[aclName]||['-']).join(','), dstIntf:(aclOut[aclName]||['-']).join(','), srcAddr:src, dstAddr:dst, srcAddr4:srcAddrSplit.v4, srcAddr6:srcAddrSplit.v6, dstAddr4:dstAddrSplit.v4, dstAddr6:dstAddrSplit.v6, service:svc, action, schedule:'-', nat:'disable', ippool:'disable', poolname:'-', logtraffic, logstart:'-', utm:{av:'-',webfilter:'-',ips:'-',ssl:'-',appctrl:'-'}, status, comments:'-', users:'-', groups:'-', vdom:aclName, enabled: status==='enable', color:'0' });
     }
     return policies;
   }

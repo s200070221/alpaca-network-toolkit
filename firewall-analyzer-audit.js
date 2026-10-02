@@ -1968,22 +1968,87 @@
   // 多 VDOM 設定：命中資料有 vdom（REST API）時只比對該 VDOM；沒有時，ID 在多個 VDOM 重複的規則無法判斷，列入 ambiguous 不下結論。
   // opts: {days=90, now=Date.now()}；回傳 {rows:[{id,name,vdom,action,hits,lastUsed,kind:'zero'|'stale'|'ok'}], zero, stale, missing:[沒有命中資料的啟用規則 ID], ambiguous:[ID], unknown:[命中資料有但設定檔沒有的 ID]}
   function analyzeFortiHitCounts(parsed, hc, opts) {
-    const days = (opts && opts.days) || 90, now = (opts && opts.now) || Date.now();
     // 只比對 IPv4 規則：REST /firewall/policy 與 iprope 00100004 皆為 IPv4 規則表，IPv6（parser 以 v6/ 前綴區分）不列入
     const pols = (parsed.policies || []).filter(p => !_isDisabledStatus(p) && !/^v6\//.test(String(p.id)) && (!hc.vdom || !p._vdom || p._vdom === hc.vdom));
+    return _analyzeHitCountsByKey(pols, hc, p => String(p.id), opts);
+  }
+  // ── 規則命中數匯入：Cisco ASA／FTD 與 Palo Alto（2026-10-02，第九輪發想 YI）──
+  // ASA：`show access-list` 輸出，頂層 ACE 行 `access-list NAME line N extended permit|deny … (hitcnt=N) 0x…`
+  //   （Cisco 官方指令參考與社群範例交叉確認）；縮排的子行是 object-group 展開明細，加總已在頂層行，略過；
+  //   remark 行沒有 hitcnt 也略過。輸出不含最後命中時間，只能判斷「從未命中」。id 為「ACL#行號」
+  // Palo Alto：CLI `show rule-hit-count vsys vsys-name X rule-base security rules all` 的表格
+  //   （Rule Name／Hit Count／Last Hit Timestamp…，欄位以多個空白分隔，名稱可含空白，時間如 `Wed Nov 20 11:31:07 2019`
+  //   或 `-`），或 XML API 回應（rules 下 `<entry name="規則">` 內 `<hit-count>`、`<last-hit-timestamp>` Unix 秒）。id 為規則名稱
+  function parseAsaHitCounts(text) {
+    const res = { format: '', vdom: '', items: [] };
+    for (const line of String(text || '').split(/\r?\n/)) {
+      const m = line.match(/^access-list\s+(\S+)\s+line\s+(\d+)\s+(?:extended|standard)\s+(permit|deny)\b.*\(hitcnt=(\d+)\)/);
+      if (!m) continue;
+      res.items.push({ id: m[1] + '#' + m[2], label: `${m[1]} line ${m[2]}`, hits: Number(m[4]), lastUsed: null, firstUsed: null, bytes: null, action: m[3] === 'permit' ? 'accept' : 'deny' });
+    }
+    if (res.items.length) res.format = 'asa';
+    return res;
+  }
+  function parsePaloAltoHitCounts(text) {
+    const t = String(text || '');
+    const res = { format: '', vdom: '', items: [] };
+    if (/<hit-count>/.test(t)) {
+      // 每個 <entry name="…"> 到下一個 <entry 或 </entry> 為一段，有 <hit-count> 的才是規則
+      for (const seg of t.split(/(?=<entry\s+name=")/)) {
+        const nm = seg.match(/^<entry\s+name="([^"]*)"/), hm = seg.match(/<hit-count>(\d*)<\/hit-count>/);
+        if (!nm || !hm) continue;
+        const body = seg.split(/<\/entry>/)[0];
+        if (!/<hit-count>/.test(body)) continue;
+        const ts = tag => { const x = body.match(new RegExp('<' + tag + '>(\\d+)</' + tag + '>')); return x && Number(x[1]) > 0 ? Number(x[1]) * 1000 : null; };
+        const name = nm[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+        res.items.push({ id: name, hits: Number(hm[1]) || 0, lastUsed: ts('last-hit-timestamp'), firstUsed: ts('first-hit-timestamp'), bytes: null });
+      }
+      if (res.items.length) res.format = 'paxml';
+      return res;
+    }
+    const MON = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+    const TS = '(?:[A-Z][a-z]{2}\\s+[A-Z][a-z]{2}\\s+\\d{1,2}\\s+\\d{2}:\\d{2}:\\d{2}\\s+\\d{4}|-)';
+    const toMs = s => { const m = String(s).match(/^[A-Z][a-z]{2}\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})$/); return m && MON[m[1]] !== undefined ? new Date(+m[6], MON[m[1]], +m[2], +m[3], +m[4], +m[5]).getTime() : null; };
+    const rowRe = new RegExp('^(\\S.*?)\\s{2,}(\\d+)\\s+(' + TS + ')\\s+(' + TS + ')\\s+(' + TS + ')');
+    if (!/Rule Name\s+Hit Count/.test(t)) return res;
+    for (const line of t.split(/\r?\n/)) {
+      const m = line.match(rowRe);
+      if (!m || /^Rule Name\b/.test(m[1]) || /^-+$/.test(m[1])) continue;
+      res.items.push({ id: m[1].trim(), hits: Number(m[2]), lastUsed: toMs(m[3]), firstUsed: toMs(m[5]), bytes: null });
+    }
+    if (res.items.length) res.format = 'pacli';
+    return res;
+  }
+  // 依廠牌分派：回傳 {hc, res}；不支援的廠牌 hc 為 null
+  function parseRuleHitCounts(text, vendor) {
+    if (vendor === 'FortiGate') return parseFortiHitCounts(text);
+    if (vendor === 'Cisco ASA' || vendor === 'Cisco FTD') return parseAsaHitCounts(text);
+    if (vendor === 'PaloAlto') return parsePaloAltoHitCounts(text);
+    return null;
+  }
+  function analyzeRuleHitCounts(parsed, hc, opts) {
+    if (parsed.vendor === 'FortiGate') return analyzeFortiHitCounts(parsed, hc, opts);
+    const pols = (parsed.policies || []).filter(p => !_isDisabledStatus(p));
+    if (parsed.vendor === 'PaloAlto') return _analyzeHitCountsByKey(pols, hc, p => String(p.name || ''), opts);
+    return _analyzeHitCountsByKey(pols.filter(p => p.aclLine), hc, p => p.name + '#' + p.aclLine, opts);
+  }
+  // 共用比對（2026-10-02 自 analyzeFortiHitCounts 抽出，供 ASA／Palo Alto 共用）：keyOf(policy) 與命中資料的 id 對應；
+  // 同一 key 對到多條規則列入 ambiguous；item.action（選填）與規則動作不同時也視為無法判斷（ASA 行號錯位的保護）
+  function _analyzeHitCountsByKey(pols, hc, keyOf, opts) {
+    const days = (opts && opts.days) || 90, now = (opts && opts.now) || Date.now();
     const byId = {};
-    pols.forEach(p => { (byId[String(p.id)] = byId[String(p.id)] || []).push(p); });
+    pols.forEach(p => { (byId[keyOf(p)] = byId[keyOf(p)] || []).push(p); });
     const out = { rows: [], zero: 0, stale: 0, missing: [], ambiguous: [], unknown: [] };
     const seen = new Set();
     hc.items.forEach(it => {
       const ps = byId[it.id];
       if (!ps) { if (!out.unknown.includes(it.id)) out.unknown.push(it.id); return; }
       seen.add(it.id);
-      if (ps.length > 1) { if (!out.ambiguous.includes(it.id)) out.ambiguous.push(it.id); return; }
+      if (ps.length > 1 || (it.action && ps[0].action && it.action !== ps[0].action)) { if (!out.ambiguous.includes(it.id)) out.ambiguous.push(it.id); return; }
       const p = ps[0];
       const kind = it.hits === 0 ? 'zero' : (it.lastUsed && now - it.lastUsed > days * 86400000 ? 'stale' : 'ok');
       if (kind === 'zero') out.zero++; else if (kind === 'stale') out.stale++;
-      out.rows.push({ id: String(p.id), name: p.name || '', vdom: p._vdom || '', action: p.action || '', hits: it.hits, lastUsed: it.lastUsed, kind });
+      out.rows.push({ id: it.label || String(p.id), name: p.name || '', vdom: p._vdom || '', action: p.action || '', hits: it.hits, lastUsed: it.lastUsed, kind });
     });
     Object.keys(byId).forEach(id => { if (!seen.has(id)) out.missing.push(id); });
     const rank = { zero: 0, stale: 1, ok: 2 };
