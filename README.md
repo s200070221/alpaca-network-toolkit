@@ -23,6 +23,8 @@
 
 `docs/` 資料夾內提供各工具的詳細使用說明（.docx）：[防火牆設定分析器](docs/firewall-analyzer-guide.docx)／[交換器設定解析器](docs/switch-config-parser-guide.docx)／[交換器設定產生器](docs/switch-config-generator-guide.docx)／[設定檔去識別化工具](docs/config-anonymizer-guide.docx)／[六工具入口頁](docs/network-analyzer-guide.docx)／[Log 分析與去識別化工具](docs/log-analyzer-guide.docx)。
 
+工具之間的串接（例如 log 分析帶到防火牆反查規則、帶到交換器查看介面，去識別化後轉送分析工具）與各自需要的前置作業，見 [工具串接說明](docs/tool-integration-guide.docx)。
+
 ## 特色
 
 - **零伺服器、零安裝**：純 JS + HTML，下載即用，或直接透過 GitHub Pages 線上開啟
