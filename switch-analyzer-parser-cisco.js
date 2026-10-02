@@ -411,7 +411,82 @@ function parseCisco(cfg){
       if(iface){iface.breakoutChild=true;iface.breakoutParent=`FortyGigabitEthernet${b.switchNum}/${slot}/${portNum}`;iface.breakoutScheme='renumber';}
     }
   }
-  return{sys,irf:null,stack,vlans,interfaces,routes,vrfs,users,ospf,ospf6,bgp,rip,rip6,vrrp,vxlan:null,vendor:'cisco',breakouts};
+  const res={sys,irf:null,stack,vlans,interfaces,routes,vrfs,users,ospf,ospf6,bgp,rip,rip6,vrrp,vxlan:null,vendor:'cisco',breakouts};
+  if(isCiscoBusiness(cfg))applyCiscoBusiness(res,cfg);
+  return res;
+}
+
+// ── Cisco Business（CBS250／CBS350、Catalyst 1200／1300、舊款 SG300／SG350，2026-10-02 第十輪發想 ZE）──
+// 與 IOS 同為 Cisco CLI 外觀但作業系統不同，show running-config 有固定檔頭（config-file-header／版本行／
+// file SSD indicator／ssd-control-start…end），依真實 SG350 設定檔與 Cisco 官方 CBS 350 CLI Guide 範例
+// （搜尋索引摘要，cisco.com 被網路政策擋下未直接讀取）確認差異：
+// - VLAN 清單在 `vlan database` 區塊的 `vlan 10,20,30-32`，名稱寫在 `interface vlan N` 底下的 `name X`
+// - 同一個 `interface vlan N` 會出現兩次（前段 private-vlan 設定、後段名稱與 IP），需合併
+// - trunk 預設只有原生 VLAN（VLAN 1）未標記，其他 VLAN 須逐一 `switchport trunk allowed vlan add LIST`
+// - general 模式（完整 802.1Q）：`switchport general allowed vlan add LIST tagged|untagged`＋`switchport general pvid N`，
+//   對應到本工具既有的 hybrid 形狀
+// - 描述含空白時帶雙引號
+function isCiscoBusiness(cfg){
+  return /^config-file-header\s*$/m.test(cfg)||/^ssd-control-start\s*$/m.test(cfg)||/^file SSD indicator\s+\S+/m.test(cfg);
+}
+function expandCiscoBizVlanList(s){
+  const out=[];
+  String(s||'').split(',').map(x=>x.trim()).filter(Boolean).forEach(seg=>{
+    const m=seg.match(/^(\d+)-(\d+)$/);
+    if(m){for(let v=+m[1];v<=+m[2]&&out.length<4096;v++)out.push(String(v));}
+    else if(/^\d+$/.test(seg))out.push(seg);
+  });
+  return out;
+}
+function applyCiscoBusiness(res,cfg){
+  // 檔頭第 2、3 行為主機名稱與「v版本 / 韌體建置代號」
+  const ver=(cfg.match(/^config-file-header\s*\n\s*\S+\s*\n\s*v(\d[\w.]*)\s*\//)||[])[1];
+  if(ver)res.sys.version=ver;
+  res.sys.platform='Cisco Business';
+  res.sys.brand='ciscobiz';
+  const blocks={};
+  cfg.split(/\ninterface\s+/).slice(1).forEach(b=>{const name=b.split('\n')[0].trim();blocks[name]=(blocks[name]||'')+'\n'+b.split(/\n!|\nexit/)[0];});
+  // 合併重複的 interface vlan N
+  const seen=new Map();
+  res.interfaces=res.interfaces.filter(i=>{
+    const k=i.name.toLowerCase();
+    if(!seen.has(k)){seen.set(k,i);return true;}
+    const first=seen.get(k);
+    ['ip','ip6','desc','vrf'].forEach(f=>{if(!first[f]&&i[f])first[f]=i[f];});
+    if(i.shutdown)first.shutdown=true;
+    return false;
+  });
+  res.interfaces.forEach(i=>{
+    if(/^".*"$/.test(i.desc||''))i.desc=i.desc.slice(1,-1);
+    const body=blocks[i.name]||'';
+    if(i.mode==='trunk'){
+      const add=[...body.matchAll(/switchport trunk allowed vlan add\s+(\S+)/g)].flatMap(m=>expandCiscoBizVlanList(m[1]));
+      const rem=new Set([...body.matchAll(/switchport trunk allowed vlan remove\s+(\S+)/g)].flatMap(m=>expandCiscoBizVlanList(m[1])));
+      i.vlans=[...new Set(add)].filter(v=>!rem.has(v)).join(',');
+      i.nativeVlan=(body.match(/switchport trunk native vlan\s+(\d+)/)||[])[1]||'1';
+    }
+    if(/switchport mode general/.test(body)){
+      const tagged=[],untagged=[];
+      for(const m of body.matchAll(/switchport general allowed vlan add\s+(\S+)\s+(tagged|untagged)/g))(m[2]==='tagged'?tagged:untagged).push(...expandCiscoBizVlanList(m[1]));
+      const pvid=(body.match(/switchport general pvid\s+(\d+)/)||[])[1]||'1';
+      i.mode='hybrid';
+      i.hybrid={pvid,untagged:[...new Set(untagged)],tagged:[...new Set(tagged)],hasIPSub:false,vlanMaps:[],hasQinQ:false};
+      i.vlans=[...new Set([...untagged,...tagged])].join(',');
+      i.nativeVlan=pvid;
+    }
+  });
+  // VLAN 清單：vlan database 的 vlan 清單＋interface vlan N，VLAN 1 為預設一定存在
+  const ids=new Set(['1']);
+  const db=(cfg.match(/^vlan database\s*\n([\s\S]*?)^exit/m)||[])[1]||'';
+  for(const m of db.matchAll(/^\s*vlan\s+([\d,\-]+)\s*$/gm))expandCiscoBizVlanList(m[1]).forEach(v=>ids.add(v));
+  res.interfaces.filter(i=>/^vlan\s*\d+$/i.test(i.name)).forEach(i=>ids.add(i.name.replace(/\D/g,'')));
+  const vlans=[...ids].sort((a,b)=>a-b).map(id=>{
+    const svi=res.interfaces.find(i=>i.name.toLowerCase().replace(/\s+/g,'')==='vlan'+id);
+    const name=((blocks['vlan '+id]||'').match(/^\s*name\s+(.+)$/m)||[])[1]||'';
+    const old=res.vlans.find(v=>v.id===id);
+    return{...(old||{}),id,name:name.replace(/^"(.*)"$/,'$1').trim()||(old&&old.name)||'',ipSubnets:svi&&svi.ip?[{cidr:svi.ip}]:((old&&old.ipSubnets)||[])};
+  });
+  res.vlans=vlans;
 }
 
 // ═ Dell EMC OS10 Parser ═════════════════════════════════════

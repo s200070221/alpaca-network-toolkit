@@ -157,10 +157,18 @@ function _portInRange(port, rangeStr) {
 // `icmp`、只寫埠號的 `443`）：原本找不到同名物件一律視為符合（2026-10-01）；其餘無法辨識的名稱維持視為符合
 function _literalSvcMatches(raw, proto, port) {
   const t = raw.trim().toLowerCase();
-  if (!proto || proto === 'any' || t === 'ip') return true;
+  if (t === 'ip') return true;
+  // 協定不限但有指定埠號（2026-10-02）：仍須埠號落在規則的 TCP 或 UDP 埠範圍內，原本完全不看埠號，
+  // 查 443 會命中只放行 udp/53 的規則
+  if (!proto || proto === 'any') {
+    if (!port) return true;
+    if (/^icmp6?$|^ipv6-icmp$/.test(t)) return false;
+    const pm = t.match(/^(?:tcp|udp|tcp\/udp|tcp-udp)\/(\d+(?:-\d+)?(?:,\s*\d+(?:-\d+)?)*)$/) || t.match(/^(\d+(?:-\d+)?)$/);
+    return pm ? _portInRange(port, pm[1]) : true;
+  }
   const q = proto.toUpperCase();
   if (/^icmp6?$|^ipv6-icmp$/.test(t)) return q === 'ICMP';
-  let m = t.match(/^(tcp|udp|tcp\/udp|tcp-udp)\/(\d+(?:-\d+)?)$/);
+  let m = t.match(/^(tcp|udp|tcp\/udp|tcp-udp)\/(\d+(?:-\d+)?(?:,\s*\d+(?:-\d+)?)*)$/);
   if (m) {
     const lp = m[1] === 'tcp' ? ['TCP'] : m[1] === 'udp' ? ['UDP'] : ['TCP', 'UDP'];
     const protoOk = q === 'TCP/UDP' ? true : lp.includes(q);
@@ -180,7 +188,12 @@ function _svcMatches(name, proto, port, svcList, seen) {
     const mems = (obj.members||'').split(',').map(s=>s.trim()).filter(Boolean);
     return mems.some(m=>_svcMatches(m, proto, port, svcList, seen));
   }
-  if (!proto||proto==='any') return true;
+  if (!proto||proto==='any') {
+    if (!port) return true;
+    if (obj.proto==='ICMP') return false;
+    const ranges=[obj.tcpPorts,obj.udpPorts].filter(r=>r&&r!=='-');
+    return !ranges.length||ranges.some(r=>_portInRange(port,r));
+  }
   const p = proto.toUpperCase();
   if (p==='ICMP'&&obj.proto==='ICMP') return true;
   const tcpOk = (p==='TCP'||p==='TCP/UDP')&&(obj.proto==='TCP'||obj.proto==='TCP/UDP')

@@ -29,7 +29,7 @@
   var d = parsed['_netAnalyzer_pending'] || parsed['_netAnalyzer_anonResult'];
   if (d) {
     localStorage.removeItem(parsed['_netAnalyzer_pending'] ? '_netAnalyzer_pending' : '_netAnalyzer_anonResult');
-    if (window._loadFromPending) window._loadFromPending(d.text, d.vendor || 'f');
+    if (window._loadFromPending) window._loadFromPending(d.text, d.vendor || '');
   }
   // log → 防火牆反查（XB）：查詢條件先交給 app.js 暫存，載入設定後自動執行
   var q = parsed['_netAnalyzer_fwQuery'];

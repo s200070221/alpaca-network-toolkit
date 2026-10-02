@@ -135,6 +135,8 @@ function detectVendor(cfg){
       }catch(e){ /* 非合法 JSON，繼續往下走既有文字 CLI 判斷鏈 */ }
     }
   }
+  // Cumulus Linux NVUE（2026-10-02）：nv config show／startup.yaml 的 YAML，或 nv set 指令（見 parser-cumulus.js）
+  if(typeof isCumulusNVUE==='function'&&isCumulusNVUE(cfg))return'cumulus';
   if(/^\s*sysname\s+|irf domain|port link-type|undo shutdown|ip route-static|ip vpn-instance/m.test(cfg))return'comware';
   // ProCurve/ArubaOS-Switch: ; J9xxx header, oobm keyword, or trunk X trk1 lacp syntax
   // 2026-10-01：另認「帶引號的 hostname＋VLAN 區塊內以埠號開頭的 untagged／tagged」組合——沒有
@@ -2176,6 +2178,9 @@ function parseAny(cfg,forceVendor){
   cfg=cfg.replace(/\r\n/g,'\n');
   // Junos display set 扁平格式先轉回括號格式（YJ，轉換器在 switch-analyzer-parser-juniper.js）
   if(typeof junosIsDisplaySet==='function'&&junosIsDisplaySet(cfg))cfg=junosSetToCurly(cfg);
+  // Allied Telesis AlliedWare Plus：範圍介面展開成逐埠（ZH，見 switch-analyzer-parser-awplus.js），其餘沿用 Cisco 解析
+  const isAW=typeof isAlliedWare==='function'&&isAlliedWare(cfg);
+  if(isAW)cfg=awplusPreprocess(cfg);
   // forceVendor：使用者手動指定廠牌時略過 detectVendor() 自動判斷，直接用指定值派送
   // （detectVendor() 誤判時的 fallback，2026-07-30 新增）
   const vendor=forceVendor||detectVendor(cfg);
@@ -2198,6 +2203,7 @@ function parseAny(cfg,forceVendor){
   else if(vendor==='procurve') res=parseProCurve(cfg);
   else if(vendor==='routeros') res=parseRouterOS(cfg);
   else if(vendor==='sonic') res=parseSONiC(cfg);
+  else if(vendor==='cumulus') res=parseCumulus(cfg);
   else res={vendor:'unknown',sys:{hostname:'unknown',version:''},irf:null,stack:null,vlans:[],interfaces:[],routes:[],vrfs:[],users:[],ospf:[],bgp:[],rip:[],vrrp:[],vxlan:null,acls:[]};
 
   res.vendor=vendor;
@@ -2209,30 +2215,32 @@ function parseAny(cfg,forceVendor){
   // （routeros 無對應分支）用空/預設值蓋掉已經解析好的正確資料
   // sonic：parseSONiC() 已用 PORTCHANNEL/PORTCHANNEL_MEMBER 正確算好 res.lacp，
   // 不可被這裡的共用 regex dispatcher（對 JSON 文字必定掃不到東西）用空結果覆蓋
-  if(vendor!=='juniper'&&vendor!=='alcatel'&&vendor!=='extreme'&&vendor!=='brocade'&&vendor!=='procurve'&&vendor!=='routeros'&&vendor!=='sonic')res.lacp=parseLACP(cfg, vendor);
-  if(vendor!=='juniper'&&vendor!=='extreme'&&vendor!=='brocade'&&vendor!=='procurve'&&vendor!=='routeros'&&vendor!=='sonic')res.dhcp=parseDHCP(cfg, vendor);
+  if(vendor!=='juniper'&&vendor!=='alcatel'&&vendor!=='extreme'&&vendor!=='brocade'&&vendor!=='procurve'&&vendor!=='routeros'&&vendor!=='sonic'&&vendor!=='cumulus')res.lacp=parseLACP(cfg, vendor);
+  // channel-group N mode auto 在 Cisco Business（CBS／SG）代表 LACP（IOS 的 auto 是 PAgP），mode on 為靜態聚合
+  if(res.sys&&res.sys.brand==='ciscobiz')(res.lacp||[]).forEach(l=>{if(l.mode==='auto')l.mode='active';});
+  if(vendor!=='juniper'&&vendor!=='extreme'&&vendor!=='brocade'&&vendor!=='procurve'&&vendor!=='routeros'&&vendor!=='sonic'&&vendor!=='cumulus')res.dhcp=parseDHCP(cfg, vendor);
   // 2026-07-24 新增：系統層級 DNS Server，獨立新頂層欄位，不受上方 DHCP dispatcher 排除清單影響
   // （parseDNSServers() 內部自行處理各廠牌 branch，無需比照 dhcp 那樣繞過 dispatcher）
-  res.dns=parseDNSServers(cfg, vendor);
+  if(vendor!=='cumulus')res.dns=parseDNSServers(cfg, vendor);
   // RouterOS 的 stp 同樣是 parseRouterOSBridgeSTP() 外部覆蓋模式（2026-07-27 起已改為
   // 回傳與共用 dispatcher 相同的 {mode,instances,ports,rootMode,timers} 巢狀形狀），此處
   // 原本對任何廠牌都無排除，會被下方共用 dispatcher 蓋掉，一併修復
-  if(vendor!=='routeros'&&vendor!=='sonic')res.stp=parseSTP(cfg, vendor);
+  if(vendor!=='routeros'&&vendor!=='sonic'&&vendor!=='cumulus')res.stp=parseSTP(cfg, vendor);
   res.acls=parseACL(cfg, vendor);
   res.security=parseSecurity(cfg, vendor);
   // sonic：parseSONiC() 已用 SNMP_COMMUNITY/SYSLOG_SERVER 兩個 JSON 表格正確算好
   // res.snmp/res.syslog（見 _parseSnmpSONiC()/_parseSyslogSONiC()），不可被這裡的共用
   // 文字正則 dispatcher（對 JSON 文字必定掃不到東西）用空結果覆蓋，比照既有 lacp/dhcp/
   // stp/qos 排除模式（2026-08-20 新增）
-  if(vendor!=='sonic')res.snmp=parseSNMP(cfg, vendor);
-  if(vendor!=='sonic')res.syslog=parseSyslog(cfg, vendor);
+  if(vendor!=='sonic'&&vendor!=='cumulus')res.snmp=parseSNMP(cfg, vendor);
+  if(vendor!=='sonic'&&vendor!=='cumulus')res.syslog=parseSyslog(cfg, vendor);
   res.mgmtAccess=parseMgmtAccess(cfg, vendor);
   res.routingAuth=parseRoutingAuth(cfg, vendor);
   // Brocade 的 qos 已在 parseBrocade() 內用專屬形狀（dscpMap/ports）設定，Extreme 的
   // qos 已在 parseExtremeXOS() 內用專屬形狀（profiles/dscpMap/ports，QP1-QP8 profile
   // 模型）設定，RouterOS 的 qos 已在 parseRouterOS() 內用專屬形狀（simpleQueues/
   // queueTree）設定，三者皆不可被這裡的共用 Cisco-style policy-map dispatcher 覆蓋
-  if(vendor!=='brocade'&&vendor!=='extreme'&&vendor!=='routeros'&&vendor!=='sonic')res.qos=parseQoS(cfg, vendor);
+  if(vendor!=='brocade'&&vendor!=='extreme'&&vendor!=='routeros'&&vendor!=='sonic'&&vendor!=='cumulus')res.qos=parseQoS(cfg, vendor);
   // class-map/match + service-policy：僅 cisco/ruijie/planet 三家已查證（見 parseClassMaps()/
   // parseServicePolicy() 註解），其餘廠牌刻意不賦值（維持 undefined，非空陣列），避免暗示
   // 未查證廠牌也支援
@@ -2267,6 +2275,7 @@ function parseAny(cfg,forceVendor){
   // 畫面（摘要卡片、總覽、VLAN 表、CSV 匯出）一律讀 vlans[].ipSubnets.length；NX-OS 與 RouterOS
   // 的 VLAN 物件沒有這個欄位，貼上這兩家設定時整頁出錯什麼都顯示不出來（2026-09-29 BD 掃描發現）。
   // 在統一出口補上空陣列，涵蓋所有廠牌
+  if(isAW&&vendor==='cisco')applyAlliedWare(res,cfg);
   (res.vlans||[]).forEach(v=>{ if(!Array.isArray(v.ipSubnets)) v.ipSubnets=[]; });
   return res;
 }

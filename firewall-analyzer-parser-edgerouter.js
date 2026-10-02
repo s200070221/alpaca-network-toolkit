@@ -437,6 +437,7 @@ const EdgeRouterParser = (() => {
     };
   }
 
-  return { parse, detect };
+  // VyOS（同為 Vyatta 語系，2026-10-02 新增）共用樹狀解析與查詢函式，見 firewall-analyzer-parser-vyos.js
+  return { parse, detect, _lib: { parseTree, unquote, child, val, vals, hasFlag, childrenPrefixed, cidrSplit, parseAddrOrPort, parseRoutes, parseUsers } };
 })();
 

@@ -632,6 +632,24 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
           <div class="file-chip" id="gc-chip" style="display:none"><span>📄</span><span class="fn" id="gc-name"></span><span class="rm" onclick="clearFile(event,'g')">✕</span></div>
           <input type="file" id="gi" accept=".xml" onchange="pickFile('g',this)">
         </div>
+        <div class="ucard" style="border-color:rgba(20,110,190,.4)" id="vc" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('vc').classList.add('drag-over')" ondragleave="document.getElementById('vc').classList.remove('drag-over')" ondrop="handleDrop(event,'v')" onclick="document.getElementById('vi').click()">
+          <div class="ucard-head"><div class="vendor-dot" style="background:rgba(20,110,190,.15)">🛰️</div><div><h3 style="color:#146ebe">VyOS</h3><div class="ver">1.3 / 1.4+ · config.boot / show configuration commands</div></div></div>
+          <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_vyos">config.boot 或 set 指令格式，1.3 具名規則集與 1.4 起 forward/input/output 規則鏈皆支援</div></div>
+          <div class="file-chip" id="vc-chip" style="display:none"><span>📄</span><span class="fn" id="vc-name"></span><span class="rm" onclick="clearFile(event,'v')">✕</span></div>
+          <input type="file" id="vi" accept=".boot,.conf,.txt,.cfg" onchange="pickFile('v',this)">
+        </div>
+        <div class="ucard" style="border-color:rgba(230,140,20,.4)" id="nfc" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('nfc').classList.add('drag-over')" ondragleave="document.getElementById('nfc').classList.remove('drag-over')" ondrop="handleDrop(event,'n')" onclick="document.getElementById('nfi').click()">
+          <div class="ucard-head"><div class="vendor-dot" style="background:rgba(230,140,20,.15)">🐧</div><div><h3 style="color:#c87808">Linux iptables / nftables</h3><div class="ver">iptables-save · ip6tables-save · nft list ruleset</div></div></div>
+          <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_netfilter">iptables-save／ip6tables-save 或 nft list ruleset 的輸出；只含規則與 NAT，介面清單取自規則中出現的名稱</div></div>
+          <div class="file-chip" id="nfc-chip" style="display:none"><span>📄</span><span class="fn" id="nc-name"></span><span class="rm" onclick="clearFile(event,'n')">✕</span></div>
+          <input type="file" id="nfi" accept=".txt,.conf,.rules,.nft,.v4,.v6" onchange="pickFile('n',this)">
+        </div>
+        <div class="ucard" style="border-color:rgba(40,130,220,.4)" id="kc" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('kc').classList.add('drag-over')" ondragleave="document.getElementById('kc').classList.remove('drag-over')" ondrop="handleDrop(event,'k')" onclick="document.getElementById('ki').click()">
+          <div class="ucard-head"><div class="vendor-dot" style="background:rgba(40,130,220,.15)">☁️</div><div><h3 style="color:#2878c8">AWS / Azure / Meraki</h3><div class="ver">describe-security-groups · NSG JSON · Meraki MX API</div></div></div>
+          <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_cloudsg">aws ec2 describe-security-groups 或 Azure NSG（az network nsg show／list、資源 JSON）的輸出，每個群組當成一個 VDOM；或 Meraki MX Dashboard API 回應（L3 防火牆規則、通訊埠轉送、1:1 NAT、VLAN、靜態路由，可多個回應前後相接）</div></div>
+          <div class="file-chip" id="kc-chip" style="display:none"><span>📄</span><span class="fn" id="kc-name"></span><span class="rm" onclick="clearFile(event,'k')">✕</span></div>
+          <input type="file" id="ki" accept=".json" onchange="pickFile('k',this)">
+        </div>
       </div>
       <div class="analyze-row">
         <button class="btn-analyze" id="btn-go" onclick="analyze()" disabled>🔍 <span data-i18n="btn.analyze">開始分析</span></button>
@@ -850,6 +868,9 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 <script src="firewall-analyzer-parser-edgerouter.js"></script>
 <script src="firewall-analyzer-parser-openwrt.js"></script>
 <script src="firewall-analyzer-parser-watchguard.js"></script>
+<script src="firewall-analyzer-parser-vyos.js"></script>
+<script src="firewall-analyzer-parser-netfilter.js"></script>
+<script src="firewall-analyzer-parser-cloud.js"></script>
 <script src="firewall-analyzer-parser-cisco-asa.js"></script>
 <script src="firewall-analyzer-converter.js"></script>
 <script src="firewall-analyzer-reporter.js"></script>

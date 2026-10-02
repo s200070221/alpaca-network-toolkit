@@ -694,7 +694,7 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
           <div class="dz-text" data-i18n="dz.text">點擊選取設定檔，或拖曳至此</div>
           <div class="dz-hint" data-i18n="dz.hint">支援 .txt .cfg .conf .log ｜ 自動識別廠牌</div>
         </div>
-        <input type="file" id="file-inp" accept=".txt,.cfg,.conf,.log" onchange="onFileChange(this)">
+        <input type="file" id="file-inp" accept=".txt,.cfg,.conf,.log,.json,.yaml,.yml" onchange="onFileChange(this)">
         <div id="file-chip" class="file-chip" style="display:none">
           <span class="fn" id="fname"></span>
           <span class="rm" onclick="clearFile()">✕</span>
@@ -770,6 +770,8 @@ Cisco IOS/IOS-XE：hostname、switchport mode trunk、ip route..."></textarea>
 <script src="switch-analyzer-parser-netgear.js"></script>
 <script src="switch-analyzer-parser-edgeswitch.js"></script>
 <script src="switch-analyzer-parser-sonic.js"></script>
+<script src="switch-analyzer-parser-cumulus.js"></script>
+<script src="switch-analyzer-parser-awplus.js"></script>
 <script src="switch-analyzer-parser-planet.js"></script>
 <script src="switch-analyzer-diff.js"></script>
 <script src="switch-analyzer-topology.js"></script>
