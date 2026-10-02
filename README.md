@@ -10,11 +10,11 @@
 
 | 工具 | 檔案 | 說明 |
 |---|---|---|
-| 🛡️ 防火牆設定分析器 | `firewall-analyzer-fixed.html` + `firewall-analyzer-*.js`（20 個模組檔） | 解析 FortiGate／Sophos XG／Check Point／Palo Alto／Juniper／pfSense／SonicWall／MikroTik／Cisco ASA/FTD／Zyxel USG-ATP／EdgeRouter (EdgeOS)／OpenWrt (UCI) 等 13 家廠牌設定檔，視覺化規則、路由、VPN、位址物件；支援設定檔格式互轉與稽核。9 家廠牌（FortiGate／Palo Alto／Juniper／SonicWall／MikroTik／Sophos／Check Point／pfSense／EdgeRouter）的政策規則已支援 IPv4/IPv6 位址分類，FortiGate 另支援 IPv6 政策/NAT66/靜態路由；FortiGate／Juniper／Palo Alto／EdgeRouter／MikroTik 5 家另支援介面次要IP（Secondary IP）解析 |
-| 🔀 交換器設定解析器 | `switch-config-parser.html` + `switch-analyzer-*.js`（20 個模組檔） | 解析 HPE Comware／Cisco IOS-XE／NX-OS／Aruba CX／ProCurve／FortiSwitch／Juniper／Extreme／Alcatel／Brocade-ICX／Dell OS10／Arista／MikroTik RouterOS／Ruijie RGOS／Netgear M4300／Ubiquiti EdgeSwitch 等 16 家廠牌，視覺化 Port/VLAN/路由/堆疊拓撲。Comware／Cisco IOS-XE／Arista／Aruba CX／Juniper／Dell OS10／Cisco NX-OS／Ruckus-Brocade ICX／Netgear M4300／FortiSwitch／SONiC／Ruijie RGOS／Alcatel OmniSwitch 共 13 家已支援 Interface/VLAN SVI 的 IPv6；Comware／Cisco IOS-XE／Aruba CX／FortiSwitch 4 家另支援介面次要IP（Secondary IP） |
-| 🛠️ 交換器設定產生器 | `switch-config-generator.html` + `switch-generator-*.js`（20 個模組檔） | 表單輸入產生上述廠牌的交換器設定指令，並支援反向匯入既有設定檔自動帶入表單（此功能僅接受合併版單檔 `switch-config-parser.html`，可用 `build-standalone.ps1` 於 `dist/` 產生）。同上 13 家已支援輸出 Interface/VLAN SVI 的 IPv6 設定，4 家已支援輸出次要IP設定 |
-| 🔒 設定檔去識別化工具 | `config-anonymizer.html` | 掃描並一致性替換設定檔中的 IP／主機名稱／密碼等敏感資訊，供分享/求助使用，支援 AES-256 加密還原對照表；IPv4/IPv6 皆完整支援 |
-| 📜 Log 分析與去識別化工具 🧪實驗中 | `log-analyzer.html` | 匯入交換器/防火牆 log（CEF、LEEF、標準 Syslog RFC3164/RFC5424、FortiGate 原生 key=value），依嚴重程度排序並找出可能問題（頻率異常、掃描 heuristic），支援本機威脅情資清單比對（僅本機、不連網，含 IPv4/IPv6 CIDR）與敏感欄位去識別化，事件清單可正規化匯出為 CSV；`fetch_threat_intel.ps1` 為選用的獨立輔助腳本，在瀏覽器外下載並合併公開黑名單為單一檔案供匯入，工具本身仍維持不連網 |
+| 🛡️ 防火牆設定分析器 | `firewall-analyzer-fixed.html` + `firewall-analyzer-*.js`（25 個模組檔） | 解析 FortiGate／Sophos XG／Check Point／Palo Alto／Juniper SRX／pfSense／OPNsense／SonicWall／MikroTik／Cisco ASA/FTD／Zyxel USG-ATP／EdgeRouter (EdgeOS)／OpenWrt (UCI)／WatchGuard Firebox／VyOS／Linux iptables・nftables 設定檔，以及 AWS 安全群組／Azure NSG／Cisco Meraki MX（API 回應 JSON），共 18 種來源；視覺化規則、路由、NAT、VPN、位址物件，支援 IP／埠查詢、遮蔽分析、合規稽核與健康度評分、新舊（HA 主備）設定比對與設定檔格式互轉。FortiGate／Cisco ASA/FTD／Palo Alto／Juniper SRX 可另外貼上規則命中數，找出從未或長期未命中的規則 |
+| 🔀 交換器設定解析器 | `switch-config-parser.html` + `switch-analyzer-*.js`（29 個模組檔） | 解析 HPE Comware／Cisco IOS-XE／NX-OS／Cisco Business (CBS/SG)／Aruba CX／ProCurve／FortiSwitch／Juniper EX/QFX／Extreme／Alcatel OmniSwitch／Ruckus-Brocade ICX／Dell OS10／Arista EOS／MikroTik RouterOS／Ruijie RGOS／Netgear M4300／Ubiquiti EdgeSwitch／SONiC／Planet／Allied Telesis AlliedWare Plus／NVIDIA Cumulus Linux (NVUE) 共 21 家廠牌，視覺化 Port/VLAN/路由/堆疊拓撲，另有安全稽核與健康度評分、設定比對、配線表與終端定位（MAC／ARP 表） |
+| 🛠️ 交換器設定產生器 | `switch-config-generator.html` + `switch-generator-*.js`（23 個模組檔） | 表單輸入產生 18 家廠牌（Comware／FortiSwitch／Aruba CX／Cisco IOS-XE／Juniper／Dell OS10／NX-OS／Arista／Brocade ICX／Alcatel／Extreme／ProCurve／RouterOS／Ruijie／Netgear／EdgeSwitch／SONiC／Planet）的交換器設定，含 IPv6、次要IP、OSPF/OSPFv3、BGP、VRRP、ACL、QoS、堆疊等；支援 CSV 批次產生、設定模板庫，並可反向匯入既有設定檔帶入表單（也可從交換器設定解析器直接送過來） |
+| 🔒 設定檔去識別化工具 | `config-anonymizer.html` | 支援 35 種防火牆／交換器／雲端設定格式，一致性替換 IP／主機名稱／帳號／密碼／金鑰／community／MAC 等敏感資訊，供分享或求助使用；可選擇保留網段結構（同網段換成同一個假網段，查詢與路由結果不變）、檢查去識別化前後結構是否一致，對照表可用 AES-256 加密保存以便還原；IPv4/IPv6 皆完整支援 |
+| 📜 Log 分析與去識別化工具 🧪實驗中 | `log-analyzer.html` | 匯入交換器／防火牆／伺服器 log（CEF、LEEF、標準 Syslog RFC3164/RFC5424、FortiGate key=value、Cisco ASA、Cisco IOS／Comware 設備 log、Juniper SRX RT_FLOW、MikroTik、Linux iptables/nftables LOG、Windows 事件 XML 與 Sysmon、AWS VPC／Azure NSG 流量紀錄、IIS／Web 存取紀錄、JSON），依嚴重程度排序並找出可能問題（頻率異常、掃描、認證失敗、Kerberoasting、橫向移動、介面異常、MAC 飄移、跨事件攻擊鏈等，附 MITRE ATT&CK 編號），支援本機威脅情資與 ASN 清單比對（僅本機、不連網）、敏感欄位去識別化與 CSV／報表匯出；事件可一鍵帶到防火牆反查規則、介面異常可帶到交換器查看該埠。`fetch_threat_intel.ps1` 為選用的獨立輔助腳本，在瀏覽器外下載並合併公開黑名單為單一檔案供匯入，工具本身仍維持不連網 |
 | 🌐 六工具入口頁 | `network-analyzer.html` | 自動偵測拖入設定檔的廠牌並導向對應工具 |
 
 > 部分工具的 JavaScript 已拆分成獨立 `.js` 檔（開發/除錯較方便），使用 `<script src>` 引入、非 ES module，因此 `file://` 雙擊開啟與 GitHub Pages 都能正常運作。**下載或分享這類工具時請連同對應 `.js` 檔一起、放在同一資料夾**，只複製單一 `.html` 會無法運作；建議直接下載整個 repo。如果需要純單一檔案版本（例如只想寄一個附件），執行 `build-standalone.ps1` 會在 `dist/` 產生合併回單檔的版本。
@@ -27,7 +27,7 @@
 
 - **零伺服器、零安裝**：純 JS + HTML，下載即用，或直接透過 GitHub Pages 線上開啟
 - **多語系**：繁體中文／English／日本語（另有多組隱藏彩蛋語言）
-- **廣泛廠牌支援**：合計涵蓋 23 家網通設備廠牌的設定檔語法
+- **廣泛廠牌支援**：防火牆 18 種來源（含 AWS／Azure／Meraki 雲端）、交換器 21 家廠牌、去識別化 35 種設定格式
 
 ## 授權與使用限制
 
