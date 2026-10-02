@@ -806,7 +806,18 @@
     f('broad-network', tr('audit.check_broad_network'), broadNetwork.length, 'medium',
       broadNetwork.length ? tr('audit.id_prefix') + broadNetwork.map(p => idLabel(p)).slice(0,10).join(', ') + (broadNetwork.length > 10 ? '…' : '') : tr('audit.none'),
       ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 12.2'], polItems(broadNetwork));
-    // 12. 過寬服務物件（2026-09-14 新增）：與第 1 項 any-any 檢查角度不同——那項看的是「規則」
+    // 12. 遠端管理埠對全網開放（2026-10-02 新增，第十輪 ZC）：來源為 any／0.0.0.0/0／::/0／Azure Internet
+    // 服務標籤，且服務明確涵蓋 SSH(22)／Telnet(23)／RDP(3389) 的允許規則。服務為 ALL 的規則已由第 1 項
+    // any-any 與第 11 項涵蓋，這裡只看有寫出服務的規則，避免重複計算
+    const MGMT_PORTS = [22, 23, 3389];
+    const anySrc = v => String(v || '').split(',').map(x => x.trim().toLowerCase()).some(x => ['all', 'any', '0.0.0.0/0', '::/0', 'internet', '0.0.0.0 0.0.0.0'].includes(x));
+    const mgmtExposed = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && anySrc(p.srcAddr) &&
+      !/^(all|any)$/i.test(String(p.service || 'ALL').trim()) &&
+      MGMT_PORTS.some(port => _policySvcMatches(p.service, 'TCP', port, parsed.services || [])));
+    f('mgmt-exposed', tr('audit.check_mgmt_exposed'), mgmtExposed.length, 'high',
+      mgmtExposed.length ? tr('audit.id_prefix') + mgmtExposed.map(p => idLabel(p)).slice(0,10).join(', ') + (mgmtExposed.length > 10 ? '…' : '') : tr('audit.none'),
+      ['PCI-DSS 4.0 1.3.1', 'NIST 800-53 SC-7', 'CIS v8 4.4'], polItems(mgmtExposed));
+    // 13. 過寬服務物件（2026-09-14 新增）：與第 1 項 any-any 檢查角度不同——那項看的是「規則」
     // 層級的來源/目的/服務是否皆為 all，此項專門看「服務物件本身」定義是否在物件層級就已無任何
     // 埠限制（proto 為 ANY/IP，或 tcp/udp port-range 寬度達 65535 等同全埠開放），即使規則的
     // src/dst 收斂，用了這種服務物件仍形同無埠管制
@@ -2019,8 +2030,24 @@
     if (res.items.length) res.format = 'pacli';
     return res;
   }
+  // Juniper SRX（2026-10-02，第十輪發想 ZP）：`show security policies hit-count` 表格，欄位為 Index／From zone／To zone／
+  //   Name／Policy count（Juniper 官方指令文件的欄位與範例列，原文頁被網路政策擋下，以搜尋索引摘要確認）。以表頭定位，
+  //   之後每列 5 欄；政策名稱不含空白。只有累計次數、沒有最後命中時間，只能判斷「從未命中」。id 為「來源區域|目的區域|名稱」
+  function parseJuniperHitCounts(text) {
+    const res = { format: '', vdom: '', items: [] };
+    let inTable = false;
+    for (const line of String(text || '').split(/\r?\n/)) {
+      if (/From zone\s+To zone\s+Name\s+Policy count/i.test(line)) { inTable = true; continue; }
+      if (!inTable) continue;
+      const m = line.match(/^\s*(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s*$/);
+      if (m) res.items.push({ id: `${m[2]}|${m[3]}|${m[4]}`, label: `${m[2]} → ${m[3]} ${m[4]}`, hits: Number(m[5]), lastUsed: null, firstUsed: null, bytes: null });
+    }
+    if (res.items.length) res.format = 'junos';
+    return res;
+  }
   // 依廠牌分派：回傳 {hc, res}；不支援的廠牌 hc 為 null
   function parseRuleHitCounts(text, vendor) {
+    if (vendor === 'Juniper') return parseJuniperHitCounts(text);
     if (vendor === 'FortiGate') return parseFortiHitCounts(text);
     if (vendor === 'Cisco ASA' || vendor === 'Cisco FTD') return parseAsaHitCounts(text);
     if (vendor === 'PaloAlto') return parsePaloAltoHitCounts(text);
@@ -2030,6 +2057,7 @@
     if (parsed.vendor === 'FortiGate') return analyzeFortiHitCounts(parsed, hc, opts);
     const pols = (parsed.policies || []).filter(p => !_isDisabledStatus(p));
     if (parsed.vendor === 'PaloAlto') return _analyzeHitCountsByKey(pols, hc, p => String(p.name || ''), opts);
+    if (parsed.vendor === 'Juniper') return _analyzeHitCountsByKey(pols, hc, p => `${p.srcIntf}|${p.dstIntf}|${p.name}`, opts);
     return _analyzeHitCountsByKey(pols.filter(p => p.aclLine), hc, p => p.name + '#' + p.aclLine, opts);
   }
   // 共用比對（2026-10-02 自 analyzeFortiHitCounts 抽出，供 ASA／Palo Alto 共用）：keyOf(policy) 與命中資料的 id 對應；

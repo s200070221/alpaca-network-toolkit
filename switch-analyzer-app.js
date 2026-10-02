@@ -204,6 +204,8 @@ function toggleLldpInput(){
 
 // 手動指定廠牌下拉選單：detectVendor() 誤判時的 fallback（2026-07-30 新增）。
 // 清單與 parseAny() 的 if-else 派送鏈完全對應，新增廠牌時務必同步更新兩處
+// 沿用 Cisco 解析的子品牌（Cisco Business、Allied Telesis AlliedWare Plus）顯示自己的名稱
+const SW_BRAND_LABEL={ciscobiz:'Cisco Business (CBS/SG)',awplus:'Allied Telesis AlliedWare Plus'};
 const FORCE_VENDOR_LIST=[
   ['comware','HPE Comware'],['cisco','Cisco IOS/IOS-XE'],['aruba','Aruba CX'],
   ['fortiswitch','FortiSwitch'],['juniper','Juniper Networks'],['dell-os10','Dell EMC Networking OS'],
@@ -211,7 +213,7 @@ const FORCE_VENDOR_LIST=[
   ['alcatel','Alcatel OmniSwitch'],['extreme','Extreme Networks ExtremeXOS'],
   ['procurve','Aruba ProCurve'],['routeros','MikroTik RouterOS'],['ruijie','Ruijie RGOS'],
   ['netgear','Netgear M4300'],['edgeswitch','Ubiquiti EdgeSwitch'],
-  ['sonic','SONiC (config_db.json)'],['planet','Planet Technology'],
+  ['sonic','SONiC (config_db.json)'],['planet','Planet Technology'],['cumulus','NVIDIA Cumulus Linux (NVUE)'],
 ];
 (function(){
   // 防護：本區塊是頂層立即執行敘述，會被不同測試腳本的最小 DOM mock 一併載入執行，
@@ -267,7 +269,8 @@ function doAnalyze(){
 let _swPortQuery=null;
 window._swSetPendingPortQuery=function(q){
   if(!q||!q.iface)return;
-  _swPortQuery={host:String(q.host||''),iface:String(q.iface),kind:String(q.kind||''),count:Number(q.count)||0};
+  _swPortQuery={host:String(q.host||''),iface:String(q.iface),kind:String(q.kind||''),count:Number(q.count)||0,
+    iface2:String(q.iface2||''),mac:String(q.mac||''),vlan:String(q.vlan||'')};
   renderSwqBar();
 };
 function _swClearPortQuery(){_swPortQuery=null;renderSwqBar();}
@@ -276,15 +279,18 @@ function renderSwqBar(){
   if(!_swPortQuery){b.style.display='none';b.innerHTML='';return;}
   const q=_swPortQuery;
   const kindLbl=tr('swq.kind_'+q.kind)!=='swq.kind_'+q.kind?tr('swq.kind_'+q.kind):q.kind;
-  const who=(q.host?q.host+' ':'')+q.iface;
+  // MAC 飄移（ZQ）帶來兩個埠，標題列出兩者
+  const who=(q.host?q.host+' ':'')+q.iface+(q.iface2?' ⇄ '+q.iface2:'')+(q.mac?` (${q.mac}${q.vlan?' vlan '+q.vlan:''})`:'');
   const close=` <button class="btn btn-ghost btn-sm" onclick="_swClearPortQuery()">${esc(tr('swq.close'))}</button>`;
   b.style.display='block';
   if(!parsed){b.innerHTML=esc(tr('swq.pending').replace('{port}',who).replace('{kind}',kindLbl))+close;return;}
-  const r=epPortLookup(parsed,epModel,q);
   let html=`<div style="font-weight:600;margin-bottom:4px">${esc(tr('swq.title').replace('{port}',who).replace('{kind}',kindLbl).replace('{n}',q.count))}</div>`;
-  if(r.hostMismatch)html+=`<div style="color:var(--yellow);margin-bottom:4px">⚠ ${esc(tr('swq.host_mismatch').replace('{host}',q.host).replace('{cfg}',r.cfgHost))}</div>`;
-  if(!r.row)html+=`<div>${esc(tr('swq.not_found').replace('{iface}',q.iface))}</div>`;
-  else{
+  const rs=[q.iface,q.iface2].filter(Boolean).map(iface=>epPortLookup(parsed,epModel,{...q,iface}));
+  if(rs[0].hostMismatch)html+=`<div style="color:var(--yellow);margin-bottom:4px">⚠ ${esc(tr('swq.host_mismatch').replace('{host}',q.host).replace('{cfg}',rs[0].cfgHost))}</div>`;
+  html+='<div style="display:flex;flex-wrap:wrap;gap:4px 24px">';
+  [q.iface,q.iface2].filter(Boolean).forEach((iface,i)=>{
+    const r=rs[i];
+    if(!r.row){html+=`<div>${esc(tr('swq.not_found').replace('{iface}',iface))}</div>`;return;}
     const x=r.row,cell=v=>esc(v===''||v==null?'—':String(v));
     const eps=x.port&&x.endpoints?_cablingEndpointsText(x):'';
     html+=`<table class="swq-table" style="border-collapse:collapse"><tbody>`+
@@ -292,6 +298,14 @@ function renderSwqBar(){
        [tr('cab.col_admin'),x.shutdown?tr('cab.admin_down'):tr('cab.admin_up')],[tr('cab.col_neighbor'),x.neighbor],[tr('cab.col_endpoints'),eps]]
       .map(([k,v])=>`<tr><th style="text-align:left;padding:1px 12px 1px 0;font-weight:500;color:var(--text-dim)">${esc(k)}</th><td class="mono" style="padding:1px 0">${cell(v)}</td></tr>`).join('')+
       `</tbody></table>`;
+  });
+  html+='</div>';
+  // MAC 目前所在位置：有載入終端定位資料（MAC 表）才查得到
+  if(q.mac){
+    const loc=epModel?epLookup(epModel,q.mac,null).locations:[];
+    if(!epModel)html+=`<div style="margin-top:4px;color:var(--text-dim)">${esc(tr('swq.mac_need_ep').replace('{mac}',q.mac))}</div>`;
+    else if(!loc.length)html+=`<div style="margin-top:4px">${esc(tr('swq.mac_not_seen').replace('{mac}',q.mac))}</div>`;
+    else html+=`<div style="margin-top:4px">${esc(tr('swq.mac_seen').replace('{mac}',q.mac))} `+loc.map(l=>`<span class="mono">${esc(`${l.device} ${l.port} vlan ${l.vlan||'-'}${l.uplink?' ('+tr('swq.uplink')+')':''}`)}</span>`).join('、')+'</div>';
   }
   b.innerHTML=html+`<div style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="navGo('cabling')">${esc(tr('swq.goto_cabling'))}</button>${close}</div>`;
 }
@@ -346,16 +360,18 @@ function showResultViews(){
     // 統一回傳 'brocade'（避免動到既有派送邏輯），品牌顯示改依 parseBrocadeSysInfo() 抓到的
     // brand 欄位（cfg 內含 Ruckus/CommScope 字樣時判定）動態切換標籤
     const brocadeTitle=parsed.sys?.brand==='ruckus'?`Ruckus ICX ${_a}`:`Brocade FastIron/ICX ${_a}`;
-    const titleMap={'comware':'HPE Comware '+_a,'arista':'Arista EOS '+_a,'ruijie':'Ruijie RGOS '+_a,'netgear':'Netgear M4300 '+_a,'edgeswitch':'Ubiquiti EdgeSwitch '+_a,'cisco':'Cisco IOS/IOS-XE '+_a,'nxos':'Cisco NX-OS '+_a,'aruba':'Aruba CX '+_a,'procurve':'Aruba ProCurve '+_a,'fortiswitch':'FortiSwitch '+_a,'juniper':'Juniper EX/QFX '+_a,'extreme':'Extreme Networks ExtremeXOS '+_a,'alcatel':'Alcatel OmniSwitch '+_a,'brocade':brocadeTitle,'dell-os10':dellTitle,'planet':'Planet Technology '+_a,'unknown':tr('sl.unknown_vendor')+' '+_a};
-    titleEl.textContent=titleMap[parsed.vendor]||tr('sl.unknown_vendor')+' '+_a;
+    const titleMap={'comware':'HPE Comware '+_a,'arista':'Arista EOS '+_a,'ruijie':'Ruijie RGOS '+_a,'netgear':'Netgear M4300 '+_a,'edgeswitch':'Ubiquiti EdgeSwitch '+_a,'cisco':'Cisco IOS/IOS-XE '+_a,'nxos':'Cisco NX-OS '+_a,'aruba':'Aruba CX '+_a,'procurve':'Aruba ProCurve '+_a,'fortiswitch':'FortiSwitch '+_a,'juniper':'Juniper EX/QFX '+_a,'extreme':'Extreme Networks ExtremeXOS '+_a,'alcatel':'Alcatel OmniSwitch '+_a,'brocade':brocadeTitle,'dell-os10':dellTitle,'planet':'Planet Technology '+_a,'cumulus':'NVIDIA Cumulus Linux '+_a,'unknown':tr('sl.unknown_vendor')+' '+_a};
+    const brandLbl=SW_BRAND_LABEL[parsed.sys?.brand];
+    titleEl.textContent=brandLbl?brandLbl+' '+_a:(titleMap[parsed.vendor]||tr('sl.unknown_vendor')+' '+_a);
   }
   const vbEl=document.getElementById('tb-vendor');
   if(vbEl){
     const dellLabel=parsed.sys?.osGen?`Dell EMC ${parsed.sys.osGen}`:'Dell EMC Networking OS';
     const brocadeLabel=parsed.sys?.brand==='ruckus'?'Ruckus ICX':'Brocade FastIron/ICX';
-    const vLabel={'comware':'HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':brocadeLabel,'dell-os10':dellLabel,'planet':'Planet Technology','unknown':tr('sl.unknown_vendor')}[parsed.vendor]||parsed.vendor;
-    const vClass={'comware':'vb-comware','arista':'vb-cisco','ruijie':'vb-cisco','netgear':'vb-cisco','edgeswitch':'vb-cisco','cisco':'vb-cisco','nxos':'vb-cisco','aruba':'vb-aruba','procurve':'vb-aruba','fortiswitch':'vb-forti','juniper':'vb-juniper','extreme':'vb-extreme','alcatel':'vb-alcatel','brocade':'vb-brocade','dell-os10':'vb-dell','planet':'vb-cisco','unknown':'vb-unknown'}[parsed.vendor]||'vb-unknown';
-    vbEl.innerHTML=`<span class="vendor-badge ${vClass}">${vLabel}</span>`;
+    const vLabel={'comware':'HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':brocadeLabel,'dell-os10':dellLabel,'planet':'Planet Technology','cumulus':'NVIDIA Cumulus Linux','unknown':tr('sl.unknown_vendor')}[parsed.vendor]||parsed.vendor;
+    const vLabelShown=SW_BRAND_LABEL[parsed.sys?.brand]||vLabel;
+    const vClass={'comware':'vb-comware','arista':'vb-cisco','ruijie':'vb-cisco','netgear':'vb-cisco','edgeswitch':'vb-cisco','cisco':'vb-cisco','nxos':'vb-cisco','aruba':'vb-aruba','procurve':'vb-aruba','fortiswitch':'vb-forti','juniper':'vb-juniper','extreme':'vb-extreme','alcatel':'vb-alcatel','brocade':'vb-brocade','dell-os10':'vb-dell','planet':'vb-cisco','cumulus':'vb-cisco','unknown':'vb-unknown'}[parsed.vendor]||'vb-unknown';
+    vbEl.innerHTML=`<span class="vendor-badge ${vClass}">${vLabelShown}</span>`;
     _setupVendorPersona();
   }
   // Update stack nav label based on vendor
@@ -1845,6 +1861,7 @@ const PARSE_COVERAGE_MATRIX={
   nxos:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:{v:'⚠️',note:'class-map/match/service-policy 條件比對已支援，但基礎 policy-map 動作（bandwidth/police 數值）走 generic fallback，switch_config_generator 端 VENDOR_UNSUPPORTED.cisco_nxos 明確標示 qos 不支援'},security:{v:'⚠️',note:'802.1X 走 generic fallback，非該廠牌專屬解析'},stp:'✅',users:'✅',snmp:'✅',vxlan:'✅',vrf:'✅',stack:{v:'⚠️',note:'VPC 與傳統機殼堆疊是不同技術概念，非字面 Stack'},ipv6:'✅',secondaryIp:'✅'},
   juniper:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'❌',dhcp:'✅',acl:'✅',qos:'❌',security:'❌',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'✅',stack:'✅',ipv6:'✅',secondaryIp:'✅'},
   planet:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'❌',ipv6:'❌',secondaryIp:'✅'},
+  cumulus:{vlan:'✅',interface:'✅',ospf:'❌',bgp:{v:'⚠️',note:'本機 AS／router-id 與鄰居（含 unnumbered、peer-group 的 remote-as）；address-family 細節未解析'},rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'❌',dhcp:'❌',acl:'❌',qos:'❌',security:'❌',stp:{v:'⚠️',note:'僅逐埠 admin-edge／bpdu-guard'},users:'✅',snmp:{v:'⚠️',note:'僅 v3 帳號名稱與 readonly-community'},vxlan:'❌',vrf:'✅',stack:{v:'⚠️',note:'MLAG 啟用、peerlink、peer-ip 與 backup'},ipv6:'✅',secondaryIp:'✅'},
 };
 const PARSE_COVERAGE_CATEGORIES=['vlan','interface','ospf','bgp','rip','staticRoute','lacp','vrrp','dhcp','acl','qos','security','stp','users','snmp','vxlan','vrf','stack','ipv6','secondaryIp'];
 function renderParseCoverageMatrix(vendor){
@@ -1862,7 +1879,7 @@ function renderParseCoverageMatrix(vendor){
 }
 // 沿用 showResultViews() 既有的品牌顯示名稱慣例（該處為函式內區域變數，此處另建一份模組級
 // 常數供本矩陣下拉選單使用，補上該處缺漏的 sonic/routeros 兩家）
-const PC_VENDOR_LABELS={'comware':'HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':'Brocade FastIron/ICX','dell-os10':'Dell EMC Networking OS','planet':'Planet Technology','sonic':'SONiC','routeros':'MikroTik RouterOS'};
+const PC_VENDOR_LABELS={'comware':'HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':'Brocade FastIron/ICX','cumulus':'NVIDIA Cumulus Linux','dell-os10':'Dell EMC Networking OS','planet':'Planet Technology','sonic':'SONiC','routeros':'MikroTik RouterOS'};
 function _initParseCoverageMatrix(){
   const sel=document.getElementById('pc-vendor-select');
   if(!sel)return;
@@ -3842,7 +3859,8 @@ function _setupVendorPersona() {
     t = setTimeout(() => { n = 0; }, 2500);
     if (n === 3) {
       n = 0;
-      const vendor = parsed ? parsed.vendor : '';
+      // Cisco Business（CBS／SG）沿用 cisco 廠牌代碼，彩蛋依 sys.brand 換成專屬文案
+      const vendor = parsed ? (parsed.sys && (parsed.sys.brand === 'ciscobiz' || parsed.sys.brand === 'awplus') ? parsed.sys.brand : parsed.vendor) : '';
       const msg = vendor ? tr('egg.vendor_' + vendor) : '';
       if (msg) _showSwitchToast(msg, 4500);
     }
@@ -4130,6 +4148,7 @@ function epParse(fromInput){
   if(fromInput&&ta)epText=ta.value;
   epModel=parseEndpointText(epText);
   epResult=epQuery?epLookup(epModel,epQuery,epCfgByDevice()):null;
+  renderSwqBar(); // log 帶來的 MAC 飄移查詢：載入終端定位資料後更新 MAC 所在位置
   navGo('endpoint');
 }
 function epLoadSample(){epText=EP_SAMPLE_TEXT;epQuery='192.0.2.21';epParse();}
