@@ -250,6 +250,22 @@ function epFreePorts(model, cfgByDevice) {
 // 同一埠學到的 MAC 達 EP_UPLINK_MAC_MIN 個、或是 trunk／聚合埠時不逐一列出，只標上行與數量。
 // 介面名稱一律經 epNormIface() 比對（設定檔全名、LLDP 與 show 輸出的縮寫可互相對上）。
 // 回傳 { rows, device }，device 為對上的終端定位裝置名稱（沒對上為空字串）。
+// log → 交換器介面對照（2026-10-02，第九輪發想 YH）：q={host,iface}（log 分析帶入），沿用配線表的
+// 整理結果找出該埠；配線表略過的 SVI／Loopback 退回設定檔介面本身。log 的設備名稱是 IP 時不比對主機名稱，
+// 是 FQDN 時只比第一段
+function epPortLookup(parsed, epModel, q) {
+  const k = epNormIface(q && q.iface);
+  let row = epBuildCablingSheet(parsed, epModel).rows.find(r => epNormIface(r.port) === k) || null;
+  if (!row) {
+    const i = ((parsed && parsed.interfaces) || []).find(x => epNormIface(x.name) === k);
+    if (i) row = { port: i.name, desc: i.desc || '', mode: i.mode || (i.ip ? 'routed' : ''), vlan: i.ip || '', shutdown: !!i.shutdown, link: '', neighbor: '', macCount: 0, uplink: false, endpoints: [] };
+  }
+  const cfgHost = String((parsed && parsed.sys && parsed.sys.hostname) || '');
+  const h = String((q && q.host) || '').toLowerCase();
+  const first = x => x.split('.')[0];
+  const hostMismatch = !!(h && cfgHost && !/^[\d.]+$|:/.test(h) && first(h) !== first(cfgHost.toLowerCase()));
+  return { row, cfgHost, hostMismatch };
+}
 function epBuildCablingSheet(parsed, epModel) {
   const host = String((parsed && parsed.sys && parsed.sys.hostname) || '').toLowerCase();
   const dev = host && epModel && epModel.devices ? epModel.devices.find(d => d.name.toLowerCase() === host) : null;
@@ -279,4 +295,30 @@ function epBuildCablingSheet(parsed, epModel) {
       };
     });
   return { rows, device: dev ? dev.name : '' };
+}
+
+// 配線表列印版（2026-10-02，第九輪發想 YK）：給現場人員的 A4 橫式表格，獨立 HTML（固定淺色、表頭每頁重複、
+// 列不跨頁截斷），多兩欄空白「現場確認 ☐」與「備註」供手寫。rows 為已整理好的文字欄位
+// {port,desc,mode,vlan,admin,link,neighbor,ep}，L 為各欄標題與頁首文字（由呼叫端翻譯）
+function epBuildCablingPrintHtml(rows, L) {
+  const e = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const cols = ['port', 'desc', 'mode', 'vlan', 'admin', 'link', 'neighbor', 'ep'];
+  const head = cols.map(c => `<th>${e(L[c])}</th>`).join('') + `<th class="chk">${e(L.check)}</th><th class="note">${e(L.note)}</th>`;
+  const body = rows.map(r => '<tr>' + cols.map(c => `<td class="${c}">${e(r[c])}</td>`).join('') + '<td class="chk">☐</td><td class="note"></td></tr>').join('\n');
+  return `<!doctype html><html lang="${e(L.lang || 'zh-Hant')}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(L.title)}</title>
+<style>
+@page{size:A4 landscape;margin:10mm}
+body{font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",sans-serif;font-size:9pt;color:#111;background:#fff;margin:12px}
+h1{font-size:14pt;margin:0 0 2px}.meta{color:#444;margin-bottom:8px}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #888;padding:3px 5px;vertical-align:top;text-align:left}
+th{background:#eee}thead{display:table-header-group}tr{page-break-inside:avoid;break-inside:avoid}
+td.port{font-family:ui-monospace,Consolas,monospace;font-weight:600;white-space:nowrap}td.ep,td.neighbor{font-family:ui-monospace,Consolas,monospace;font-size:8pt}
+th.chk,td.chk{width:5%;text-align:center}th.note,td.note{width:16%}
+.bar{margin-bottom:8px}@media print{.bar{display:none}body{margin:0}}
+</style></head><body>
+<div class="bar"><button onclick="window.print()">🖨 ${e(L.print)}</button></div>
+<h1>${e(L.title)}</h1><div class="meta">${e(L.meta)}</div>
+<table><thead><tr>${head}</tr></thead><tbody>
+${body}
+</tbody></table></body></html>`;
 }

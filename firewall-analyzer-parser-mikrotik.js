@@ -124,6 +124,9 @@ const MikrotikParser = (() => {
       if (!sec.startsWith('/interface')) continue;
       const type = sec.replace('/interface', '').trim() || 'physical';
       if (IFACE_MEMBERSHIP_SECTIONS.has(type)) continue;
+      // 名稱含空白的子區塊（lte apn、wireless security-profiles、bridge vlan、dot1x server、wireguard peers…）
+      // 是設定檔／成員關係而非介面本身，name= 是設定檔名稱（2026-10-02，第 13 輪：APN 與 WiFi 安全設定被列成介面）
+      if (type.includes(' ')) continue;
       lines.forEach(line => {
         const p = parseLine(line);
         const name = p['name'] || p['interface'] || '';

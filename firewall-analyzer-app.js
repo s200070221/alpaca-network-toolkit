@@ -181,14 +181,19 @@ const App = (() => {
   // 解析與比對在 firewall-analyzer-audit.js 的 parseFortiHitCounts()／analyzeFortiHitCounts()（純函式）；
   // 貼上的內容只留在記憶體，不存 localStorage
   const _fwHit = { text: '', days: 90, res: null, hc: null };
+  // 2026-10-02（YI）擴及 Cisco ASA／FTD 與 Palo Alto：標題、說明、提示文字與無法辨識訊息依廠牌換 key 後綴
+  const _HIT_VENDOR_SUFFIX = { 'FortiGate': '', 'Cisco ASA': '_asa', 'Cisco FTD': '_asa', 'PaloAlto': '_pa' };
+  const _HIT_FMT_LABEL = { json: 'REST API JSON', cli: 'CLI iprope', asa: 'show access-list', pacli: 'show rule-hit-count', paxml: 'XML API' };
+  const _hitKey = k => tr('hit.' + k + (_HIT_VENDOR_SUFFIX[PARSED && PARSED.vendor] || ''));
   function _fwHitResultHtml() {
     const r = _fwHit.res, hc = _fwHit.hc;
     if (!hc) return '';
-    if (!hc.format) return `<div style="font-size:12px;color:var(--red)">${esc(tr('hit.unrecognized'))}</div>`;
+    if (!hc.format) return `<div style="font-size:12px;color:var(--red)">${esc(_hitKey('unrecognized'))}</div>`;
     const fmt = d => d ? new Date(d).toLocaleString() : '—';
-    let h = `<div style="font-size:12px;margin:6px 0">${esc(tr('hit.summary').replace('{fmt}', hc.format === 'json' ? 'REST API JSON' : 'CLI iprope').replace('{n}', hc.items.length)
+    let h = `<div style="font-size:12px;margin:6px 0">${esc(tr('hit.summary').replace('{fmt}', _HIT_FMT_LABEL[hc.format] || hc.format).replace('{n}', hc.items.length)
       .replace('{zero}', r.zero).replace('{stale}', r.stale).replace('{days}', _fwHit.days))}</div>`;
     const notes = [];
+    if (hc.format === 'asa') notes.push(tr('hit.asa_no_last'));
     if (r.missing.length) notes.push(tr('hit.missing').replace('{list}', r.missing.slice(0, 20).join(', ') + (r.missing.length > 20 ? '…' : '')));
     if (r.unknown.length) notes.push(tr('hit.unknown').replace('{list}', r.unknown.slice(0, 20).join(', ')));
     if (r.ambiguous.length) notes.push(tr('hit.ambiguous').replace('{list}', r.ambiguous.join(', ')));
@@ -203,9 +208,9 @@ const App = (() => {
   }
   function _fwHitCardHtml() {
     return `<div id="hit-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
-      <div style="font-size:13px;font-weight:600;margin-bottom:6px">📈 ${esc(tr('hit.title'))}</div>
-      <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--accent)">${esc(tr('hit.hint'))}</div>
-      <textarea id="hit-text" spellcheck="false" aria-label="${esc(tr('hit.title'))}" placeholder="${esc(tr('hit.ph'))}" style="width:100%;height:120px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px">${esc(_fwHit.text)}</textarea>
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px">📈 ${esc(_hitKey('title'))}</div>
+      <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--accent)">${esc(_hitKey('hint'))}</div>
+      <textarea id="hit-text" spellcheck="false" aria-label="${esc(_hitKey('title'))}" placeholder="${esc(_hitKey('ph'))}" style="width:100%;height:120px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px">${esc(_fwHit.text)}</textarea>
       <div style="display:flex;gap:8px;align-items:center;margin-top:6px;font-size:12px">
         <label style="display:flex;gap:4px;align-items:center">${esc(tr('hit.days_label'))}<input id="hit-days" type="number" min="1" max="3650" value="${_fwHit.days}" style="width:70px"></label>
         <button class="btn btn-ghost btn-sm" onclick="window._fwHitRun()">${esc(tr('hit.run_btn'))}</button>
@@ -217,8 +222,8 @@ const App = (() => {
     const ta = document.getElementById('hit-text'), d = document.getElementById('hit-days');
     _fwHit.text = ta ? ta.value : '';
     _fwHit.days = Math.max(1, parseInt(d && d.value, 10) || 90);
-    _fwHit.hc = parseFortiHitCounts(_fwHit.text);
-    _fwHit.res = _fwHit.hc.format ? analyzeFortiHitCounts(PARSED, _fwHit.hc, { days: _fwHit.days }) : null;
+    _fwHit.hc = parseRuleHitCounts(_fwHit.text, PARSED.vendor);
+    _fwHit.res = _fwHit.hc && _fwHit.hc.format ? analyzeRuleHitCounts(PARSED, _fwHit.hc, { days: _fwHit.days }) : null;
     const box = document.getElementById('hit-result');
     if (box) box.innerHTML = _fwHitResultHtml();
   };
@@ -227,7 +232,7 @@ const App = (() => {
     const rows = _fwHit.res.rows.map(x => [x.id, x.name, x.vdom, x.action, x.hits, x.lastUsed ? new Date(x.lastUsed).toISOString() : '',
       x.kind === 'ok' ? '' : tr(x.kind === 'zero' ? 'hit.kind_zero' : 'hit.kind_stale').replace('{days}', _fwHit.days)]);
     const headers = ['ID', tr('hit.col_name'), 'VDOM', tr('hit.col_action'), tr('hit.col_hits'), tr('hit.col_last'), tr('hit.col_result')];
-    const host = (PARSED.deviceInfo && PARSED.deviceInfo.hostname && PARSED.deviceInfo.hostname !== '-') ? PARSED.deviceInfo.hostname : 'fortigate';
+    const host = (PARSED.deviceInfo && PARSED.deviceInfo.hostname && PARSED.deviceInfo.hostname !== '-') ? PARSED.deviceInfo.hostname : 'firewall';
     Reporter.download(Reporter.toCSV(rows, headers), host.replace(/[^\w.\-]/g, '_') + '_policy_hits.csv', 'text/csv');
   };
   window._fwCleanupCopy = _fwCleanupCopy;
@@ -379,6 +384,27 @@ const App = (() => {
     zyxel:t=>ZyxelParser.parse(t), edgerouter:t=>EdgeRouterParser.parse(t),
     openwrt:t=>OpenWrtParser.parse(t), watchguard:t=>WatchGuardParser.parse(t),
   };
+  // 去識別化結構保持度自檢（2026-10-02，第九輪發想 YD）：config_anonymizer 以隱藏 iframe
+  // （?structcheck=1）開啟本頁，postMessage 送來原始檔與去識別化結果，各自判斷廠牌並解析、只回傳數量
+  // （不回傳內容）。用 postMessage 而非直接呼叫 iframe 內函式，離線 file:// 開啟時也能運作。
+  if(/[?&]structcheck=1(?:&|$)/.test(location.search)&&window.parent!==window){
+    window.addEventListener('message',e=>{
+      if(e.source!==window.parent||!e.data||e.data.type!=='_naStructCheck')return;
+      const len=v=>Array.isArray(v)?v.length:0;
+      const results=(e.data.texts||[]).map(t=>{
+        try{
+          const text=String(t||'').replace(/^\uFEFF/,'').replace(/\r\n/g,'\n');
+          const vendor=detectFwVendor(text);
+          if(!FW_DIFF_PARSERS[vendor])return {vendor,error:'unknown vendor'};
+          const p=FW_DIFF_PARSERS[vendor](text), counts={};
+          ['interfaces','policies','addresses','services','routes','nat','vpn','users'].forEach(k=>{counts[k]=len(p[k]);});
+          return {vendor,counts};
+        }catch(err){return {error:String(err&&err.message||err)};}
+      });
+      window.parent.postMessage({type:'_naStructResult',id:e.data.id,tool:'firewall',results},'*');
+    });
+    window.parent.postMessage({type:'_naStructReady'},'*');
+  }
   let DIFF_OLD_FILE=null, DIFF_NEW_FILE=null, DIFF_RESULT=null, _diffInited=false;
   // 批次查詢跨版本比對（FE）：最近一次比對成功的新舊解析結果與比對結果快取
   let DIFF_OLD_PARSED=null, DIFF_NEW_PARSED=null, LAST_BATCH_DIFF=null, LAST_BATCH_DIFF_ERRORS=[];
@@ -496,9 +522,7 @@ const App = (() => {
         // 無大括號階層）偵測：JuniperParser 的 parseJunosTree()/tokenizeJunos() 僅支援大括號
         // 階層格式（含單行變體），display set 語法完全不支援，靜默誤判/解析不完整卻無任何
         // 提示；比照上方 vendor_mismatch 慣例，非阻塞警告（解析仍會嘗試進行）
-        if(v==='j'&&isJunosDisplaySet(ST.raw.j)){
-          warnMsgs.push(tr('msg.junos_display_set_unsupported'));
-        }
+        // display set 格式已於 2026-10-02（YJ）由 JuniperParser 轉回括號格式解析，不再警告
       });
       if(warnMsgs.length){
         $('err-bar').classList.add('show');
@@ -1367,7 +1391,7 @@ function onParsed(){
         }
         $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules())
           + (PARSED.vendor === 'FortiGate' ? _fwCleanupCardHtml() : '')
-          + (PARSED.vendor === 'FortiGate' ? _fwHitCardHtml() : '')
+          + (_HIT_VENDOR_SUFFIX[PARSED.vendor] !== undefined ? _fwHitCardHtml() : '')
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
               <div id="health-result" style="margin-top:12px"></div>

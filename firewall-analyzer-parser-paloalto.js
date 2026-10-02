@@ -379,6 +379,7 @@ const PaloAltoParser = (() => {
           status:   gv('disabled') === 'yes' ? 'disable' : 'enable',
           comments: gv('description') || '-',
           users: gv('source-user') || '-', groups: '-',
+          _vdom: vsysName || 'vsys1',
         });
       });
     }
@@ -1065,6 +1066,11 @@ const PaloAltoParser = (() => {
 
   // ── Multi-vsys aware parse() ──────────────────────────────────────────────────
   function parse(text) {
+    // set 格式正規化（2026-10-02，第 13 輪）：PAN-OS 實際輸出規則為 `set rulebase security|nat rules NAME …`，
+    // 多 vsys 設備另有 `set vsys vsysN` 前綴（物件、區域、規則皆同）；下方各段解析沿用 `set security rules`／
+    // `set nat rules`／`set address` 的寫法，原本 set 格式設定檔一條規則都讀不到。這裡先轉成解析器的寫法
+    // （多 vsys 的 set 格式不區分 vsys，一律歸 vsys1）
+    if (!isXml(text)) text = String(text).replace(/^set\s+vsys\s+\S+\s+/gm, 'set ').replace(/^set\s+rulebase\s+(security|nat)\s+rules\s+/gm, 'set $1 rules ');
     const deviceInfo = parseDeviceInfo(text);
     const vsysList   = extractVsysList(text);
     const isMultiVsys = vsysList.length > 1;

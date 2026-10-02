@@ -258,6 +258,42 @@ function doAnalyze(){
   setLang(_lang);
   recordSwitchActivity(parsed);
   recordSwitchSummary(parsed);
+  renderSwqBar();
+}
+// log → 交換器介面對照（2026-10-02，第九輪發想 YH）：log 分析的介面反覆上下線／err-disable／PoE
+// 異常問題帶來設備與介面（交接 key `_netAnalyzer_swPortQuery`，開頁時取出並清除後呼叫
+// _swSetPendingPortQuery），先暫存在記憶體並顯示提示列；載入設定後提示列改顯示該埠的描述、
+// 模式／VLAN、管理狀態、LLDP 對端與終端數。不寫回 localStorage
+let _swPortQuery=null;
+window._swSetPendingPortQuery=function(q){
+  if(!q||!q.iface)return;
+  _swPortQuery={host:String(q.host||''),iface:String(q.iface),kind:String(q.kind||''),count:Number(q.count)||0};
+  renderSwqBar();
+};
+function _swClearPortQuery(){_swPortQuery=null;renderSwqBar();}
+function renderSwqBar(){
+  const b=document.getElementById('swq-bar');if(!b)return;
+  if(!_swPortQuery){b.style.display='none';b.innerHTML='';return;}
+  const q=_swPortQuery;
+  const kindLbl=tr('swq.kind_'+q.kind)!=='swq.kind_'+q.kind?tr('swq.kind_'+q.kind):q.kind;
+  const who=(q.host?q.host+' ':'')+q.iface;
+  const close=` <button class="btn btn-ghost btn-sm" onclick="_swClearPortQuery()">${esc(tr('swq.close'))}</button>`;
+  b.style.display='block';
+  if(!parsed){b.innerHTML=esc(tr('swq.pending').replace('{port}',who).replace('{kind}',kindLbl))+close;return;}
+  const r=epPortLookup(parsed,epModel,q);
+  let html=`<div style="font-weight:600;margin-bottom:4px">${esc(tr('swq.title').replace('{port}',who).replace('{kind}',kindLbl).replace('{n}',q.count))}</div>`;
+  if(r.hostMismatch)html+=`<div style="color:var(--yellow);margin-bottom:4px">⚠ ${esc(tr('swq.host_mismatch').replace('{host}',q.host).replace('{cfg}',r.cfgHost))}</div>`;
+  if(!r.row)html+=`<div>${esc(tr('swq.not_found').replace('{iface}',q.iface))}</div>`;
+  else{
+    const x=r.row,cell=v=>esc(v===''||v==null?'—':String(v));
+    const eps=x.port&&x.endpoints?_cablingEndpointsText(x):'';
+    html+=`<table class="swq-table" style="border-collapse:collapse"><tbody>`+
+      [[tr('cab.col_port'),x.port],[tr('cab.col_desc'),x.desc],[tr('cab.col_mode'),[x.mode,x.vlan].filter(Boolean).join(' ')],
+       [tr('cab.col_admin'),x.shutdown?tr('cab.admin_down'):tr('cab.admin_up')],[tr('cab.col_neighbor'),x.neighbor],[tr('cab.col_endpoints'),eps]]
+      .map(([k,v])=>`<tr><th style="text-align:left;padding:1px 12px 1px 0;font-weight:500;color:var(--text-dim)">${esc(k)}</th><td class="mono" style="padding:1px 0">${cell(v)}</td></tr>`).join('')+
+      `</tbody></table>`;
+  }
+  b.innerHTML=html+`<div style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="navGo('cabling')">${esc(tr('swq.goto_cabling'))}</button>${close}</div>`;
 }
 // 跨工具活動時間軸（2026-09-24 新增）：寫入 `_netAnalyzer_activityHistory` rolling-history
 // （持續累積歷史，無 TTL，比照 log_analyzer／switch_config_generator 既有寫入端），
@@ -561,7 +597,8 @@ function renderCabling(){
   const {html,count,total}=renderTable(hdrs,rows,null);
   const note=(sheet.device?tr('cab.ep_matched').replace('{dev}',sheet.device):tr('cab.ep_none')).replace('{page}',tr('nav.endpoint'));
   return `<div style="padding:12px 18px 0"><div style="font-size:14px;font-weight:600;margin-bottom:4px">${esc(tr('cab.title'))}</div>
-    <div style="font-size:12px;color:var(--text-dim)">${esc(tr('cab.hint'))} ${esc(note)}</div></div>`+
+    <div style="font-size:12px;color:var(--text-dim)">${esc(tr('cab.hint'))} ${esc(note)}</div>
+    <button class="btn btn-ghost btn-sm" id="btn-cabling-print" style="margin-top:6px" onclick="printCabling()">${esc(tr('cab.print_btn'))}</button></div>`+
     mkTbar('search-inp',null,'exportCablingCSV')+
     `<div class="tbl-wrap">${html}</div>
      <div class="tbl-foot"><span>${count} / ${total} ${tr('unit.count')}</span></div>`;
@@ -572,6 +609,22 @@ function exportCablingCSV(){
   dlCSV(sheet.rows.map(r=>[r.port,r.desc,r.mode,r.vlan,r.shutdown?tr('cab.admin_down'):tr('cab.admin_up'),r.link,r.neighbor,_cablingEndpointsText(r)]),
     [tr('cab.col_port'),tr('cab.col_desc'),tr('cab.col_mode'),'VLAN',tr('cab.col_admin'),tr('cab.col_link'),tr('cab.col_neighbor'),tr('cab.col_endpoints')],
     (parsed.sys.hostname||'switch')+'_cabling.csv');
+}
+// 配線表列印版（YK）：以 Blob 網址開新分頁顯示 A4 橫式表格，頁面上有列印按鈕（離線也可用）
+function printCabling(){
+  if(!parsed){alert(tr('msg.no_config'));return;}
+  const sheet=epBuildCablingSheet(parsed,epModel);
+  const rows=sheet.rows.map(r=>({port:r.port,desc:r.desc,mode:r.mode,vlan:r.vlan,admin:r.shutdown?tr('cab.admin_down'):tr('cab.admin_up'),link:r.link,neighbor:r.neighbor,ep:_cablingEndpointsText(r)}));
+  const host=parsed.sys.hostname||'switch';
+  const html=epBuildCablingPrintHtml(rows,{lang:_lang==='ja'?'ja':_lang==='en'?'en':'zh-Hant',
+    title:tr('cab.title')+' — '+host,print:tr('cab.print_do'),
+    meta:tr('cab.print_meta').replace('{host}',host).replace('{time}',new Date().toLocaleString()).replace('{n}',rows.length),
+    port:tr('cab.col_port'),desc:tr('cab.col_desc'),mode:tr('cab.col_mode'),vlan:'VLAN',admin:tr('cab.col_admin'),link:tr('cab.col_link'),
+    neighbor:tr('cab.col_neighbor'),ep:tr('cab.col_endpoints'),check:tr('cab.print_check'),note:tr('cab.print_note')});
+  const url=URL.createObjectURL(new Blob([html],{type:'text/html;charset=utf-8'}));
+  const w=window.open(url,'_blank');
+  if(!w){URL.revokeObjectURL(url);alert(tr('err.send_popup_blocked'));return;}
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
 }
 function setC(id,v){const el=document.getElementById(id);if(el)el.textContent=v;}
 function buildSumCards(){
@@ -630,6 +683,7 @@ function doGlobalSearch(){
 function resetAll(){
   if(exText===null||exText===rawCfgText){exText=null;exResult=null;}
   parsed=null;currentView='upload';
+  renderSwqBar();
   document.getElementById('view-upload').classList.add('show');
   document.getElementById('view-result').style.display='none';
   document.getElementById('tb-actions').style.display='none';
@@ -3550,7 +3604,9 @@ _initParseCoverageMatrix();
 // 匿名化完成後轉送的獨立 key `_netAnalyzer_anonResult`（原本兩者共用 `_netAnalyzer_pending`，
 // 有搶寫/誤讀風險，已拆開）。
 (function(){
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000};
+  // 去識別化結構自檢用的隱藏頁面（?structcheck=1）不碰交接 key，避免搶走使用者另一個分頁要接收的內容
+  if (/[?&]structcheck=1(?:&|$)/.test(location.search)) return;
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000, _netAnalyzer_swPortQuery:30000};
   var parsed = {};
   Object.keys(TTL).forEach(function(k){
     var raw = localStorage.getItem(k);
@@ -3563,6 +3619,9 @@ _initParseCoverageMatrix();
   });
   // 本工具不消費 `_netAnalyzer_swParsedModel`（那是本工具自己送給 switch_config_generator 的
   // 結構化交接 key），若使用者剛好把這個分頁重新整理，僅需清掉過期值，不需讀取
+  // log → 交換器介面對照（YH）：查詢先暫存在記憶體，載入設定後顯示該埠資料
+  var pq = parsed['_netAnalyzer_swPortQuery'];
+  if (pq) { localStorage.removeItem('_netAnalyzer_swPortQuery'); window._swSetPendingPortQuery(pq); }
   var d = parsed['_netAnalyzer_pending'] || parsed['_netAnalyzer_anonResult'];
   if (!d) return;
   localStorage.removeItem(parsed['_netAnalyzer_pending'] ? '_netAnalyzer_pending' : '_netAnalyzer_anonResult');
@@ -3574,6 +3633,26 @@ _initParseCoverageMatrix();
   if (fname) fname.textContent = d.name;
   doAnalyze();
 })();
+
+// 去識別化結構保持度自檢（2026-10-02，第九輪發想 YD）：config_anonymizer 以隱藏 iframe
+// （?structcheck=1）開啟本頁，postMessage 送來原始檔與去識別化結果，這裡各解析一次、只回傳數量
+// （不回傳內容）。用 postMessage 而非直接呼叫 iframe 內函式，離線 file:// 開啟時也能運作。
+if (/[?&]structcheck=1(?:&|$)/.test(location.search) && window.parent !== window) {
+  window.addEventListener('message', function(e){
+    if (e.source !== window.parent || !e.data || e.data.type !== '_naStructCheck') return;
+    var len = function(v){ return Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v).length : 0); };
+    var results = (e.data.texts || []).map(function(t){
+      try {
+        var p = parseAny(String(t || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n'));
+        var counts = {};
+        ['vlans','interfaces','routes','users','acls','lacp','vrrp','dhcp'].forEach(function(k){ counts[k] = len(p[k]); });
+        return { vendor: p.vendor || '', counts: counts };
+      } catch (err) { return { error: String(err && err.message || err) }; }
+    });
+    window.parent.postMessage({ type: '_naStructResult', id: e.data.id, tool: 'switch', results: results }, '*');
+  });
+  window.parent.postMessage({ type: '_naStructReady' }, '*');
+}
 
 // Phase 4 第 16 項：傳送已解析好的 parsed 物件給 switch_config_generator，讓對方直接呼叫
 // applyParsedConfigToForm() 回填表單，不需要重新解析原始文字（那條路只能靠對方內建的

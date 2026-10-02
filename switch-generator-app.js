@@ -1180,13 +1180,17 @@ function addVrrpRow(vlanId='',ip='',vrid='',vip='',priority='100',preempt=false,
 // 導致 Extreme/Brocade/RouterOS 三家 render 函式讀取 d.bootFile 等欄位的既有程式碼永遠是死碼
 // （不管手動填表單或匯入既有設定檔，這 3 個欄位在更早的環節就已遺失）。此處補上表單輸入框
 // 讓資料能真正流通到 render 端。
+// 位址範圍拆成起始／結束兩欄（2026-10-02，第九輪發想 YG）：model 仍維持「起-迄」單一字串，
+// 各廠牌 render、匯入回填、模板皆不需改；這裡拆開顯示，collectModel() 再組回
 function addDhcpPoolRow(name='',network='',gateway='',dns='',range='',excluded='',lease='',iface='',bootFile='',nextServer='',ntpServer=''){
+  const rp=String(range||'').split(/\s*-\s*/);
+  const [rStart,rEnd]=rp.length===2?rp:[String(range||''),''];
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input class="dp-name" value="${escAttr(name)}"></td>
     <td><input class="dp-network" value="${escAttr(network)}" placeholder="10.0.0.0/24"></td>
     <td><input class="dp-gateway" value="${escAttr(gateway)}"></td>
     <td><input class="dp-dns" value="${escAttr(dns)}" placeholder="8.8.8.8 8.8.4.4"></td>
-    <td><input class="dp-range" value="${escAttr(range)}" placeholder="10.0.0.10-10.0.0.100"></td>
+    <td style="white-space:nowrap"><input class="dp-range-start" value="${escAttr(rStart)}" placeholder="10.0.0.10" style="width:7.5em"> – <input class="dp-range-end" value="${escAttr(rEnd)}" placeholder="10.0.0.100" style="width:7.5em"></td>
     <td><input class="dp-excluded" value="${escAttr(excluded)}"></td>
     <td><input class="dp-lease" value="${escAttr(lease)}" placeholder="1"></td>
     <td><input class="dp-iface" value="${escAttr(iface)}" placeholder="vlan10"></td>
@@ -1195,6 +1199,12 @@ function addDhcpPoolRow(name='',network='',gateway='',dns='',range='',excluded='
     <td><input class="dp-ntpserver" value="${escAttr(ntpServer)}"></td>
     ${RM_BTN_TD}`;
   document.getElementById('dhcp-pool-body').appendChild(tr);
+}
+
+// 兩欄都有值才組成「起-迄」；只填一欄時原樣傳回，交給 validateForm() 提示格式錯誤
+function dhcpRangeOf(tr){
+  const a=val(tr,'dp-range-start'), b=val(tr,'dp-range-end');
+  return a&&b?`${a}-${b}`:(a||b);
 }
 
 function addDhcpRelayRow(iface='',server='',option82=false){
@@ -1782,7 +1792,7 @@ function collectModel(){
   // 共用扁平陣列形狀（type:'server'|'relay'）合併成單一 dhcp 清單
   const dhcpServers=rowsOf('#dhcp-pool-body tr').map(tr=>({
     name:val(tr,'dp-name'), network:val(tr,'dp-network'), gateway:val(tr,'dp-gateway'),
-    dns:val(tr,'dp-dns'), range:val(tr,'dp-range'), excluded:val(tr,'dp-excluded'),
+    dns:val(tr,'dp-dns'), range:dhcpRangeOf(tr), excluded:val(tr,'dp-excluded'),
     lease:val(tr,'dp-lease'), interface:val(tr,'dp-iface'), type:'server',
     bootFile:val(tr,'dp-bootfile'), nextServer:val(tr,'dp-nextserver'), ntpServer:val(tr,'dp-ntpserver'),
   })).filter(d=>d.name);
@@ -5088,7 +5098,7 @@ function _focusRemediationField(findingId){
 // access/trunk，見 `parseAndImport()`）。`_netAnalyzer_anonThenOpen` 本工具仍非其消費目標，
 // 僅在過期時順手清掉。
 (function(){
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000};
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000, _netAnalyzer_swPortQuery:30000};
   var parsed = {};
   Object.keys(TTL).forEach(function(k){
     var raw = localStorage.getItem(k);
