@@ -1,5 +1,7 @@
 # 🦙 Alpaca Network Toolkit（羊駝網管工具包）
 
+**繁體中文** | [English](README.en.md)
+
 多廠牌防火牆／交換器設定檔解析、匿名化、比對與產生工具組。純前端 JavaScript 實作，下載後即可離線執行，**所有解析與運算皆在瀏覽器本地端完成，設定檔內容不會上傳至任何伺服器**。
 
 線上體驗（無需下載）：**https://s200070221.github.io/alpaca-network-toolkit/**
