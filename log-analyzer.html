@@ -830,6 +830,7 @@ function parseRFC5424Line(line, lineNo) {
   const mt = parseMikroTikMsg(msg);
   let vf = mt ? null : parseVendorCSVFields(app === '-' ? '' : app, msg);
   if (!mt && !vf) { const jf = parseJunosRtFlow(msgid, fields, msg); if (jf) vf = { vendor: 'junos', fields: jf }; }
+  if (!mt && !vf) { const hf = parseH3CFlowLog(msg); if (hf) vf = { vendor: 'h3c', fields: hf }; }
   const extra = mt ? mt.fields : (vf ? vf.fields : null);
   if (extra) Object.keys(extra).forEach(k => { if (fields[k] === undefined) fields[k] = extra[k]; });
   return {
@@ -871,6 +872,7 @@ function parseRFC3164Line(line, lineNo) {
   const msg = tagMatch ? tagMatch[3] : rest;
   let vf = mt ? null : parseVendorCSVFields(appName, msg);
   if (!mt && !vf) { const jf = parseJunosRtFlow('', null, msg); if (jf) vf = { vendor: 'junos', fields: jf }; }
+  if (!mt && !vf) { const hf = parseH3CFlowLog(msg); if (hf) vf = { vendor: 'h3c', fields: hf }; }
   return {
     format: 'rfc3164', raw: line, lineNo, mikrotik: !!mt, netFields: !!(mt || vf), netVendor: mt ? 'mikrotik' : (vf ? vf.vendor : ''),
     timestamp: isoTs ? parseISOSyslogTimestamp(ts) : parseSyslogTimestamp(ts, 'bsd'), timestampRaw: ts,
@@ -1028,6 +1030,29 @@ function parseJunosRtFlow(msgid, sd, msg) {
   if (kind === 'deny' && m[6]) Object.assign(f, { proto: JUNOS_FLOW_PROTO[m[6]] || m[6], policy: m[7], srczone: m[8], dstzone: m[9] });
   return f;
 }
+// H3C 防火牆工作階段／過濾紀錄（2026-10-05，第十一輪 KC）：Comware V7 安全產品的 SESSION_IPV4_FLOW、
+// FILTER_ZONE_IPV4_EXECUTION 等訊息內容為「欄位名稱(編號)=值;」串接，欄位名稱依 H3C Security Products
+// Comware 7 System Log Messages Reference 與 Flow log 設定文件的搜尋摘要確認（h3c.com 被網路政策擋下，信心度中等）：
+// Protocol(1001)、SrcIPAddr(1003)、SrcPort(1004)、NatSrcIPAddr(1005)、NatSrcPort(1006)、DstIPAddr(1007)、DstPort(1008)、
+// NatDstIPAddr(1009)、RcvIfName(1023)、SrcZoneName(1025)、DstZoneName(1035)、Event(1048)、Action(1053)、Acl(1068)。
+// 依欄位名稱取值（不依編號），未列出的欄位不拆；Event／Action 含 deny／drop／block／reject 視為拒絕
+const H3C_FLOW_KEYS = { Protocol: 'proto', SrcIPAddr: 'srcip', SrcPort: 'srcport', NatSrcIPAddr: 'natsrcip', NatSrcPort: 'natsrcport',
+  DstIPAddr: 'dstip', DstPort: 'dstport', NatDstIPAddr: 'natdstip', RcvIfName: 'srcintf', SrcZoneName: 'srczone', DstZoneName: 'dstzone', Acl: 'acl' };
+function parseH3CFlowLog(msg) {
+  const t = String(msg || '');
+  if (!/\bSrcIPAddr\(\d{4}\)=/.test(t)) return null;
+  const kv = {};
+  t.replace(/([A-Za-z]+)\(\d{4}\)=([^;]*)/g, (m, k, v) => { kv[k] = v.trim(); return m; });
+  if (!kv.SrcIPAddr || !kv.DstIPAddr) return null;
+  const f = {};
+  Object.keys(H3C_FLOW_KEYS).forEach(k => { if (kv[k]) f[H3C_FLOW_KEYS[k]] = kv[k]; });
+  if (f.proto) f.proto = f.proto.toLowerCase();
+  const ev = kv.Event || kv.Action || '';
+  if (ev) f.flowEvent = ev;
+  if (/deny|denied|drop|block|reject/i.test(ev)) f.action = 'deny';
+  else if (/permit|pass|accept|allow|creat/i.test(ev)) f.action = 'accept';
+  return f;
+}
 function parseVendorCSVFields(appName, msg) {
   if (appName === 'filterlog') { const fields = parsePfSenseFilterlog(msg || ''); return fields ? { vendor: 'pfsense', fields } : null; }
   const nf = parseNetfilterLog(msg);
@@ -1075,13 +1100,14 @@ function parseComwareLine(line, lineNo) {
   const hasPri = pri !== undefined;
   const facility = hasPri ? Math.floor(Number(pri) / 8) : null;
   const hostIdx = line.indexOf(' ' + host + ' ');
+  const hf = parseH3CFlowLog(msg);
   return {
-    format: 'comware', raw: line, lineNo,
+    format: 'comware', raw: line, lineNo, netFields: !!hf, netVendor: hf ? 'h3c' : '',
     timestamp: isNaN(d.getTime()) ? null : d, timestampRaw: `${ts} ${yyyy}`,
     host, appName: fac, procid: '', msgid: digest,
     severityRaw: level, severityNorm: normSyslogSeverity(Number(level)),
     facility, facilityAuth: false,
-    msg, fields: {},
+    msg, fields: hf || {},
     rawHead: line.slice(0, hostIdx + 1), rawTag: tag
   };
 }
@@ -1991,6 +2017,8 @@ function classifyByKeyword(evt) {
   if (evt.format === 'flowlog' && evt.fields && evt.fields.action === 'deny') return 'denyBlock';
   // Juniper SRX RT_FLOW_SESSION_DENY
   if (evt.netVendor === 'junos' && evt.fields && evt.fields.action === 'deny') return 'denyBlock';
+  // H3C 防火牆 SESSION／FILTER 紀錄的 Event／Action 為拒絕
+  if (evt.netVendor === 'h3c' && evt.fields && evt.fields.action === 'deny') return 'denyBlock';
   const text = parts.join(' ');
   for (const c of KEYWORD_CATEGORIES) { if (c.re.test(text)) return c.id; }
   return 'other';
@@ -4752,7 +4780,7 @@ function anonymizeJSONFields(fields, opts) {
 function anonymizeNetFields(clone, opts, ipsDone) {
   const f = clone.fields;
   if (!ipsDone) {
-    ['srcip', 'dstip'].forEach(k => { if (f[k]) f[k] = isValidIPv4(f[k]) ? anonIP(f[k], opts) : 'REDACTED'; });
+    ['srcip', 'dstip', 'natsrcip', 'natdstip'].forEach(k => { if (f[k]) f[k] = isValidIPv4(f[k]) ? anonIP(f[k], opts) : 'REDACTED'; });
     if (f.srcmac) f.srcmac = anonMAC(f.srcmac);
   }
   // netfilter：msg 的 MAC= 已在通用替換前處理（見 anonNetfilterMac()），這裡只換拆出的 MAC 欄位
