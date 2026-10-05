@@ -1223,7 +1223,8 @@ function detectTool(text) {
   // Palo Alto：原本只認 PAN-OS XML 匯出（<config><devices>），比照 firewall_analyzer 自己的
   // FW_VENDOR_SIGS.paloalto 補上 flat "set" CLI 匯出格式（set deviceconfig system/set vsys），
   // 這是 firewall-analyzer-parser-paloalto.js 也支援、但先前完全沒被拖放偵測認出的格式
-  if (/<config\b[^>]*>[\s\S]{0,300}<devices>/m.test(t) || /^set deviceconfig system/m.test(t) || /^set vsys vsys/m.test(t) || /Palo Alto Networks/i.test(t)) return {idx:0, vendor:'p'};
+  // Panorama 匯出（KF）：開頭是 <mgt-config><devices/>，改以 device-group 判斷
+  if (/<config\b[^>]*>[\s\S]{0,300}<devices>/m.test(t) || /<device-group>\s*<entry\b/.test(text) || /^set deviceconfig system/m.test(t) || /^set vsys vsys/m.test(t) || /Palo Alto Networks/i.test(t)) return {idx:0, vendor:'p'};
   // MikroTik 防火牆訊號：僅認 /ip firewall（真正的防火牆規則區塊）。原本連 /interface bridge
   // 也一併判定為防火牆，但 /interface bridge 是純交換器功能（VLAN filtering／橋接），純交換器
   // 匯出檔（無任何 /ip firewall 規則）會被誤導向防火牆分析器；/interface bridge 判斷改移到
