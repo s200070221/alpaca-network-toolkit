@@ -205,9 +205,10 @@ function toggleLldpInput(){
 // 手動指定廠牌下拉選單：detectVendor() 誤判時的 fallback（2026-07-30 新增）。
 // 清單與 parseAny() 的 if-else 派送鏈完全對應，新增廠牌時務必同步更新兩處
 // 沿用 Cisco 解析的子品牌（Cisco Business、Allied Telesis AlliedWare Plus）顯示自己的名稱
-const SW_BRAND_LABEL={ciscobiz:'Cisco Business (CBS/SG)',awplus:'Allied Telesis AlliedWare Plus'};
+// H3C／HPE 沿用 comware 解析（第十一輪 KA），依 sys.brand 分開顯示；判斷不出時顯示「H3C / HPE Comware」
+const SW_BRAND_LABEL={ciscobiz:'Cisco Business (CBS/SG)',awplus:'Allied Telesis AlliedWare Plus',h3c:'H3C Comware',hpe:'HPE Comware'};
 const FORCE_VENDOR_LIST=[
-  ['comware','HPE Comware'],['cisco','Cisco IOS/IOS-XE'],['aruba','Aruba CX'],
+  ['comware','H3C / HPE Comware'],['h3c','H3C Comware'],['hpe','HPE Comware'],['cisco','Cisco IOS/IOS-XE'],['aruba','Aruba CX'],
   ['fortiswitch','FortiSwitch'],['juniper','Juniper Networks'],['dell-os10','Dell EMC Networking OS'],
   ['nxos','Cisco NX-OS'],['arista','Arista EOS'],['brocade','Brocade FastIron/ICX (Ruckus)'],
   ['alcatel','Alcatel OmniSwitch'],['extreme','Extreme Networks ExtremeXOS'],
@@ -360,7 +361,7 @@ function showResultViews(){
     // 統一回傳 'brocade'（避免動到既有派送邏輯），品牌顯示改依 parseBrocadeSysInfo() 抓到的
     // brand 欄位（cfg 內含 Ruckus/CommScope 字樣時判定）動態切換標籤
     const brocadeTitle=parsed.sys?.brand==='ruckus'?`Ruckus ICX ${_a}`:`Brocade FastIron/ICX ${_a}`;
-    const titleMap={'comware':'HPE Comware '+_a,'arista':'Arista EOS '+_a,'ruijie':'Ruijie RGOS '+_a,'netgear':'Netgear M4300 '+_a,'edgeswitch':'Ubiquiti EdgeSwitch '+_a,'cisco':'Cisco IOS/IOS-XE '+_a,'nxos':'Cisco NX-OS '+_a,'aruba':'Aruba CX '+_a,'procurve':'Aruba ProCurve '+_a,'fortiswitch':'FortiSwitch '+_a,'juniper':'Juniper EX/QFX '+_a,'extreme':'Extreme Networks ExtremeXOS '+_a,'alcatel':'Alcatel OmniSwitch '+_a,'brocade':brocadeTitle,'dell-os10':dellTitle,'planet':'Planet Technology '+_a,'cumulus':'NVIDIA Cumulus Linux '+_a,'unknown':tr('sl.unknown_vendor')+' '+_a};
+    const titleMap={'comware':'H3C / HPE Comware '+_a,'arista':'Arista EOS '+_a,'ruijie':'Ruijie RGOS '+_a,'netgear':'Netgear M4300 '+_a,'edgeswitch':'Ubiquiti EdgeSwitch '+_a,'cisco':'Cisco IOS/IOS-XE '+_a,'nxos':'Cisco NX-OS '+_a,'aruba':'Aruba CX '+_a,'procurve':'Aruba ProCurve '+_a,'fortiswitch':'FortiSwitch '+_a,'juniper':'Juniper EX/QFX '+_a,'extreme':'Extreme Networks ExtremeXOS '+_a,'alcatel':'Alcatel OmniSwitch '+_a,'brocade':brocadeTitle,'dell-os10':dellTitle,'planet':'Planet Technology '+_a,'cumulus':'NVIDIA Cumulus Linux '+_a,'unknown':tr('sl.unknown_vendor')+' '+_a};
     const brandLbl=SW_BRAND_LABEL[parsed.sys?.brand];
     titleEl.textContent=brandLbl?brandLbl+' '+_a:(titleMap[parsed.vendor]||tr('sl.unknown_vendor')+' '+_a);
   }
@@ -368,7 +369,7 @@ function showResultViews(){
   if(vbEl){
     const dellLabel=parsed.sys?.osGen?`Dell EMC ${parsed.sys.osGen}`:'Dell EMC Networking OS';
     const brocadeLabel=parsed.sys?.brand==='ruckus'?'Ruckus ICX':'Brocade FastIron/ICX';
-    const vLabel={'comware':'HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':brocadeLabel,'dell-os10':dellLabel,'planet':'Planet Technology','cumulus':'NVIDIA Cumulus Linux','unknown':tr('sl.unknown_vendor')}[parsed.vendor]||parsed.vendor;
+    const vLabel={'comware':'H3C / HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':brocadeLabel,'dell-os10':dellLabel,'planet':'Planet Technology','cumulus':'NVIDIA Cumulus Linux','unknown':tr('sl.unknown_vendor')}[parsed.vendor]||parsed.vendor;
     const vLabelShown=SW_BRAND_LABEL[parsed.sys?.brand]||vLabel;
     const vClass={'comware':'vb-comware','arista':'vb-cisco','ruijie':'vb-cisco','netgear':'vb-cisco','edgeswitch':'vb-cisco','cisco':'vb-cisco','nxos':'vb-cisco','aruba':'vb-aruba','procurve':'vb-aruba','fortiswitch':'vb-forti','juniper':'vb-juniper','extreme':'vb-extreme','alcatel':'vb-alcatel','brocade':'vb-brocade','dell-os10':'vb-dell','planet':'vb-cisco','cumulus':'vb-cisco','unknown':'vb-unknown'}[parsed.vendor]||'vb-unknown';
     vbEl.innerHTML=`<span class="vendor-badge ${vClass}">${vLabelShown}</span>`;
@@ -1879,7 +1880,7 @@ function renderParseCoverageMatrix(vendor){
 }
 // 沿用 showResultViews() 既有的品牌顯示名稱慣例（該處為函式內區域變數，此處另建一份模組級
 // 常數供本矩陣下拉選單使用，補上該處缺漏的 sonic/routeros 兩家）
-const PC_VENDOR_LABELS={'comware':'HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':'Brocade FastIron/ICX','cumulus':'NVIDIA Cumulus Linux','dell-os10':'Dell EMC Networking OS','planet':'Planet Technology','sonic':'SONiC','routeros':'MikroTik RouterOS'};
+const PC_VENDOR_LABELS={'comware':'H3C / HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':'Brocade FastIron/ICX','cumulus':'NVIDIA Cumulus Linux','dell-os10':'Dell EMC Networking OS','planet':'Planet Technology','sonic':'SONiC','routeros':'MikroTik RouterOS'};
 function _initParseCoverageMatrix(){
   const sel=document.getElementById('pc-vendor-select');
   if(!sel)return;
@@ -2522,7 +2523,7 @@ function exportHTMLReport(mode){
   }
   // exportHTML 內動態 vendor 標籤（含 brocade/ruckus 品牌切換）必須在 template literal
   // 外面先計算，不可用 ${(() => {...})()} 內嵌（既有慣例，見 CLAUDE.md exportHTML 規則）
-  const rptVendorLabel=({'comware':'HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':p.sys?.brand==='ruckus'?'Ruckus ICX':'Brocade FastIron/ICX','dell-os10':'Dell EMC Networking','planet':'Planet Technology'})[p.vendor]||p.vendor;
+  const rptVendorLabel=(typeof SW_BRAND_LABEL!=='undefined'&&SW_BRAND_LABEL[p.sys&&p.sys.brand])||({'comware':'H3C / HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':p.sys?.brand==='ruckus'?'Ruckus ICX':'Brocade FastIron/ICX','dell-os10':'Dell EMC Networking','planet':'Planet Technology'})[p.vendor]||p.vendor;
   const reportHtml=`<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -3863,7 +3864,7 @@ function _setupVendorPersona() {
     if (n === 3) {
       n = 0;
       // Cisco Business（CBS／SG）沿用 cisco 廠牌代碼，彩蛋依 sys.brand 換成專屬文案
-      const vendor = parsed ? (parsed.sys && (parsed.sys.brand === 'ciscobiz' || parsed.sys.brand === 'awplus') ? parsed.sys.brand : parsed.vendor) : '';
+      const vendor = parsed ? (parsed.sys && ['ciscobiz', 'awplus', 'h3c'].includes(parsed.sys.brand) ? parsed.sys.brand : parsed.vendor) : '';
       const msg = vendor ? tr('egg.vendor_' + vendor) : '';
       if (msg) _showSwitchToast(msg, 4500);
     }

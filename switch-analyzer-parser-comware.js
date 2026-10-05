@@ -1,5 +1,15 @@
 const cidrFromMask=m=>{const t={'255.255.255.0':'24','255.255.255.128':'25','255.255.255.192':'26','255.255.255.224':'27','255.255.255.240':'28','255.255.255.248':'29','255.255.255.252':'30','255.255.0.0':'16','255.0.0.0':'8','0.0.0.0':'0','255.255.128.0':'17','255.255.192.0':'18','255.255.224.0':'19','255.255.240.0':'20','255.255.248.0':'21','255.255.252.0':'22','255.255.254.0':'23','255.255.255.255':'32'};return t[m]||maskToCIDR(m)};
 
+// H3C 與 HPE Comware 品牌判斷（第十一輪 KA，2026-10-05）：兩者 running-config 語法相同，只依明確的廠牌字樣判斷——
+// `display version` 開頭「H3C Comware Software」／「HPE Comware Software」（H3C 依公開 issue 的真實輸出、HPE 依
+// Oxidized 真實錄製）、版權行（New H3C Technologies／Hewlett Packard Enterprise）、出廠預設 sysname（H3C／HPE），
+// 以及 H3C 雲端管理網域。兩邊都命中或都沒有時回傳空字串（不猜測），畫面顯示「H3C / HPE Comware」
+function comwareBrand(cfg){
+  const t=String(cfg||'');
+  const h3c=/\bH3C Comware\b|New H3C Technologies|^\s*sysname\s+H3C\s*$|cloud-management (?:server|backup-server) domain\s+\S*h3c/im.test(t);
+  const hpe=/\bHPE? Comware\b|Hewlett[- ]Packard|^\s*sysname\s+HPE?\s*$/im.test(t);
+  return h3c&&!hpe?'h3c':hpe&&!h3c?'hpe':'';
+}
 // Split cfg on "\n#\n" to get clean top-level sections
 function getSections(cfg){return cfg.split('\n#\n').map(s=>s.trim()).filter(Boolean);}
 
