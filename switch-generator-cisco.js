@@ -248,7 +248,7 @@ function renderCiscoRoutes(list){return (list||[]).map(renderCiscoRoute).join('\
 // DHCP server pool；relay（ip helper-address）內嵌進 renderCiscoInterface，不在此輸出
 function renderCiscoDHCPPool(d){
   const lines=[`ip dhcp pool ${d.name}`];
-  if(d.network)lines.push(` network ${d.network}`);
+  if(d.network)lines.push(` network ${dhcpNetworkToAddrMask(d.network)}`);
   if(d.gateway)lines.push(` default-router ${d.gateway}`);
   if(d.dns)lines.push(` dns-server ${d.dns}`);
   if(d.lease)lines.push(` lease ${d.lease}`);

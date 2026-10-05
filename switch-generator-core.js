@@ -28,6 +28,25 @@ function maskFromCidr(len){
   return [24,16,8,0].map(s=>(bits>>>s)&0xff).join('.');
 }
 
+// DHCP 網段格式（2026-10-05）：產生器表單一律用 CIDR（validateForm() 依 CIDR 檢查）；Cisco／Planet
+// 等解析器給的是「位址 遮罩」或「位址 /長度」，匯入時用 dhcpNetworkToCidr() 轉成 CIDR，這兩家輸出時
+// 再用 dhcpNetworkToAddrMask() 轉回「位址 遮罩」。無法辨識的寫法原樣保留
+function dhcpNetworkToCidr(s){
+  const t=String(s||'').trim();
+  let m=t.match(/^(\d+\.\d+\.\d+\.\d+)\s*\/\s*(\d{1,2})$/);
+  if(m)return m[1]+'/'+m[2];
+  m=t.match(/^(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)$/);
+  if(m){
+    const len=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32].find(n=>maskFromCidr(n)===m[2]);
+    if(len!==undefined)return m[1]+'/'+len;
+  }
+  return t;
+}
+function dhcpNetworkToAddrMask(s){
+  const m=String(s||'').trim().match(/^(\d+\.\d+\.\d+\.\d+)\/(\d{1,2})$/);
+  return m?m[1]+' '+maskFromCidr(m[2]):String(s||'').trim();
+}
+
 // 找出某介面名稱屬於哪個 LACP 群組（若有）。member port 的聚合指令要內嵌在其自己的
 // interface 區塊裡（跟主要 VLAN 設定同一個區塊），而不是另外輸出獨立區塊——
 // 除了 FortiSwitch 外，多數廠牌的 parser 對同名 interface 區塊的合併行為不一致

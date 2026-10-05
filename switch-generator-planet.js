@@ -211,7 +211,7 @@ function renderPlanetSTP(stp){
 // 欄位本輪未查得 Planet 官方佐證，不猜測、不輸出。
 function renderPlanetDHCPPool(d){
   const lines=[`ip dhcp pool ${d.name}`];
-  if(d.network)lines.push(` network-address ${d.network}`);
+  if(d.network)lines.push(` network-address ${dhcpNetworkToAddrMask(d.network)}`);
   if(d.gateway)lines.push(` default-router ${d.gateway}`);
   if(d.dns)lines.push(` dns-server ${d.dns}`);
   if(d.lease)lines.push(` lease ${d.lease}`);
