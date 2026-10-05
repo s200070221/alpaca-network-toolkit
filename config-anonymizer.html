@@ -477,7 +477,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="watchguard">WatchGuard Firebox</option>
               </optgroup>
               <optgroup id="optgrp-sw" label="交換器">
-                <option value="comware">HPE Comware</option>
+                <option value="comware">H3C / HPE Comware</option>
                 <option value="cisco_biz">Cisco Business (CBS/SG)</option>
                 <option value="cisco_ios">Cisco IOS / IOS-XE</option>
                 <option value="cisco_nxos">Cisco NX-OS</option>
@@ -1327,7 +1327,7 @@ const VENDOR_LABELS = {
   fortigate:'FortiGate',fortiswitch:'FortiSwitch',sophos:'Sophos XG',
   checkpoint:'Check Point',paloalto:'Palo Alto PAN-OS',pfsense:'pfSense/OPNsense',
   sonicwall:'SonicWall',mikrotik:'MikroTik RouterOS',juniper:'Juniper JunOS',
-  comware:'HPE Comware',cisco_ios:'Cisco IOS/IOS-XE',cisco_biz:'Cisco Business (CBS/SG)',cisco_nxos:'Cisco NX-OS',
+  comware:'H3C / HPE Comware',cisco_ios:'Cisco IOS/IOS-XE',cisco_biz:'Cisco Business (CBS/SG)',cisco_nxos:'Cisco NX-OS',
   arista:'Arista EOS',aruba_cx:'Aruba CX',procurve:'Aruba ProCurve',
   dell_os10:'Dell OS10',extreme:'Extreme XOS',alcatel:'Alcatel OmniSwitch',
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
@@ -2618,9 +2618,19 @@ function anonOpenWrt(text, opts) {
   return out.join('\n');
 }
 
-// ---- HPE Comware ----
+// H3C 與 HPE Comware 依明確廠牌字樣分開標示（第十一輪 KA，與 switch_analyzer comwareBrand() 同規則）；
+// 去識別化規則兩者相同，只影響畫面上的廠牌名稱
+function vendorBrandLabel(vendor, text) {
+  if (vendor !== 'comware') return '';
+  const t = String(text || '');
+  const h3c = /\bH3C Comware\b|New H3C Technologies|^\s*sysname\s+H3C\s*$|cloud-management (?:server|backup-server) domain\s+\S*h3c/im.test(t);
+  const hpe = /\bHPE? Comware\b|Hewlett[- ]Packard|^\s*sysname\s+HPE?\s*$/im.test(t);
+  return h3c && !hpe ? 'H3C Comware' : hpe && !h3c ? 'HPE Comware' : '';
+}
+// ---- H3C／HPE Comware ----
 function anonComware(text, opts) {
   const lines = text.split('\n');
+  const sysnames = [...text.matchAll(/^\s*sysname\s+(\S+)/gm)].map(m => m[1]);
   const out = [];
   let inLocalUser = false, currentUser = null;
 
@@ -2636,6 +2646,9 @@ function anonComware(text, opts) {
     if (opts.hostname) {
       // Comware 設定行有前導空格，以 \s* 兼容
       line = line.replace(/^(\s*sysname\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'sw', opts));
+      // 連同指令輸出一起貼上時，提示字元 <主機名稱>／[主機名稱…] 也含主機名稱（2026-10-05，KA 測試發現）
+      line = line.replace(/^<([^>\s]+)>/, (m, n) => '<' + anonHostname(n, 'sw', opts) + '>');
+      if (sysnames.length) line = line.replace(/^\[([^\]\s]+)\]/, (m, n) => { const h = sysnames.find(x => n === x || n.startsWith(x + '-')); return h ? '[' + anonHostname(h, 'sw', opts) + n.slice(h.length) + ']' : m; });
     }
     if (opts.user && luMatch) {
       line = line.replace(/^(\s*local-user\s+)(\S+)/, (m, p, n) => p + anonUser(n));
@@ -4720,7 +4733,7 @@ function runAnonymize() {
 
   // Update vendor badge
   const badge = document.getElementById('vendor-badge');
-  badge.textContent = vendor === 'unknown' ? tr('upload.vendor_unknown') : (VENDOR_LABELS[vendor] || vendor);
+  badge.textContent = vendor === 'unknown' ? tr('upload.vendor_unknown') : (vendorBrandLabel(vendor, STATE.original) || VENDOR_LABELS[vendor] || vendor);
   badge.style.display = '';
 
   // Render diff
@@ -4911,7 +4924,7 @@ function renderStats(vendor, changedCount) {
 
   // Vendor info
   document.getElementById('vendor-info-row').innerHTML =
-    `<span class="vb" style="background:rgba(0,200,240,.15);color:var(--accent);border:1px solid var(--accent)">${vendor === 'unknown' ? tr('upload.vendor_unknown') : (VENDOR_LABELS[vendor] || vendor)}</span>`;
+    `<span class="vb" style="background:rgba(0,200,240,.15);color:var(--accent);border:1px solid var(--accent)">${vendor === 'unknown' ? tr('upload.vendor_unknown') : (vendorBrandLabel(vendor, STATE.original) || VENDOR_LABELS[vendor] || vendor)}</span>`;
   renderVendorCandidates();
 
   renderResidualWarnings();

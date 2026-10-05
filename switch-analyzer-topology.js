@@ -157,7 +157,7 @@ function buildTopoSVG(p){
   <text x="224" y="${lY+18}" font-size="9" fill="#64748b" font-family="JetBrains Mono,monospace">${tr('svg.irf_link')}</text>
   <line x1="295" y1="${lY+14}" x2="317" y2="${lY+14}" stroke="${tc}" stroke-width="1.5" stroke-dasharray="3,3" opacity=".5"/>
   <text x="323" y="${lY+18}" font-size="9" fill="#64748b" font-family="JetBrains Mono,monospace">${tr('svg.trunk_uplink')}</text>
-  <text x="${W-18}" y="${lY+20}" font-size="9" fill="#2c3e58" text-anchor="end" font-family="JetBrains Mono,monospace">HPE Comware Analyzer</text>`;
+  <text x="${W-18}" y="${lY+20}" font-size="9" fill="#2c3e58" text-anchor="end" font-family="JetBrains Mono,monospace">Comware Analyzer</text>`;
   svg+=`</svg>`;
   return svg;
 }

@@ -1,3 +1,6 @@
+// H3C 與 HPE Comware 分開成兩個廠牌選項（第十一輪 KE，2026-10-05）：兩者設定語法相同，下拉選 H3C 時
+// 內部仍以 comware 產生與檢查，model.brand 記錄 'h3c' 供畫面與存檔還原；讀取廠牌一律經 currentVendor()
+function currentVendor(){const v=document.getElementById('vendor').value;return v==='h3c'?'comware':v;}
 function rowsOf(sel){return Array.from(document.querySelectorAll(sel));}
 // 2026-09 資安審查修復：換行/CR 一律清除，作為明確的程式碼防護（先前僅依賴 <input> 元素賦值時
 // 瀏覽器自動剝除換行的隱性行為，若欄位型別未來改成 <textarea> 或新增不經過 <input> 的資料流，
@@ -98,7 +101,7 @@ function addVlanRange(){
 // （vendor 切換時呼叫），指定 tr 時只處理剛新增的那一列（addVlanRow() 呼叫時）。
 const SVI_UNSUPPORTED_HINT_KEY={sonic:'hint.vlanIpUnsupportedSonic',edgeswitch:'hint.vlanIpUnsupportedEdgeswitch'};
 function updateVlanIpAvailability(vlanTr){
-  const vendor=document.getElementById('vendor').value;
+  const vendor=currentVendor();
   const hintKey=SVI_UNSUPPORTED_HINT_KEY[vendor];
   const rows=vlanTr?[vlanTr]:rowsOf('#vlan-body tr');
   rows.forEach(row=>{
@@ -171,7 +174,7 @@ const SPEED_PREFIX={
   juniper:{'1G':'ge-','10G':'xe-','25G':'xe-','40G':'et-','100G':'et-'},
 };
 function onSpeedChange(sel){
-  const prefixMap=SPEED_PREFIX[document.getElementById('vendor').value];
+  const prefixMap=SPEED_PREFIX[currentVendor()];
   if(!prefixMap)return;
   const nameInput=sel.closest('tr').querySelector('.i-name');
   const m=nameInput.value.match(/^[A-Za-z-]+(\d.*)$/);
@@ -731,7 +734,7 @@ const DEVICE_MODELS={
 };
 
 function updateDeviceModelOptions(){
-  const vendor=document.getElementById('vendor').value;
+  const vendor=currentVendor();
   const sel=document.getElementById('device-model');
   if(!sel)return;
   const models=(DEVICE_MODELS[vendor]||[]);
@@ -802,7 +805,7 @@ function updateDeviceModelOptions(){
 }
 
 function applyDeviceModel(){
-  const vendor=document.getElementById('vendor').value;
+  const vendor=currentVendor();
   const deviceModelSel=document.getElementById('device-model');
   const modelValue=deviceModelSel.value;
   if(!modelValue)return;
@@ -829,7 +832,7 @@ function applyDeviceModel(){
 // isKnownModelPort() 已搬到 switch-generator-validate.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
 
 function updateAppliedModelNotice(){
-  const vendor=document.getElementById('vendor').value;
+  const vendor=currentVendor();
   const modelValue=document.getElementById('device-model').value;
   const notice=document.getElementById('applied-model-notice');
   if(!notice)return;
@@ -850,7 +853,7 @@ function updateAppliedModelNotice(){
 let _breakoutEnables=[];
 
 function expandBreakoutPorts(){
-  const vendor=document.getElementById('vendor').value;
+  const vendor=currentVendor();
   const parent=document.getElementById('breakout-parent-name').value.trim();
   const ratio=document.getElementById('breakout-ratio').value;
   if(!parent)return;
@@ -1423,7 +1426,7 @@ const CLASSMAP_VENDOR_TYPES={
 const CLASSMAP_TYPE_I18N={'access-group':'opt.cmapAccessGroup',dscp:'opt.cmapDscp',protocol:'opt.cmapProtocol','ip-precedence':'opt.cmapIpPrecedence',cos:'opt.cmapCos',vlan:'opt.cmapVlan'};
 
 function updateModeOptions(){
-  const vendor=document.getElementById('vendor').value;
+  const vendor=currentVendor();
   // VLAN IP 欄位（withSviInterfaces()）：SONiC/EdgeSwitch/RouterOS 三家不支援，vendor 切換時
   // 重新評估全部既有 VLAN 列的停用狀態＋提示文字
   updateVlanIpAvailability();
@@ -1973,7 +1976,7 @@ function collectModel(){
   const vxlan=vxlanVtepEl?{vtep:vxlanVtepEl.value.trim(),vnis:vxlanVnis}:null;
 
   return {
-    vendor:document.getElementById('vendor').value,
+    vendor:currentVendor(), brand:document.getElementById('vendor').value==='h3c'?'h3c':'',
     sysname:document.getElementById('hostname').value.replace(/[\r\n]/g,'').trim()||'Switch',
     snmpTrapHost:document.getElementById('snmp-trap-host').value.trim(),
     syslogServer:document.getElementById('syslog-server').value.trim(),
@@ -2005,7 +2008,7 @@ function applyModelToForm(model){
     document.getElementById(id).innerHTML='';
   });
 
-  document.getElementById('vendor').value=model.vendor||'comware';
+  document.getElementById('vendor').value=model.vendor==='comware'&&model.brand==='h3c'?'h3c':(model.vendor||'comware');
   updateModeOptions();
   document.getElementById('hostname').value=model.sysname||'';
   document.getElementById('snmp-trap-host').value=model.snmpTrapHost||'';
@@ -3472,7 +3475,8 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
     document.getElementById(id).innerHTML='';
   });
 
-  document.getElementById('vendor').value=genVendor;
+  // 解析結果標為 H3C 時選 H3C 選項（第十一輪 KE）
+  document.getElementById('vendor').value=genVendor==='comware'&&parsed.sys&&parsed.sys.brand==='h3c'?'h3c':genVendor;
   updateModeOptions();
   document.getElementById('hostname').value=parsed.sys?.hostname||'';
 
@@ -3960,7 +3964,7 @@ function _sendToAnalyzer(){
   try{
     localStorage.setItem('_netAnalyzer_pending', JSON.stringify({
       name:(document.getElementById('hostname').value.trim()||'switch')+'.cfg',
-      text:t, ts:Date.now(), vendor:document.getElementById('vendor').value
+      text:t, ts:Date.now(), vendor:currentVendor()
     }));
     wrote=true;
   }catch(e){ alert(tr('err.sendFail')); }
@@ -3977,7 +3981,7 @@ function _sendToAnonymizer(){
   try{
     localStorage.setItem('_netAnalyzer_pending', JSON.stringify({
       name:(document.getElementById('hostname').value.trim()||'switch')+'.cfg',
-      text:t, ts:Date.now(), vendor:document.getElementById('vendor').value
+      text:t, ts:Date.now(), vendor:currentVendor()
     }));
     wrote=true;
   }catch(e){ alert(tr('err.sendFail')); }
@@ -4169,7 +4173,7 @@ function downloadBulkSampleCSV(){
 // <option> 會讓 selectedIndex=-1、.value 讀回空字串，後續 collectModel().vendor==='' 沒有任何
 // 分支match，會靜默落到最後的 else 分支輸出 Comware 格式（但畫面卻顯示「成功」），使用者完全
 // 不會發現輸出的其實是錯誤廠牌的設定文字（2026-09-02 全功能審查發現）
-const BULK_CSV_VALID_VENDORS=['comware','fortiswitch','aruba','cisco','cisco_nxos','juniper','dell-os10','arista','brocade','alcatel','extreme','procurve','routeros','ruijie','netgear','edgeswitch','sonic','planet'];
+const BULK_CSV_VALID_VENDORS=['comware','h3c','fortiswitch','aruba','cisco','cisco_nxos','juniper','dell-os10','arista','brocade','alcatel','extreme','procurve','routeros','ruijie','netgear','edgeswitch','sonic','planet'];
 function processBulkCSV(){
   const file=document.getElementById('bulk-csv-file').files[0];
   if(!file){
@@ -4214,7 +4218,7 @@ function processBulkCSV(){
     // 「恢復原始值」與完成訊息從未真正執行過；另外 updateModeOptions() 切到非 Comware 廠牌時
     // 會把 Hybrid 介面強制改成 Trunk，且事後只會補回下拉選單的 hybrid <option>、不會把
     // select 的實際選取值改回來，故一併快照每列 .i-mode 的原始值供事後手動復原
-    const originalVendor=document.getElementById('vendor').value;
+    const originalVendor=document.getElementById('vendor').value; // 原始選項（含 h3c），結束時原樣還原
     const originalHostname=document.getElementById('hostname').value;
     const originalModeValues=rowsOf('#iface-body tr').map(tr=>tr.querySelector('.i-mode')?.value);
     // vlanId/vlanName/ifaceDesc 覆寫僅作用於表格第一列（比照 vendor/hostname 單一表單欄位的
@@ -4728,7 +4732,7 @@ function downloadOutput(){
   if(!t)return;
   clearDraftAfterExport();
   const hostname=document.getElementById('hostname').value.trim()||'switch';
-  if(document.getElementById('vendor').value==='sonic'){
+  if(currentVendor()==='sonic'){
     // config_db.json 本體就是 JSON，比照 generateDocumentationAsJSON() 既有 Blob 寫法，
     // 不可沿用下面固定 .cfg + text/plain 的 dlTxt()
     const blob=new Blob([t],{type:'application/json;charset=utf-8'});

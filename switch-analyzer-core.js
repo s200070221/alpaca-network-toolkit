@@ -2183,7 +2183,9 @@ function parseAny(cfg,forceVendor){
   if(isAW)cfg=awplusPreprocess(cfg);
   // forceVendor：使用者手動指定廠牌時略過 detectVendor() 自動判斷，直接用指定值派送
   // （detectVendor() 誤判時的 fallback，2026-07-30 新增）
-  const vendor=forceVendor||detectVendor(cfg);
+  // 手動指定 H3C 或 HPE Comware（第十一輪 KA）：同樣以 comware 解析，只差品牌標示
+  const forcedBrand=forceVendor==='h3c'||forceVendor==='hpe'?forceVendor:'';
+  const vendor=forcedBrand?'comware':(forceVendor||detectVendor(cfg));
   let res;
   if(vendor==='comware') res=parseComware(cfg);
   else if(vendor==='dell-os10') res=parseDellOS10(cfg);
@@ -2207,6 +2209,7 @@ function parseAny(cfg,forceVendor){
   else res={vendor:'unknown',sys:{hostname:'unknown',version:''},irf:null,stack:null,vlans:[],interfaces:[],routes:[],vrfs:[],users:[],ospf:[],bgp:[],rip:[],vrrp:[],vxlan:null,acls:[]};
 
   res.vendor=vendor;
+  if(vendor==='comware'){ const b=forcedBrand||comwareBrand(cfg); if(b){ res.sys=res.sys||{}; res.sys.brand=b; } }
   if(!res.breakouts)res.breakouts=[]; // 未提供 breakout 解析的廠牌維持空陣列，保持回傳形狀一致
   if(vendor==='comware') res.stack=res.irf?{type:'IRF',members:res.irf.members,links:res.irf.links,details:res.irf}:null;
   // 2026-07-19 修復既有 bug：RouterOS 的 lacp/dhcp 是 parseRouterOS() 自己算好塞回傳
