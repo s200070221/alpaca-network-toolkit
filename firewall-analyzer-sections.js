@@ -554,6 +554,9 @@ function buildQuerySectionHtml(qvdoms, isFortiGate, qintfs){
       <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:10px;color:var(--text-dim)">
         <input type="checkbox" id="q-newonly" checked> ${tr('query.new_only')}
       </label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:4px;color:var(--text-dim)">
+        <input type="checkbox" id="q-nat" checked> ${tr('query.nat_opt')}
+      </label>
       <div id="query-result" style="margin-top:20px"></div>
       <div style="margin-top:28px;padding-top:20px;border-top:1px solid var(--border)">
         <h2 style="margin:0 0 6px;font-size:16px">${tr('batch.title')}</h2>

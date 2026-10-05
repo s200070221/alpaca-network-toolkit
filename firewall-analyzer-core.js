@@ -244,7 +244,7 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
     const anyNames = (p[k] || '').split(/\s*,\s*/).filter(n => n.trim().toLowerCase() === 'any');
     return [...new Set([...six, ...anyNames])].filter(Boolean).join(', ');
   };
-  const addrs=PARSED.addresses||[], svcs=PARSED.services||[];
+  const addrs=_addrsWithVips(PARSED), svcs=PARSED.services||[];
   let pols = PARSED.policies;
   if (vdomFilter&&vdomFilter!=='__all__') pols=pols.filter(p=>p._vdom===vdomFilter);
   const trace=[];
@@ -317,6 +317,99 @@ function _policyAddrResolve(addrStr, targetInt, addrList) {
   return fqdn||{match:false,display:addrStr||'-',detail:''};
 }
 // ── 批次 IP/Policy 查詢（2026-09-29 新增）──────────────────────────────────
+// ── 目的 NAT 換算（2026-10-05，第十一輪 KJ）────────────────────────────────
+// FortiGate 規則的目的位址直接引用 VIP 物件名稱（vip／vipgrp），原本查不到同名位址物件，一律視為「無法判斷」。
+// 把對外位址為單一 IPv4 的 VIP 當成位址物件（對外位址／32）、vipgrp 當成群組，已有同名位址物件時不覆蓋
+function _addrsWithVips(PARSED) {
+  const addrs = (PARSED && PARSED.addresses) || [];
+  const nat = (PARSED && PARSED.nat) || [];
+  const have = new Set(addrs.map(a => String(a.name).toLowerCase()));
+  const extra = [];
+  nat.forEach(n => {
+    if (!n || !n.name || have.has(String(n.name).toLowerCase())) return;
+    if (n.type === 'vip' && _strictIpInt(String(n.extIp || '')) !== null) extra.push({ category: 'address', name: n.name, type: 'ipmask', subnet: n.extIp + '/32', _vdom: n._vdom || '' });
+    else if (n.type === 'vipgrp' && n.members && n.members !== '-') extra.push({ category: 'address-group', name: n.name, type: 'group', members: String(n.members).split(/[,\s]+/).filter(Boolean).join(', '), _vdom: n._vdom || '' });
+  });
+  return extra.length ? addrs.concat(extra) : addrs;
+}
+// 規則比對的是 NAT 轉換前還是轉換後的目的位址，依廠牌而定（各廠牌官方文件的封包處理順序）：
+// - 轉換後：Juniper SRX（destination NAT 在 policy 之前）、Cisco ASA／FTD（8.3 起 ACL 用實際位址）、
+//   Linux netfilter 系列（PREROUTING 的 DNAT 在 filter 之前：netfilter、VyOS、EdgeRouter、OpenWrt）、MikroTik（dstnat 在 forward 之前）、
+//   pfSense／OPNsense（rdr 在過濾規則之前）、H3C SecPath（官方 NAT Server 範例的安全策略寫內部伺服器位址）
+// - 轉換前：FortiGate（規則引用 VIP 物件）、Palo Alto（規則用轉換前位址、轉換後區域）、SonicWall（存取規則用對外位址物件）
+// - 其餘（Check Point、Sophos、Zyxel、WatchGuard、雲端）未確認，兩種結果都列出
+const NAT_STAGE_POST = /^(Juniper|Cisco ASA|Cisco FTD|Linux netfilter|VyOS|EdgeRouter|OpenWrt|MikroTik|pfSense|OPNsense|H3C SecPath)$/;
+const NAT_STAGE_PRE = /^(FortiGate|PaloAlto|SonicWall)$/;
+function _natStage(vendor) {
+  const vs = String(vendor || '').split(' + ').map(v => v.trim()).filter(Boolean);
+  if (!vs.length) return 'unknown';
+  if (vs.every(v => NAT_STAGE_POST.test(v))) return 'post';
+  if (vs.every(v => NAT_STAGE_PRE.test(v))) return 'pre';
+  return 'unknown';
+}
+// 位址物件名稱或字面值 → 單一 IPv4（主機物件或 /32）；其餘回傳 null
+function _natSingleIp(v, addrs) {
+  const t = String(v || '').trim();
+  if (_strictIpInt(t) !== null) return t;
+  const o = (addrs || []).find(a => String(a.name) === t);
+  if (!o) return null;
+  const sub = String(o.subnet || '').trim().replace(/\s+255\.255\.255\.255$/, '/32');
+  const m = sub.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?:\/32)?$/);
+  return m ? m[1] : null;
+}
+function _natPortIn(port, list) {
+  return String(list).split(/[,\s]+/).filter(Boolean).some(seg => {
+    const [a, b] = seg.split('-').map(x => parseInt(x, 10));
+    return port >= a && port <= (isNaN(b) ? a : b);
+  });
+}
+// 依查詢的目的位址／埠找出命中的目的 NAT（VIP、DNAT、埠轉送、ASA static）。回傳 {nat, name, toIp, toPort} 或 null。
+// 對外位址為「-」或介面名稱（未指定位址，如 iptables 只寫 -i eth0、Meraki 的 internet1）時，
+// 只有查詢指定的進入介面相同，或目的位址剛好是該介面的位址才算命中；對外埠有指定但查詢沒填埠號時不換算
+function _findDestNat(dstStr, proto, port, PARSED, opts) {
+  const dst = String(dstStr || '').trim();
+  const dInt = _strictIpInt(dst);
+  if (dInt === null || !PARSED) return null;
+  const qIntf = String((opts && opts.srcIntf) || '').trim().toLowerCase();
+  const qPort = /^\d+$/.test(String(port || '')) ? parseInt(port, 10) : null;
+  const q = String(proto || 'any').toLowerCase();
+  const addrs = PARSED.addresses || [], ifaces = PARSED.interfaces || [];
+  for (const n of (PARSED.nat || [])) {
+    if (!n || n.status === 'disable') continue;
+    if (n.type === 'static' && n.origSrc && n.transSrc) {
+      // Cisco ASA twice NAT「source static 實際 對外」：連往對外位址時換回實際位址
+      const ext = _natSingleIp(n.transSrc, addrs), real = _natSingleIp(n.origSrc, addrs);
+      if (ext && real && ext === dst && real !== dst) return { nat: n, name: `NAT #${n.id}`, toIp: real, toPort: port || '' };
+      continue;
+    }
+    if (n.type !== 'vip') continue;
+    const toIp = String(n.mapIp || '').trim();
+    if (_strictIpInt(toIp) === null) continue;
+    const ext = String(n.extIp || '').trim();
+    let hit = false;
+    if (_strictIpInt(ext) !== null) hit = ext === dst;
+    else if (/^\d{1,3}(?:\.\d{1,3}){3}\s*-\s*\d{1,3}(?:\.\d{1,3}){3}$/.test(ext)) { const [a, b] = ext.split('-').map(x => _strictIpInt(x.trim())); hit = dInt >= a && dInt <= b; }
+    else if (/^\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}$/.test(ext)) hit = _ipInSubnet(dInt, ext) === true;
+    else {
+      const ifn = String(ext && ext !== '-' ? ext : (n.extIntf || '')).toLowerCase();
+      if (!ifn || ifn === '-') continue;
+      const ifo = ifaces.find(i => String(i.name).toLowerCase() === ifn);
+      hit = qIntf === ifn || !!(ifo && ifo.ip === dst);
+    }
+    if (!hit) continue;
+    const np = String(n.proto || '').toLowerCase();
+    if ((np === 'tcp' || np === 'udp') && q !== 'any' && q !== np && q !== 'tcp/udp') continue;
+    const extPort = n.extPort && n.extPort !== '-' ? String(n.extPort) : '';
+    if (extPort) {
+      if (qPort === null || !_natPortIn(qPort, extPort)) continue;
+    }
+    const mp = n.mapPort && n.mapPort !== '-' ? String(n.mapPort) : '';
+    const toPort = mp && /^\d+$/.test(mp) && extPort && /^\d+$/.test(extPort) ? mp : (port || '');
+    return { nat: n, name: n.name || '-', toIp, toPort };
+  }
+  return null;
+}
+
 // 一次查詢多組 src/dst/proto/port，逐列沿用 _runPolicyQuery()，適合變更前後驗證。
 // CSV 欄位：src,dst,proto,port,expect（proto/port/expect 可省略）。第一列含 src 與 dst
 // 欄名時視為表頭、依欄名對應（順序不拘）；否則依上述固定順序。# 開頭與空白列略過。

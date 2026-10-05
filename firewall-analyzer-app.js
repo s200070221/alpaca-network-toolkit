@@ -2438,18 +2438,38 @@ function onParsed(){
     const el = $('query-result');
     if (!el) return;
 
-    const res = _runPolicyQuery(src.trim(), dst.trim(), proto, port, vdom, PARSED, _queryOpts());
+    // 目的 NAT 換算（KJ）：以對外位址查詢時，找出命中的 VIP／DNAT／埠轉送；依廠牌決定規則比對轉換前或轉換後位址
+    const natOn = !$('q-nat') || $('q-nat').checked;
+    const dnat = natOn ? _findDestNat(dst.trim(), proto, port, PARSED, _queryOpts()) : null;
+    const natStage = dnat ? _natStage(PARSED && PARSED.vendor) : '';
+    const qDst = dnat && natStage === 'post' ? dnat.toIp : dst.trim();
+    const qPort = dnat && natStage === 'post' ? dnat.toPort : port;
+    const res = _runPolicyQuery(src.trim(), qDst, proto, qPort, vdom, PARSED, _queryOpts());
+    const altRes = dnat && natStage === 'unknown' ? _runPolicyQuery(src.trim(), dnat.toIp, proto, dnat.toPort, vdom, PARSED, _queryOpts()) : null;
     if (!res) { el.innerHTML = '<div class="nodata">'+tr('query.no_policy')+'</div>'; LAST_QUERY_TRACE = null; return; }
     if (res.error === 'invalid_ip') {
       el.innerHTML = `<div style="color:var(--red);padding:10px 0">${tr('query.invalid_ip')}</div>`; LAST_QUERY_TRACE = null; return;
     }
     // CSV 匯出按鈕快取：只保留目前畫面上的單次查詢結果（非歷史批次），見上方
     // LAST_QUERY_TRACE 宣告處註解
-    LAST_QUERY_TRACE = { src: src.trim(), dst: dst.trim(), proto, port, trace: res.trace || [] };
+    LAST_QUERY_TRACE = { src: src.trim(), dst: qDst, proto, port: qPort, trace: res.trace || [] };
     // Packet Walk 路由查詢
     const _pwRoutes = (PARSED && PARSED.routes) || [];
-    const _pwRoute = (res.action === 'accept' && dst.trim()) ? _lookupRoute(dst.trim(), _pwRoutes) : null;
-    const _pwHtml = _buildPacketWalkHtml(src.trim(), dst.trim(), res, _pwRoute);
+    // 轉送依轉換後的目的位址查路由
+    const _pwDst = dnat ? dnat.toIp : dst.trim();
+    const _pwRoute = (res.action === 'accept' && _pwDst) ? _lookupRoute(_pwDst, _pwRoutes) : null;
+    const _pwHtml = _buildPacketWalkHtml(src.trim(), _pwDst, res, _pwRoute);
+    let natHtml = '';
+    if (dnat) {
+      const from = dst.trim() + (port ? ':' + port : ''), to = dnat.toIp + (dnat.toPort ? ':' + dnat.toPort : '');
+      const fill = k => tr(k).replace('{rule}', dnat.name).replace('{from}', from).split('{to}').join(to);
+      let alt = '';
+      if (altRes && !altRes.error) {
+        const am = altRes.matched;
+        alt = `<div style="margin-top:4px">${esc(fill('query.nat_alt'))} <b>${am ? esc(am.name) + ' (' + (altRes.action === 'accept' ? 'ACCEPT' : 'DENY') + ')' : esc(tr('query.result_implicit'))}</b></div>`;
+      }
+      natHtml = `<div id="query-nat-note" style="padding:8px 12px;border-radius:8px;border:1px dashed var(--accent);margin-bottom:10px;font-size:12px">🔀 ${esc(fill('query.nat_' + natStage))}${alt}</div>`;
+    }
 
     // 結果橫幅
     let banner = '';
@@ -2534,7 +2554,7 @@ function onParsed(){
       return mainRow + resolvedRow;
     }).join('');
 
-    el.innerHTML = _pwHtml + banner + `
+    el.innerHTML = natHtml + _pwHtml + banner + `
       <details open>
         <summary style="cursor:pointer;font-weight:600;margin-bottom:8px;font-size:13px;user-select:none">
           ${tr('query.trace_title')} (${res.trace.length})
