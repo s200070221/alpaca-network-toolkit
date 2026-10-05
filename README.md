@@ -103,7 +103,7 @@
 
 **支援格式**
 - CEF、LEEF、Syslog（RFC3164／RFC5424）、JSON
-- 防火牆：FortiGate key=value、Cisco ASA、Juniper SRX RT_FLOW、MikroTik、Linux iptables／nftables LOG
+- 防火牆：FortiGate key=value、Cisco ASA、Juniper SRX RT_FLOW、H3C SecPath 工作階段／過濾紀錄、MikroTik、Linux iptables／nftables LOG
 - 網路設備：Cisco IOS、Comware 設備 log
 - 伺服器與雲端：Windows 事件 XML 與 Sysmon、IIS／Web 存取紀錄、AWS VPC／Azure NSG 流量紀錄
 
