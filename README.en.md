@@ -58,8 +58,8 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 ![Switch Config Parser: overview](docs/images/04-switch-overview-en.png)
 
-**Supported vendors (21)**
-- HPE Comware, Cisco IOS-XE, Cisco NX-OS, Cisco Business (CBS / SG), Aruba CX, Aruba ProCurve, Juniper EX / QFX, Arista EOS, Dell OS10
+**Supported vendors (22)**
+- H3C Comware, HPE Comware, Cisco IOS-XE, Cisco NX-OS, Cisco Business (CBS / SG), Aruba CX, Aruba ProCurve, Juniper EX / QFX, Arista EOS, Dell OS10
 - FortiSwitch, Extreme, Alcatel OmniSwitch, Ruckus-Brocade ICX, MikroTik RouterOS, Ruijie RGOS, Netgear M4300, Ubiquiti EdgeSwitch, Planet, Allied Telesis AlliedWare Plus
 - SONiC, NVIDIA Cumulus Linux (NVUE)
 
@@ -74,8 +74,8 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 ![Switch Config Generator: generated config](docs/images/08-generator-en.png)
 
-**Supported vendors (18)**
-- Comware, Cisco IOS-XE, Cisco NX-OS, Aruba CX, ProCurve, Juniper, Arista, Dell OS10, FortiSwitch
+**Supported vendors (19)**
+- H3C Comware, HPE Comware, Cisco IOS-XE, Cisco NX-OS, Aruba CX, ProCurve, Juniper, Arista, Dell OS10, FortiSwitch
 - Brocade ICX, Alcatel, Extreme, MikroTik RouterOS, Ruijie, Netgear, EdgeSwitch, Planet, SONiC
 
 **Main features**
