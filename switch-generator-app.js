@@ -2099,7 +2099,7 @@ function applyModelToForm(model){
   (model.vrrp||[]).forEach(v=>addVrrpRow(v.vlanId,v.ip,v.vrid,v.vip,v.priority,!!v.preempt,v.authMode,v.authKey,v.trackIf,v.trackReduced,v.vip6));
 
   (model.dhcp||[]).forEach(d=>{
-    if(d.type==='server')addDhcpPoolRow(d.name,d.network,d.gateway,d.dns,d.range,d.excluded,d.lease,d.interface,d.bootFile||'',d.nextServer||'',d.ntpServer||'');
+    if(d.type==='server')addDhcpPoolRow(d.name,dhcpNetworkToCidr(d.network),d.gateway,d.dns,d.range,d.excluded,d.lease,d.interface,d.bootFile||'',d.nextServer||'',d.ntpServer||'');
     else if(d.type==='relay')addDhcpRelayRow(d.interface,d.relayServer,!!d.option82);
   });
 
@@ -2754,12 +2754,15 @@ function validateForm(){
   }
 
   // 6. 靜態路由驗證
+  // 目的網段接受 IPv4／IPv6 CIDR（IPv6 靜態路由各廠牌輸出已支援）；下一跳接受 IPv4／IPv6 位址，
+  // 或介面名稱（Planet `ethernet 1/0/1`、Ruijie `VLAN 10`、Cisco `Vlan10` 等解析器會帶入的寫法）
+  const isIfaceGw=g=>/^[A-Za-z][A-Za-z0-9\/.:\- ]{0,63}$/.test(g||'');
   model.routes.forEach((r,i)=>{
-    if(!isValidCIDR(r.dst)){
+    if(!isValidCIDR(r.dst)&&!isValidIPv6CIDR(r.dst)){
       errors.push(`⚠️ ${tr('val.static_route')} ${i+1}：${tr('val.format_invalid').replace('{item}','Destination CIDR')} (${tr('val.example').replace('{example}','10.0.0.0/24')})`);
       markInvalid(routeRows[i]?.querySelector('.rt-dst'));
     }
-    if(!isValidIPv4(r.gw)){
+    if(!isValidIPv4(r.gw)&&!isValidIPv6(r.gw)&&!isIfaceGw(r.gw)){
       errors.push(`⚠️ ${tr('val.static_route')} ${i+1}：${tr('val.format_invalid').replace('{item}','Gateway IP')}`);
       markInvalid(routeRows[i]?.querySelector('.rt-gw'));
     }
@@ -3670,7 +3673,7 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   const dhcpBypass=vendor==='brocade'||vendor==='extreme'||vendor==='procurve'||vendor==='routeros';
   const dhcpList=fns?(dhcpBypass?(parsed.dhcp||[]):fns.parseDHCP(text,vendor)):[];
   (dhcpList||[]).forEach(d=>{
-    if(d.type==='server')addDhcpPoolRow(d.name,d.network,d.gateway,Array.isArray(d.dns)?d.dns.join(' '):(d.dns||''),d.range,d.excluded,d.lease,d.interface,d.bootFile||'',d.nextServer||'',d.ntpServer||'');
+    if(d.type==='server')addDhcpPoolRow(d.name,dhcpNetworkToCidr(d.network),d.gateway,Array.isArray(d.dns)?d.dns.join(' '):(d.dns||''),d.range,d.excluded,d.lease,d.interface,d.bootFile||'',d.nextServer||'',d.ntpServer||'');
     else if(d.type==='relay')addDhcpRelayRow(d.interface==='all'?'':(d.interface||''),d.relayServer,!!d.option82);
   });
 
