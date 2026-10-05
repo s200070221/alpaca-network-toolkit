@@ -252,6 +252,8 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
     if (p.status==='disable') { trace.push({policy:p,result:'disabled'}); continue; }
     if (newOnly && !_ruleAppliesToNew(p)) { trace.push({policy:p,result:'skip',reason:'state'}); continue; }
     if (!_queryIntfMatch(p, qIntf)) { trace.push({policy:p,result:'skip',reason:'intf'}); continue; }
+    // 規則只適用單一位址家族（H3C security-policy ip／ipv6，2026-10-05）：家族不同直接略過，避免 ipv6 規則的 any 命中 IPv4 查詢
+    if (p._family && p._family !== (isV6 ? 'v6' : 'v4')) { trace.push({policy:p,result:'skip',reason:'src_addr'}); continue; }
     const pSrc=addrField(p,'srcAddr'), pDst=addrField(p,'dstAddr');
     const sm=_policyAddrMatches(pSrc,srcInt,addrs);
     if (sm===false) { trace.push({policy:p,result:'skip',reason:'src_addr'}); continue; }

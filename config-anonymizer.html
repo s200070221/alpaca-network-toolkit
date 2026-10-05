@@ -478,6 +478,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
               </optgroup>
               <optgroup id="optgrp-sw" label="交換器">
                 <option value="comware">H3C / HPE Comware</option>
+                <option value="h3c_secpath">H3C SecPath</option>
                 <option value="cisco_biz">Cisco Business (CBS/SG)</option>
                 <option value="cisco_ios">Cisco IOS / IOS-XE</option>
                 <option value="cisco_nxos">Cisco NX-OS</option>
@@ -1286,6 +1287,8 @@ const VENDOR_SIGS = {
   // 務必與 firewall_analyzer 的 FW_VENDOR_SIGS.vyos 保持一致（2026-10-02 新增）：VyOS 與 EdgeOS 同源，
   // 只能靠 // vyos-config-version 檔尾或 1.4 起 firewall ipv4 {forward|input|output|name} 結構區分，排在 edgerouter 前
   // 雲端安全群組 JSON（AWS describe-security-groups／Azure NSG），務必與 firewall_analyzer 的 FW_VENDOR_SIGS.cloudsg 一致（2026-10-02）
+  // H3C SecPath 防火牆（2026-10-05，KB）：務必與 firewall_analyzer 的 FW_VENDOR_SIGS.h3c 一致，排在 comware 前
+  h3c_secpath: { p:[/^\s*security-policy\s+ipv?6?\s*$/m, /^\s*security-zone\s+name\s+\S+/m], min:2 },
   cloudsg:     { p:[/"IpPermissions(?:Egress)?"\s*:\s*\[/, /"(?:default)?[sS]ecurityRules"\s*:\s*\[/, /"destCidr"\s*:/, /"applianceIp"\s*:/, /"publicPort"\s*:/], min:1 },
   // 務必與 firewall_analyzer 的 FW_VENDOR_SIGS.netfilter 保持一致（2026-10-02 新增）
   // Cumulus Linux NVUE（YAML 的 `- set:` 段或 nv set 指令），務必與 switch_analyzer isCumulusNVUE() 一致（2026-10-02）
@@ -1317,7 +1320,7 @@ const VENDOR_SIGS = {
 // "Sophos"/"Aruba" 文字比對），故刻意排在最後——讓其他更具結構特徵的廠牌訊號優先判定，
 // 只有在都沒命中時才輪到這兩家，降低誤判機率
 const VENDOR_ORDER = [
-  'cisco_nxos','fortiswitch','fortigate','comware','paloalto','cloudsg','cumulus','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
+  'cisco_nxos','fortiswitch','fortigate','h3c_secpath','comware','paloalto','cloudsg','cumulus','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
   'checkpoint','pfsense','sonicwall','watchguard','mikrotik','arista',
   'extreme','alcatel','brocade','procurve','dell_os10','planet','ruijie','netgear','edgeswitch','sonic',
   'ciscoasa','cisco_biz','cisco_ios',
@@ -1327,7 +1330,7 @@ const VENDOR_LABELS = {
   fortigate:'FortiGate',fortiswitch:'FortiSwitch',sophos:'Sophos XG',
   checkpoint:'Check Point',paloalto:'Palo Alto PAN-OS',pfsense:'pfSense/OPNsense',
   sonicwall:'SonicWall',mikrotik:'MikroTik RouterOS',juniper:'Juniper JunOS',
-  comware:'H3C / HPE Comware',cisco_ios:'Cisco IOS/IOS-XE',cisco_biz:'Cisco Business (CBS/SG)',cisco_nxos:'Cisco NX-OS',
+  comware:'H3C / HPE Comware',h3c_secpath:'H3C SecPath',cisco_ios:'Cisco IOS/IOS-XE',cisco_biz:'Cisco Business (CBS/SG)',cisco_nxos:'Cisco NX-OS',
   arista:'Arista EOS',aruba_cx:'Aruba CX',procurve:'Aruba ProCurve',
   dell_os10:'Dell OS10',extreme:'Extreme XOS',alcatel:'Alcatel OmniSwitch',
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
@@ -3705,7 +3708,7 @@ const VENDOR_FNS = {
   fortigate: anonFortiGate, fortiswitch: anonFortiSwitch,
   sophos: anonSophos, checkpoint: anonCheckPoint, paloalto: anonPaloAlto,
   pfsense: anonPfSense, sonicwall: anonSonicWall, mikrotik: anonMikroTik,
-  comware: anonComware, cisco_ios: anonCiscoIOS, cisco_biz: anonCiscoBiz, cisco_nxos: anonCiscoNXOS,
+  comware: anonComware, h3c_secpath: anonComware, cisco_ios: anonCiscoIOS, cisco_biz: anonCiscoBiz, cisco_nxos: anonCiscoNXOS,
   juniper: anonJuniper, arista: anonArista, aruba_cx: anonArubaCX,
   procurve: anonProCurve,
   dell_os10: anonDellOS10, extreme: anonExtreme, alcatel: anonAlcatel,
@@ -4807,7 +4810,7 @@ function runAnonymize() {
 // ── 結構保持度自檢（2026-10-02，第九輪發想 YD）──
 // 以隱藏 iframe 開啟對應分析工具（?structcheck=1，該頁不碰交接 key），postMessage 送出原始檔與
 // 去識別化結果，對方各自解析後只回傳數量。不直接呼叫 iframe 內函式，離線 file:// 開啟時也能運作。
-const STRUCT_FW_VENDORS = new Set(['fortigate','sophos','checkpoint','paloalto','pfsense','sonicwall','ciscoasa','zyxel','edgerouter','openwrt','watchguard','vyos','netfilter','cloudsg']);
+const STRUCT_FW_VENDORS = new Set(['fortigate','sophos','checkpoint','paloalto','pfsense','sonicwall','ciscoasa','zyxel','edgerouter','openwrt','watchguard','vyos','netfilter','cloudsg','h3c_secpath']);
 const STRUCT_LABELS = { vlans:'VLAN', interfaces:'Interface', routes:'Route', users:'User', acls:'ACL', lacp:'LACP', vrrp:'VRRP', dhcp:'DHCP', policies:'Policy', addresses:'Address', services:'Service', nat:'NAT', vpn:'VPN' };
 // MikroTik／Juniper 兩個分析工具都支援：有防火牆規則／security 區塊時交給防火牆分析，否則交給交換器解析
 function structCheckTool(vendor, text) {
