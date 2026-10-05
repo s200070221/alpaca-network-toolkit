@@ -3663,7 +3663,10 @@ if (/[?&]structcheck=1(?:&|$)/.test(location.search) && window.parent !== window
         var p = parseAny(String(t || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n'));
         var counts = {};
         ['vlans','interfaces','routes','users','acls','lacp','vrrp','dhcp'].forEach(function(k){ counts[k] = len(p[k]); });
-        return { vendor: p.vendor || '', counts: counts };
+        // 第十輪 ZO：另回傳分析結論（健康度分數與等級、命中的稽核項目及數量），比對去識別化是否改變結論
+        var h = computeSwitchHealth(p), audit = {};
+        analyzeSwitchAudit(p).filter(function(f){ return f.value > 0; }).forEach(function(f){ audit[f.id] = { v: f.value, label: f.check }; });
+        return { vendor: p.vendor || '', counts: counts, health: { score: h.score, grade: h.grade }, audit: audit };
       } catch (err) { return { error: String(err && err.message || err) }; }
     });
     window.parent.postMessage({ type: '_naStructResult', id: e.data.id, tool: 'switch', results: results }, '*');

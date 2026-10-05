@@ -410,7 +410,10 @@ const App = (() => {
           if(!FW_DIFF_PARSERS[vendor])return {vendor,error:'unknown vendor'};
           const p=FW_DIFF_PARSERS[vendor](text), counts={};
           ['interfaces','policies','addresses','services','routes','nat','vpn','users'].forEach(k=>{counts[k]=len(p[k]);});
-          return {vendor,counts};
+          // 第十輪 ZO：另回傳分析結論（健康度分數與等級、命中的稽核項目及數量），比對去識別化是否改變結論
+          const h=computeFirewallHealth(p), audit={};
+          analyzeCompliance(p).filter(f=>f.value>0).forEach(f=>{audit[f.id]={v:f.value,label:f.check};});
+          return {vendor,counts,health:{score:h.score,grade:h.grade},audit};
         }catch(err){return {error:String(err&&err.message||err)};}
       });
       window.parent.postMessage({type:'_naStructResult',id:e.data.id,tool:'firewall',results},'*');

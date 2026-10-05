@@ -11,6 +11,8 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - **Use online (no download)**: https://s200070221.github.io/alpaca-network-toolkit/
 - **Use offline**: download the whole repository, open `network-analyzer.html` in your browser and drop a config file or log onto it. The vendor is detected automatically and the matching tool opens.
 
+![Entry page](docs/images/01-hub-en.png)
+
 ## Tools at a glance
 
 | Tool | What it does |
@@ -34,6 +36,8 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 `firewall-analyzer-fixed.html` + `firewall-analyzer-*.js`
 
+![Firewall Config Analyzer: rule list](docs/images/02-firewall-policies-en.png)
+
 **Supported sources (18)**
 - FortiGate, Sophos XG, Check Point, Palo Alto, Juniper SRX, pfSense, OPNsense, SonicWall, MikroTik, Cisco ASA / FTD, Zyxel USG / ATP, WatchGuard Firebox
 - EdgeRouter (EdgeOS), VyOS, OpenWrt (UCI), Linux iptables / nftables
@@ -46,9 +50,13 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - Old-vs-new config comparison (including HA primary/secondary), conversion between config formats
 - Rule hit-count import (FortiGate, Cisco ASA / FTD, Palo Alto, Juniper SRX) to find rules never hit or not hit for a long time
 
+![Firewall Config Analyzer: audit](docs/images/03-firewall-audit-en.png)
+
 ## 🔀 Switch Config Parser
 
 `switch-config-parser.html` + `switch-analyzer-*.js`
+
+![Switch Config Parser: overview](docs/images/04-switch-overview-en.png)
 
 **Supported vendors (21)**
 - HPE Comware, Cisco IOS-XE, Cisco NX-OS, Cisco Business (CBS / SG), Aruba CX, Aruba ProCurve, Juniper EX / QFX, Arista EOS, Dell OS10
@@ -64,6 +72,8 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 `switch-config-generator.html` + `switch-generator-*.js`
 
+![Switch Config Generator: generated config](docs/images/08-generator-en.png)
+
 **Supported vendors (18)**
 - Comware, Cisco IOS-XE, Cisco NX-OS, Aruba CX, ProCurve, Juniper, Arista, Dell OS10, FortiSwitch
 - Brocade ICX, Alcatel, Extreme, MikroTik RouterOS, Ruijie, Netgear, EdgeSwitch, Planet, SONiC
@@ -77,6 +87,8 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 `config-anonymizer.html`
 
+![Config Anonymizer: side-by-side comparison](docs/images/06-anonymizer-en.png)
+
 - Supports 35 firewall / switch / cloud config formats
 - Consistently replaces IPs, hostnames, user names, passwords, keys, SNMP communities, MAC addresses and more; IPv4 and IPv6 supported
 - Optional subnet preservation: addresses in the same subnet map to the same fake subnet, so lookups and routing results stay the same after anonymization
@@ -86,6 +98,8 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 ## 📜 Log Analyzer (experimental)
 
 `log-analyzer.html`
+
+![Log Analyzer: issue list](docs/images/07-log-en.png)
 
 **Supported formats**
 - CEF, LEEF, Syslog (RFC3164 / RFC5424), JSON
