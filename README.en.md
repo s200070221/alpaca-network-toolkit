@@ -103,7 +103,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 **Supported formats**
 - CEF, LEEF, Syslog (RFC3164 / RFC5424), JSON
-- Firewalls: FortiGate key=value, Cisco ASA, Juniper SRX RT_FLOW, MikroTik, Linux iptables / nftables LOG
+- Firewalls: FortiGate key=value, Cisco ASA, Juniper SRX RT_FLOW, H3C SecPath session / filter logs, MikroTik, Linux iptables / nftables LOG
 - Network devices: Cisco IOS and Comware device logs
 - Servers and cloud: Windows event XML and Sysmon, IIS / web access logs, AWS VPC / Azure NSG flow logs
 
