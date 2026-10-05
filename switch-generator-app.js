@@ -3481,7 +3481,8 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   document.getElementById('snmp-trap-host').value=parsed.snmp?.hosts?.[0]?.host||'';
   document.getElementById('syslog-server').value=parsed.syslog?.servers?.[0]?.host||'';
 
-  (parsed.vlans||[]).forEach(v=>addVlanRow(v.id,v.name,v.ip));
+  // VLAN 表格的 IP 欄位只收 IPv4 CIDR；IPv6 SVI 位址不填入（填入會被判為格式錯誤）
+  (parsed.vlans||[]).forEach(v=>addVlanRow(v.id,v.name,/:/.test(v.ip||'')?'':v.ip));
 
   // VLAN IP 回填（2026-09-08 新增，withSviInterfaces()／switch-generator-core.js 的反向邏輯）：
   // switch_analyzer 的 parser 早就把這批介面解析成 type:'svi'，但下面 Interface 表格的回填
@@ -3490,7 +3491,7 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   // 找到對應 VLAN 列就填入其 IP，找不到（真實設定檔上 SVI 早於 VLAN 宣告等罕見情境）則補一列。
   if(SVI_NAME_FORMATTERS[genVendor]){
     (parsed.interfaces||[]).forEach(i=>{
-      if(i.type!=='svi'||!i.ip)return;
+      if(i.type!=='svi'||!i.ip||/:/.test(i.ip))return; // VLAN IP 欄位只收 IPv4
       const vid=(i.name.match(/\d+/)||[])[0];
       if(!vid)return;
       const existingRow=rowsOf('#vlan-body tr').find(row=>val(row,'v-id')===vid);
@@ -3551,7 +3552,8 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   (vrrpList||[]).forEach(v=>{
     const svi=(parsed.interfaces||[]).find(i=>i.name===v.interface);
     const vlanId=svi?.vlans||(v.interface.match(/\d+/)||[])[0]||'';
-    const sviIp=svi?.ip?svi.ip.split('/')[0]:'';
+    // VRRP 的 SVI IP 欄位為 CIDR（validateForm() 依 CIDR 檢查），保留前綴長度
+    const sviIp=svi?.ip||'';
     addVrrpRow(vlanId,sviIp,v.vrid,v.vip,v.priority,!!v.preempt,v.authMode,v.authKey,v.trackIf,v.trackReduced,v.vip6);
   });
 

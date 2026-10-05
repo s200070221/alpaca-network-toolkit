@@ -11,6 +11,8 @@
 - **線上使用（免下載）**：https://s200070221.github.io/alpaca-network-toolkit/
 - **離線使用**：下載整個 repo，用瀏覽器開啟 `network-analyzer.html`，把設定檔或 log 拖進去，會自動判斷廠牌並開啟對應工具。
 
+![入口頁](docs/images/01-hub-zh.png)
+
 ## 工具一覽
 
 | 工具 | 用途 |
@@ -34,6 +36,8 @@
 
 `firewall-analyzer-fixed.html` ＋ `firewall-analyzer-*.js`
 
+![防火牆設定分析器：規則清單](docs/images/02-firewall-policies-zh.png)
+
 **支援來源（18 種）**
 - FortiGate、Sophos XG、Check Point、Palo Alto、Juniper SRX、pfSense、OPNsense、SonicWall、MikroTik、Cisco ASA／FTD、Zyxel USG／ATP、WatchGuard Firebox
 - EdgeRouter（EdgeOS）、VyOS、OpenWrt（UCI）、Linux iptables／nftables
@@ -46,9 +50,13 @@
 - 新舊設定比對（含 HA 主備比對）、設定檔格式互轉
 - 規則命中數匯入（FortiGate、Cisco ASA／FTD、Palo Alto、Juniper SRX），找出從未或長期未命中的規則
 
+![防火牆設定分析器：稽核](docs/images/03-firewall-audit-zh.png)
+
 ## 🔀 交換器設定解析器
 
 `switch-config-parser.html` ＋ `switch-analyzer-*.js`
+
+![交換器設定解析器：總覽](docs/images/04-switch-overview-zh.png)
 
 **支援廠牌（21 家）**
 - HPE Comware、Cisco IOS-XE、Cisco NX-OS、Cisco Business（CBS／SG）、Aruba CX、Aruba ProCurve、Juniper EX／QFX、Arista EOS、Dell OS10
@@ -64,6 +72,8 @@
 
 `switch-config-generator.html` ＋ `switch-generator-*.js`
 
+![交換器設定產生器：產生結果](docs/images/08-generator-zh.png)
+
 **支援廠牌（18 家）**
 - Comware、Cisco IOS-XE、Cisco NX-OS、Aruba CX、ProCurve、Juniper、Arista、Dell OS10、FortiSwitch
 - Brocade ICX、Alcatel、Extreme、MikroTik RouterOS、Ruijie、Netgear、EdgeSwitch、Planet、SONiC
@@ -77,6 +87,8 @@
 
 `config-anonymizer.html`
 
+![設定檔去識別化工具：前後對照](docs/images/06-anonymizer-zh.png)
+
 - 支援 35 種防火牆／交換器／雲端設定格式
 - 一致性替換 IP、主機名稱、帳號、密碼、金鑰、SNMP community、MAC 等，IPv4／IPv6 皆支援
 - 可保留網段結構：同網段換成同一個假網段，去識別化後的查詢與路由結果不變
@@ -86,6 +98,8 @@
 ## 📜 Log 分析工具（實驗中）
 
 `log-analyzer.html`
+
+![Log 分析工具：問題清單](docs/images/07-log-zh.png)
 
 **支援格式**
 - CEF、LEEF、Syslog（RFC3164／RFC5424）、JSON
