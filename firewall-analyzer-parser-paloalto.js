@@ -650,12 +650,13 @@ const PaloAltoParser = (() => {
   }
 
   // ─── Address objects ──────────────────────────────────────────────────────
-  function parseAddressObjects(text, vsysXml, vsysName) {
+  // strict（Panorama 用）：找不到 <address> 區塊時不回退到整段文字，避免把其他 entry 當成位址物件
+  function parseAddressObjects(text, vsysXml, vsysName, strict) {
     const objs = [];
 
     if (isXml(text)) {
       const aoContent = vsysXml !== undefined ? vsysXml : text;
-      xblks(xv(aoContent,'address')||xv(text,'address')||aoContent, 'entry').forEach(e => {
+      xblks(xv(aoContent,'address')||(strict?'':xv(text,'address')||aoContent), 'entry').forEach(e => {
         const name  = xname(e);
         const inner = e._inner;
         const ip6   = xv(inner,'ip-netmask');
@@ -726,12 +727,12 @@ const PaloAltoParser = (() => {
   }
 
   // ─── Service objects ──────────────────────────────────────────────────────
-  function parseServiceObjects(text, vsysXml, vsysName) {
+  function parseServiceObjects(text, vsysXml, vsysName, strict) {
     const svcs = [];
 
     if (isXml(text)) {
       const soContent = vsysXml !== undefined ? vsysXml : text;
-      xblks(xv(soContent,'service')||xv(text,'service')||soContent, 'entry').forEach(e => {
+      xblks(xv(soContent,'service')||(strict?'':xv(text,'service')||soContent), 'entry').forEach(e => {
         const name  = xname(e);
         const inner = e._inner;
         const proto = xv(inner,'protocol');
@@ -1064,8 +1065,99 @@ const PaloAltoParser = (() => {
     return result;
   }
 
+  // ── Panorama 匯出（2026-10-05，第十一輪 KF）───────────────────────────────────
+  // 結構依 Palo Alto 官方 iron-skillet 的 Panorama 設定檔與 pan-os-python 的 XPath：
+  //   /config/shared/{address,address-group,service,service-group,pre-rulebase,post-rulebase}
+  //   /config/devices/entry[localhost.localdomain]/device-group/entry[@name]/{同上}
+  //   /config/readonly/devices/entry/device-group/entry[@name]/parent-dg（上層 device-group）
+  // 規則評估順序依官方 Device Group Policies 文件：shared 前置 → 各層 device-group 前置（上層到下層）
+  // → 防火牆本機規則（不在 Panorama 檔內）→ device-group 後置（下層到上層）→ shared 後置。
+  // 每個 device-group 當一個 VDOM，規則依上述順序展開。規則內的 <target>（指定套用的防火牆序號）不解析，
+  // 解析前先拿掉，避免其中的 <entry/> 打亂規則切分。templates（介面、區域、路由）與預設規則未涵蓋
+  function isPanorama(text) {
+    return isXml(text) && /<device-group>\s*<entry\b/.test(text);
+  }
+  // 依名稱合併同名的直接子 entry（iron-skillet 同一個 device-group 會出現兩個 entry）
+  function panoEntries(xml) {
+    const map = new Map();
+    xentriesTop(xml).forEach(e => map.set(e._name, (map.get(e._name) || '') + '\n' + e._inner));
+    return map;
+  }
+  function panoStrip(xml) {
+    return String(xml || '').replace(/<target>[\s\S]*?<\/target>/g, '')
+      .replace(/<pre-rulebase>[\s\S]*?<\/pre-rulebase>/g, '').replace(/<post-rulebase>[\s\S]*?<\/post-rulebase>/g, '');
+  }
+  function panoRulebase(xml, which) {
+    return xva(String(xml || ''), which).join('\n').replace(/<target>[\s\S]*?<\/target>/g, '')
+      .replace(/<default-security-rules>[\s\S]*?<\/default-security-rules>/g, '');
+  }
+  function parsePanorama(text) {
+    const deviceInfo = { vendor: 'PaloAlto', hostname: '-', firmware: '-', model: 'Panorama', serial: '-', vdom: [] };
+    const ver = text.match(/<config\b[^>]*\bversion="([^"]+)"/);
+    if (ver) deviceInfo.firmware = ver[1];
+    const sys = xv(xv(xv(text, 'deviceconfig'), 'system'), 'hostname');
+    if (sys) deviceInfo.hostname = sys;
+    const shared = xv(text, 'shared');
+    const dgBlocks = new Map();
+    xva(text, 'device-group').forEach(b => panoEntries(b).forEach((inner, name) => dgBlocks.set(name, (dgBlocks.get(name) || '') + inner)));
+    // readonly 的 device-group 只有 id／parent-dg 等中繼資料，不含規則
+    const parent = {};
+    xva(xv(text, 'readonly'), 'device-group').forEach(b => panoEntries(b).forEach((inner, name) => {
+      const pd = xv(inner, 'parent-dg');
+      if (pd) parent[name] = pd;
+    }));
+    // readonly 區塊裡的 device-group entry 也會被上面的 xva(text,'device-group') 收進來，但不含規則與物件，不影響結果
+    const chain = name => { const out = []; let n = name; const seen = new Set(); while (n && !seen.has(n) && dgBlocks.has(n)) { seen.add(n); out.unshift(n); n = parent[n]; } return out; };
+    const objs = (xml, tag) => {
+      const x = panoStrip(xml);
+      return { addresses: parseAddressObjects(x, x, tag, true), services: parseServiceObjects(x, x, tag, true) };
+    };
+    const sharedObj = objs(shared, 'shared');
+    const dgObj = {};
+    dgBlocks.forEach((inner, name) => { dgObj[name] = objs(inner, name); });
+    // 物件比照規則展開：每個 device-group 帶一份看得到的物件（shared＋上層＋自己，_vdom 為該 device-group），
+    // 稽核依 VDOM 比對引用時，shared／上層物件才不會被誤判為未使用
+    let policies = [], addresses = [], services = [], nat = [];
+    const perVdom = [];
+    const dgNames = dgBlocks.size ? [...dgBlocks.keys()] : ['shared'];
+    dgNames.forEach(dg => {
+      const anc = dgBlocks.size ? chain(dg) : [];
+      const scopeAddr = sharedObj.addresses.concat(...anc.map(a => dgObj[a].addresses));
+      const atm = buildAddrTypeMap(scopeAddr);
+      const layers = [['shared', shared, 'pre-rulebase']].concat(anc.map(a => [a, dgBlocks.get(a), 'pre-rulebase']))
+        .concat(anc.slice().reverse().map(a => [a, dgBlocks.get(a), 'post-rulebase'])).concat([['shared', shared, 'post-rulebase']]);
+      const pols = [], nats = [];
+      layers.forEach(([owner, xml, rb]) => {
+        const block = panoRulebase(xml, rb);
+        if (!block) return;
+        const tag = `[${owner} ${rb === 'pre-rulebase' ? 'pre' : 'post'}]`;
+        parsePolicies(block, block, dg, atm).forEach(p => {
+          pols.push(Object.assign(p, { id: String(pols.length + 1), comments: p.comments && p.comments !== '-' ? `${tag} ${p.comments}` : tag, _layer: tag }));
+        });
+        if (/<nat>/.test(block)) parseNAT(block, block, dg).forEach(n => nats.push(Object.assign(n, { _vdom: dg, comment: tag })));
+      });
+      policies = policies.concat(pols);
+      nat = nat.concat(nats);
+      const vAddr = scopeAddr.map(a => Object.assign({}, a, { _vdom: dg }));
+      const vSvc = sharedObj.services.concat(...anc.map(a => dgObj[a].services)).map(s => Object.assign({}, s, { _vdom: dg }));
+      addresses = addresses.concat(vAddr); services = services.concat(vSvc);
+      perVdom.push({ name: dg, displayName: dg, policies: pols, addresses: vAddr, services: vSvc, schedules: [], nat: nats, vpn: [], users: [], interfaces: [], routes: [] });
+    });
+    deviceInfo.vdom = dgNames;
+    return {
+      vendor: 'PaloAlto', deviceInfo, interfaces: [], policies, routes: [], vpn: [], addresses, services, schedules: [], nat,
+      // 管理者帳號只在 mgt-config/users（一般 parseUsers() 會把規則、物件的 entry 也當成帳號）
+      users: xentriesTop(xv(xv(text, 'mgt-config'), 'users')).map(e => ({ type: 'local', name: e._name, status: 'enable', authType: 'password', email: '-',
+        twoFactor: 'disable', twoFType: '-', ldapServer: '-', radiusServer: '-', comment: /<superuser>yes<\/superuser>/.test(e._inner) ? 'superuser' : '-' })),
+      sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
+      ha: null, dhcp: null, dns: null, snmp: null, logservers: null,
+      _vdomNames: dgNames.length > 1 ? dgNames : [], _isMultiVdom: dgNames.length > 1, _perVdom: perVdom, _panorama: true,
+    };
+  }
+
   // ── Multi-vsys aware parse() ──────────────────────────────────────────────────
   function parse(text) {
+    if (isPanorama(text)) return parsePanorama(text);
     // set 格式正規化（2026-10-02，第 13 輪）：PAN-OS 實際輸出規則為 `set rulebase security|nat rules NAME …`，
     // 多 vsys 設備另有 `set vsys vsysN` 前綴（物件、區域、規則皆同）；下方各段解析沿用 `set security rules`／
     // `set nat rules`／`set address` 的寫法，原本 set 格式設定檔一條規則都讀不到。這裡先轉成解析器的寫法

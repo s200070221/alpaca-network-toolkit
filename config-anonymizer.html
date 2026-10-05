@@ -1248,7 +1248,7 @@ const VENDOR_SIGS = {
   fortigate:   { p:[/^#config-version=/m, /^config system global/m, /FortiGate-/i], min:1 },
   comware:     { p:[/^\s*sysname\s+\S/m, /HPE Comware|H3C Comware/i, /^\s*version\s+\d+[\d.]+,\s*Release/m], min:1 },
   // XML 匯出檔（running-config.xml）根標籤帶屬性 <config version="…" urldb=…>，後接 <devices>
-  paloalto:    { p:[/^set deviceconfig system/m, /^set vsys vsys/m, /Palo Alto Networks/i, /<config\b[^>]*>[\s\S]{0,300}<devices>/], min:1 },
+  paloalto:    { p:[/^set deviceconfig system/m, /^set vsys vsys/m, /Palo Alto Networks/i, /<config\b[^>]*>[\s\S]{0,300}<devices>/, /<device-group>\s*<entry\b/], min:1 },
   // Junos 設定檔有兩種輸出風格：扁平 "set" 格式與階層式大括號格式（"system { host-name X; }"）；
   // 原本簽章只認 set 格式，對大括號格式真實匯出檔會誤判為 unknown（比照 firewall_analyzer
   // FW_VENDOR_SIGS.juniper 已修復的落差補上對應訊號，2026-07-21 查核發現此處從未同步修正）
@@ -2123,10 +2123,14 @@ function anonCheckPoint(text, opts) {
 // （firewall_analyzer/test_config/paloalto_test.xml）交叉確認的標籤：<hostname>（巢狀於
 // <system>）、<pre-shared-key><key>VALUE</key></pre-shared-key>；SNMP community 依 Parser
 // parseSnmp() 兩種既有格式（<snmp-community-string> 與 <snmp-community><entry name="X"/>>）
-// 一併涵蓋。**已知缺口**：本機使用者密碼在 XML 格式下的欄位名稱（set 格式對應的 phash）
-// 查無 PaloAltoParser 有解析、也查無真實 fixture 佐證，比照專案「parser 沒解析的欄位不
-// 猜測遮蔽」原則不實作。
+// 一併涵蓋。管理者帳號與密碼雜湊（2026-10-05 補上）：XML 格式為 <mgt-config><users><entry name="帳號">
+// <phash>雜湊</phash>，依 Palo Alto 官方 iron-skillet 的防火牆與 Panorama 設定檔確認
 function anonPaloAltoXML(text, opts) {
+  text = text.replace(/(<phash>)([^<]*)(<\/phash>)/g, (m, o, v, c) => { stats.password++; return o + 'REDACTED_HASH' + c; });
+  if (opts.user) {
+    text = text.replace(/(<mgt-config>[\s\S]*?<users>)([\s\S]*?)(<\/users>)/, (m, a, body, c) =>
+      a + body.replace(/(<entry\s+name=")([^"]+)(")/g, (mm, p, n, q) => p + anonUser(n) + q) + c);
+  }
   if (opts.hostname) {
     text = text.replace(/(<hostname>)([^<]+)(<\/hostname>)/i, (m, o, name, c) => o + anonHostname(name.trim(), 'fw', opts) + c);
   }
@@ -4026,7 +4030,8 @@ function checkResidual(text) {
     }
     // 網域名稱殘留（2026-09-29 新增，RB）：只在「domain-name 類關鍵字後」或「內部網域結尾」時示警，
     // 公開網域（如 pool.ntp.org、廠牌更新伺服器）不列入，避免各廠牌模式大量誤報
-    if (!/REDACTED/.test(t) && (DOMAIN_KW_RESIDUAL_RE.test(t) || INTERNAL_DOMAIN_RE.test(t))) {
+    // PAN-OS 設定固定以 localhost.localdomain 當裝置節點名稱（Panorama／防火牆 XML 皆然），不是內部網域（2026-10-05）
+    if (!/REDACTED/.test(t) && (DOMAIN_KW_RESIDUAL_RE.test(t) || INTERNAL_DOMAIN_RE.test(t.replace(/\blocalhost\.localdomain\b/gi, '')))) {
       warnings.push({ line: lineNum, text: t });
     }
     if (COMPANY_DOMAIN_SUFFIX && t.toLowerCase().includes(COMPANY_DOMAIN_SUFFIX.toLowerCase())) {

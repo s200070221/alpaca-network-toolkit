@@ -568,7 +568,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
         </div>
         <div class="ucard paloalto" id="pc" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('pc').classList.add('drag-over')" ondragleave="document.getElementById('pc').classList.remove('drag-over')" ondrop="handleDrop(event,'p')" onclick="document.getElementById('pi').click()">
           <div class="ucard-head"><div class="vendor-dot paloalto">🔶</div><div><h3>Palo Alto</h3><div class="ver">PAN-OS 10/11 · XML / set CLI</div></div></div>
-          <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_pa">running-config.xml / set format CLI</div></div>
+          <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_pa">running-config.xml／set 格式 CLI；Panorama 匯出會依 device-group 展開 shared 與各層前置／後置規則</div></div>
           <div class="file-chip" id="pc-chip" style="display:none"><span>📄</span><span class="fn" id="pc-name"></span><span class="rm" onclick="clearFile(event,'p')">✕</span></div>
           <input type="file" id="pi" accept=".xml,.txt,.conf,.cfg" onchange="pickFile('p',this)">
         </div>
