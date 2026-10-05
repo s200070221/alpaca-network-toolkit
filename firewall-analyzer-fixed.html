@@ -460,7 +460,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 <body>
 <div id="app">
 <div id="sidebar">
-  <div class="sidebar-logo"><div class="icon">🛡️</div><div><h2>FW Analyzer</h2><p data-i18n="subtitle">v4.0 · 18-Vendor · No AI</p></div></div>
+  <div class="sidebar-logo"><div class="icon">🛡️</div><div><h2>FW Analyzer</h2><p data-i18n="subtitle">v4.0 · 19-Vendor · No AI</p></div></div>
   <nav class="sidebar-nav">
     <div class="nav-group">
       <div class="nav-group-label" data-i18n="nav.upload_group">上傳</div>
@@ -649,6 +649,12 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
           <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_cloudsg">aws ec2 describe-security-groups 或 Azure NSG（az network nsg show／list、資源 JSON）的輸出，每個群組當成一個 VDOM；或 Meraki MX Dashboard API 回應（L3 防火牆規則、通訊埠轉送、1:1 NAT、VLAN、靜態路由，可多個回應前後相接）</div></div>
           <div class="file-chip" id="kc-chip" style="display:none"><span>📄</span><span class="fn" id="kc-name"></span><span class="rm" onclick="clearFile(event,'k')">✕</span></div>
           <input type="file" id="ki" accept=".json" onchange="pickFile('k',this)">
+        </div>
+        <div class="ucard" style="border-color:rgba(0,90,170,.4)" id="hc" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('hc').classList.add('drag-over')" ondragleave="document.getElementById('hc').classList.remove('drag-over')" ondrop="handleDrop(event,'h')" onclick="document.getElementById('hi').click()">
+          <div class="ucard-head"><div class="vendor-dot" style="background:rgba(0,90,170,.15)">🧱</div><div><h3 style="color:#005aaa">H3C SecPath</h3><div class="ver">Comware V7 · display current-configuration</div></div></div>
+          <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_h3c">display current-configuration 的輸出；涵蓋安全區域、security-policy、物件群組、NAT Server／Outbound、IPsec 策略與靜態路由</div></div>
+          <div class="file-chip" id="hc-chip" style="display:none"><span>📄</span><span class="fn" id="hc-name"></span><span class="rm" onclick="clearFile(event,'h')">✕</span></div>
+          <input type="file" id="hi" accept=".cfg,.txt,.conf" onchange="pickFile('h',this)">
         </div>
       </div>
       <div class="analyze-row">
@@ -869,6 +875,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 <script src="firewall-analyzer-parser-openwrt.js"></script>
 <script src="firewall-analyzer-parser-watchguard.js"></script>
 <script src="firewall-analyzer-parser-vyos.js"></script>
+<script src="firewall-analyzer-parser-h3c.js"></script>
 <script src="firewall-analyzer-parser-netfilter.js"></script>
 <script src="firewall-analyzer-parser-cloud.js"></script>
 <script src="firewall-analyzer-parser-cisco-asa.js"></script>
