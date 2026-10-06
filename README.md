@@ -60,9 +60,9 @@
 
 ![交換器設定解析器：總覽](docs/images/04-switch-overview-zh.png)
 
-**支援廠牌（23 家）**
+**支援廠牌（24 家）**
 - H3C Comware、HPE Comware、Cisco IOS-XE、Cisco NX-OS、Cisco Business（CBS／SG）、Aruba CX、Aruba ProCurve、Juniper EX／QFX、Arista EOS、Dell OS10
-- FortiSwitch、Extreme ExtremeXOS、Extreme VOSS／Fabric Engine、Alcatel OmniSwitch、Ruckus-Brocade ICX、MikroTik RouterOS、Ruijie RGOS、Netgear M4300、Ubiquiti EdgeSwitch、Planet、Allied Telesis AlliedWare Plus
+- FortiSwitch、Extreme ExtremeXOS、Extreme VOSS／Fabric Engine、Alcatel OmniSwitch、Ruckus-Brocade ICX、MikroTik RouterOS、Ruijie RGOS、Netgear M4300、Ubiquiti EdgeSwitch、Broadcom EFOS、Planet、Allied Telesis AlliedWare Plus
 - SONiC、NVIDIA Cumulus Linux（NVUE）
 
 **主要功能**
