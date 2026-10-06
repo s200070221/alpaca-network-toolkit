@@ -303,9 +303,9 @@ const Reporter = (() => {
   function exportBatchQueryCSV(results) {
     if (!results || !results.length) return null;
     // combos／accept_count：CIDR／範圍列展開的組合數與其中允許的數量（2026-09-29 新增，FF）
-    const headers = ['line','src','dst','proto','port','result','policy_id','policy_name','combos','accept_count','fqdn','expect','check'];
+    const headers = ['line','src','dst','proto','port','result','policy_id','policy_name','combos','accept_count','fqdn','expect','check','count'];
     const rows = results.map(r => [r.line, r.src, r.dst, r.proto, r.port, r.action, r.policyId, r.policyName, r.combos, r.acceptCount,
-      r.hasFqdn ? 'yes' : '', r.expect, r.check === null ? '' : (r.check ? 'ok' : 'mismatch')]);
+      r.hasFqdn ? 'yes' : '', r.expect, r.check === null ? '' : (r.check ? 'ok' : 'mismatch'), r.count == null ? '' : r.count]);
     return toCSV(rows, headers);
   }
 

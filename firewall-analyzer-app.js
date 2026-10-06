@@ -3212,10 +3212,19 @@ function startMatrixRain(){
     const q = _fwPendingQuery;
     const cond = `${q.src} → ${q.dst}${q.port ? ':' + q.port : ''}${q.proto && q.proto !== 'any' ? ' ' + q.proto : ''}`;
     b.style.display = 'block';
-    b.innerHTML = esc(tr('fwq.pending').replace('{cond}', cond).replace('{page}', tr('nav.query'))) +
+    b.innerHTML = esc(q.batch ? tr('fwq.pending_batch').replace('{n}', q.rows).replace('{page}', tr('nav.query'))
+      : tr('fwq.pending').replace('{cond}', cond).replace('{page}', tr('nav.query'))) +
       ` <button class="btn btn-ghost btn-sm" onclick="_fwClearPendingQuery()">${esc(tr('fwq.cancel'))}</button>`;
   }
   window._fwSetPendingQuery = function(q) {
+    // 批次（第十二輪 ME）：log 分析送來 batch＝批次查詢 CSV（src,dst,proto,port,expect,count），
+    // 載入設定後填入批次查詢並執行，expect 為 log 的實際結果
+    if (q && typeof q.batch === 'string' && q.batch) {
+      _fwPendingQuery = { batch: q.batch, rows: Math.max(0, q.batch.split('\n').length - 1) };
+      renderFwqBar();
+      if (PARSED && PARSED.policies) _applyPendingFwQuery();
+      return;
+    }
     if (!q || !q.src || !q.dst) return;
     _fwPendingQuery = { src: String(q.src), dst: String(q.dst), port: String(q.port || ''), proto: ['TCP','UDP','ICMP'].includes(q.proto) ? q.proto : 'any' };
     renderFwqBar();
@@ -3227,6 +3236,12 @@ function startMatrixRain(){
     const q = _fwPendingQuery; _fwPendingQuery = null; renderFwqBar();
     showSection('query');
     const set = (id, v) => { const e = $(id); if (e) e.value = v; };
+    if (q.batch) {
+      set('batch-input', q.batch);
+      window._runBatchQuery();
+      const r = $('batch-result'); if (r && r.scrollIntoView) r.scrollIntoView({ block: 'start' });
+      return;
+    }
     set('q-src', q.src); set('q-dst', q.dst); set('q-proto', q.proto); set('q-port', q.port);
     window._runQuery();
   }

@@ -519,7 +519,9 @@ function parseBatchQueryCSV(text) {
     if (exp && !expect) { errors.push({ line: lineNo, reason: 'expect' }); return; }
     if (rows.length >= BATCH_QUERY_MAX_ROWS) { errors.push({ line: lineNo, reason: 'max' }); return; }
     // srcintf：選填欄位（需有表頭），進入介面／區域名稱（2026-10-01，YA）
-    rows.push({ line: lineNo, src, dst, proto, port, expect, srcList, dstList, srcIntf: get('srcintf') });
+    // count：選填欄位（需有表頭），log 分析批次送來時為該組連線的 log 筆數（第十二輪 ME），只供顯示
+    const cnt = get('count');
+    rows.push({ line: lineNo, src, dst, proto, port, expect, srcList, dstList, srcIntf: get('srcintf'), count: /^\d+$/.test(cnt) ? +cnt : null });
   });
   return { rows, errors };
 }
