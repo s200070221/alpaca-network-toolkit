@@ -2243,6 +2243,10 @@ function parseAny(cfg,forceVendor){
   // VOSS 的 SSH／Telnet 由開機旗標 boot config flags sshd／telnetd 啟用（真實 running-config 錄製可見 sshd）
   res.mgmtAccess=vendor==='voss'?{telnet:/^boot config flags telnetd\s*$/m.test(cfg),ssh:/^boot config flags sshd\s*$/m.test(cfg)}:parseMgmtAccess(cfg, vendor);
   res.routingAuth=parseRoutingAuth(cfg, vendor);
+  // 基礎管理服務（第十二輪 MA）；Cisco 的 SSH v1 依「SSH 已開放但未限定 ip ssh version 2」判斷
+  // AlliedWare Plus 的品牌在下方 applyAlliedWare() 才設定，這裡以 isAW 判斷
+  res.mgmtSvc=parseMgmtServices(cfg, vendor, isAW&&vendor==='cisco'?'awplus':(res.sys&&res.sys.brand));
+  if(res.mgmtSvc&&vendor==='cisco')res.mgmtSvc.sshV1=!!(res.mgmtAccess&&res.mgmtAccess.ssh)&&!res.mgmtSvc.sshV2Only;
   // Brocade 的 qos 已在 parseBrocade() 內用專屬形狀（dscpMap/ports）設定，Extreme 的
   // qos 已在 parseExtremeXOS() 內用專屬形狀（profiles/dscpMap/ports，QP1-QP8 profile
   // 模型）設定，RouterOS 的 qos 已在 parseRouterOS() 內用專屬形狀（simpleQueues/

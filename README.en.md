@@ -67,7 +67,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 **Main features**
 - Visualizes ports, VLANs, routing and stack topology
-- Security audit with a health score, config comparison
+- Security audit with a health score (including baseline management checks: NTP, syslog, centralized authentication, login banner, plain HTTP, SSH v1, idle timeout), config comparison
 - Cabling sheet and endpoint lookup (paste MAC / ARP tables to find which port a device is on)
 
 ## 🛠️ Switch Config Generator

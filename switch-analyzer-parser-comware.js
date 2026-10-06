@@ -630,6 +630,66 @@ function parseMgmtAccess(cfg, vendor){
   return {telnet,ssh};
 }
 
+// 基礎管理服務解析（2026-10-06 新增，第十二輪 MA）：NTP、集中認證伺服器（TACACS+／RADIUS）、登入橫幅、
+// 明文 HTTP 管理、SSH v1、閒置逾時關閉。供 analyzeSwitchAudit() 的基礎服務稽核使用。
+// 欄位為 null 代表「此廠牌未查證，不評估」（稽核不列該項，避免誤報）。語法依據：
+// - Oxidized 真實錄製（IOS C9200L／C9800、AOS-CX 6000～CX10000 共 30 份）：`ntp server`、`logging host`、
+//   `tacacs-server host … key`、`aaa authentication login default group tacacs local`、`banner login/motd ^C`、
+//   `ip http server`／`ip http secure-server`、`ip ssh version 2`、`exec-timeout 20 0`、AOS-CX `https-server vrf`、`banner motd $`
+// - Oxidized 各廠牌遮蔽規則（nxos／eos／ios／aoscx：`tacacs-server host … key`、`radius-server host … key`）
+// - 本專案真實範例：Comware `idle-timeout 0 0`、`info-center loghost`；ProCurve `ntp server-name "…"`；Ruijie `banner motd`、`exec-timeout 10 0`、`ntp server`
+// - 既有已查證解析：Comware hwtacacs／radius scheme 的 primary authentication（去識別化）、Junos system 區塊（junosBlock）
+// Cisco Business／AlliedWare Plus（sys.brand）語法不同，整組不評估
+const MGMT_SVC_VENDORS=['cisco','ruijie','nxos','arista','aruba','comware','juniper','procurve'];
+function parseMgmtServices(cfg, vendor, brand){
+  if(!MGMT_SVC_VENDORS.includes(vendor)||brand==='ciscobiz'||brand==='awplus')return null;
+  const all=(re)=>{const out=[];let m;const r=new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g');while((m=r.exec(cfg))!==null)out.push(m[1]);return out;};
+  const has=re=>re.test(cfg);
+  const jb=n=>typeof junosBlock==='function'?junosBlock(cfg,n):'';
+  let ntp=[], aaa=[], banner=null, httpPlain=null, sshV1=null, idleOff=null, syslogExtra=[];
+  if(vendor==='juniper'){
+    const nb=jb('ntp'); let m; const r=/^\s*server\s+([^\s;{]+)/gm; while((m=r.exec(nb))!==null)ntp.push(m[1]);
+    aaa=all(/^\s*(?:tacplus-server|radius-server)\s+([^\s;{]+)/m);
+    banner=/^\s*(?:message|announcement)\s+"/m.test(jb('login'));
+    const wm=jb('web-management'); httpPlain=/^\s*http\s*[;{]/m.test(wm);
+  }else if(vendor==='comware'){
+    ntp=all(/^\s*ntp-service\s+(?:ipv6\s+)?unicast-server\s+(\S+)/m);
+    // 預設的 radius scheme system 沒有伺服器，以 primary authentication 判斷有無實際設定伺服器
+    aaa=all(/^\s*primary\s+authentication\s+(?:ipv6\s+)?(\S+)/m);
+    banner=has(/^\s*header\s+(?:motd|login|shell|incoming|legal)\b/m);
+    httpPlain=has(/^\s*ip\s+http\s+enable\b/m);
+    sshV1=has(/^\s*ssh\s+server\s+compatible-ssh1x\s+enable\b/m);
+    idleOff=all(/^(\s*idle-timeout\s+0(?:\s+0)?\s*)$/m).map(x=>x.trim());
+  }else if(vendor==='procurve'){
+    ntp=all(/^\s*(?:ntp\s+server(?:-name)?|sntp\s+server(?:\s+priority\s+\d+)?)\s+"?([^"\s]+)/m);
+    aaa=all(/^\s*(?:tacacs-server|radius-server)\s+host\s+(\S+)/m);
+    banner=has(/^\s*banner\s+motd\b/m);
+  }else{
+    // cisco／ruijie／nxos／arista／aruba：ntp server [vrf X] 主機
+    ntp=all(/^\s*ntp\s+server\s+(?:vrf\s+\S+\s+)?(?!vrf\b)(\S+)/m);
+    aaa=[...all(/^\s*(?:tacacs-server|radius-server)\s+host\s+(\S+)/m),
+         ...all(/^\s*(?:tacacs|radius)\s+server\s+(\S+)\s*$/m)];
+    banner=has(/^\s*banner\s+(?:motd|login|exec)\b/m);
+    if(vendor==='cisco'){
+      httpPlain=has(/^ip\s+http\s+server\s*$/m);
+      sshV1=null; // 由 parseAny() 依 mgmtAccess.ssh 判斷（未限定 ip ssh version 2 時 IOS 預設 1.99 相容 v1）
+      // 舊式 `logging 10.1.1.1`（無 host 關鍵字）也是遠端 syslog
+      syslogExtra=all(/^logging\s+(\d+\.\d+\.\d+\.\d+)\s*$/m);
+    }else if(vendor==='nxos'){
+      httpPlain=has(/^\s*nxapi\s+http\s+port\s+\d+/m);
+    }else if(vendor==='arista'){
+      const blk=(cfg.match(/^management\s+(?:api\s+http-commands|http-server)\n((?:[ \t][^\n]*\n?)*)/gm)||[]).join('\n');
+      httpPlain=/^\s*protocol\s+http\b(?!s)/m.test(blk)&&!/^\s*shutdown\s*$/m.test(blk);
+    }else if(vendor==='aruba'){
+      httpPlain=false; // AOS-CX 只有 https-server，沒有明文 HTTP 管理
+    }
+    if(vendor==='cisco'||vendor==='ruijie'||vendor==='nxos')
+      idleOff=all(/^(\s*exec-timeout\s+0(?:\s+0)?\s*)$/m).map(x=>x.trim());
+  }
+  return {ntp:[...new Set(ntp)], aaa:[...new Set(aaa)], banner, httpPlain, sshV1, idleOff, syslogExtra:[...new Set(syslogExtra)],
+    sshV2Only:vendor==='cisco'?has(/^\s*ip\s+ssh\s+version\s+2\b/m):null};
+}
+
 // OSPF/BGP/RIP 路由通訊協定認證解析（2026-07-22 新增，13 廠牌逐一對外查證官方 CLI 文件後
 // 實作）。設計為獨立於既有 parseOSPF()/parseBGP()/parseRIP() 之外的整體性判斷（是否「整份
 // 設定檔內至少有一處」該通訊協定的認證設定），非逐 area/neighbor 精確比對——避免需要改動
