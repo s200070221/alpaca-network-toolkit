@@ -1415,6 +1415,13 @@
     // T17：過大／巢狀過深群組物件（2026-09-23 新增），權重同上
     const oversizedGroupCount = analyzeOversizedGroups(parsed).length;
     if (oversizedGroupCount) deduct('health.oversized_group', 'info', oversizedGroupCount, oversizedGroupCount * HEALTH_WEIGHT.low, HEALTH_WEIGHT.low);
+    // T18：臨時規則到期（第十二輪 MF）——備註寫明到期卻仍啟用屬實際開放風險（medium）；
+    // 單次排程已過期的規則已不放行流量，屬設定衛生（low）
+    const expired = analyzeExpiredRules(parsed, { now: opts && opts.now, keywords: opts && opts.expiryKeywords }).results.filter(r => r.status === 'expired');
+    const expComment = expired.filter(r => r.source === 'comment').length;
+    if (expComment) deduct('health.rule_expired', 'warn', expComment, expComment * HEALTH_WEIGHT.medium, HEALTH_WEIGHT.medium);
+    const expSched = expired.filter(r => r.source === 'schedule').length;
+    if (expSched) deduct('health.schedule_expired', 'info', expSched, expSched * HEALTH_WEIGHT.low, HEALTH_WEIGHT.low);
     score = Math.max(0, Math.min(100, score));
     const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
     const gradeColor = grade === 'A' ? 'var(--green)' : grade === 'B' ? 'var(--teal)' : grade === 'C' ? 'var(--yellow)' : grade === 'D' ? 'var(--orange)' : 'var(--red)';
@@ -1463,6 +1470,85 @@
     res.results.forEach(r => {
       const idCell = r.kind === 'policy' ? `<span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.id).replace(/"/g,'&quot;')})" title="${esc(tr('audit.jump_hint'))}">${esc(r.id)}</span>` : '-';
       h += `<tr><td>${pill(kindLabel[r.kind], 'p-info')}</td><td class="mono">${idCell}</td><td class="mono" style="color:var(--accent)">${esc(r.name)}</td><td style="color:var(--text-dim)">${esc(r.vdom || '-')}</td></tr>`;
+    });
+    return h + '</tbody></table></div></div>';
+  }
+
+  // 臨時規則到期稽核（第十二輪 MF）：兩種來源——(1) 規則引用的單次排程已過期（FortiGate
+  // `config firewall schedule onetime` 的 end「hh:mm yyyy/mm/dd」、Palo Alto non-recurring
+  // 「YYYY/MM/DD@hh:mm-YYYY/MM/DD@hh:mm」，皆依官方格式）；(2) 規則名稱或備註在到期關鍵字後
+  // 寫了日期（只認年在前的 YYYY-MM-DD／YYYY/MM/DD／YYYY.MM.DD／YYYYMMDD，DD/MM 與 MM/DD
+  // 無法區分不判斷）。只看啟用中的規則；status 為 expired（已過期）或 soon（30 天內到期）。
+  // keywords 為使用者自訂正則（空字串用預設），無效正則回報在 error 並改用預設
+  const EXPIRY_DEFAULT_KEYWORDS = 'expire[sd]?|expiry|expiration|exp(?![a-z])|until|valid\\s+to|到期|期限|截止|有效';
+  const EXPIRY_SOON_DAYS = 30;
+  function _ymdDay(y, m, d) {
+    y = +y; m = +m; d = +d;
+    if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+    const t = Date.UTC(y, m - 1, d);
+    const dt = new Date(t);
+    if (dt.getUTCMonth() !== m - 1) return null; // 2月30日之類不存在的日期
+    return Math.floor(t / 864e5);
+  }
+  function analyzeExpiredRules(parsed, opts) {
+    opts = opts || {};
+    const now = new Date(opts.now || Date.now());
+    const today = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 864e5);
+    let kwSrc = (opts.keywords || '').trim(), error = false, re;
+    try { re = new RegExp('(?:' + (kwSrc || EXPIRY_DEFAULT_KEYWORDS) + ')[^\\d\\n]{0,4}?\\d{4}(?:[-/.]\\d{1,2}[-/.]\\d{1,2}|\\d{4})(?!\\d)', 'gi'); }
+    catch (e) { error = true; re = new RegExp('(?:' + EXPIRY_DEFAULT_KEYWORDS + ')[^\\d\\n]{0,4}?\\d{4}(?:[-/.]\\d{1,2}[-/.]\\d{1,2}|\\d{4})(?!\\d)', 'gi'); }
+    const sched = new Map();
+    (parsed.schedules || []).forEach(s => {
+      if (s.type !== 'onetime') return;
+      const m = String(s.end || '').match(/(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+      const day = m && _ymdDay(m[1], m[2], m[3]);
+      if (day === null || day === undefined) return;
+      const v = { day, raw: s.end };
+      sched.set((s._vdom || '') + '\u0000' + s.name, v);
+      if (!sched.has('\u0000' + s.name)) sched.set('\u0000' + s.name, v);
+    });
+    const fmt = day => new Date(day * 864e5).toISOString().slice(0, 10);
+    const results = [];
+    (parsed.policies || []).forEach(p => {
+      if (_isDisabledStatus(p) || p.enabled === false) return;
+      const push = (source, day, ref) => {
+        const days = day - today;
+        if (days > EXPIRY_SOON_DAYS) return;
+        results.push({ id: p.id, name: p.name || '-', vdom: p._vdom || '', source, ref, date: fmt(day), days, status: days < 0 ? 'expired' : 'soon' });
+      };
+      const sn = p.schedule;
+      if (sn && !/^(always|any|none|-)$/i.test(sn)) {
+        const v = sched.get((p._vdom || '') + '\u0000' + sn) || sched.get('\u0000' + sn);
+        if (v) push('schedule', v.day, sn);
+      }
+      const text = [p.name, p.comments].filter(x => x && x !== '-').join('\n');
+      let best = null, m;
+      re.lastIndex = 0;
+      while ((m = re.exec(text)) !== null) {
+        const d = m[0].match(/(\d{4})(?:[-/.](\d{1,2})[-/.](\d{1,2})|(\d{2})(\d{2}))$/);
+        const day = d && _ymdDay(d[1], d[2] || d[4], d[3] || d[5]);
+        if (day !== null && day !== undefined && (best === null || day > best.day)) best = { day, ref: m[0].trim() };
+        if (m[0].length === 0) re.lastIndex++;
+      }
+      if (best) push('comment', best.day, best.ref);
+    });
+    results.sort((a, b) => a.days - b.days);
+    return { results, error };
+  }
+  function buildExpiredRulesHtml(res, keywords) {
+    let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('expiry.title')) + '</div>';
+    h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('expiry.hint')) + '</div>';
+    h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px"><label style="display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--text-dim)">${esc(tr('expiry.keywords'))}<input id="expiry-keywords" class="mono" value="${esc(keywords || '')}" placeholder="${esc(EXPIRY_DEFAULT_KEYWORDS)}" style="width:320px;max-width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface2);color:var(--text)"></label><button class="btn btn-ghost btn-sm" onclick="window._applyExpiryKeywords()">${esc(tr('naming.apply'))}</button></div>`;
+    if (res.error) h += `<div style="color:var(--red);font-size:12px;margin-bottom:8px">${esc(tr('expiry.regex_error'))}</div>`;
+    if (!res.results.length) return h + '<div class="nodata" style="padding:14px 0;color:var(--green)">' + esc(tr('expiry.none')) + '</div></div>';
+    const jh = tr('audit.jump_hint');
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>ID</th><th>' + tr('audit.col_name') + '</th><th>' + tr('audit.col_vdom') + '</th><th>' + esc(tr('expiry.col_source')) + '</th><th>' + esc(tr('expiry.col_date')) + '</th><th>' + esc(tr('expiry.col_status')) + '</th></tr></thead><tbody>';
+    res.results.forEach(r => {
+      const st = r.status === 'expired'
+        ? pill(tr('expiry.expired').replace('{n}', -r.days), 'p-deny')
+        : pill(tr('expiry.soon').replace('{n}', r.days), 'p-warn');
+      const src = (r.source === 'schedule' ? tr('expiry.src_schedule') : tr('expiry.src_comment')) + ': ' + r.ref;
+      h += `<tr><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.id).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.id)}</span></td><td>${esc(r.name)}</td><td style="color:var(--text-dim)">${esc(r.vdom || '-')}</td><td style="font-size:11px">${esc(src)}</td><td class="mono">${esc(r.date)}</td><td>${st}</td></tr>`;
     });
     return h + '</tbody></table></div></div>';
   }

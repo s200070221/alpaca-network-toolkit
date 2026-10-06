@@ -871,11 +871,14 @@ const PaloAltoParser = (() => {
         const inner = e._inner;
         const recur = xv(inner,'recurring');
         const once  = xv(inner,'non-recurring');
+        // non-recurring 的 member 為「YYYY/MM/DD@hh:mm-YYYY/MM/DD@hh:mm」（pan-os-python
+        // ScheduleObject 文件格式），多筆時取第一筆開始與最後一筆結束
+        const onceM = once ? xva(once,'member') : [];
         scheds.push({
           type: recur ? 'recurring' : 'onetime',
           name: xname(e),
-          start: xv(once||recur||inner,'start') || xv(once||recur||inner,'first') || '-',
-          end:   xv(once||recur||inner,'end')   || xv(once||recur||inner,'last')  || '-',
+          start: (onceM.length && onceM[0].split('-')[0]) || xv(once||recur||inner,'start') || xv(once||recur||inner,'first') || '-',
+          end:   (onceM.length && (onceM[onceM.length-1].split('-')[1] || '')) || xv(once||recur||inner,'end')   || xv(once||recur||inner,'last')  || '-',
           day:   xva(recur||inner,'weekly').join(', ') || xva(recur||inner,'daily').join(', ') || '-',
           color:'0',
         });

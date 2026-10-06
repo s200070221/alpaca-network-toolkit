@@ -691,7 +691,7 @@ const App = (() => {
   // 供 network_analyzer hub 彙整成綜合健檢報告。只存等級、分數、風險數與前三項問題名稱，不存設定原文
   function recordFirewallSummary(p){
     try{
-      const h=computeFirewallHealth(p,{acceptedRisks:_loadAcceptedRisks()});
+      const h=computeFirewallHealth(p,{acceptedRisks:_loadAcceptedRisks(),expiryKeywords:_loadExpiryKeywords()});
       const RANK={crit:0,warn:1,info:2};
       const act=h.issues.filter(i=>!i.accepted);
       const host=p&&p.deviceInfo&&p.deviceInfo.hostname;
@@ -1429,7 +1429,7 @@ function onParsed(){
           const _zTgl=`<div style="display:flex;gap:5px;margin-bottom:8px"><button onclick="window._fwZoneView='table';renderSection('audit')" style="${_zbs(!window._fwZoneView||window._fwZoneView==='table')}">${tr('routing.view_table')}</button><button onclick="window._fwZoneView='topo';renderSection('audit')" style="${_zbs(window._fwZoneView==='topo')}">${tr('routing.view_topo')}</button></div>`;
           _zoneHtml = _zTgl + (window._fwZoneView==='topo' ? buildZoneTopoHtml(PARSED.policies) : _zoneHtml);
         }
-        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules())
+        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules()) + buildExpiredRulesHtml(analyzeExpiredRules(PARSED, { keywords: _loadExpiryKeywords() }), _loadExpiryKeywords())
           + (PARSED.vendor === 'FortiGate' ? _fwCleanupCardHtml() : '')
           + (_HIT_VENDOR_SUFFIX[PARSED.vendor] !== undefined ? _fwHitCardHtml() : '')
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
@@ -1706,6 +1706,21 @@ function onParsed(){
     renderSection('audit');
   };
 
+  // 到期關鍵字（第十二輪 MF）：localStorage 'fw_expiry_keywords'，比照命名規範不分裝置；空字串用預設
+  const EXPIRY_KW_LS = 'fw_expiry_keywords';
+  let _expiryKwMem = null;
+  function _loadExpiryKeywords() {
+    try { const v = localStorage.getItem(EXPIRY_KW_LS); if (v !== null) return v; } catch (e) { /* 落到記憶體備援 */ }
+    return _expiryKwMem || '';
+  }
+  window._applyExpiryKeywords = function() {
+    const el = document.getElementById('expiry-keywords');
+    const v = el ? el.value.trim() : '';
+    _expiryKwMem = v;
+    try { localStorage.setItem(EXPIRY_KW_LS, v); } catch (e) { /* 不可用時由 _expiryKwMem 維持本次有效 */ }
+    renderSection('audit');
+  };
+
   // 健康度歷史（2026-09-24 新增）：比照 switch_analyzer 既有 switch_analyzer_health_history_v1，
   // 依 hostname 分開存放、每台最多 20 筆（新到舊）。記錄的是畫面上顯示的分數（已排除接受風險）；
   // 只有使用者按「執行健康度檢查」才記錄一筆，勾選接受風險／清除歷史造成的重繪不記錄，避免同一次
@@ -1740,8 +1755,8 @@ function onParsed(){
     const btn = document.getElementById('health-btn');
     if (btn) btn.textContent = tr('health.recheck');
     const accepted = _loadAcceptedRisks();
-    const res = computeFirewallHealth(PARSED, { acceptedRisks: accepted });
-    const rawScore = accepted.length ? computeFirewallHealth(PARSED).score : res.score;
+    const res = computeFirewallHealth(PARSED, { acceptedRisks: accepted, expiryKeywords: _loadExpiryKeywords() });
+    const rawScore = accepted.length ? computeFirewallHealth(PARSED, { expiryKeywords: _loadExpiryKeywords() }).score : res.score;
     // onclick="_doHealthCheck()" 傳入的是 undefined，事件物件不會傳進來，故以 !== true 判斷
     if (skipRecord !== true) _saveFwHealthHistory(res.score, res.grade);
     const history = _loadFwHealthHistory();
