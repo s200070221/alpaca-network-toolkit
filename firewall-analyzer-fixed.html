@@ -460,7 +460,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 <body>
 <div id="app">
 <div id="sidebar">
-  <div class="sidebar-logo"><div class="icon">🛡️</div><div><h2>FW Analyzer</h2><p data-i18n="subtitle">v4.0 · 19-Vendor · No AI</p></div></div>
+  <div class="sidebar-logo"><div class="icon">🛡️</div><div><h2>FW Analyzer</h2><p data-i18n="subtitle">v4.0 · 20-Vendor · No AI</p></div></div>
   <nav class="sidebar-nav">
     <div class="nav-group">
       <div class="nav-group-label" data-i18n="nav.upload_group">上傳</div>
@@ -655,6 +655,12 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
           <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_h3c">display current-configuration 的輸出；涵蓋安全區域、security-policy、物件群組、NAT Server／Outbound、IPsec 策略與靜態路由</div></div>
           <div class="file-chip" id="hc-chip" style="display:none"><span>📄</span><span class="fn" id="hc-name"></span><span class="rm" onclick="clearFile(event,'h')">✕</span></div>
           <input type="file" id="hi" accept=".cfg,.txt,.conf" onchange="pickFile('h',this)">
+        </div>
+        <div class="ucard" style="border-color:rgba(32,120,90,.4)" id="ec" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('ec').classList.add('drag-over')" ondragleave="document.getElementById('ec').classList.remove('drag-over')" ondrop="handleDrop(event,'e')" onclick="document.getElementById('ei').click()">
+          <div class="ucard-head"><div class="vendor-dot" style="background:rgba(32,120,90,.15)">🧱</div><div><h3 style="color:#20785a">Netgate TNSR</h3><div class="ver">show configuration running cli</div></div></div>
+          <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_tnsr">show configuration running cli 的輸出；涵蓋介面、套用在介面的 ACL、VPF 篩選規則、NAT 靜態對應、route table 靜態路由與本機帳號</div></div>
+          <div class="file-chip" id="ec-chip" style="display:none"><span>📄</span><span class="fn" id="ec-name"></span><span class="rm" onclick="clearFile(event,'e')">✕</span></div>
+          <input type="file" id="ei" accept=".cfg,.txt,.conf" onchange="pickFile('e',this)">
         </div>
         <div class="ucard" style="border-color:rgba(120,90,200,.4)" id="lc" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('lc').classList.add('drag-over')" ondragleave="document.getElementById('lc').classList.remove('drag-over')" ondrop="handleDrop(event,'l')" onclick="document.getElementById('li').click()">
           <div class="ucard-head"><div class="vendor-dot" style="background:rgba(120,90,200,.15)">📡</div><div><h3 style="color:#7058c0" data-i18n="upload.wlc_title">無線控制器</h3><div class="ver">Cisco 9800 / AireOS · Aruba · H3C WX</div></div></div>
@@ -882,6 +888,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 <script src="firewall-analyzer-parser-watchguard.js"></script>
 <script src="firewall-analyzer-parser-vyos.js"></script>
 <script src="firewall-analyzer-parser-h3c.js"></script>
+<script src="firewall-analyzer-parser-tnsr.js"></script>
 <script src="firewall-analyzer-parser-wlc.js"></script>
 <script src="firewall-analyzer-parser-netfilter.js"></script>
 <script src="firewall-analyzer-parser-cloud.js"></script>

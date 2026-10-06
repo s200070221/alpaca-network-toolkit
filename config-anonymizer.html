@@ -481,6 +481,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
               <optgroup id="optgrp-sw" label="交換器">
                 <option value="comware">H3C / HPE Comware</option>
                 <option value="h3c_secpath">H3C SecPath</option>
+                <option value="tnsr">Netgate TNSR</option>
                 <option value="cisco_biz">Cisco Business (CBS/SG)</option>
                 <option value="cisco_ios">Cisco IOS / IOS-XE</option>
                 <option value="cisco_nxos">Cisco NX-OS</option>
@@ -1291,6 +1292,8 @@ const VENDOR_SIGS = {
   // 雲端安全群組 JSON（AWS describe-security-groups／Azure NSG），務必與 firewall_analyzer 的 FW_VENDOR_SIGS.cloudsg 一致（2026-10-02）
   // H3C SecPath 防火牆（2026-10-05，KB）：務必與 firewall_analyzer 的 FW_VENDOR_SIGS.h3c 一致，排在 comware 前
   h3c_secpath: { p:[/^\s*security-policy\s+ipv?6?\s*$/m, /^\s*security-zone\s+name\s+\S+/m], min:2 },
+  // Netgate TNSR（2026-10-06，ML）：務必與 firewall_analyzer 的 FW_VENDOR_SIGS.tnsr 一致
+  tnsr:        { p:[/^nacm\s+(?:enable|disable|group\s)[\s\S]*^dataplane\s|^dataplane\s[\s\S]*^nacm\s+(?:enable|disable|group\s)/m, /^[ \t]+access-list\s+(?:input|output)\s+acl\s+\S+\s+sequence\s+\d+/m, /^vpf\s+(?:filter\s+ruleset|options)\b/m, /^[ \t]+next-hop\s+\d+\s+via\s/m], min:1 },
   // 無線控制器（2026-10-05，KD／KH／KI）：務必與 firewall_analyzer 的 FW_VENDOR_SIGS.wlc 一致，排在 comware／cisco_ios 前
   wlc:         { p:[/^(?:config\s+)?wlan\s+create\s+\d+\s+\S+/m, /^\s*wlan\s+service-template\s+\S+/m, /^\s*wlan\s+ssid-profile\s+\S+/m, /^wlan\s+\S+\s+\d{1,4}\s+\S+/m], min:1 },
   cloudsg:     { p:[/"IpPermissions(?:Egress)?"\s*:\s*\[/, /"(?:default)?[sS]ecurityRules"\s*:\s*\[/, /"destCidr"\s*:/, /"applianceIp"\s*:/, /"publicPort"\s*:/], min:1 },
@@ -1326,7 +1329,7 @@ const VENDOR_SIGS = {
 // "Sophos"/"Aruba" 文字比對），故刻意排在最後——讓其他更具結構特徵的廠牌訊號優先判定，
 // 只有在都沒命中時才輪到這兩家，降低誤判機率
 const VENDOR_ORDER = [
-  'cisco_nxos','fortiswitch','fortigate','h3c_secpath','wlc','comware','paloalto','cloudsg','cumulus','voss','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
+  'cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
   'checkpoint','pfsense','sonicwall','watchguard','mikrotik','arista',
   'extreme','alcatel','brocade','procurve','dell_os10','planet','ruijie','netgear','edgeswitch','sonic',
   'ciscoasa','cisco_biz','cisco_ios',
@@ -1336,7 +1339,7 @@ const VENDOR_LABELS = {
   fortigate:'FortiGate',fortiswitch:'FortiSwitch',sophos:'Sophos XG',
   checkpoint:'Check Point',paloalto:'Palo Alto PAN-OS',pfsense:'pfSense/OPNsense',
   sonicwall:'SonicWall',mikrotik:'MikroTik RouterOS',juniper:'Juniper JunOS',
-  comware:'H3C / HPE Comware',h3c_secpath:'H3C SecPath',wlc:'Wireless LAN Controller',cisco_ios:'Cisco IOS/IOS-XE',cisco_biz:'Cisco Business (CBS/SG)',cisco_nxos:'Cisco NX-OS',
+  comware:'H3C / HPE Comware',h3c_secpath:'H3C SecPath',tnsr:'Netgate TNSR',wlc:'Wireless LAN Controller',cisco_ios:'Cisco IOS/IOS-XE',cisco_biz:'Cisco Business (CBS/SG)',cisco_nxos:'Cisco NX-OS',
   arista:'Arista EOS',aruba_cx:'Aruba CX',procurve:'Aruba ProCurve',
   dell_os10:'Dell OS10',extreme:'Extreme XOS',alcatel:'Alcatel OmniSwitch',
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
@@ -1717,7 +1720,8 @@ const MAC_SHAPE_RE = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
 // Generic line-level IP replacement (skips version/comment lines)
 function replaceIPsInLine(line, opts) {
   if (/^(?:#config-version=|#build|!! IOS|! Last|!Software|version\s+\d+\.\d+\s*$)/.test(line.trim())) return line;
-  line = line.replace(IPv6_RE, m => (m.split(':').length >= 4 && !MAC_SHAPE_RE.test(m) ? anonIPv6(m) : m));
+  // 4 組以上，或含 :: 的縮寫（如 fe80::1、2002::；時間 12:34:56 不含 ::），:: 與 ::1 比照 0.0.0.0／127.x 保留（2026-10-06）
+  line = line.replace(IPv6_RE, m => ((m.split(':').length >= 4 || (m.includes('::') && m !== '::' && m !== '::1')) && !MAC_SHAPE_RE.test(m) ? anonIPv6(m) : m));
   line = line.replace(IPv4_RE, m => (isValidIPv4(m) && classifyIP(m) !== 'skip' ? anonIP(m, opts) : m));
   return line;
 }
@@ -2591,6 +2595,28 @@ function anonVyOS(text, opts) {
       line = swap(line, 'username', v => /^user-\d{3}$/.test(v) ? v : anonUser(v));
     }
     if (opts.comments) line = red(line, 'description', 'REDACTED_COMMENT', 'comment');
+    if (opts.ip) line = replaceIPsInLine(line, opts);
+    if (opts.mac) line = replaceMACsInLine(line, opts);
+    return line;
+  }).join('\n');
+}
+
+// ---- Netgate TNSR ----
+// 2026-10-06（第十二輪 ML）新增。show configuration running cli 逐行處理：system name（主機名稱）、
+// auth user 與 nacm group 的 member（帳號，同一對照）、password 行（auth user 的雜湊與 BGP neighbor
+// 密碼）、snmp community community-name（欄位依 Oxidized tnsr 模型的遮蔽規則與真實錄製）、description；
+// IP／MAC 交給通用替換
+function anonTNSR(text, opts) {
+  return text.split('\n').map(line => {
+    let m;
+    if (opts.hostname && (m = /^(system\s+name\s+)(\S+)\s*$/.exec(line))) return m[1] + anonHostname(m[2], 'fw', opts);
+    if ((m = /^(\s*password(?:\s+\d+)?\s+)(\S.*)$/.exec(line))) { stats.password++; return m[1] + (/^\$\d\$/.test(m[2]) ? 'REDACTED_HASH' : 'REDACTED_PASSWORD'); }
+    line = line.replace(/^(snmp\s+community\s+community-name\s+)(\S+)/, (x, p) => { stats.community++; return p + 'REDACTED_COMMUNITY'; });
+    if (opts.user) {
+      line = line.replace(/^(auth\s+user\s+)(\S+)/, (x, p, n) => p + anonUser(n));
+      line = line.replace(/^(\s+member\s+)(\S+)\s*$/, (x, p, n) => p + anonUser(n));
+    }
+    if (opts.comments && (m = /^(\s*description\s+)(\S.*)$/.exec(line))) { stats.comment++; line = m[1] + 'REDACTED_COMMENT'; }
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
     return line;
@@ -3797,7 +3823,7 @@ const VENDOR_FNS = {
   fortigate: anonFortiGate, fortiswitch: anonFortiSwitch,
   sophos: anonSophos, checkpoint: anonCheckPoint, paloalto: anonPaloAlto,
   pfsense: anonPfSense, sonicwall: anonSonicWall, mikrotik: anonMikroTik,
-  comware: anonComware, h3c_secpath: anonComware, wlc: anonWlc, cisco_ios: anonCiscoIOS, cisco_biz: anonCiscoBiz, cisco_nxos: anonCiscoNXOS,
+  comware: anonComware, h3c_secpath: anonComware, tnsr: anonTNSR, wlc: anonWlc, cisco_ios: anonCiscoIOS, cisco_biz: anonCiscoBiz, cisco_nxos: anonCiscoNXOS,
   juniper: anonJuniper, arista: anonArista, aruba_cx: anonArubaCX,
   procurve: anonProCurve,
   dell_os10: anonDellOS10, extreme: anonExtreme, alcatel: anonAlcatel,
@@ -4038,7 +4064,8 @@ function checkResidual(text) {
     // `service password-encryption`（Cisco IOS／AW+ 的功能開關）不是密碼
     // Aruba 的 `opmode wpa2-psk-aes` 是加密模式名稱，不是金鑰（2026-10-05）
     // AireOS 的 `wlan security wpa akm psk enable|disable N` 是功能開關
-    const tk = t.replace(/\bpassword-encryption\b/gi, '').replace(/^\s*opmode\s+\S+/i, 'opmode').replace(/\bakm\s+psk\s+(?:enable|disable)\b/i, 'akm');
+    // BGP 的 `send-community standard|extended|large|both`（Cisco IOS、FRR／TNSR）是功能開關（2026-10-06）
+    const tk = t.replace(/\bsend-community\b(?:\s+\S+)?/gi, '').replace(/\bpassword-encryption\b/gi, '').replace(/^\s*opmode\s+\S+/i, 'opmode').replace(/\bakm\s+psk\s+(?:enable|disable)\b/i, 'akm');
     if (sensitiveKw.test(tk) && !/^[:'"*\s]*$/.test(tk.replace(/\s+/g, ' ').split(/password|passwd|secret|psk|community|auth.?key|shared.?key|pre.?shared/i).pop().trim())) {
       if (!/REDACTED/.test(t)) warnings.push({ line: lineNum, text: t });
     }
@@ -4092,7 +4119,7 @@ function checkResidual(text) {
     // MAC_SHAPE_RE 沿用共用引擎定義，不重新定義一份僅供殘留檢查用的近似正則）
     const ip6Matches = t.match(new RegExp(IPv6_RE.source, 'g'));
     // ::／::/0 為「任何 IPv6 位址」，與 0.0.0.0 同樣刻意保留（2026-10-02）
-    if (ip6Matches && ip6Matches.some(m => !/^2001:db8::/i.test(m) && !MAC_SHAPE_RE.test(m) && m !== '::')) {
+    if (ip6Matches && ip6Matches.some(m => !/^2001:db8::/i.test(m) && !MAC_SHAPE_RE.test(m) && m !== '::' && m !== '::1')) {
       warnings.push({ line: lineNum, text: t });
     }
     // 排除已正確匿名化的 MAC：固定模式（預設）anonMAC() 輸出第一 octet 恆為字面 '02'，可
@@ -4903,7 +4930,7 @@ function runAnonymize() {
 // ── 結構保持度自檢（2026-10-02，第九輪發想 YD）──
 // 以隱藏 iframe 開啟對應分析工具（?structcheck=1，該頁不碰交接 key），postMessage 送出原始檔與
 // 去識別化結果，對方各自解析後只回傳數量。不直接呼叫 iframe 內函式，離線 file:// 開啟時也能運作。
-const STRUCT_FW_VENDORS = new Set(['fortigate','sophos','checkpoint','paloalto','pfsense','sonicwall','ciscoasa','zyxel','edgerouter','openwrt','watchguard','vyos','netfilter','cloudsg','h3c_secpath']);
+const STRUCT_FW_VENDORS = new Set(['fortigate','sophos','checkpoint','paloalto','pfsense','sonicwall','ciscoasa','zyxel','edgerouter','openwrt','watchguard','vyos','netfilter','cloudsg','h3c_secpath','tnsr']);
 const STRUCT_LABELS = { vlans:'VLAN', interfaces:'Interface', routes:'Route', users:'User', acls:'ACL', lacp:'LACP', vrrp:'VRRP', dhcp:'DHCP', policies:'Policy', addresses:'Address', services:'Service', nat:'NAT', vpn:'VPN' };
 // MikroTik／Juniper 兩個分析工具都支援：有防火牆規則／security 區塊時交給防火牆分析，否則交給交換器解析
 function structCheckTool(vendor, text) {
