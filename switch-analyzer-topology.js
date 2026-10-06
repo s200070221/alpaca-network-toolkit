@@ -558,3 +558,68 @@ function buildStackWiseSVG(p){
   svg+=`</svg>`;
   return svg;
 }
+
+// ── LLDP 拓樸匯出成可編輯格式（2026-10-06，第十二輪 MI）──────────────────────
+// 圖的資料模型：{nodes:[{id,label,sub,kind:'local'|'known'|'lldp'}], edges:[{a,b,labels:[]}]}，
+// 同一對設備的多條連線合併成一條邊、標籤逐行列出（A 埠 ↔ B 埠，方向以邊的 a→b 為準）。
+// 單台：本機＋鄰居；多設備：每台已載入的設備（known）＋只在 LLDP 中出現的設備（lldp），兩端都回報
+// 同一條連線時只留一筆。輸出 draw.io（未壓縮的 mxfile XML，diagrams.net 可直接開啟）與 Mermaid flowchart
+function buildLldpGraph(devices){
+  const nodes=[],idx=new Map(),edgeMap=new Map(),edges=[];
+  const node=(name,kind,sub)=>{
+    if(!idx.has(name)){idx.set(name,nodes.length);nodes.push({id:'n'+nodes.length,label:name,sub:sub||'',kind});}
+    const n=nodes[idx.get(name)];
+    if(kind==='known'&&n.kind==='lldp')n.kind='known';
+    if(sub&&!n.sub)n.sub=sub;
+    return n;
+  };
+  (devices||[]).forEach((d,i)=>node(d.hostname||'Local',i===0?'local':'known'));
+  (devices||[]).forEach(d=>{
+    const self=node(d.hostname||'Local');
+    (d.lldp||[]).forEach(l=>{
+      if(!l.neighbor)return;
+      const nb=node(l.neighbor,'lldp',l.ip&&l.ip!=='-'?l.ip:'');
+      const key=[self.id,nb.id].sort().join('|');
+      let e=edgeMap.get(key);
+      if(!e){e={a:self.id,b:nb.id,labels:[]};edgeMap.set(key,e);edges.push(e);}
+      const lp=l.localPort||'?',rp=l.remotePort||'?';
+      const lbl=e.a===self.id?`${lp} ↔ ${rp}`:`${rp} ↔ ${lp}`;
+      if(!e.labels.includes(lbl))e.labels.push(lbl);
+    });
+  });
+  return {nodes,edges};
+}
+function _xmlAttr(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');}
+function _htmlText(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function graphToDrawio(g,title){
+  const n=g.nodes.length||1,W=160,H=56;
+  const R=n<=1?0:Math.max(180,n*40),CX=R+60,CY=R+60;
+  const STYLE={local:'fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;',known:'fillColor=#d5e8d4;strokeColor=#82b366;',lldp:'fillColor=#f5f5f5;strokeColor=#999999;dashed=1;'};
+  const cells=[];
+  g.nodes.forEach((nd,i)=>{
+    // 第一個節點（單台的本機）放中央，其餘排成一圈
+    const ring=n>1&&g.nodes[0].kind==='local'&&g.nodes.length>2;
+    let x,y;
+    if(ring&&i===0){x=CX;y=CY;}
+    else{const k=ring?i-1:i,m=ring?n-1:n,a=2*Math.PI*k/m-Math.PI/2;x=CX+R*Math.cos(a);y=CY+R*Math.sin(a);}
+    const val=_htmlText(nd.label)+(nd.sub?'<br>'+_htmlText(nd.sub):'');
+    cells.push(`<mxCell id="${nd.id}" value="${_xmlAttr(val)}" style="rounded=1;whiteSpace=wrap;html=1;${STYLE[nd.kind]||STYLE.lldp}" vertex="1" parent="1"><mxGeometry x="${Math.round(x-W/2)}" y="${Math.round(y-H/2)}" width="${W}" height="${H}" as="geometry"/></mxCell>`);
+  });
+  g.edges.forEach((e,i)=>{
+    const val=e.labels.map(_htmlText).join('<br>');
+    cells.push(`<mxCell id="e${i}" value="${_xmlAttr(val)}" style="endArrow=none;html=1;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="${e.a}" target="${e.b}"><mxGeometry relative="1" as="geometry"/></mxCell>`);
+  });
+  return `<mxfile host="app.diagrams.net"><diagram id="lldp-topology" name="${_xmlAttr(title||'LLDP')}"><mxGraphModel grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="${Math.max(1169,2*CX)}" pageHeight="${Math.max(827,2*CY)}"><root><mxCell id="0"/><mxCell id="1" parent="0"/>${cells.join('')}</root></mxGraphModel></diagram></mxfile>\n`;
+}
+// Mermaid 標籤放在雙引號內，引號與角括號改用 Mermaid 實體碼（#quot; #lt; #gt;），換行用 <br/>
+function _mmd(s){return String(s==null?'':s).replace(/"/g,'#quot;').replace(/</g,'#lt;').replace(/>/g,'#gt;');}
+function graphToMermaid(g){
+  const out=['graph LR'];
+  g.nodes.forEach(nd=>out.push(`  ${nd.id}["${_mmd(nd.label)}${nd.sub?'<br/>'+_mmd(nd.sub):''}"]`));
+  g.edges.forEach(e=>out.push(`  ${e.a} ---|"${e.labels.map(_mmd).join('<br/>')}"| ${e.b}`));
+  out.push('  classDef local stroke:#6c8ebf,stroke-width:3px,fill:#dae8fc;');
+  out.push('  classDef known stroke:#82b366,fill:#d5e8d4;');
+  out.push('  classDef lldp stroke:#999,stroke-dasharray:4 3,fill:#f5f5f5;');
+  ['local','known','lldp'].forEach(k=>{const ids=g.nodes.filter(nd=>nd.kind===k).map(nd=>nd.id);if(ids.length)out.push(`  class ${ids.join(',')} ${k};`);});
+  return out.join('\n')+'\n';
+}

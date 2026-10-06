@@ -1559,7 +1559,9 @@ function renderLLDP(){
     <button onclick="lldpView='topo';navGo('lldp')" style="${btnStyle(lldpView==='topo')}">${tr('lldp.view_topo')}</button>
     <button onclick="lldpView='multi';navGo('lldp')" style="${btnStyle(lldpView==='multi')}">${tr('lldp.multi_title')}</button>
   </div>`;
-  if(lldpView==='topo') return toggleHtml+renderLLDPTopo(nbrs);
+  // 匯出可編輯格式（第十二輪 MI）：draw.io 與 Mermaid，單台與多設備各自匯出目前畫面上的拓樸
+  const expRow=multi=>`<div class="export-row" style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="exportLldpTopo('drawio',${multi})" title="${esc(tr('lldp.export_editable_tip'))}">⬇ draw.io</button><button class="btn btn-ghost btn-sm" onclick="exportLldpTopo('mermaid',${multi})" title="${esc(tr('lldp.export_editable_tip'))}">⬇ Mermaid</button></div>`;
+  if(lldpView==='topo') return toggleHtml+renderLLDPTopo(nbrs)+expRow(false);
   if(lldpView==='multi'){
     const devices=[{hostname:parsed.sys?.hostname||'Local',lldp:parsed.lldp||[]},..._multiDevices];
     const foc=`Array.from(this.files).forEach(f=>addMultiDevice(f));this.value=''`;
@@ -1571,7 +1573,7 @@ function renderLLDP(){
         <span style="font-size:11px;color:var(--text-dim)">${tr('lldp.multi_hint')}</span>
       </div>
       <div style="margin-bottom:8px;font-size:11px">${devices.map(d=>`<span style="margin-right:10px;color:var(--${d.hostname===(parsed.sys?.hostname||'Local')?'accent':'green'})">● ${esc(d.hostname)}</span>`).join('')}</div>`
-      +renderMultiTopo();
+      +renderMultiTopo()+expRow(true);
   }
   const rows=nbrs.map(n=>({
     localPort: n.localPort,
@@ -1622,6 +1624,13 @@ function exportRoutesCSV(){if(!parsed){alert(tr('msg.no_config'));return;}dlCSV(
 function _lacpMembersArr(x){return Array.isArray(x.members)?x.members:String(x.members||'').split(',').map(s=>s.trim()).filter(Boolean);}
 function exportLACPCSV(){if(!parsed){alert(tr('msg.no_config'));return;}dlCSV(parsed.lacp.map(x=>{const ma=_lacpMembersArr(x);return[x.name,x.mode||'—',x.mtu||'—',ma.length,ma.map(m=>typeof m==='string'?m:m.name).join(';')];}),[tr('lacp.col_name'),tr('lacp.col_mode'),'MTU',tr('lacp.col_members'),tr('col.member_port')],`${hn()}_lacp.csv`);}
 function exportVRFsCSV(){if(!parsed){alert(tr('msg.no_config'));return;}dlCSV(parsed.vrfs.map(v=>[v.name,v.rd,v.importRoute,parsed.interfaces.filter(i=>i.vrf===v.name).map(i=>i.name).join(';'),parsed.routes.filter(r=>r.vrf===v.name).length]),[tr('col.vrf_name'),tr('vxlan.col_rd'),tr('col.import_route'),tr('col.bound_if'),tr('col.route_count')],`${hn()}_vrfs.csv`);}
+function exportLldpTopo(fmt,multi){
+  if(!parsed)return;
+  const local={hostname:parsed.sys?.hostname||'Local',lldp:parsed.lldp||[]};
+  const g=buildLldpGraph(multi?[local,..._multiDevices]:[local]);
+  if(fmt==='drawio'){const b=new Blob([graphToDrawio(g,local.hostname)],{type:'application/xml;charset=utf-8'});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=`${hn()}_lldp_topology.drawio`;a.click();URL.revokeObjectURL(url);}
+  else dlTxt(graphToMermaid(g),`${hn()}_lldp_topology.mmd`);
+}
 function exportTopoSVG(){if(!parsed)return;const svg=buildTopoSVG(parsed);const b=new Blob([svg],{type:'image/svg+xml;charset=utf-8'});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=`${hn()}_topology.svg`;a.click();URL.revokeObjectURL(url);}
 function exportLLDPCSV(){
   if(!parsed){alert(tr('msg.no_config'));return;}
