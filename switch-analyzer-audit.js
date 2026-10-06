@@ -355,6 +355,27 @@ function analyzeSwitchAudit(parsed){
   f('acl-exact-duplicate', tr('audit.check_acl_exact_duplicate'), aclExactDup.length, 'low',
     aclExactDup.length?aclExactDup.map(d=>`${d.acl}#${d.seq}`).slice(0,8).join(', ')+(aclExactDup.length>8?'…':''):tr('audit.none'),
     ['ISO27001 A.8.20','CIS v8 12.2'],aclExactDup.map(d=>`${d.acl}#${d.seq}`));
+  // 基礎管理服務（2026-10-06，第十二輪 MA）：parsed.mgmtSvc 由 parseMgmtServices() 產生；整組為 null（廠牌未查證）
+  // 或單一欄位為 null 時不列該項，避免誤報。syslog 用既有 parsed.syslog（parseSyslog() 已涵蓋這些廠牌）
+  const ms=parsed.mgmtSvc;
+  if(ms){
+    const none=tr('audit.none');
+    if(Array.isArray(ms.ntp))f('ntp-missing', tr('audit.check_ntp_missing'), ms.ntp.length?0:1, 'low',
+      ms.ntp.length?ms.ntp.slice(0,8).join(', '):tr('audit.ntp_missing_detail'), ['ISO27001 A.8.17','NIST 800-53 AU-8','CIS v8 8.4'], ms.ntp.length?[]:['ntp']);
+    const logHosts=[...((parsed.syslog&&parsed.syslog.servers)||[]).map(s=>s.host),...(ms.syslogExtra||[])];
+    f('syslog-missing', tr('audit.check_syslog_missing'), logHosts.length?0:1, 'medium',
+      logHosts.length?[...new Set(logHosts)].slice(0,8).join(', '):tr('audit.syslog_missing_detail'), ['ISO27001 A.8.15','NIST 800-53 AU-4','CIS v8 8.9'], logHosts.length?[]:['syslog']);
+    if(Array.isArray(ms.aaa))f('aaa-local-only', tr('audit.check_aaa_local_only'), ms.aaa.length?0:1, 'medium',
+      ms.aaa.length?ms.aaa.slice(0,8).join(', '):tr('audit.aaa_local_only_detail'), ['ISO27001 A.8.5','NIST 800-53 IA-2','CIS v8 6.7'], ms.aaa.length?[]:['aaa']);
+    if(ms.banner!==null&&ms.banner!==undefined)f('no-banner', tr('audit.check_no_banner'), ms.banner?0:1, 'low',
+      ms.banner?none:tr('audit.no_banner_detail'), ['NIST 800-53 AC-8'], ms.banner?[]:['banner']);
+    if(ms.httpPlain!==null&&ms.httpPlain!==undefined)f('http-mgmt', tr('audit.check_http_mgmt'), ms.httpPlain?1:0, 'medium',
+      ms.httpPlain?tr('audit.http_mgmt_detail'):none, ['ISO27001 A.8.21','NIST 800-53 SC-8','CIS v8 3.10'], ms.httpPlain?['http']:[]);
+    if(ms.sshV1!==null&&ms.sshV1!==undefined)f('ssh-v1', tr('audit.check_ssh_v1'), ms.sshV1?1:0, 'high',
+      ms.sshV1?tr('audit.ssh_v1_detail'):none, ['ISO27001 A.8.24','NIST 800-53 SC-8','CIS v8 3.10'], ms.sshV1?['ssh']:[]);
+    if(Array.isArray(ms.idleOff))f('idle-timeout-off', tr('audit.check_idle_timeout_off'), ms.idleOff.length, 'low',
+      ms.idleOff.length?ms.idleOff.slice(0,8).join(', '):none, ['ISO27001 A.8.5','NIST 800-53 AC-12','CIS v8 4.3'], ms.idleOff.slice());
+  }
   return findings;
 }
 
@@ -635,6 +656,13 @@ const EVIDENCE_KIND={
   'security-off':'iface','if-no-desc':'iface','lacp-member-mismatch':'iface','ip-conflict-exact':'iface','ip-subnet-conflict':'iface',
   'snmp-weak':'snmp','snmp-default-name':'snmp','telnet-mgmt':'telnet','routing-no-auth':'routing',
   'acl-any-any':'acl','acl-shadowed':'acl','acl-exact-duplicate':'acl','unused-vlan-trunk':'vlan',
+  'http-mgmt':'line','ssh-v1':'line','idle-timeout-off':'line',
+};
+// 關鍵字型證據行（第十二輪 MA）：命中這些設定行即列出；ntp／syslog／aaa／banner 是「缺少設定」，沒有對應行
+const EVIDENCE_LINE_RE={
+  'http-mgmt':/^\s*(ip\s+http\s+server\s*$|ip\s+http\s+enable\b|nxapi\s+http\b|protocol\s+http\b(?!s)|http\s*[;{])/i,
+  'ssh-v1':/^\s*(ip\s+ssh\b|ssh\s+server\s+compatible-ssh1x\b|line\s+vty\b|\s*transport\s+input\b)/i,
+  'idle-timeout-off':/^\s*(exec-timeout|idle-timeout)\s+0(\s+0)?\s*$/i,
 };
 // 區塊內要一併列出的子行（沒列的只顯示宣告行）
 const EVIDENCE_SUB={
@@ -697,6 +725,9 @@ function buildSwitchAuditEvidence(text,findings){
         const jsonKey=new RegExp('^\\s*"'+_evEsc(item)+'"\\s*:');
         lines.forEach((l,k)=>{if(re.test(l)&&/snmp|community/i.test(l))add(k);
           else if(jsonKey.test(l)&&lines.slice(Math.max(0,k-5),k).some(x=>/SNMP_COMMUNITY/.test(x)))add(k);});
+      }else if(kind==='line'){
+        const re=EVIDENCE_LINE_RE[f.id];
+        if(re)lines.forEach((l,k)=>{if(re.test(l)&&!/^\s*(no|undo)\s/i.test(l))add(k);});
       }else if(kind==='telnet'){
         lines.forEach((l,k)=>{if(/telnet|transport input/i.test(l)&&!/^\s*(no|undo)\s/i.test(l))add(k);});
       }else if(kind==='routing'){
@@ -760,6 +791,13 @@ const SW_FIX_CMDS={
     'if-no-desc':it=>_fixIfaces(it,['description <purpose>']),
     'stp-portfast-trunk':it=>_fixIfaces(it,['no spanning-tree portfast']),
     'stp-uplink-no-rootguard':it=>_fixIfaces(it,['spanning-tree guard root']),
+    'ntp-missing':()=>['ntp server <ntp-server-1>','ntp server <ntp-server-2>'],
+    'syslog-missing':()=>['logging host <syslog-server>','logging trap informational'],
+    'aaa-local-only':()=>['aaa new-model','tacacs server <name>',' address ipv4 <tacacs-server>',' key <key>','aaa authentication login default group tacacs+ local','aaa accounting exec default start-stop group tacacs+'],
+    'no-banner':()=>['banner login ^C','Authorized access only. Activity is logged.','^C'],
+    'http-mgmt':()=>['no ip http server','ip http secure-server'],
+    'ssh-v1':()=>['ip ssh version 2'],
+    'idle-timeout-off':()=>['line con 0',' exec-timeout 10 0','line vty 0 15',' exec-timeout 10 0'],
   },
   comware:{
     'weak-pwd':it=>(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(u=>[`local-user ${u} class manage`,' password simple <new-password>']),
@@ -777,6 +815,13 @@ const SW_FIX_CMDS={
     'if-no-desc':it=>_fixIfaces(it,['description <purpose>']),
     'stp-portfast-trunk':it=>_fixIfaces(it,['undo stp edged-port']),
     'stp-uplink-no-rootguard':it=>_fixIfaces(it,['stp root-protection']),
+    'ntp-missing':()=>['ntp-service enable','ntp-service unicast-server <ntp-server-1>','ntp-service unicast-server <ntp-server-2>'],
+    'syslog-missing':()=>['info-center enable','info-center loghost <syslog-server>'],
+    'aaa-local-only':()=>['hwtacacs scheme <name>',' primary authentication <tacacs-server>',' primary authorization <tacacs-server>',' primary accounting <tacacs-server>',' key authentication simple <key>','domain <domain>',' authentication login hwtacacs-scheme <name> local'],
+    'no-banner':()=>['header login %','Authorized access only. Activity is logged.','%'],
+    'http-mgmt':()=>['undo ip http enable','ip https enable'],
+    'ssh-v1':()=>['undo ssh server compatible-ssh1x enable'],
+    'idle-timeout-off':()=>['line vty 0 63',' idle-timeout 10 0'],
   },
 };
 // 回傳修正指令文字（沒有範例時為空字串）；nxos／arista 等語法相近但不完全相同的廠牌刻意不套用 Cisco 範例
