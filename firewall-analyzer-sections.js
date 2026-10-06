@@ -479,7 +479,7 @@ function buildFortiswitchSectionHtml(fSwitches, fPorts, fMacPolicies, fNacPolici
 }
 
 // qintfs（2026-10-01，YA）：規則實際使用的來源介面／區域名稱，給「進入介面」欄位的建議清單
-function buildQuerySectionHtml(qvdoms, isFortiGate, qintfs){
+function buildQuerySectionHtml(qvdoms, isFortiGate, qintfs, wiRules){
   const qvdomOpts = `<option value="__all__">${tr('query.all_vdom')}</option>`
     + qvdoms.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
   const qVdomSel = qvdoms.length > 1
@@ -572,9 +572,44 @@ function buildQuerySectionHtml(qvdoms, isFortiGate, qintfs){
         </div>
         <div id="batch-result" style="margin-top:14px"></div>
       </div>
+      ${buildWhatIfHtml(wiRules||[])}
       ${isFortiGate ? buildAllowRequestHtml(qvdoms) : ''}
     </div>`;
 }
+// 規則變更模擬（2026-10-06，第十二輪 MD）：rules 為 [{idx,label}]（idx＝原始規則陣列索引）；變更清單與執行由 app.js 的 _wi*() 負責
+function buildWhatIfHtml(rules){
+  const sel='padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:12px;max-width:100%';
+  const ruleOpts=rules.map(r=>`<option value="${r.idx}">${esc(r.label)}</option>`).join('');
+  const ops=['disable','enable','delete','accept','deny','move'].map(o=>`<option value="${o}">${esc(tr('whatif.op_'+o))}</option>`).join('');
+  return `<div style="margin-top:28px;padding-top:20px;border-top:1px solid var(--border)">
+        <h2 style="margin:0 0 6px;font-size:16px">${tr('whatif.title')}</h2>
+        <p style="color:var(--text-dim);margin:0 0 10px;font-size:12px">${tr('whatif.hint')}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <select id="wi-op" style="${sel}" onchange="document.getElementById('wi-target').style.display=this.value==='move'?'':'none'">${ops}</select>
+          <select id="wi-rule" style="${sel}">${ruleOpts}</select>
+          <select id="wi-target" style="${sel};display:none"><option value="-1">${esc(tr('whatif.to_end'))}</option>${rules.map(r=>`<option value="${r.idx}">${esc(tr('whatif.before').replace('{rule}',r.label))}</option>`).join('')}</select>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="_wiAdd()">＋ ${tr('whatif.add')}</button>
+        </div>
+        <div id="wi-list" style="margin-top:8px"></div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+          <button type="button" onclick="_wiRun()" style="padding:7px 20px;border-radius:6px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600;font-size:13px">▶ ${tr('whatif.run')}</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="_wiClear()">${tr('whatif.clear')}</button>
+        </div>
+        <div id="wi-result" style="margin-top:14px"></div>
+      </div>`;
+}
+// 模擬結果：批次查詢改變（沿用跨版本比對的表格）＋遮蔽關係變化
+function buildWhatIfResultHtml(results, errors, shadow, nRows){
+  let h=nRows?buildBatchDiffResultHtml(results, errors, {exportType:'csv-whatif', colOld:tr('whatif.col_before'), colNew:tr('whatif.col_after')})
+    :`<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('whatif.no_queries'))}</div>`;
+  const line=r=>`<li><span class="mono">${esc(r.shadowedId)}</span> ${esc(r.shadowedName||'')} ← <span class="mono">${esc(r.shadowingId)}</span> ${esc(r.shadowingName||'')}</li>`;
+  h+=`<div style="margin-top:14px;font-size:13px;font-weight:600">${tr('whatif.shadow_title')}</div>`;
+  if(!shadow.added.length&&!shadow.resolved.length) return h+`<div class="nodata" style="color:var(--green)">${tr('whatif.shadow_none')}</div>`;
+  if(shadow.added.length) h+=`<div style="font-size:12px;color:var(--red);margin-top:6px">${esc(tr('whatif.shadow_added').replace('{n}',shadow.added.length))}</div><ul style="font-size:12px;margin:4px 0 0 18px">${shadow.added.map(line).join('')}</ul>`;
+  if(shadow.resolved.length) h+=`<div style="font-size:12px;color:var(--green);margin-top:6px">${esc(tr('whatif.shadow_resolved').replace('{n}',shadow.resolved.length))}</div><ul style="font-size:12px;margin:4px 0 0 18px">${shadow.resolved.map(line).join('')}</ul>`;
+  return h;
+}
+window.buildWhatIfResultHtml=buildWhatIfResultHtml;
 // 開通需求檢查（FortiGate，2026-09-29 新增，第六輪 WI）：輸入欄位；判斷與指令組裝在
 // firewall-analyzer-audit.js 的 fgCheckRequest()／buildFortiGateAllowCommand()，DOM 寫入由 app.js _runAllowCheck() 負責
 function buildAllowRequestHtml(qvdoms){
@@ -929,16 +964,17 @@ window.buildFortiswitchSectionHtml=buildFortiswitchSectionHtml;
 window.buildQuerySectionHtml=buildQuerySectionHtml;
 window.buildBatchQueryResultHtml=buildBatchQueryResultHtml;
 // 批次查詢跨版本比對結果（2026-09-29 新增，FE）：results 為 compareBatchQuery() 輸出；預設只列有改變的列
-function buildBatchDiffResultHtml(results, errors){
+function buildBatchDiffResultHtml(results, errors, o){
+  o=o||{};
   const nAct=results.filter(r=>r.change==='action').length, nPol=results.filter(r=>r.change==='policy').length;
   let h=`<div style="font-size:13px;margin-bottom:8px;color:${nAct?'var(--red)':'var(--text)'}">${esc(tr('bdiff.summary').replace('{total}',results.length).replace('{action}',nAct).replace('{policy}',nPol))}</div>`;
   if(errors.length) h+=`<div style="font-size:12px;color:var(--orange);margin-bottom:8px">${esc(tr('batch.errors').replace('{items}',errors.map(e=>e.line+'('+e.reason+')').join(', ')))}</div>`;
   if(!results.length) return h+`<div class="nodata">${tr('batch.empty')}</div>`;
-  h+=`<button type="button" class="btn btn-ghost btn-sm" style="margin-bottom:8px" onclick="doExport('csv-batch-diff')">⬇ ${tr('batch.export')}</button>`;
+  h+=`<button type="button" class="btn btn-ghost btn-sm" style="margin-bottom:8px" onclick="doExport('${o.exportType||'csv-batch-diff'}')">⬇ ${tr('batch.export')}</button>`;
   const changed=results.filter(r=>r.change);
   if(!changed.length) return h+`<div class="nodata" style="color:var(--green)">${tr('bdiff.none')}</div>`;
   const cell=x=>`${esc(batchActionLabel(x))}<br><span class="mono" style="font-size:11px;color:var(--text-dim)">${esc(x.policyId===''?'-':String(x.policyId))}${x.policyName?' '+esc(x.policyName):''}</span>`;
-  h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>#</th><th>${tr('query.src_ip')}</th><th>${tr('query.dst_ip')}</th><th>${tr('query.proto')}</th><th>${tr('query.port')}</th><th>${tr('bdiff.col_old')}</th><th>${tr('bdiff.col_new')}</th><th>${tr('bdiff.col_change')}</th></tr></thead><tbody>`;
+  h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>#</th><th>${tr('query.src_ip')}</th><th>${tr('query.dst_ip')}</th><th>${tr('query.proto')}</th><th>${tr('query.port')}</th><th>${o.colOld||tr('bdiff.col_old')}</th><th>${o.colNew||tr('bdiff.col_new')}</th><th>${tr('bdiff.col_change')}</th></tr></thead><tbody>`;
   changed.forEach(r=>{
     const isAct=r.change==='action';
     h+=`<tr style="background:${isAct?'rgba(239,83,80,.08)':'rgba(255,193,7,.08)'}"><td class="mono">${r.line}</td><td class="mono">${esc(r.src)}</td><td class="mono">${esc(r.dst)}</td><td>${esc(r.proto==='any'?tr('query.any_proto'):r.proto)}</td><td class="mono">${esc(r.port||'-')}</td>`
