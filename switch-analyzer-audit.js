@@ -213,7 +213,9 @@ function analyzeSwitchAudit(parsed){
     ['ISO27001 A.8.20','NIST 800-53 SC-7','CIS v8 12.2'],noBpduGuard.map(p=>p.port));
   // 3. VLAN 1（預設/原生 VLAN）仍用於使用者流量——空值代表未明確宣告，實際設備行為預設落在 VLAN1
   const interfaces=parsed.interfaces||[];
-  const vlan1Ports=interfaces.filter(i=>(i.mode==='access'||i.mode==='trunk')&&(!i.nativeVlan||i.nativeVlan==='1'));
+  // access 埠看所屬 VLAN（vlans），trunk 埠看原生 VLAN（nativeVlan）；原本 access 埠也看 nativeVlan（access 埠
+  // 一律為空），設在其他 VLAN 的 access 埠全部被誤列（2026-10-05，KG 測試發現，所有廠牌皆受影響）
+  const vlan1Ports=interfaces.filter(i=>i.mode==='access'?(!i.vlans||String(i.vlans).trim()==='1'):i.mode==='trunk'&&(!i.nativeVlan||i.nativeVlan==='1'));
   f('vlan1-inuse', tr('audit.check_vlan1_inuse'), vlan1Ports.length, 'medium',
     vlan1Ports.length ? vlan1Ports.map(i=>i.name).slice(0,8).join(', ')+(vlan1Ports.length>8?'…':'') : tr('audit.none'),
     ['ISO27001 A.8.22','NIST 800-53 SC-7','CIS v8 12.2'],vlan1Ports.map(i=>i.name));

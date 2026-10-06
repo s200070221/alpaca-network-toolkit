@@ -214,7 +214,7 @@ const FORCE_VENDOR_LIST=[
   ['alcatel','Alcatel OmniSwitch'],['extreme','Extreme Networks ExtremeXOS'],
   ['procurve','Aruba ProCurve'],['routeros','MikroTik RouterOS'],['ruijie','Ruijie RGOS'],
   ['netgear','Netgear M4300'],['edgeswitch','Ubiquiti EdgeSwitch'],
-  ['sonic','SONiC (config_db.json)'],['planet','Planet Technology'],['cumulus','NVIDIA Cumulus Linux (NVUE)'],
+  ['sonic','SONiC (config_db.json)'],['planet','Planet Technology'],['cumulus','NVIDIA Cumulus Linux (NVUE)'],['voss','Extreme VOSS / Fabric Engine'],
 ];
 (function(){
   // 防護：本區塊是頂層立即執行敘述，會被不同測試腳本的最小 DOM mock 一併載入執行，
@@ -361,7 +361,7 @@ function showResultViews(){
     // 統一回傳 'brocade'（避免動到既有派送邏輯），品牌顯示改依 parseBrocadeSysInfo() 抓到的
     // brand 欄位（cfg 內含 Ruckus/CommScope 字樣時判定）動態切換標籤
     const brocadeTitle=parsed.sys?.brand==='ruckus'?`Ruckus ICX ${_a}`:`Brocade FastIron/ICX ${_a}`;
-    const titleMap={'comware':'H3C / HPE Comware '+_a,'arista':'Arista EOS '+_a,'ruijie':'Ruijie RGOS '+_a,'netgear':'Netgear M4300 '+_a,'edgeswitch':'Ubiquiti EdgeSwitch '+_a,'cisco':'Cisco IOS/IOS-XE '+_a,'nxos':'Cisco NX-OS '+_a,'aruba':'Aruba CX '+_a,'procurve':'Aruba ProCurve '+_a,'fortiswitch':'FortiSwitch '+_a,'juniper':'Juniper EX/QFX '+_a,'extreme':'Extreme Networks ExtremeXOS '+_a,'alcatel':'Alcatel OmniSwitch '+_a,'brocade':brocadeTitle,'dell-os10':dellTitle,'planet':'Planet Technology '+_a,'cumulus':'NVIDIA Cumulus Linux '+_a,'unknown':tr('sl.unknown_vendor')+' '+_a};
+    const titleMap={'comware':'H3C / HPE Comware '+_a,'arista':'Arista EOS '+_a,'ruijie':'Ruijie RGOS '+_a,'netgear':'Netgear M4300 '+_a,'edgeswitch':'Ubiquiti EdgeSwitch '+_a,'cisco':'Cisco IOS/IOS-XE '+_a,'nxos':'Cisco NX-OS '+_a,'aruba':'Aruba CX '+_a,'procurve':'Aruba ProCurve '+_a,'fortiswitch':'FortiSwitch '+_a,'juniper':'Juniper EX/QFX '+_a,'extreme':'Extreme Networks ExtremeXOS '+_a,'alcatel':'Alcatel OmniSwitch '+_a,'brocade':brocadeTitle,'dell-os10':dellTitle,'planet':'Planet Technology '+_a,'cumulus':'NVIDIA Cumulus Linux '+_a,'voss':'Extreme VOSS / Fabric Engine '+_a,'unknown':tr('sl.unknown_vendor')+' '+_a};
     const brandLbl=SW_BRAND_LABEL[parsed.sys?.brand];
     titleEl.textContent=brandLbl?brandLbl+' '+_a:(titleMap[parsed.vendor]||tr('sl.unknown_vendor')+' '+_a);
   }
@@ -369,16 +369,16 @@ function showResultViews(){
   if(vbEl){
     const dellLabel=parsed.sys?.osGen?`Dell EMC ${parsed.sys.osGen}`:'Dell EMC Networking OS';
     const brocadeLabel=parsed.sys?.brand==='ruckus'?'Ruckus ICX':'Brocade FastIron/ICX';
-    const vLabel={'comware':'H3C / HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':brocadeLabel,'dell-os10':dellLabel,'planet':'Planet Technology','cumulus':'NVIDIA Cumulus Linux','unknown':tr('sl.unknown_vendor')}[parsed.vendor]||parsed.vendor;
+    const vLabel={'comware':'H3C / HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':brocadeLabel,'dell-os10':dellLabel,'planet':'Planet Technology','cumulus':'NVIDIA Cumulus Linux','voss':'Extreme VOSS / Fabric Engine','unknown':tr('sl.unknown_vendor')}[parsed.vendor]||parsed.vendor;
     const vLabelShown=SW_BRAND_LABEL[parsed.sys?.brand]||vLabel;
-    const vClass={'comware':'vb-comware','arista':'vb-cisco','ruijie':'vb-cisco','netgear':'vb-cisco','edgeswitch':'vb-cisco','cisco':'vb-cisco','nxos':'vb-cisco','aruba':'vb-aruba','procurve':'vb-aruba','fortiswitch':'vb-forti','juniper':'vb-juniper','extreme':'vb-extreme','alcatel':'vb-alcatel','brocade':'vb-brocade','dell-os10':'vb-dell','planet':'vb-cisco','cumulus':'vb-cisco','unknown':'vb-unknown'}[parsed.vendor]||'vb-unknown';
+    const vClass={'comware':'vb-comware','arista':'vb-cisco','ruijie':'vb-cisco','netgear':'vb-cisco','edgeswitch':'vb-cisco','cisco':'vb-cisco','nxos':'vb-cisco','aruba':'vb-aruba','procurve':'vb-aruba','fortiswitch':'vb-forti','juniper':'vb-juniper','extreme':'vb-extreme','alcatel':'vb-alcatel','brocade':'vb-brocade','dell-os10':'vb-dell','planet':'vb-cisco','cumulus':'vb-cisco','voss':'vb-cisco','unknown':'vb-unknown'}[parsed.vendor]||'vb-unknown';
     vbEl.innerHTML=`<span class="vendor-badge ${vClass}">${vLabelShown}</span>`;
     _setupVendorPersona();
   }
   // Update stack nav label based on vendor
   const irfLbl=document.getElementById('nav-irf-lbl');
   if(irfLbl){
-    irfLbl.textContent=parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('nav.irf.cisco'):parsed.vendor==='nxos'?tr('nav.irf.cisco'):parsed.vendor==='comware'?tr('nav.irf.comware'):parsed.vendor==='aruba'?tr('nav.irf.aruba'):parsed.vendor==='procurve'?tr('nav.irf.default'):parsed.vendor==='fortiswitch'?tr('nav.irf.forti'):parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?'Virtual Chassis':parsed.vendor==='juniper'&&parsed.stack?.type==='MC-LAG'?'Juniper MC-LAG':parsed.vendor==='alcatel'&&parsed.stack?'Alcatel Stack':parsed.vendor==='extreme'&&parsed.stack?'ExtremeStack':parsed.vendor==='brocade'&&parsed.stack?tr('nav.irf.brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('nav.irf.dell_vlt'):parsed.vendor==='dell-os10'&&parsed.stack?tr('nav.irf.dell_stack'):tr('nav.irf.default');
+    irfLbl.textContent=parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='cumulus'&&parsed.stack?'Cumulus MLAG':parsed.vendor==='voss'&&parsed.stack?'VOSS vIST':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('nav.irf.cisco'):parsed.vendor==='nxos'?tr('nav.irf.cisco'):parsed.vendor==='comware'?tr('nav.irf.comware'):parsed.vendor==='aruba'?tr('nav.irf.aruba'):parsed.vendor==='procurve'?tr('nav.irf.default'):parsed.vendor==='fortiswitch'?tr('nav.irf.forti'):parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?'Virtual Chassis':parsed.vendor==='juniper'&&parsed.stack?.type==='MC-LAG'?'Juniper MC-LAG':parsed.vendor==='alcatel'&&parsed.stack?'Alcatel Stack':parsed.vendor==='extreme'&&parsed.stack?'ExtremeStack':parsed.vendor==='brocade'&&parsed.stack?tr('nav.irf.brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('nav.irf.dell_vlt'):parsed.vendor==='dell-os10'&&parsed.stack?tr('nav.irf.dell_stack'):tr('nav.irf.default');
   }
   // Show nav items
   ['lbl-result','nav-overview','nav-irf','nav-vlans','nav-vlan-matrix','nav-ports','nav-lacp','nav-routes','nav-routing','nav-vrrp','nav-vxlan','nav-vrfs','nav-dhcp','nav-users','nav-lldp','nav-cabling','nav-stp','nav-acl','nav-security','nav-qos','nav-snmp','nav-audit'].forEach(id=>{
@@ -460,7 +460,7 @@ function buildPeerLinkSVG(hostname,peerLabel,peerKnown,linkLabel,tc){
 function renderAristaMlag(){
   const mlag=parsed.stack;
   if(!mlag)return'<div class="nodata">'+tr('msg.no_data')+'</div>';
-  const title=mlag.type==='VPC'?'Cisco NX-OS VPC':mlag.type==='MC-LAG'?'Juniper MC-LAG':'Arista MLAG';
+  const title=mlag.type==='VPC'?'Cisco NX-OS VPC':mlag.type==='MC-LAG'?'Juniper MC-LAG':mlag.type==='vIST'?'VOSS vIST':parsed.vendor==='cumulus'?'Cumulus MLAG':'Arista MLAG';
   const cards=mlag.type==='VPC'?[
     {t:'VPC Domain',v:mlag.domain,c:'var(--accent)',big:true},
     {t:'Peer Link',v:mlag.peerLink,c:'var(--teal)'},
@@ -651,7 +651,7 @@ function buildSumCards(){
   const hyb=ph.filter(i=>i.mode==='hybrid').length;
   const ipSubVlans=parsed.vlans.filter(v=>v.ipSubnets.length>0).length;
   document.getElementById('sum-wrap').innerHTML=[
-    [parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('sl.stack_cisco'):parsed.vendor==='aruba'?tr('sl.stack_aruba'):parsed.vendor==='fortiswitch'?tr('sl.stack_forti'):parsed.vendor==='brocade'?tr('sl.stack_brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('sl.vlt_node'):parsed.vendor==='dell-os10'?tr('sl.dell_stack'):tr('sl.irf'),parsed.stack?.members?.length || parsed.irf?.members?.length || 0,'var(--accent)','irf'],
+    [parsed.vendor==='arista'&&parsed.stack?'Arista MLAG':parsed.vendor==='cumulus'&&parsed.stack?'Cumulus MLAG':parsed.vendor==='voss'&&parsed.stack?'VOSS vIST':parsed.vendor==='nxos'&&parsed.stack?'Cisco NX-OS VPC':parsed.vendor==='ruijie'&&parsed.stack?'Ruijie VSU':parsed.vendor==='cisco'?tr('sl.stack_cisco'):parsed.vendor==='aruba'?tr('sl.stack_aruba'):parsed.vendor==='fortiswitch'?tr('sl.stack_forti'):parsed.vendor==='brocade'?tr('sl.stack_brocade'):parsed.vendor==='dell-os10'&&parsed.stack?.type==='VLT'?tr('sl.vlt_node'):parsed.vendor==='dell-os10'?tr('sl.dell_stack'):tr('sl.irf'),parsed.stack?.members?.length || parsed.irf?.members?.length || 0,'var(--accent)','irf'],
     ['VLAN',parsed.vlans.length,'var(--teal)','vlans'],
     [tr('sl.phy_ports'),ph.length,'var(--text)','ports'],
     [tr('sl.enabled'),ph.length-dn,'var(--green)','ports'],
@@ -737,7 +737,7 @@ function renderView(view){
   if(!parsed){tc.innerHTML='<div class="nodata">'+tr('msg.no_config')+'</div>';return;}
   switch(view){
     case'overview': tc.innerHTML=renderOverview();break;
-    case'irf':      tc.innerHTML=parsed.vendor==='cisco'?renderStackWise():parsed.vendor==='aruba'?renderVSF():parsed.vendor==='fortiswitch'?renderMCLAG():parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?renderVC():parsed.vendor==='juniper'&&parsed.stack?.type==='MC-LAG'?renderAristaMlag():parsed.vendor==='alcatel'&&parsed.stack?renderAlcatelStack():parsed.vendor==='extreme'&&parsed.stack?renderExtremeStack():parsed.vendor==='brocade'&&parsed.stack?renderBrocadeStack():parsed.vendor==='ruijie'&&parsed.stack?renderRuijieVSU():(parsed.vendor==='arista'||parsed.vendor==='nxos')&&parsed.stack?renderAristaMlag():parsed.vendor==='dell-os10'&&parsed.stack?renderDellStack():parsed.vendor==='procurve'&&parsed.stack?renderProCurveVSF():renderIRF();break;
+    case'irf':      tc.innerHTML=parsed.vendor==='cisco'?renderStackWise():parsed.vendor==='aruba'?renderVSF():parsed.vendor==='fortiswitch'?renderMCLAG():parsed.vendor==='juniper'&&parsed.stack?.type==='VC'?renderVC():parsed.vendor==='juniper'&&parsed.stack?.type==='MC-LAG'?renderAristaMlag():parsed.vendor==='alcatel'&&parsed.stack?renderAlcatelStack():parsed.vendor==='extreme'&&parsed.stack?renderExtremeStack():parsed.vendor==='brocade'&&parsed.stack?renderBrocadeStack():parsed.vendor==='ruijie'&&parsed.stack?renderRuijieVSU():(parsed.vendor==='arista'||parsed.vendor==='nxos'||parsed.vendor==='cumulus'||parsed.vendor==='voss')&&parsed.stack?renderAristaMlag():parsed.vendor==='dell-os10'&&parsed.stack?renderDellStack():parsed.vendor==='procurve'&&parsed.stack?renderProCurveVSF():renderIRF();break;
     case'routing':  tc.innerHTML=renderRoutingProtocols();break;
     case'vrrp':    tc.innerHTML=renderVRRP();break;
     case'vxlan':   tc.innerHTML=renderVXLAN();break;
@@ -1863,6 +1863,7 @@ const PARSE_COVERAGE_MATRIX={
   juniper:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'❌',dhcp:'✅',acl:'✅',qos:'❌',security:'❌',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'✅',stack:'✅',ipv6:'✅',secondaryIp:'✅'},
   planet:{vlan:'✅',interface:'✅',ospf:'✅',bgp:'✅',rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'✅',dhcp:'✅',acl:'✅',qos:'✅',security:'✅',stp:'✅',users:'✅',snmp:'✅',vxlan:'❌',vrf:'❌',stack:'❌',ipv6:'❌',secondaryIp:'✅'},
   cumulus:{vlan:'✅',interface:'✅',ospf:'❌',bgp:{v:'⚠️',note:'本機 AS／router-id 與鄰居（含 unnumbered、peer-group 的 remote-as）；address-family 細節未解析'},rip:'❌',staticRoute:'✅',lacp:'✅',vrrp:'❌',dhcp:'❌',acl:'❌',qos:'❌',security:'❌',stp:{v:'⚠️',note:'僅逐埠 admin-edge／bpdu-guard'},users:'✅',snmp:{v:'⚠️',note:'僅 v3 帳號名稱與 readonly-community'},vxlan:'❌',vrf:'✅',stack:{v:'⚠️',note:'MLAG 啟用、peerlink、peer-ip 與 backup'},ipv6:'✅',secondaryIp:'✅'},
+  voss:{vlan:{v:'⚠️',note:'VLAN 名稱、I-SID、成員（vlan members／vlan mlt）與 SVI；Switched UNI（i-sid 區塊）另列'},interface:{v:'⚠️',note:'埠名稱、tagged（encapsulation dot1q）、default-vlan-id、shutdown、MLT 成員；速率等細節未解析'},ospf:'❌',bgp:'❌',rip:'❌',staticRoute:'✅',lacp:{v:'⚠️',note:'MLT 成員與 interface mlt 的 lacp key；SMLT／vIST 只記錄 virtual-ist 對端'},vrrp:'❌',dhcp:'❌',acl:'❌',qos:'❌',security:'❌',stp:'❌',users:'❌',snmp:{v:'⚠️',note:'僅 snmp-server name／location／contact'},vxlan:'❌',vrf:'✅',stack:{v:'⚠️',note:'僅 virtual-ist 對端與 VLAN'},ipv6:{v:'⚠️',note:'SVI／loopback 的 ipv6 interface address'},secondaryIp:'✅'},
 };
 const PARSE_COVERAGE_CATEGORIES=['vlan','interface','ospf','bgp','rip','staticRoute','lacp','vrrp','dhcp','acl','qos','security','stp','users','snmp','vxlan','vrf','stack','ipv6','secondaryIp'];
 function renderParseCoverageMatrix(vendor){
@@ -1880,7 +1881,7 @@ function renderParseCoverageMatrix(vendor){
 }
 // 沿用 showResultViews() 既有的品牌顯示名稱慣例（該處為函式內區域變數，此處另建一份模組級
 // 常數供本矩陣下拉選單使用，補上該處缺漏的 sonic/routeros 兩家）
-const PC_VENDOR_LABELS={'comware':'H3C / HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':'Brocade FastIron/ICX','cumulus':'NVIDIA Cumulus Linux','dell-os10':'Dell EMC Networking OS','planet':'Planet Technology','sonic':'SONiC','routeros':'MikroTik RouterOS'};
+const PC_VENDOR_LABELS={'comware':'H3C / HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':'Brocade FastIron/ICX','cumulus':'NVIDIA Cumulus Linux','voss':'Extreme VOSS / Fabric Engine','dell-os10':'Dell EMC Networking OS','planet':'Planet Technology','sonic':'SONiC','routeros':'MikroTik RouterOS'};
 function _initParseCoverageMatrix(){
   const sel=document.getElementById('pc-vendor-select');
   if(!sel)return;
@@ -2523,7 +2524,7 @@ function exportHTMLReport(mode){
   }
   // exportHTML 內動態 vendor 標籤（含 brocade/ruckus 品牌切換）必須在 template literal
   // 外面先計算，不可用 ${(() => {...})()} 內嵌（既有慣例，見 CLAUDE.md exportHTML 規則）
-  const rptVendorLabel=(typeof SW_BRAND_LABEL!=='undefined'&&SW_BRAND_LABEL[p.sys&&p.sys.brand])||({'comware':'H3C / HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':p.sys?.brand==='ruckus'?'Ruckus ICX':'Brocade FastIron/ICX','dell-os10':'Dell EMC Networking','planet':'Planet Technology'})[p.vendor]||p.vendor;
+  const rptVendorLabel=(typeof SW_BRAND_LABEL!=='undefined'&&SW_BRAND_LABEL[p.sys&&p.sys.brand])||({'comware':'H3C / HPE Comware','arista':'Arista EOS','ruijie':'Ruijie RGOS','netgear':'Netgear M4300','edgeswitch':'Ubiquiti EdgeSwitch','cisco':'Cisco IOS/IOS-XE','nxos':'Cisco NX-OS','aruba':'Aruba CX','procurve':'Aruba ProCurve','fortiswitch':'FortiSwitch','juniper':'Juniper Networks','extreme':'Extreme Networks','alcatel':'Alcatel OmniSwitch','brocade':p.sys?.brand==='ruckus'?'Ruckus ICX':'Brocade FastIron/ICX','dell-os10':'Dell EMC Networking','planet':'Planet Technology','routeros':'MikroTik RouterOS','sonic':'SONiC','cumulus':'NVIDIA Cumulus Linux','voss':'Extreme VOSS / Fabric Engine'})[p.vendor]||p.vendor;
   const reportHtml=`<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
