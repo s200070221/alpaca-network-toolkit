@@ -213,9 +213,9 @@ function analyzeSwitchAudit(parsed){
     ['ISO27001 A.8.20','NIST 800-53 SC-7','CIS v8 12.2'],noBpduGuard.map(p=>p.port));
   // 3. VLAN 1（預設/原生 VLAN）仍用於使用者流量——空值代表未明確宣告，實際設備行為預設落在 VLAN1
   const interfaces=parsed.interfaces||[];
-  // access 埠看所屬 VLAN（vlans），trunk 埠看原生 VLAN（nativeVlan）；原本 access 埠也看 nativeVlan（access 埠
+  // access 埠看所屬 VLAN（vlans；NX-OS 解析器為 vlan），trunk 埠看原生 VLAN（nativeVlan）；原本 access 埠也看 nativeVlan（access 埠
   // 一律為空），設在其他 VLAN 的 access 埠全部被誤列（2026-10-05，KG 測試發現，所有廠牌皆受影響）
-  const vlan1Ports=interfaces.filter(i=>i.mode==='access'?(!i.vlans||String(i.vlans).trim()==='1'):i.mode==='trunk'&&(!i.nativeVlan||i.nativeVlan==='1'));
+  const vlan1Ports=interfaces.filter(i=>i.mode==='access'?(!(i.vlans||i.vlan)||String(i.vlans||i.vlan).trim()==='1'):i.mode==='trunk'&&(!i.nativeVlan||i.nativeVlan==='1'));
   f('vlan1-inuse', tr('audit.check_vlan1_inuse'), vlan1Ports.length, 'medium',
     vlan1Ports.length ? vlan1Ports.map(i=>i.name).slice(0,8).join(', ')+(vlan1Ports.length>8?'…':'') : tr('audit.none'),
     ['ISO27001 A.8.22','NIST 800-53 SC-7','CIS v8 12.2'],vlan1Ports.map(i=>i.name));
@@ -375,6 +375,42 @@ function analyzeSwitchAudit(parsed){
       ms.sshV1?tr('audit.ssh_v1_detail'):none, ['ISO27001 A.8.24','NIST 800-53 SC-8','CIS v8 3.10'], ms.sshV1?['ssh']:[]);
     if(Array.isArray(ms.idleOff))f('idle-timeout-off', tr('audit.check_idle_timeout_off'), ms.idleOff.length, 'low',
       ms.idleOff.length?ms.idleOff.slice(0,8).join(', '):none, ['ISO27001 A.8.5','NIST 800-53 AC-12','CIS v8 4.3'], ms.idleOff.slice());
+  }
+  // L2 防護（2026-10-06，第十二輪 MB）：parsed.l2Protect 由 parseL2Protect() 產生；只看啟用中的 access 埠
+  // （使用者端），沒有 access 埠或整組／單一功能為 null（未查證）時不列。DAI 與 IP Source Guard 依賴 DHCP
+  // snooping 的綁定表，只在 DHCP snooping 已涵蓋的 VLAN 上檢查
+  const l2=parsed.l2Protect;
+  const accessPorts=interfaces.filter(i=>i.mode==='access'&&!i.shutdown&&i.type!=='svi'&&i.type!=='loopback');
+  if(l2&&accessPorts.length){
+    const vlanOf=i=>String(i.vlans||i.vlan||'1').trim();
+    const covered=(list,i)=>Array.isArray(list)&&(list.includes('all')||list.includes(vlanOf(i)));
+    const names=a=>a.map(i=>i.name);
+    const lst=a=>a.length?a.slice(0,8).join(', ')+(a.length>8?'…':''):tr('audit.none');
+    if(Array.isArray(l2.snoop)){
+      const noSnoop=accessPorts.filter(i=>!covered(l2.snoop,i));
+      const vl=[...new Set(noSnoop.map(vlanOf))];
+      f('dhcp-snooping-off', tr('audit.check_dhcp_snooping_off'), vl.length, 'medium',
+        vl.length?tr('audit.l2_vlans_detail').replace('{vlans}',lst(vl)).replace('{n}',noSnoop.length):tr('audit.none'),
+        ['ISO27001 A.8.20','NIST 800-53 SC-7','CIS v8 12.2'], vl);
+    }
+    const snooped=accessPorts.filter(i=>covered(l2.snoop,i));
+    if(Array.isArray(l2.dai)&&snooped.length){
+      const noDai=snooped.filter(i=>!covered(l2.dai,i));
+      const vl=[...new Set(noDai.map(vlanOf))];
+      f('dai-off', tr('audit.check_dai_off'), vl.length, 'low',
+        vl.length?tr('audit.l2_vlans_detail').replace('{vlans}',lst(vl)).replace('{n}',noDai.length):tr('audit.none'),
+        ['ISO27001 A.8.20','NIST 800-53 SC-7'], vl);
+    }
+    if(Array.isArray(l2.ipsg)&&snooped.length){
+      const noIpsg=snooped.filter(i=>!l2.ipsg.includes(i.name));
+      f('ipsg-off', tr('audit.check_ipsg_off'), noIpsg.length, 'low', lst(names(noIpsg)),
+        ['ISO27001 A.8.20','NIST 800-53 SC-7'], names(noIpsg));
+    }
+    if(Array.isArray(l2.storm)){
+      const noStorm=accessPorts.filter(i=>!l2.storm.includes(i.name));
+      f('storm-control-off', tr('audit.check_storm_control_off'), noStorm.length, 'low', lst(names(noStorm)),
+        ['ISO27001 A.8.20','NIST 800-53 SC-5'], names(noStorm));
+    }
   }
   return findings;
 }
@@ -657,12 +693,16 @@ const EVIDENCE_KIND={
   'snmp-weak':'snmp','snmp-default-name':'snmp','telnet-mgmt':'telnet','routing-no-auth':'routing',
   'acl-any-any':'acl','acl-shadowed':'acl','acl-exact-duplicate':'acl','unused-vlan-trunk':'vlan',
   'http-mgmt':'line','ssh-v1':'line','idle-timeout-off':'line',
+  'dhcp-snooping-off':'line','dai-off':'line','ipsg-off':'iface','storm-control-off':'iface',
 };
 // 關鍵字型證據行（第十二輪 MA）：命中這些設定行即列出；ntp／syslog／aaa／banner 是「缺少設定」，沒有對應行
 const EVIDENCE_LINE_RE={
   'http-mgmt':/^\s*(ip\s+http\s+server\s*$|ip\s+http\s+enable\b|nxapi\s+http\b|protocol\s+http\b(?!s)|http\s*[;{])/i,
   'ssh-v1':/^\s*(ip\s+ssh\b|ssh\s+server\s+compatible-ssh1x\b|line\s+vty\b|\s*transport\s+input\b)/i,
   'idle-timeout-off':/^\s*(exec-timeout|idle-timeout)\s+0(\s+0)?\s*$/i,
+  // L2 防護（第十二輪 MB）：列出已有的 DHCP snooping／DAI 設定行（部分 VLAN 已涵蓋時看得出缺哪些）
+  'dhcp-snooping-off':/^\s*(ip\s+dhcp\s+snooping|dhcp\s+snooping\s+enable|dhcp-snooping|dhcpv4-snooping)\b/i,
+  'dai-off':/^\s*(ip\s+arp\s+inspection\s+vlan|arp\s+detection\s+enable|arp\s+inspection\s*$)/i,
 };
 // 區塊內要一併列出的子行（沒列的只顯示宣告行）
 const EVIDENCE_SUB={
@@ -673,6 +713,8 @@ const EVIDENCE_SUB={
   'lacp-member-mismatch':/channel-group|link-aggregation|port-group|lacp|switchport|port (link-type|access)/i,
   'ip-conflict-exact':/ip(v6)? address|set ip\b/i,'ip-subnet-conflict':/ip(v6)? address|set ip\b/i,
   'weak-pwd':/password|secret|cipher|hash/i,'weak-pwd-legacy-hash':/password|secret|cipher|hash/i,
+  'ipsg-off':/switchport|port (link-type|access)|verify source|source-lockdown|vlan access/i,
+  'storm-control-off':/switchport|port (link-type|access)|storm|suppression|vlan access/i,
 };
 const EVIDENCE_MAX_LINES=30;
 function _evEsc(s){return String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
@@ -798,6 +840,10 @@ const SW_FIX_CMDS={
     'http-mgmt':()=>['no ip http server','ip http secure-server'],
     'ssh-v1':()=>['ip ssh version 2'],
     'idle-timeout-off':()=>['line con 0',' exec-timeout 10 0','line vty 0 15',' exec-timeout 10 0'],
+    'dhcp-snooping-off':it=>['ip dhcp snooping',`ip dhcp snooping vlan ${(it||[]).slice(0,FIX_MAX_ITEMS).join(',')}`,'interface <uplink-to-dhcp-server>',' ip dhcp snooping trust'],
+    'dai-off':it=>[`ip arp inspection vlan ${(it||[]).slice(0,FIX_MAX_ITEMS).join(',')}`,'interface <uplink-to-dhcp-server>',' ip arp inspection trust'],
+    'ipsg-off':it=>_fixIfaces(it,['ip verify source']),
+    'storm-control-off':it=>_fixIfaces(it,['storm-control broadcast level 1.00']),
   },
   comware:{
     'weak-pwd':it=>(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(u=>[`local-user ${u} class manage`,' password simple <new-password>']),
@@ -822,6 +868,9 @@ const SW_FIX_CMDS={
     'http-mgmt':()=>['undo ip http enable','ip https enable'],
     'ssh-v1':()=>['undo ssh server compatible-ssh1x enable'],
     'idle-timeout-off':()=>['line vty 0 63',' idle-timeout 10 0'],
+    'dhcp-snooping-off':()=>['dhcp snooping enable','interface <uplink-to-dhcp-server>',' dhcp snooping trust'],
+    'dai-off':it=>[...(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(v=>[`vlan ${v}`,' arp detection enable']),'interface <uplink-to-dhcp-server>',' arp detection trust'],
+    'storm-control-off':it=>_fixIfaces(it,['broadcast-suppression 1']),
   },
 };
 // 回傳修正指令文字（沒有範例時為空字串）；nxos／arista 等語法相近但不完全相同的廠牌刻意不套用 Cisco 範例
