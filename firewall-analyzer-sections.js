@@ -691,7 +691,7 @@ function renderWifiSection(w) {
     const secLabel = v.security === 'wpa2-only' ? 'WPA2' : v.security === 'open' ? tr('wifi.sec_open') : v.security;
     html += `<div class="ssid-row" style="cursor:pointer" onclick="showSsidDetail('${btoa(unescape(encodeURIComponent(v.name)))}')">
       <div style="font-weight:600">
-        ${!v.broadcastSsid ? `<span title="${tr('wifi.hidden_ssid_tip')}">👁‍🗨</span> ` : ''}${esc(v.ssid)}
+        ${!v.broadcastSsid ? `<span title="${tr('wifi.hidden_ssid_tip')}">👁‍🗨</span> ` : ''}${esc(v.ssid)}${v.status === 'disable' ? ` <span style="color:var(--text-dim);font-size:11px">(${esc(tr('sl.disabled'))})</span>` : ''}
       </div>
       <div><span class="wifi-badge ${gradeClass}">${esc(secLabel)}</span></div>
       <div><span class="wifi-badge ${gradeClass}">${v.secGrade}</span></div>

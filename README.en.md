@@ -42,6 +42,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - FortiGate, Sophos XG, Check Point, Palo Alto (incl. Panorama), Juniper SRX, pfSense, OPNsense, SonicWall, MikroTik, Cisco ASA / FTD, Zyxel USG / ATP, WatchGuard Firebox, H3C SecPath
 - EdgeRouter (EdgeOS), VyOS, OpenWrt (UCI), Linux iptables / nftables
 - Cloud: AWS security groups, Azure NSGs, Cisco Meraki MX (API response JSON)
+- Wireless LAN controllers (WiFi analysis only): Cisco Catalyst 9800 / AireOS, Aruba controller / Instant, H3C WX
 
 **Main features**
 - Visualizes rules, routes, NAT, VPN and address objects
@@ -49,6 +50,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - Shadowed-rule analysis, compliance audit and health score
 - Old-vs-new config comparison (including HA primary/secondary), conversion between config formats
 - Rule hit-count import (FortiGate, Cisco ASA / FTD, Palo Alto, Juniper SRX) to find rules never hit or not hit for a long time
+- WiFi analysis: SSID encryption, PMF, hidden SSIDs, captive portal, client isolation and security grade (FortiGate, MikroTik, OpenWrt, pfSense and wireless LAN controllers)
 
 ![Firewall Config Analyzer: audit](docs/images/03-firewall-audit-en.png)
 

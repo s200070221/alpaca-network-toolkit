@@ -475,6 +475,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="awplus">Allied Telesis AlliedWare Plus</option>
                 <option value="openwrt">OpenWrt (UCI)</option>
                 <option value="watchguard">WatchGuard Firebox</option>
+                <option value="wlc">Wireless LAN Controller (Cisco 9800 / AireOS · Aruba · H3C WX)</option>
               </optgroup>
               <optgroup id="optgrp-sw" label="交換器">
                 <option value="comware">H3C / HPE Comware</option>
@@ -1289,6 +1290,8 @@ const VENDOR_SIGS = {
   // 雲端安全群組 JSON（AWS describe-security-groups／Azure NSG），務必與 firewall_analyzer 的 FW_VENDOR_SIGS.cloudsg 一致（2026-10-02）
   // H3C SecPath 防火牆（2026-10-05，KB）：務必與 firewall_analyzer 的 FW_VENDOR_SIGS.h3c 一致，排在 comware 前
   h3c_secpath: { p:[/^\s*security-policy\s+ipv?6?\s*$/m, /^\s*security-zone\s+name\s+\S+/m], min:2 },
+  // 無線控制器（2026-10-05，KD／KH／KI）：務必與 firewall_analyzer 的 FW_VENDOR_SIGS.wlc 一致，排在 comware／cisco_ios 前
+  wlc:         { p:[/^(?:config\s+)?wlan\s+create\s+\d+\s+\S+/m, /^\s*wlan\s+service-template\s+\S+/m, /^\s*wlan\s+ssid-profile\s+\S+/m, /^wlan\s+\S+\s+\d{1,4}\s+\S+/m], min:1 },
   cloudsg:     { p:[/"IpPermissions(?:Egress)?"\s*:\s*\[/, /"(?:default)?[sS]ecurityRules"\s*:\s*\[/, /"destCidr"\s*:/, /"applianceIp"\s*:/, /"publicPort"\s*:/], min:1 },
   // 務必與 firewall_analyzer 的 FW_VENDOR_SIGS.netfilter 保持一致（2026-10-02 新增）
   // Cumulus Linux NVUE（YAML 的 `- set:` 段或 nv set 指令），務必與 switch_analyzer isCumulusNVUE() 一致（2026-10-02）
@@ -1320,7 +1323,7 @@ const VENDOR_SIGS = {
 // "Sophos"/"Aruba" 文字比對），故刻意排在最後——讓其他更具結構特徵的廠牌訊號優先判定，
 // 只有在都沒命中時才輪到這兩家，降低誤判機率
 const VENDOR_ORDER = [
-  'cisco_nxos','fortiswitch','fortigate','h3c_secpath','comware','paloalto','cloudsg','cumulus','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
+  'cisco_nxos','fortiswitch','fortigate','h3c_secpath','wlc','comware','paloalto','cloudsg','cumulus','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
   'checkpoint','pfsense','sonicwall','watchguard','mikrotik','arista',
   'extreme','alcatel','brocade','procurve','dell_os10','planet','ruijie','netgear','edgeswitch','sonic',
   'ciscoasa','cisco_biz','cisco_ios',
@@ -1330,7 +1333,7 @@ const VENDOR_LABELS = {
   fortigate:'FortiGate',fortiswitch:'FortiSwitch',sophos:'Sophos XG',
   checkpoint:'Check Point',paloalto:'Palo Alto PAN-OS',pfsense:'pfSense/OPNsense',
   sonicwall:'SonicWall',mikrotik:'MikroTik RouterOS',juniper:'Juniper JunOS',
-  comware:'H3C / HPE Comware',h3c_secpath:'H3C SecPath',cisco_ios:'Cisco IOS/IOS-XE',cisco_biz:'Cisco Business (CBS/SG)',cisco_nxos:'Cisco NX-OS',
+  comware:'H3C / HPE Comware',h3c_secpath:'H3C SecPath',wlc:'Wireless LAN Controller',cisco_ios:'Cisco IOS/IOS-XE',cisco_biz:'Cisco Business (CBS/SG)',cisco_nxos:'Cisco NX-OS',
   arista:'Arista EOS',aruba_cx:'Aruba CX',procurve:'Aruba ProCurve',
   dell_os10:'Dell OS10',extreme:'Extreme XOS',alcatel:'Alcatel OmniSwitch',
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
@@ -3708,11 +3711,73 @@ function anonSonic(text, opts) {
   return out;
 }
 
+// ---- 無線控制器（2026-10-05，KD／KH／KI）----
+// Catalyst 9800（IOS-XE）、AireOS、Aruba Mobility Controller／Instant、H3C WX。先處理 WLAN 專屬欄位
+// （PSK、SSID 與 WLAN／SSID profile 名稱、AP 管理帳密），再交給同語系的既有規則（9800→IOS、H3C WX→Comware、
+// AireOS 與 Aruba→通用）。欄位依 firewall_analyzer 的 parseWlcWifi() 已解析的語法，另加 Oxidized 真實錄製中
+// 出現的 Aruba／9800 機敏欄位（virtual-controller-key、ap-console-password、mgmtuser 等）
+function anonWlc(text, opts) {
+  const kind = /^(?:config\s+)?wlan\s+create\s+\d+\s+\S+/m.test(text) ? 'aireos'
+    : /^\s*wlan\s+service-template\s+\S+/m.test(text) ? 'h3cwx'
+    : /^\s*wlan\s+ssid-profile\s+\S+/m.test(text) ? 'aruba' : 'cisco9800';
+  const red = (tok, kindStat) => { stats[kindStat]++; return tok; };
+  const ss = n => {
+    const q = /^".*"$/.test(n) ? '"' : '';
+    return opts.hostname ? q + anonSSID(q ? n.slice(1, -1) : n) + q : n;
+  };
+  const pre = text.split('\n').map(line => {
+    let m;
+    if (kind === 'cisco9800') {
+      if ((m = /^(wlan\s+)(\S+)(\s+\d{1,4}\s+)(.+)$/.exec(line))) return m[1] + ss(m[2]) + m[3] + ss(m[4].trim());
+      if ((m = /^(\s+wlan\s+)(\S+)(\s+policy\s+.*)$/.exec(line))) return m[1] + ss(m[2]) + m[3];
+      if ((m = /^(\s*security\s+wpa\s+psk\s+set-key\s+(?:ascii|hex)\s+\d+\s+).+$/.exec(line))) return m[1] + red('REDACTED_PSK', 'key');
+      // AP profile 的 dot1x／mgmtuser 帳密（密碼可含空白，取到 secret 或行尾）
+      if ((m = /^(\s*(?:dot1x|mgmtuser)\s+username\s+)(\S+)(\s+password\s+\d+\s+)(.+?)(?:(\s+secret\s+\d+\s+).+)?$/.exec(line)))
+        return m[1] + (opts.user ? anonUser(m[2]) : m[2]) + m[3] + red('REDACTED_PASSWORD', 'password') + (m[5] ? m[5] + red('REDACTED_SECRET', 'password') : '');
+    } else if (kind === 'aireos') {
+      const l = line.replace(/^\s+/, '');
+      if ((m = /^((?:config\s+)?wlan\s+create\s+\d+\s+)(\S+)(?:(\s+)(\S+))?(.*)$/.exec(l))) return m[1] + ss(m[2]) + (m[4] ? m[3] + ss(m[4]) : '') + m[5];
+      if ((m = /^((?:config\s+)?wlan\s+security\s+wpa\s+akm\s+psk\s+set-key\s+(?:ascii|hex)\s+)\S+(\s+\d+\s*)$/.exec(l))) return m[1] + red('REDACTED_PSK', 'key') + m[2];
+      if ((m = /^((?:config\s+)?radius\s+(?:auth|acct)\s+add\s+\d+\s+\S+\s+\d+\s+(?:ascii|hex)\s+)\S+(.*)$/.exec(l))) return m[1] + red('REDACTED_KEY', 'key') + m[2];
+      if (opts.hostname && (m = /^((?:config\s+)?sysname\s+)(\S+)/.exec(l))) return m[1] + anonHostname(m[2], 'wlc', opts);
+    } else if (kind === 'aruba') {
+      if ((m = /^(\s*wpa-passphrase\s+)("[^"]*"|\S+)\s*$/.exec(line))) return m[1] + (m[2][0] === '"' ? '"' + red('REDACTED_PSK', 'key') + '"' : red('REDACTED_PSK', 'key'));
+      if ((m = /^(\s*essid\s+)("[^"]*"|\S+)\s*$/.exec(line))) return m[1] + ss(m[2]);
+      if ((m = /^(\s*(?:wlan\s+ssid-profile|ssid-profile)\s+)("[^"]*"|\S+)\s*$/.exec(line))) return m[1] + ss(m[2]);
+      if ((m = /^(\s*(?:key|virtual-controller-key|ap-console-password|bkup-passwords|ike\s+authentication\s+pre-share)\s+)("[^"]*"|\S+)\s*$/.exec(line)))
+        return m[1] + (m[2][0] === '"' ? '"' + red('REDACTED_KEY', 'key') + '"' : red('REDACTED_KEY', 'key'));
+      if ((m = /^(authentication\s+)(?!pre-share\b|rsa-sig\b|ecdsa)(\S+)\s*$/.exec(line))) return m[1] + red('REDACTED_KEY', 'key');
+      if ((m = /^(\s*peer-ip-address\s+\S+\s+ipsec\s+)\S+\s*$/.exec(line))) return m[1] + red('REDACTED_KEY', 'key');
+      if ((m = /^(\s*snmp-server\s+host\s+\S+\s+version\s+(?:1|2c)\s+)(\S+)(.*)$/.exec(line))) return m[1] + red('REDACTED_COMMUNITY', 'community') + m[3];
+      if (opts.hostname && (m = /^(name\s+)(\S+)\s*$/.exec(line))) return m[1] + anonHostname(m[2], 'wlc', opts);
+      if (opts.hostname && (m = /^(organization\s+)(.+)$/.exec(line))) return m[1] + 'REDACTED_ORG';
+      if (opts.hostname && (m = /^(\s*nas-identifier\s+)("?)([^"\s]+)("?)\s*$/.exec(line))) return m[1] + m[2] + anonHostname(m[3], 'wlc', opts) + m[4];
+      if ((m = /^(\s*wlan\s+access-rule\s+)("[^"]*"|\S+)\s*$/.exec(line))) return m[1] + ss(m[2]);
+      // Instant 檔頭的 AP 清單（# 名稱  IP  型號 …）：AP 名稱可含空白，取到 IP 之前
+      if (opts.hostname && (m = /^(#\s+)(\S.*?)(\s+\d{1,3}(?:\.\d{1,3}){3}\*?\s.*)$/.exec(line))) return m[1] + anonHostname(m[2].trim(), 'ap', opts) + m[3];
+    } else if (kind === 'h3cwx') {
+      if ((m = /^(\s*ssid\s+)(.+?)\s*$/.exec(line))) return m[1] + ss(m[2]);
+      if ((m = /^(\s*preshared-key\s+(?:pass-phrase|raw-key)\s+(?:simple|cipher)\s+)\S+/.exec(line))) return m[1] + red('REDACTED_PSK', 'key');
+      if ((m = /^(\s*(?:wlan\s+)?service-template\s+)(?!enable\b|disable\b)(\S+)(.*)$/.exec(line))) return m[1] + ss(m[2]) + m[3];
+      if (opts.hostname && (m = /^(wlan\s+ap\s+)(\S+)(.*)$/.exec(line))) return m[1] + anonHostname(m[2], 'ap', opts) + m[3];
+    }
+    return line;
+  }).join('\n');
+  const out = (kind === 'cisco9800' ? anonCiscoIOS : kind === 'h3cwx' ? anonComware : anonGeneric)(pre, opts).split('\n');
+  // AireOS 的 wlan security … 指令已在上面處理過 PSK；通用規則會把 `akm psk enable` 的 enable 當成金鑰，改用處理後的行
+  const preLines = pre.split('\n');
+  if (kind === 'aireos' && preLines.length === out.length) preLines.forEach((l, i) => { if (/^\s*(?:config\s+)?wlan\s+security\s/.test(l)) out[i] = l; });
+  // 版本號（Aruba 的 version 8.10.0.0-8.10.0、ArubaOS … Version 8.10.0.6）長得像 IPv4，維持原文
+  const orig = text.split('\n');
+  if (orig.length === out.length) orig.forEach((l, i) => { if (/\bversion\s+\d+\.\d+\.\d+\.\d+/i.test(l) && !/\b(?:host|server|ip)\b/i.test(l)) out[i] = l; });
+  return out.join('\n');
+}
+
 const VENDOR_FNS = {
   fortigate: anonFortiGate, fortiswitch: anonFortiSwitch,
   sophos: anonSophos, checkpoint: anonCheckPoint, paloalto: anonPaloAlto,
   pfsense: anonPfSense, sonicwall: anonSonicWall, mikrotik: anonMikroTik,
-  comware: anonComware, h3c_secpath: anonComware, cisco_ios: anonCiscoIOS, cisco_biz: anonCiscoBiz, cisco_nxos: anonCiscoNXOS,
+  comware: anonComware, h3c_secpath: anonComware, wlc: anonWlc, cisco_ios: anonCiscoIOS, cisco_biz: anonCiscoBiz, cisco_nxos: anonCiscoNXOS,
   juniper: anonJuniper, arista: anonArista, aruba_cx: anonArubaCX,
   procurve: anonProCurve,
   dell_os10: anonDellOS10, extreme: anonExtreme, alcatel: anonAlcatel,
@@ -3951,7 +4016,9 @@ function checkResidual(text) {
     // 下的行為與其餘關鍵字不一致。
     // 關鍵字後只剩冒號、引號或 *（YAML 鍵行的值在下一行、NVUE 的 '*' 代表未設密碼）不算殘留（2026-10-02）
     // `service password-encryption`（Cisco IOS／AW+ 的功能開關）不是密碼
-    const tk = t.replace(/\bpassword-encryption\b/gi, '');
+    // Aruba 的 `opmode wpa2-psk-aes` 是加密模式名稱，不是金鑰（2026-10-05）
+    // AireOS 的 `wlan security wpa akm psk enable|disable N` 是功能開關
+    const tk = t.replace(/\bpassword-encryption\b/gi, '').replace(/^\s*opmode\s+\S+/i, 'opmode').replace(/\bakm\s+psk\s+(?:enable|disable)\b/i, 'akm');
     if (sensitiveKw.test(tk) && !/^[:'"*\s]*$/.test(tk.replace(/\s+/g, ' ').split(/password|passwd|secret|psk|community|auth.?key|shared.?key|pre.?shared/i).pop().trim())) {
       if (!/REDACTED/.test(t)) warnings.push({ line: lineNum, text: t });
     }
@@ -3991,7 +4058,8 @@ function checkResidual(text) {
     // 一行可能有多個 IP（如 NAT/ACL 常見的 src/dst 對），須逐一檢查每個相符項目，
     // 不能只驗證第一個就判定整行安全（`.match()` 不加 g 只會回傳第一個匹配）
     // 前後還接著「.數字」的是更長的點分數字（SNMP OID 如 1.3.6.1.2.1），不是 IP（2026-10-02）
-    const ipMatches = t.match(new RegExp('(?<![\\d.])' + ipLike.source + '(?!\\.\\d)', 'g'));
+    // 緊接在 version／Version 之後的是版本號（Aruba 的 version 8.10.0.0-8.10.0），不是 IP（2026-10-05）
+    const ipMatches = t.replace(/\bversion\s+\d+(?:\.\d+){3}/gi, 'version').match(new RegExp('(?<![\\d.])' + ipLike.source + '(?!\\.\\d)', 'g'));
     // 去識別化刻意保留的位址（0.x 預設路由／萬用遮罩、127.x、224 以上的群播與子網路遮罩，見 classifyIP()）
     // 不算殘留；原本每條預設路由、ACL 萬用遮罩都被列為殘留，匯出時一再跳出確認（2026-10-01）
     if (ipMatches && ipMatches.some(m => !/^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(m) && !(isValidIPv4(m) && classifyIP(m) === 'skip'))) {
