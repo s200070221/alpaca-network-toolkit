@@ -2246,6 +2246,7 @@ function parseAny(cfg,forceVendor){
   // 基礎管理服務（第十二輪 MA）；Cisco 的 SSH v1 依「SSH 已開放但未限定 ip ssh version 2」判斷
   // AlliedWare Plus 的品牌在下方 applyAlliedWare() 才設定，這裡以 isAW 判斷
   res.mgmtSvc=parseMgmtServices(cfg, vendor, isAW&&vendor==='cisco'?'awplus':(res.sys&&res.sys.brand));
+  res.l2Protect=parseL2Protect(cfg, vendor, isAW&&vendor==='cisco'?'awplus':(res.sys&&res.sys.brand));
   if(res.mgmtSvc&&vendor==='cisco')res.mgmtSvc.sshV1=!!(res.mgmtAccess&&res.mgmtAccess.ssh)&&!res.mgmtSvc.sshV2Only;
   // Brocade 的 qos 已在 parseBrocade() 內用專屬形狀（dscpMap/ports）設定，Extreme 的
   // qos 已在 parseExtremeXOS() 內用專屬形狀（profiles/dscpMap/ports，QP1-QP8 profile

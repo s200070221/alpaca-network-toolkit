@@ -690,6 +690,63 @@ function parseMgmtServices(cfg, vendor, brand){
     sshV2Only:vendor==='cisco'?has(/^\s*ip\s+ssh\s+version\s+2\b/m):null};
 }
 
+// L2 防護（2026-10-06，第十二輪 MB）：DHCP snooping、DAI（Comware 稱 ARP detection）、IP Source Guard
+// （Aruba CX 稱 source-lockdown）、broadcast storm control。回傳 null 代表該廠牌不評估，單一欄位 null
+// 代表該功能語法未查證不評估。語法依官方文件與 DISA STIG 稽核項目的搜尋摘要（cisco.com、h3c.com、
+// arubanetworking 被網路政策擋下）：
+//   Cisco IOS／NX-OS：ip dhcp snooping＋ip dhcp snooping vlan 清單、ip arp inspection vlan 清單、
+//     介面 ip verify source、介面 storm-control broadcast（NX-OS 與 IOS 相同）
+//   Arista EOS：介面 storm-control broadcast（DHCP snooping 在 EOS 主要用於 option 82，不評估）
+//   Comware：dhcp snooping enable（V7）／dhcp-snooping（V5）全域、vlan 視圖 arp detection enable、
+//     介面 broadcast-suppression 或 storm-constrain broadcast（IP Source Guard 未查證）
+//   Aruba CX：全域 dhcpv4-snooping＋vlan 內 dhcpv4-snooping、vlan 內 arp inspection、介面 ipv4 source-lockdown
+//     （storm control 未查證）
+const L2_PROTECT_VENDORS=['cisco','nxos','arista','comware','aruba'];
+function expandL2VlanList(str){
+  const out=new Set();
+  String(str||'').split(',').forEach(t=>{
+    const m=t.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+    if(!m)return;
+    const a=+m[1], b=m[2]?+m[2]:a;
+    for(let v=a;v<=Math.min(b,a+4094);v++)out.add(String(v));
+  });
+  return out;
+}
+function parseL2Protect(cfg, vendor, brand){
+  if(!L2_PROTECT_VENDORS.includes(vendor)||brand==='ciscobiz'||brand==='awplus')return null;
+  const blocks=(kw)=>{
+    const map={};let m;
+    const re=new RegExp('^'+kw+'\\s+(\\S+)[^\\n]*\\n((?:[ \\t]+[^\\n]*(?:\\n|$))*)','gm');
+    while((m=re.exec(cfg))!==null)map[m[1]]=(map[m[1]]||'')+m[2];
+    return map;
+  };
+  const ifs=blocks('interface');
+  const ifHas=re=>Object.keys(ifs).filter(n=>re.test(ifs[n]));
+  let snoop=null, dai=null, ipsg=null, storm=null;
+  if(vendor==='cisco'||vendor==='nxos'){
+    const on=/^ip\s+dhcp\s+snooping\s*$/m.test(cfg);
+    const v=new Set();(cfg.match(/^ip\s+dhcp\s+snooping\s+vlan\s+(\S+)/gm)||[]).forEach(l=>expandL2VlanList(l.split(/\s+/)[4]).forEach(x=>v.add(x)));
+    snoop=on?[...v]:[];
+    const d=new Set();(cfg.match(/^ip\s+arp\s+inspection\s+vlan\s+(\S+)/gm)||[]).forEach(l=>expandL2VlanList(l.split(/\s+/)[4]).forEach(x=>d.add(x)));
+    dai=[...d];
+    ipsg=ifHas(/^\s*ip\s+verify\s+source\b/m);
+    storm=ifHas(/^\s*storm-control\s+broadcast\b/m);
+  }else if(vendor==='arista'){
+    storm=ifHas(/^\s*storm-control\s+broadcast\b/m);
+  }else if(vendor==='comware'){
+    snoop=/^\s*(?:dhcp\s+snooping\s+enable|dhcp-snooping)\s*$/m.test(cfg)?['all']:[];
+    const vl=blocks('vlan');
+    dai=Object.keys(vl).filter(v=>/^\s*arp\s+detection\s+enable\b/m.test(vl[v]));
+    storm=ifHas(/^\s*(?:broadcast-suppression|storm-constrain\s+broadcast)\b/m);
+  }else if(vendor==='aruba'){
+    const vl=blocks('vlan');
+    snoop=/^dhcpv4-snooping\s*$/m.test(cfg)?Object.keys(vl).filter(v=>/^\s*dhcpv4-snooping\s*$/m.test(vl[v])):[];
+    dai=Object.keys(vl).filter(v=>/^\s*arp\s+inspection\s*$/m.test(vl[v]));
+    ipsg=ifHas(/^\s*ipv4\s+source-lockdown\b/m);
+  }
+  return {snoop, dai, ipsg, storm};
+}
+
 // OSPF/BGP/RIP 路由通訊協定認證解析（2026-07-22 新增，13 廠牌逐一對外查證官方 CLI 文件後
 // 實作）。設計為獨立於既有 parseOSPF()/parseBGP()/parseRIP() 之外的整體性判斷（是否「整份
 // 設定檔內至少有一處」該通訊協定的認證設定），非逐 area/neighbor 精確比對——避免需要改動
