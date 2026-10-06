@@ -139,6 +139,8 @@ function detectVendor(cfg){
   if(typeof isCumulusNVUE==='function'&&isCumulusNVUE(cfg))return'cumulus';
   // Extreme VOSS／Fabric Engine（2026-10-05，KG）：config.cfg 檔頭 `# box type`、`vlan create … type port-mstprstp`（見 parser-voss.js）
   if(typeof isVOSS==='function'&&isVOSS(cfg))return'voss';
+  // Broadcom EFOS（2026-10-06，MM）：!System Description "EFOS…"；須排在 EdgeSwitch（同為 FASTPATH，也有 vlan participation）前
+  if(typeof isEFOS==='function'&&isEFOS(cfg))return'efos';
   if(/^\s*sysname\s+|irf domain|port link-type|undo shutdown|ip route-static|ip vpn-instance/m.test(cfg))return'comware';
   // ProCurve/ArubaOS-Switch: ; J9xxx header, oobm keyword, or trunk X trk1 lacp syntax
   // 2026-10-01：另認「帶引號的 hostname＋VLAN 區塊內以埠號開頭的 untagged／tagged」組合——沒有
@@ -2209,6 +2211,7 @@ function parseAny(cfg,forceVendor){
   else if(vendor==='sonic') res=parseSONiC(cfg);
   else if(vendor==='cumulus') res=parseCumulus(cfg);
   else if(vendor==='voss') res=parseVOSS(cfg);
+  else if(vendor==='efos') res=parseEFOS(cfg);
   else res={vendor:'unknown',sys:{hostname:'unknown',version:''},irf:null,stack:null,vlans:[],interfaces:[],routes:[],vrfs:[],users:[],ospf:[],bgp:[],rip:[],vrrp:[],vxlan:null,acls:[]};
 
   res.vendor=vendor;
@@ -2221,27 +2224,27 @@ function parseAny(cfg,forceVendor){
   // （routeros 無對應分支）用空/預設值蓋掉已經解析好的正確資料
   // sonic：parseSONiC() 已用 PORTCHANNEL/PORTCHANNEL_MEMBER 正確算好 res.lacp，
   // 不可被這裡的共用 regex dispatcher（對 JSON 文字必定掃不到東西）用空結果覆蓋
-  if(vendor!=='juniper'&&vendor!=='alcatel'&&vendor!=='extreme'&&vendor!=='brocade'&&vendor!=='procurve'&&vendor!=='routeros'&&vendor!=='sonic'&&vendor!=='cumulus'&&vendor!=='voss')res.lacp=parseLACP(cfg, vendor);
+  if(vendor!=='juniper'&&vendor!=='alcatel'&&vendor!=='extreme'&&vendor!=='brocade'&&vendor!=='procurve'&&vendor!=='routeros'&&vendor!=='sonic'&&vendor!=='cumulus'&&vendor!=='voss'&&vendor!=='efos')res.lacp=parseLACP(cfg, vendor);
   // channel-group N mode auto 在 Cisco Business（CBS／SG）代表 LACP（IOS 的 auto 是 PAgP），mode on 為靜態聚合
   if(res.sys&&res.sys.brand==='ciscobiz')(res.lacp||[]).forEach(l=>{if(l.mode==='auto')l.mode='active';});
-  if(vendor!=='juniper'&&vendor!=='extreme'&&vendor!=='brocade'&&vendor!=='procurve'&&vendor!=='routeros'&&vendor!=='sonic'&&vendor!=='cumulus'&&vendor!=='voss')res.dhcp=parseDHCP(cfg, vendor);
+  if(vendor!=='juniper'&&vendor!=='extreme'&&vendor!=='brocade'&&vendor!=='procurve'&&vendor!=='routeros'&&vendor!=='sonic'&&vendor!=='cumulus'&&vendor!=='voss'&&vendor!=='efos')res.dhcp=parseDHCP(cfg, vendor);
   // 2026-07-24 新增：系統層級 DNS Server，獨立新頂層欄位，不受上方 DHCP dispatcher 排除清單影響
   // （parseDNSServers() 內部自行處理各廠牌 branch，無需比照 dhcp 那樣繞過 dispatcher）
-  if(vendor!=='cumulus'&&vendor!=='voss')res.dns=parseDNSServers(cfg, vendor);
+  if(vendor!=='cumulus'&&vendor!=='voss'&&vendor!=='efos')res.dns=parseDNSServers(cfg, vendor);
   // RouterOS 的 stp 同樣是 parseRouterOSBridgeSTP() 外部覆蓋模式（2026-07-27 起已改為
   // 回傳與共用 dispatcher 相同的 {mode,instances,ports,rootMode,timers} 巢狀形狀），此處
   // 原本對任何廠牌都無排除，會被下方共用 dispatcher 蓋掉，一併修復
-  if(vendor!=='routeros'&&vendor!=='sonic'&&vendor!=='cumulus'&&vendor!=='voss')res.stp=parseSTP(cfg, vendor);
+  if(vendor!=='routeros'&&vendor!=='sonic'&&vendor!=='cumulus'&&vendor!=='voss'&&vendor!=='efos')res.stp=parseSTP(cfg, vendor);
   res.acls=parseACL(cfg, vendor);
   res.security=parseSecurity(cfg, vendor);
   // sonic：parseSONiC() 已用 SNMP_COMMUNITY/SYSLOG_SERVER 兩個 JSON 表格正確算好
   // res.snmp/res.syslog（見 _parseSnmpSONiC()/_parseSyslogSONiC()），不可被這裡的共用
   // 文字正則 dispatcher（對 JSON 文字必定掃不到東西）用空結果覆蓋，比照既有 lacp/dhcp/
   // stp/qos 排除模式（2026-08-20 新增）
-  if(vendor!=='sonic'&&vendor!=='cumulus'&&vendor!=='voss')res.snmp=parseSNMP(cfg, vendor);
+  if(vendor!=='sonic'&&vendor!=='cumulus'&&vendor!=='voss'&&vendor!=='efos')res.snmp=parseSNMP(cfg, vendor);
   if(vendor!=='sonic'&&vendor!=='cumulus'&&vendor!=='voss')res.syslog=parseSyslog(cfg, vendor);
   // VOSS 的 SSH／Telnet 由開機旗標 boot config flags sshd／telnetd 啟用（真實 running-config 錄製可見 sshd）
-  res.mgmtAccess=vendor==='voss'?{telnet:/^boot config flags telnetd\s*$/m.test(cfg),ssh:/^boot config flags sshd\s*$/m.test(cfg)}:parseMgmtAccess(cfg, vendor);
+  res.mgmtAccess=vendor==='efos'?res.mgmtAccess:vendor==='voss'?{telnet:/^boot config flags telnetd\s*$/m.test(cfg),ssh:/^boot config flags sshd\s*$/m.test(cfg)}:parseMgmtAccess(cfg, vendor);
   res.routingAuth=parseRoutingAuth(cfg, vendor);
   // 基礎管理服務（第十二輪 MA）；Cisco 的 SSH v1 依「SSH 已開放但未限定 ip ssh version 2」判斷
   // AlliedWare Plus 的品牌在下方 applyAlliedWare() 才設定，這裡以 isAW 判斷
@@ -2252,7 +2255,7 @@ function parseAny(cfg,forceVendor){
   // qos 已在 parseExtremeXOS() 內用專屬形狀（profiles/dscpMap/ports，QP1-QP8 profile
   // 模型）設定，RouterOS 的 qos 已在 parseRouterOS() 內用專屬形狀（simpleQueues/
   // queueTree）設定，三者皆不可被這裡的共用 Cisco-style policy-map dispatcher 覆蓋
-  if(vendor!=='brocade'&&vendor!=='extreme'&&vendor!=='routeros'&&vendor!=='sonic'&&vendor!=='cumulus'&&vendor!=='voss')res.qos=parseQoS(cfg, vendor);
+  if(vendor!=='brocade'&&vendor!=='extreme'&&vendor!=='routeros'&&vendor!=='sonic'&&vendor!=='cumulus'&&vendor!=='voss'&&vendor!=='efos')res.qos=parseQoS(cfg, vendor);
   // class-map/match + service-policy：僅 cisco/ruijie/planet 三家已查證（見 parseClassMaps()/
   // parseServicePolicy() 註解），其餘廠牌刻意不賦值（維持 undefined，非空陣列），避免暗示
   // 未查證廠牌也支援
