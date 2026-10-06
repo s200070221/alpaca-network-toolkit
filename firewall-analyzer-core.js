@@ -548,6 +548,41 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED, opts) {
       hasFqdn: results.some(x => x.hasFqdn), combos: results.length, acceptCount, check };
   });
 }
+// 規則變更模擬（2026-10-06，第十二輪 MD）：在 parsed 的副本上套用變更，不動原物件。
+// changes：[{op, idx, target?}]，idx／target 為原始 policies 陣列的索引（多 VDOM 時規則 ID 可能重複，以索引
+// 指定才不會混淆）；op：disable／enable／delete／accept／deny（改動作）／move（移到 target 之前，target 為
+// -1 時移到最後）。依序套用；找不到的規則（已被前面的變更刪除）回報在 errors。規則評估依陣列順序
+function applyPolicyWhatIf(parsed, changes) {
+  const pols = ((parsed && parsed.policies) || []).map((p, i) => Object.assign({}, p, { _wiIdx: i }));
+  const errors = [];
+  const at = idx => pols.findIndex(p => p._wiIdx === idx);
+  (changes || []).forEach((c, n) => {
+    const i = at(c.idx);
+    if (i < 0) { errors.push({ n, reason: 'missing' }); return; }
+    const p = pols[i];
+    if (c.op === 'disable') p.status = 'disable';
+    else if (c.op === 'enable') p.status = 'enable';
+    else if (c.op === 'delete') pols.splice(i, 1);
+    else if (c.op === 'accept' || c.op === 'deny') { p.action = c.op; p.actionRaw = c.op; }
+    else if (c.op === 'move') {
+      if (c.target === c.idx) return;
+      const [moved] = pols.splice(i, 1);
+      if (c.target === -1 || c.target === undefined) pols.push(moved);
+      else {
+        const j = at(c.target);
+        if (j < 0) { pols.splice(i, 0, moved); errors.push({ n, reason: 'missing' }); return; }
+        pols.splice(j, 0, moved);
+      }
+    } else errors.push({ n, reason: 'op' });
+  });
+  return { parsed: Object.assign({}, parsed, { policies: pols }), errors };
+}
+// 遮蔽關係的變化（模擬前後各跑一次 analyzeRuleShadowing()）：added＝模擬後新出現的遮蔽、resolved＝模擬後消失的遮蔽
+function compareShadowing(oldShadow, newShadow) {
+  const key = r => `${r.shadowedId}|${r.shadowingId}`;
+  const o = new Set((oldShadow || []).map(key)), nw = new Set((newShadow || []).map(key));
+  return { added: (newShadow || []).filter(r => !o.has(key(r))), resolved: (oldShadow || []).filter(r => !nw.has(key(r))) };
+}
 // 批次查詢跨版本比對（2026-09-29 新增，FE）：同一批查詢對新舊兩份設定各跑一次。
 // change：'action'＝允許／拒絕結果改變（implicit deny 視同 deny）；'policy'＝結果相同但命中的
 // 規則 ID 不同；''＝完全相同。回傳 [{...row, old:{action,policyId,policyName}, new:{...}, change}]

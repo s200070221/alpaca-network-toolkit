@@ -620,6 +620,7 @@ const App = (() => {
       // 舊檔案的過期查詢結果（唯讀稽核發現的既有 bug）
       LAST_QUERY_TRACE = null;
       LAST_BATCH_RESULTS = null;
+      _whatIf = []; LAST_WHATIF = null;
       // WiFi analysis（2026-08-19 擴大：原僅 FortiGate，對外查證後新增 mikrotik/openwrt/
       // pfsense 三家「自身即為 AP」架構的廠牌，合併各自 vaps 並重新計算共用 summary；
       // sophos/sonicwall 查證後查無語法佐證，維持排除，見下方 WIFI_UNSUPPORTED）
@@ -1468,7 +1469,8 @@ function onParsed(){
         const _qvdoms = [...new Set((PARSED.policies||[]).map(p=>p._vdom).filter(Boolean))];
         const _qintfs = [...new Set((PARSED.policies || []).flatMap(p => (p._chain && p.srcIntf === p._chain) ? [] : String(p.srcIntf || '').split(/\s*,\s*/))
           .map(s => s.trim()).filter(s => s && s !== '-' && !/^(any|all)$/i.test(s)))].sort();
-        $('tbl-wrap').innerHTML = buildQuerySectionHtml(_qvdoms, PARSED.vendor === 'FortiGate', _qintfs);
+        $('tbl-wrap').innerHTML = buildQuerySectionHtml(_qvdoms, PARSED.vendor === 'FortiGate', _qintfs, (PARSED.policies || []).map((p, i) => ({ idx: i, label: _wiRuleLabel(p) })));
+        _wiRenderList();
         $('tbl-section-label').textContent = tr('nav.query');
         if (_sv.src) { const _e=$('q-src'); if(_e) _e.value=_sv.src; }
         if (_sv.dst) { const _e=$('q-dst'); if(_e) _e.value=_sv.dst; }
@@ -2047,6 +2049,12 @@ function onParsed(){
 
   async function doExport(type){
     // 批次查詢跨版本比對（FE）同樣屬於獨立於 PARSED 的比對流程，比照下方 csv-diff- 在門檻前處理
+    if(type==='csv-whatif'){
+      const content=Reporter.exportBatchDiffCSV(LAST_WHATIF);
+      if(content)Reporter.download(content,`fw_whatif_${dateStr()}.csv`,'text/csv');
+      else showErr(tr('batch.empty'));
+      return;
+    }
     if(type==='csv-batch-diff'){
       const content=Reporter.exportBatchDiffCSV(LAST_BATCH_DIFF);
       if(content)Reporter.download(content,`fw_batch_diff_${dateStr()}.csv`,'text/csv');
@@ -2408,6 +2416,36 @@ function onParsed(){
   }
 
   // ── 批次 IP/Policy 查詢（2026-09-29 新增）：解析／查詢邏輯在 core.js，這裡只接 DOM ──
+  // ── 規則變更模擬（2026-10-06，第十二輪 MD）：變更清單只存在記憶體，載入新設定時清空 ──
+  let _whatIf = [], LAST_WHATIF = null;
+  function _wiRuleLabel(p) {
+    return `${p._vdom ? p._vdom + ' / ' : ''}#${p.id}${p.name && p.name !== '-' && String(p.name) !== String(p.id) ? ' ' + p.name : ''} (${p.action}${_isDisabledStatus(p) ? ', ' + tr('whatif.disabled') : ''})`;
+  }
+  function _wiRenderList() {
+    const el = $('wi-list'); if (!el) return;
+    const pols = (PARSED && PARSED.policies) || [];
+    el.innerHTML = _whatIf.map((c, n) => `<div style="font-size:12px;padding:3px 0">${n + 1}. ${esc(tr('whatif.op_' + c.op))}：${esc(pols[c.idx] ? _wiRuleLabel(pols[c.idx]) : '?')}`
+      + (c.op === 'move' ? ` → ${esc(c.target === -1 ? tr('whatif.to_end') : tr('whatif.before').replace('{rule}', pols[c.target] ? _wiRuleLabel(pols[c.target]) : '?'))}` : '')
+      + ` <button type="button" class="btn btn-ghost btn-sm" onclick="_wiRemove(${n})">✕</button></div>`).join('');
+  }
+  window._wiAdd = function() {
+    const op = ($('wi-op') || {}).value, idx = parseInt(($('wi-rule') || {}).value, 10);
+    if (!op || !Number.isFinite(idx)) return;
+    const c = { op, idx };
+    if (op === 'move') c.target = parseInt(($('wi-target') || {}).value, 10);
+    _whatIf.push(c); _wiRenderList();
+  };
+  window._wiRemove = function(n) { _whatIf.splice(n, 1); _wiRenderList(); };
+  window._wiClear = function() { _whatIf = []; LAST_WHATIF = null; _wiRenderList(); const r = $('wi-result'); if (r) r.innerHTML = ''; };
+  window._wiRun = function() {
+    const el = $('wi-result'); if (!el || !PARSED) return;
+    if (!_whatIf.length) { el.innerHTML = `<div class="nodata">${tr('whatif.empty')}</div>`; return; }
+    const { rows, errors } = parseBatchQueryCSV(($('batch-input') || {}).value || '');
+    const sim = applyPolicyWhatIf(PARSED, _whatIf);
+    LAST_WHATIF = rows.length ? compareBatchQuery(rows, PARSED, sim.parsed, _queryOpts(false)) : [];
+    const shadow = compareShadowing(analyzeRuleShadowing(PARSED.policies || [], PARSED.addresses), analyzeRuleShadowing(sim.parsed.policies, PARSED.addresses));
+    el.innerHTML = buildWhatIfResultHtml(LAST_WHATIF, errors, shadow, rows.length);
+  };
   window._runBatchQuery = function() {
     const el = $('batch-result'); if (!el) return;
     const { rows, errors } = parseBatchQueryCSV(($('batch-input')||{}).value||'');
