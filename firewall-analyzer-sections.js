@@ -615,13 +615,16 @@ function buildBatchQueryResultHtml(results, errors){
   let h=`<div style="font-size:13px;margin-bottom:8px;color:${nMis?'var(--red)':'var(--text)'}">${esc(summary)}</div>`;
   if(errors.length) h+=`<div style="font-size:12px;color:var(--orange);margin-bottom:8px">${esc(tr('batch.errors').replace('{items}',errors.map(e=>e.line+'('+e.reason+')').join(', ')))}</div>`;
   if(!results.length) return h+`<div class="nodata">${tr('batch.empty')}</div>`;
+  // 有 count 欄（log 分析批次送來，第十二輪 ME）時多一欄 log 筆數，並說明不一致的意義
+  const hasCount=results.some(r=>r.count!=null);
+  if(hasCount) h+=`<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('batch.log_note'))}</div>`;
   h+=`<button type="button" class="btn btn-ghost btn-sm" style="margin-bottom:8px" onclick="doExport('csv-batch-query')">⬇ ${tr('batch.export')}</button>`;
-  h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>#</th><th>${tr('query.src_ip')}</th><th>${tr('query.dst_ip')}</th><th>${tr('query.proto')}</th><th>${tr('query.port')}</th><th>${tr('batch.col_result')}</th><th>${tr('batch.col_policy')}</th><th>${tr('batch.col_expect')}</th><th>${tr('batch.col_check')}</th></tr></thead><tbody>`;
+  h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>#</th><th>${tr('query.src_ip')}</th><th>${tr('query.dst_ip')}</th><th>${tr('query.proto')}</th><th>${tr('query.port')}</th><th>${tr('batch.col_result')}</th><th>${tr('batch.col_policy')}</th><th>${hasCount?tr('batch.col_log_expect'):tr('batch.col_expect')}</th>${hasCount?`<th>${tr('batch.col_count')}</th>`:''}<th>${tr('batch.col_check')}</th></tr></thead><tbody>`;
   results.forEach(r=>{
     const chk=r.check===null?'':(r.check?`<span style="color:var(--green)">✓ ${tr('batch.check_ok')}</span>`:`<span style="color:var(--red);font-weight:600">✗ ${tr('batch.check_bad')}</span>`);
     h+=`<tr${r.check===false?' style="background:rgba(239,83,80,.08)"':''}><td class="mono">${r.line}</td><td class="mono">${esc(r.src)}</td><td class="mono">${esc(r.dst)}</td><td>${esc(r.proto==='any'?tr('query.any_proto'):r.proto)}</td><td class="mono">${esc(r.port||'-')}</td>`
       +`<td>${esc(batchActionLabel(r))}${r.hasFqdn?` <span style="font-size:11px;color:var(--orange)">(${tr('query.fqdn_note')})</span>`:''}</td>`
-      +`<td class="mono">${esc(r.policyId===''?'-':String(r.policyId))}${r.policyName?' '+esc(r.policyName):''}</td><td>${esc(r.expect||'-')}</td><td>${chk}</td></tr>`;
+      +`<td class="mono">${esc(r.policyId===''?'-':String(r.policyId))}${r.policyName?' '+esc(r.policyName):''}</td><td>${esc(r.expect||'-')}</td>${hasCount?`<td class="mono">${r.count==null?'-':r.count}</td>`:''}<td>${chk}</td></tr>`;
   });
   return h+'</tbody></table></div>';
 }
