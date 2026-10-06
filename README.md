@@ -47,7 +47,7 @@
 **主要功能**
 - 規則、路由、NAT、VPN、位址物件視覺化
 - IP／埠查詢：這條連線會被哪條規則放行或擋下（以對外位址查詢時可依目的 NAT 換算）
-- 遮蔽規則分析、合規稽核與健康度評分
+- 遮蔽規則分析、合規稽核（含 IPv6 防護缺口）與健康度評分
 - 新舊設定比對（含 HA 主備比對）、設定檔格式互轉
 - 規則命中數匯入（FortiGate、Cisco ASA／FTD、Palo Alto、Juniper SRX），找出從未或長期未命中的規則
 - WiFi 分析：SSID 加密、PMF、隱藏、入口網頁、使用者隔離與安全等級（FortiGate、MikroTik、OpenWrt、pfSense 與無線控制器）

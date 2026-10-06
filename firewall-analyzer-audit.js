@@ -817,6 +817,40 @@
     f('mgmt-exposed', tr('audit.check_mgmt_exposed'), mgmtExposed.length, 'high',
       mgmtExposed.length ? tr('audit.id_prefix') + mgmtExposed.map(p => idLabel(p)).slice(0,10).join(', ') + (mgmtExposed.length > 10 ? '…' : '') : tr('audit.none'),
       ['PCI-DSS 4.0 1.3.1', 'NIST 800-53 SC-7', 'CIS v8 4.4'], polItems(mgmtExposed));
+    // 12b. IPv6 防護缺口（2026-10-06，第十二輪 MC）
+    // (a) ipv6-any-open：IPv6 部分來源與目的皆為全部（::/0、any6、all6 等字面值或值為 ::/0 的位址物件）、服務不限的允許規則。
+    //     any-any 與過寬網段只看 IPv4／字面 any，`::/0` 這類 IPv6 全開寫法原本兩者都抓不到；已算進第 1 項的規則不重複列
+    // (b) ipv6-unfiltered：未設定規則時 IPv6 預設放行的系統（MikroTik /ipv6 firewall filter 與 Linux netfilter 鏈預設接受、
+    //     VyOS 基本鏈預設 accept——依官方文件），有 IPv4 規則卻沒有任何適用 IPv6 的規則。只在單一廠牌上傳時判斷
+    const V6_ANY = new Set(['::/0', '::0/0', '0::0/0', 'any6', 'all6', 'any-ipv6', 'ipv6-any', '::']);
+    const v6AnyTok = (tok, vdom) => {
+      const t = String(tok || '').trim().replace(/^"|"$/g, '');
+      if (V6_ANY.has(t.toLowerCase())) return true;
+      const o = addrByName.get(vk(vdom, t));
+      return !!o && [o.subnet, o.ip6, o.value, o.ip].some(x => V6_ANY.has(String(x || '').trim().toLowerCase().replace(/\s+/g, '')));
+    };
+    const v6Side = (p, k) => {
+      const six = p[k + '6'];
+      if (six !== undefined && six !== '-' && six !== '') return String(six).split(/\s*,\s*/);
+      if (p._family === 'v6' || /^v6\//.test(String(p.id))) return String(p[k] || '').split(/\s*,\s*/);
+      return String(p[k] || '').split(/\s*,\s*/).filter(x => x.includes(':'));
+    };
+    const svcAny = p => /^(all|any|ALL)$/i.test(String(p.service || 'ALL').trim());
+    const v6AnyOpen = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && !anyAny.includes(p) && svcAny(p) &&
+      v6Side(p, 'srcAddr').some(x => v6AnyTok(x, p._vdom)) && v6Side(p, 'dstAddr').some(x => v6AnyTok(x, p._vdom)));
+    f('ipv6-any-open', tr('audit.check_ipv6_any_open'), v6AnyOpen.length, 'high',
+      v6AnyOpen.length ? tr('audit.id_prefix') + v6AnyOpen.map(p => idLabel(p)).slice(0,10).join(', ') + (v6AnyOpen.length > 10 ? '…' : '') : tr('audit.none'),
+      ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 12.2'], polItems(v6AnyOpen));
+    const vend = String(parsed.vendor || '');
+    if (/^(MikroTik|VyOS|Linux netfilter)$/.test(vend)) {
+      const live = policies.filter(p => !_isDisabledStatus(p));
+      const v6Rules = live.filter(p => p._family !== 'v4');
+      const v4Rules = live.filter(p => p._family === 'v4');
+      const gap = v4Rules.length > 0 && v6Rules.length === 0;
+      f('ipv6-unfiltered', tr('audit.check_ipv6_unfiltered'), gap ? 1 : 0, 'medium',
+        gap ? tr('audit.ipv6_unfiltered_detail').replace('{n}', v4Rules.length) : tr('audit.none'),
+        ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 12.2'], []);
+    }
     // 13. 過寬服務物件（2026-09-14 新增）：與第 1 項 any-any 檢查角度不同——那項看的是「規則」
     // 層級的來源/目的/服務是否皆為 all，此項專門看「服務物件本身」定義是否在物件層級就已無任何
     // 埠限制（proto 為 ANY/IP，或 tcp/udp port-range 寬度達 65535 等同全埠開放），即使規則的
@@ -1351,6 +1385,8 @@
       ['vpn-no-pfs', 'health.vpn_no_pfs'],
       ['default-admin-name', 'health.default_admin'],
       ['snmpv3-weak', 'health.snmpv3_weak'],
+      ['ipv6-any-open', 'health.ipv6_any_open'],
+      ['ipv6-unfiltered', 'health.ipv6_unfiltered'],
     ];
     HEALTH_EXTRA_CHECKS.forEach(([id, labelKey]) => {
       const found = complianceFindings.find(f => f.id === id);

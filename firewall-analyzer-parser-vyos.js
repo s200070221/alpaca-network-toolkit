@@ -193,6 +193,8 @@ const VyOSParser = (() => {
         utm: { av: '-', ips: '-', webfilter: '-', appctrl: '-' },
         status: hasFlag(r, 'disable') ? 'disable' : 'enable',
         users: '-', groups: '-', comments: desc, _vdom: '', connState, chain: c.name, ruleNum: num,
+        // 位址家族（2026-10-06，MC）：name／ipv4 鏈為 v4、ipv6-name／ipv6 鏈為 v6，查詢時略過家族不同的規則
+        _family: c.fam === 6 ? 'v6' : 'v4',
       });
     }));
     return out;

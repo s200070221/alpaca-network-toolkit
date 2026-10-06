@@ -28,6 +28,8 @@ const NetfilterParser = (() => {
       nat: 'disable', ippool: 'disable', poolname: '-', logtraffic: o.log ? 'all' : 'disable',
       utm: { av: '-', ips: '-', webfilter: '-', appctrl: '-' }, status: 'enable',
       users: '-', groups: '-', comments: o.comment || '', _vdom: '', connState: o.state || [], chain: o.chain, ruleNum: String(o.num), family: o.family,
+      // 位址家族（2026-10-06，MC）：ip6tables／nft ip6 表為 v6、iptables／nft ip 表為 v4、nft inet 表兩者皆適用（不標）
+      _family: o.family === 6 ? 'v6' : o.family === 4 ? 'v4' : undefined,
     };
   }
   // 規則 → 政策：先找出各自訂鏈被哪些介面的 jump 跳入，再逐條轉換
