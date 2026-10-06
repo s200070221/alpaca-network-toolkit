@@ -357,7 +357,14 @@ const MikrotikParser = (() => {
       'forward': { src: 'any',   dst: 'any' },
     };
 
-    (sections['/ip firewall filter'] || []).forEach(line => {
+    // /ipv6 firewall filter（2026-10-06，MC）：與 /ip firewall filter 同一套參數（官方 Filter 文件），
+    // 規則 id 加 v6/ 前綴並標 _family，查詢時略過家族不同的規則；/ip firewall filter 只適用 IPv4
+    const filterLines = [
+      ...(sections['/ip firewall filter'] || []).map(line => ({ line, fam: 'v4' })),
+      ...(sections['/ipv6 firewall filter'] || []).map(line => ({ line, fam: 'v6' })),
+    ];
+    let seq6 = 1;
+    filterLines.forEach(({ line, fam }) => {
       const p = parseLine(line);
       const chain  = p['chain']  || 'forward';
       const action = p['action'] || 'drop';
@@ -397,8 +404,9 @@ const MikrotikParser = (() => {
       // UTM / extra features
       const log = p['log'] === 'yes' || p['log-prefix'] ? 'all' : 'disable';
 
+      const rid = fam === 'v6' ? `v6/${seq6++}` : seq++;
       rules.push({
-        id: seq++, name: p['comment'] || `Rule-${seq-1}`,
+        id: rid, name: p['comment'] || (fam === 'v6' ? `Rule6-${String(rid).slice(3)}` : `Rule-${rid}`), _family: fam,
         srcIntf, dstIntf, srcAddr, dstAddr,
         srcAddr4: srcAddrSplit.v4, srcAddr6: srcAddrSplit.v6,
         dstAddr4: dstAddrSplit.v4, dstAddr6: dstAddrSplit.v6,

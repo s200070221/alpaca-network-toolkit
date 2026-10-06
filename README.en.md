@@ -47,7 +47,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 **Main features**
 - Visualizes rules, routes, NAT, VPN and address objects
 - IP/port lookup: which rule allows or blocks a given connection (destination NAT is applied when querying a public address)
-- Shadowed-rule analysis, compliance audit and health score
+- Shadowed-rule analysis, compliance audit (including IPv6 protection gaps) and health score
 - Old-vs-new config comparison (including HA primary/secondary), conversion between config formats
 - Rule hit-count import (FortiGate, Cisco ASA / FTD, Palo Alto, Juniper SRX) to find rules never hit or not hit for a long time
 - WiFi analysis: SSID encryption, PMF, hidden SSIDs, captive portal, client isolation and security grade (FortiGate, MikroTik, OpenWrt, pfSense and wireless LAN controllers)
