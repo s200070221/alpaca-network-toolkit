@@ -19,6 +19,15 @@ function gradeVap(vap) {
     score_deductions.push(20);
   }
 
+  // WEP 與 TKIP（WPA1）已被破解或淘汰（2026-10-05 新增，無線控制器支援時一併補上；FortiGate wep64／wep128 同樣適用）
+  if (/wep/i.test(vap.security)) {
+    issues.push({ level: 'critical', msg: 'wifi.msg_weak_cipher' });
+    score_deductions.push(40);
+  } else if (/tkip/i.test(vap.security)) {
+    issues.push({ level: 'warn', msg: 'wifi.msg_weak_cipher' });
+    score_deductions.push(20);
+  }
+
   if (vap.security.includes('wpa2') && !vap.security.includes('wpa3')) {
     issues.push({ level: 'info', msg: 'wifi.msg_wpa2_only' });
     score_deductions.push(5);
@@ -577,3 +586,280 @@ function parsePfsenseWifi(text) {
 }
 
 
+
+// ══════════════════════════════════════════════════════════════════
+// 2026-10-05 新增（第十一輪 KD／KH／KI）：無線控制器設定檔 → WiFi 分析
+// 與上方「自身即為 AP」的三家不同，這些是控制器（或虛擬控制器）集中管理 SSID 的設定檔，
+// 由防火牆分析器的「無線控制器」上傳欄位（slot l）讀入，只產生 WiFi 資料。
+//   Cisco Catalyst 9800（IOS-XE）：wlan PROFILE ID SSID 區塊；語法依 Oxidized 真實錄製
+//     （C9800-L 17.06.05）與 CiscoDevNet/iPSK-Manager 的官方設定片段，其餘關鍵字依 Cisco 官方
+//     文件搜尋摘要（官網被網路政策擋下）
+//   Cisco AireOS：show run-config commands 的扁平 config wlan … <id> 指令（WLAN ID 為最後一欄）
+//   Aruba Mobility Controller（ArubaOS 8）／Aruba Instant：wlan ssid-profile；控制器子指令不縮排、
+//     以 ! 分段，Instant 縮排、以空行分段（皆依 Oxidized 真實錄製 Aruba7210 8.10／IAP-515 8.10）
+//   H3C WX（Comware V7）：wlan service-template 與 wlan ap 區塊，依 H3C 官方命令參考的搜尋摘要
+//     （h3c.com 被網路政策擋下，信心度中等）
+// 安全性字串沿用 FortiGate 風格（wpa2-personal／wpa3-enterprise／open／owe／wep），供 gradeVap() 判斷。
+// ══════════════════════════════════════════════════════════════════
+
+function _wlcVap(fields) {
+  const vap = Object.assign({ name: '-', ssid: '-', security: 'open', captivePortal: false, intraVapPrivacy: false,
+    broadcastSsid: true, pmf: '-', vlanId: '-', passphrase: '-', authMode: '-', radius: '-', status: 'enable',
+    usedInProfiles: [], deployedOnAps: 0 }, fields);
+  const { score, grade, issues } = gradeVap(vap);
+  return { ...vap, secScore: score, secGrade: grade, secIssues: issues };
+}
+
+// 由 WPA 版本與 AKM 組出安全性字串
+function _wlcSecurity(wpa, ver, akm) {
+  if (!wpa) return 'open';
+  if (akm.owe && !akm.psk && !akm.sae && !akm.dot1x) return 'owe';
+  const v = [ver.wpa1 ? 'wpa-tkip' : '', ver.wpa2 ? 'wpa2' : '', ver.wpa3 ? 'wpa3' : ''].filter(Boolean).join('-') || 'wpa2';
+  const kind = (akm.dot1x && (akm.psk || akm.sae)) ? 'mixed' : akm.dot1x ? 'enterprise' : (akm.psk || akm.sae) ? 'personal' : 'enterprise';
+  return v + '-' + kind;
+}
+
+function detectWlcKind(text) {
+  if (/^(?:config\s+)?wlan\s+create\s+\d+\s+\S+/m.test(text)) return 'aireos';
+  if (/^\s*wlan\s+service-template\s+\S+/m.test(text)) return 'h3cwx';
+  if (/^\s*wlan\s+ssid-profile\s+\S+/m.test(text)) return 'aruba';
+  if (/^wlan\s+\S+\s+\d{1,4}\s+\S+/m.test(text)) return 'cisco9800';
+  return '';
+}
+
+// ── Cisco Catalyst 9800 ──────────────────────────────────────────────────
+// 新建 WLAN 預設為 WPA2＋802.1X、SSID 廣播、PMF 停用；running-config 只列出與預設不同的指令。
+// VLAN 不在 WLAN 內：wireless tag policy 把 WLAN 對到 policy profile，policy profile 的 vlan 才是 VLAN；
+// AP 以 ap MAC 區塊的 policy-tag 取得要廣播的 WLAN。
+function parseCisco9800Wifi(text) {
+  text = text.replace(/\r\n/g, '\n');
+  const lines = text.split('\n');
+  const blocks = [];
+  let cur = null;
+  for (const line of lines) {
+    if (/^\S/.test(line)) { cur = { head: line.trim(), body: [] }; blocks.push(cur); }
+    else if (cur && line.trim()) cur.body.push(line.trim());
+  }
+  const policyVlan = {}, tagMap = {}, apTags = [];
+  blocks.forEach(b => {
+    let m;
+    if ((m = /^wireless profile policy\s+(\S+)/.exec(b.head))) {
+      const v = b.body.map(l => /^vlan\s+(\S+)/.exec(l)).find(Boolean);
+      policyVlan[m[1]] = v ? v[1] : '1';
+    } else if ((m = /^wireless tag policy\s+(\S+)/.exec(b.head))) {
+      tagMap[m[1]] = b.body.map(l => /^wlan\s+(\S+)\s+policy\s+(\S+)/.exec(l)).filter(Boolean).map(x => ({ wlan: x[1], policy: x[2] }));
+    } else if ((m = /^ap\s+([0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}|[0-9a-f:]{17})\s*$/i.exec(b.head))) {
+      const t = b.body.map(l => /^policy-tag\s+(\S+)/.exec(l)).find(Boolean);
+      apTags.push({ mac: m[1], tag: t ? t[1] : 'default-policy-tag', location: (b.body.map(l => /^location\s+(.+)/.exec(l)).find(Boolean) || [])[1] || '-' });
+    }
+  });
+  const vaps = [];
+  blocks.forEach(b => {
+    const m = /^wlan\s+(\S+)\s+(\d{1,4})\s+(.+)$/.exec(b.head);
+    if (!m) return;
+    const name = m[1], ssid = m[3].trim().replace(/^"|"$/g, '');
+    const has = re => b.body.some(l => re.test(l));
+    const wpa = !has(/^no security wpa\s*$/);
+    const ver = { wpa1: has(/^security wpa wpa1\s*$/), wpa2: !has(/^no security wpa wpa2\s*$/), wpa3: has(/^security wpa wpa3\s*$/) };
+    const akm = { dot1x: !has(/^no security wpa akm dot1x\s*$/), psk: has(/^security wpa akm (?:ft )?psk\s*$/), sae: has(/^security wpa akm (?:ft )?sae\s*$/), owe: has(/^security wpa akm owe\s*$/) };
+    const pmfL = b.body.map(l => /^security pmf\s+(mandatory|optional)/.exec(l)).find(Boolean);
+    const keyL = b.body.map(l => /^security wpa psk set-key\s+(?:ascii|hex)\s+(\d+)\s+/.exec(l)).find(Boolean);
+    const authL = b.body.map(l => /^security dot1x authentication-list\s+(\S+)/.exec(l)).find(Boolean);
+    const peer = b.body.map(l => /^peer-blocking\s+(\S+)/.exec(l)).find(Boolean);
+    const policies = Object.entries(tagMap).flatMap(([tag, arr]) => arr.filter(x => x.wlan === name).map(x => ({ tag, policy: x.policy })));
+    const vlans = [...new Set(policies.map(p => policyVlan[p.policy]).filter(Boolean))];
+    const tags = [...new Set(policies.map(p => p.tag))];
+    const security = _wlcSecurity(wpa, ver, akm);
+    vaps.push(_wlcVap({
+      name, ssid, security,
+      captivePortal: has(/^security web-auth\s*$/),
+      intraVapPrivacy: !!peer && /^(?:drop|forward-upstream)$/.test(peer[1]),
+      broadcastSsid: !has(/^no broadcast-ssid\s*$/),
+      pmf: pmfL ? pmfL[1] : '-',
+      vlanId: vlans.join(', ') || '-',
+      passphrase: keyL ? (keyL[1] === '0' ? tr('wifi.pass_plain') : tr('wifi.pass_enc')) : '-',
+      authMode: security === 'open' ? '-' : [akm.dot1x && '802.1X', akm.psk && 'PSK', akm.sae && 'SAE', akm.owe && 'OWE'].filter(Boolean).join('+') || '-',
+      radius: authL ? authL[1] : '-',
+      status: has(/^no shutdown\s*$/) ? 'enable' : 'disable',
+      usedInProfiles: tags,
+      deployedOnAps: apTags.filter(a => tags.includes(a.tag)).length,
+    }));
+  });
+  const wtps = apTags.map(a => ({ serial: a.mac, name: a.mac, location: a.location, profile: a.tag, admin: 'enable', status: 'enable' }));
+  return { vaps, wtpProfiles: [], wtps, widsProfiles: [], summary: buildWifiSummary(vaps, [], wtps, [], '-') };
+}
+
+// ── Cisco AireOS ─────────────────────────────────────────────────────────
+// show run-config commands 為扁平 config 指令；WLAN ID 是最後一欄。新建 WLAN 預設 WPA2＋802.1X、停用狀態。
+function parseAireOSWifi(text) {
+  text = text.replace(/\r\n/g, '\n');
+  const wl = {}, order = [];
+  const get = id => wl[id];
+  text.split('\n').forEach(raw => {
+    const line = raw.trim().replace(/^\([^)]*\)\s*>\s*/, '').replace(/^config\s+/, '');
+    let m;
+    if ((m = /^wlan\s+create\s+(\d+)\s+(\S+)(?:\s+(\S+))?/.exec(line))) {
+      wl[m[1]] = { name: m[2], ssid: (m[3] || m[2]).replace(/^"|"$/g, ''), wpa: true, ver: { wpa1: false, wpa2: true, wpa3: false },
+        akm: { dot1x: true, psk: false, sae: false, owe: false }, web: false, bcast: true, pmf: '-', vlan: '-', key: false, peer: false, status: 'disable' };
+      order.push(m[1]);
+      return;
+    }
+    // wlan interface 的 WLAN ID 在介面名稱前，其餘指令的 WLAN ID 在最後一欄
+    if ((m = /^wlan\s+interface\s+(\d+)\s+(\S+)/.exec(line))) { if (get(m[1])) get(m[1]).vlan = m[2]; return; }
+    const tail = /\s(\d+)\s*$/.exec(line);
+    const w = tail && get(tail[1]);
+    if (!w || !/^wlan\s/.test(line)) return;
+    if ((m = /^wlan\s+(enable|disable)\s+\d+$/.exec(line))) w.status = m[1];
+    else if ((m = /^wlan\s+broadcast-ssid\s+(enable|disable)\s/.exec(line))) w.bcast = m[1] === 'enable';
+    else if ((m = /^wlan\s+peer-blocking\s+(\S+)\s/.exec(line))) w.peer = /^(?:drop|forward-upstream)$/.test(m[1]);
+    else if ((m = /^wlan\s+security\s+web-auth\s+(enable|disable)\s/.exec(line))) w.web = m[1] === 'enable';
+    else if ((m = /^wlan\s+security\s+pmf\s+(disable|optional|required)\s/.exec(line))) w.pmf = m[1] === 'disable' ? '-' : m[1] === 'required' ? 'mandatory' : 'optional';
+    else if ((m = /^wlan\s+security\s+wpa\s+(enable|disable)\s/.exec(line))) w.wpa = m[1] === 'enable';
+    else if ((m = /^wlan\s+security\s+wpa\s+(wpa1|wpa2|wpa3)\s+(enable|disable)\s/.exec(line))) w.ver[m[1]] = m[2] === 'enable';
+    else if ((m = /^wlan\s+security\s+wpa\s+akm\s+psk\s+set-key\s/.exec(line))) w.key = true;
+    else if ((m = /^wlan\s+security\s+wpa\s+akm\s+(802\.1x|psk|sae|owe)\s+(enable|disable)\s/.exec(line))) w.akm[m[1] === '802.1x' ? 'dot1x' : m[1]] = m[2] === 'enable';
+  });
+  const vaps = order.map(id => {
+    const w = wl[id];
+    const security = _wlcSecurity(w.wpa, w.ver, w.akm);
+    return _wlcVap({
+      name: w.name, ssid: w.ssid, security, captivePortal: w.web, intraVapPrivacy: w.peer, broadcastSsid: w.bcast,
+      pmf: w.pmf, vlanId: w.vlan, passphrase: w.key ? tr('wifi.pass_enc') : '-', status: w.status,
+      authMode: security === 'open' ? '-' : [w.akm.dot1x && '802.1X', w.akm.psk && 'PSK', w.akm.sae && 'SAE', w.akm.owe && 'OWE'].filter(Boolean).join('+') || '-',
+    });
+  });
+  return { vaps, wtpProfiles: [], wtps: [], widsProfiles: [], summary: buildWifiSummary(vaps, [], [], [], '-') };
+}
+
+// ── Aruba Mobility Controller（ArubaOS 8）／Aruba Instant ─────────────────
+// opmode 未設定時為 opensystem。控制器的 VLAN 與使用者隔離在 wlan virtual-ap（ssid-profile 引用），
+// Instant 直接寫在 ssid-profile 內。
+const ARUBA_OPMODE = {
+  'opensystem': 'open', 'enhanced-open': 'owe', 'static-wep': 'wep', 'dynamic-wep': 'wep-enterprise',
+  'wpa-tkip': 'wpa-tkip-enterprise', 'wpa-psk-tkip': 'wpa-tkip-personal', 'wpa2-aes': 'wpa2-enterprise', 'wpa2-psk-aes': 'wpa2-personal',
+  'mpsk-aes': 'wpa2-personal', 'wpa3-sae-aes': 'wpa3-personal', 'wpa3-aes-ccm-128': 'wpa3-enterprise', 'wpa3-cnsa': 'wpa3-enterprise',
+  'wpa3-aes-gcm-256': 'wpa3-enterprise',
+};
+function _arubaBlocks(text, re) {
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const m = re.exec(lines[i]);
+    if (!m) continue;
+    const body = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      const t = lines[j].trim();
+      if (!t || t === '!' || /^wlan\s/.test(t) || (/^\S/.test(lines[j]) && /^\s/.test(lines[i + 1] || ''))) break;
+      body.push(t);
+    }
+    out.push({ name: m[1].replace(/^"|"$/g, ''), body });
+  }
+  return out;
+}
+function parseArubaWifi(text) {
+  text = text.replace(/\r\n/g, '\n');
+  const unq = v => v.trim().replace(/^"|"$/g, '');
+  const vapProf = _arubaBlocks(text, /^\s*wlan\s+virtual-ap\s+("[^"]+"|\S+)\s*$/).map(b => ({
+    name: b.name,
+    ssidProfile: unq((b.body.map(l => /^ssid-profile\s+(.+)$/.exec(l)).find(Boolean) || [, ''])[1]),
+    vlan: (b.body.map(l => /^vlan\s+(.+)$/.exec(l)).find(Boolean) || [, ''])[1].trim(),
+    deny: b.body.some(l => /^deny-inter-user-traffic\s*$/.test(l)),
+    aaa: unq((b.body.map(l => /^aaa-profile\s+(.+)$/.exec(l)).find(Boolean) || [, ''])[1]),
+  }));
+  const vaps = _arubaBlocks(text, /^\s*wlan\s+ssid-profile\s+("[^"]+"|\S+)\s*$/).map(b => {
+    const val = k => { const m = b.body.map(l => new RegExp('^' + k + '\\s+(.+)$').exec(l)).find(Boolean); return m ? unq(m[1]) : ''; };
+    const has = k => b.body.some(l => new RegExp('^' + k + '\\s*$').test(l));
+    const opmode = val('opmode') || 'opensystem';
+    const modes = opmode.split(',').map(s => s.trim());
+    const secs = modes.map(o => ARUBA_OPMODE[o] || o);
+    const security = secs.length > 1 ? secs.join('+') : secs[0];
+    const refs = vapProf.filter(v => v.ssidProfile === b.name);
+    const vlan = val('vlan') || [...new Set(refs.map(v => v.vlan).filter(Boolean))].join(', ');
+    const wpa3Only = /^wpa3/.test(security) && !/wpa2|tkip/.test(security);
+    return _wlcVap({
+      name: b.name, ssid: val('essid') || b.name, security,
+      captivePortal: !!val('captive-portal') && !/^disable/.test(val('captive-portal')),
+      intraVapPrivacy: has('deny-inter-user-bridging') || refs.some(v => v.deny),
+      broadcastSsid: !has('hide-ssid'),
+      // ArubaOS 8 依 opmode 自動設定 MFP（WPA3 為必要），Instant 可用 mfp-required／mfp-capable 指定
+      pmf: has('mfp-required') || wpa3Only ? 'mandatory' : has('mfp-capable') ? 'optional' : '-',
+      vlanId: vlan || '-',
+      passphrase: val('wpa-passphrase') ? tr('wifi.pass_set') : '-',
+      authMode: opmode, radius: val('auth-server') || [...new Set(refs.map(v => v.aaa).filter(Boolean))].join(', ') || '-',
+      status: has('disable') ? 'disable' : 'enable',
+      usedInProfiles: refs.map(v => v.name),
+      userType: val('type') || '-',
+    });
+  });
+  return { vaps, wtpProfiles: [], wtps: [], widsProfiles: [], summary: buildWifiSummary(vaps, [], [], [], '-') };
+}
+
+// ── H3C WX（Comware V7 無線控制器）────────────────────────────────────────
+// wlan service-template 內：ssid、vlan、akm mode、cipher-suite、security-ie、preshared-key、beacon ssid-hide、
+// user-isolation enable、pmf、portal enable、service-template enable。未設 akm／cipher-suite 為開放式。
+// wlan ap NAME model M 區塊的 radio N 子區塊以 service-template X [vlan N] 綁定服務模板。
+function parseH3CWxWifi(text) {
+  text = text.replace(/\r\n/g, '\n');
+  const lines = text.split('\n');
+  const tops = [];
+  let cur = null;
+  for (const line of lines) {
+    if (/^\s*#/.test(line)) { cur = null; continue; }
+    if (/^\S/.test(line)) { cur = { head: line.trim(), body: [] }; tops.push(cur); continue; }
+    if (cur && line.trim()) cur.body.push(line);
+  }
+  const aps = [];
+  tops.forEach(t => {
+    const m = /^wlan\s+ap\s+(\S+)(?:\s+model\s+(\S+))?/.exec(t.head);
+    if (!m) return;
+    const bind = [];
+    t.body.forEach(l => { const b = /^\s+service-template\s+(\S+)(?:\s+vlan\s+(\d+))?/.exec(l); if (b) bind.push({ st: b[1], vlan: b[2] || '' }); });
+    const sn = t.body.map(l => /^\s*serial-id\s+(\S+)/.exec(l)).find(Boolean);
+    aps.push({ name: m[1], model: m[2] || '-', serial: sn ? sn[1] : '-', bind });
+  });
+  const vaps = [];
+  tops.forEach(t => {
+    const m = /^wlan\s+service-template\s+(\S+)/.exec(t.head);
+    if (!m) return;
+    const body = t.body.map(l => l.trim());
+    const val = k => { const x = body.map(l => new RegExp('^' + k + '\\s+(.+)$').exec(l)).find(Boolean); return x ? x[1].trim() : ''; };
+    const has = re => body.some(l => re.test(l));
+    const akmMode = val('akm mode');
+    const ciphers = body.filter(l => /^cipher-suite\s/.test(l)).map(l => l.split(/\s+/)[1]).join(' ');
+    const ies = body.filter(l => /^security-ie\s/.test(l)).map(l => l.split(/\s+/)[1]).join(' ');
+    let security;
+    if (!akmMode && !ciphers) security = 'open';
+    else if (/wep/.test(ciphers) && !akmMode) security = 'wep';
+    else {
+      const ver = { wpa1: /\bwpa\b/.test(ies) && /tkip/.test(ciphers), wpa2: /\brsn\b/.test(ies) || !ies, wpa3: /sae/.test(akmMode) };
+      if (/\bwpa\b/.test(ies) && !/tkip/.test(ciphers)) ver.wpa2 = true;
+      const akm = { dot1x: /dot1x/.test(akmMode), psk: /psk/.test(akmMode), sae: /sae/.test(akmMode), owe: /owe/.test(akmMode) };
+      security = _wlcSecurity(true, ver, akm);
+      if (/tkip/.test(ciphers) && !/tkip/.test(security)) security = 'wpa-tkip-' + security;
+    }
+    const pre = /^preshared-key\s+(?:pass-phrase|raw-key)\s+(simple|cipher)\s/.exec(body.find(l => /^preshared-key\s/.test(l)) || '');
+    const bound = aps.filter(a => a.bind.some(b => b.st === m[1]));
+    const vlans = [...new Set([val('vlan'), ...bound.flatMap(a => a.bind.filter(b => b.st === m[1]).map(b => b.vlan))].filter(Boolean))];
+    vaps.push(_wlcVap({
+      name: m[1], ssid: val('ssid').replace(/^"|"$/g, '') || m[1], security,
+      captivePortal: has(/^portal\s+enable\b/),
+      intraVapPrivacy: has(/^user-isolation\s+enable\s*$/),
+      broadcastSsid: !has(/^beacon\s+ssid-hide\s*$/),
+      pmf: val('pmf') || '-',
+      vlanId: vlans.join(', ') || '-',
+      passphrase: pre ? (pre[1] === 'simple' ? tr('wifi.pass_plain') : tr('wifi.pass_enc')) : '-',
+      authMode: akmMode || '-',
+      status: has(/^service-template\s+enable\s*$/) ? 'enable' : 'disable',
+      usedInProfiles: bound.map(a => a.name),
+      deployedOnAps: bound.length,
+    }));
+  });
+  const wtps = aps.map(a => ({ serial: a.serial, name: a.name, location: '-', profile: a.model, admin: 'enable', status: 'enable' }));
+  return { vaps, wtpProfiles: [], wtps, widsProfiles: [], summary: buildWifiSummary(vaps, [], wtps, [], '-') };
+}
+
+function parseWlcWifi(text) {
+  const kind = detectWlcKind(text);
+  const fn = { cisco9800: parseCisco9800Wifi, aireos: parseAireOSWifi, aruba: parseArubaWifi, h3cwx: parseH3CWxWifi }[kind];
+  return fn ? fn(text) : { vaps: [], wtpProfiles: [], wtps: [], widsProfiles: [], summary: buildWifiSummary([], [], [], [], '-') };
+}

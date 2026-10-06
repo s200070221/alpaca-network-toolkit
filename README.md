@@ -42,6 +42,7 @@
 - FortiGate、Sophos XG、Check Point、Palo Alto（含 Panorama）、Juniper SRX、pfSense、OPNsense、SonicWall、MikroTik、Cisco ASA／FTD、Zyxel USG／ATP、WatchGuard Firebox、H3C SecPath
 - EdgeRouter（EdgeOS）、VyOS、OpenWrt（UCI）、Linux iptables／nftables
 - 雲端：AWS 安全群組、Azure NSG、Cisco Meraki MX（API 回應 JSON）
+- 無線控制器（只做 WiFi 分析）：Cisco Catalyst 9800／AireOS、Aruba 控制器／Instant、H3C WX
 
 **主要功能**
 - 規則、路由、NAT、VPN、位址物件視覺化
@@ -49,6 +50,7 @@
 - 遮蔽規則分析、合規稽核與健康度評分
 - 新舊設定比對（含 HA 主備比對）、設定檔格式互轉
 - 規則命中數匯入（FortiGate、Cisco ASA／FTD、Palo Alto、Juniper SRX），找出從未或長期未命中的規則
+- WiFi 分析：SSID 加密、PMF、隱藏、入口網頁、使用者隔離與安全等級（FortiGate、MikroTik、OpenWrt、pfSense 與無線控制器）
 
 ![防火牆設定分析器：稽核](docs/images/03-firewall-audit-zh.png)
 

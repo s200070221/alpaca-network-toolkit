@@ -656,6 +656,12 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
           <div class="file-chip" id="hc-chip" style="display:none"><span>📄</span><span class="fn" id="hc-name"></span><span class="rm" onclick="clearFile(event,'h')">✕</span></div>
           <input type="file" id="hi" accept=".cfg,.txt,.conf" onchange="pickFile('h',this)">
         </div>
+        <div class="ucard" style="border-color:rgba(120,90,200,.4)" id="lc" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('lc').classList.add('drag-over')" ondragleave="document.getElementById('lc').classList.remove('drag-over')" ondrop="handleDrop(event,'l')" onclick="document.getElementById('li').click()">
+          <div class="ucard-head"><div class="vendor-dot" style="background:rgba(120,90,200,.15)">📡</div><div><h3 style="color:#7058c0" data-i18n="upload.wlc_title">無線控制器</h3><div class="ver">Cisco 9800 / AireOS · Aruba · H3C WX</div></div></div>
+          <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_wlc">Catalyst 9800 的 show running-config、AireOS 的 show run-config commands、Aruba 控制器／Instant 的 show running-config、H3C WX 的 display current-configuration；只分析 SSID 設定（WiFi 分析頁）</div></div>
+          <div class="file-chip" id="lc-chip" style="display:none"><span>📄</span><span class="fn" id="lc-name"></span><span class="rm" onclick="clearFile(event,'l')">✕</span></div>
+          <input type="file" id="li" accept=".cfg,.txt,.conf,.log" onchange="pickFile('l',this)">
+        </div>
       </div>
       <div class="analyze-row">
         <button class="btn-analyze" id="btn-go" onclick="analyze()" disabled>🔍 <span data-i18n="btn.analyze">開始分析</span></button>
@@ -876,6 +882,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 <script src="firewall-analyzer-parser-watchguard.js"></script>
 <script src="firewall-analyzer-parser-vyos.js"></script>
 <script src="firewall-analyzer-parser-h3c.js"></script>
+<script src="firewall-analyzer-parser-wlc.js"></script>
 <script src="firewall-analyzer-parser-netfilter.js"></script>
 <script src="firewall-analyzer-parser-cloud.js"></script>
 <script src="firewall-analyzer-parser-cisco-asa.js"></script>
