@@ -640,7 +640,7 @@ function parseMgmtAccess(cfg, vendor){
 // - 本專案真實範例：Comware `idle-timeout 0 0`、`info-center loghost`；ProCurve `ntp server-name "…"`；Ruijie `banner motd`、`exec-timeout 10 0`、`ntp server`
 // - 既有已查證解析：Comware hwtacacs／radius scheme 的 primary authentication（去識別化）、Junos system 區塊（junosBlock）
 // Cisco Business／AlliedWare Plus（sys.brand）語法不同，整組不評估
-const MGMT_SVC_VENDORS=['cisco','ruijie','nxos','arista','aruba','comware','juniper','procurve','efos'];
+const MGMT_SVC_VENDORS=['cisco','ruijie','nxos','arista','aruba','comware','juniper','procurve','efos','brocade'];
 function parseMgmtServices(cfg, vendor, brand){
   if(!MGMT_SVC_VENDORS.includes(vendor)||brand==='ciscobiz'||brand==='awplus')return null;
   const all=(re)=>{const out=[];let m;const r=new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g');while((m=r.exec(cfg))!==null)out.push(m[1]);return out;};
@@ -662,6 +662,13 @@ function parseMgmtServices(cfg, vendor, brand){
     httpPlain=has(/^\s*ip\s+http\s+enable\b/m);
     sshV1=has(/^\s*ssh\s+server\s+compatible-ssh1x\s+enable\b/m);
     idleOff=all(/^(\s*idle-timeout\s+0(?:\s+0)?\s*)$/m).map(x=>x.trim());
+  }else if(vendor==='brocade'){
+    // Ruckus／Brocade ICX（第十三輪 NB）：ntp 區塊內 server、tacacs-server／radius-server host，依 Oxidized 的 ICX7150
+    // 真實錄製；錄製中伺服器位址被遮蔽，故 aaa authentication login default 使用 tacacs+／radius 也算已設定集中認證。
+    // banner motd 依 Ansible icx_banner 模組文件；HTTP、SSH 版本、閒置逾時未查證不評估
+    ntp=all(/^ntp\s*\n((?:[ \t]+[^\n]*\n?)*)/m).flatMap(b=>[...b.matchAll(/^\s+server\s+(\S+)/gm)].map(x=>x[1]));
+    aaa=[...all(/^\s*(?:tacacs-server|radius-server)\s+host\s+(\S+)/m), ...all(/^aaa\s+authentication\s+login\s+default\s+(?:.*\s)?(tacacs\+|radius)(?=\s|$)/m)];
+    banner=has(/^\s*banner\s+(?:motd|exec|incoming)\b/m);
   }else if(vendor==='procurve'){
     ntp=all(/^\s*(?:ntp\s+server(?:-name)?|sntp\s+server(?:\s+priority\s+\d+)?)\s+"?([^"\s]+)/m);
     aaa=all(/^\s*(?:tacacs-server|radius-server)\s+host\s+(\S+)/m);
@@ -703,7 +710,7 @@ function parseMgmtServices(cfg, vendor, brand){
 //     介面 broadcast-suppression 或 storm-constrain broadcast（IP Source Guard 未查證）
 //   Aruba CX：全域 dhcpv4-snooping＋vlan 內 dhcpv4-snooping、vlan 內 arp inspection、介面 ipv4 source-lockdown
 //     （storm control 未查證）
-const L2_PROTECT_VENDORS=['cisco','nxos','arista','comware','aruba'];
+const L2_PROTECT_VENDORS=['cisco','nxos','arista','comware','aruba','brocade'];
 function expandL2VlanList(str){
   const out=new Set();
   String(str||'').split(',').forEach(t=>{
@@ -745,6 +752,20 @@ function parseL2Protect(cfg, vendor, brand){
     snoop=/^dhcpv4-snooping\s*$/m.test(cfg)?Object.keys(vl).filter(v=>/^\s*dhcpv4-snooping\s*$/m.test(vl[v])):[];
     dai=Object.keys(vl).filter(v=>/^\s*arp\s+inspection\s*$/m.test(vl[v]));
     ipsg=ifHas(/^\s*ipv4\s+source-lockdown\b/m);
+  }else if(vendor==='brocade'){
+    // Ruckus／Brocade ICX（第十三輪 NB）：全域 ip dhcp snooping vlan／ip arp inspection vlan（可用「A to B」範圍，
+    // 依 Ruckus FastIron DHCP 指南與 DISA RUCKUS ICX L2 STIG 搜尋摘要）、介面 source-guard enable、介面 broadcast limit。
+    // 介面名稱與解析結果一致為 e＋埠號，interface ethernet A to B 範圍展開
+    const vl=kw=>{const out=new Set();(cfg.match(new RegExp('^ip\\s+'+kw+'\\s+vlan\\s+([^\\n]+)','gm'))||[]).forEach(l=>{
+      const t=l.replace(/^.*?\bvlan\s+/,'').trim().split(/\s+/);
+      for(let i=0;i<t.length;i++){if(!/^\d+$/.test(t[i]))continue;if(t[i+1]==='to'&&/^\d+$/.test(t[i+2]||'')){for(let k=+t[i];k<=+t[i+2]&&k-t[i]<4095;k++)out.add(String(k));i+=2;}else out.add(t[i]);}
+    });return [...out];};
+    snoop=vl('dhcp\\s+snooping'); dai=vl('arp\\s+inspection');
+    const bif={};let m;const re=/^interface\s+(?:ethernet|ethe|e)\s+([^\n]+)\n((?:[ \t]+[^\n]*(?:\n|$))*)/gm;
+    while((m=re.exec(cfg))!==null){const ports=typeof brocadeExpandPorts==='function'?brocadeExpandPorts(m[1]):[m[1].trim()];ports.forEach(pt=>{bif['e'+pt]=(bif['e'+pt]||'')+m[2];});}
+    const bHas=r=>Object.keys(bif).filter(n=>r.test(bif[n]));
+    ipsg=bHas(/^\s*source-guard\s+enable\b/m);
+    storm=bHas(/^\s*broadcast\s+limit\b/m);
   }
   return {snoop, dai, ipsg, storm};
 }
