@@ -900,8 +900,42 @@ function parseASALine(line, lineNo) {
     host: '', appName: '', procid: '', msgid: msgId,
     severityRaw: level, severityNorm: normSyslogSeverity(Number(level)),
     facility: null, facilityAuth: false,
-    msg, fields: {}
+    msg, fields: parseASAFields(msgId, msg)
   };
+}
+// ASA 連線與 ACL 訊息拆欄位（第十三輪 NF），格式依 Cisco ASA Syslog Messages 指南（搜尋摘要，cisco.com 被擋）：
+//   106023 Deny 協定 src 介面:位址/埠 dst 介面:位址/埠 … by access-group "ACL"
+//   106100 access-list ACL permitted|denied 協定 介面/位址(埠) -> 介面/位址(埠) hit-cnt …
+//   302013／302015 Built inbound|outbound TCP|UDP connection ID for 介面:位址/埠 (對應位址/埠) to 介面:位址/埠 (…)
+//     兩端固定先列安全等級較低的介面；inbound 為第一個列出的一端發起，outbound 為第二個（to）一端發起。
+//     Built 代表規則已放行（action 記為 accept）
+// 「介面:位址/埠」以第一個冒號分介面（IPv6 位址本身含冒號），最後一個 / 分埠
+function parseASAFields(msgId, msg) {
+  const ep = tok => {
+    const i = tok.indexOf(':'); if (i < 0) return null;
+    const rest = tok.slice(i + 1), j = rest.lastIndexOf('/');
+    return { intf: tok.slice(0, i), ip: j < 0 ? rest : rest.slice(0, j), port: j < 0 ? '' : rest.slice(j + 1) };
+  };
+  const pack = (proto, a, b, action, acl) => {
+    if (!a || !b) return {};
+    const f = { proto: String(proto).toLowerCase(), srcintf: a.intf, srcip: a.ip, dstintf: b.intf, dstip: b.ip, action };
+    if (/^\d+$/.test(a.port)) f.srcport = a.port;
+    if (/^\d+$/.test(b.port)) f.dstport = b.port;
+    if (acl) f.acl = acl;
+    return f;
+  };
+  let m;
+  if (msgId === '106023' && (m = msg.match(/^Deny\s+(\S+)\s+src\s+(\S+)\s+dst\s+(\S+?)(?:\s|$)[\s\S]*?(?:by\s+access-group\s+"?([^"\s]+)"?)?/)))
+    return pack(m[1], ep(m[2]), ep(m[3]), 'deny', m[4]);
+  if (msgId === '106100' && (m = msg.match(/^access-list\s+(\S+)\s+(permitted|denied|est-allowed)\s+(\S+)\s+([^\/\s]+)\/([^(\s]+)\((\d+)\)\s+->\s+([^\/\s]+)\/([^(\s]+)\((\d+)\)/))) {
+    const f = pack(m[3], { intf: m[4], ip: m[5], port: m[6] }, { intf: m[7], ip: m[8], port: m[9] }, m[2] === 'denied' ? 'deny' : 'accept', m[1]);
+    return f;
+  }
+  if ((msgId === '302013' || msgId === '302015') && (m = msg.match(/^Built\s+(inbound|outbound)\s+(TCP|UDP)\s+connection\s+\d+\s+for\s+(\S+)\s+\([^)]*\)[\s\S]*?\s+to\s+(\S+)\s+\(/))) {
+    const a = ep(m[3]), b = ep(m[4]);
+    return m[1] === 'inbound' ? pack(m[2], a, b, 'accept') : pack(m[2], b, a, 'accept');
+  }
+  return {};
 }
 // FortiOS 原生 key=value 逐欄擷取：與 extractKeyValueFields()（供既有格式的可選欄位 best-effort
 // 擷取用）分開實作，因為這裡需要保留「原始欄位順序」與「原始是否加雙引號」供去識別化後原樣重建，
@@ -2251,7 +2285,7 @@ function buildFwQueryPayload(tuple) {
 // accept／deny，或廠牌原值 allow／permit／pass），其次為 denyBlock 分類；FortiGate 流量 log 的
 // close／timeout／start／server-rst／client-rst 都是規則已放行的工作階段結束方式（Fortinet 官方 KB
 // 「understanding action close, reset and timeout in FortiGate forward traffic logs」），也算放行。
-// 判斷不出來（如 ASA Built 連線、一般 syslog）回傳空字串，不列入批次
+// 判斷不出來（如一般 syslog）回傳空字串，不列入批次；ASA 的 106023／106100／302013／302015 由 parseASAFields() 帶 action
 const FW_DENY_ACTION_RE = /^(?:deny|denied|drop|dropped|block|blocked|reject|rejected)$/i;
 const FW_ALLOW_ACTION_RE = /^(?:accept|accepted|allow|allowed|permit|permitted|pass|passed)$/i;
 const FORTI_ALLOW_ACTION_RE = /^(?:close|timeout|start|server-rst|client-rst)$/i;
@@ -2351,7 +2385,7 @@ function getEventNetTuple(e) {
   // （SD 內容已被 splitSDandMSG() 從 msg 切走，兩者不會重複比對到同一段文字）
   // rfc3164／mikrotik 的 fields 只有 MikroTik 訊息拆解時才有內容（見 parseMikroTikMsg()），
   // 一般 rfc3164 為空物件，照舊落回下方 msg 文字擷取
-  if ((e.format === 'rfc5424' || e.format === 'rfc3164' || e.format === 'mikrotik' || e.format === 'weblog' || e.format === 'w3c' || e.format === 'ciscoios' || e.format === 'comware' || e.format === 'flowlog') && e.fields && Object.keys(e.fields).length) {
+  if ((e.format === 'rfc5424' || e.format === 'rfc3164' || e.format === 'asa' || e.format === 'mikrotik' || e.format === 'weblog' || e.format === 'w3c' || e.format === 'ciscoios' || e.format === 'comware' || e.format === 'flowlog') && e.fields && Object.keys(e.fields).length) {
     const src = pickField(e.fields, SRC_IP_KEYS);
     const dst = pickField(e.fields, DST_IP_KEYS);
     const spt = pickField(e.fields, SRC_PORT_KEYS);
@@ -4952,6 +4986,8 @@ function anonymizeEvent(evt, opts) {
     // ASA msg 是明碼文字（無結構化欄位），比照 rfc3164/rfc5424 既有處理模式，僅通用文字
     // 正則替換（IP/MAC），範圍刻意不擴及使用者名稱，維持專案「寧可漏報不誤判」原則
     clone.msg = anonUsersInMsg(replaceMACsInLine(replaceIPsInLine(clone.msg || '', opts)));
+    // 拆出的欄位（第十三輪 NF）由去識別化後的訊息重新拆，不留原始位址
+    clone.fields = parseASAFields(clone.msgid, clone.msg);
     clone.raw = `${clone.timestampRaw}: %ASA-${clone.severityRaw}-${clone.msgid}: ${clone.msg}`;
   } else if (evt.format === 'leef') {
     LEEF_SENSITIVE_KEYS.forEach(k => {
