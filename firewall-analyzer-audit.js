@@ -821,7 +821,7 @@
     // (a) ipv6-any-open：IPv6 部分來源與目的皆為全部（::/0、any6、all6 等字面值或值為 ::/0 的位址物件）、服務不限的允許規則。
     //     any-any 與過寬網段只看 IPv4／字面 any，`::/0` 這類 IPv6 全開寫法原本兩者都抓不到；已算進第 1 項的規則不重複列
     // (b) ipv6-unfiltered：未設定規則時 IPv6 預設放行的系統（MikroTik /ipv6 firewall filter 與 Linux netfilter 鏈預設接受、
-    //     VyOS 基本鏈預設 accept——依官方文件），有 IPv4 規則卻沒有任何適用 IPv6 的規則。只在單一廠牌上傳時判斷
+    //     VyOS 基本鏈預設 accept、EdgeRouter 未綁定規則集即不過濾——依官方文件），有 IPv4 規則卻沒有任何適用 IPv6 的規則。只在單一廠牌上傳時判斷
     const V6_ANY = new Set(['::/0', '::0/0', '0::0/0', 'any6', 'all6', 'any-ipv6', 'ipv6-any', '::']);
     const v6AnyTok = (tok, vdom) => {
       const t = String(tok || '').trim().replace(/^"|"$/g, '');
@@ -842,7 +842,8 @@
       v6AnyOpen.length ? tr('audit.id_prefix') + v6AnyOpen.map(p => idLabel(p)).slice(0,10).join(', ') + (v6AnyOpen.length > 10 ? '…' : '') : tr('audit.none'),
       ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 12.2'], polItems(v6AnyOpen));
     const vend = String(parsed.vendor || '');
-    if (/^(MikroTik|VyOS|Linux netfilter)$/.test(vend)) {
+    // EdgeRouter（第十三輪 NE）：規則集要綁到介面才生效，沒綁 ipv6-name 的介面 IPv6 不過濾（Ubiquiti 說明的搜尋摘要）
+    if (/^(MikroTik|VyOS|Linux netfilter|EdgeRouter)$/.test(vend)) {
       const live = policies.filter(p => !_isDisabledStatus(p));
       const v6Rules = live.filter(p => p._family !== 'v4');
       const v4Rules = live.filter(p => p._family === 'v4');
@@ -1170,6 +1171,70 @@
   // 過大／巢狀過深群組物件稽核渲染（2026-09-23 新增）：同一群組物件可能同時命中「成員過多」
   // 與「巢狀過深」兩種 issue，各自獨立一列顯示，不合併，避免單列塞兩種不同語意的數值
   const _OVERSIZED_GROUP_ISSUE_LABEL = { members: 'audit.issue_too_many_members', depth: 'audit.issue_too_deep' };
+  // 重複物件（2026-10-07，第十三輪 NI）：同一 VDOM 內值相同但名稱不同的位址／服務物件，以及成員完全相同的群組，
+  // 可合併成一個以簡化維護。各廠牌欄位寫法不同，比對前先正規化：位址取 subnet（「位址 遮罩」「位址/遮罩」
+  // 「位址/長度」「單一位址」一律轉成 CIDR）、範圍取 startIp-endIp、FQDN 取小寫；服務取協定＋TCP／UDP 埠＋ICMP 類型
+  // （ASA 為 proto＋port）；群組取排序後的成員清單。內建物件不列。值為空或 '-' 的物件不比對
+  function _dupMaskLen(m) {
+    if (/^\d+$/.test(m)) return +m;
+    const p = m.split('.').map(Number);
+    if (p.length !== 4 || p.some(x => isNaN(x) || x < 0 || x > 255)) return null;
+    const bits = p.map(x => x.toString(2).padStart(8, '0')).join('');
+    return /^1*0*$/.test(bits) ? bits.indexOf('0') < 0 ? 32 : bits.indexOf('0') : null;
+  }
+  function _dupNormSubnet(v) {
+    const t = String(v || '').trim();
+    if (!t || t === '-') return '';
+    const m = t.match(/^(\S+?)(?:\s+|\/)(\S+)$/);
+    const ip = (m ? m[1] : t).toLowerCase();
+    if (ip.includes(':')) return ip + '/' + (m ? m[2] : '128');
+    if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return '';
+    const len = m ? _dupMaskLen(m[2]) : 32;
+    return len === null ? '' : ip + '/' + len;
+  }
+  function analyzeDuplicateObjects(parsed) {
+    const _vendorEntry = [...VENDOR_BUILTINS.entries()].find(([v]) => (parsed.vendor || '').includes(v));
+    const BUILTINS = new Set(_vendorEntry ? _vendorEntry[1] : _COMMON_BUILTINS);
+    const dash = v => { const t = String(v == null ? '' : v).trim(); return t === '-' ? '' : t; };
+    const isGroup = o => /group/i.test(o.category || '') || o.type === 'group';
+    const memberKey = o => { const m = dash(o.members).split(/[\s,]+/).filter(Boolean); return m.length ? [...new Set(m)].sort().join(',') : ''; };
+    const addrKey = o => {
+      if (isGroup(o)) { const k = memberKey(o); return k ? ['addrgroup', k] : null; }
+      const fq = dash(o.fqdn); if (fq && /fqdn/i.test(o.type || '')) return ['address', 'fqdn:' + fq.toLowerCase()];
+      const s = dash(o.startIp), e = dash(o.endIp); if (s && e) return ['address', 'range:' + s + '-' + e];
+      const n = _dupNormSubnet(o.subnet); return n ? ['address', n] : null;
+    };
+    const svcKey = o => {
+      if (isGroup(o) && !dash(o.port)) { const k = memberKey(o); return k ? ['svcgroup', k] : null; }
+      const proto = dash(o.proto).toLowerCase();
+      if (dash(o.port)) return ['service', proto + ':' + dash(o.port).replace(/\s+/g, '')];
+      const parts = [dash(o.tcpPorts), dash(o.udpPorts), dash(o.icmpType)];
+      if (!proto && !parts.some(Boolean)) return null;
+      return ['service', [proto, ...parts].join('|').replace(/\s+/g, '')];
+    };
+    const groups = new Map();
+    const add = (o, k) => {
+      if (!k || !o.name || BUILTINS.has(o.name)) return;
+      const key = (o._vdom || '') + '\u0000' + k[0] + '\u0000' + k[1];
+      if (!groups.has(key)) groups.set(key, { kind: k[0], vdom: o._vdom || '', value: k[1], names: [] });
+      const g = groups.get(key);
+      if (!g.names.includes(o.name)) g.names.push(o.name);
+    };
+    (parsed.addresses || []).forEach(o => add(o, addrKey(o)));
+    (parsed.services || []).forEach(o => add(o, svcKey(o)));
+    return [...groups.values()].filter(g => g.names.length > 1);
+  }
+  function buildDuplicateObjectsHtml(results) {
+    let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--yellow);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('audit.dup_obj_title')) + '</div>';
+    if (!results.length) return h + '<div class="nodata" style="padding:14px 0;color:var(--green)">' + esc(tr('audit.dup_obj_none')) + '</div></div>';
+    h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--yellow)">' + esc(tr('audit.dup_obj_warn')) + '</div>';
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_category') + '</th><th>' + tr('audit.dup_obj_col_value') + '</th><th>' + tr('audit.col_vdom') + '</th><th>' + tr('audit.dup_obj_col_names') + '</th></tr></thead><tbody>';
+    results.forEach(r => {
+      h += `<tr><td>${pill(tr('audit.dup_kind_' + r.kind), 'p-info')}</td><td class="mono" style="word-break:break-all">${esc(r.value)}</td><td style="color:var(--text-dim)">${esc(r.vdom || '-')}</td><td class="mono" style="color:var(--accent)">${r.names.map(esc).join(', ')}</td></tr>`;
+    });
+    return h + '</tbody></table></div></div>';
+  }
+
   function buildOversizedGroupsHtml(results) {
     let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--yellow);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('audit.oversized_group_title')) + '</div>';
     if (!results.length) {
@@ -1667,6 +1732,7 @@
       [tr('audit.sum_cross_vdom'), analyzeCrossVdomInconsistency(parsed).length],
       [tr('audit.sum_missing_comments'), analyzeMissingComments(parsed).length],
       [tr('audit.sum_oversized_groups'), analyzeOversizedGroups(parsed).length],
+      [tr('audit.sum_dup_objects'), analyzeDuplicateObjects(parsed).length],
       [tr('audit.disabled_title'), analyzeDisabledPolicies(parsed).length],
     ];
     const L = [

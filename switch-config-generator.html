@@ -314,6 +314,21 @@ input.valid,select.valid{border-color:var(--green)!important}
       <input id="syslog-server" placeholder="10.0.0.2">
     </div>
     <div class="row">
+      <label data-i18n="lbl.ntpServers">NTP 伺服器</label>
+      <input id="ntp-servers" placeholder="10.0.0.3, ntp.example.com">
+    </div>
+    <div class="row">
+      <label data-i18n="lbl.aaaType">集中認證</label>
+      <select id="aaa-type">
+        <option value="" data-i18n="opt.aaaNone">不設定</option>
+        <option value="tacacs">TACACS+</option>
+        <option value="radius">RADIUS</option>
+      </select>
+      <input id="aaa-server" placeholder="10.0.0.4">
+      <input id="aaa-key" placeholder="shared-key">
+    </div>
+    <div class="hint" id="mgmt-svc-scope-hint" style="font-size:11px;color:var(--text-mid);margin:-2px 0 8px" data-i18n="hint.mgmtSvcScope">NTP 與集中認證目前只輸出 Cisco IOS-XE 與 H3C／HPE Comware；其餘廠牌會忽略這兩項，產生前稽核會提醒自行補上</div>
+    <div class="row">
       <label data-i18n="lbl.snmpCommunity">SNMP Community</label>
       <input id="snmp-community" placeholder="ro-community" data-tip="僅 Cisco IOS-XE/Ruijie/Comware/Juniper 支援；其餘廠牌會忽略此欄位">
     </div>

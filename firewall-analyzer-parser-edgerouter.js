@@ -135,10 +135,13 @@ const EdgeRouterParser = (() => {
       const fw = child(node, 'firewall');
       if (fw) {
         ['in', 'out', 'local'].forEach(dir => {
-          const rn = val(child(fw, dir), 'name');
-          if (!rn) return;
-          bind[rn] = bind[rn] || [];
-          bind[rn].push(name);
+          // IPv6 規則集以 ipv6-name 綁定（第十三輪 NE），key 加 6: 前綴與 IPv4 的 name 區分
+          [['name', ''], ['ipv6-name', '6:']].forEach(([k, pre]) => {
+            const rn = val(child(fw, dir), k);
+            if (!rn) return;
+            bind[pre + rn] = bind[pre + rn] || [];
+            bind[pre + rn].push(name);
+          });
         });
       }
       // EdgeRouter 允許把 firewall 直接綁在 VLAN sub-interface（vif）上，而非只綁在
@@ -150,10 +153,12 @@ const EdgeRouterParser = (() => {
         const vfw = child(vnode, 'firewall');
         if (!vfw) return;
         ['in', 'out', 'local'].forEach(dir => {
-          const rn = val(child(vfw, dir), 'name');
-          if (!rn) return;
-          bind[rn] = bind[rn] || [];
-          bind[rn].push(`${name}.${vlanId}`);
+          [['name', ''], ['ipv6-name', '6:']].forEach(([k, pre]) => {
+            const rn = val(child(vfw, dir), k);
+            if (!rn) return;
+            bind[pre + rn] = bind[pre + rn] || [];
+            bind[pre + rn].push(`${name}.${vlanId}`);
+          });
         });
       });
     });
@@ -217,7 +222,7 @@ const EdgeRouterParser = (() => {
     if (!node) return { addr: 'any', port: '' };
     const grp = child(node, 'group');
     if (grp) {
-      const addrGrp = val(grp, 'address-group') || val(grp, 'network-group');
+      const addrGrp = val(grp, 'address-group') || val(grp, 'network-group') || val(grp, 'ipv6-address-group') || val(grp, 'ipv6-network-group');
       if (addrGrp) return { addr: addrGrp, port: val(node, 'port') || '' };
       const portGrp = val(grp, 'port-group');
       if (portGrp) {
@@ -230,10 +235,13 @@ const EdgeRouterParser = (() => {
 
   function parsePolicies(tree, bind, addrTypeMap, portGroupMap) {
     const out = [];
-    const rulesets = childrenPrefixed(child(tree, 'firewall'), 'name');
-    let idx = 0;
-    Object.entries(rulesets).forEach(([key, rsNode]) => {
-      const rsName = key.replace(/^name\s+/, '');
+    // firewall name X（IPv4）與 firewall ipv6-name X（IPv6，第十三輪 NE：語法依 Ubiquiti 官方說明與社群設定的
+    // 搜尋摘要，介面以 firewall in|out|local ipv6-name X 綁定，與 VyOS 1.3 同源）；IPv6 規則 id 加 v6/ 前綴並標 _family
+    const fwNode = child(tree, 'firewall');
+    const rulesets = [...Object.entries(childrenPrefixed(fwNode, 'name')).map(([k, n]) => [k.replace(/^name\s+/, ''), n, 4]),
+      ...Object.entries(childrenPrefixed(fwNode, 'ipv6-name')).map(([k, n]) => [k.replace(/^ipv6-name\s+/, ''), n, 6])];
+    let idx = 0, idx6 = 0;
+    rulesets.forEach(([rsName, rsNode, fam]) => {
       const rules = childrenPrefixed(rsNode, 'rule');
       Object.entries(rules).forEach(([rkey, rNode]) => {
         const ruleNum = rkey.replace(/^rule\s+/, '');
@@ -246,14 +254,14 @@ const EdgeRouterParser = (() => {
         // 供 IP/Policy 查詢「只看新連線」略過僅比對既有連線的規則）
         const stNode = child(rNode, 'state');
         const connState = stNode ? ['new', 'established', 'related', 'invalid'].filter(k => val(stNode, k) === 'enable') : [];
-        idx++;
+        if (fam === 6) idx6++; else idx++;
         // 2026-08-10 稽核修復：先前完全沒有呼叫 _splitAddr()，srcAddr6/dstAddr6 恆為 '-'，
         // 不論規則引用的 group 實際是否含 IPv6 成員
         const srcAddrSplit = _splitAddr(src.addr, addrTypeMap);
         const dstAddrSplit = _splitAddr(dst.addr, addrTypeMap);
         out.push({
-          id: idx, name: desc || `${rsName}-${ruleNum}`,
-          srcIntf: (bind[rsName] || []).join(',') || '-', dstIntf: '-',
+          id: fam === 6 ? 'v6/' + idx6 : idx, name: desc || `${rsName}-${ruleNum}`,
+          srcIntf: (bind[(fam === 6 ? '6:' : '') + rsName] || []).join(',') || '-', dstIntf: '-',
           srcAddr: src.addr, dstAddr: dst.addr,
           srcAddr4: srcAddrSplit.v4, srcAddr6: srcAddrSplit.v6,
           dstAddr4: dstAddrSplit.v4, dstAddr6: dstAddrSplit.v6,
@@ -264,7 +272,7 @@ const EdgeRouterParser = (() => {
           logtraffic: val(rNode, 'log') === 'enable' ? 'all' : 'disable',
           utm: { av: '-', ips: '-', webfilter: '-', appctrl: '-' },
           status: hasFlag(rNode, 'disable') ? 'disable' : 'enable',
-          users: '-', groups: '-', comments: desc, _vdom: '', connState,
+          users: '-', groups: '-', comments: desc, _vdom: '', connState, _family: fam === 6 ? 'v6' : 'v4',
         });
       });
     });
@@ -288,6 +296,14 @@ const EdgeRouterParser = (() => {
       const members = vals(node, 'network');
       out.push({ category: 'address-group', name, type: 'group', subnet: '-', fqdn: '-', startIp: '-', endIp: '-',
         wildcard: '-', iface: '-', color: '0', comment: val(node, 'description') || '', members: members.join(', ') || '-', _vdom: '' });
+    });
+    // IPv6 群組（第十三輪 NE）：ipv6-address-group／ipv6-network-group，成員葉節點為 address／network（另見 ipv6-network 寫法）
+    ['ipv6-address-group', 'ipv6-network-group'].forEach(kind => {
+      Object.entries(childrenPrefixed(grp, kind)).forEach(([key, node]) => {
+        const members = ['address', 'network', 'ipv6-address', 'ipv6-network'].flatMap(k => vals(node, k));
+        out.push({ category: 'address-group', name: key.replace(new RegExp('^' + kind + '\\s+'), ''), type: 'group', subnet: '-', fqdn: '-', startIp: '-', endIp: '-',
+          wildcard: '-', iface: '-', color: '0', comment: val(node, 'description') || '', members: members.join(', ') || '-', _vdom: '' });
+      });
     });
     return out;
   }

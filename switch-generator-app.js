@@ -1980,6 +1980,9 @@ function collectModel(){
     sysname:document.getElementById('hostname').value.replace(/[\r\n]/g,'').trim()||'Switch',
     snmpTrapHost:document.getElementById('snmp-trap-host').value.trim(),
     syslogServer:document.getElementById('syslog-server').value.trim(),
+    // NTP／集中認證（第十三輪 ND）：只有 Cisco IOS-XE 與 Comware 輸出
+    ntpServers:fval('ntp-servers').split(/[\s,]+/).filter(Boolean),
+    aaaType:(document.getElementById('aaa-type')||{}).value||'', aaaServer:fval('aaa-server'), aaaKey:fval('aaa-key'),
     snmpCommunity:fval('snmp-community'),
     mgmtTelnetDisable:!!document.getElementById('mgmt-telnet-disable').checked,
     vlans, interfaces, ospf, ospf6,
@@ -2013,6 +2016,10 @@ function applyModelToForm(model){
   document.getElementById('hostname').value=model.sysname||'';
   document.getElementById('snmp-trap-host').value=model.snmpTrapHost||'';
   document.getElementById('syslog-server').value=model.syslogServer||'';
+  document.getElementById('ntp-servers').value=(model.ntpServers||[]).join(', ');
+  document.getElementById('aaa-type').value=model.aaaType||'';
+  document.getElementById('aaa-server').value=model.aaaServer||'';
+  document.getElementById('aaa-key').value=model.aaaKey||'';
   document.getElementById('snmp-community').value=model.snmpCommunity||'';
   document.getElementById('mgmt-telnet-disable').checked=!!model.mgmtTelnetDisable;
 
@@ -2989,6 +2996,17 @@ function validateForm(){
     });
   }
 
+  // NTP／集中認證（第十三輪 ND）：位址或主機名稱；認證伺服器須為 IPv4（Cisco address ipv4、Comware primary authentication），
+  // 金鑰不可含空白與引號（會變成多個參數）；選了類型卻沒填伺服器或金鑰為錯誤
+  (model.ntpServers||[]).forEach(n=>{
+    if(!isValidIPv4(n)&&!isValidIPv6(n)&&!/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/.test(n)){
+      errors.push('⚠️ '+tr('val.invalid').replace('{item}',tr('lbl.ntpServers')+' '+n));markInvalid(document.getElementById('ntp-servers'));
+    }
+  });
+  if(model.aaaType){
+    if(!isValidIPv4(model.aaaServer)){errors.push('⚠️ '+tr('val.invalid').replace('{item}',tr('lbl.aaaType')+' IP'));markInvalid(document.getElementById('aaa-server'));}
+    if(!model.aaaKey||/[\s"']/.test(model.aaaKey)){errors.push('⚠️ '+tr('val.aaa_key'));markInvalid(document.getElementById('aaa-key'));}
+  }
   return{errors,warnings,valid:errors.length===0,model};
 }
 
@@ -3487,6 +3505,8 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   document.getElementById('snmp-community').value=parsed.snmp?.communities?.[0]?.name||'';
   document.getElementById('snmp-trap-host').value=parsed.snmp?.hosts?.[0]?.host||'';
   document.getElementById('syslog-server').value=parsed.syslog?.servers?.[0]?.host||'';
+  // NTP（第十三輪 ND）：解析器的 mgmtSvc.ntp；集中認證的金鑰無法從設定檔取得（多為加密），不回填
+  document.getElementById('ntp-servers').value=(parsed.mgmtSvc&&Array.isArray(parsed.mgmtSvc.ntp)?parsed.mgmtSvc.ntp:[]).join(', ');
 
   // VLAN 表格的 IP 欄位只收 IPv4 CIDR；IPv6 SVI 位址不填入（填入會被判為格式錯誤）
   (parsed.vlans||[]).forEach(v=>addVlanRow(v.id,v.name,/:/.test(v.ip||'')?'':v.ip));
