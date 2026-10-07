@@ -363,7 +363,8 @@ function analyzeSwitchAudit(parsed){
     if(Array.isArray(ms.ntp))f('ntp-missing', tr('audit.check_ntp_missing'), ms.ntp.length?0:1, 'low',
       ms.ntp.length?ms.ntp.slice(0,8).join(', '):tr('audit.ntp_missing_detail'), ['ISO27001 A.8.17','NIST 800-53 AU-8','CIS v8 8.4'], ms.ntp.length?[]:['ntp']);
     const logHosts=[...((parsed.syslog&&parsed.syslog.servers)||[]).map(s=>s.host),...(ms.syslogExtra||[])];
-    f('syslog-missing', tr('audit.check_syslog_missing'), logHosts.length?0:1, 'medium',
+    // syslogEval:false＝該廠牌的遠端 syslog 語法未查證，不評估（第十三輪 NC，Netgear Smart Managed Pro）
+    if(ms.syslogEval!==false)f('syslog-missing', tr('audit.check_syslog_missing'), logHosts.length?0:1, 'medium',
       logHosts.length?[...new Set(logHosts)].slice(0,8).join(', '):tr('audit.syslog_missing_detail'), ['ISO27001 A.8.15','NIST 800-53 AU-4','CIS v8 8.9'], logHosts.length?[]:['syslog']);
     if(Array.isArray(ms.aaa))f('aaa-local-only', tr('audit.check_aaa_local_only'), ms.aaa.length?0:1, 'medium',
       ms.aaa.length?ms.aaa.slice(0,8).join(', '):tr('audit.aaa_local_only_detail'), ['ISO27001 A.8.5','NIST 800-53 IA-2','CIS v8 6.7'], ms.aaa.length?[]:['aaa']);

@@ -640,7 +640,7 @@ function parseMgmtAccess(cfg, vendor){
 // - 本專案真實範例：Comware `idle-timeout 0 0`、`info-center loghost`；ProCurve `ntp server-name "…"`；Ruijie `banner motd`、`exec-timeout 10 0`、`ntp server`
 // - 既有已查證解析：Comware hwtacacs／radius scheme 的 primary authentication（去識別化）、Junos system 區塊（junosBlock）
 // Cisco Business／AlliedWare Plus（sys.brand）語法不同，整組不評估
-const MGMT_SVC_VENDORS=['cisco','ruijie','nxos','arista','aruba','comware','juniper','procurve','efos','brocade'];
+const MGMT_SVC_VENDORS=['cisco','ruijie','nxos','arista','aruba','comware','juniper','procurve','efos','brocade','netgearsmart'];
 function parseMgmtServices(cfg, vendor, brand){
   if(!MGMT_SVC_VENDORS.includes(vendor)||brand==='ciscobiz'||brand==='awplus')return null;
   const all=(re)=>{const out=[];let m;const r=new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g');while((m=r.exec(cfg))!==null)out.push(m[1]);return out;};
@@ -648,6 +648,8 @@ function parseMgmtServices(cfg, vendor, brand){
   const jb=n=>typeof junosBlock==='function'?junosBlock(cfg,n):'';
   let ntp=[], aaa=[], banner=null, httpPlain=null, sshV1=null, idleOff=null, syslogExtra=[];
   // EFOS（第十二輪 MM）：只有 ntp server 依真實錄製確認，其餘項目語法未查證不評估
+  // Netgear Smart Managed Pro（第十三輪 NC）：只有 sntp N host 依真實錄製確認，其餘未查證不評估
+  if(vendor==='netgearsmart')return {ntp:[...new Set(all(/^sntp\s+\d+\s+host\s+(\S+)/m))], aaa:null, banner:null, httpPlain:null, sshV1:null, idleOff:null, syslogExtra:[], sshV2Only:null, syslogEval:false};
   if(vendor==='efos')return {ntp:[...new Set(all(/^ntp\s+server\s+(\S+)/m))], aaa:null, banner:null, httpPlain:null, sshV1:null, idleOff:null, syslogExtra:[], sshV2Only:null};
   if(vendor==='juniper'){
     const nb=jb('ntp'); let m; const r=/^\s*server\s+([^\s;{]+)/gm; while((m=r.exec(nb))!==null)ntp.push(m[1]);

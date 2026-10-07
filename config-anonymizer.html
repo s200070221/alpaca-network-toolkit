@@ -474,6 +474,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="cumulus">NVIDIA Cumulus Linux (NVUE)</option>
                 <option value="voss">Extreme VOSS / Fabric Engine</option>
                 <option value="efos">Broadcom EFOS</option>
+                <option value="netgearsmart">Netgear Smart Managed Pro</option>
                 <option value="awplus">Allied Telesis AlliedWare Plus</option>
                 <option value="openwrt">OpenWrt (UCI)</option>
                 <option value="watchguard">WatchGuard Firebox</option>
@@ -1304,6 +1305,7 @@ const VENDOR_SIGS = {
   awplus:      { p:[/^interface\s+port\d+\.\d+\.\d+/m, /AlliedWare Plus/i, /^vlan database\s*$\n(?:[ \t]+.*\n)*?[ \t]+vlan\s+[\d,-]+\s+state\s+enable/m], min:1 },
   // Extreme VOSS／Fabric Engine（2026-10-05，KG）：與 switch_analyzer isVOSS() 一致
   // Broadcom EFOS（2026-10-06，MM）：與 switch_analyzer isEFOS() 一致，排在 edgeswitch／netgear 前
+  netgearsmart:{ p:[/^SYSTEM CONFIG FILE ::= BEGIN\s*$/m, /^!\s*System Description:\s*NETGEAR\b/mi], min:2 },
   efos:        { p:[/^!System Description\s+"EFOS\b/m, /^!System Software Version\s+"[\s\S]*^serviceport\s+(?:ip|protocol)\b[\s\S]*^port-channel\s+name\s+\d+\/\d+\s/m], min:1 },
   voss:        { p:[/^#\s*box type\s*:\s*(?:VSP|XA|\d{4})/m, /^vlan\s+create\s+[\d,\-]+(?:\s+name\s+"[^"]*")?\s+type\s+port-mstprstp\s+\d+/m], min:1 },
   cumulus:     { p:[/^\s*-\s+set:\s*$\n(?:.*\n)*?\s+(?:interface|bridge|system|router|vrf):\s*$/m, /nvue-api-version/, /^nv set (?:interface|bridge|system|router|vrf|service) /m], min:1 },
@@ -1332,7 +1334,7 @@ const VENDOR_SIGS = {
 // "Sophos"/"Aruba" 文字比對），故刻意排在最後——讓其他更具結構特徵的廠牌訊號優先判定，
 // 只有在都沒命中時才輪到這兩家，降低誤判機率
 const VENDOR_ORDER = [
-  'cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
+  'cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','netgearsmart','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
   'checkpoint','pfsense','sonicwall','watchguard','mikrotik','arista',
   'extreme','alcatel','brocade','procurve','dell_os10','planet','ruijie','netgear','edgeswitch','sonic',
   'ciscoasa','cisco_biz','cisco_ios',
@@ -1346,7 +1348,7 @@ const VENDOR_LABELS = {
   arista:'Arista EOS',aruba_cx:'Aruba CX',procurve:'Aruba ProCurve',
   dell_os10:'Dell OS10',extreme:'Extreme XOS',alcatel:'Alcatel OmniSwitch',
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
-  edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',cumulus:'NVIDIA Cumulus Linux (NVUE)',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',awplus:'Allied Telesis AlliedWare Plus',
+  edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',cumulus:'NVIDIA Cumulus Linux (NVUE)',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',netgearsmart:'Netgear Smart Managed Pro',awplus:'Allied Telesis AlliedWare Plus',
   planet:'Planet Technology',ruijie:'Ruijie (RGOS)',netgear:'Netgear M4300 (ICOS)',
   edgeswitch:'Ubiquiti EdgeSwitch',sonic:'SONiC (config_db.json)',watchguard:'WatchGuard Firebox',
   unknown:''
@@ -3505,6 +3507,32 @@ function anonEFOS(text, opts) {
   }).join('\n');
 }
 
+// ---- Netgear Smart Managed Pro（GS7xx，第十三輪 NC）----
+// 語法依 Oxidized 的 GS752TPP 真實錄製：檔頭註解 `! System Name:`／`! Serial Number:`／`! MAC Address:`、
+// system name／location "…"、username "…" secret encrypted …、snmp community "…" … ro、snmp host … "community"、
+// snmp user "名稱" "群組" auth md5 encrypted …
+function anonNetgearSmart(text, opts) {
+  const q = (v, fn) => (/^".*"$/.test(v) ? '"' + fn(v.slice(1, -1)) + '"' : fn(v));
+  return text.split('\n').map(line => {
+    if (opts.hostname) {
+      line = line.replace(/^(system\s+name\s+)(".*"|\S+)\s*$/, (m, p, n) => p + q(n, v => anonHostname(v, 'sw', opts)));
+      line = line.replace(/^(!\s*System Name:\s*)(\S+)\s*$/, (m, p, n) => p + anonHostname(n, 'sw', opts));
+    }
+    line = line.replace(/^(!\s*(?:Serial Number:|SN\s*:)\s*)\S+/, '$1REDACTED_SERIAL');
+    line = line.replace(/^(system\s+location\s+)(".*"|\S+)/, (m, p, v) => { stats.comment++; return p + (/^"/.test(v) ? '"REDACTED_LOCATION"' : 'REDACTED_LOCATION'); });
+    line = line.replace(/^(username\s+)(".*?"|\S+)(\s+(?:secret|password)\s+(?:encrypted\s+)?)(\S+)/, (m, p, n, mid) => { stats.password++; return p + (opts.user ? q(n, anonUser) : n) + mid + 'REDACTED_HASH'; });
+    line = line.replace(/^(snmp\s+community\s+)(".*?"|\S+)/, (m, p, c) => { stats.community++; return p + (/^"/.test(c) ? '"REDACTED_COMMUNITY"' : 'REDACTED_COMMUNITY'); });
+    line = line.replace(/^(snmp\s+host\s+\S+.*?\bversion\s+\S+\s+)(".*?"|\S+)/, (m, p, c) => { stats.community++; return p + (/^"/.test(c) ? '"REDACTED_COMMUNITY"' : 'REDACTED_COMMUNITY'); });
+    line = line.replace(/^(snmp\s+user\s+)(".*?"|\S+)(.*?\bencrypted\s+)(\S+)/, (m, p, n, mid) => { stats.key++; return p + (opts.user ? q(n, anonUser) : n) + mid + 'REDACTED_KEY'; });
+    // 韌體／Loader 版本號（6.0.10.14）長得像 IP，維持原文
+    if (/^!\s*(?:Firmware|Loader) Version\s*:/i.test(line)) return line;
+    line = replaceDescLine(line, opts);
+    if (opts.ip) line = replaceIPsInLine(line, opts);
+    if (opts.mac) line = replaceMACsInLine(line, opts);
+    return line;
+  }).join('\n');
+}
+
 // ---- Ubiquiti EdgeSwitch (ICOS) ----
 // 與 Netgear 同源 Broadcom ICOS，hostname／帳號密碼語法逐字相同；EdgeSwitch 無 L3/VRRP
 // 支援（switch_analyzer parser 硬編碼 vrrp:[]，裝置架構限制——VLAN Routing 邏輯介面 ID 由
@@ -3848,7 +3876,7 @@ const VENDOR_FNS = {
   procurve: anonProCurve,
   dell_os10: anonDellOS10, extreme: anonExtreme, alcatel: anonAlcatel,
   brocade: anonBrocade, ciscoasa: anonCiscoASA, zyxel: anonZyxel,
-  edgerouter: anonEdgeRouter, openwrt: anonOpenWrt, vyos: anonVyOS, netfilter: anonNetfilter, cloudsg: anonCloudSG, cumulus: anonCumulus, voss: anonVOSS, efos: anonEFOS, awplus: anonAlliedWare,
+  edgerouter: anonEdgeRouter, openwrt: anonOpenWrt, vyos: anonVyOS, netfilter: anonNetfilter, cloudsg: anonCloudSG, cumulus: anonCumulus, voss: anonVOSS, efos: anonEFOS, netgearsmart: anonNetgearSmart, awplus: anonAlliedWare,
   planet: anonPlanet, ruijie: anonRuijie, netgear: anonNetgear,
   edgeswitch: anonEdgeSwitch, sonic: anonSonic, watchguard: anonWatchGuard,
   unknown: anonGeneric
