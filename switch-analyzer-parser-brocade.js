@@ -111,6 +111,23 @@ function parseBrocadeInterfaces(cfg){
   const taggedMap={};   // port → [vid]
   const untaggedMap={}; // port → vid (access/native)
 
+  // VLAN 成員可直接寫 LAG（`tagged lag 100`，FastIron 08.0.9x 的 lag 指令，第十三輪 NB 依 Oxidized 的
+  // ICX7150 真實錄製確認）：套用到該 LAG 的成員埠。原本 "lag 100" 被拆成埠號 100，產生不存在的 e100
+  const lagPorts={}, portLag={};
+  parseBrocadeLACP(cfg).forEach(l=>{
+    const id=(l.name.match(/^lag(\d+)/)||[])[1];
+    if(!id)return;
+    lagPorts[id]=l.members.map(x=>x.replace(/^e/,''));
+    lagPorts[id].forEach(p=>{portLag[p]='lag'+id;});
+  });
+  const memberPorts=str=>{
+    const out=[];
+    const rest=str.replace(/\blag\s+(\d+)(?:\s+to\s+(\d+))?/gi,(x,a,b)=>{
+      for(let k=+a;k<=+(b||a)&&k-a<64;k++)(lagPorts[k]||[]).forEach(p=>out.push(p));
+      return ' ';
+    });
+    return out.concat(brocadeExpandPorts(rest));
+  };
   const vlanBlocks=cfg.split(/^(?=vlan\s+\d)/m);
   for(const blk of vlanBlocks){
     const vm=blk.match(/^vlan\s+(\d+)/);
@@ -119,7 +136,7 @@ function parseBrocadeInterfaces(cfg){
     // tagged ports
     const tR=/^\s+tagged\s+([^\n]+)/gm; let m;
     while((m=tR.exec(blk))!==null){
-      brocadeExpandPorts(m[1]).forEach(p=>{
+      memberPorts(m[1]).forEach(p=>{
         if(!taggedMap[p])taggedMap[p]=[];
         if(!taggedMap[p].includes(vid))taggedMap[p].push(vid);
       });
@@ -127,7 +144,7 @@ function parseBrocadeInterfaces(cfg){
     // untagged ports
     const uR=/^\s+untagged\s+([^\n]+)/gm;
     while((m=uR.exec(blk))!==null){
-      brocadeExpandPorts(m[1]).forEach(p=>{
+      memberPorts(m[1]).forEach(p=>{
         untaggedMap[p]=vid;
         if(!taggedMap[p])taggedMap[p]=[];
       });
@@ -201,7 +218,7 @@ function parseBrocadeInterfaces(cfg){
 
     const mem=(port.match(/^(\d+)\//)||[])[1]||'1';
     const lagM=blk.match(/^\s+link-aggregate\s+(\d+)/m)||blk.match(/^\s+lag\s+(\d+)/m);
-    const lagMember=lagM?'lag'+lagM[1]:'';
+    const lagMember=lagM?'lag'+lagM[1]:(portLag[port]||'');
     // Breakout: 子埠命名為 unit/slot/port:1~4（獨立 `breakout ethernet X to ethernet Y`
     // 指令啟用，見 parseBrocadeBreakout()），官方查證需 write memory+reload 才生效
     const bkMatch=port.match(/^(\d+\/\d+\/\d+):([1-4])$/);

@@ -152,7 +152,7 @@ function detectVendor(cfg){
   // running-config` 檔頭與產生器的 NX-OS 檔頭——未啟用任何 feature 的設定原本被判成 Cisco IOS
   if((/^feature\s+\w+/m.test(cfg)&&(/Cisco\s+Nexus/i.test(cfg)||/^vdc\s+\S+\s+id\s+\d+/m.test(cfg)||/^system\s+jumbomtu\s+\d+/m.test(cfg)))||
      /^version\s+\d+\.\d+\(\d+\)/m.test(cfg)||/^!Command:\s*show running-config/m.test(cfg)||/^!\s*Cisco Nexus Operating System \(NX-OS\)/m.test(cfg))return'nxos';
-  if(/^vsf\s*$|vlan trunk allowed|vlan trunk native|vlan access\s+\d|vrf attach\s/m.test(cfg))return'aruba';
+  if(/^!Version ArubaOS-CX\b/m.test(cfg)||/^vsf\s*$|vlan trunk allowed|vlan trunk native|vlan access\s+\d|vrf attach\s/m.test(cfg))return'aruba';
   if(/^config system global/m.test(cfg) || /^config switch physical-port/m.test(cfg) || /^config router ospf/m.test(cfg))return'fortiswitch';
   // Brocade FastIron/ICX: "vlan N by port", "tagged"/"untagged" under vlan, "stack unit"
   if(/^vlan\s+\d+\s+(?:name\s+\S+\s+)?by\s+port/m.test(cfg)||

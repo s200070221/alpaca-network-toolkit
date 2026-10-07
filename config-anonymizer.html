@@ -1271,7 +1271,7 @@ const VENDOR_SIGS = {
   alcatel:     { p:[/^(?:->\s*)?system name\s+/m, /^stack set slot\s+/m, /OmniSwitch/i], min:1 },
   brocade:     { p:[/^vlan\s+\d+\s+(?:name\s+\S+\s+)?by\s+port/m, /^stack unit\s+\d+/m, /FastIron|ICX/i], min:1 },
   // min 由 1 提高為 2：單靠字面 "Aruba" 一個訊號太寬鬆，理由同 sophos
-  aruba_cx:    { p:[/vlan trunk (?:allowed|native)/m, /^vsf\s*$/m, /Aruba/i], min:2 },
+  aruba_cx:    { p:[/^!Version ArubaOS-CX\b/m, /vlan trunk (?:allowed|native)/m, /^vsf\s*$/m, /Aruba/i], min:2 },
   // 第 4 條：帶引號 hostname 之後出現以埠號開頭的 untagged／tagged（無 `; J9xxxA` 檔頭時，與 switch_analyzer 同步，2026-10-01）
   procurve:    { p:[/^;\s*(?:HP\s|Aruba\s|J\d{4}[A-Z])/m, /^oobm$/m, /^trunk\s+[\dA-Za-z,\/\-]+\s+[Tt]rk\d+/m, /^hostname\s+"[^"\n]*"\s*$[\s\S]*?^\s+(?:un)?tagged\s+[A-Z]?\d/m], min:1 },
   dell_os10:   { p:[/^interface\s+ethernet\d+\/\d+\/\d+/m, /^vlt-domain\s+\d+/m, /Dell.*OS10/i], min:1 },
@@ -3884,7 +3884,17 @@ function anonymize(text, vendor, opts, keepState) {
   }
 
   const fn = VENDOR_FNS[vendor] || anonGeneric;
-  return anonContactInfo(anonCommentsFallback(fn(text, opts), opts, vendor));
+  return anonPemBlocks(anonContactInfo(anonCommentsFallback(fn(text, opts), opts, vendor)));
+}
+// PEM 區塊（第十三輪 NA 實跑 Oxidized 的 FortiGate 91G 錄製發現）：FortiGate 的 set private-key／set certificate、
+// 其他廠牌貼上的金鑰與憑證都是多行 PEM，逐行規則只處理到開頭那一行，私鑰內文原樣殘留（checkResidual() 只會警示）。
+// 不分廠牌，保留 BEGIN／END 行，內文換成 REDACTED_PEM；憑證雖為公開資料，內文可能含內部主機名稱與組織資訊，一併遮蔽
+function anonPemBlocks(text) {
+  return text.replace(/(-----BEGIN ([A-Za-z0-9 ]+)-----)([\s\S]*?)(-----END \2-----)/g, (m, b, kind, body, e) => {
+    if (/^\s*REDACTED_PEM\s*$/.test(body)) return m;
+    stats.key++;
+    return b + '\nREDACTED_PEM\n' + e;
+  });
 }
 
 // 備註／描述補掃（2026-10-02，第 13 輪）：「備註/描述/別名」選項原本只在部分廠牌函式內處理，
@@ -4085,6 +4095,8 @@ function checkResidual(text) {
     // Aruba 的 `opmode wpa2-psk-aes` 是加密模式名稱，不是金鑰（2026-10-05）
     // AireOS 的 `wlan security wpa akm psk enable|disable N` 是功能開關
     // BGP 的 `send-community standard|extended|large|both`（Cisco IOS、FRR／TNSR）是功能開關（2026-10-06）
+    // 值為 PEM 開頭行（內文已由 anonPemBlocks() 換成 REDACTED_PEM，下一行起才是內文）不算殘留（第十三輪 NA）
+    if (/^[^"]*"?-----BEGIN [A-Za-z0-9 ]+-----\s*$/.test(t.replace(/^.*?(?:private.key|certificate|key)\s+/i, '')) && /^REDACTED_PEM\s*$/.test(lines[i + 1] || '')) return;
     const tk = t.replace(/\bsend-community\b(?:\s+\S+)?/gi, '').replace(/\bpassword-encryption\b/gi, '').replace(/^\s*opmode\s+\S+/i, 'opmode').replace(/\bakm\s+psk\s+(?:enable|disable)\b/i, 'akm');
     if (sensitiveKw.test(tk) && !/^[:'"*\s]*$/.test(tk.replace(/\s+/g, ' ').split(/password|passwd|secret|psk|community|auth.?key|shared.?key|pre.?shared/i).pop().trim())) {
       if (!/REDACTED/.test(t)) warnings.push({ line: lineNum, text: t });
