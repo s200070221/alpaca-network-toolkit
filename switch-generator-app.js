@@ -4016,6 +4016,14 @@ function _doGeneratorAuditCheck(){
       <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}${i.capped?` <span title="${escapeHtml(tr('genaudit.capped_tip'))}">(${escapeHtml(tr('genaudit.capped_mark'))})</span>`:''}</span>
     </div>`).join('');
   }
+  // 基礎服務提醒（MK）：不計分，列在分數下方
+  const rem=analyzeGeneratorReminders(model);
+  if(rem.length){
+    h+=`<div style="margin-top:12px;font-size:13px;font-weight:600;color:var(--text)">${esc(tr('genaudit.reminder_title'))}</div>`
+      +rem.map(r=>`<div class="gen-reminder" data-id="${escAttr(r.id)}" style="margin-top:6px;padding:6px 10px;background:var(--surface2);border-radius:6px;border-left:3px solid var(--border)">
+      <div style="font-size:13px;color:var(--text)">💡 ${esc(r.text)}</div>${r.cmds.length?`<div style="font-size:11px;color:var(--text-dim);margin-top:4px">${esc(tr('genaudit.reminder_example'))}</div><pre style="margin:2px 0 0;font-size:11px;white-space:pre-wrap">${esc(r.cmds.join('\n'))}</pre>`:''}
+    </div>`).join('');
+  }
   const el=document.getElementById('gen-audit-result');
   if(el)el.innerHTML=h;
 }

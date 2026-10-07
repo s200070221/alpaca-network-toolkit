@@ -228,6 +228,28 @@ function analyzeGeneratorAudit(model){
   return findings;
 }
 
+// ── 基礎服務提醒（2026-10-07，第十二輪 MK）──────────────────────────
+// 對應 switch_analyzer 的 ntp-missing／syslog-missing／aaa-local-only 稽核：表單沒有 NTP 與 AAA 欄位，
+// 產生結果不會有這兩項，Syslog 也只有下列廠牌會輸出，故只列為提醒、不計入健康度分數（使用者在表單上無法修正）。
+// 範例指令沿用 switch_analyzer SW_FIX_CMDS 已查證的 Cisco／Comware 語法，其餘廠牌只顯示文字提醒。
+const GEN_SYSLOG_VENDORS=new Set(['cisco','arista','brocade','comware','dell-os10','cisco_nxos']);
+const GEN_REMINDER_CMDS={
+  cisco:{ntp:['ntp server <ntp-server-1>','ntp server <ntp-server-2>'],syslog:['logging host <syslog-server>','logging trap informational'],
+    aaa:['aaa new-model','tacacs server <name>',' address ipv4 <tacacs-server>',' key <key>','aaa authentication login default group tacacs+ local','aaa accounting exec default start-stop group tacacs+']},
+  comware:{ntp:['ntp-service enable','ntp-service unicast-server <ntp-server-1>','ntp-service unicast-server <ntp-server-2>'],syslog:['info-center enable','info-center loghost <syslog-server>'],
+    aaa:['hwtacacs scheme <name>',' primary authentication <tacacs-server>',' primary authorization <tacacs-server>',' primary accounting <tacacs-server>',' key authentication simple <key>','domain <domain>',' authentication login hwtacacs-scheme <name> local']},
+};
+function analyzeGeneratorReminders(model){
+  const vendor=model.vendor||'';
+  const cmds=GEN_REMINDER_CMDS[vendor]||{};
+  const out=[];
+  if(!GEN_SYSLOG_VENDORS.has(vendor))out.push({id:'syslog',text:tr('genaudit.reminder_syslog_unsupported'),cmds:cmds.syslog||[]});
+  else if(!(model.syslogServer||'').trim())out.push({id:'syslog',text:tr('genaudit.reminder_syslog_empty'),cmds:[]});
+  out.push({id:'ntp',text:tr('genaudit.reminder_ntp'),cmds:cmds.ntp||[]});
+  out.push({id:'aaa',text:tr('genaudit.reminder_aaa'),cmds:cmds.aaa||[]});
+  return out;
+}
+
 function computeGeneratorAuditHealth(model){
   const findings=analyzeGeneratorAudit(model);
   let score=100;

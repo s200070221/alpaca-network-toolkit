@@ -705,36 +705,45 @@ function parseLACP(cfg, vendor){
     });
     lacp.sort((a,b)=>parseInt(a.name.match(/\d+/)[0])-parseInt(b.name.match(/\d+/)[0]));
   }else if(vendor==='netgear'||vendor==='edgeswitch'){
-    // Netgear M4300／Ubiquiti EdgeSwitch 同源 Broadcom ICOS，LACP 語法完全一致（EdgeSwitch
-    // 官方 CLI Command Reference 確認格式與 Netgear 逐字相同，僅介面命名少一段 unit 前綴），
-    // 共用同一分支。2026-08-09 對外查證官方 NETGEAR KB（kb.netgear.com/21635，逐字指令稿）
-    // 修正既有方向錯誤：`addport` 是在 **LAG 自己的介面區塊內**執行，用來加入實體成員埠，
-    // 非「member 埠自己宣告要加入哪個 LAG」——原先方向理解相反，導致官方範例的原始
-    // unit/slot/port 位址形式（LAG 本身用 unit/slot/port 定址，如 0/13/1，非 "lag N" 別名）
-    // 完全無法正確歸群，且與 Cisco 慣例（member 埠宣告 channel-group）的類比也不成立。
-    // 官方指令稿範例：`interface 0/2` → `addport 1/1` → `exit`（LAG 介面 0/2 加入實體埠 1/1）。
-    // 修正後：不論 LAG 自己是用 "lag N" 別名或 unit/slot/port 原始位址命名，只要該介面
-    // 區塊內含 `addport` 行就視為 LAG，直接讀出成員清單；額外保留「介面名稱本身符合
-    // "lag N"」的既有 fixture 相容性（即使目前尚無成員也照舊列出該 LAG，例如剛建立但尚未
-    // addport 的情境）。"port-channel static" 出現時視為 Static，未出現時視為預設值 Active
-    // （官方 "port lacpmode" 預設即開啟 LACP 協商）
+    // Netgear M4300／Ubiquiti EdgeSwitch 同源 Broadcom ICOS（FASTPATH），LACP 語法一致，共用同一分支。
+    // 方向（2026-10-07 再查證修正）：addport 在「成員埠」自己的介面區塊內執行，參數是要加入的 LAG——
+    //   Ubiquiti 官方說明範例：interface 0/7-0/8 → addport 3/1 → exit，接著 interface lag 1 設定 VLAN；
+    //   FASTPATH 指令參考：addport logical unit/slot/port（Interface Config 模式），也可寫 addport lag N；
+    //   Netgear 社群：interface 1/0/1-1/0/2 → addport lag 1，或 addport 0/13/1（0/13/1 即 lag 1）；
+    //   Broadcom EFOS 真實錄製（Oxidized）同樣是成員埠區塊內 addport 1/1。
+    // LAG 的實體位址：EdgeSwitch 3/N、Netgear M4300 0/13/N 視為 lag N（依上述範例）；其餘位址形式原樣作為 LAG 名稱。
+    // LAG 區塊（interface lag N 或同位址）有 port-channel static 為 Static，否則為預設 LACP（Active）。
     const ifaceMap={};
     cfg.split(/\ninterface /).slice(1).forEach(blk=>{
       const name=blk.split('\n')[0].trim();
-      ifaceMap[name]=blk;
+      ifaceMap[name]=(ifaceMap[name]||'')+blk;
     });
-    const membersByName={};
+    const lagKey=t=>{
+      let m=t.match(/^lag\s*(\d+)$/i);if(m)return 'lag '+m[1];
+      if(vendor==='edgeswitch'&&(m=t.match(/^3\/(\d+)$/)))return 'lag '+m[1];
+      if(vendor==='netgear'&&(m=t.match(/^0\/13\/(\d+)$/)))return 'lag '+m[1];
+      return t;
+    };
+    // 介面範圍（0/7-0/8、1/0/1-1/0/2）展開成逐埠
+    const expandRange=n=>{
+      const m=n.match(/^((?:\d+\/)+)(\d+)-\1(\d+)$/);
+      if(!m)return [n];
+      const out=[];for(let k=+m[2];k<=+m[3]&&out.length<64;k++)out.push(m[1]+k);
+      return out;
+    };
+    const groups={};
     Object.entries(ifaceMap).forEach(([name,blk])=>{
-      const addports=[...blk.matchAll(/^\s*addport\s+(\S+)\s*$/gm)].map(m=>({name:m[1],lacpMode:null}));
-      if(addports.length) membersByName[name]=addports;
+      const a=blk.match(/^\s*addport\s+(.+?)\s*$/m);
+      if(!a)return;
+      const key=lagKey(a[1]);
+      (groups[key]=groups[key]||[]).push(...expandRange(name).map(n=>({name:n,lacpMode:null})));
     });
-    Object.entries(ifaceMap).forEach(([name,blk])=>{
-      const isNamedLag=/^lag\s+\d+/i.test(name);
-      if(!isNamedLag&&!membersByName[name])return;
-      const mode=/^\s*port-channel static\s*$/m.test(blk)?'Static':'Active';
-      lacp.push({name,mode,members:membersByName[name]||[]});
+    Object.keys(ifaceMap).forEach(name=>{const k=lagKey(name);if(/^lag \d+$/.test(k)&&!groups[k])groups[k]=[];});
+    Object.entries(groups).forEach(([key,members])=>{
+      const blk=Object.entries(ifaceMap).filter(([n])=>lagKey(n)===key).map(([,b])=>b).join('\n');
+      lacp.push({name:key,mode:/^\s*port-channel static\s*$/m.test(blk)?'Static':'Active',members});
     });
-    lacp.sort((a,b)=>parseInt(a.name.match(/\d+/)[0])-parseInt(b.name.match(/\d+/)[0]));
+    lacp.sort((a,b)=>parseInt((a.name.match(/\d+/)||[0])[0])-parseInt((b.name.match(/\d+/)||[0])[0]));
   }else if(vendor==='planet'){
     // Planet SGS-6341 系列：聚合介面稱為 "port-channel N"（非 Ruijie 的
     // AggregatePort），成員埠在自己的 interface 區塊內用 "port-group N mode
