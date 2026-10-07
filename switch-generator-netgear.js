@@ -34,36 +34,34 @@ function renderNetgearInterface(iface,lacpList){
     if(iface.ip.includes(':')){ lines.push(' ipv6 enable'); lines.push(` ipv6 address ${iface.ip}`); }
     else{ const [ip,len]=iface.ip.split('/'); lines.push(` ip address ${ip} ${maskFromCidr(len)}`); }
   }
-  // 2026-08-09 對外查證官方 NETGEAR KB（kb.netgear.com/21635，逐字指令稿）修正：addport
-  // 是在 LAG 自己的介面區塊內宣告要加入的實體成員埠，並非「member 埠自己宣告要加入哪個
-  // LAG」，故 member port 自己的介面區塊不應輸出 addport 行；已改在 renderNetgearLACPExtra()
-  // 的 LAG 區塊內輸出，見該函式說明
+  // addport 在成員埠自己的區塊內，參數為 LAG（2026-10-07 再查證修正方向，見 switch-generator-netgear 的 renderNetgearLACPExtra()）
+  if(lg)lines.push(` addport ${netgearAddportRef(lg)}`);
   if(iface.shutdown)lines.push(' shutdown');
   return lines.join('\n');
 }
 function renderNetgearInterfaces(ifaces,lacpList){return (ifaces||[]).map(i=>renderNetgearInterface(i,lacpList)).join('\n!\n');}
 
+// addport 方向（2026-10-07 再查證修正）：addport 在「成員埠」自己的介面區塊內執行，參數是要加入的 LAG。
+// 依據：Ubiquiti 官方說明範例（interface 0/7-0/8 → addport 3/1，再 interface lag 1 設定 VLAN）、FASTPATH 指令參考
+// （addport logical unit/slot/port，或 addport lag N）、Netgear 社群（interface 1/0/1-1/0/2 → addport lag 1）與 EFOS 真實錄製。
+// Netgear 輸出 addport lag N；EdgeSwitch 依官方範例輸出 addport 3/N；表單填的是實體位址（含 /）時原樣輸出。
+// LAG 自己的區塊只放 VLAN 設定與 port-channel static；尚未在介面表格的成員埠補一個含 addport 的區塊。
+function netgearAddportRef(l){
+  const gid=(l.id||'').toString().replace(/^lag\s*/i,'').trim();
+  return gid.includes('/')?gid:`lag ${gid}`;
+}
 function renderNetgearLACPExtra(lacpList,ifaces){
   const existingNames=new Set((ifaces||[]).map(i=>i.name));
   const blocks=[];
   (lacpList||[]).forEach(l=>{
     const gid=(l.id||'').toString().replace(/^lag\s*/i,'').trim();
     const refIface=(l.members||[]).map(m=>(ifaces||[]).find(i=>i.name===m)).find(Boolean);
-    // 2026-08-09 查證官方 KB 逐字指令稿（"interface 0/2" → "addport 1/1" → "exit"）修正：
-    // addport 一律輸出在 LAG 自己的區塊內、每個成員一行，而非先前誤植在各成員埠自己的
-    // 區塊內；member port 若尚未在 model.interfaces 有自己的顯式區塊，仍補一個空區塊
-    // 確保該埠存在，但不再輸出 addport
-    // gid 含 "/" 代表官方 KB 範例本身示範的 unit/slot/port 原始位址格式（如 "0/2"），與
-    // "lag N" 別名是平行、互斥的兩種定址方式，原始位址本身不帶 "lag" 關鍵字（2026-09-02
-    // 全功能審查發現：先前無條件輸出 "interface lag {gid}"，官方範例格式會產生真機無效
-    // 語法 "interface lag 0/2"）
     const lines=[gid.includes('/')?`interface ${gid}`:`interface lag ${gid}`,...netgearSwitchportLines(refIface)];
-    (l.members||[]).forEach(mem=>lines.push(` addport ${mem}`));
     if(l.mode==='static')lines.push(' port-channel static');
     blocks.push(lines.join('\n'));
     (l.members||[]).forEach(mem=>{
       if(existingNames.has(mem))return;
-      blocks.push(`interface ${mem}`);
+      blocks.push(`interface ${mem}\n addport ${netgearAddportRef(l)}`);
     });
   });
   return blocks.join('\n!\n');

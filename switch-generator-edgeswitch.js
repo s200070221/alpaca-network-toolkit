@@ -23,37 +23,34 @@ function renderEdgeSwitchInterface(iface,lacpList){
   if(iface.desc)lines.push(` description ${iface.desc}`);
   const lg=findLacpGroup(lacpList,iface.name);
   if(!lg)lines.push(...edgeSwitchVlanLines(iface));
-  // 2026-08-09 對外查證官方 NETGEAR KB（kb.netgear.com/21635，逐字指令稿，EdgeSwitch 與
-  // Netgear 同源 ICOS 共用同一套語法）修正：addport 是在 LAG 自己的介面區塊內宣告要加入
-  // 的實體成員埠，並非「member 埠自己宣告要加入哪個 LAG」，member port 自己的介面區塊
-  // 不應輸出 addport 行；已改在 renderEdgeSwitchLACPExtra() 的 LAG 區塊內輸出
+  // addport 在成員埠自己的區塊內，參數為 LAG（2026-10-07 再查證修正方向，見 switch-generator-edgeswitch 的 renderEdgeSwitchLACPExtra()）
+  if(lg)lines.push(` addport ${edgeSwitchAddportRef(lg)}`);
   if(iface.shutdown)lines.push(' shutdown');
   return lines.join('\n');
 }
 function renderEdgeSwitchInterfaces(ifaces,lacpList){return (ifaces||[]).map(i=>renderEdgeSwitchInterface(i,lacpList)).join('\n!\n');}
 
-// LACP 產生邏輯與 renderNetgearLACPExtra 完全相同（同一套 ICOS addport 語法），
-// 獨立複製一份而非共用函式名稱，避免未來任一廠牌語法出現分歧時互相牽動
+// addport 方向（2026-10-07 再查證修正）：addport 在「成員埠」自己的介面區塊內執行，參數是要加入的 LAG。
+// 依據：Ubiquiti 官方說明範例（interface 0/7-0/8 → addport 3/1，再 interface lag 1 設定 VLAN）、FASTPATH 指令參考
+// （addport logical unit/slot/port，或 addport lag N）、Netgear 社群（interface 1/0/1-1/0/2 → addport lag 1）與 EFOS 真實錄製。
+// Netgear 輸出 addport lag N；EdgeSwitch 依官方範例輸出 addport 3/N；表單填的是實體位址（含 /）時原樣輸出。
+// LAG 自己的區塊只放 VLAN 設定與 port-channel static；尚未在介面表格的成員埠補一個含 addport 的區塊。
+function edgeSwitchAddportRef(l){
+  const gid=(l.id||'').toString().replace(/^lag\s*/i,'').trim();
+  return gid.includes('/')?gid:`3/${gid}`;
+}
 function renderEdgeSwitchLACPExtra(lacpList,ifaces){
   const existingNames=new Set((ifaces||[]).map(i=>i.name));
   const blocks=[];
   (lacpList||[]).forEach(l=>{
     const gid=(l.id||'').toString().replace(/^lag\s*/i,'').trim();
-    // port-channel static 語法與 Netgear 完全共用（同源 ICOS），先前版本漏接此行，使用者
-    // 在表單把 LAG 模式設為 Static 時輸出設定檔完全不反映（2026-08-01 對外查證後修正，
-    // 比照 renderNetgearLACPExtra 既有寫法）
-    // 2026-08-09 查證官方 KB 逐字指令稿修正：addport 一律輸出在 LAG 自己的區塊內、
-    // 每個成員一行，而非先前誤植在各成員埠自己的區塊內
     const refIface=(l.members||[]).map(m=>(ifaces||[]).find(i=>i.name===m)).find(Boolean);
-    // gid 含 "/" 代表官方 KB 範例本身示範的 unit/slot/port 原始位址格式，與 "lag N" 別名平行、
-    // 互斥，原始位址不帶 "lag" 關鍵字（2026-09-02 全功能審查發現，比照 Netgear 同源修復）
     const lines=[gid.includes('/')?`interface ${gid}`:`interface lag ${gid}`,...edgeSwitchVlanLines(refIface)];
-    (l.members||[]).forEach(mem=>lines.push(` addport ${mem}`));
     if(l.mode==='static')lines.push(' port-channel static');
     blocks.push(lines.join('\n'));
     (l.members||[]).forEach(mem=>{
       if(existingNames.has(mem))return;
-      blocks.push(`interface ${mem}`);
+      blocks.push(`interface ${mem}\n addport ${edgeSwitchAddportRef(l)}`);
     });
   });
   return blocks.join('\n!\n');
