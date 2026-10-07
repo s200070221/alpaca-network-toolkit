@@ -529,6 +529,11 @@ function assembleComwareConfig(model){
   if(model.snmpCommunity)blocks.push(`snmp-agent community read simple ${model.snmpCommunity}`,'#');
   if(model.snmpTrapHost)blocks.push(`snmp-agent target-host trap address udp-domain ${model.snmpTrapHost} params securityname ${model.snmpCommunity||'public'} v2c`,'#');
   if(model.syslogServer)blocks.push(`info-center loghost ${model.syslogServer}`,'#');
+  // NTP 與集中認證（第十三輪 ND）：語法與 switch_analyzer 稽核修正指令（SW_FIX_CMDS.comware）相同；
+  // 認證方案名稱固定 TACACS-1／RADIUS-1，套用在預設 ISP 網域 system，本機帳號備援
+  if((model.ntpServers||[]).length)blocks.push(['ntp-service enable',...model.ntpServers.map(n=>`ntp-service unicast-server ${n}`)].join('\n'),'#');
+  if(model.aaaType==='tacacs'&&model.aaaServer)blocks.push(['hwtacacs scheme TACACS-1',` primary authentication ${model.aaaServer}`,` primary authorization ${model.aaaServer}`,` primary accounting ${model.aaaServer}`,` key authentication simple ${model.aaaKey}`,'#','domain system',' authentication login hwtacacs-scheme TACACS-1 local'].join('\n'),'#');
+  if(model.aaaType==='radius'&&model.aaaServer)blocks.push(['radius scheme RADIUS-1',` primary authentication ${model.aaaServer}`,` primary accounting ${model.aaaServer}`,` key authentication simple ${model.aaaKey}`,'#','domain system',' authentication login radius-scheme RADIUS-1 local'].join('\n'),'#');
   // Telnet 停用（選填，2026-09-16 新增）：官方 H3C Login Management Commands 查證 telnet 未
   // 設定時預設 all（telnet+ssh 皆開放），須 user-interface vty 下 protocol inbound ssh 才限縮
   // 為僅 SSH（parseMgmtAccess() comware 分支）

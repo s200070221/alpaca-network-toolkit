@@ -231,22 +231,20 @@ function analyzeGeneratorAudit(model){
 // ── 基礎服務提醒（2026-10-07，第十二輪 MK）──────────────────────────
 // 對應 switch_analyzer 的 ntp-missing／syslog-missing／aaa-local-only 稽核：表單沒有 NTP 與 AAA 欄位，
 // 產生結果不會有這兩項，Syslog 也只有下列廠牌會輸出，故只列為提醒、不計入健康度分數（使用者在表單上無法修正）。
-// 範例指令沿用 switch_analyzer SW_FIX_CMDS 已查證的 Cisco／Comware 語法，其餘廠牌只顯示文字提醒。
+// 原本附 Cisco／Comware 範例指令；第十三輪 ND 起這兩家可直接在表單填 NTP 與集中認證，範例指令移除（cmds 保留為空陣列）。
+const GEN_MGMT_SVC_VENDORS=new Set(['cisco','comware']);
 const GEN_SYSLOG_VENDORS=new Set(['cisco','arista','brocade','comware','dell-os10','cisco_nxos']);
-const GEN_REMINDER_CMDS={
-  cisco:{ntp:['ntp server <ntp-server-1>','ntp server <ntp-server-2>'],syslog:['logging host <syslog-server>','logging trap informational'],
-    aaa:['aaa new-model','tacacs server <name>',' address ipv4 <tacacs-server>',' key <key>','aaa authentication login default group tacacs+ local','aaa accounting exec default start-stop group tacacs+']},
-  comware:{ntp:['ntp-service enable','ntp-service unicast-server <ntp-server-1>','ntp-service unicast-server <ntp-server-2>'],syslog:['info-center enable','info-center loghost <syslog-server>'],
-    aaa:['hwtacacs scheme <name>',' primary authentication <tacacs-server>',' primary authorization <tacacs-server>',' primary accounting <tacacs-server>',' key authentication simple <key>','domain <domain>',' authentication login hwtacacs-scheme <name> local']},
-};
 function analyzeGeneratorReminders(model){
   const vendor=model.vendor||'';
-  const cmds=GEN_REMINDER_CMDS[vendor]||{};
   const out=[];
-  if(!GEN_SYSLOG_VENDORS.has(vendor))out.push({id:'syslog',text:tr('genaudit.reminder_syslog_unsupported'),cmds:cmds.syslog||[]});
+  if(!GEN_SYSLOG_VENDORS.has(vendor))out.push({id:'syslog',text:tr('genaudit.reminder_syslog_unsupported'),cmds:[]});
   else if(!(model.syslogServer||'').trim())out.push({id:'syslog',text:tr('genaudit.reminder_syslog_empty'),cmds:[]});
-  out.push({id:'ntp',text:tr('genaudit.reminder_ntp'),cmds:cmds.ntp||[]});
-  out.push({id:'aaa',text:tr('genaudit.reminder_aaa'),cmds:cmds.aaa||[]});
+  // 第十三輪 ND：Cisco／Comware 表單可填 NTP 與集中認證，填了就不提醒，沒填改為「未填」提醒；其餘廠牌維持「產生結果不含」
+  const svcVendor=GEN_MGMT_SVC_VENDORS.has(vendor);
+  if(!svcVendor)out.push({id:'ntp',text:tr('genaudit.reminder_ntp'),cmds:[]});
+  else if(!(model.ntpServers||[]).length)out.push({id:'ntp',text:tr('genaudit.reminder_ntp_empty'),cmds:[]});
+  if(!svcVendor)out.push({id:'aaa',text:tr('genaudit.reminder_aaa'),cmds:[]});
+  else if(!model.aaaType)out.push({id:'aaa',text:tr('genaudit.reminder_aaa_empty'),cmds:[]});
   return out;
 }
 

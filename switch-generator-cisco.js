@@ -355,6 +355,11 @@ function assembleCiscoConfig(model){
   if(model.snmpCommunity)blocks.push(`snmp-server community ${model.snmpCommunity} ro`);
   if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
   if(model.syslogServer)blocks.push(`logging host ${model.syslogServer}`);
+  // NTP 與集中認證（第十三輪 ND）：語法與 switch_analyzer 稽核修正指令（SW_FIX_CMDS.cisco）相同，
+  // 伺服器名稱固定 TACACS-1／RADIUS-1，登入以集中認證為主、本機帳號備援
+  (model.ntpServers||[]).forEach(n=>blocks.push(`ntp server ${n}`));
+  if(model.aaaType==='tacacs'&&model.aaaServer)blocks.push(['aaa new-model','tacacs server TACACS-1',` address ipv4 ${model.aaaServer}`,` key ${model.aaaKey}`,'aaa authentication login default group tacacs+ local','aaa accounting exec default start-stop group tacacs+'].join('\n'));
+  if(model.aaaType==='radius'&&model.aaaServer)blocks.push(['aaa new-model','radius server RADIUS-1',` address ipv4 ${model.aaaServer} auth-port 1812 acct-port 1813`,` key ${model.aaaKey}`,'aaa authentication login default group radius local'].join('\n'));
   if(model.mgmtTelnetDisable)blocks.push('line vty 0 4\n transport input ssh');
   if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
   // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序

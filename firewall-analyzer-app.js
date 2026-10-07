@@ -930,9 +930,10 @@ function onParsed(){
         // 的 tbl-cnt 用同一套算法，避免側邊欄徽章與稽核頁面實際命中數再次脫節
         const _mc = analyzeMissingComments(d);
         const _og = analyzeOversizedGroups(d);
+        const _do = analyzeDuplicateObjects(d);
         const total = _sh.length + _db.length + _mg.length + _un.unusedAddrs.length + _un.unusedSvcs.length +
                       _co.filter(f => f.risk === 'high' || f.risk === 'medium').length + _dup.length + _xv.length +
-                      _mc.length + _og.length;
+                      _mc.length + _og.length + _do.length;
         const nc = $('nc-audit');
         if (nc) { nc.textContent = total; nc.style.color = total > 0 ? 'var(--red)' : 'var(--green)'; }
       } catch(e) { console.warn('audit badge error:', e); }
@@ -1414,6 +1415,7 @@ function onParsed(){
         const _xv  = analyzeCrossVdomInconsistency(PARSED);
         const _mc  = analyzeMissingComments(PARSED);
         const _og  = analyzeOversizedGroups(PARSED);
+        const _do  = analyzeDuplicateObjects(PARSED);
         const _hi  = _co.filter(f => f.risk === 'high'  ).length;
         const _med = _co.filter(f => f.risk === 'medium').length;
         $('sum-wrap').innerHTML = sumC([
@@ -1428,8 +1430,9 @@ function onParsed(){
           { l:tr('audit.sum_cross_vdom'),  v: _xv.length,              c: _xv.length ? 'var(--orange)' : 'var(--green)' },
           { l:tr('audit.sum_missing_comments'), v: _mc.length,         c: _mc.length ? 'var(--yellow)' : 'var(--green)' },
           { l:tr('audit.sum_oversized_groups'), v: _og.length,         c: _og.length ? 'var(--yellow)' : 'var(--green)' },
+          { l:tr('audit.sum_dup_objects'), v: _do.length,              c: _do.length ? 'var(--yellow)' : 'var(--green)' },
         ]);
-        $('tbl-cnt').textContent = `${_sh.length + _db.length + _mg.length + _dup.length + _un.unusedAddrs.length + _un.unusedSvcs.length + _hi + _med + _xv.length + _mc.length + _og.length} ${tr('unit.findings')}`;
+        $('tbl-cnt').textContent = `${_sh.length + _db.length + _mg.length + _dup.length + _un.unusedAddrs.length + _un.unusedSvcs.length + _hi + _med + _xv.length + _mc.length + _og.length + _do.length} ${tr('unit.findings')}`;
         // Zone 拓樸圖：表格/拓樸切換，比照 case 'routes' 內既有 BGP peer 拓樸的 _fwBgpView 慣例
         let _zoneHtml = buildZoneMatrixHtml(PARSED.policies);
         if (_zoneHtml) {
@@ -1437,7 +1440,7 @@ function onParsed(){
           const _zTgl=`<div style="display:flex;gap:5px;margin-bottom:8px"><button onclick="window._fwZoneView='table';renderSection('audit')" style="${_zbs(!window._fwZoneView||window._fwZoneView==='table')}">${tr('routing.view_table')}</button><button onclick="window._fwZoneView='topo';renderSection('audit')" style="${_zbs(window._fwZoneView==='topo')}">${tr('routing.view_topo')}</button></div>`;
           _zoneHtml = _zTgl + (window._fwZoneView==='topo' ? buildZoneTopoHtml(PARSED.policies) : _zoneHtml);
         }
-        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules()) + buildExpiredRulesHtml(analyzeExpiredRules(PARSED, { keywords: _loadExpiryKeywords() }), _loadExpiryKeywords())
+        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildDuplicateObjectsHtml(_do) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules()) + buildExpiredRulesHtml(analyzeExpiredRules(PARSED, { keywords: _loadExpiryKeywords() }), _loadExpiryKeywords())
           + (PARSED.vendor === 'FortiGate' ? _fwCleanupCardHtml() : '')
           + (_HIT_VENDOR_SUFFIX[PARSED.vendor] !== undefined ? _fwHitCardHtml() : '')
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
