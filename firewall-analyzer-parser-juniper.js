@@ -366,7 +366,7 @@ const JuniperParser = (() => {
           srcAddr: srcAddr || 'any', dstAddr: dstAddr || 'any',
           srcAddr4: srcAddrSplit.v4, srcAddr6: srcAddrSplit.v6,
           dstAddr4: dstAddrSplit.v4, dstAddr6: dstAddrSplit.v6,
-          service: apps || 'any', schedule: 'always',
+          service: apps || 'any', schedule: val(polNode,'scheduler-name') || 'always',
           action, nat: 'disable', ippool: 'disable', poolname: '-',
           logtraffic, logstart: '-', utm,
           status: disabled ? 'disable' : 'enable',
@@ -800,15 +800,41 @@ const JuniperParser = (() => {
 
   // ── Schedules ─────────────────────────────────────────────────────────────
   function parseSchedules(tree) {
+    // 依 Juniper 官方 YANG（junos-es-conf-schedulers）：scheduler NAME 底下 `start-date [YYYY-]MM-DD.hh:mm stop-date …;`
+    // 可重複多組，另有 daily／sunday…saturday 子區塊（內含 start-time／stop-time 或 all-day／exclude）。
+    // 日期區間有年份時視為單次排程（end 取最晚的 stop-date，轉成 hh:mm YYYY/MM/DD 供到期稽核使用）；
+    // 未寫年份代表每年重複，維持 recurring。政策以 `scheduler-name NAME` 引用。
     const scheds = [];
     const schedNode = path(tree, ['schedulers']);
     if (!schedNode) return scheds;
+    const DAYS = ['daily','sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
     Object.entries(schedNode._children).forEach(([skey, snode]) => {
+      if (!skey.startsWith('scheduler ')) return;
       const name = skey.replace('scheduler ','');
+      const days = DAYS.filter(d => snode._children[d] || snode._values.some(v => v === d || v.startsWith(d + ' ')));
+      const firstDay = days.length ? (snode._children[days[0]] || null) : null;
+      const ranges = [];
+      snode._values.forEach(v => {
+        const m = v.match(/^start-date\s+(?:(\d{4})-)?(\d{2})-(\d{2})\.(\d{2}:\d{2})\s+stop-date\s+(?:(\d{4})-)?(\d{2})-(\d{2})\.(\d{2}:\d{2})/);
+        if (!m) return;
+        const year = m[1] || m[5] || '';
+        ranges.push({ year, start: `${m[4]} ${year ? year + '/' : ''}${m[2]}/${m[3]}`, end: `${m[8]} ${year ? year + '/' : ''}${m[6]}/${m[7]}`,
+          key: (year || '0000') + m[6] + m[7] + m[8] });
+      });
+      if (ranges.length && ranges.every(r => r.year)) {
+        const last = ranges.reduce((a, b) => (b.key > a.key ? b : a));
+        scheds.push({ type:'onetime', name, start: ranges[0].start, end: last.end,
+          day: days.join(' ') || '-', color:'0', _vdom:'default' });
+        return;
+      }
+      // daily／星期子區塊內為 `start-time HH:MM[:SS] stop-time HH:MM[:SS];` 單行
+      //（display set 轉回時只有一行的子區塊會寫成 `daily start-time … stop-time …;` 單行值）
+      const dayTxt = days.length ? (val(firstDay,'start-time') ? 'start-time ' + val(firstDay,'start-time') : val(snode, days[0])) : '';
+      const tm = dayTxt.match(/^start-time\s+(\S+)(?:\s+stop-time\s+(\S+))?/) || [];
       scheds.push({ type:'recurring', name,
-        start: val(snode,'start-time')||'-',
-        end:   val(snode,'stop-time')||'-',
-        day:   val(snode,'day-of-week')||'-', color:'0', _vdom:'default' });
+        start: ranges[0] ? ranges[0].start : (tm[1] || val(snode,'start-time') || '-'),
+        end:   ranges[0] ? ranges[0].end   : (tm[2] || val(snode,'stop-time') || '-'),
+        day:   days.join(' ') || val(snode,'day-of-week') || '-', color:'0', _vdom:'default' });
     });
     return scheds;
   }
@@ -1026,6 +1052,8 @@ const JuniperParser = (() => {
       for (let i = 0; i < t.length; i++) {
         let key = t[i];
         if (JUNOS_NAMED_KW.has(key) && i + 1 < t.length) key += ' ' + t[++i];
+        // 排程時段 `start-date X stop-date Y`／`start-time X stop-time Y` 為單一陳述式（同一排程可重複多組）
+        else if ((key === 'start-date' || key === 'start-time') && t[i + 2] === key.replace('start', 'stop') && i + 3 < t.length) { key += ' ' + t.slice(i + 1, i + 4).join(' '); i += 3; }
         else if (key === 'from-zone' && i + 1 < t.length) {
           key += ' ' + t[++i];
           if (t[i + 1] === 'to-zone' && i + 2 < t.length) { key += ' to-zone ' + t[i + 2]; i += 2; }
