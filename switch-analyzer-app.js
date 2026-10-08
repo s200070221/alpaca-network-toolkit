@@ -916,6 +916,7 @@ function renderBrocadeStack(){
           </tr>`).join('')}
         </table>
       </div>
+      <div class="export-row" style="margin-top:8px">${stackEditableBtns()}</div>
     </div>
   </div>`;
 }
@@ -982,7 +983,7 @@ function renderIRF(){
   if(!irf)return `<div class="nodata">${tr('msg.no_irf')}<br><span style="font-size:11px;color:var(--text-muted)">${tr('msg.no_irf_hint')}</span></div>`;
   const svg=buildTopoSVG(parsed);
   let html=`<div style="flex:1;overflow-y:auto">
-    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button></div>
+    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button>${stackEditableBtns()}</div>
     <div class="topo-wrap">${svg}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 18px 14px">
       <div class="ov-card">
@@ -1469,6 +1470,23 @@ function renderLLDPTopo(nbrs){
   svg+='</svg>';
   return`<div style="background:var(--surface2);border-radius:8px;padding:12px;overflow:auto">${svg}</div>`;
 }
+// 多設備檢視保存的設備資料（第十三輪 NJ 起一併保存介面與聚合成員，供鏈路一致性比對）
+function _ljDevice(p){
+  const lag=new Set();
+  (p.lacp||[]).forEach(l=>{const m=l.members;(Array.isArray(m)?m.map(x=>typeof x==='object'?x.name:x):String(m||'').split(/[\s,]+/)).filter(Boolean).forEach(x=>lag.add(x));});
+  (p.interfaces||[]).forEach(i=>{if(i.lagMember)lag.add(i.name);});
+  return {hostname:p.sys?.hostname||'Local',lldp:p.lldp||[],ifaces:(p.interfaces||[]).map(i=>({name:i.name,type:i.type,mode:i.mode,vlans:i.vlans,nativeVlan:i.nativeVlan})),lagPorts:[...lag]};
+}
+function renderLinkConsistency(devices){
+  const r=checkLinkConsistency(devices);
+  if(!r.links.length&&!r.unmatched)return'';
+  const bad=r.links.filter(l=>l.issues.length);
+  const txt=i=>tr('lldp.ljissue_'+i.type).replace('{a}',i.a||'-').replace('{b}',i.b||'-');
+  return `<div class="ov-card" id="lj-card" style="margin-top:12px"><div class="ov-card-title">🔍 ${esc(tr('lldp.consistency_title'))}</div>
+    <div style="font-size:11px;color:var(--text-dim);margin:2px 0 6px">${esc(tr('lldp.consistency_summary').replace('{n}',r.links.length).replace('{m}',r.unmatched))}</div>`+
+    (bad.length?`<table class="data-tbl"><tr><th>${esc(tr('lldp.consistency_col_link'))}</th><th>${esc(tr('lldp.consistency_col_issue'))}</th></tr>${bad.map(l=>`<tr><td class="mono">${esc(l.a)} ${esc(l.aPort)} ↔ ${esc(l.b)} ${esc(l.bPort)}</td><td>${l.issues.map(i=>esc(txt(i))).join('<br>')}</td></tr>`).join('')}</table>`
+      :`<div style="color:var(--green);font-size:12px">${esc(tr('lldp.consistency_ok'))}</div>`)+'</div>';
+}
 function addMultiDevice(file){
   const reader=new FileReader();
   reader.onload=e=>{
@@ -1476,7 +1494,7 @@ function addMultiDevice(file){
       const p=parseAny(e.target.result);
       if(p&&p.sys&&p.sys.hostname){
         _multiDevices=_multiDevices.filter(d=>d.hostname!==p.sys.hostname);
-        _multiDevices.push({hostname:p.sys.hostname,lldp:p.lldp||[]});
+        _multiDevices.push(_ljDevice(p));
         navGo('lldp');
       }
     }catch(ex){console.warn('multi parse error:',ex);}
@@ -1573,7 +1591,7 @@ function renderLLDP(){
         <span style="font-size:11px;color:var(--text-dim)">${tr('lldp.multi_hint')}</span>
       </div>
       <div style="margin-bottom:8px;font-size:11px">${devices.map(d=>`<span style="margin-right:10px;color:var(--${d.hostname===(parsed.sys?.hostname||'Local')?'accent':'green'})">● ${esc(d.hostname)}</span>`).join('')}</div>`
-      +renderMultiTopo()+expRow(true);
+      +renderMultiTopo()+expRow(true)+renderLinkConsistency([_ljDevice(parsed),..._multiDevices]);
   }
   const rows=nbrs.map(n=>({
     localPort: n.localPort,
@@ -1630,6 +1648,16 @@ function exportLldpTopo(fmt,multi){
   const g=buildLldpGraph(multi?[local,..._multiDevices]:[local]);
   if(fmt==='drawio'){const b=new Blob([graphToDrawio(g,local.hostname)],{type:'application/xml;charset=utf-8'});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=`${hn()}_lldp_topology.drawio`;a.click();URL.revokeObjectURL(url);}
   else dlTxt(graphToMermaid(g),`${hn()}_lldp_topology.mmd`);
+}
+// 堆疊拓樸匯出 draw.io／Mermaid（第十三輪 NG），按鈕文字與 LLDP 拓樸相同
+function stackEditableBtns(){return `<button class="btn btn-ghost btn-sm" onclick="exportStackTopo('drawio')" title="${esc(tr('lldp.export_editable_tip'))}">⬇ draw.io</button><button class="btn btn-ghost btn-sm" onclick="exportStackTopo('mermaid')" title="${esc(tr('lldp.export_editable_tip'))}">⬇ Mermaid</button>`;}
+function exportStackTopo(fmt){
+  if(!parsed)return;
+  const g=buildStackGraph(parsed);
+  if(!g.nodes.length)return;
+  const host=parsed.sys?.hostname||'Stack';
+  if(fmt==='drawio'){const b=new Blob([graphToDrawio(g,host+' stack')],{type:'application/xml;charset=utf-8'});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=`${hn()}_stack_topology.drawio`;a.click();URL.revokeObjectURL(url);}
+  else dlTxt(graphToMermaid(g),`${hn()}_stack_topology.mmd`);
 }
 function exportTopoSVG(){if(!parsed)return;const svg=buildTopoSVG(parsed);const b=new Blob([svg],{type:'image/svg+xml;charset=utf-8'});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=`${hn()}_topology.svg`;a.click();URL.revokeObjectURL(url);}
 function exportLLDPCSV(){
@@ -2290,7 +2318,7 @@ function renderVC(){
   <text x="${W-18}" y="${lY+18}" font-size="9" fill="#4c1d95" text-anchor="end" font-family="JetBrains Mono,monospace">Juniper Virtual Chassis</text>`;
   svg+=`</svg>`;
   return`<div style="flex:1;overflow-y:auto">
-    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button></div>
+    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button>${stackEditableBtns()}</div>
     <div class="topo-wrap">${svg}</div>
     <div style="padding:0 18px 14px"><div class="ov-card">
       <div class="ov-card-title">📋 ${tr('stack.vc_list')}</div>
@@ -2319,7 +2347,7 @@ function renderAlcatelStack(){
 
   const svgStr=buildAlcatelStackSVG(parsed);
   return`<div style="flex:1;overflow-y:auto">
-    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button></div>
+    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button>${stackEditableBtns()}</div>
     <div class="topo-wrap">${svgStr}</div>
     <div style="padding:0 18px 14px"><div class="ov-card">
       <div class="ov-card-title">${tr('stack.member_list_card')}</div>
@@ -2363,7 +2391,7 @@ function renderExtremeStack(){
     return`<div class="nodata">${tr('msg.no_extreme_pre')}<br><span style="font-size:11px;color:var(--text-muted)">${tr('msg.no_extreme_sub')}</span></div>`;
   const svgStr=buildExtremeStackSVG(parsed);
   return`<div style="flex:1;overflow-y:auto">
-    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button></div>
+    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button>${stackEditableBtns()}</div>
     <div class="topo-wrap">${svgStr}</div>
     <div style="padding:0 18px 14px"><div class="ov-card">
       <div class="ov-card-title">${tr('stack.member_list_card')}</div>
@@ -2845,7 +2873,7 @@ function renderStackWise(){
   if(!s||!s.members.length)return`<div class="nodata">${tr('msg.no_stackwise_pre')}<br><span style="font-size:11px;color:var(--text-muted)">${tr('msg.no_stackwise_sub')}</span></div>`;
   const svg=buildStackWiseSVG(parsed);
   return`<div style="flex:1;overflow-y:auto">
-    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button></div>
+    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button>${stackEditableBtns()}</div>
     <div class="topo-wrap">${svg}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 18px 14px">
       <div class="ov-card">
@@ -3015,7 +3043,7 @@ function renderVSF(){
   });
   svg+=`</svg>`;
   return`<div style="flex:1;overflow-y:auto">
-    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button></div>
+    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button>${stackEditableBtns()}</div>
     <div class="topo-wrap">${svg}</div>
     <div style="padding:0 18px 14px"><div class="ov-card">
       <div class="ov-card-title">👥 ${tr('stack.vsf_list')}</div>
@@ -3043,7 +3071,7 @@ function renderProCurveVSF(){
   if(!s||!s.members.length)return`<div class="nodata">${tr('msg.no_vsf')}</div>`;
   const svg=buildProCurveVSFSVG(parsed);
   return`<div style="flex:1;overflow-y:auto">
-    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button></div>
+    <div class="export-row"><button class="btn btn-ghost btn-sm" onclick="exportTopoSVG()">⬇ ${tr('irf.export_svg')}</button>${stackEditableBtns()}</div>
     <div class="topo-wrap">${svg}</div>
     <div style="padding:0 18px 14px"><div class="ov-card">
       <div class="ov-card-title">👥 ${tr('stack.vsf_list')}</div>

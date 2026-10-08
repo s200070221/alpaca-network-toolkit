@@ -616,10 +616,88 @@ function _mmd(s){return String(s==null?'':s).replace(/"/g,'#quot;').replace(/</g
 function graphToMermaid(g){
   const out=['graph LR'];
   g.nodes.forEach(nd=>out.push(`  ${nd.id}["${_mmd(nd.label)}${nd.sub?'<br/>'+_mmd(nd.sub):''}"]`));
-  g.edges.forEach(e=>out.push(`  ${e.a} ---|"${e.labels.map(_mmd).join('<br/>')}"| ${e.b}`));
+  // 沒有標籤的連線（如堆疊鏈路未記錄埠）不輸出空的 |""|
+  g.edges.forEach(e=>out.push(e.labels.length?`  ${e.a} ---|"${e.labels.map(_mmd).join('<br/>')}"| ${e.b}`:`  ${e.a} --- ${e.b}`));
   out.push('  classDef local stroke:#6c8ebf,stroke-width:3px,fill:#dae8fc;');
   out.push('  classDef known stroke:#82b366,fill:#d5e8d4;');
   out.push('  classDef lldp stroke:#999,stroke-dasharray:4 3,fill:#f5f5f5;');
   ['local','known','lldp'].forEach(k=>{const ids=g.nodes.filter(nd=>nd.kind===k).map(nd=>nd.id);if(ids.length)out.push(`  class ${ids.join(',')} ${k};`);});
   return out.join('\n')+'\n';
+}
+
+// 堆疊拓樸匯出可編輯格式（2026-10-07，第十三輪 NG）：與畫面上的堆疊 SVG 相同的連接方式——成員依序相連，
+// links[i] 為第 i 與 i+1 台之間的鏈路（Comware IRF 依 fromMember 對應）；IRF 三台以上、ICX 鏈路數不少於成員數時頭尾相接成環。
+// 主設備（Master／Active／Commander／Conductor 等角色）以 local 樣式標示，其餘為 known
+function buildStackGraph(p){
+  const irf=p&&p.vendor==='comware'?p.irf:null;
+  const stack=irf||(p&&p.stack)||{};
+  const mems=stack.members||[];
+  const ports=l=>{const a=l&&(l.shortPorts&&l.shortPorts.length?l.shortPorts:l.ports);return Array.isArray(a)?a.slice(0,2).join(' | '):'';};
+  const isMain=m=>/^(master|active|commander|conductor|primary)$/i.test(String(m.role||''));
+  const hasMain=mems.some(isMain);
+  const nodes=mems.map((m,i)=>({id:'n'+i,label:'Member '+(m.id!=null?m.id:i+1),
+    sub:[m.role,m.priority?'prio '+m.priority:'',m.model&&m.model!=='—'&&m.model!=='-'?m.model:''].filter(Boolean).join(' · '),
+    kind:(hasMain?isMain(m):i===0)?'local':'known'}));
+  const edges=[];
+  const linkFor=i=>irf?(irf.links||[]).find(l=>l.fromMember===mems[i].id):(stack.links||[])[i];
+  for(let i=0;i+1<mems.length;i++){const lb=ports(linkFor(i));edges.push({a:'n'+i,b:'n'+(i+1),labels:lb?[lb]:[]});}
+  const ring=mems.length>2&&(irf?true:p&&p.vendor==='brocade'&&(stack.links||[]).length>=mems.length);
+  if(ring){const lb=ports(linkFor(mems.length-1));edges.push({a:'n'+(mems.length-1),b:'n0',labels:lb?[lb]:[]});}
+  return {nodes,edges};
+}
+
+// 多設備鏈路一致性（2026-10-07，第十三輪 NJ）：devices 為 [{hostname,lldp,ifaces,lagPorts}]（ifaces 取自解析結果的
+// interfaces，lagPorts 為聚合成員埠名稱）。依 LLDP 找出兩端都已載入設定的鏈路，比對兩端埠的模式（access／trunk）、
+// access VLAN、trunk 允許 VLAN、native VLAN（兩端都有明確值才比）與是否同屬聚合；hybrid 與無模式的埠不比。
+// LLDP 的埠名常為縮寫，對應順序：名稱完全相同（不分大小寫）→ 埠號路徑（1/0/1）唯一 → 埠號路徑相同且第一個字母相同；
+// 對不到的鏈路只計數不判斷。鄰居名稱不分大小寫，也接受網域名稱前段（sw2.corp.local → sw2）
+function _ljVlanSet(v){
+  const out=new Set();
+  String(v||'').replace(/\s*(?:\bto\b|-)\s*/gi,'-').split(/[\s,]+/).filter(Boolean).forEach(t=>{
+    const m=t.match(/^(\d+)(?:-(\d+))?$/);if(!m)return;
+    for(let k=+m[1];k<=+(m[2]||m[1])&&k-m[1]<4095;k++)out.add(String(k));
+  });
+  return out;
+}
+function _ljFindIface(dev,port){
+  const ifs=(dev.ifaces||[]).filter(i=>i.type!=='svi'&&i.type!=='loopback'&&i.type!=='null');
+  const p=String(port||'').trim(),pl=p.toLowerCase().replace(/\s+/g,'');
+  let hit=ifs.filter(i=>String(i.name).toLowerCase().replace(/\s+/g,'')===pl);
+  if(hit.length===1)return hit[0];
+  const num=s=>(String(s).match(/(\d+(?:[\/:.]\d+)*)$/)||[])[1]||'';
+  const pn=num(p);if(!pn)return null;
+  hit=ifs.filter(i=>num(i.name)===pn);
+  if(hit.length===1)return hit[0];
+  hit=hit.filter(i=>String(i.name).charAt(0).toLowerCase()===pl.charAt(0));
+  return hit.length===1?hit[0]:null;
+}
+function checkLinkConsistency(devices){
+  const devs=devices||[];
+  const byName=n=>{const s=String(n||'').toLowerCase();return devs.find(d=>String(d.hostname).toLowerCase()===s)||devs.find(d=>String(d.hostname).toLowerCase()===s.split('.')[0]);};
+  const seen=new Set(),links=[];let unmatched=0;
+  devs.forEach(a=>(a.lldp||[]).forEach(l=>{
+    const b=byName(l.neighbor);if(!b||b===a)return;
+    const ia=_ljFindIface(a,l.localPort),ib=_ljFindIface(b,l.remotePort);
+    if(!ia||!ib){const k=[a.hostname+'|'+l.localPort,b.hostname+'|'+l.remotePort].sort().join('#');if(!seen.has(k)){seen.add(k);unmatched++;}return;}
+    const key=[a.hostname+'|'+ia.name,b.hostname+'|'+ib.name].sort().join('#');
+    if(seen.has(key))return;seen.add(key);
+    const issues=[];
+    const ma=ia.mode,mb=ib.mode,ok=m=>m==='access'||m==='trunk';
+    if(ok(ma)&&ok(mb)){
+      if(ma!==mb)issues.push({type:'mode',a:ma,b:mb});
+      else if(ma==='access'){const va=[..._ljVlanSet(ia.vlans)][0]||'',vb=[..._ljVlanSet(ib.vlans)][0]||'';if(va&&vb&&va!==vb)issues.push({type:'access',a:va,b:vb});}
+      else{
+        const sa=_ljVlanSet(ia.vlans),sb=_ljVlanSet(ib.vlans);
+        if(sa.size&&sb.size&&!/\ball\b/i.test(ia.vlans)&&!/\ball\b/i.test(ib.vlans)){
+          const onlyA=[...sa].filter(v=>!sb.has(v)),onlyB=[...sb].filter(v=>!sa.has(v));
+          if(onlyA.length||onlyB.length)issues.push({type:'trunk',a:onlyA.slice(0,10).join(','),b:onlyB.slice(0,10).join(',')});
+        }
+        if(ia.nativeVlan&&ib.nativeVlan&&String(ia.nativeVlan)!==String(ib.nativeVlan))issues.push({type:'native',a:String(ia.nativeVlan),b:String(ib.nativeVlan)});
+      }
+    }
+    const la=(a.lagPorts||[]).includes(ia.name),lb=(b.lagPorts||[]).includes(ib.name);
+    if(la!==lb)issues.push({type:'lag',a:la?'LAG':'-',b:lb?'LAG':'-'});
+    links.push({a:a.hostname,aPort:ia.name,b:b.hostname,bPort:ib.name,issues});
+  }));
+  return {links,unmatched};
 }
