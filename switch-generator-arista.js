@@ -195,6 +195,11 @@ function assembleAristaConfig(model){
   if(aristaUsersBlock)blocks.push(aristaUsersBlock);
   if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
   if(model.syslogServer)blocks.push(`logging host ${model.syslogServer}`);
+  // NTP 與 TACACS+（第十四輪 OD）：ntp server 依 Ansible arista.eos 單元測試的真實設定；tacacs-server host … key 0
+  // ＋ aaa authentication login default group tacacs+ local 依 EOS User Security 手冊結構與實例。RADIUS 的指令拼法
+  // （radius-server host／radius server host）來源不一致，不輸出，產生前稽核會提醒
+  (model.ntpServers||[]).forEach(n=>blocks.push(`ntp server ${n}`));
+  if(model.aaaType==='tacacs'&&model.aaaServer)blocks.push([`tacacs-server host ${model.aaaServer} key 0 ${model.aaaKey}`,'aaa authentication login default group tacacs+ local'].join('\n'));
   // Telnet 停用（選填，2026-09-16 新增）：官方 Arista EOS 查證 telnet 預設 shutdown（關閉），
   // 須 management telnet 子模式內 no shutdown 才視為開放（parseMgmtAccess() arista 分支），
   // 明確輸出 shutdown 子指令作為 defense-in-depth 聲明

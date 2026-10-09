@@ -1475,7 +1475,7 @@ function _ljDevice(p){
   const lag=new Set();
   (p.lacp||[]).forEach(l=>{const m=l.members;(Array.isArray(m)?m.map(x=>typeof x==='object'?x.name:x):String(m||'').split(/[\s,]+/)).filter(Boolean).forEach(x=>lag.add(x));});
   (p.interfaces||[]).forEach(i=>{if(i.lagMember)lag.add(i.name);});
-  return {hostname:p.sys?.hostname||'Local',lldp:p.lldp||[],ifaces:(p.interfaces||[]).map(i=>({name:i.name,type:i.type,mode:i.mode,vlans:i.vlans,nativeVlan:i.nativeVlan})),lagPorts:[...lag]};
+  return {hostname:p.sys?.hostname||'Local',lldp:p.lldp||[],ifaces:(p.interfaces||[]).map(i=>({name:i.name,type:i.type,mode:i.mode,vlans:i.vlans,nativeVlan:i.nativeVlan,hybrid:i.hybrid?{pvid:i.hybrid.pvid,untagged:i.hybrid.untagged,tagged:i.hybrid.tagged}:null})),lagPorts:[...lag]};
 }
 function renderLinkConsistency(devices){
   const r=checkLinkConsistency(devices);

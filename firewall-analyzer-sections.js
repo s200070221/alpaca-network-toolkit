@@ -191,14 +191,43 @@ function buildSnmpSectionHtml(sn){
   return { sumHtml, html };
 }
 
-function buildLogSectionHtml(lg, filterByVdom){
+// 本機 log 儲存卡片（2026-10-09，第十四輪 OK）：只有 FortiGate 解析器提供 localLog；
+// 未列出的欄位依 FortiOS「show 不列預設值」顯示為預設
+function buildLocalLogHtml(ll){
+  const dk=ll.disk||{}, dflt=tr('log.default_value');
+  const v=x=>x?esc(x):`<span style="color:var(--text-dim)">${dflt}</span>`;
+  const disk=ll.hasDisk===true
+    ? (ll.diskSource==='header'?tr('log.disk_yes_header').replace('{size}',esc(ll.diskSize)):tr('log.disk_yes_model'))
+    : ll.hasDisk===false?tr('log.disk_no'):tr('log.disk_unknown');
+  const age=dk.maxAgeDefault?tr('log.days_default').replace('{n}',esc(dk.maxAge)):tr('log.days').replace('{n}',esc(dk.maxAge));
+  let th='';
+  try{ th=localStorage.getItem('fw_log_retention_days')||''; }catch(e){}
+  const rows=[
+    [tr('log.local_disk'),disk],
+    [tr('log.local_status'),v(dk.status)],
+    [tr('log.retention'),age],
+    [tr('log.diskfull'),v(dk.diskfull)],
+    [tr('log.max_file_size'),v(dk.maxFileSize)],
+    [tr('log.roll_schedule'),v(dk.rollSchedule)],
+    [tr('log.upload'),v(dk.upload)],
+    [tr('log.memory_status'),v((ll.memory||{}).status)],
+  ];
+  let html='<div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:8px">💾 '+tr('log.local_header')+'</div>';
+  html+='<div style="overflow-x:auto;margin-bottom:8px"><table><tbody>';
+  rows.forEach(r=>{ html+=`<tr><td style="color:var(--text-dim);white-space:nowrap">${r[0]}</td><td>${r[1]}</td></tr>`; });
+  html+='</tbody></table></div>';
+  html+=`<div style="font-size:12px;color:var(--text-dim);margin-bottom:20px"><label>${tr('log.retention_threshold')} <input type="number" min="1" max="3650" id="log-retention-days" value="${esc(th)}" placeholder="90" style="width:80px" onchange="try{localStorage.setItem('fw_log_retention_days',this.value)}catch(e){}"></label></div>`;
+  return html;
+}
+
+function buildLogSectionHtml(lg, filterByVdom, ll){
   const sumHtml=sumC([
     {l:'Syslog',       v:lg.syslog.length,        c:'var(--accent)'},
     {l:'FortiAnalyzer',v:lg.fortianalyzer.length,  c:'var(--orange)'},
     {l:'NetFlow',      v:lg.netflow.length,        c:'var(--purple)'},
     {l:'Log Profile',  v:lg.logForward.length,     c:'var(--info)'},
   ]);
-  let html='';
+  let html=ll?buildLocalLogHtml(ll):'';
   if(lg.syslog.length){
     html+='<div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:8px">📋 Syslog Server</div>';
     html+='<div style="overflow-x:auto;margin-bottom:20px"><table><thead><tr>';

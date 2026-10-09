@@ -315,8 +315,9 @@ function parseSNMP(cfg, vendor){
   if(vendor==='comware'){
     // 官方 H3C Comware Login Management Commands 查證：
     // snmp-agent community {read|write} {simple|cipher} community-name
-    let m; const reC=/^\s*snmp-agent\s+community\s+(?:read|write)\s+(?:simple|cipher)\s+(\S+)/gm;
-    while((m=reC.exec(cfg))!==null)pushC(m[1]);
+    // Comware V5 沒有 simple／cipher（真實範例 HPE 5720：snmp-agent community read NAME），故為選填
+    let m; const reC=/^\s*snmp-agent\s+community\s+(?:read|write)\s+(?:(?:simple|cipher)\s+)?("[^"]*"|\S+)/gm;
+    while((m=reC.exec(cfg))!==null)pushC(m[1].replace(/^"|"$/g,''));
     const reU=/^\s*snmp-agent\s+usm-user\s+v3\s+(\S+)/gm;
     while((m=reU.exec(cfg))!==null)pushU(m[1]);
     // Trap host（2026-08-19 新增，對外查證官方 H3C SNMP Commands 確認）：

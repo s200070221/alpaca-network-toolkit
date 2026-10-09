@@ -24,7 +24,7 @@ const VyOSParser = (() => {
   const VYOS_TAG = new Set(['rule', 'name', 'ipv6-name', 'address-group', 'network-group', 'port-group', 'interface-group', 'domain-group',
     'mac-group', 'ipv6-address-group', 'ipv6-network-group', 'ethernet', 'vif', 'vif-s', 'vif-c', 'bonding', 'bridge', 'dummy', 'loopback',
     'pppoe', 'wireguard', 'vti', 'tunnel', 'openvpn', 'wireless', 'user', 'route', 'route6', 'next-hop', 'interface', 'shared-network-name',
-    'subnet', 'static-mapping', 'peer', 'neighbor', 'area', 'server', 'community', 'host', 'ike-group', 'esp-group', 'proposal', 'zone',
+    'subnet', 'static-mapping', 'peer', 'neighbor', 'area', 'server', 'community', 'host', 'trap-target', 'facility', 'ike-group', 'esp-group', 'proposal', 'zone',
     'from', 'route-map', 'prefix-list', 'access-list', 'psk', 'ca', 'certificate', 'virtual-server', 'table', 'instance']);
   const VYOS_SET_TOP = /^set\s+(?:firewall|interfaces|nat|system|protocols|service|vpn|policy|high-availability|container|pki|qos|vrf|load-balancing)\s/;
   function isSetFormat(text) {
@@ -43,7 +43,9 @@ const VyOSParser = (() => {
         if (last) { node.vals.push(t[i]); break; }
         if (i === t.length - 2 && /^['"]/.test(t[i + 1])) { node.vals.push(t[i] + ' ' + t[i + 1]); break; }
         let key = t[i];
-        if (VYOS_TAG.has(key) || (key === 'group' && t[i - 1] === 'vrrp')) key += ' ' + unquote(t[++i]);
+        // remote 只在 system syslog 下是具名節點（其他處如 tunnel remote 為值）；range 只在 DHCP subnet 下是具名節點
+        if (VYOS_TAG.has(key) || (key === 'group' && t[i - 1] === 'vrrp') || (key === 'remote' && t[i - 1] === 'syslog') ||
+          (key === 'range' && t[i - 2] === 'subnet')) key += ' ' + unquote(t[++i]);
         if (!node.kids.has(key)) node.kids.set(key, { vals: [], kids: new Map() });
         node = node.kids.get(key);
         if (i === t.length - 1) break;
@@ -331,7 +333,7 @@ const VyOSParser = (() => {
       addresses, services, users: L.parseUsers(tree), schedules: [],
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
       // 比照 EdgeRouter：onParsed() 對這些欄位只做 truthy 判斷，未解析一律給 null
-      dhcp: null, dns: null, snmp: null, logservers: null, wwan: null, wlan: null,
+      ...L.parseServicesVyatta(tree), wwan: null, wlan: null,
     };
   }
 

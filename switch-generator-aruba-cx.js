@@ -311,6 +311,12 @@ function assembleArubaConfig(model){
   const arubaUsersBlock=renderArubaUsers(model.users);
   if(arubaUsersBlock)blocks.push(arubaUsersBlock);
   if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost} trap version 2c`);
+  // NTP 與集中認證（第十四輪 OD）：ntp server／ntp enable、tacacs-server host … key ciphertext 與
+  // aaa authentication login default group tacacs local 依 Oxidized AOS-CX 真實錄製（內建群組名稱 tacacs）；
+  // 使用者填的是明文金鑰，改用 key plaintext。RADIUS 依 HPE 社群實例 radius-server host … key plaintext，群組 radius
+  if((model.ntpServers||[]).length)blocks.push([...model.ntpServers.map(n=>`ntp server ${n}`),'ntp enable'].join('\n'));
+  if(model.aaaType==='tacacs'&&model.aaaServer)blocks.push([`tacacs-server host ${model.aaaServer} key plaintext ${model.aaaKey}`,'aaa authentication login default group tacacs local'].join('\n'));
+  if(model.aaaType==='radius'&&model.aaaServer)blocks.push([`radius-server host ${model.aaaServer} key plaintext ${model.aaaKey}`,'aaa authentication login default group radius local'].join('\n'));
   // 結尾補換行：Aruba 語法無 Comware(#)/FortiSwitch(end) 這類收尾關鍵字，
   // 若最後一行缺少換行字元，parseArubaBGP 等以「每行含尾端 \n」為前提的正則會漏抓最後一行內容
   return blocks.join('\n!\n')+'\n';
