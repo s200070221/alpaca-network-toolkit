@@ -648,7 +648,7 @@ function buildStackGraph(p){
 
 // 多設備鏈路一致性（2026-10-07，第十三輪 NJ）：devices 為 [{hostname,lldp,ifaces,lagPorts}]（ifaces 取自解析結果的
 // interfaces，lagPorts 為聚合成員埠名稱）。依 LLDP 找出兩端都已載入設定的鏈路，比對兩端埠的模式（access／trunk）、
-// access VLAN、trunk 允許 VLAN、native VLAN（兩端都有明確值才比）與是否同屬聚合；hybrid 與無模式的埠不比。
+// access VLAN、trunk 允許 VLAN、native VLAN（兩端都有明確值才比）與是否同屬聚合；任一端為 hybrid 時改比 tagged／untagged／PVID（見 _ljEffective）；無模式的埠不比。
 // LLDP 的埠名常為縮寫，對應順序：名稱完全相同（不分大小寫）→ 埠號路徑（1/0/1）唯一 → 埠號路徑相同且第一個字母相同；
 // 對不到的鏈路只計數不判斷。鄰居名稱不分大小寫，也接受網域名稱前段（sw2.corp.local → sw2）
 function _ljVlanSet(v){
@@ -671,6 +671,27 @@ function _ljFindIface(dev,port){
   hit=hit.filter(i=>String(i.name).charAt(0).toLowerCase()===pl.charAt(0));
   return hit.length===1?hit[0]:null;
 }
+// hybrid 比對（第十四輪 OE）：兩端任一為 hybrid 時，把各端換算成「tagged 集合／untagged 集合／PVID」再比。
+// access＝untagged 只有該 VLAN；trunk＝允許清單扣掉 native 為 tagged、native 在允許清單內時為 untagged（native 未知則
+// untagged 與 PVID 不比）；允許清單為 all 或 except 時無法換算不比。hybrid 物件形狀 {pvid,untagged[],tagged[]}
+// 由 Comware、Cisco Business、Ruijie、Planet 解析器提供
+function _ljEffective(i){
+  if(i.mode==='hybrid'){
+    const h=i.hybrid;if(!h)return null;
+    const t=(h.tagged||[]).join(','),u=(h.untagged||[]).join(',');
+    if(/\ball\b/i.test(t+','+u))return null;
+    return {tagged:_ljVlanSet(t),untagged:_ljVlanSet(u),pvid:String(h.pvid||'')};
+  }
+  if(i.mode==='access'){const v=[..._ljVlanSet(i.vlans)][0]||'';return v?{tagged:new Set(),untagged:new Set([v]),pvid:v}:null;}
+  if(i.mode==='trunk'){
+    if(/\b(?:all|except)\b/i.test(String(i.vlans||'')))return null;
+    const s=_ljVlanSet(i.vlans),nv=String(i.nativeVlan||'');
+    if(!s.size)return null;
+    return {tagged:new Set([...s].filter(v=>v!==nv)),untagged:nv?new Set(s.has(nv)?[nv]:[]):null,pvid:nv};
+  }
+  return null;
+}
+function _ljSetDiff(a,b){return [[...a].filter(v=>!b.has(v)).slice(0,10).join(','),[...b].filter(v=>!a.has(v)).slice(0,10).join(',')];}
 function checkLinkConsistency(devices){
   const devs=devices||[];
   const byName=n=>{const s=String(n||'').toLowerCase();return devs.find(d=>String(d.hostname).toLowerCase()===s)||devs.find(d=>String(d.hostname).toLowerCase()===s.split('.')[0]);};
@@ -693,6 +714,14 @@ function checkLinkConsistency(devices){
           if(onlyA.length||onlyB.length)issues.push({type:'trunk',a:onlyA.slice(0,10).join(','),b:onlyB.slice(0,10).join(',')});
         }
         if(ia.nativeVlan&&ib.nativeVlan&&String(ia.nativeVlan)!==String(ib.nativeVlan))issues.push({type:'native',a:String(ia.nativeVlan),b:String(ib.nativeVlan)});
+      }
+    }else if((ma==='hybrid'||mb==='hybrid')&&(ok(ma)||ma==='hybrid')&&(ok(mb)||mb==='hybrid')){
+      const ea=_ljEffective(ia),eb=_ljEffective(ib);
+      if(ea&&eb){
+        const [ta,tb]=_ljSetDiff(ea.tagged,eb.tagged);
+        if(ta||tb)issues.push({type:'hybridTagged',a:ta,b:tb});
+        if(ea.untagged&&eb.untagged){const [ua,ub]=_ljSetDiff(ea.untagged,eb.untagged);if(ua||ub)issues.push({type:'hybridUntagged',a:ua,b:ub});}
+        if(ea.pvid&&eb.pvid&&ea.pvid!==eb.pvid)issues.push({type:'native',a:ea.pvid,b:eb.pvid});
       }
     }
     const la=(a.lagPorts||[]).includes(ia.name),lb=(b.lagPorts||[]).includes(ib.name);

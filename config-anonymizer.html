@@ -2708,11 +2708,15 @@ function anonComware(text, opts) {
     // community-name cipher/plain（snmp-agent community string in user/snmp context）
     const comNameR = line.replace(/^(\s+community-name\s+(?:cipher|plain)\s+)(\S+)/, '$1REDACTED_COMMUNITY');
     if (comNameR !== line) { stats.community++; line = comNameR; }
-    // snmp-agent community read/write "..."
-    const snmpComR = line.replace(/^(snmp-agent\s+community\s+(?:read|write|read-write)\s+"?)(\S+)("?)/, (m, p, c, s2) => { stats.community++; return p + 'REDACTED_COMMUNITY' + s2; });
+    // snmp-agent community read|write [simple|cipher] 名稱（2026-10-09 修正：display current-configuration 行首縮排一格、
+    // V7 的 simple／cipher 關鍵字與雙引號名稱原本都會讓名稱漏遮或結尾引號遺失，真實範例 HPE 5720 即漏遮）
+    const snmpComR = line.replace(/^(\s*snmp-agent\s+community\s+(?:read|write|read-write)\s+(?:(?:simple|cipher)\s+)?)("[^"]*"|\S+)/, (m, p, c) => { stats.community++; return p + (c[0] === '"' ? '"REDACTED_COMMUNITY"' : 'REDACTED_COMMUNITY'); });
     if (snmpComR !== line) line = snmpComR;
+    // target-host 的 securityname：v1／v2c 即 community 名稱，v3 為 SNMPv3 使用者
+    const thR = line.replace(/^(\s*snmp-agent\s+target-host\b.*?\bsecurityname\s+)(\S+)/, (m, p, n) => p + (/\bv3\b/.test(line) ? (opts.user ? anonUser(n) : n) : 'REDACTED_COMMUNITY'));
+    if (thR !== line) { stats.community++; line = thR; }
     // snmp-agent usm-user：auth/priv 密碼
-    if (/^snmp-agent\s+usm-user/.test(line)) {
+    if (/^\s*snmp-agent\s+usm-user/.test(line)) {
       line = line.replace(/(\bauth\s+\S+\s+)"([^"]+)"/, '$1"REDACTED_KEY"');
       line = line.replace(/(\bpriv\s+\S+\s+)"([^"]+)"/, '$1"REDACTED_KEY"');
       // 不帶引號格式
@@ -3259,7 +3263,8 @@ function anonBrocade(text, opts) {
     const enR = line.replace(/^(enable\s+(?:super-user-password|port-config-password|read-only-password)\s+(?:\d\s+)?)(\S+)/, '$1REDACTED_HASH');
     if (enR !== line) { stats.password++; line = enR; }
     // OSPF MD5 auth
-    const ospfR = line.replace(/^(\s+ip\s+ospf\s+(?:authentication-key|message-digest-key\s+\d+\s+md5)\s+)(\S+)/, '$1REDACTED_KEY');
+    // FastIron 寫法 `ip ospf [N] md5-authentication key-id N key [0|1|2] 金鑰`（FastIron 08.0.60 文件，2026-10-09）
+    const ospfR = line.replace(/^(\s+ip\s+ospf\s+(?:authentication-key|message-digest-key\s+\d+\s+md5|(?:\d+\s+)?md-?5-authentication\s+key-id\s+\d+\s+key(?:\s+\d)?)\s+)(\S+)/, '$1REDACTED_KEY');
     if (ospfR !== line) { stats.key++; line = ospfR; }
     // SNMPv3 user 行內密碼
     if (/^snmp-server\s+user/.test(line)) {

@@ -1286,13 +1286,13 @@ function onParsed(){
 
       case 'log': {
         $('sum-wrap').innerHTML=''; $('tbl-wrap').innerHTML=''; $('filter-action').style.display='none';
-        const lg=d.logservers;
-        if(!lg||(!lg.syslog.length&&!lg.fortianalyzer.length&&!lg.netflow.length)){
+        const lg=d.logservers, ll=d.localLog;
+        if(!ll&&(!lg||(!lg.syslog.length&&!lg.fortianalyzer.length&&!lg.netflow.length))){
           $('tbl-wrap').innerHTML='<div class="nodata">'+tr('log.no_log')+'</div>'; return;
         }
         $('tbl-section-label').textContent='Log Server';
         $('tbl-cnt').textContent=`${lg.syslog.length+lg.fortianalyzer.length} ${tr('unit.log_target')}`;
-        const _logR=buildLogSectionHtml(lg, filterByVdom);
+        const _logR=buildLogSectionHtml(lg, filterByVdom, ll);
         $('sum-wrap').innerHTML=_logR.sumHtml;
         $('tbl-wrap').innerHTML=_logR.html;
         return;

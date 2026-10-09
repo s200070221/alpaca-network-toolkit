@@ -282,6 +282,46 @@ const H3CSecPathParser = (() => {
     return /^security-policy\s+ipv?6?\s*$/m.test(text) && /^security-zone\s+name\s+\S+/m.test(text);
   }
 
+  // SNMP／syslog／DNS／DHCP（2026-10-09，第十四輪 OC）：Comware V7 共通指令，語法與 switch_analyzer 已查證的
+  // Comware 交換器相同（snmp-agent community read|write [simple|cipher] 名稱、snmp-agent target-host trap address
+  // udp-domain 位址、info-center loghost [vpn-instance X] 位址 [port N] [facility localN]、dns server、
+  // dhcp server ip-pool 的 network／gateway-list／dns-list／address range）。沒有對應設定時回傳 null
+  function parseServices(text) {
+    text = String(text || '').replace(/\r\n/g, '\n');
+    const all = (re) => [...text.matchAll(re)];
+    let snmp = null;
+    const comms = all(/^\s*snmp-agent\s+community\s+(read|write)\s+(?:(?:simple|cipher)\s+)?("[^"]*"|\S+)/gm);
+    const v3 = all(/^\s*snmp-agent\s+usm-user\s+v3\s+(\S+)/gm);
+    if (comms.length || v3.length || /^\s*snmp-agent\b/m.test(text)) {
+      const sv = (text.match(/^\s*snmp-agent\s+sys-info\s+version\s+([^\n]+)/m) || [])[1] || '';
+      snmp = { enabled: true,
+        agent: { name: '-', description: '-', location: (text.match(/^\s*snmp-agent\s+sys-info\s+location\s+([^\n]+)/m) || [])[1] || '-',
+          contact: (text.match(/^\s*snmp-agent\s+sys-info\s+contact\s+([^\n]+)/m) || [])[1] || '-',
+          version: sv ? sv.trim().split(/\s+/).filter(x => /^v/.test(x)) : (comms.length ? ['v2c'] : []) },
+        communities: comms.map(m => ({ name: m[2].replace(/^"|"$/g, ''), permission: m[1] === 'write' ? 'rw' : 'ro', allowedHosts: [], events: '-', status: 'enable' })),
+        v3users: v3.map(m => ({ name: m[1], authProto: '-', privProto: '-', secLevel: '-', notifyHost: '-', status: 'enable' })),
+        trapServers: all(/^\s*snmp-agent\s+target-host\s+trap\s+address\s+udp-domain\s+(\S+)(?:[^\n]*?securityname\s+(\S+))?/gm)
+          .map(m => ({ ip: m[1], port: '162', community: m[2] || '-', version: 'v2c' })) };
+    }
+    const hosts = all(/^\s*info-center\s+loghost\s+(?:vpn-instance\s+\S+\s+)?(\S+)(?:[^\n]*?\bport\s+(\d+))?(?:[^\n]*?facility\s+(local\d))?/gm);
+    const logservers = hosts.length ? { syslog: hosts.map(m => ({ name: m[1], server: m[1], port: m[2] || '514', facility: m[3] || 'local7', format: 'default', protocol: 'UDP', level: '-', status: 'enable' })),
+      fortianalyzer: [], netflow: [], logForward: [] } : null;
+    const ds = all(/^\s*dns\s+server\s+(\S+)/gm).map(m => m[1]);
+    const dns = ds.length ? { servers: ds.slice(0, 1), secondaries: ds.slice(1), domain: (text.match(/^\s*dns\s+domain\s+(\S+)/m) || [])[1] || '-',
+      proxy: /^\s*dns\s+proxy\s+enable\b/m.test(text), proxyRules: [], dnsOverTls: false, cacheSize: '-', static: [] } : null;
+    const servers = [];
+    for (const m of text.matchAll(/^dhcp\s+server\s+ip-pool\s+(\S+)[^\n]*\n((?:[ \t]+[^\n]*\n?)*)/gm)) {
+      const b = m[2], g = re => (b.match(re) || [])[1] || '';
+      const dnsL = g(/^\s*dns-list\s+([^\n]+)/m).trim().split(/\s+/).filter(Boolean);
+      const rg = b.match(/^\s*address\s+range\s+(\S+)\s+(\S+)/m);
+      servers.push({ name: m[1], iface: '-', startIp: rg ? rg[1] : '-', endIp: rg ? rg[2] : '-', gateway: g(/^\s*gateway-list\s+(\S+)/m) || '-',
+        mask: g(/^\s*network\s+\S+\s+mask\s+(\S+)/m) || '-', dns1: dnsL[0] || '-', dns2: dnsL[1] || '-', domain: g(/^\s*domain-name\s+(\S+)/m) || '-',
+        lease: g(/^\s*expired\s+([^\n]+)/m).trim() || '-', status: 'enable', comment: g(/^\s*network\s+(\S+)/m) });
+    }
+    const dhcp = servers.length ? { servers, relays: [] } : null;
+    return { snmp, logservers, dns, dhcp };
+  }
+
   function parse(text) {
     const tree = buildTree(text);
     const zones = zoneMap(tree);
@@ -298,7 +338,7 @@ const H3CSecPathParser = (() => {
       addresses, services: parseServiceObjects(tree),
       users: parseUsers(tree), schedules: [],
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
-      dhcp: null, dns: null, snmp: null, logservers: null,
+      ...parseServices(text),
       wwan: null, wlan: null,
     };
   }

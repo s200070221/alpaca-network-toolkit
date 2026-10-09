@@ -665,7 +665,15 @@
     return results;
   }
 
-  function analyzeCompliance(parsed) {
+  // 本機 log 保留天數門檻（第十四輪 OK）：opts 優先，其次日誌頁設定（localStorage），預設 90 天
+  const LOG_RETENTION_DEFAULT = 90;
+  function logRetentionThreshold(opts) {
+    let v = opts && opts.logRetentionDays;
+    if (v == null) { try { v = localStorage.getItem('fw_log_retention_days'); } catch (e) { v = null; } }
+    const n = parseInt(v, 10);
+    return n > 0 ? n : LOG_RETENTION_DEFAULT;
+  }
+  function analyzeCompliance(parsed, opts) {
     const findings = [];
     // standards：僅供參考的常見資安標準關聯條號（業界廣泛公開引用的控制編號與主題，
     // 非逐字引用付費標準內容），純資訊性標籤，不代表通過此工具檢查即符合該標準認證。
@@ -851,6 +859,20 @@
       f('ipv6-unfiltered', tr('audit.check_ipv6_unfiltered'), gap ? 1 : 0, 'medium',
         gap ? tr('audit.ipv6_unfiltered_detail').replace('{n}', v4Rules.length) : tr('audit.none'),
         ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.1/1.3.2', 'NIST 800-53 SC-7', 'CIS v8 12.2'], []);
+    }
+    // 12c. 本機 log 保留天數過短（2026-10-09，第十四輪 OK）：FortiGate 有硬碟（或推測有）且寫入硬碟，
+    // 保留天數低於門檻，又沒有任何 Syslog／FortiAnalyzer 外送。門檻預設 90 天（PCI-DSS 4.0 10.5.1：最近
+    // 三個月須可立即分析），可由 opts.logRetentionDays 或日誌頁設定（localStorage fw_log_retention_days）調整
+    const ll = parsed.localLog;
+    if (ll && ll.hasDisk !== false && ll.disk && ll.disk.status !== 'disable') {
+      const lg = parsed.logservers || {};
+      const external = (lg.syslog || []).length + (lg.fortianalyzer || []).length;
+      const minDays = logRetentionThreshold(opts);
+      const age = Number(ll.disk.maxAge);
+      const short = ll.hasDisk && !external && age > 0 && age < minDays;
+      f('log-retention', tr('audit.check_log_retention'), short ? 1 : 0, 'low',
+        short ? tr('audit.log_retention_detail').replace('{n}', age).replace('{min}', minDays) : tr('audit.none'),
+        ['PCI-DSS 4.0 10.5.1', 'NIST 800-53 AU-11', 'CIS v8 8.10'], []);
     }
     // 13. 過寬服務物件（2026-09-14 新增）：與第 1 項 any-any 檢查角度不同——那項看的是「規則」
     // 層級的來源/目的/服務是否皆為 all，此項專門看「服務物件本身」定義是否在物件層級就已無任何

@@ -232,7 +232,10 @@ function analyzeGeneratorAudit(model){
 // 對應 switch_analyzer 的 ntp-missing／syslog-missing／aaa-local-only 稽核：表單沒有 NTP 與 AAA 欄位，
 // 產生結果不會有這兩項，Syslog 也只有下列廠牌會輸出，故只列為提醒、不計入健康度分數（使用者在表單上無法修正）。
 // 原本附 Cisco／Comware 範例指令；第十三輪 ND 起這兩家可直接在表單填 NTP 與集中認證，範例指令移除（cmds 保留為空陣列）。
-const GEN_MGMT_SVC_VENDORS=new Set(['cisco','comware']);
+const GEN_MGMT_SVC_VENDORS=new Set(['cisco','comware','cisco_nxos','arista','aruba']);
+// 各廠牌會輸出的集中認證種類（第十四輪 OD）：Arista 只輸出 TACACS+，其餘兩種皆可
+const GEN_AAA_TYPES={arista:['tacacs']};
+function genAaaSupported(vendor,type){ return GEN_MGMT_SVC_VENDORS.has(vendor)&&(GEN_AAA_TYPES[vendor]||['tacacs','radius']).includes(type); }
 const GEN_SYSLOG_VENDORS=new Set(['cisco','arista','brocade','comware','dell-os10','cisco_nxos']);
 function analyzeGeneratorReminders(model){
   const vendor=model.vendor||'';
@@ -245,6 +248,7 @@ function analyzeGeneratorReminders(model){
   else if(!(model.ntpServers||[]).length)out.push({id:'ntp',text:tr('genaudit.reminder_ntp_empty'),cmds:[]});
   if(!svcVendor)out.push({id:'aaa',text:tr('genaudit.reminder_aaa'),cmds:[]});
   else if(!model.aaaType)out.push({id:'aaa',text:tr('genaudit.reminder_aaa_empty'),cmds:[]});
+  else if(!genAaaSupported(vendor,model.aaaType))out.push({id:'aaa',text:tr('genaudit.reminder_aaa'),cmds:[]});
   return out;
 }
 

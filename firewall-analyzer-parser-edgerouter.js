@@ -419,6 +419,81 @@ const EdgeRouterParser = (() => {
     return /ethernet\s+eth\d+\s*\{/.test(text) && /firewall\s*\{/.test(text);
   }
 
+  // ── SNMP／syslog／DNS／DHCP（2026-10-09，第十四輪 OC；VyOS 共用）──────────────────────
+  // 語法依 vyos-1x smoketest 的真實 config.boot（1.3：syslog host、DHCP subnet 下 default-router／
+  // dns-server、range N { start stop }）與遷移後的 set 指令（新版：syslog remote、option default-router／
+  // name-server），EdgeOS 另以 Comcast 真實 config.boot 確認 DHCP `start A { stop B }` 與 DNS forwarding。
+  // 形狀比照 FortiGate／MikroTik；沒有對應設定時回傳 null（onParsed() 只做 truthy 判斷）
+  function tagName(k) { return unquote(k.slice(k.indexOf(' ') + 1).trim()); }
+  function parseServicesVyatta(tree) {
+    const svc = child(tree, 'service'), sys = child(tree, 'system');
+    let snmp = null;
+    const sn = child(svc, 'snmp');
+    if (sn) {
+      snmp = { enabled: true, agent: { name: '-', description: val(sn, 'description') || '-', location: val(sn, 'location') || '-', contact: val(sn, 'contact') || '-', version: [] }, communities: [], v3users: [], trapServers: [] };
+      Object.entries(childrenPrefixed(sn, 'community')).forEach(([k, n]) => {
+        snmp.communities.push({ name: tagName(k), permission: val(n, 'authorization') === 'rw' ? 'rw' : 'ro', allowedHosts: [...vals(n, 'network'), ...vals(n, 'client')], events: '-', status: 'enable' });
+      });
+      vals(sn, 'community').forEach(c => snmp.communities.push({ name: c, permission: 'ro', allowedHosts: [], events: '-', status: 'enable' }));
+      const traps = (node, ver) => {
+        Object.entries(childrenPrefixed(node, 'trap-target')).forEach(([k, n]) => snmp.trapServers.push({ ip: tagName(k), port: val(n, 'port') || '162', community: val(n, 'community') || '-', version: ver }));
+        vals(node, 'trap-target').forEach(ip => snmp.trapServers.push({ ip, port: '162', community: '-', version: ver }));
+      };
+      traps(sn, 'v2c');
+      const v3 = child(sn, 'v3');
+      Object.entries(childrenPrefixed(v3, 'user')).forEach(([k, n]) => {
+        snmp.v3users.push({ name: tagName(k), authProto: val(child(n, 'auth'), 'type') || '-', privProto: val(child(n, 'privacy'), 'type') || '-', secLevel: child(n, 'privacy') ? 'auth-priv' : (child(n, 'auth') ? 'auth-no-priv' : '-'), notifyHost: '-', status: 'enable' });
+      });
+      traps(v3, 'v3');
+      if (snmp.communities.length) snmp.agent.version.push('v2c');
+      if (snmp.v3users.length) snmp.agent.version.push('v3');
+    }
+    let logservers = null;
+    const sl = child(sys, 'syslog');
+    const hosts = Object.entries({ ...childrenPrefixed(sl, 'host'), ...childrenPrefixed(sl, 'remote') });
+    if (hosts.length) {
+      logservers = { syslog: [], fortianalyzer: [], netflow: [], logForward: [] };
+      hosts.forEach(([k, n]) => {
+        let server = tagName(k), port = val(n, 'port');
+        const hp = server.match(/^([^:]+):(\d+)$/);   // 1.3 允許 host 名稱:埠
+        if (hp) { server = hp[1]; port = port || hp[2]; }
+        const fac = Object.entries(childrenPrefixed(n, 'facility'))[0];
+        logservers.syslog.push({ name: server, server, port: port || '514', facility: fac ? tagName(fac[0]) : '-', format: 'default',
+          protocol: (val(n, 'protocol') || 'udp').toUpperCase(), level: fac ? val(fac[1], 'level') || '-' : '-', status: 'enable' });
+      });
+    }
+    let dns = null;
+    const fw = child(child(svc, 'dns'), 'forwarding');
+    const fwServers = [...vals(fw, 'name-server'), ...Object.keys(childrenPrefixed(fw, 'name-server')).map(tagName)];
+    const sysServers = vals(sys, 'name-server');
+    const list = sysServers.length ? sysServers : fwServers;
+    if (list.length || fw) {
+      dns = { servers: list.slice(0, 1), secondaries: list.slice(1), domain: val(sys, 'domain-name') || '-', proxy: !!fw,
+        proxyRules: fw && sysServers.length ? fwServers.map(x => ({ domain: '*', target: x })) : [], dnsOverTls: false, cacheSize: val(fw, 'cache-size') || '-', static: [] };
+    }
+    let dhcp = null;
+    const ds = child(svc, 'dhcp-server');
+    const servers = [];
+    Object.entries(childrenPrefixed(ds, 'shared-network-name')).forEach(([nk, net]) => {
+      Object.entries(childrenPrefixed(net, 'subnet')).forEach(([sk, sub]) => {
+        const opt = child(sub, 'option');
+        const cidr = tagName(sk);
+        const dnsList = vals(sub, 'dns-server').length ? vals(sub, 'dns-server') : vals(opt, 'name-server');
+        const ranges = [...Object.entries(childrenPrefixed(sub, 'start')).map(([k, n]) => [tagName(k), val(n, 'stop')]),
+          ...Object.values(childrenPrefixed(sub, 'range')).map(n => [val(n, 'start'), val(n, 'stop')])];
+        (ranges.length ? ranges : [['-', '-']]).forEach(([a, b]) => servers.push({
+          name: tagName(nk), iface: '-', startIp: a || '-', endIp: b || '-',
+          gateway: val(sub, 'default-router') || val(opt, 'default-router') || '-', mask: cidr.includes('/') ? cidrSplit(cidr)[1] : '-',
+          dns1: dnsList[0] || '-', dns2: dnsList[1] || '-', domain: val(sub, 'domain-name') || val(opt, 'domain-name') || '-',
+          lease: val(sub, 'lease') || '-', status: /^(true|enable)$/.test(val(ds, 'disabled')) || hasFlag(ds, 'disable') ? 'disable' : 'enable', comment: cidr }));
+      });
+    });
+    const dr = child(svc, 'dhcp-relay');
+    const relays = vals(dr, 'server').map(ip => ({ name: '-', iface: [...vals(dr, 'interface'), ...vals(dr, 'listen-interface')].join(', ') || '-', serverIp: ip, status: 'enable', comment: '' }));
+    if (servers.length || relays.length) dhcp = { servers, relays };
+    return { snmp, logservers, dns, dhcp };
+  }
+
   function parse(text) {
     const tree = parseTree(text);
     const bind = buildRulesetBinding(tree);
@@ -448,12 +523,12 @@ const EdgeRouterParser = (() => {
       // .length 直接拋錯，導致單獨上傳本廠牌（未與其他廠牌合併）分析時整頁崩潰。比照 `ha:
       // null` 既有慣例改用 null（onParsed()/exportHTML()/merge() 對這些欄位的 guard 皆已是
       // `d.xxx&&...`，null 可安全短路），非新增規則、只是修正型別
-      dhcp: null, dns: null, snmp: null, logservers: null,
+      ...parseServicesVyatta(tree),
       wwan: null, wlan: null,
     };
   }
 
   // VyOS（同為 Vyatta 語系，2026-10-02 新增）共用樹狀解析與查詢函式，見 firewall-analyzer-parser-vyos.js
-  return { parse, detect, _lib: { parseTree, unquote, child, val, vals, hasFlag, childrenPrefixed, cidrSplit, parseAddrOrPort, parseRoutes, parseUsers } };
+  return { parse, detect, _lib: { parseTree, unquote, child, val, vals, hasFlag, childrenPrefixed, cidrSplit, parseAddrOrPort, parseRoutes, parseUsers, parseServicesVyatta } };
 })();
 

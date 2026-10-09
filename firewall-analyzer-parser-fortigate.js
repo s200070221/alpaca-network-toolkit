@@ -970,6 +970,36 @@ const FortigateParser = (() => {
     return result;
   }
 
+  // ── 本機 log 儲存（2026-10-09，第十四輪 OK）─────────────────────────────────
+  // config log disk setting：欄位依 Fortinet 官方 Ansible collection fortios_log_disk_setting；
+  // maximum-log-age（天）預設 7 依官方 KB／管理指南搜尋摘要。一般 show 不列預設值，區塊或欄位
+  // 不存在即為預設（三份有硬碟的 Oxidized 錄製 91G／501E／3001F 皆無此區塊）。
+  // 是否有硬碟：Oxidized 檔頭的 get system status「# Hard disk: N MB」為確定；否則依
+  // #config-version 型號末碼為 1（61F、101F、91G、501E…，Fortinet 有內建儲存機型的命名慣例）
+  // 推測，其他型號不判斷
+  function parseLocalLog(lines, text) {
+    const d = extractSection(lines, 'log disk setting');
+    const t = d.sectionLines.join('\n');
+    const age = d.found ? gv(t, 'maximum-log-age') : '';
+    const disk = {
+      found: d.found, status: d.found ? gv(t, 'status') : '',
+      maxAge: age || '7', maxAgeDefault: !age,
+      diskfull: d.found ? gv(t, 'diskfull') : '', maxFileSize: d.found ? gv(t, 'max-log-file-size') : '',
+      rollSchedule: d.found ? gv(t, 'roll-schedule') : '', upload: d.found ? gv(t, 'upload') : '',
+    };
+    const m = extractSection(lines, 'log memory setting');
+    const memory = { found: m.found, status: m.found ? gv(m.sectionLines.join('\n'), 'status') : '' };
+    let hasDisk = null, diskSource = '', diskSize = '';
+    const hd = text.match(/^#\s*Hard disk:\s*(.*)$/m);
+    if (hd && /(\d+)\s*MB/i.test(hd[1])) { hasDisk = true; diskSource = 'header'; diskSize = hd[1].match(/(\d+)\s*MB/i)[1] + ' MB'; }
+    else if (hd && /not available/i.test(hd[1])) { hasDisk = false; diskSource = 'header'; }
+    else {
+      const mv = text.match(/#config-version=F(?:GT|G|WF)_?(\d+)[A-Z]*-/i);
+      if (mv && /1$/.test(mv[1])) { hasDisk = true; diskSource = 'model'; }
+    }
+    return { disk, memory, hasDisk, diskSource, diskSize };
+  }
+
   function parseSdwan(lines, vdomName) {
     const result = {
       enabled: false, lbMode: '-',
@@ -1235,6 +1265,7 @@ const FortigateParser = (() => {
     const globalSnmp  = parseSnmp(globalLineArr, 'root');
     const globalHa    = parseHa(globalLineArr, 'root');
     const globalLog   = parseLogServers(globalLineArr, 'root');
+    const localLog    = parseLocalLog(globalLineArr, text);
     // LTE/5G modem 設定在 config global（multi-VDOM）或頂層（single-VDOM）
     const lteModem    = parseLteModem(globalLineArr);
     const systemModem = parseSystemModem(globalLineArr);
@@ -1303,6 +1334,7 @@ const FortigateParser = (() => {
         netflow:       [...(globalLog.netflow||[]), ...perVdom.flatMap(v=>v.logservers?.netflow||[])],
         logForward:    [...(globalLog.logForward||[]), ...perVdom.flatMap(v=>v.logservers?.logForward||[])],
       } : globalLog,
+      localLog,
       wwan: {
         profiles:    perVdom.flatMap(v => v.wwan?.profiles || []),
         lteModem,

@@ -257,6 +257,18 @@ const TNSRParser = (() => {
     /^[ \t]+access-list\s+(?:input|output)\s+acl\s+\S+\s+sequence\s+\d+/m, /^vpf\s+(?:filter\s+ruleset|options)\b/m, /^[ \t]+next-hop\s+\d+\s+via\s/m];
   function detect(text) { return SIGS.some(re => re.test(text)); }
 
+  // SNMP（2026-10-09，第十四輪 OC）：依 Oxidized 真實錄製的單行指令
+  // `snmp community community-name NAME source 位址/長度 security-name 名稱`、`snmp host enable`。
+  // 錄製中的 dhcp4 server 沒有子網、unbound 沒有轉送設定，DHCP／DNS／syslog 語法無法驗證不解析
+  function parseSnmp(text) {
+    const comms = [...text.matchAll(/^snmp\s+community\s+community-name\s+(\S+)(?:\s+source\s+(\S+))?/gm)];
+    if (!comms.length && !/^snmp\s+host\s+enable\b/m.test(text)) return null;
+    return { enabled: /^snmp\s+host\s+enable\b/m.test(text) || comms.length > 0,
+      agent: { name: '-', description: '-', location: '-', contact: '-', version: comms.length ? ['v2c'] : [] },
+      communities: comms.map(m => ({ name: m[1], permission: 'ro', allowedHosts: m[2] && m[2] !== 'default' ? [m[2]] : [], events: '-', status: 'enable' })),
+      v3users: [], trapServers: [] };
+  }
+
   function parse(text) {
     const tree = buildTree(String(text || '').replace(/\r\n/g, '\n'));
     const interfaces = parseInterfaces(tree);
@@ -270,7 +282,7 @@ const TNSRParser = (() => {
       addresses: [], services: [],
       users: parseUsers(tree), schedules: [],
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
-      dhcp: null, dns: null, snmp: null, logservers: null,
+      dhcp: null, dns: null, snmp: parseSnmp(String(text || '').replace(/\r\n/g, '\n')), logservers: null,
       wwan: null, wlan: null,
     };
   }

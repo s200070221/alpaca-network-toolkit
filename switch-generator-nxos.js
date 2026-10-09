@@ -385,6 +385,13 @@ function assembleNXOSConfig(model){
   if(model.snmpCommunity)blocks.push(`snmp-server community ${model.snmpCommunity} ro`);
   if(model.snmpTrapHost)blocks.push(`snmp-server host ${model.snmpTrapHost}`);
   if(model.syslogServer)blocks.push(`logging server ${model.syslogServer}`);
+  // NTP 與集中認證（第十四輪 OD）：ntp server 依 Ansible cisco.nxos 單元測試的真實設定；TACACS+ 依 Cisco 官方設定範例
+  // （feature tacacs+、tacacs-server host … key、aaa group server tacacs+、aaa authentication login default group），
+  // RADIUS 依 CIS NX-OS 基準與社群實例（radius-server host … key … authentication accounting、aaa group server radius）。
+  // 群組名稱固定 TACACS-1／RADIUS-1；NX-OS 伺服器全部無回應時預設改用本機帳號，登入清單不另寫 local
+  (model.ntpServers||[]).forEach(n=>blocks.push(`ntp server ${n}`));
+  if(model.aaaType==='tacacs'&&model.aaaServer)blocks.push(['feature tacacs+',`tacacs-server host ${model.aaaServer} key 0 ${model.aaaKey}`,'aaa group server tacacs+ TACACS-1',`  server ${model.aaaServer}`,'aaa authentication login default group TACACS-1'].join('\n'));
+  if(model.aaaType==='radius'&&model.aaaServer)blocks.push([`radius-server host ${model.aaaServer} key 0 ${model.aaaKey} authentication accounting`,'aaa group server radius RADIUS-1',`  server ${model.aaaServer}`,'aaa authentication login default group RADIUS-1'].join('\n'));
   // Telnet 停用（選填，2026-09-16 新增）：官方 NX-OS 查證 telnet 預設關閉，須 "feature telnet"
   // 才開啟（switch-analyzer-parser-comware.js parseMgmtAccess() nxos 分支），本工具從不輸出
   // "feature telnet"，此行僅作為明確聲明用途（defense-in-depth，不影響既有預設關閉行為）
