@@ -413,6 +413,9 @@ function parseCisco(cfg){
   }
   const res={sys,irf:null,stack,vlans,interfaces,routes,vrfs,users,ospf,ospf6,bgp,rip,rip6,vrrp,vxlan:null,vendor:'cisco',breakouts};
   if(isCiscoBusiness(cfg))applyCiscoBusiness(res,cfg);
+  // FS.com FSOS（第十六輪 PI）：S3400（Fiberstore 檔頭，Cisco 式語法）與 S5850（FSOS Software 檔頭）以 Cisco 解析器解析，只標品牌；
+  // 管理服務與 L2 防護稽核語法未查證，不評估（同 Cisco Business）
+  else if(/^!?\s*(?:Fiberstore Co\., Limited|FSOS Software, )/m.test(cfg)||/by FS\.COM\b/m.test(cfg))res.sys.brand='fs';
   return res;
 }
 

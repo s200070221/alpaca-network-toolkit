@@ -206,7 +206,7 @@ function toggleLldpInput(){
 // 清單與 parseAny() 的 if-else 派送鏈完全對應，新增廠牌時務必同步更新兩處
 // 沿用 Cisco 解析的子品牌（Cisco Business、Allied Telesis AlliedWare Plus）顯示自己的名稱
 // H3C／HPE 沿用 comware 解析（第十一輪 KA），依 sys.brand 分開顯示；判斷不出時顯示「H3C / HPE Comware」
-const SW_BRAND_LABEL={ciscobiz:'Cisco Business (CBS/SG)',awplus:'Allied Telesis AlliedWare Plus',h3c:'H3C Comware',hpe:'HPE Comware'};
+const SW_BRAND_LABEL={ciscobiz:'Cisco Business (CBS/SG)',fs:'FS.com FSOS',awplus:'Allied Telesis AlliedWare Plus',h3c:'H3C Comware',hpe:'HPE Comware'};
 const FORCE_VENDOR_LIST=[
   ['comware','H3C / HPE Comware'],['h3c','H3C Comware'],['hpe','HPE Comware'],['cisco','Cisco IOS/IOS-XE'],['aruba','Aruba CX'],
   ['fortiswitch','FortiSwitch'],['juniper','Juniper Networks'],['dell-os10','Dell EMC Networking OS'],

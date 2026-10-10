@@ -60,9 +60,9 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 ![Switch Config Parser: overview](docs/images/04-switch-overview-en.png)
 
-**Supported vendors (25)**
+**Supported vendors (26)**
 - H3C Comware, HPE Comware, Cisco IOS-XE, Cisco NX-OS, Cisco Business (CBS / SG), Aruba CX, Aruba ProCurve, Juniper EX / QFX, Arista EOS, Dell OS10
-- FortiSwitch, Extreme ExtremeXOS, Extreme VOSS / Fabric Engine, Alcatel OmniSwitch, Ruckus-Brocade ICX, MikroTik RouterOS, Ruijie RGOS, Netgear M4300, Netgear Smart Managed Pro (GS7xx), Ubiquiti EdgeSwitch, Broadcom EFOS, Planet, Allied Telesis AlliedWare Plus
+- FortiSwitch, Extreme ExtremeXOS, Extreme VOSS / Fabric Engine, Alcatel OmniSwitch, Ruckus-Brocade ICX, MikroTik RouterOS, Ruijie RGOS, Netgear M4300, Netgear Smart Managed Pro (GS7xx), Ubiquiti EdgeSwitch, Broadcom EFOS, Planet, Allied Telesis AlliedWare Plus, FS.com FSOS
 - SONiC, NVIDIA Cumulus Linux (NVUE)
 
 **Main features**
@@ -91,7 +91,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 ![Config Anonymizer: side-by-side comparison](docs/images/06-anonymizer-en.png)
 
-- Supports 35 firewall / switch / cloud config formats
+- Supports 36 firewall / switch / cloud config formats
 - Consistently replaces IPs, hostnames, user names, passwords, keys, SNMP communities, MAC addresses and more; IPv4 and IPv6 supported
 - Optional subnet preservation: addresses in the same subnet map to the same fake subnet, so lookups and routing results stay the same after anonymization
 - Checks that the config structure is unchanged after anonymization
@@ -105,11 +105,12 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 **Supported formats**
 - CEF, LEEF, Syslog (RFC3164 / RFC5424), JSON
-- Firewalls: FortiGate key=value (including syslog forwarding), Cisco ASA / FTD, Palo Alto PAN-OS (including GlobalProtect / User-ID), Check Point Log Exporter, Juniper SRX RT_FLOW and IDP / UTM, H3C SecPath session / filter logs, SonicWall, Sophos Firewall, MikroTik, Linux iptables / nftables LOG
+- Firewalls: FortiGate key=value (including syslog forwarding), Cisco ASA / FTD, Palo Alto PAN-OS (including GlobalProtect / User-ID), Check Point Log Exporter, Cisco FTD Firepower events, Juniper SRX RT_FLOW and IDP / UTM, H3C SecPath session / filter logs, SonicWall, Sophos Firewall, MikroTik, EdgeRouter / VyOS and Linux iptables / nftables LOG
 - Intrusion detection and endpoint protection: Suricata EVE JSON, Cisco Secure Endpoint (AMP) event JSON
 - DNS / cloud security: Cisco Umbrella CSV
 - Network devices: Cisco IOS (including ACL logs) and Comware device logs
-- Servers and cloud: Windows event XML and Sysmon, IIS / web access logs, AWS VPC / Azure NSG flow logs
+- Servers and cloud: Windows event XML and Sysmon, IIS / web and AWS ELB access logs, AWS VPC / Azure NSG / GCP flow logs
+- Cloud identity and audit: Microsoft Entra ID sign-ins, Okta, Microsoft 365 audit, Google Workspace logins, AWS CloudTrail
 
 **Main features**
 - Sorts by severity and flags likely problems: frequency anomalies, scans, authentication failures, Kerberoasting, lateral movement, interface problems, MAC flapping, multi-stage attack chains and more, tagged with MITRE ATT&CK IDs

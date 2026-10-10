@@ -1149,7 +1149,7 @@ document.getElementById('logo-btn').addEventListener('click', () => {
 const VENDOR_NAMES = {t:'Cisco FTD',netgearsmart:'Netgear Smart Managed Pro',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',h3c:'H3C Comware',h:'H3C SecPath',e:'Netgate TNSR',l:'Wireless LAN Controller',hpe:'HPE Comware',f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure 安全群組',awsflow:'AWS VPC Flow Logs',azureflow:'Azure NSG／VNet Flow Logs',u:'OpenWrt (UCI)',sonic:'SONiC',cumulus:'NVIDIA Cumulus Linux',awplus:'Allied Telesis AlliedWare Plus',ciscobiz:'Cisco Business (CBS/SG)',g:'WatchGuard Firebox',
   // 2026-08-19 新增：log_analyzer 拖放偵測的格式標籤（非廠牌，沿用同一份對照表顯示於拖放
   // 提示 chip），key 與 detectTool() 回傳的 vendor 字串一致
-  rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog',kvfw:'SonicWall／Sophos Firewall Log',pancsv:'Palo Alto PAN-OS CSV',umbrella:'Cisco Umbrella CSV', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log',
+  rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog',kvfw:'SonicWall／Sophos Firewall Log',pancsv:'Palo Alto PAN-OS CSV',umbrella:'Cisco Umbrella CSV',elb:'AWS ELB Access Log', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log',
   ciscoios:'Cisco IOS Log', comwarelog:'Comware Log', isosyslog:'Syslog（ISO 時間）', w3c:'IIS W3C Log', weblog:'Web Access Log', mikrotiklog:'MikroTik Log'};
 let _dropPending = null;
 // 快速連續拖放/選檔的競態防呆：每次啟動新的 FileReader 讀取時遞增，onload 觸發時比對
@@ -1163,6 +1163,12 @@ function _isAmpEvent(o) { return !!o && typeof o === 'object' && typeof o.event_
 function _isLogJsonObj(o) {
   if (!o || typeof o !== 'object' || Array.isArray(o)) return false;
   if (o.data && (Array.isArray(o.data) ? o.data.length && o.data.every(_isAmpEvent) : _isAmpEvent(o.data))) return true;
+  // 雲端身分／稽核紀錄（第十六輪 PF／PG）：Entra ID sign-in、Okta、Microsoft 365 稽核、Google Workspace Reports、
+  // AWS CloudTrail（含 {"Records":[…]}），判斷與 log_analyzer cloudAuthInfo() 一致
+  if (Array.isArray(o.Records) && o.Records.length && o.Records[0] && o.Records[0].eventSource && o.Records[0].eventName) return true;
+  if ((/SignInLogs$/.test(String(o.category || '')) && 'resultType' in o) || (typeof o.eventType === 'string' && o.outcome && o.actor && o.published) ||
+      (typeof o.Operation === 'string' && o.Workload && o.CreationTime) || (o.kind === 'admin#reports#activity' && o.id) ||
+      (o.eventSource && o.eventName && o.eventTime && o.userIdentity)) return true;
   return _isAmpEvent(o) || LOG_JSON_KEYS.some(k => k in o);
 }
 function _isLogJsonHead(trimmed) {
@@ -1240,6 +1246,8 @@ function detectTool(text) {
   if (/^"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}","[^"\n]*","[^"\n]*","[^"\n]*","[^"\n]*","(?:Allowed|Blocked|\d+)"/m.test(t) ||
       /^"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}","[^"\n]*","[^"\n]*","[^"\n]*","[^"\n]*","[^"\n]*","(?:ALLOWED|BLOCKED)","\w+:\/\//m.test(t) ||
       /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\[\d+\],[^\n]*,(?:INBOUND|OUTBOUND),/m.test(t)) return {idx:4, vendor:'umbrella'};
+  // AWS ELB 存取紀錄（第十六輪 PH，與 log_analyzer ELB_LINE_RE／NLB_LINE_RE 一致）：Classic／ALB／NLB
+  if (/^(?:(?:https?|h2|grpcs|wss?) )?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z \S+ \S+:\d+ \S+ -?[\d.]+ -?[\d.]+ -?[\d.]+ (?:\d{3}|-) (?:\d{3}|-) \d+ \d+ "/m.test(t) || /^tls \S+ \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} net\/\S+ /m.test(t)) return {idx:4, vendor:'elb'};
   // SonicWall／Sophos Firewall 原生 key=value（log 工具 kvfw）
   if (/^(?:<\d{1,3}>)?(?:id=\S+\s+sn=\S+\s+time="|device="SFW"\s)/m.test(t)) return {idx:4, vendor:'kvfw'};
   // Cisco ASA／FTD 帶主機、時區或 EMBLEM 類別的表頭（行內出現 %ASA-／%FTD-等級-六位數訊息號）
@@ -1449,6 +1457,7 @@ function _detectToolReasons(text) {
     { reason: '命中 FortiGate 原生 log（`date=... time=...` + `logid=`）', test: () => /^date=\d{4}-\d{2}-\d{2}\s+time=\d{2}:\d{2}:\d{2}\b/m.test(t) && /\blogid=/.test(t) },
     { reason: '命中 FortiGate 經 syslog 送出的 log（`<PRI>` 開頭或 devname 開頭，同一行有 date=、time= 與 10 位數 logid）', test: () => /^(?:<\d{1,3}>)?(?=[^\n]*\bdate=\d{4}-\d{2}-\d{2}\s)(?=[^\n]*\stime=\d{2}:\d{2}:\d{2}\b)(?=[^\n]*\blogid="?\d{10}\b)[a-z_]+=/m.test(t) },
     { reason: '命中沒有 syslog 外殼的 Palo Alto PAN-OS CSV（`1,時間,序號,TRAFFIC|THREAT|GLOBALPROTECT|USERID…,`）', test: () => /^\d+,(?:\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z),[^,]*,(?:TRAFFIC|THREAT|GLOBALPROTECT|USERID|HIPMATCH|HIP-MATCH|SYSTEM|CONFIG|DECRYPTION|AUTHENTICATION),/m.test(t) },
+    { reason: '命中 AWS ELB Access Log 存取紀錄（Classic／ALB／NLB 欄位順序）', test: () => { const t = text.slice(0, 8000); return /^(?:(?:https?|h2|grpcs|wss?) )?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z \S+ \S+:\d+ \S+ -?[\d.]+ -?[\d.]+ -?[\d.]+ (?:\d{3}|-) (?:\d{3}|-) \d+ \d+ "/m.test(t) || /^tls \S+ \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} net\/\S+ /m.test(t); } },
     { reason: '命中 Cisco Umbrella CSV 匯出（DNS／IP／Proxy／Cloud Firewall 欄位形狀）', test: () => /^"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}","[^"\n]*","[^"\n]*","[^"\n]*","[^"\n]*","(?:Allowed|Blocked|\d+)"/m.test(t) ||
       /^"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}","[^"\n]*","[^"\n]*","[^"\n]*","[^"\n]*","[^"\n]*","(?:ALLOWED|BLOCKED)","\w+:\/\//m.test(t) ||
       /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\[\d+\],[^\n]*,(?:INBOUND|OUTBOUND),/m.test(t) },

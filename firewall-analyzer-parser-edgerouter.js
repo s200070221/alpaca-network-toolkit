@@ -272,7 +272,7 @@ const EdgeRouterParser = (() => {
           logtraffic: val(rNode, 'log') === 'enable' ? 'all' : 'disable',
           utm: { av: '-', ips: '-', webfilter: '-', appctrl: '-' },
           status: hasFlag(rNode, 'disable') ? 'disable' : 'enable',
-          users: '-', groups: '-', comments: desc, _vdom: '', connState, _family: fam === 6 ? 'v6' : 'v4',
+          users: '-', groups: '-', comments: desc, _vdom: '', connState, chain: rsName, ruleNum, _family: fam === 6 ? 'v6' : 'v4',
         });
       });
     });

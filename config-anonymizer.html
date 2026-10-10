@@ -485,6 +485,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="h3c_secpath">H3C SecPath</option>
                 <option value="tnsr">Netgate TNSR</option>
                 <option value="cisco_biz">Cisco Business (CBS/SG)</option>
+                <option value="fsos">FS.com FSOS</option>
                 <option value="cisco_ios">Cisco IOS / IOS-XE</option>
                 <option value="cisco_nxos">Cisco NX-OS</option>
                 <option value="arista">Arista EOS</option>
@@ -1282,6 +1283,7 @@ const VENDOR_SIGS = {
   ciscoasa:    { p:[/^ASA Version\s+\S+/m, /^NGFW Version\s+\S+/m, /^nameif\s+\S+/m, /^failover\s*$/m], min:1 },
   // Cisco Business（CBS250／350、Catalyst 1200／1300、SG300／350，2026-10-02）：固定檔頭，與 switch_analyzer 的 isCiscoBusiness() 一致
   cisco_biz:   { p:[/^config-file-header\s*$/m, /^ssd-control-start\s*$/m, /^file SSD indicator\s+\S+/m], min:1 },
+  fsos:        { p:[/^!?\s*Fiberstore Co\., Limited/m, /^!?\s*FSOS Software, /m, /by FS\.COM\b/m], min:1 },
   cisco_ios:   { p:[/^version \d+\.\d+\s*$/m, /^hostname /m, /Cisco IOS/i], min:2 },
   // 務必與 firewall_analyzer 的 FW_VENDOR_SIGS.zyxel 保持一致（2026-07-30 新增），避免兩邊
   // 簽章各自維護後逐漸失步（既有註解已警告過 juniper 曾發生過這個問題）
@@ -1335,7 +1337,7 @@ const VENDOR_SIGS = {
 // 只有在都沒命中時才輪到這兩家，降低誤判機率
 const VENDOR_ORDER = [
   'cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','netgearsmart','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
-  'checkpoint','pfsense','sonicwall','watchguard','mikrotik','arista',
+  'checkpoint','pfsense','sonicwall','watchguard','mikrotik','fsos','arista',
   'extreme','alcatel','brocade','procurve','dell_os10','planet','ruijie','netgear','edgeswitch','sonic',
   'ciscoasa','cisco_biz','cisco_ios',
   'zyxel','sophos','aruba_cx'
@@ -1344,7 +1346,7 @@ const VENDOR_LABELS = {
   fortigate:'FortiGate',fortiswitch:'FortiSwitch',sophos:'Sophos XG',
   checkpoint:'Check Point',paloalto:'Palo Alto PAN-OS',pfsense:'pfSense/OPNsense',
   sonicwall:'SonicWall',mikrotik:'MikroTik RouterOS',juniper:'Juniper JunOS',
-  comware:'H3C / HPE Comware',h3c_secpath:'H3C SecPath',tnsr:'Netgate TNSR',wlc:'Wireless LAN Controller',cisco_ios:'Cisco IOS/IOS-XE',cisco_biz:'Cisco Business (CBS/SG)',cisco_nxos:'Cisco NX-OS',
+  comware:'H3C / HPE Comware',h3c_secpath:'H3C SecPath',tnsr:'Netgate TNSR',wlc:'Wireless LAN Controller',cisco_ios:'Cisco IOS/IOS-XE',cisco_biz:'Cisco Business (CBS/SG)',fsos:'FS.com FSOS',cisco_nxos:'Cisco NX-OS',
   arista:'Arista EOS',aruba_cx:'Aruba CX',procurve:'Aruba ProCurve',
   dell_os10:'Dell OS10',extreme:'Extreme XOS',alcatel:'Alcatel OmniSwitch',
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
@@ -2252,6 +2254,12 @@ function anonPfSense(text, opts) {
         multilineKeyTag = kt;
       }
     }
+    // 憑證管理員的 <crt>／<prv>（base64 單行 PEM，含私鑰）與 OPNsense <httpdPassword> 等名稱以 password／secret 結尾的標籤
+    // （Oxidized pfSense CE 2.7.2／OPNsense 真實錄製，第十六輪 PA）
+    const certR = line.replace(/(<prv>)([^<]+)(<\/prv>)/, '$1REDACTED_KEY$3').replace(/(<crt>)([^<]+)(<\/crt>)/, '$1REDACTED_CERT$3');
+    if (certR !== line) { stats.key++; line = certR; }
+    const pwTagR = line.replace(/(<([A-Za-z_]*(?:[Pp]assword|[Ss]ecret))>)([^<]+)(<\/\2>)/, '$1REDACTED_PASSWORD$4');
+    if (pwTagR !== line) { stats.password++; line = pwTagR; }
     const comR = line.replace(/(<(?:rocommunity|rwcommunity|community)>)([^<]*)(<\/[^>]+>)/, '$1REDACTED_COMMUNITY$3');
     if (comR !== line) { stats.community++; line = comR; }
     const bpR = line.replace(/(<bindpw>)([^<]*)(<\/bindpw>)/, '$1REDACTED_PASSWORD$3');
@@ -2545,6 +2553,33 @@ function anonCiscoBiz(text, opts) {
   const i = out.findIndex(l => /^config-file-header\s*$/.test(l));
   if (opts.hostname && i >= 0 && out[i + 1] && /^\S+\s*$/.test(out[i + 1])) out[i + 1] = anonHostname(out[i + 1].trim(), 'sw', opts);
   return out.join('\n');
+}
+
+// ---- FS.com FSOS（第十六輪 PI）----
+// 兩種韌體的 Oxidized 真實錄製：S3400（`! Fiberstore Co., Limited Internetwork Operating System Software`，Cisco 式語法）與
+// S5850（`! FSOS Software, S5850`，介面 eth-0-N）。沿用 IOS 規則，另處理 IOS 規則沒涵蓋的寫法：
+// `snmp-server community 7|8 名稱`（型別數字在前）、`snmp-server user … auth sha256 7 驗證金鑰 加密金鑰`、
+// RADIUS 群組內 ` server 位址 key 7 金鑰`、show version 的 `Serial num:`／`System serial number is`、提示字元 `! 主機名稱#`
+function anonFSOS(text, opts) {
+  const orig = text.split('\n');
+  const out = anonCiscoIOS(text, opts).split('\n');
+  if (out.length !== orig.length) return out.join('\n');
+  return out.map((l, i) => {
+    const o = orig[i];
+    if (/^snmp-server\s+community\s+[78]\s+\S+/.test(o)) { stats.community++; return o.replace(/^(snmp-server\s+community\s+[78]\s+)\S+/, '$1REDACTED_COMMUNITY'); }
+    // 帳號沿用 IOS 規則換過的名稱，金鑰從原始行處理（IOS 規則會把 auth 關鍵字當成金鑰）：雜湊演算法與型別數字後接驗證金鑰、選填加密金鑰
+    if (/^snmp-server\s+user\s/.test(o)) {
+      const u = (l.match(/^snmp-server\s+user\s+(\S+)/) || [])[1];
+      stats.key++;
+      return o.replace(/^(snmp-server\s+user\s+)\S+/, (m, p) => p + (u || 'REDACTED'))
+        .replace(/(\b(?:sha\d*|md5)\s+[078]\s+)\S+(\s+\S+)?/i, (m, p, k2) => p + 'REDACTED_KEY' + (k2 ? ' REDACTED_KEY' : ''))
+        .replace(/\b[0-9a-fA-F]{16,}\b/g, 'REDACTED_KEY');
+    }
+    if (/^\s+server\s+\S+\s+.*\bkey\s+/.test(o)) { stats.key++; return l.replace(/(\bkey\s+(?:\d\s+)?)\S+/, '$1REDACTED_KEY'); }
+    if (/^!\s*(?:Serial num:|System serial number is)/.test(o)) return l.replace(/(Serial num:\s*|serial number is\s+)([A-Z0-9]{6,})/i, '$1SERIAL-X');
+    if (opts.hostname && /^(?:!\s*)?[\w.-]+#\s*$/.test(o)) return o.replace(/^((?:!\s*)?)([\w.-]+)(#)/, (m, p, n, h) => p + anonHostname(n, 'sw', opts) + h);
+    return l;
+  }).join('\n');
 }
 
 // ---- Linux netfilter（iptables-save／nft list ruleset）----
@@ -2872,6 +2907,9 @@ function anonCiscoASA(text, opts) {
     // enable password（ASA 無 enable secret）
     const enR = line.replace(/^(enable\s+password\s+)(\S+)/, '$1REDACTED_HASH');
     if (enR !== line) { stats.password++; line = enR; }
+    // passwd（Telnet／登入密碼，`passwd 雜湊 encrypted`；Oxidized ASA 5512 真實錄製，第十六輪 PA）
+    const pwdR = line.replace(/^(passwd\s+)(\S+)/, '$1REDACTED_HASH');
+    if (pwdR !== line) { stats.password++; line = pwdR; }
     // username line
     if (opts.user) {
       line = line.replace(/^(username\s+)(\S+)(\s+password\s+)(\S+)/, (m, p, n, mid) => p + anonUser(n) + mid + 'REDACTED_HASH');
@@ -2990,6 +3028,9 @@ function anonJuniper(text, opts) {
     let ospfR = line.replace(/^(set\s+protocols\s+ospf\s+.+\s+key\s+)"([^"]+)"/, '$1"REDACTED_KEY"');
     if (ospfR === line) ospfR = line.replace(/^(\s*(?:md5\s+\d+\s+)?key\s+)"([^"]+)"/, '$1"REDACTED_KEY"');
     if (ospfR !== line) { stats.key++; line = ospfR; }
+    // archive-sites 的 `"網址" password "$9$…"`（Oxidized SRX300 真實錄製，第十六輪 PA；網址內嵌帳密由 anonUrlCredentials() 處理）
+    const arcR = line.replace(/(\s+password\s+)"([^"]+)"/, '$1"REDACTED_PASSWORD"');
+    if (arcR !== line) { stats.password++; line = arcR; }
     // TACACS/RADIUS secret
     let kR = line.replace(/^(set\s+system\s+(?:tacplus|radius)-server\s+\S+\s+secret\s+)"([^"]+)"/, '$1"REDACTED_KEY"');
     if (kR === line) kR = line.replace(/^(\s*secret\s+)"([^"]+)"/, '$1"REDACTED_KEY"');
@@ -3064,6 +3105,9 @@ function anonArubaCX(text, opts) {
     }
     const comR = line.replace(/^(snmp-server\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
     if (comR !== line) { stats.community++; line = comR; }
+    // `snmp-server host 位址 trap|inform version v2c community 名稱`（Oxidized AOS-CX 真實錄製，第十六輪 PA）
+    const comHostR = line.replace(/^(snmp-server\s+host\s+\S+\s.*?\bcommunity\s+)(\S+)/, '$1REDACTED_COMMUNITY');
+    if (comHostR !== line) { stats.community++; line = comHostR; }
     // AOS-CX 金鑰前有 ciphertext／plaintext 修飾詞，原本把修飾詞當成金鑰值、真正的值原樣留下（2026-10-01）
     const kR = line.replace(/^((?:radius-server|tacacs-server)\s+host\s+\S+\s+(?:.*?\s)?key\s+(?:ciphertext\s+|plaintext\s+)?)(\S+)/, '$1REDACTED_KEY');
     if (kR !== line) { stats.key++; line = kR; }
@@ -3876,7 +3920,7 @@ const VENDOR_FNS = {
   fortigate: anonFortiGate, fortiswitch: anonFortiSwitch,
   sophos: anonSophos, checkpoint: anonCheckPoint, paloalto: anonPaloAlto,
   pfsense: anonPfSense, sonicwall: anonSonicWall, mikrotik: anonMikroTik,
-  comware: anonComware, h3c_secpath: anonComware, tnsr: anonTNSR, wlc: anonWlc, cisco_ios: anonCiscoIOS, cisco_biz: anonCiscoBiz, cisco_nxos: anonCiscoNXOS,
+  comware: anonComware, h3c_secpath: anonComware, tnsr: anonTNSR, wlc: anonWlc, cisco_ios: anonCiscoIOS, cisco_biz: anonCiscoBiz, fsos: anonFSOS, cisco_nxos: anonCiscoNXOS,
   juniper: anonJuniper, arista: anonArista, aruba_cx: anonArubaCX,
   procurve: anonProCurve,
   dell_os10: anonDellOS10, extreme: anonExtreme, alcatel: anonAlcatel,
@@ -3917,11 +3961,20 @@ function anonymize(text, vendor, opts, keepState) {
   }
 
   const fn = VENDOR_FNS[vendor] || anonGeneric;
-  return anonPemBlocks(anonContactInfo(anonCommentsFallback(fn(text, opts), opts, vendor)));
+  return anonUrlCredentials(anonPemBlocks(anonContactInfo(anonCommentsFallback(fn(text, opts), opts, vendor))), opts);
 }
 // PEM 區塊（第十三輪 NA 實跑 Oxidized 的 FortiGate 91G 錄製發現）：FortiGate 的 set private-key／set certificate、
 // 其他廠牌貼上的金鑰與憑證都是多行 PEM，逐行規則只處理到開頭那一行，私鑰內文原樣殘留（checkResidual() 只會警示）。
 // 不分廠牌，保留 BEGIN／END 行，內文換成 REDACTED_PEM；憑證雖為公開資料，內文可能含內部主機名稱與組織資訊，一併遮蔽
+// 網址內嵌帳密（`ftp://帳號:密碼@主機/`，備份／archive 網址常見；第十六輪 PA）不分廠牌處理：密碼換成 REDACTED_PASSWORD，
+// 勾選帳號匿名化時帳號也換掉
+function anonUrlCredentials(text, opts) {
+  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)([^\s:@\/"'<>]+):([^\s@\/"'<>]+)@/gi, (m, sch, u, pw) => {
+    if (pw === 'REDACTED_PASSWORD') return m;
+    stats.password++;
+    return sch + (opts && opts.user ? anonUser(u) : u) + ':REDACTED_PASSWORD@';
+  }).replace(/\b((?:s?ftp|pasvftp|scp|https?):\/\/)([^\s:@\/"'<>]+)@/gi, (m, sch, u) => (opts && opts.user && !/^user-\d+$/.test(u)) ? sch + anonUser(u) + '@' : m);
+}
 function anonPemBlocks(text) {
   return text.replace(/(-----BEGIN ([A-Za-z0-9 ]+)-----)([\s\S]*?)(-----END \2-----)/g, (m, b, kind, body, e) => {
     if (/^\s*REDACTED_PEM\s*$/.test(body)) return m;
