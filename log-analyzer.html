@@ -568,6 +568,7 @@ function detectLineFormat(line) {
   line = line.replace(OCTET_COUNT_RE, '');
   if (PAN_CSV_LINE_RE.test(line)) return 'pancsv';
   if (UMBRELLA_LINE_RE.test(line) && umbrellaKind(splitCSVSimple(line))) return 'umbrella';
+  if (ELB_LINE_RE.test(line) || NLB_LINE_RE.test(line)) return 'elb';
   if (/^<\d{1,3}>1\s/.test(line)) return 'rfc5424';
   if (/^(?:<\d{1,3}>\s*)?CEF:\d+\|/.test(line)) return 'cef';
   if (/^(?:<\d{1,3}>\s*)?LEEF:\d+(?:\.\d+)?\|/i.test(line)) return 'leef';
@@ -977,17 +978,19 @@ function parseRFC3164Line(line, lineNo) {
 // [<PRI>]Mmm dd [yyyy] hh:mm:ss[.ms][ 時區][ 主機[ 程式[pid]]][ ]:? %ASA|FTD-[類別-]等級-訊息號: 訊息
 // FTD 的 Lina 引擎與 ASA 共用訊息號與格式，一律以 parseASAFields() 拆欄位
 const ASA_TZ = '(?:UTC|GMT|EDT|EST|CDT|CST|MDT|MST|PDT|PST|CET|CEST|JST|KST|AEST|BST|IST|HKT|SGT)';
-const ASA_LINE_RE = new RegExp('^(?:<(\\d{1,3})>\\s*)?([A-Z][a-z]{2}\\s+\\d{1,2}(?:\\s+\\d{4})?\\s+\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?)(?:\\s+' + ASA_TZ + ')?' +
-  '(?:\\s+([^\\s:%\\[]+)(?:\\s+[\\w.-]+\\[\\d+\\])?)?\\s*:?\\s*%(ASA|FTD)-(?:[a-z]+-)?(\\d)-(\\d+):\\s*([\\s\\S]*)$');
+// 第十六輪 PD：時間也可為 ISO 8601（FMC／FTD 轉送的 Firepower 事件 `2019-08-15T16:03:31Z firepower  %FTD-1-430002:`），
+// 程式名稱可不帶 pid（`CISCO-SENSOR-3D Alerts %NGIPS-0-430003:`），族群另含 NGIPS
+const ASA_LINE_RE = new RegExp('^(?:<(\\d{1,3})>\\s*)?([A-Z][a-z]{2}\\s+\\d{1,2}(?:\\s+\\d{4})?\\s+\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?)(?:\\s+' + ASA_TZ + ')?' +
+  '(?:\\s+([^\\s:%\\[]+)(?:\\s+[\\w.-]+(?:\\[\\d+\\])?)?)?\\s*:?\\s*%(ASA|FTD|NGIPS)-(?:[a-z]+-)?(\\d)-(\\d+):\\s*([\\s\\S]*)$');
 function parseASALine(line, lineNo) {
   const m = line.match(ASA_LINE_RE);
   if (!m) return null;
   const [, pri, ts, host, fam, level, msgId, msg] = m;
-  const d = /\s\d{4}\s/.test(ts) ? new Date(ts) : parseSyslogTimestamp(ts.replace(/\.\d+$/, ''), 'bsd');
+  const d = /^\d{4}-/.test(ts) ? new Date(ts) : /\s\d{4}\s/.test(ts) ? new Date(ts) : parseSyslogTimestamp(ts.replace(/\.\d+$/, ''), 'bsd');
   return {
     format: 'asa', raw: line, lineNo,
     timestamp: d && !isNaN(d.getTime()) ? d : null, timestampRaw: ts,
-    host: host || '', appName: fam === 'FTD' ? 'FTD' : '', procid: '', msgid: msgId,
+    host: host || '', appName: fam === 'ASA' ? '' : fam, procid: '', msgid: msgId,
     severityRaw: level, severityNorm: normSyslogSeverity(Number(level)),
     facility: pri !== undefined ? Math.floor(Number(pri) / 8) : null, facilityAuth: false,
     msg, fields: parseASAFields(msgId, msg),
@@ -1002,7 +1005,47 @@ function parseASALine(line, lineNo) {
 //     兩端固定先列安全等級較低的介面；inbound 為第一個列出的一端發起，outbound 為第二個（to）一端發起。
 //     Built 代表規則已放行（action 記為 accept）
 // 「介面:位址/埠」以第一個冒號分介面（IPv6 位址本身含冒號），最後一個 / 分埠
+// Firepower 事件（FTD／NGIPS 430001 入侵、430002／430003 連線開始／結束、430004 檔案、430005 惡意程式檔案；第十六輪 PD）：
+// 訊息為「欄位: 值, 欄位: 值」清單，欄位名稱依 Elastic Beats cisco 模組（asa-ftd-pipeline）與其 ftd 真實測試 log。
+// 值可能含逗號（Message、URI），以「, 下一個欄位名稱: 」切分
+const FIREPOWER_ACTION = { allow: 'accept', trust: 'accept', fastpath: 'accept', block: 'deny', 'block with reset': 'deny', 'interactive block': 'deny', 'interactive block with reset': 'deny' };
+function parseFirepowerKV(msg) {
+  const kv = {};
+  String(msg || '').split(/,\s*(?=[A-Z][A-Za-z0-9_ ]{1,40}:\s)/).forEach(part => {
+    const i = part.indexOf(':');
+    if (i > 0) kv[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+  });
+  return kv;
+}
+function parseFirepowerFields(msgId, msg) {
+  const kv = parseFirepowerKV(msg);
+  const f = { fpEvent: msgId };
+  const set = (k, v) => { if (v !== undefined && v !== '') f[k] = v; };
+  set('srcip', kv.SrcIP); set('dstip', kv.DstIP);
+  if (/^\d+$/.test(kv.SrcPort || '')) f.srcport = kv.SrcPort;
+  if (/^\d+$/.test(kv.DstPort || '')) f.dstport = kv.DstPort;
+  if (kv.Protocol) f.proto = kv.Protocol.toLowerCase();
+  set('srcintf', kv.IngressInterface); set('dstintf', kv.EgressInterface);
+  set('srczone', kv.IngressZone); set('dstzone', kv.EgressZone);
+  set('rule', kv.AccessControlRuleName); set('policy', kv.ACPolicy);
+  const act = (kv.AccessControlRuleAction || '').toLowerCase();
+  if (FIREPOWER_ACTION[act]) f.action = FIREPOWER_ACTION[act];
+  if (kv.User && !/^No Authentication Required$/i.test(kv.User)) f.user = kv.User;
+  set('app', kv.ApplicationProtocol); set('url', kv.URI);
+  // Security Intelligence（IP／URL／DNS 信譽清單）：AccessControlRuleReason 如 IP Monitor／IP Block，類別在 *SICategory
+  set('reason', kv.AccessControlRuleReason);
+  set('sicategory', kv.IPReputationSICategory || kv.URLSICategory || kv.DNSSICategory);
+  // 入侵事件：Message 為特徵名稱，GID:SID 為特徵編號，Priority 1 最高
+  if (msgId === '430001') { set('signature', kv.Message); set('sid', kv.GID && kv.SID ? kv.GID + ':' + kv.SID : kv.SID); set('priority', kv.Priority); set('classification', kv.Classification); }
+  // 檔案／惡意程式事件
+  if (msgId === '430004' || msgId === '430005') {
+    set('filename', kv.FileName); set('fileaction', kv.FileAction); set('disposition', kv.SHA_Disposition || kv.Disposition);
+    set('threat', kv.ThreatName); set('sha256', kv.FileSHA256);
+  }
+  return f;
+}
 function parseASAFields(msgId, msg) {
+  if (/^43000[1-5]$/.test(msgId)) return parseFirepowerFields(msgId, msg);
   const ep = tok => {
     const i = tok.indexOf(':'); if (i < 0) return null;
     const rest = tok.slice(i + 1), j = rest.lastIndexOf('/');
@@ -1371,7 +1414,16 @@ function parseNetfilterLog(msg) {
   const spt = g(/\bSPT=(\d+)/), dpt = g(/\bDPT=(\d+)/);
   if (spt) fields.srcport = spt; if (dpt) fields.dstport = dpt;
   const len = g(/\bLEN=(\d+)/); if (len) fields.len = len;
-  if (/\b(?:drop|dropped|block|blocked|reject|rejected|deny|denied)\b/i.test(px)) fields.action = 'deny';
+  // EdgeRouter／VyOS 1.3 的 `[規則集-規則編號-A|D|R]` 與 VyOS 1.4 起的 `[ipv4|ipv6|bri-FWD|INP|OUT|PRE-filter-編號-動作]`、
+  // `[ipv4-NAM-規則集-編號-動作]`（編號可為 default＝預設動作；A＝accept、D＝drop、R＝reject；格式依 Beats iptables 模組
+  // 的 Ubiquiti 解析規則、vyos-1x smoketest test_firewall.py，第十六輪 PC）。ruleset 與 VyOS 解析器的規則鏈名稱一致
+  const vy = px.match(/^(?:(ipv4|ipv6|bri)-(FWD|INP|OUT|PRE|NAM)-)?(.+)-(\d+|default)-([ADR])$/);
+  if (vy) {
+    const HOOK = { FWD: 'forward', INP: 'input', OUT: 'output', PRE: 'prerouting' };
+    fields.ruleset = vy[1] && vy[2] !== 'NAM' ? `${vy[1]}-${HOOK[vy[2]]}` : vy[3];
+    fields.rulenum = vy[4];
+    fields.action = vy[5] === 'A' ? 'accept' : 'deny';
+  } else if (/\b(?:drop|dropped|block|blocked|reject|rejected|deny|denied)\b/i.test(px)) fields.action = 'deny';
   else if (/\b(?:accept|accepted|allow|allowed|pass)\b/i.test(px)) fields.action = 'accept';
   return fields;
 }
@@ -1694,6 +1746,39 @@ function webEvent(format, raw, lineNo, ts, tsRaw, host, fields) {
     msg: `${fields.method || '-'} ${fields.url || '-'} ${fields.status}`, fields
   };
 }
+// AWS Elastic Load Balancing 存取紀錄（第十六輪 PH）：格式依 AWS 官方文件（Classic／ALB／NLB access logs）與 Elastic Beats
+// aws elb 模組的 grok 規則與真實測試 log——
+//   Classic：時間 名稱 用戶端:埠 後端:埠|- 三個處理時間 ELB狀態碼 後端狀態碼 收位元組 送位元組 "要求" "UA" 加密套件 TLS版本
+//   ALB：類型(http|https|h2|grpcs|ws|wss) 時間 app/名稱/ID 用戶端:埠 目標:埠|- 三個時間 ELB狀態碼 目標狀態碼 位元組 位元組 "要求" "UA" …
+//   NLB：tls 版本 時間 net/名稱/ID 監聽器 用戶端:埠 目的:埠 …（無 HTTP 狀態）
+// 以 weblog 格式輸出（狀態碼分類與 Web 路徑探測沿用），fields.elb 記類型；主機為負載平衡器名稱
+const ELB_LINE_RE = /^(?:(https?|h2|grpcs|wss?) )?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) (\S+) (\S+:\d+) (\S+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (\d{3}|-) (\d{3}|-) (\d+) (\d+) "([^"]*)" "([^"]*)"/;
+const NLB_LINE_RE = /^tls (\S+) (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}) (net\/\S+) (\S+) (\S+:\d+) (\S+:\d+) /;
+function splitHostPort(v) { const i = String(v).lastIndexOf(':'); return i < 0 ? [v, ''] : [v.slice(0, i).replace(/^\[|\]$/g, ''), v.slice(i + 1)]; }
+function parseElbLine(line, lineNo) {
+  let m = line.match(ELB_LINE_RE);
+  if (m) {
+    const [, type, ts, name, client, backend, , , , elbStatus, tgtStatus, rbytes, sbytes, request] = m;
+    const [srcip, srcport] = splitHostPort(client);
+    const req = request.split(' ');
+    const fields = { elb: type ? 'alb' : 'classic', srcip, srcport, method: req.length >= 2 && req[0] !== '-' ? req[0] : '', url: req.length >= 2 && req[1] !== '-' ? req[1] : '',
+      status: elbStatus === '-' ? '' : elbStatus, bytes: sbytes, rbytes };
+    if (backend !== '-') { const [dstip, dstport] = splitHostPort(backend); fields.dstip = dstip; fields.dstport = dstport; }
+    if (tgtStatus !== '-') fields.targetstatus = tgtStatus;
+    if (!fields.method) fields.elb += '-tcp';
+    return webEvent('weblog', line, lineNo, new Date(ts), ts, name.replace(/^app\//, '').split('/')[0], fields);
+  }
+  m = line.match(NLB_LINE_RE);
+  if (m) {
+    const [, , ts, name, listener, client, dest] = m;
+    const [srcip, srcport] = splitHostPort(client), [dstip, dstport] = splitHostPort(dest);
+    const fields = { elb: 'nlb', srcip, srcport, dstip, dstport, listener, status: '' };
+    const evt = webEvent('weblog', line, lineNo, new Date(ts + 'Z'), ts, name.split('/')[1] || name, fields);
+    evt.msg = `TLS ${srcip}:${srcport} -> ${dstip}:${dstport}`;
+    return evt;
+  }
+  return null;
+}
 function parseWebAccessLine(line, lineNo) {
   const m = line.match(WEB_ACCESS_RE);
   if (!m || !WEB_MONTHS[m[5]]) return null;
@@ -1751,6 +1836,7 @@ function _idsAlertOf(e) {
   const f = e.fields || {};
   if (e.netVendor === 'suricata' && f.alert) return { key: 's:' + String(f.alert.signature_id || f.alert.signature || ''), sig: f.alert.signature_id || '-', name: f.alert.signature || '', sev: Number(f.alert.severity) || 3, src: f.src_ip, dst: f.dest_ip, dpt: f.dest_port };
   if (e.netVendor === 'amp' && (f.detection || /threat|malware|ioc|dropper|infect/i.test(f.ampType || ''))) return { key: 'a:' + (f.detection || f.ampType), sig: 'AMP', name: [f.ampType, f.detection].filter(Boolean).join(' '), sev: { Critical: 1, High: 1, Medium: 2, Low: 3 }[e.severityRaw] || 2, src: f.computer || f.srcip, dst: f.dstip, dpt: f.dstport };
+  if (e.format === 'asa' && f.fpEvent === '430001' && f.signature) return { key: 'f:' + (f.sid || f.signature), sig: 'FTD ' + (f.sid || ''), name: f.signature, sev: Math.min(3, Number(f.priority) || 2), src: f.srcip, dst: f.dstip, dpt: f.dstport };
   if (e.netVendor === 'junos' && (f.jsec === 'idp' || f.jsec === 'ids') && f.attack) return { key: 'j:' + f.attack, sig: f.jsec.toUpperCase(), name: f.attack, sev: JUNOS_THREAT_SEV[String(f.threatsev || '').toUpperCase()] || 2, src: f.srcip, dst: f.dstip, dpt: f.dstport };
   return null;
 }
@@ -1914,6 +2000,7 @@ function parseLogLine(line, lineNo) {
   if (fmt === 'kvfw') return parseKvFwLine(line, lineNo);
   if (fmt === 'mikrotik') return parseMikroTikLine(line, lineNo);
   if (fmt === 'weblog') return parseWebAccessLine(line, lineNo);
+  if (fmt === 'elb') return parseElbLine(line, lineNo);
   return null;
 }
 // JSON log 沒有統一欄位規格，依常見別名（TS_KEYS/SEV_KEYS/HOST_KEYS/MSG_KEYS/APP_KEYS，定義於
@@ -1966,7 +2053,63 @@ const AMP_THREAT_RE = /threat|detection|malware|malicious|quarantine|ioc|dropper
 // 欄位依 Elastic Beats suricata 模組的真實 eve 測試 log。alert 以 signature 為訊息、severity 換算等級，IPS 模式 blocked 視為拒絕
 const SURICATA_SEV = { 1: 'High', 2: 'Medium', 3: 'Low' };
 function isSuricataEve(obj) { return !!obj && typeof obj.event_type === 'string' && obj.timestamp !== undefined && ('src_ip' in obj || 'flow_id' in obj); }
+// 雲端身分／稽核平台登入紀錄（第十六輪 PF）：欄位依 Elastic Beats 各模組的真實測試 log 與 ingest 規則——
+// Microsoft Entra ID（Azure AD）sign-in logs：category 以 SignInLogs 結尾，resultType 為錯誤碼、"0" 為成功（Beats 以
+//   properties.status.errorCode 非 0 判為失敗），帳號 properties.userPrincipalName、來源 properties.ipAddress／callerIpAddress
+// Okta System Log：eventType＋outcome.result（SUCCESS／FAILURE／ALLOW／DENY…），帳號 actor.alternateId、來源 client.ipAddress；
+//   只把 user.session.start 與 user.authentication.* 的 FAILURE 當登入失敗
+// Microsoft 365 稽核：Operation UserLoggedIn／UserLoginFailed，帳號 UserId、來源 ClientIP
+// Google Workspace Reports API（applicationName login）：events.name login_success／login_failure，帳號 actor.email、來源 ipAddress
+// AWS CloudTrail：eventName ConsoleLogin，responseElements.ConsoleLogin Success／Failure，帳號 userIdentity.userName、來源 sourceIPAddress
+function cloudAuthInfo(o) {
+  if (!o || typeof o !== 'object') return null;
+  const g = (...path) => path.reduce((v, k) => (v && typeof v === 'object') ? v[k] : undefined, o);
+  if (/SignInLogs$/.test(String(o.category || '')) && o.resultType !== undefined) {
+    return { vendor: 'entra', event: o.operationName || 'Sign-in activity', user: g('properties', 'userPrincipalName') || o.identity || '',
+      ip: g('properties', 'ipAddress') || o.callerIpAddress || '', login: true, ok: String(o.resultType) === '0', reason: o.resultDescription || '', ts: o.time };
+  }
+  if (typeof o.eventType === 'string' && o.outcome && o.actor && o.published) {
+    const res = String(g('outcome', 'result') || '').toUpperCase();
+    return { vendor: 'okta', event: o.eventType, user: g('actor', 'alternateId') || '', ip: g('client', 'ipAddress') || '',
+      login: /^user\.(?:session\.start|authentication\.)/.test(o.eventType), ok: res !== 'FAILURE', reason: g('outcome', 'reason') || '', ts: o.published };
+  }
+  if (typeof o.Operation === 'string' && o.Workload && o.CreationTime) {
+    return { vendor: 'm365', event: o.Operation, user: o.UserId || '', ip: o.ClientIP || o.ActorIpAddress || '',
+      login: /^UserLog(?:gedIn|inFailed)$/.test(o.Operation), ok: o.Operation !== 'UserLoginFailed', reason: o.LogonError || '', ts: o.CreationTime + (/Z|[+-]\d\d:?\d\d$/.test(o.CreationTime) ? '' : 'Z') };
+  }
+  if (o.kind === 'admin#reports#activity' && o.id) {
+    const evs = [].concat(o.events || []);
+    const names = evs.map(e => e && e.name).filter(Boolean);
+    const isLogin = g('id', 'applicationName') === 'login';
+    return { vendor: 'gws', event: names.join(',') || g('id', 'applicationName') || '', user: g('actor', 'email') || '', ip: o.ipAddress || '',
+      login: isLogin && names.some(n => /^login_(?:success|failure)$/.test(n)), ok: !names.includes('login_failure'), reason: '', ts: g('id', 'time') };
+  }
+  if (o.eventSource && o.eventName && o.eventTime && o.userIdentity) {
+    const arn = String(g('userIdentity', 'arn') || '');
+    return { vendor: 'cloudtrail', event: o.eventName, user: g('userIdentity', 'userName') || (arn.includes('/') ? arn.split('/').pop() : '') || g('userIdentity', 'type') || '',
+      ip: o.sourceIPAddress || '', login: o.eventName === 'ConsoleLogin', ok: !(o.eventName === 'ConsoleLogin' && g('responseElements', 'ConsoleLogin') === 'Failure') && !o.errorCode,
+      reason: o.errorMessage || o.errorCode || '', ts: o.eventTime };
+  }
+  return null;
+}
+const CLOUD_AUTH_APP = { entra: 'Entra ID', okta: 'Okta', m365: 'Microsoft 365', gws: 'Google Workspace', cloudtrail: 'CloudTrail' };
+function cloudAuthEvent(o, ci, lineNo) {
+  const t = new Date(ci.ts || '');
+  const f = Object.assign({}, o, { cloudEvent: ci.event, cloudOutcome: ci.ok ? 'success' : 'failure' });
+  if (ci.user) f.user = ci.user;
+  if (ci.ip && /^[0-9A-Fa-f:.]+$/.test(ci.ip)) f.srcip = ci.ip;
+  return {
+    format: 'json', raw: JSON.stringify(o), lineNo, netFields: !!f.srcip, netVendor: ci.vendor, cloudRaw: o,
+    timestamp: isNaN(t.getTime()) ? null : t, timestampRaw: ci.ts || '',
+    host: '', appName: CLOUD_AUTH_APP[ci.vendor], procid: '', msgid: ci.event,
+    severityRaw: '', severityNorm: ci.login && !ci.ok ? 'Medium' : 'Info', facility: null, facilityAuth: false,
+    url: '', httpMethod: '',
+    msg: [ci.event, ci.ok ? '' : 'FAILURE', ci.user, ci.ip ? 'from ' + ci.ip : '', ci.reason].filter(Boolean).join(' '), fields: f
+  };
+}
 function eventFromJSONObject(obj, lineNo) {
+  const ci = cloudAuthInfo(obj);
+  if (ci) return cloudAuthEvent(obj, ci, lineNo);
   if (isSuricataEve(obj)) {
     const ts = new Date(String(obj.timestamp).replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
     const al = obj.alert && typeof obj.alert === 'object' ? obj.alert : null;
@@ -2094,6 +2237,8 @@ function parseJSONLogEvents(text) {
     if (!item || typeof item !== 'object') return;
     // Cisco Secure Endpoint（AMP）事件 API 回應：{version, metadata, data:[事件…]}（或逐筆 data:{事件}），展開成逐筆事件（第十五輪 VH）
     if (isCiscoAmpEvent(item)) { events.push(ampEvent(item, idx + 1)); return; }
+    // CloudTrail 檔案（S3）為 {"Records":[事件…]}，逐行 NDJSON 時每行一個這種物件（第十六輪 PF）
+    if (Array.isArray(item.Records) && item.Records.length && item.Records.every(r => r && r.eventSource && r.eventName)) { item.Records.forEach(r => events.push(eventFromJSONObject(r, idx + 1))); return; }
     const amp = item.data && (Array.isArray(item.data) ? item.data : [item.data]);
     if (amp && amp.length && amp.every(isCiscoAmpEvent)) { amp.forEach(a => events.push(ampEvent(a, idx + 1))); return; }
     events.push(eventFromJSONObject(item, idx + 1));
@@ -2114,7 +2259,7 @@ const AWS_FLOW_V2 = ['version', 'account-id', 'interface-id', 'srcaddr', 'dstadd
 const FLOW_PROTO = { '6': 'tcp', '17': 'udp', '1': 'icmp', '58': 'icmpv6', T: 'tcp', U: 'udp' };
 function flowMsg(f) {
   if (f.status && !f.srcip) return f.status;
-  return `${f.action === 'deny' ? 'DENY' : 'ALLOW'} ${f.proto ? f.proto.toUpperCase() : ''} ${f.srcip || '-'}${f.srcport ? ':' + f.srcport : ''} -> ${f.dstip || '-'}${f.dstport ? ':' + f.dstport : ''}${f.rule ? ' rule=' + f.rule : ''}`;
+  return `${f.action === 'deny' ? 'DENY' : f.action === 'accept' ? 'ALLOW' : 'FLOW'} ${f.proto ? f.proto.toUpperCase() : ''} ${f.srcip || '-'}${f.srcport ? ':' + f.srcport : ''} -> ${f.dstip || '-'}${f.dstport ? ':' + f.dstport : ''}${f.rule ? ' rule=' + f.rule : ''}`;
 }
 function flowEvent(vendor, raw, lineNo, ts, tsRaw, host, f, extra) {
   const deny = f.action === 'deny';
@@ -2190,8 +2335,40 @@ function parseAzureFlowLogs(text) {
   }));
   return events.length ? { events, unparsed: [] } : null;
 }
+// GCP（第十六輪 PE）：Cloud Logging 匯出的 VPC Flow Logs（logName …compute.googleapis.com%2Fvpc_flows）與
+// Firewall Rules Logging（…%2Ffirewall），逐行 JSON 或 gcloud logging read 的 JSON 陣列。欄位依 Elastic Beats gcp 模組
+// 的真實測試 log：jsonPayload.connection.src_ip／dest_ip／src_port／dest_port／protocol（號碼），防火牆紀錄另有
+// disposition ALLOWED／DENIED 與 rule_details.reference（network:網路/firewall:規則）／direction；VPC Flow Logs 沒有動作欄位，
+// 依 reporter（SRC／DEST）取回報端 VM 名稱為主機
+const GCP_FLOW_LOG_RE = /compute\.googleapis\.com%2F(vpc_flows|firewall)/;
+function gcpFlowEvent(o, lineNo) {
+  const p = o.jsonPayload || {}, c = p.connection || {};
+  const kind = (String(o.logName || '').match(GCP_FLOW_LOG_RE) || [])[1];
+  const f = { srcip: c.src_ip, dstip: c.dest_ip, srcport: c.src_port !== undefined ? String(c.src_port) : '', dstport: c.dest_port !== undefined ? String(c.dest_port) : '',
+    proto: FLOW_PROTO[String(c.protocol)] || (c.protocol !== undefined ? String(c.protocol) : '') };
+  if (kind === 'firewall') {
+    f.action = p.disposition === 'DENIED' ? 'deny' : p.disposition === 'ALLOWED' ? 'accept' : '';
+    const rd = p.rule_details || {};
+    f.rule = (String(rd.reference || '').match(/firewall:(.+)$/) || [])[1] || '';
+    if (rd.direction) f.direction = rd.direction === 'INGRESS' ? 'inbound' : 'outbound';
+  } else {
+    f.bytes = p.bytes_sent; f.packets = p.packets_sent;
+    if (p.reporter) f.reporter = p.reporter;
+  }
+  Object.keys(f).forEach(k => { if (f[k] === undefined || f[k] === '') delete f[k]; });
+  const inst = p.instance || (p.reporter === 'DEST' ? p.dest_instance : p.src_instance) || p.src_instance || p.dest_instance || {};
+  const tsRaw = o.timestamp || p.end_time || '';
+  return flowEvent('gcp', JSON.stringify(o), lineNo, tsRaw ? new Date(tsRaw) : null, tsRaw, inst.vm_name || '', f, { gcpRaw: o, flowKind: kind });
+}
+function parseGcpFlowLogs(text) {
+  if (!GCP_FLOW_LOG_RE.test(text) || !/"jsonPayload"/.test(text)) return null;
+  const { arr } = parseJSONOrNDJSON(text);
+  const list = (arr || []).filter(o => o && o.jsonPayload && o.jsonPayload.connection && GCP_FLOW_LOG_RE.test(String(o.logName || '')));
+  if (!list.length) return null;
+  return { events: list.map((o, i) => gcpFlowEvent(o, i + 1)), unparsed: [] };
+}
 function parseFlowLogEvents(text) {
-  return parseAzureFlowLogs(text) || parseAwsFlowLogs(text);
+  return parseAzureFlowLogs(text) || parseAwsFlowLogs(text) || parseGcpFlowLogs(text);
 }
 function parseLogText(text) {
   // 貼上內容可能帶 UTF-8 BOM（檔案上傳時瀏覽器會自動去除），未去除會讓第一行解析失敗
@@ -2524,6 +2701,22 @@ function classifyByKeyword(evt) {
   // Suricata 告警（第十四輪 OG）：IPS 模式 blocked 歸封鎖，其餘告警歸攻擊；非告警事件（flow／dns…）不分類
   if (evt.netVendor === 'suricata') return evt.fields && evt.fields.alert ? (String(evt.fields.alert.action).toLowerCase() === 'blocked' ? 'denyBlock' : 'attack') : 'other';
   // Cisco Secure Endpoint 威脅事件（第十五輪 VH）
+  // Firepower 事件（第十六輪 PD）：入侵與惡意程式歸 attack，存取控制 Block 歸 denyBlock，其餘連線／檔案事件不靠關鍵字
+  // （規則名稱、IntrusionPolicy 等欄位常含 Intrusion 字樣，原本整批被誤判）
+  if (evt.format === 'asa' && evt.fields && evt.fields.fpEvent) {
+    const f = evt.fields;
+    if (f.fpEvent === '430001' || f.fpEvent === '430005') return 'attack';
+    if (f.fpEvent === '430004' && (/^malware$/i.test(f.disposition || '') || (f.threat && !/^unknown$/i.test(f.threat)))) return 'attack';
+    if (f.action === 'deny' || /^block/i.test(f.fileaction || '') || (f.sicategory && /block/i.test(f.reason || ''))) return 'denyBlock';
+    // 連到信譽清單上的位址／網址但只監看放行
+    if (f.sicategory) return 'attack';
+    return 'other';
+  }
+  // 雲端身分平台登入失敗（第十六輪 PF）
+  if (evt.format === 'json' && evt.cloudRaw) {
+    const ci = cloudAuthInfo(evt.cloudRaw);
+    if (ci && ci.login && !ci.ok) return 'authFail';
+  }
   if (evt.netVendor === 'amp') return AMP_THREAT_RE.test(evt.msgid || '') && !/no detections?/i.test(evt.msgid || '') ? 'attack' : 'other';
   // Cisco Umbrella 封鎖（第十五輪 VG）
   if (evt.netVendor === 'umbrella' && evt.fields && evt.fields.action === 'deny') return 'denyBlock';
@@ -3119,9 +3312,40 @@ const ACCOUNT_AUDIT_WINEVENT_MAP = {
   '4657': { category: 'registryValueChange', severityNorm: 'Medium' },
   '4703': { category: 'tokenPrivAdjust', severityNorm: 'Medium' }
 };
+// AWS CloudTrail 高風險操作（第十六輪 PG）：對應既有 Windows 稽核分類；只計成功的呼叫（無 errorCode）。事件名稱依
+// AWS CloudTrail／IAM API 名稱，Beats aws cloudtrail 模組的真實測試 log 皆有範例
+const CLOUDTRAIL_RISK_MAP = {
+  StopLogging: { category: 'auditCleared', severityNorm: 'Critical' },
+  DeleteTrail: { category: 'auditCleared', severityNorm: 'Critical' },
+  UpdateTrail: { category: 'auditPolicyChanged', severityNorm: 'High' },
+  PutEventSelectors: { category: 'auditPolicyChanged', severityNorm: 'High' },
+  CreateUser: { category: 'privEsc', severityNorm: 'High' },
+  AddUserToGroup: { category: 'privEsc', severityNorm: 'High' },
+  AttachUserPolicy: { category: 'privEsc', severityNorm: 'High' },
+  AttachGroupPolicy: { category: 'privEsc', severityNorm: 'High' },
+  AttachRolePolicy: { category: 'privEsc', severityNorm: 'High' },
+  PutUserPolicy: { category: 'privEsc', severityNorm: 'High' },
+  RemoveUserFromGroup: { category: 'groupRemoved', severityNorm: 'Medium' },
+  DeleteUser: { category: 'acctDeleted', severityNorm: 'High' },
+  UpdateLoginProfile: { category: 'pwReset', severityNorm: 'High' },
+  CreateLoginProfile: { category: 'persistence', severityNorm: 'Medium' },
+  CreateAccessKey: { category: 'persistence', severityNorm: 'Medium' },
+  DeactivateMFADevice: { category: 'acctStatusChange', severityNorm: 'High' },
+  DeleteVirtualMFADevice: { category: 'acctStatusChange', severityNorm: 'High' }
+};
 function detectAccountAuditEvents(events) {
   const issues = [];
   events.forEach(e => {
+    if (e.netVendor === 'cloudtrail' && e.cloudRaw && !e.cloudRaw.errorCode) {
+      const hit = CLOUDTRAIL_RISK_MAP[e.cloudRaw.eventName];
+      if (hit) issues.push({
+        category: hit.category, severityNorm: hit.severityNorm, count: 1,
+        firstSeen: e.timestamp, lastSeen: e.timestamp,
+        sampleRaw: e.msg, relatedHosts: e.fields.user ? [e.fields.user] : [], relatedEvents: [e],
+        confidence: 'confirmed', cloudTrailEvent: e.cloudRaw.eventName
+      });
+      return;
+    }
     if (e.format !== 'winevent' || !e.fields) return;
     const hit = ACCOUNT_AUDIT_WINEVENT_MAP[e.fields.EventID];
     if (!hit) return;
@@ -5423,6 +5647,8 @@ const MSG_USER_PATTERNS = [
   /(-User=)([^;\-*][^;]*)(?=;)/g,
   /(\bUser ')([^']+)(?=' requested)/g,
   /(\bchanged by )(\S+)$/g,
+  // Firepower 事件的 `User: 帳號,`（No Authentication Required／Unknown 等系統值不換；第十六輪 PD）
+  /((?:^|,\s*)User:\s+)(?!No Authentication Required\b|Unknown\b|Not Found\b)([^,]+?)(?=,|$)/g,
 ];
 function anonUsersInMsg(msg) {
   let out = msg || '';
@@ -5436,6 +5662,12 @@ function anonymizeWebEvent(clone, opts) {
   const f = clone.fields;
   ['srcip', 'dstip'].forEach(k => { if (f[k]) f[k] = replaceIPsInLine(f[k], opts); });
   let raw = replaceMACsInLine(replaceIPsInLine(clone.raw, opts));
+  // ELB：負載平衡器名稱與 ARN 內的帳號 ID、資源名稱（第十六輪 PH）
+  if (f.elb) {
+    if (clone.host) { const h = anonHostname(clone.host); raw = raw.split(clone.host).join(h); clone.host = h; }
+    raw = raw.replace(/(arn:aws[\w-]*:[\w-]*:[\w-]*:)(\d{12})(:)/g, (m, p, id, c) => p + anonHostname(id) + c)
+      .replace(/(:(?:targetgroup|certificate|loadbalancer\/(?:app|net))\/)([^\/\s"]+)/g, (m, p, n) => p + anonHostname(n));
+  }
   if (clone.format === 'weblog') {
     if (f.user) { f.user = anonUser(f.user); raw = raw.replace(/^(\S+ \S+ )\S+(?= \[)/, `$1${f.user}`); }
   } else {
@@ -5530,6 +5762,27 @@ function anonymizeEvent(evt, opts) {
   } else if (evt.format === 'json') {
     anonymizeJSONFields(clone.fields, opts);
     // Cisco Secure Endpoint：原始事件深拷貝後換 IP／MAC，電腦名稱換假名、路徑中的使用者資料夾換假帳號，再重新整理欄位
+    // 雲端身分平台：原始事件深拷貝後換 IP，帳號（含 email）換假名，再重新整理欄位（第十六輪 PF）
+    if (clone.cloudRaw) {
+      const a = JSON.parse(JSON.stringify(clone.cloudRaw));
+      const ci0 = cloudAuthInfo(clone.cloudRaw);
+      const USER_KEY_RE = /^(?:userPrincipalName|userName|UserId|alternateId|email|identity|userDisplayName|displayName|UserKey|principalId|userId)$/;
+      const walk = o => Object.keys(o).forEach(k => { const v = o[k]; if (v && typeof v === 'object') walk(v); else if (typeof v === 'string') {
+        let x = (USER_KEY_RE.test(k) || (ci0 && v === ci0.user)) && v ? anonUser(v) : replaceMACsInLine(replaceIPsInLine(v, opts));
+        x = x.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, m => anonUser(m));
+        // AWS ARN 的帳號 ID 與 user／role 名稱、accountId 欄位（帳號 ID 比照雲端流量紀錄以主機名稱對照替換）
+        if (k === 'accountId' && /^\d{12}$/.test(x)) x = anonHostname(x);
+        // AWS 存取金鑰 ID（AKIA 長期金鑰、ASIA 暫時金鑰）
+        x = x.replace(/\b(?:AKIA|ASIA)[A-Z0-9]{12,}\b/g, 'REDACTED_KEY');
+        x = x.replace(/^(arn:aws[\w-]*:[\w-]*:[\w-]*:)(\d{12})(:)/, (m, p, id, c) => p + anonHostname(id) + c)
+          .replace(/(:(?:user|assumed-role|role)\/)([^\/\s"]+)/, (m, p, u) => p + anonUser(u));
+        o[k] = x; } });
+      walk(a);
+      const ci = cloudAuthInfo(a);
+      const ev = cloudAuthEvent(a, ci, clone.lineNo);
+      Object.assign(clone, { cloudRaw: a, fields: ev.fields, msg: ev.msg, raw: ev.raw });
+      return clone;
+    }
     if (clone.netVendor === 'amp' && clone.ampRaw) {
       const a = JSON.parse(JSON.stringify(clone.ampRaw));
       const host = a.computer && a.computer.hostname;
@@ -5600,6 +5853,20 @@ function anonymizeFlowEvent(clone, opts) {
   ['account-id', 'interface-id', 'instance-id', 'vpc-id', 'subnet-id', 'interface', 'ecs-cluster-name', 'ecs-container-instance-id'].forEach(k => { if (f[k] && f[k] !== 'unknown') f[k] = anonHostname(f[k]); });
   if (f.srcmac) f.srcmac = anonMAC(f.srcmac);
   if (clone.host) clone.host = anonHostname(clone.host);
+  // GCP：原始紀錄深拷貝後換 IP，專案、VPC、子網路、VM 名稱以主機名稱對照替換，再重新整理欄位
+  if (clone.netVendor === 'gcp' && clone.gcpRaw) {
+    const a = JSON.parse(JSON.stringify(clone.gcpRaw));
+    const HOSTISH = /^(?:project_id|vm_name|vpc_name|subnetwork_name|subnetwork_id|instance_id|network)$/;
+    const walk = o => Object.keys(o).forEach(k => { const v = o[k]; if (v && typeof v === 'object') walk(v); else if (typeof v === 'string') {
+      o[k] = HOSTISH.test(k) && v !== 'default' ? anonHostname(v) : replaceIPsInLine(v, opts); } });
+    walk(a);
+    if (clone.gcpRaw.logName) a.logName = String(clone.gcpRaw.logName).replace(/^projects\/([^/]+)/, (m, pj) => 'projects/' + anonHostname(pj));
+    const rd = a.jsonPayload && a.jsonPayload.rule_details;
+    if (rd && rd.reference) rd.reference = String(rd.reference).replace(/^network:([^/]+)/, (m, n) => 'network:' + (n === 'default' ? n : anonHostname(n)));
+    const ev = gcpFlowEvent(a, clone.lineNo);
+    Object.assign(clone, { gcpRaw: a, fields: ev.fields, raw: ev.raw, msg: ev.msg, host: ev.host });
+    return;
+  }
   if (clone.netVendor === 'aws' && clone.flowCols) {
     clone.raw = clone.flowCols.map(c => (c === 'action' ? ({ deny: 'REJECT', accept: 'ACCEPT' }[f.action] || '-') : (f[c] !== undefined ? f[c] : '-'))).join(' ');
   } else {
@@ -6583,9 +6850,12 @@ function showMoreResults() {
 }
 // keepLimit 必須嚴格等於 true：本函式也直接當事件處理器使用，會收到事件物件
 // 事件清單訊息欄開頭的「到防火牆查詢」小按鈕（來源／目的欄預設隱藏，故放在一定顯示的訊息欄）；條件以 JSON.stringify()＋跳脫雙引號塞進 onclick（本專案既有慣例）
-function fwqBtn(tuple) {
+function fwqBtn(tuple, e) {
   const q = buildFwQueryPayload(tuple);
   if (!q) return '';
+  // EdgeRouter／VyOS log 前綴帶規則集與編號時一併送出，防火牆端標出設定中對應的規則（第十六輪 PC）
+  const rs = e && e.fields && e.fields.ruleset, rn = e && e.fields && e.fields.rulenum;
+  if (rs && rn && /^[\w.-]+$/.test(rs) && /^(?:\d+|default)$/.test(rn)) q.rule = rs + '/' + rn;
   const arg = esc(JSON.stringify(q));
   return `<button class="fwq-btn" onclick="sendToFirewallQuery(${arg})" title="${esc(tr('fwq.btn_tip'))}" aria-label="${esc(tr('fwq.btn_tip'))}">🛡</button> `;
 }
@@ -6654,7 +6924,7 @@ function renderResults(keepLimit) {
       return `<tr>
       <td><span class="badge ${e.severityNorm}">${tr(SEV_KEY_MAP[e.severityNorm])}</span></td>
       <td>${esc(fmtTime(e.timestamp))}</td><td>${esc(e.host)}</td><td>${esc(e.format)}</td>
-      <td>${esc(tr(CAT_KEY_MAP[e.category] || 'cat.other'))}</td><td>${notesHtml}</td>${extraCells}<td>${fwqBtn(tuple)}${esc(e.msg)}</td></tr>`;
+      <td>${esc(tr(CAT_KEY_MAP[e.category] || 'cat.other'))}</td><td>${notesHtml}</td>${extraCells}<td>${fwqBtn(tuple, e)}${esc(e.msg)}</td></tr>`;
     }).join('') + (page.remaining > 0
       ? `<tr class="results-more-row"><td colspan="${7 + extraCount}" class="empty">${esc(tr('results.showing').replace('{shown}', page.shown).replace('{total}', sorted.length))} <button class="btn" onclick="showMoreResults()">${esc(tr('results.show_more').replace('{n}', Math.min(RESULTS_PAGE_SIZE, page.remaining)))}</button></td></tr>`
       : '');

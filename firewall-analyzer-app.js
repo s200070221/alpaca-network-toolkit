@@ -2528,7 +2528,7 @@ function onParsed(){
     }
     // CSV 匯出按鈕快取：只保留目前畫面上的單次查詢結果（非歷史批次），見上方
     // LAST_QUERY_TRACE 宣告處註解
-    LAST_QUERY_TRACE = { src: src.trim(), dst: qDst, proto, port: qPort, trace: res.trace || [] };
+    LAST_QUERY_TRACE = { src: src.trim(), dst: qDst, proto, port: qPort, trace: res.trace || [], matched: res.matched || null };
     // Packet Walk 路由查詢
     // 介面位址所在網段視為直連路由（2026-10-06）：原本只看設定檔的靜態路由，內部目的位址會被預設路由帶往 WAN
     const _pwConnected = [];
@@ -3267,7 +3267,7 @@ function startMatrixRain(){
     const cond = `${q.src} → ${q.dst}${q.port ? ':' + q.port : ''}${q.proto && q.proto !== 'any' ? ' ' + q.proto : ''}`;
     b.style.display = 'block';
     b.innerHTML = esc(q.batch ? tr('fwq.pending_batch').replace('{n}', q.rows).replace('{page}', tr('nav.query'))
-      : tr('fwq.pending').replace('{cond}', cond).replace('{page}', tr('nav.query'))) +
+      : tr('fwq.pending').replace('{cond}', cond).replace('{page}', tr('nav.query')) + (q.rule ? ' ' + tr('fwq.rule_hint').replace('{rule}', fwqRuleLabel(q.rule)) : '')) +
       ` <button class="btn btn-ghost btn-sm" onclick="_fwClearPendingQuery()">${esc(tr('fwq.cancel'))}</button>`;
   }
   window._fwSetPendingQuery = function(q) {
@@ -3280,7 +3280,8 @@ function startMatrixRain(){
       return;
     }
     if (!q || !q.src || !q.dst) return;
-    _fwPendingQuery = { src: String(q.src), dst: String(q.dst), port: String(q.port || ''), proto: ['TCP','UDP','ICMP'].includes(q.proto) ? q.proto : 'any' };
+    _fwPendingQuery = { src: String(q.src), dst: String(q.dst), port: String(q.port || ''), proto: ['TCP','UDP','ICMP'].includes(q.proto) ? q.proto : 'any',
+      rule: /^[\w.-]+\/(?:\d+|default)$/.test(q.rule || '') ? q.rule : '' };
     renderFwqBar();
     if (PARSED && PARSED.policies) _applyPendingFwQuery();
   };
@@ -3298,6 +3299,26 @@ function startMatrixRain(){
     }
     set('q-src', q.src); set('q-dst', q.dst); set('q-proto', q.proto); set('q-port', q.port);
     window._runQuery();
+    if (q.rule) {
+      const el = $('query-result');
+      if (el) el.insertAdjacentHTML('afterbegin', buildFwqRuleNote(q.rule, (PARSED && PARSED.policies) || [], LAST_QUERY_TRACE && LAST_QUERY_TRACE.matched));
+    }
+  }
+  // EdgeRouter／VyOS log 前綴的規則集／編號（第十六輪 PC）：在設定中找出對應規則，並與查詢命中的第一條規則比較
+  function fwqRuleLabel(rule) {
+    const [set, num] = rule.split('/');
+    return num === 'default' ? tr('fwq.rule_default').replace('{set}', set) : `${set} ${num}`;
+  }
+  function buildFwqRuleNote(rule, policies, matched) {
+    const [set, num] = rule.split('/');
+    const label = fwqRuleLabel(rule);
+    const hit = num === 'default' ? null : policies.find(p => p.chain === set && String(p.ruleNum) === num);
+    let msg;
+    if (num === 'default') msg = tr('fwq.rule_hint').replace('{rule}', label);
+    else if (!hit) msg = tr('fwq.rule_missing').replace('{rule}', label);
+    else if (matched && matched === hit) msg = tr('fwq.rule_same').replace('{rule}', label).replace('{name}', hit.name);
+    else msg = tr('fwq.rule_diff').replace('{rule}', label).replace('{name}', hit.name).replace('{hit}', matched ? matched.name : tr('query.result_implicit'));
+    return `<div id="fwq-rule-note" style="padding:8px 12px;border-radius:8px;border:1px dashed var(--accent);margin-bottom:10px;font-size:12px">🧾 ${esc(msg)}</div>`;
   }
   // Phase 4 第 18 項：把目前已上傳的原始設定文字（可能有多台裝置分別掛在不同 slot）串接後
   // 送去 config_anonymizer 去識別化，補齊本工具原本只能被動接收 config_anonymizer 轉送

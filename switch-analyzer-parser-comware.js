@@ -643,7 +643,7 @@ function parseMgmtAccess(cfg, vendor){
 // Cisco Business／AlliedWare Plus（sys.brand）語法不同，整組不評估
 const MGMT_SVC_VENDORS=['cisco','ruijie','nxos','arista','aruba','comware','juniper','procurve','efos','brocade','netgearsmart'];
 function parseMgmtServices(cfg, vendor, brand){
-  if(!MGMT_SVC_VENDORS.includes(vendor)||brand==='ciscobiz'||brand==='awplus')return null;
+  if(!MGMT_SVC_VENDORS.includes(vendor)||brand==='ciscobiz'||brand==='awplus'||brand==='fs')return null;
   const all=(re)=>{const out=[];let m;const r=new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g');while((m=r.exec(cfg))!==null)out.push(m[1]);return out;};
   const has=re=>re.test(cfg);
   const jb=n=>typeof junosBlock==='function'?junosBlock(cfg,n):'';
@@ -725,7 +725,7 @@ function expandL2VlanList(str){
   return out;
 }
 function parseL2Protect(cfg, vendor, brand){
-  if(!L2_PROTECT_VENDORS.includes(vendor)||brand==='ciscobiz'||brand==='awplus')return null;
+  if(!L2_PROTECT_VENDORS.includes(vendor)||brand==='ciscobiz'||brand==='awplus'||brand==='fs')return null;
   const blocks=(kw)=>{
     const map={};let m;
     const re=new RegExp('^'+kw+'\\s+(\\S+)[^\\n]*\\n((?:[ \\t]+[^\\n]*(?:\\n|$))*)','gm');

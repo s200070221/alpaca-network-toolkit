@@ -60,9 +60,9 @@
 
 ![交換器設定解析器：總覽](docs/images/04-switch-overview-zh.png)
 
-**支援廠牌（25 家）**
+**支援廠牌（26 家）**
 - H3C Comware、HPE Comware、Cisco IOS-XE、Cisco NX-OS、Cisco Business（CBS／SG）、Aruba CX、Aruba ProCurve、Juniper EX／QFX、Arista EOS、Dell OS10
-- FortiSwitch、Extreme ExtremeXOS、Extreme VOSS／Fabric Engine、Alcatel OmniSwitch、Ruckus-Brocade ICX、MikroTik RouterOS、Ruijie RGOS、Netgear M4300、Netgear Smart Managed Pro（GS7xx）、Ubiquiti EdgeSwitch、Broadcom EFOS、Planet、Allied Telesis AlliedWare Plus
+- FortiSwitch、Extreme ExtremeXOS、Extreme VOSS／Fabric Engine、Alcatel OmniSwitch、Ruckus-Brocade ICX、MikroTik RouterOS、Ruijie RGOS、Netgear M4300、Netgear Smart Managed Pro（GS7xx）、Ubiquiti EdgeSwitch、Broadcom EFOS、Planet、Allied Telesis AlliedWare Plus、FS.com FSOS
 - SONiC、NVIDIA Cumulus Linux（NVUE）
 
 **主要功能**
@@ -91,7 +91,7 @@
 
 ![設定檔去識別化工具：前後對照](docs/images/06-anonymizer-zh.png)
 
-- 支援 35 種防火牆／交換器／雲端設定格式
+- 支援 36 種防火牆／交換器／雲端設定格式
 - 一致性替換 IP、主機名稱、帳號、密碼、金鑰、SNMP community、MAC 等，IPv4／IPv6 皆支援
 - 可保留網段結構：同網段換成同一個假網段，去識別化後的查詢與路由結果不變
 - 檢查去識別化前後的結構是否一致
@@ -105,11 +105,12 @@
 
 **支援格式**
 - CEF、LEEF、Syslog（RFC3164／RFC5424）、JSON
-- 防火牆：FortiGate key=value（含 syslog 轉送）、Cisco ASA／FTD、Palo Alto PAN-OS（含 GlobalProtect／User-ID）、Check Point Log Exporter、Juniper SRX RT_FLOW 與 IDP／UTM、H3C SecPath 工作階段／過濾紀錄、SonicWall、Sophos Firewall、MikroTik、Linux iptables／nftables LOG
+- 防火牆：FortiGate key=value（含 syslog 轉送）、Cisco ASA／FTD、Palo Alto PAN-OS（含 GlobalProtect／User-ID）、Check Point Log Exporter、Cisco FTD Firepower 事件、Juniper SRX RT_FLOW 與 IDP／UTM、H3C SecPath 工作階段／過濾紀錄、SonicWall、Sophos Firewall、MikroTik、EdgeRouter／VyOS 與 Linux iptables／nftables LOG
 - 入侵偵測與端點防護：Suricata EVE JSON、Cisco Secure Endpoint（AMP）事件 JSON
 - DNS／雲端安全：Cisco Umbrella CSV
 - 網路設備：Cisco IOS（含 ACL 記錄）、Comware 設備 log
-- 伺服器與雲端：Windows 事件 XML 與 Sysmon、IIS／Web 存取紀錄、AWS VPC／Azure NSG 流量紀錄
+- 伺服器與雲端：Windows 事件 XML 與 Sysmon、IIS／Web 與 AWS ELB 存取紀錄、AWS VPC／Azure NSG／GCP 流量紀錄
+- 雲端身分與稽核：Microsoft Entra ID 登入、Okta、Microsoft 365 稽核、Google Workspace 登入、AWS CloudTrail
 
 **主要功能**
 - 依嚴重程度排序，找出可能問題：頻率異常、掃描、認證失敗、Kerberoasting、橫向移動、介面異常、MAC 飄移、跨事件攻擊鏈等，附 MITRE ATT&CK 編號

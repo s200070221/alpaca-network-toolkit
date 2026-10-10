@@ -143,7 +143,8 @@ function detectVendor(cfg){
   if(typeof isVOSS==='function'&&isVOSS(cfg))return'voss';
   // Broadcom EFOS（2026-10-06，MM）：!System Description "EFOS…"；須排在 EdgeSwitch（同為 FASTPATH，也有 vlan participation）前
   if(typeof isEFOS==='function'&&isEFOS(cfg))return'efos';
-  if(/^\s*sysname\s+|irf domain|port link-type|undo shutdown|ip route-static|ip vpn-instance/m.test(cfg))return'comware';
+  // `# HPE|H3C Comware Software, Version …`（display version 檔頭）與 `port link-mode bridge|route` 也是 Comware 專有（Oxidized 5130 錄製片段，第十六輪 PB）
+  if(/^\s*sysname\s+|irf domain|port link-type|undo shutdown|ip route-static|ip vpn-instance|^\s*port link-mode\s+(?:bridge|route)\b|^[#!]?\s*(?:HPE |H3C )?Comware Software, Version/m.test(cfg))return'comware';
   // ProCurve/ArubaOS-Switch: ; J9xxx header, oobm keyword, or trunk X trk1 lacp syntax
   // 2026-10-01：另認「帶引號的 hostname＋VLAN 區塊內以埠號開頭的 untagged／tagged」組合——沒有
   // `; J9xxxA` 檔頭的設定（產生器輸出、手動整理過的片段）原本被判成 Cisco，VLAN 成員與介面模式全部遺失
@@ -182,7 +183,7 @@ function detectVendor(cfg){
      /^interface\s+fortyGigE\s/m.test(cfg)||
      /^stack-unit\s+\d+/m.test(cfg))return'dell-os10';
   // Arista EOS: unique signatures (must be before Cisco)
-  if(/^!\s*device:\s*\S+.*\(Arista\s/m.test(cfg)||/^!\s*Software image version:\s*EOS/im.test(cfg)||
+  if(/^!\s*device:\s*\S+.*\(Arista\s/m.test(cfg)||/^!\s*device:\s*\S+\s*\([^)]*\bEOS-\d/m.test(cfg)||/^!\s*Software image version:\s*EOS/im.test(cfg)||
      (/^interface\s+Ethernet\d+(?:\/\d+)?\s*$/m.test(cfg)&&/^ip routing$/m.test(cfg)))return'arista';
   // RouterOS / MikroTik: 必須在 cisco 之前，避免 /ip route 行觸發 cisco 誤判
   if(/^\s*\/interface|\/ip\s+(?:address|firewall|route)|\/system\s+identity/m.test(cfg))return'routeros';
