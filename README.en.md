@@ -39,7 +39,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 ![Firewall Config Analyzer: rule list](docs/images/02-firewall-policies-en.png)
 
 **Supported sources (20)**
-- FortiGate, Sophos XG, Check Point, Palo Alto (incl. Panorama), Juniper SRX, pfSense, OPNsense, SonicWall, MikroTik, Cisco ASA / FTD, Zyxel USG / ATP, WatchGuard Firebox, H3C SecPath
+- FortiGate, Sophos XG, Check Point (Gaia clish or Management API JSON), Palo Alto (incl. Panorama), Juniper SRX, pfSense, OPNsense, SonicWall, MikroTik, Cisco ASA / FTD, Zyxel USG / ATP, WatchGuard Firebox, H3C SecPath
 - EdgeRouter (EdgeOS), VyOS, OpenWrt (UCI), Netgate TNSR, Linux iptables / nftables
 - Cloud: AWS security groups, Azure NSGs, Cisco Meraki MX (API response JSON)
 - Wireless LAN controllers (WiFi analysis only): Cisco Catalyst 9800 / AireOS, Aruba controller / Instant, H3C WX

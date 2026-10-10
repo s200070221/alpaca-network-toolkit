@@ -1268,7 +1268,7 @@ const VENDOR_SIGS = {
   pfsense:     { p:[/<pfsense>/i, /pfSense|OPNsense/i, /<version>[\d.]+<\/version>/], min:1 },
   sonicwall:   { p:[/<SonicWALLconfig/i, /SonicWall|SonicOS/i], min:1 },
   mikrotik:    { p:[/^\/ip\s+(?:firewall|address|route)/m, /^\/system\s+identity/m, /RouterOS/i], min:1 },
-  arista:      { p:[/^! device:.* EOS/m, /Arista Networks/i, /^management api http-commands/m, /^!\s*Software image version:\s*EOS/m, /^!\s*device:\s*\S+.*\(Arista\s/m], min:1 },
+  arista:      { p:[/^! device:.* EOS/m, /Arista Networks/i, /^management api http-commands/m, /^!\s*Software image version:\s*EOS/m, /^!\s*device:\s*\S+.*\(Arista\s/m, /^!?\s*boot system flash[:\s]\s*\/?\S*\.swi\s*$/m], min:1 },
   extreme:     { p:[/^create vlan\s+/m, /^configure sys-name/m, /ExtremeXOS|ExtremeEOS/i], min:1 },
   alcatel:     { p:[/^(?:->\s*)?system name\s+/m, /^stack set slot\s+/m, /OmniSwitch/i], min:1 },
   brocade:     { p:[/^vlan\s+\d+\s+(?:name\s+\S+\s+)?by\s+port/m, /^stack unit\s+\d+/m, /FastIron|ICX/i], min:1 },
@@ -1363,9 +1363,13 @@ const VENDOR_LABELS = {
 function detectVendorCandidates(text) {
   // 去除貼上內容開頭的 UTF-8 BOM，否則以行首錨點比對的簽章會漏判
   text = String(text || '').replace(/^\uFEFF/, '');
-  let vendor = 'unknown';
+  // RANCID 備份檔頭（第十七輪 QC）：第一行標明內容類型時優先採用，其餘命中的廠牌列為候選
+  const RANCID_ANON = { 'cisco-nx': 'cisco_nxos', arista: 'arista', juniper: 'juniper', paloalto: 'paloalto' };
+  const rc = ((text.match(/^[!#]RANCID-CONTENT-TYPE:\s*([\w-]+)/m) || [])[1] || '').toLowerCase();
+  let vendor = RANCID_ANON[rc] || 'unknown';
   const candidates = [];
   for (const id of VENDOR_ORDER) {
+    if (id === vendor) continue;
     const { p, min } = VENDOR_SIGS[id];
     let m = 0;
     for (const pat of p) { if (pat.test(text)) m++; }
@@ -2172,8 +2176,16 @@ function anonPaloAlto(text, opts) {
     if (opts.user) line = line.replace(/^(set\s+mgt-config\s+users\s+)(\S+)/, (m, p, n) => p + anonUser(n));
     const pR = line.replace(/^(set\s+mgt-config\s+users\s+\S+\s+phash\s+)(\S+)/, '$1REDACTED_HASH');
     if (pR !== line) { stats.password++; line = pR; }
-    const pskR = line.replace(/^(set\s+network\s+ike\s+gateway\s+\S+\s+pre-shared-key\s+key\s+)(\S+)/, '$1REDACTED_PSK');
+    // 實際路徑在 gateway 名稱後有 authentication（Batfish ipsec-tunnel 測試設定，第十七輪 QA），兩種寫法都認
+    const pskR = line.replace(/^(set\s+network\s+ike\s+gateway\s+\S+\s+(?:authentication\s+)?pre-shared-key\s+key\s+)(\S+)/, '$1REDACTED_PSK');
     if (pskR !== line) { stats.key++; line = pskR; }
+    // OSPF 認證設定檔 `… protocol ospf auth-profile 名稱 password 值`／`md5 N key 值`（Batfish palo_alto ospf 測試設定）
+    const ospfR = line.replace(/(\bauth-profile\s+\S+\s+(?:password|md5\s+\d+\s+key)\s+)(\S+)/, '$1REDACTED_KEY');
+    if (ospfR !== line) { stats.key++; line = ospfR; }
+    // 大括號格式的 `password 值;`（外部動態清單 auth 等）
+    const braceR = line.replace(/^(\s*password\s+)([^;\s]+)(;)/, '$1REDACTED_PASSWORD$3');
+    if (braceR !== line) { stats.password++; line = braceR; }
+    if (opts.user) line = line.replace(/^(\s*username\s+)([^;\s]+)(;)/, (m, p, u, e) => p + anonUser(u) + e);
     // SNMP community（允許 community 在行尾，移除必要尾端空白）
     const comR = line.replace(/^(.+\s+community\s+)(\S+)/, (m, p, c) => { stats.community++; return p + 'REDACTED_COMMUNITY'; });
     if (comR !== line) line = comR;
@@ -2994,7 +3006,7 @@ function anonCiscoNXOS(text, opts) {
 // 前綴的等效比對。大括號格式跨行巢狀、無法單靠單行判斷完整路徑，故部分訊號（如 OSPF/RADIUS
 // 的 key/secret）改用較寬鬆的關鍵字比對，寧可過度遮罩也不要漏掉真正的機敏值。
 function anonJuniper(text, opts) {
-  return text.split('\n').map(line => {
+  const one = line => {
     if (opts.hostname) {
       line = line.replace(/^(set\s+system\s+host-name\s+)(\S+)/, (m, p, n) => p + anonHostname(n, 'fw', opts));
       line = line.replace(/^(\s*host-name\s+)(\S+?);/, (m, p, n) => p + anonHostname(n, 'fw', opts) + ';');
@@ -3031,6 +3043,15 @@ function anonJuniper(text, opts) {
     // archive-sites 的 `"網址" password "$9$…"`（Oxidized SRX300 真實錄製，第十六輪 PA；網址內嵌帳密由 anonUrlCredentials() 處理）
     const arcR = line.replace(/(\s+password\s+)"([^"]+)"/, '$1"REDACTED_PASSWORD"');
     if (arcR !== line) { stats.password++; line = arcR; }
+    // 其他路徑的 secret（`set system accounting destination radius|tacplus server 位址 secret "…"`、
+    // `set access radius-server 位址 secret|preauthentication-secret "…"`；Batfish juniper 測試設定，第十七輪 QA）
+    const secAnyR = line.replace(/(\b(?:secret|preauthentication-secret)\s+)"([^"]+)"/g, '$1"REDACTED_KEY"');
+    if (secAnyR !== line) { stats.key++; line = secAnyR; }
+    // IKE `pre-shared-key hexadecimal "…"`（現有規則只認 ascii-text）與 MACsec `pre-shared-key ckn 值 cak 值`／大括號內 `ckn 值; cak "值";`
+    const hexR = line.replace(/(\bpre-shared-key\s+hexadecimal\s+)"([^"]+)"/, '$1"REDACTED_PSK"').replace(/(\bpre-shared-key\s+hexadecimal\s+)(?!")(\S+?)(;?)$/, '$1REDACTED_PSK$3');
+    if (hexR !== line) { stats.key++; line = hexR; }
+    const cakR = line.replace(/(\b(?:ckn|cak)\s+)("?)([^"\s;]+)\2/g, (m, p, q, v) => v.startsWith('REDACTED') ? m : p + q + 'REDACTED_KEY' + q);
+    if (cakR !== line) { stats.key++; line = cakR; }
     // TACACS/RADIUS secret
     let kR = line.replace(/^(set\s+system\s+(?:tacplus|radius)-server\s+\S+\s+secret\s+)"([^"]+)"/, '$1"REDACTED_KEY"');
     if (kR === line) kR = line.replace(/^(\s*secret\s+)"([^"]+)"/, '$1"REDACTED_KEY"');
@@ -3042,6 +3063,11 @@ function anonJuniper(text, opts) {
     if (opts.ip) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
     return line;
+  };
+  // `set groups 名稱 …`（apply-groups 用的設定群組，第十七輪 QA）：群組內的指令與頂層同一套規則
+  return text.split('\n').map(line => {
+    const g = line.match(/^(set\s+groups\s+\S+\s+)(\S[\s\S]*)$/);
+    return g ? g[1] + one('set ' + g[2]).replace(/^set /, '') : one(line);
   }).join('\n');
 }
 
@@ -4136,6 +4162,8 @@ function reportFileName(meta, ts) {
 
 const DOMAIN_KW_RESIDUAL_RE = /\b(?:domain-name|domain|dns-domain|search-domain|domain-list|fqdn)\b(?:\s+|\s*[=:]\s*)"?(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}\b/i;
 const INTERNAL_DOMAIN_RE = /\b(?:[A-Za-z0-9-]+\.)+(?:local|lan|corp|internal|intra|intranet|localdomain|home|priv|private)(?![\w.-])/i;
+// BGP community 相關設定行（第十七輪 QD，checkResidual() 用）
+const BGP_COMMUNITY_LINE_RE = /\b(?:(?:ip|ipv6)\s+(?:ext|large-)?community-list|community-list|(?:set|match|delete|add)\s+(?:ext|large-)?community|policy-options\s+community|aggregate-route\s+community|bgp\s+community|bgp-community|community-count|(?:then|from)\s+community|policy-statement\b.*\bcommunity)\b|^\s*community\s+(?:add|set|delete)\s|^\s*(?:set\s+)?(?:groups\s+\S+\s+)?routing-options\b.*\bcommunity\b|^\s*community\s+\S+\s+(?:members|invert-match)\b/i;
 function checkResidual(text) {
   const warnings = [];
   const lines = text.split('\n');
@@ -4181,9 +4209,13 @@ function checkResidual(text) {
     // Aruba 的 `opmode wpa2-psk-aes` 是加密模式名稱，不是金鑰（2026-10-05）
     // AireOS 的 `wlan security wpa akm psk enable|disable N` 是功能開關
     // BGP 的 `send-community standard|extended|large|both`（Cisco IOS、FRR／TNSR）是功能開關（2026-10-06）
+    // Junos 密碼政策（system login password minimum-length 等）、ssh no-password-authentication、MACsec pre-shared-key-chain 名稱不是密碼（第十七輪 QD）
     // 值為 PEM 開頭行（內文已由 anonPemBlocks() 換成 REDACTED_PEM，下一行起才是內文）不算殘留（第十三輪 NA）
     if (/^[^"]*"?-----BEGIN [A-Za-z0-9 ]+-----\s*$/.test(t.replace(/^.*?(?:private.key|certificate|key)\s+/i, '')) && /^REDACTED_PEM\s*$/.test(lines[i + 1] || '')) return;
-    const tk = t.replace(/\bsend-community\b(?:\s+\S+)?/gi, '').replace(/\bpassword-encryption\b/gi, '').replace(/^\s*opmode\s+\S+/i, 'opmode').replace(/\bakm\s+psk\s+(?:enable|disable)\b/i, 'akm');
+    // BGP community（路由屬性，不是 SNMP community，第十七輪 QD）：ip community-list、route-map set／match community、
+    // Junos policy-options community 名稱 members、靜態／彙總路由的 community、ASA community-list、值為 AS:編號或知名 community
+    const bgpComm = !/snmp/i.test(t) && (BGP_COMMUNITY_LINE_RE.test(t) || /\bcommunity\s+\[?\s*(?:\d+:\d+|no-export|no-advertise|local-as|internet|gshut)\b/i.test(t));
+    const tk = (bgpComm ? t.replace(/(?:ext|large-?)?community(?:-list)?/gi, '') : t).replace(/\bsend-community\b(?:\s+\S+)?/gi, '').replace(/\bpassword-encryption\b/gi, '').replace(/\bno-password-authentication\b|\bpre-shared-key-chain\b|\bpassword\s+(?:minimum|maximum|change-type|format)[\w-]*\s+\S+/gi, '').replace(/^\s*opmode\s+\S+/i, 'opmode').replace(/\bakm\s+psk\s+(?:enable|disable)\b/i, 'akm');
     if (sensitiveKw.test(tk) && !/^[:'"*\s]*$/.test(tk.replace(/\s+/g, ' ').split(/password|passwd|secret|psk|community|auth.?key|shared.?key|pre.?shared/i).pop().trim())) {
       if (!/REDACTED/.test(t)) warnings.push({ line: lineNum, text: t });
     }

@@ -299,6 +299,8 @@ const PaloAltoParser = (() => {
         const app   = xlist(inner,'application').join(', ') || 'any';
         const action= xv(inner,'action') || 'deny';
         const dis   = entry._outer.includes('disabled="yes"') || xv(inner,'disabled') === 'yes';
+        // 取反（第十七輪 QB）：<negate-source>／<negate-destination> 為 yes 時，比對結果反過來
+        const srcNegate = xv(inner,'negate-source') === 'yes', dstNegate = xv(inner,'negate-destination') === 'yes';
         const srcAddrSplit = _splitAddr(src, addrTypeMap);
         const dstAddrSplit = _splitAddr(dst, addrTypeMap);
 
@@ -332,7 +334,7 @@ const PaloAltoParser = (() => {
           comments: xv(inner,'description') || '-',
           users:    xlist(inner,'user').join(', ') || '-',
           groups:   xlist(xv(inner,'source-user'),'entry').join(', ') || xva(inner,'source-user').join(', ') || '-',
-          app,
+          app, srcNegate, dstNegate,
           _vdom: vsysName || 'vsys1',
         });
       });
@@ -347,7 +349,9 @@ const PaloAltoParser = (() => {
       ruleNames.forEach(name => {
         const p = `security rules "${name}"`;
         const p2 = `security rules ${name}`;
-        const gv = k => setVal(text, `${p} ${k}`) || setVal(text, `${p2} ${k}`);
+        const gv0 = k => setVal(text, `${p} ${k}`) || setVal(text, `${p2} ${k}`);
+        // set 格式的多值寫成 `[ a b ]`（第十七輪 QB，Batfish palo_alto 測試設定），轉成與 XML 相同的逗號清單
+        const gv = k => { const v = gv0(k); return v && /^\[.*\]$/.test(v.trim()) ? v.trim().slice(1, -1).trim().split(/\s+/).join(', ') : v; };
         const action = gv('action') || 'deny';
         const srcStr = gv('source') || 'any';
         const dstStr = gv('destination') || 'any';
@@ -378,6 +382,7 @@ const PaloAltoParser = (() => {
           },
           status:   gv('disabled') === 'yes' ? 'disable' : 'enable',
           comments: gv('description') || '-',
+          srcNegate: gv('negate-source') === 'yes', dstNegate: gv('negate-destination') === 'yes',
           users: gv('source-user') || '-', groups: '-',
           _vdom: vsysName || 'vsys1',
         });

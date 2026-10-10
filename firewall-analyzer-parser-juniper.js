@@ -301,8 +301,19 @@ const JuniperParser = (() => {
       const srcZone = zm[1], dstZone = zm[2];
       // Junos 以 deactivate 停用的陳述式在大括號格式中顯示為「inactive: 陳述式 {」前綴
       const zoneInactive = /^inactive:\s*/.test(zoneKey);
+      Object.entries(zoneNode._children).forEach(([polKey, polNode]) => addPolicy(polKey, polNode, srcZone, dstZone, zoneInactive, `${srcZone}-to-${dstZone}`));
+    });
+    // 全域政策（第十七輪 QF）：security policies global policy X，評估順序在區域政策之後；
+    // match from-zone／to-zone 限定區域（可多個），未指定為 any
+    Object.entries(polsNode._children).forEach(([gKey, gNode]) => {
+      if (gKey.replace(/^inactive:\s*/, '') !== 'global') return;
+      const gInactive = /^inactive:\s*/.test(gKey);
+      Object.entries(gNode._children).forEach(([polKey, polNode]) => addPolicy(polKey, polNode, null, null, gInactive, 'global'));
+    });
+    return policies;
 
-      Object.entries(zoneNode._children).forEach(([polKey, polNode]) => {
+    function addPolicy(polKey, polNode, srcZone, dstZone, zoneInactive, vdom) {
+      {
         const polInactive = /^inactive:\s*/.test(polKey);
         const polName = polKey.replace(/^inactive:\s*/, '').replace(/^policy\s+/, '');
         const matchNode = path(polNode, ['match']);
@@ -322,6 +333,10 @@ const JuniperParser = (() => {
             while((mm=mRe.exec(inlinePol))!==null) sources.push(mm[1].trim());
           }
           return sources.length ? sources.join(', ') : 'any';
+        }
+        if (srcZone === null) {
+          const zl = k => extractMatchVal(k).replace(/[\[\]]/g, ' ').trim().split(/[\s,]+/).filter(Boolean).join(', ') || 'any';
+          srcZone = zl('from-zone'); dstZone = zl('to-zone');
         }
         const srcAddr = extractMatchVal('source-address');
         const dstAddr = extractMatchVal('destination-address');
@@ -371,11 +386,10 @@ const JuniperParser = (() => {
           logtraffic, logstart: '-', utm,
           status: disabled ? 'disable' : 'enable',
           comments: val(polNode,'description').replace(/^"|"$/g,'')||'-',
-          users: '-', groups: '-', _vdom: `${srcZone}-to-${dstZone}`,
+          users: '-', groups: '-', _vdom: vdom,
         });
-      });
-    });
-    return policies;
+      }
+    }
   }
 
   // ── Address objects ───────────────────────────────────────────────────────
@@ -1035,8 +1049,95 @@ const JuniperParser = (() => {
   const JUNOS_ONELINE_KW = new Set(['address', 'node', 'route', 'tacplus-server', 'radius-server', 'from', 'to']);
   const JUNOS_LIST_KW = new Set(['members', 'source-address', 'destination-address', 'application', 'proposals', 'targets', 'apply-groups', 'vlan-id-list',
     'source-address-excluded', 'destination-address-excluded', 'import', 'export', 'source-identity', 'dynamic-application']);
+  // Junos apply-groups 繼承展開（第十七輪 QE）：大括號格式文字 → 保序樹 → 把 groups 內容依 apply-groups
+  // 合併到套用的階層 → 輸出大括號文字。語意依 Junos 官方說明：群組在套用階層以下的設定被繼承；明確設定的
+  // 值優先、同一層先列的群組優先；<…> 為萬用字元（* ? [..]），只套用到已存在的同名項目；apply-groups-except
+  // 排除該子樹；SRX 叢集 apply-groups "${node}" 以 node0 展開。沒有 groups 或 apply-groups 時原文不動
+  function junosApplyGroups(text) {
+    if (!/\bgroups\s*\{/.test(text) || !/\bapply-groups\b/.test(text)) return text;
+    // 保序樹：{items:[{v:'陳述式'}|{k:'鍵',n:子樹}]}
+    const root = { items: [] }, stack = [root];
+    let buf = '', q = '';
+    const flush = end => {
+      const t = buf.trim(); buf = '';
+      const cur = stack[stack.length - 1];
+      if (end === '{') { const n = { items: [] }; cur.items.push({ k: t, n }); stack.push(n); }
+      else if (t) cur.items.push({ v: t });
+    };
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) { buf += ch; if (ch === q) q = ''; continue; }
+      if (ch === '"') { q = ch; buf += ch; continue; }
+      if (ch === '#' && !buf.trim()) { while (i < text.length && text[i] !== '\n') i++; continue; }
+      if (ch === '/' && text[i + 1] === '*') { const e = text.indexOf('*/', i + 2); i = e < 0 ? text.length : e + 1; continue; }
+      if (ch === '{') flush('{');
+      else if (ch === ';') flush(';');
+      else if (ch === '}') { flush(';'); if (stack.length > 1) stack.pop(); }
+      else buf += ch === '\n' || ch === '\r' ? ' ' : ch;
+    }
+    flush(';');
+    const gi = root.items.findIndex(it => it.k === 'groups');
+    if (gi < 0) return text;
+    const groups = {};
+    root.items[gi].n.items.forEach(it => { if (it.n) groups[it.k.replace(/^"|"$/g, '')] = it.n; });
+    root.items.splice(gi, 1);
+    const unq = s => s.replace(/"/g, '');
+    const keyRe = p => new RegExp('^' + unq(p).split(/(<[^>]*>)/).map(seg => /^<.*>$/.test(seg)
+      ? seg.slice(1, -1).replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '\\S*').replace(/\?/g, '\\S')
+      : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('') + '$');
+    const isWild = k => /<[^>]*>/.test(k);
+    const keyMatch = (p, k) => p === k || (isWild(p) && keyRe(p).test(unq(k)));
+    const listOf = (n, kw) => n.items.filter(it => it.v && new RegExp('^' + kw + '\\s').test(it.v))
+      .flatMap(it => it.v.slice(kw.length).replace(/[\[\]]/g, ' ').trim().split(/\s+/)).map(g => g.replace(/^"|"$/g, ''))
+      .map(g => g === '${node}' ? 'node0' : g).filter(Boolean);
+    const clone = n => ({ items: n.items.map(it => it.n ? { k: it.k, n: clone(it.n) } : { v: it.v }) });
+    function merge(dst, src, names, top) {
+      src.items.forEach(it => {
+        if (it.v) {
+          if (top && /^apply-groups(?:-except)?\s/.test(it.v)) return;
+          if (dst.items.some(d => d.v === it.v)) return;
+          const tk = it.v.split(/\s+/);
+          if (tk.length === 2 && dst.items.some(d => d.v && d.v.split(/\s+/)[0] === tk[0])) return; // 單值設定：明確設定優先
+          dst.items.push({ v: it.v });
+          return;
+        }
+        // 沒有內容的項目（`unit 0;`）視同空區塊，萬用字元也要比對得到
+      if (isWild(it.k)) dst.items.forEach((d, di) => { if (!d.v) return; const sp = d.v.indexOf(' ');
+        if (keyMatch(it.k, d.v)) dst.items[di] = { k: d.v, n: { items: [] } };
+        else if (sp > 0 && !/\s/.test(it.k) && keyMatch(it.k, d.v.slice(0, sp))) dst.items[di] = { k: d.v.slice(0, sp), n: { items: [{ v: d.v.slice(sp + 1) }] } }; });
+      const targets = isWild(it.k) ? dst.items.filter(d => d.n && keyMatch(it.k, d.k)) : dst.items.filter(d => d.n && d.k === it.k).slice(0, 1);
+        if (!targets.length && !isWild(it.k)) { dst.items.push({ k: it.k, n: clone(it.n) }); return; }
+        targets.forEach(d => { if (!listOf(d.n, 'apply-groups-except').some(x => names.includes(x))) merge(d.n, it.n, names, false); });
+      });
+    }
+    function expand(node, keys, depth) {
+      if (depth > 40) return;
+      // 群組最上層的 apply-groups 代表該群組再繼承其他群組（G1 → G2）
+      const chain = (g, seen) => seen.includes(g) || !groups[g] ? [] : [g].concat(...listOf(groups[g], 'apply-groups').map(x => chain(x, seen.concat(g))));
+      listOf(node, 'apply-groups').forEach(root => {
+        const names = chain(root, []);
+        names.forEach(g => {
+          let subs = [groups[g]];
+          keys.forEach(k => { subs = subs.flatMap(s => s.items.filter(it => it.n && keyMatch(it.k, k)).map(it => it.n)); });
+          subs.forEach(s => merge(node, s, names, true));
+        });
+      });
+      node.items = node.items.filter(it => !(it.v && /^apply-groups(?:-except)?\s/.test(it.v)));
+      node.items.forEach(it => { if (it.n) expand(it.n, keys.concat(it.k), depth + 1); });
+    }
+    expand(root, [], 0);
+    const out = [];
+    const emit = (n, ind) => n.items.forEach(it => {
+      if (it.v) out.push(ind + it.v + ';');
+      else { out.push(ind + it.k + ' {'); emit(it.n, ind + '    '); out.push(ind + '}'); }
+    });
+    emit(root, '');
+    return out.join('\n') + '\n';
+  }
+
   function junosIsDisplaySet(text) {
-    if (!text || /\{/.test(text)) return false;
+    // 引號內的大括號（apply-groups "${node}"）不算階層格式
+    if (!text || /\{/.test(String(text).replace(/"[^"\n]*"/g, '""'))) return false;
     const sets = String(text).match(/^set\s+\S.*$/gm) || [];
     const junos = sets.filter(l => JUNOS_SET_TOP.test(l)).length;
     return junos >= 3 && junos * 2 >= sets.length;
@@ -1092,6 +1193,7 @@ const JuniperParser = (() => {
 
   function parse(text) {
     if (junosIsDisplaySet(text)) text = junosSetToCurly(text);
+    text = junosApplyGroups(text);
     const tree = parseJunosTree(text);
     // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 source/destination-address
     // 名稱反查 v4/v6 型別（見 _splitAddr() 上方註解）

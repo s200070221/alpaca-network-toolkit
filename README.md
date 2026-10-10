@@ -39,7 +39,7 @@
 ![防火牆設定分析器：規則清單](docs/images/02-firewall-policies-zh.png)
 
 **支援來源（20 種）**
-- FortiGate、Sophos XG、Check Point、Palo Alto（含 Panorama）、Juniper SRX、pfSense、OPNsense、SonicWall、MikroTik、Cisco ASA／FTD、Zyxel USG／ATP、WatchGuard Firebox、H3C SecPath
+- FortiGate、Sophos XG、Check Point（Gaia clish 或 Management API JSON）、Palo Alto（含 Panorama）、Juniper SRX、pfSense、OPNsense、SonicWall、MikroTik、Cisco ASA／FTD、Zyxel USG／ATP、WatchGuard Firebox、H3C SecPath
 - EdgeRouter（EdgeOS）、VyOS、OpenWrt（UCI）、Netgate TNSR、Linux iptables／nftables
 - 雲端：AWS 安全群組、Azure NSG、Cisco Meraki MX（API 回應 JSON）
 - 無線控制器（只做 WiFi 分析）：Cisco Catalyst 9800／AireOS、Aruba 控制器／Instant、H3C WX

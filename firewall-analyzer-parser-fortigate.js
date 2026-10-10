@@ -368,6 +368,8 @@ const FortigateParser = (() => {
         status: gv(t, 'status') === 'disable' ? 'disable' : 'enable',
         comments: gv(t, 'comments') || '-',
         users: gvs(t, 'users') || '-', groups: gvs(t, 'groups') || '-',
+        // 取反（第十七輪 QB）：FortiOS firewall policy 的 srcaddr-negate／dstaddr-negate／service-negate enable
+        srcNegate: gv(t, 'srcaddr-negate') === 'enable', dstNegate: gv(t, 'dstaddr-negate') === 'enable', svcNegate: gv(t, 'service-negate') === 'enable',
         _vdom: vdomName,
       };
     });

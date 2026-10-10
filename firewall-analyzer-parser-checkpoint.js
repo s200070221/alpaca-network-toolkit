@@ -726,8 +726,111 @@ const CheckpointParser = (() => {
     return 'Unknown';
   }
 
+  // ─── Management API JSON（第十七輪 QG）──────────────────────────────────────
+  // mgmt_cli／Web API 的回應：show-access-rulebase、show-nat-rulebase（含 objects-dictionary，以 UID 對應物件）
+  // 與 show-hosts／show-networks／show-address-ranges／show-groups／show-services-tcp|udp|icmp／show-service-groups
+  // 的 objects 清單。可貼單一回應、分頁陣列或多個回應前後相接。欄位依官方 Management API 參考與 Batfish
+  // checkpoint_management 測試資料（真實 API 回應）
+  function isMgmtApiJson(text) {
+    const t = String(text || '').trimStart();
+    return /^[\[{]/.test(t) && /"(?:objects-dictionary|rulebase|objects)"\s*:/.test(t) &&
+      /"type"\s*:\s*"(?:access-rule|access-section|nat-rule|nat-section|host|network|address-range|group|service-tcp|service-udp|service-group)"/.test(t);
+  }
+  // 前後相接的多個 JSON 文件依括號深度切開（字串內的括號略過）
+  function splitJsonDocs(text) {
+    const docs = []; let depth = 0, start = -1, inStr = false, esc = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+      if (ch === '"') inStr = true;
+      else if (ch === '{' || ch === '[') { if (depth++ === 0) start = i; }
+      else if (ch === '}' || ch === ']') { if (--depth === 0 && start >= 0) { docs.push(text.slice(start, i + 1)); start = -1; } }
+    }
+    return docs.map(d => { try { return JSON.parse(d); } catch (e) { return null; } }).filter(Boolean);
+  }
+  function parseMgmtApi(text) {
+    const docs = [];
+    const add = d => { if (Array.isArray(d)) d.forEach(add); else if (d && typeof d === 'object') docs.push(d); };
+    splitJsonDocs(text).forEach(add);
+    const byUid = {};
+    const reg = o => { if (o && typeof o === 'object' && o.uid && !byUid[o.uid]) byUid[o.uid] = o; };
+    docs.forEach(d => { (d['objects-dictionary'] || []).forEach(reg); (d.objects || []).forEach(reg); });
+    const obj = r => typeof r === 'string' ? (byUid[r] || { name: r, type: '' }) : (reg(r), r || {});
+    const nameOf = r => { const o = obj(r); return o.type === 'CpmiAnyObject' || o.name === 'Any' ? 'any' : (o.name || '-'); };
+    const names = arr => (Array.isArray(arr) && arr.length ? arr.map(nameOf) : ['any']).join(', ');
+    // 位址物件的字面值（NAT 用）
+    const lit = r => { const o = obj(r);
+      if (o.type === 'host') return o['ipv4-address'] || o['ipv6-address'] || '-';
+      if (o.type === 'network') return o.subnet4 ? `${o.subnet4}/${o['mask-length4']}` : o.subnet6 ? `${o.subnet6}/${o['mask-length6']}` : '-';
+      if (o.type === 'address-range') return o['ipv4-address-first'] ? `${o['ipv4-address-first']}-${o['ipv4-address-last']}` : `${o['ipv6-address-first']}-${o['ipv6-address-last']}`;
+      return o.name || '-'; };
+    // 埠：80、1000-2000、>1023、<1024
+    const port = p => { p = String(p || '').trim(); let m;
+      if ((m = p.match(/^>\s*(\d+)$/))) return `${+m[1] + 1}-65535`;
+      if ((m = p.match(/^<\s*(\d+)$/))) return `1-${+m[1] - 1}`;
+      return p || '-'; };
+    // 位址與服務物件（含規則、群組引用到的，以名稱去重）
+    const addresses = [], services = [], seenA = {}, seenS = {};
+    const pushAddr = o => { if (!o || seenA[o.name]) return; const base = { name: o.name, fqdn: '-', wildcard: '-', iface: '-', color: '0', comment: o.comments || '', members: '-', _vdom: '' };
+      if (o.type === 'host' && (o['ipv4-address'] || o['ipv6-address'])) { seenA[o.name] = 1; const ip = o['ipv4-address'] || o['ipv6-address']; addresses.push({ ...base, category: 'address', type: 'ipmask', subnet: ip.includes(':') ? `${ip}/128` : `${ip}/32`, startIp: ip, endIp: '-' }); }
+      else if (o.type === 'network') { seenA[o.name] = 1; const s = lit(o); addresses.push({ ...base, category: 'address', type: 'ipmask', subnet: s, startIp: s.split('/')[0], endIp: '-' }); }
+      else if (o.type === 'address-range') { seenA[o.name] = 1; const [a, b] = lit(o).split('-'); addresses.push({ ...base, category: 'address', type: 'iprange', subnet: '-', startIp: a, endIp: b }); }
+      else if (o.type === 'group') { seenA[o.name] = 1; const ms = (o.members || []).map(obj); ms.forEach(pushAddr); addresses.push({ ...base, category: 'address-group', type: 'group', subnet: '-', startIp: '-', endIp: '-', members: ms.map(m => m.name).join(', ') }); } };
+    const pushSvc = o => { if (!o || seenS[o.name]) return; const base = { name: o.name, icmpType: '-', icmpCode: '-', comment: o.comments || '', color: '0', category_name: '-', members: '-' };
+      if (o.type === 'service-tcp') { seenS[o.name] = 1; services.push({ ...base, category: 'custom', proto: 'TCP', tcpPorts: port(o.port), udpPorts: '-' }); }
+      else if (o.type === 'service-udp') { seenS[o.name] = 1; services.push({ ...base, category: 'custom', proto: 'UDP', tcpPorts: '-', udpPorts: port(o.port) }); }
+      else if (o.type === 'service-icmp' || o.type === 'service-icmp6') { seenS[o.name] = 1; services.push({ ...base, category: 'custom', proto: 'ICMP', tcpPorts: '-', udpPorts: '-', icmpType: o['icmp-type'] != null ? String(o['icmp-type']) : '-' }); }
+      else if (o.type === 'service-group') { seenS[o.name] = 1; const ms = (o.members || []).map(obj); ms.forEach(pushSvc); services.push({ ...base, category: 'group', proto: '-', tcpPorts: '-', udpPorts: '-', members: ms.map(m => m.name).join(', ') }); } };
+    Object.values(byUid).forEach(o => { pushAddr(o); pushSvc(o); });
+    const policies = [], nat = [], seenRule = {};
+    docs.forEach(d => {
+      if (!Array.isArray(d.rulebase)) return;
+      const layer = d.name || '';
+      const walk = (items, section) => items.forEach(r => {
+        if (!r || typeof r !== 'object') return;
+        if (r.type === 'access-section' || r.type === 'nat-section') { walk(r.rulebase || [], r.name || section); return; }
+        if (seenRule[r.uid]) return; if (r.uid) seenRule[r.uid] = 1;
+        if (r.type === 'access-rule') {
+          [].concat(r.source || [], r.destination || []).forEach(x => pushAddr(obj(x))); (r.service || []).forEach(x => pushSvc(obj(x)));
+          const act = nameOf(r.action), track = r.track && (obj(r.track.type).name || '');
+          const srcAddr = names(r.source), dstAddr = names(r.destination);
+          const times = names(r.time);
+          policies.push({ id: String(r['rule-number'] != null ? r['rule-number'] : policies.length + 1), name: r.name || '-',
+            srcIntf: 'any', dstIntf: 'any', srcAddr, dstAddr, srcAddr4: srcAddr, srcAddr6: '-', dstAddr4: dstAddr, dstAddr6: '-',
+            service: names(r.service), schedule: times === 'any' ? 'always' : times,
+            action: /^(?:accept|allow|ask|inform)$/i.test(act) ? 'accept' : 'deny',
+            nat: 'disable', ippool: 'disable', poolname: '-', logtraffic: track && !/^none$/i.test(track) ? 'enable' : 'disable', logstart: '-',
+            utm: { av: '-', webfilter: '-', ips: '-', ssl: '-', appctrl: '-' }, status: r.enabled === false ? 'disable' : 'enable',
+            comments: [section ? `[${section}]` : '', /^(?:accept|allow|drop|reject)$/i.test(act) ? '' : `[${act}]`, r.comments || ''].filter(Boolean).join(' ') || '-',
+            users: '-', groups: '-', srcNegate: r['source-negate'] === true, dstNegate: r['destination-negate'] === true, svcNegate: r['service-negate'] === true,
+            _vdom: layer });
+        } else if (r.type === 'nat-rule') {
+          const isOrig = x => /^original$/i.test(obj(x).name || '');
+          const xDst = !isOrig(r['translated-destination']) && r['translated-destination'], xSrc = !isOrig(r['translated-source']) && r['translated-source'];
+          const svcO = obj(r['original-service']), svcT = isOrig(r['translated-service']) ? null : obj(r['translated-service']);
+          const p0 = svcO.port ? port(svcO.port) : '-';
+          nat.push({ type: xDst ? 'vip' : 'ippool', name: `NAT-${r['rule-number'] != null ? r['rule-number'] : nat.length + 1}`,
+            vipType: xDst ? 'static-nat' : '-', poolType: xSrc ? (r.method === 'hide' ? 'overload' : 'one-to-one') : '-',
+            extIp: xDst ? lit(r['original-destination']) : '-', extIntf: '-', mapIp: xDst ? lit(xDst) : xSrc ? lit(xSrc) : '-',
+            startIp: xSrc ? lit(xSrc) : '-', endIp: '-', portFwd: svcT ? 'enable' : 'disable',
+            extPort: p0, mapPort: svcT && svcT.port ? port(svcT.port) : '-', proto: /tcp/.test(svcO.type || '') ? 'tcp' : /udp/.test(svcO.type || '') ? 'udp' : '-',
+            comment: [section ? `[${section}]` : '', `${nameOf(r['original-source'])} → ${nameOf(r['original-destination'])}`, r['auto-generated'] ? '(auto)' : '', !xDst && !xSrc ? '(no NAT)' : '', r.comments || ''].filter(Boolean).join(' '),
+            status: r.enabled === false ? 'disable' : 'enable', srcIntf: '-', arpReply: '-' });
+        }
+      });
+      walk(d.rulebase, '');
+    });
+    // 只有單一層時不分區（_vdom 留空）
+    if (new Set(policies.map(p => p._vdom)).size <= 1) policies.forEach(p => { p._vdom = ''; });
+    const gw = Object.values(byUid).find(o => /simple-gateway|CpmiClusterMember|CpmiGatewayCluster/i.test(o.type || ''));
+    return { vendor: 'CheckPoint', deviceInfo: { vendor: 'CheckPoint', hostname: gw ? gw.name : '-', firmware: '-', model: 'Management API', serial: '-', vdom: [...new Set(policies.map(p => p._vdom).filter(Boolean))] },
+      interfaces: [], policies, routes: [], vpn: [], addresses, services, schedules: [], nat, users: [], sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
+      dhcp: null, dns: null, snmp: null, logservers: null, _mgmtApi: true };
+  }
+
   // ─── Main parse ───────────────────────────────────────────────────────────
   function parse(text) {
+    if (isMgmtApiJson(text)) return parseMgmtApi(text);
     // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 source/destination 名稱反查
     // v4/v6 型別（見 _splitAddr() 定義處註解）。注意：parseAddressObjects() 目前只認 IPv4
     // 專屬 Gaia clish 關鍵字（ipaddr/mask-length/first-ip/last-ip），沒有 IPv6 位址物件會被

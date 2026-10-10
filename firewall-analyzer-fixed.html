@@ -561,10 +561,10 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
           <input type="file" id="si" accept=".xml,.conf,.txt,.cfg" onchange="pickFile('s',this)">
         </div>
         <div class="ucard checkpoint" id="cc" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('cc').classList.add('drag-over')" ondragleave="document.getElementById('cc').classList.remove('drag-over')" ondrop="handleDrop(event,'c')" onclick="document.getElementById('ci').click()">
-          <div class="ucard-head"><div class="vendor-dot checkpoint">🔰</div><div><h3>Check Point</h3><div class="ver">R81.x Gaia · .txt / .C / .fws</div></div></div>
+          <div class="ucard-head"><div class="vendor-dot checkpoint">🔰</div><div><h3>Check Point</h3><div class="ver">R81.x Gaia · .txt / .C / .fws · API .json</div></div></div>
           <div class="dropzone"><div class="dz-icon">📂</div><div class="dz-text" data-i18n="upload.dz_text">拖曳或點擊上傳</div><div class="dz-hint" data-i18n="upload.hint_cp">show config / objects_5_0.C / rulebases</div></div>
           <div class="file-chip" id="cc-chip" style="display:none"><span>📄</span><span class="fn" id="cc-name"></span><span class="rm" onclick="clearFile(event,'c')">✕</span></div>
-          <input type="file" id="ci" accept=".txt,.conf,.C,.W,.fws,.cfg" onchange="pickFile('c',this)">
+          <input type="file" id="ci" accept=".txt,.conf,.C,.W,.fws,.cfg,.json" onchange="pickFile('c',this)">
         </div>
         <div class="ucard paloalto" id="pc" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('pc').classList.add('drag-over')" ondragleave="document.getElementById('pc').classList.remove('drag-over')" ondrop="handleDrop(event,'p')" onclick="document.getElementById('pi').click()">
           <div class="ucard-head"><div class="vendor-dot paloalto">🔶</div><div><h3>Palo Alto</h3><div class="ver">PAN-OS 10/11 · XML / set CLI</div></div></div>
