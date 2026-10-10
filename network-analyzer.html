@@ -1200,6 +1200,8 @@ function detectTool(text) {
   // 截斷後 JSON.parse 必定因不完整而失敗
   {
     const trimmedFull = text.trim();
+    // Check Point Management API JSON（第十七輪 QG）：rulebase 回應含 objects-dictionary 與 access／nat 規則
+    if (/^[\[{]/.test(trimmedFull) && /"objects-dictionary"\s*:/.test(text) && /"type"\s*:\s*"(?:access|nat)-(?:rule|section)"/.test(text)) return {idx:0, vendor:'c'};
     // 雲端安全群組 JSON（AWS describe-security-groups／Azure NSG，2026-10-02），訊號與 FW_VENDOR_SIGS.cloudsg 一致
     if (/^[\[{]/.test(trimmedFull) && CLOUD_SG_RE.test(text)) return {idx:0, vendor:'k'};
     // Cumulus Linux NVUE（2026-10-02）：YAML 的 `- set:` 段或 nv set 指令，判斷式與 switch_analyzer isCumulusNVUE() 一致
@@ -1258,6 +1260,13 @@ function detectTool(text) {
   // 交換器分析；其餘格式則判定為無法識別。判斷式逐字沿用 log_analyzer 的 CISCO_IOS_LOG_RE／
   // COMWARE_LOG_RE／ISO_SYSLOG_LINE_RE／WEB_ACCESS_RE／MikroTik topics 規則（去掉行尾擷取）
   for (const [re, v] of LOG_HEAD_SIGS) if (re.test(t)) return {idx:4, vendor:v};
+  // RANCID 備份檔頭（第十七輪 QC）：第一行標明內容類型；juniper 可能是交換器或防火牆，交給下方規則判斷
+  {
+    const rc = ((t.match(/^[!#]RANCID-CONTENT-TYPE:\s*([\w-]+)/m) || [])[1] || '').toLowerCase();
+    if (rc === 'paloalto') return {idx:0, vendor:'p'};
+    if (rc === 'arista') return {idx:1, vendor:'arista'};
+    if (rc === 'cisco-nx') return {idx:1, vendor:null};
+  }
   // 真實錄製（Oxidized 等）在設定前常有數十行版本資訊，config firewall policy 會落在前 8000 字元之外，
   // 而 config system global 會被下方 FortiSwitch 規則攔截（第十三輪 NA）；FortiGate 的 config-version
   // 以 FG 開頭（FGT／FGVM／FG40F…），FortiSwitch 不是
@@ -1334,7 +1343,7 @@ function detectTool(text) {
   if (/ethernet\s+eth\d+\s*\{/m.test(t) && /outbound-interface\s+\S+/m.test(t))              return {idx:0, vendor:'r'};
   if (/^config\s+interface(\s|$)/m.test(t) && /^package\s+(network|firewall|dhcp)/m.test(t)) return {idx:0, vendor:'u'};
   // Arista EOS: unique signatures (must check before generic Cisco patterns)
-  if (/^!\s*device:\s*\S+.*\(Arista\s/m.test(t) || /^!\s*Software image version:\s*EOS/m.test(t) ||
+  if (/^!\s*device:\s*\S+.*\(Arista\s/m.test(t) || /^!\s*Software image version:\s*EOS/m.test(t) || /^!?\s*boot system flash[:\s]\s*\/?\S*\.swi\s*$/m.test(t) ||
       (/^interface\s+Ethernet\d+(?:\/\d+)*\s*$/m.test(t) && /^ip routing$/m.test(t)))
     return {idx:1, vendor:'arista'};
   // Allied Telesis AlliedWare Plus（2026-10-02）：port1.0.1 埠名或 vlan database 的 state enable，與 switch_analyzer isAlliedWare() 一致
@@ -1435,6 +1444,7 @@ function _detectToolReasons(text) {
         if (trimmedFull.charAt(0) !== '{') return false;
         try { const obj = JSON.parse(trimmedFull); return !!(obj && typeof obj === 'object' && obj.DEVICE_METADATA && (obj.VLAN || obj.PORT || obj.INTERFACE)); } catch(e) { return false; }
       } },
+    { reason: '命中 Check Point Management API JSON（rulebase 回應的 objects-dictionary 與 access／nat 規則）', test: () => /^[\[{]/.test(text.trim()) && /"objects-dictionary"\s*:/.test(text) && /"type"\s*:\s*"(?:access|nat)-(?:rule|section)"/.test(text) },
     { reason: '命中 Cumulus Linux NVUE 設定（YAML 的 `- set:` 段或 `nv set` 指令）', test: () => CUMULUS_RE(text) },
     { reason: '命中 AWS 安全群組（IpPermissions）、Azure NSG（securityRules）或 Meraki MX API（destCidr／applianceIp／publicPort）JSON', test: () => /^[\[{]/.test(text.trim()) && CLOUD_SG_RE.test(text) },
     { reason: '命中 Azure NSG／VNet flow logs（category 為 NetworkSecurityGroupFlowEvent／FlowLogFlowEvent 且含 flowTuples）', test: () => AZURE_FLOW_RE.test(text) && /"flowTuples"/.test(text) },
@@ -1465,6 +1475,7 @@ function _detectToolReasons(text) {
     { reason: '命中 Cisco ASA／FTD syslog（帶主機、時區或類別的表頭，行內有 `%ASA-` 或 `%FTD-` 等級與六位數訊息號）', test: () => /^(?:<\d{1,3}>)?\s*[A-Z][a-z]{2}\s+\d{1,2}\s[^\n]*%(?:ASA|FTD)-(?:[a-z]+-)?\d-\d{6}:/m.test(t) },
     { reason: '命中標準 Syslog RFC3164 表頭', test: () => /^(?:<\d{1,3}>)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s/m.test(t) },
     ...LOG_HEAD_SIGS.map(([re, v]) => ({ reason: '命中 ' + VENDOR_NAMES[v] + ' 行首格式（與 log_analyzer 判斷式相同）', test: () => re.test(t) })),
+    { reason: 'RANCID 備份檔頭 `!RANCID-CONTENT-TYPE:` 標明內容類型（paloalto／arista／cisco-nx）', test: () => /^[!#]RANCID-CONTENT-TYPE:\s*(?:paloalto|arista|cisco-nx)\b/mi.test(t) },
     { reason: '命中 FortiGate 設定檔（`#config-version=FG…` 檔頭，或 `config firewall policy`／`config vdom`）', test: () => /^#config-version=FG/m.test(t) || /config firewall policy|config vdom/i.test(t) },
     { reason: '命中 H3C SecPath 防火牆的 security-policy 視圖＋security-zone 宣告', test: () => /^\s*security-policy\s+ipv?6?\s*$/m.test(text) && /^\s*security-zone\s+name\s+\S+/m.test(text) },
     { reason: '命中 Netgate TNSR（nacm＋dataplane 設定、介面 `access-list input acl … sequence`、VPF 或 `next-hop N via`）', test: () => /^nacm\s+(?:enable|disable|group\s)[\s\S]*^dataplane\s|^dataplane\s[\s\S]*^nacm\s+(?:enable|disable|group\s)/m.test(text) || /^[ \t]+access-list\s+(?:input|output)\s+acl\s+\S+\s+sequence\s+\d+/m.test(text) ||/^vpf\s+(?:filter\s+ruleset|options)\b/m.test(text) || /^[ \t]+next-hop\s+\d+\s+via\s/m.test(text) },
@@ -1492,7 +1503,7 @@ function _detectToolReasons(text) {
     { reason: '命中 VyOS 檔尾 `// vyos-config-version`、`// Release version` 或 1.4 起 `firewall ipv4 forward/input/output/name` 結構', test: () => /vyos-config-version/.test(t) || /^#\s*Version:\s+VyOS\b/m.test(t) || /^set firewall global-options /m.test(t) || /^\/\/ Release version:\s*\d/m.test(t) || /^set firewall ipv[46] (?:forward|input|output|name) /m.test(t) || /^\s+ipv[46]\s*\{\s*\n\s+(?:forward|input|output|name)\b/m.test(t) },
     { reason: '命中 EdgeRouter EdgeOS `ethernet ethN {` + `outbound-interface`', test: () => /ethernet\s+eth\d+\s*\{/m.test(t) && /outbound-interface\s+\S+/m.test(t) },
     { reason: '命中 OpenWrt UCI `config interface` + `package network/firewall/dhcp`', test: () => /^config\s+interface(\s|$)/m.test(t) && /^package\s+(network|firewall|dhcp)/m.test(t) },
-    { reason: '命中 Arista EOS 裝置字樣，或 Ethernet 介面命名 + `ip routing`', test: () => /^!\s*device:\s*\S+.*\(Arista\s/m.test(t) || /^!\s*Software image version:\s*EOS/m.test(t) || (/^interface\s+Ethernet\d+(?:\/\d+)*\s*$/m.test(t) && /^ip routing$/m.test(t)) },
+    { reason: '命中 Arista EOS 裝置字樣、`boot system flash *.swi`，或 Ethernet 介面命名 + `ip routing`', test: () => /^!\s*device:\s*\S+.*\(Arista\s/m.test(t) || /^!\s*Software image version:\s*EOS/m.test(t) || /^!?\s*boot system flash[:\s]\s*\/?\S*\.swi\s*$/m.test(t) || (/^interface\s+Ethernet\d+(?:\/\d+)*\s*$/m.test(t) && /^ip routing$/m.test(t)) },
     { reason: '命中 Allied Telesis AlliedWare Plus（`interface port1.0.1` 埠名或 vlan database 的 `state enable`）', test: () => /^interface\s+port\d+\.\d+\.\d+/m.test(t) || /AlliedWare Plus/i.test(t) || (/^vlan database\s*$/m.test(t) && /^\s+vlan\s+[\d,-]+\s+state\s+enable/m.test(t)) },
     { reason: '命中 Cisco Business（CBS／SG／Catalyst 1200/1300）設定檔表頭 `config-file-header`', test: () => /^config-file-header\s*$/m.test(t) || /^@?ssd-control-start/m.test(t) },
     { reason: '命中 Cisco NX-OS `feature` 指令 + Nexus/vdc 字樣、`version N.N(N)` 版本格式或 `!Command: show running-config` 檔頭', test: () => (/^feature\s+\w+/m.test(t) && (/Cisco\s+Nexus/i.test(t) || /^vdc\s+\S+\s+id/m.test(t))) || /^version\s+\d+\.\d+\(\d+\)/m.test(t) || /^!Command:\s*show running-config/m.test(t) || /^!\s*Cisco Nexus Operating System \(NX-OS\)/m.test(t) },

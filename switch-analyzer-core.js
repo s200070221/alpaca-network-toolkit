@@ -135,6 +135,12 @@ function detectVendor(cfg){
       }catch(e){ /* 非合法 JSON，繼續往下走既有文字 CLI 判斷鏈 */ }
     }
   }
+  // RANCID 備份檔頭（第十七輪 QC）：每份備份第一行標明內容類型，比任何語法猜測都可靠
+  {
+    const rc=(cfg.match(/^[!#]RANCID-CONTENT-TYPE:\s*([\w-]+)/m)||[])[1];
+    const RANCID_SW={'cisco-nx':'nxos',arista:'arista',juniper:'juniper'};
+    if(rc&&RANCID_SW[rc.toLowerCase()])return RANCID_SW[rc.toLowerCase()];
+  }
   // Netgear Smart Managed Pro（第十三輪 NC）：system name 會被下方 Alcatel 規則攔截，須排在前面
   if(typeof isNetgearSmart==='function'&&isNetgearSmart(cfg))return'netgearsmart';
   // Cumulus Linux NVUE（2026-10-02）：nv config show／startup.yaml 的 YAML，或 nv set 指令（見 parser-cumulus.js）
@@ -183,7 +189,7 @@ function detectVendor(cfg){
      /^interface\s+fortyGigE\s/m.test(cfg)||
      /^stack-unit\s+\d+/m.test(cfg))return'dell-os10';
   // Arista EOS: unique signatures (must be before Cisco)
-  if(/^!\s*device:\s*\S+.*\(Arista\s/m.test(cfg)||/^!\s*device:\s*\S+\s*\([^)]*\bEOS-\d/m.test(cfg)||/^!\s*Software image version:\s*EOS/im.test(cfg)||
+  if(/^!\s*device:\s*\S+.*\(Arista\s/m.test(cfg)||/^!\s*device:\s*\S+\s*\([^)]*\bEOS-\d/m.test(cfg)||/^!\s*Software image version:\s*EOS/im.test(cfg)||/^!?\s*boot system flash[:\s]\s*\/?\S*\.swi\s*$/m.test(cfg)||
      (/^interface\s+Ethernet\d+(?:\/\d+)?\s*$/m.test(cfg)&&/^ip routing$/m.test(cfg)))return'arista';
   // RouterOS / MikroTik: 必須在 cisco 之前，避免 /ip route 行觸發 cisco 誤判
   if(/^\s*\/interface|\/ip\s+(?:address|firewall|route)|\/system\s+identity/m.test(cfg))return'routeros';
@@ -2194,6 +2200,7 @@ function parseAny(cfg,forceVendor){
   cfg=cfg.replace(/\r\n/g,'\n');
   // Junos display set 扁平格式先轉回括號格式（YJ，轉換器在 switch-analyzer-parser-juniper.js）
   if(typeof junosIsDisplaySet==='function'&&junosIsDisplaySet(cfg))cfg=junosSetToCurly(cfg);
+  if(typeof junosApplyGroups==='function'&&/\bapply-groups\b/.test(cfg)&&/(?:^|\n)\s*groups\s*\{/.test(cfg))cfg=junosApplyGroups(cfg);
   // Allied Telesis AlliedWare Plus：範圍介面展開成逐埠（ZH，見 switch-analyzer-parser-awplus.js），其餘沿用 Cisco 解析
   const isAW=typeof isAlliedWare==='function'&&isAlliedWare(cfg);
   if(isAW)cfg=awplusPreprocess(cfg);

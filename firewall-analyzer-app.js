@@ -65,7 +65,8 @@ const App = (() => {
     // 支援解析，簽章比對若只認 set 格式會對大括號格式真實匯出檔誤判為 unknown，已補上
     // 對應訊號（2026-07-17 測試 juniper_srx_test.conf 大括號格式時發現此落差）
     juniper:    { p:[/^set system host-name/m, /^set interfaces .* family inet/m, /Juniper Networks|JUNOS/i, /^system\s*\{/m, /^\s*host-name\s+\S+;/m], min:1 },
-    checkpoint: { p:[/^set hostname /m, /^set interface .* ipv4-address/m, /Check Point/i], min:2 },
+    // Management API JSON（第十七輪 QG）：rulebase 回應含 objects-dictionary 與 access／nat 規則
+    checkpoint: { p:[/^set hostname /m, /^set interface .* ipv4-address/m, /Check Point/i, /"objects-dictionary"\s*:/, /"type"\s*:\s*"(?:access|nat)-(?:rule|section)"/], min:2 },
     // <opnsense> 根標籤訊號：OPNsense（pfSense fork，沿用同一個 PfsenseParser，非獨立
     // vendor id）官方 config.xml.sample 已查證根標籤是 <opnsense> 非 <pfsense>，第二個
     // 訊號 /pfSense|OPNsense/i 本來就會命中 OPNsense 匯出檔內的字樣，此為額外穩健度補強
@@ -115,6 +116,11 @@ const App = (() => {
   // sophos 簽章相對寬鬆，排最後，讓其他更具結構特徵的廠牌訊號優先判定
   const FW_VENDOR_ORDER = ['fortigate','cloudsg','h3c','tnsr','wlc','netfilter','vyos','edgerouter','openwrt','watchguard','paloalto','juniper','checkpoint','pfsense','sonicwall','mikrotik','ciscoasa','zyxel','sophos'];
   function detectFwVendor(text) {
+    // RANCID 備份檔頭（第十七輪 QC）
+    const rc = ((String(text).match(/^[!#]RANCID-CONTENT-TYPE:\s*([\w-]+)/m) || [])[1] || '').toLowerCase();
+    if (rc === 'paloalto' || rc === 'juniper') return rc;
+    // Check Point Management API JSON（第十七輪 QG）：先於其他廠牌判斷，物件說明文字可能含其他廠牌名稱
+    if (/^\s*[\[{]/.test(text) && /"objects-dictionary"\s*:/.test(text) && /"type"\s*:\s*"(?:access|nat)-(?:rule|section)"/.test(text)) return 'checkpoint';
     for (const id of FW_VENDOR_ORDER) {
       const { p, min } = FW_VENDOR_SIGS[id];
       let m = 0;
@@ -128,7 +134,7 @@ const App = (() => {
   // 大括號階層格式（parseJunosTree() 支援）幾乎必含 '{'；display set 匯出是連續多行裸
   // "set ..." 指令、完全無大括號。純函式抽出以利測試（DOM 無關），呼叫端見 analyze()。
   function isJunosDisplaySet(text) {
-    if (!text || /\{/.test(text)) return false;
+    if (!text || /\{/.test(String(text).replace(/"[^"\n]*"/g, '""'))) return false;
     return (text.match(/^set\s+\S/gm) || []).length >= 3;
   }
 
@@ -381,7 +387,7 @@ const App = (() => {
   const FW_VENDOR_META=[
     {key:'fortigate',label:'FortiGate',accept:'.conf,.txt,.cfg,.log'},
     {key:'sophos',label:'Sophos XG/XGS',accept:'.xml,.conf,.txt,.cfg'},
-    {key:'checkpoint',label:'Check Point',accept:'.txt,.conf,.C,.W,.fws,.cfg'},
+    {key:'checkpoint',label:'Check Point',accept:'.txt,.conf,.C,.W,.fws,.cfg,.json'},
     {key:'paloalto',label:'Palo Alto',accept:'.xml,.txt,.conf,.cfg'},
     {key:'juniper',label:'Juniper SRX',accept:'.conf,.txt,.log,.cfg'},
     {key:'pfsense',label:'pfSense/OPNsense',accept:'.xml,.conf'},
@@ -1641,8 +1647,8 @@ function onParsed(){
           <td style="color:var(--yellow);font-size:11px">${esc(p.users)}</td>
           <td style="color:var(--purple);font-size:11px">${esc(p.groups)}</td>
           <td>${pAction(p.action)}</td>
-          <td class="mono" style="font-size:11px">${esc(p.srcAddr)}</td>
-          <td class="mono" style="font-size:11px">${esc(p.dstAddr)}</td>
+          <td class="mono" style="font-size:11px">${p.srcNegate===true?"! ":""}${esc(p.srcAddr)}</td>
+          <td class="mono" style="font-size:11px">${p.dstNegate===true?"! ":""}${esc(p.dstAddr)}</td>
         </tr>`).join('')}
         </tbody>
       </table>

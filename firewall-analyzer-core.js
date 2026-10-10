@@ -255,11 +255,13 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
     // 規則只適用單一位址家族（H3C security-policy ip／ipv6，2026-10-05）：家族不同直接略過，避免 ipv6 規則的 any 命中 IPv4 查詢
     if (p._family && p._family !== (isV6 ? 'v6' : 'v4')) { trace.push({policy:p,result:'skip',reason:'src_addr'}); continue; }
     const pSrc=addrField(p,'srcAddr'), pDst=addrField(p,'dstAddr');
-    const sm=_policyAddrMatches(pSrc,srcInt,addrs);
+    // 取反條件（srcNegate／dstNegate／svcNegate，第十七輪 QB）：比對結果反過來，無法判斷（FQDN）仍為無法判斷
+    const neg = (v, on) => on === true && v !== null ? !v : v;
+    const sm=neg(_policyAddrMatches(pSrc,srcInt,addrs), p.srcNegate);
     if (sm===false) { trace.push({policy:p,result:'skip',reason:'src_addr'}); continue; }
-    const dm=_policyAddrMatches(pDst,dstInt,addrs);
+    const dm=neg(_policyAddrMatches(pDst,dstInt,addrs), p.dstNegate);
     if (dm===false) { trace.push({policy:p,result:'skip',reason:'dst_addr'}); continue; }
-    const svm=_policySvcMatches(p.service,proto,port?parseInt(port):null,svcs);
+    const svm=neg(_policySvcMatches(p.service,proto,port?parseInt(port):null,svcs), p.svcNegate);
     if (!svm) { trace.push({policy:p,result:'skip',reason:'service'}); continue; }
     const resolvedSrc=_policyAddrResolve(pSrc,srcInt,addrs);
     const resolvedDst=_policyAddrResolve(pDst,dstInt,addrs);

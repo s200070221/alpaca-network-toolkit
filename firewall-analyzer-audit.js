@@ -222,10 +222,12 @@
     };
   }
 
+  // 有取反條件的規則（srcNegate／dstNegate／svcNegate，第十七輪 QB）涵蓋範圍是「清單以外」，集合比對不適用，遮蔽／阻擋分析略過
+  const _hasNegate = p => p.srcNegate === true || p.dstNegate === true || p.svcNegate === true;
   function analyzeRuleShadowing(policies, addresses) {
     const results = [];
     const eq = (a, b) => a.size === b.size && [...a].every(v => b.has(v));
-    const active = policies.filter(p => !_isDisabledStatus(p));
+    const active = policies.filter(p => !_isDisabledStatus(p) && !_hasNegate(p));
     const prep = _shadowPrep(active, addresses);
     for (let i = 0; i < active.length; i++) {
       const later = active[i];
@@ -250,7 +252,7 @@
   function buildShadowMap(policies, addresses) {
     // 建立每個規則遮蔽的下游規則清單（用於流程排序顯示）
     const map = {};
-    const active = policies.filter(p => !_isDisabledStatus(p));
+    const active = policies.filter(p => !_isDisabledStatus(p) && !_hasNegate(p));
     const prep = _shadowPrep(active, addresses);
     active.forEach(p => map[p.id] = []);
     for (let i = 0; i < active.length; i++) {
@@ -275,7 +277,7 @@
   // 的 `gv(t,'action')||'deny'` 預設值慣例），不需處理 vendor 專屬的 drop/reject 同義詞。
   function analyzeDenyBlocking(policies, addresses) {
     const results = [];
-    const active = policies.filter(p => !_isDisabledStatus(p));
+    const active = policies.filter(p => !_isDisabledStatus(p) && !_hasNegate(p));
     const prep = _shadowPrep(active, addresses);
     for (let i = 0; i < active.length; i++) {
       const later = active[i];
@@ -463,7 +465,8 @@
   // 排除比對改用不分大小寫的子字串（比照既有 no-2fa 的 .includes('PaloAlto') 修法），因為
   // parsed.vendor 實際值是 'Cisco ASA'／'SonicWall'（含空格/駝峰），且 merge() 合併多廠牌分析
   // 時會在後面加後綴，精確比對／小寫字面值比對兩者皆會恆為 false 導致排除清單完全失效。
-  const ORPHAN_NAT_EXCLUDED_VENDOR_RE = /cisco\s*asa|sonicwall/i;
+  // Check Point 的 NAT 也是自成一表的規則（clish nat rule 與 Management API nat-rulebase），不被政策引用（第十七輪 QG）
+  const ORPHAN_NAT_EXCLUDED_VENDOR_RE = /cisco\s*asa|sonicwall|checkpoint/i;
   const ORPHAN_NAT_TYPES = new Set(['vip', 'ippool', 'vipgrp']);
   function analyzeOrphanNAT(parsed) {
     if (ORPHAN_NAT_EXCLUDED_VENDOR_RE.test(parsed.vendor || '')) return [];
@@ -606,7 +609,7 @@
   function analyzeMergeSuggestions(policies) {
     const isWild = v => _SHADOW_WILDCARD.has((v || '').trim().toLowerCase());
     const results = [];
-    const active = (policies || []).filter(p => !_isDisabledStatus(p));
+    const active = (policies || []).filter(p => !_isDisabledStatus(p) && !_hasNegate(p));
     let i = 0;
     while (i < active.length) {
       const base = active[i];
@@ -646,7 +649,7 @@
   // 完全相同的規則全量分組（非相鄰亦會命中），找出的是真正的冗餘規則（可直接刪除其一），
   // 語意與合併建議互補、非重工
   function analyzeExactDuplicates(policies) {
-    const active = (policies || []).filter(p => !_isDisabledStatus(p));
+    const active = (policies || []).filter(p => !_isDisabledStatus(p) && !_hasNegate(p));
     const groups = new Map();
     active.forEach(p => {
       const key = `${p._vdom || ''}|${p.srcAddr || '-'}|${p.dstAddr || '-'}|${p.service || '-'}|${p.action || '-'}`;
@@ -693,7 +696,7 @@
     // _isDisabledStatus 已提升為本檔案頂層共用 helper（見檔案開頭 27 行附近），此處不再
     // 重複定義
     // 1. any-to-any 允許規則
-    const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) &&
+    const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && !_hasNegate(p) &&
       /\b(all|any)\b/i.test(p.srcAddr||'') && /\b(all|any)\b/i.test(p.dstAddr||'') && /\b(all|any|ALL)\b/i.test(p.service||''));
     f('any-any', tr('audit.check_any_any'), anyAny.length, 'high',
       anyAny.length ? tr('audit.id_prefix') + anyAny.map(p => idLabel(p)).slice(0,10).join(', ') + (anyAny.length > 10 ? '…' : '') : tr('audit.none'),
