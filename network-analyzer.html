@@ -1149,7 +1149,7 @@ document.getElementById('logo-btn').addEventListener('click', () => {
 const VENDOR_NAMES = {t:'Cisco FTD',netgearsmart:'Netgear Smart Managed Pro',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',h3c:'H3C Comware',h:'H3C SecPath',e:'Netgate TNSR',l:'Wireless LAN Controller',hpe:'HPE Comware',f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure 安全群組',awsflow:'AWS VPC Flow Logs',azureflow:'Azure NSG／VNet Flow Logs',u:'OpenWrt (UCI)',sonic:'SONiC',cumulus:'NVIDIA Cumulus Linux',awplus:'Allied Telesis AlliedWare Plus',ciscobiz:'Cisco Business (CBS/SG)',g:'WatchGuard Firebox',
   // 2026-08-19 新增：log_analyzer 拖放偵測的格式標籤（非廠牌，沿用同一份對照表顯示於拖放
   // 提示 chip），key 與 detectTool() 回傳的 vendor 字串一致
-  rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log',
+  rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog',kvfw:'SonicWall／Sophos Firewall Log',pancsv:'Palo Alto PAN-OS CSV',umbrella:'Cisco Umbrella CSV', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log',
   ciscoios:'Cisco IOS Log', comwarelog:'Comware Log', isosyslog:'Syslog（ISO 時間）', w3c:'IIS W3C Log', weblog:'Web Access Log', mikrotiklog:'MikroTik Log'};
 let _dropPending = null;
 // 快速連續拖放/選檔的競態防呆：每次啟動新的 FileReader 讀取時遞增，onload 觸發時比對
@@ -1158,7 +1158,13 @@ let _dropPending = null;
 let _dropGen = 0;
 
 const LOG_JSON_KEYS = ['message','msg','severity','timestamp','@timestamp','log'];
-function _isLogJsonObj(o) { return !!(o && typeof o === 'object' && !Array.isArray(o) && LOG_JSON_KEYS.some(k => k in o)); }
+// Cisco Secure Endpoint 事件 API 回應（{version, metadata, data:[事件…]}，事件有 event_type／computer／connector_guid），與 log_analyzer isCiscoAmpEvent() 一致
+function _isAmpEvent(o) { return !!o && typeof o === 'object' && typeof o.event_type === 'string' && !!o.computer && o.connector_guid !== undefined; }
+function _isLogJsonObj(o) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return false;
+  if (o.data && (Array.isArray(o.data) ? o.data.length && o.data.every(_isAmpEvent) : _isAmpEvent(o.data))) return true;
+  return _isAmpEvent(o) || LOG_JSON_KEYS.some(k => k in o);
+}
 function _isLogJsonHead(trimmed) {
   try { const d = JSON.parse(trimmed); return Array.isArray(d) && _isLogJsonObj(d[0]); } catch(e) { /* 不是單一 JSON 文件 */ }
   try { return trimmed.charAt(0) === '{' && _isLogJsonObj(JSON.parse(trimmed.split('\n')[0].trim())); } catch(e) { return false; }
@@ -1202,8 +1208,7 @@ function detectTool(text) {
         // 2026-08-19 新增：單筆 JSON log 事件（log_analyzer 的 JSON/NDJSON 格式），須排在
         // SONiC 判斷之後（避免搶先攔截）但仍在所有文字 CLI 判斷式之前；僅在常見 log 欄位
         // 命中時才判定，避免任意 JSON 都被導向 log_analyzer
-        if (obj && typeof obj === 'object' && !Array.isArray(obj) &&
-            ['message','msg','severity','timestamp','@timestamp','log'].some(k => k in obj)) return {idx:4, vendor:'json'};
+        if (_isLogJsonObj(obj)) return {idx:4, vendor:'json'};
       } catch(e) { /* 非合法 JSON，繼續往下走既有文字 CLI 判斷鏈 */ }
     }
     // 2026-10-01：多筆 NDJSON（每行一個物件，整段 JSON.parse 必定失敗）與 JSON 事件陣列原本
@@ -1227,6 +1232,18 @@ function detectTool(text) {
   if (/^(?:<\d{1,3}>\s*)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+CEF:\d+\|/m.test(t)) return {idx:4, vendor:'cef-syslog'};
   if (/^(?:<\d{1,3}>\s*)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}:\s*%ASA-\d-\d+:/m.test(t)) return {idx:4, vendor:'asa'};
   if (/^date=\d{4}-\d{2}-\d{2}\s+time=\d{2}:\d{2}:\d{2}\b/m.test(t) && /\blogid=/.test(t)) return {idx:4, vendor:'fortigate'};
+  // FortiGate 經 syslog 送出時帶 <PRI>、6.4 起可能以 devname 開頭（第十五輪 VD，與 log 工具 detectLineFormat() 同一判斷）
+  if (/^(?:<\d{1,3}>)?(?=[^\n]*\bdate=\d{4}-\d{2}-\d{2}\s)(?=[^\n]*\stime=\d{2}:\d{2}:\d{2}\b)(?=[^\n]*\blogid="?\d{10}\b)[a-z_]+=/m.test(t)) return {idx:4, vendor:'fortigate'};
+  // 沒有 syslog 外殼的 PAN-OS CSV（第十五輪 VC，與 log 工具 PAN_CSV_LINE_RE 相同）
+  if (/^\d+,(?:\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z),[^,]*,(?:TRAFFIC|THREAT|GLOBALPROTECT|USERID|HIPMATCH|HIP-MATCH|SYSTEM|CONFIG|DECRYPTION|AUTHENTICATION),/m.test(t)) return {idx:4, vendor:'pancsv'};
+  // Cisco Umbrella CSV 匯出（第十五輪 VG）：DNS／Proxy／IP 為引號包住的「YYYY-MM-DD hh:mm:ss」開頭，Cloud Firewall 為不加引號時間＋[來源 ID]
+  if (/^"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}","[^"\n]*","[^"\n]*","[^"\n]*","[^"\n]*","(?:Allowed|Blocked|\d+)"/m.test(t) ||
+      /^"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}","[^"\n]*","[^"\n]*","[^"\n]*","[^"\n]*","[^"\n]*","(?:ALLOWED|BLOCKED)","\w+:\/\//m.test(t) ||
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\[\d+\],[^\n]*,(?:INBOUND|OUTBOUND),/m.test(t)) return {idx:4, vendor:'umbrella'};
+  // SonicWall／Sophos Firewall 原生 key=value（log 工具 kvfw）
+  if (/^(?:<\d{1,3}>)?(?:id=\S+\s+sn=\S+\s+time="|device="SFW"\s)/m.test(t)) return {idx:4, vendor:'kvfw'};
+  // Cisco ASA／FTD 帶主機、時區或 EMBLEM 類別的表頭（行內出現 %ASA-／%FTD-等級-六位數訊息號）
+  if (/^(?:<\d{1,3}>)?\s*[A-Z][a-z]{2}\s+\d{1,2}\s[^\n]*%(?:ASA|FTD)-(?:[a-z]+-)?\d-\d{6}:/m.test(t)) return {idx:4, vendor:'asa'};
   if (/^(?:<\d{1,3}>)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s/m.test(t))            return {idx:4, vendor:'rfc3164'};
   // 2026-10-01：log_analyzer 後續新增的格式（WC／BA／BB 與 MikroTik）未同步到這裡——Cisco IOS／
   // Comware 設備 log 內文的 "Interface GigabitEthernet…" 會被下方交換器 fallback 規則攔截、誤送到
@@ -1419,7 +1436,7 @@ function _detectToolReasons(text) {
         if (trimmedFull.charAt(0) !== '{') return false;
         try {
           const obj = JSON.parse(trimmedFull);
-          return !!(obj && typeof obj === 'object' && !Array.isArray(obj) && ['message','msg','severity','timestamp','@timestamp','log'].some(k => k in obj));
+          return _isLogJsonObj(obj);
         } catch(e) { return false; }
       } },
     { reason: '多筆 NDJSON 第一行或 JSON 陣列第一個元素含常見 log 欄位 → JSON/NDJSON Log', test: () => { const tf = text.trim(); return (tf.charAt(0) === '{' || tf.charAt(0) === '[') && _isLogJsonHead(tf); } },
@@ -1430,6 +1447,13 @@ function _detectToolReasons(text) {
     { reason: '命中包在傳統 Syslog 信封裡的 CEF（月份/時間戳記後接 CEF:）', test: () => /^(?:<\d{1,3}>\s*)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+CEF:\d+\|/m.test(t) },
     { reason: '命中 Cisco ASA Syslog `%ASA-X-XXXXXX:` 格式', test: () => /^(?:<\d{1,3}>\s*)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}:\s*%ASA-\d-\d+:/m.test(t) },
     { reason: '命中 FortiGate 原生 log（`date=... time=...` + `logid=`）', test: () => /^date=\d{4}-\d{2}-\d{2}\s+time=\d{2}:\d{2}:\d{2}\b/m.test(t) && /\blogid=/.test(t) },
+    { reason: '命中 FortiGate 經 syslog 送出的 log（`<PRI>` 開頭或 devname 開頭，同一行有 date=、time= 與 10 位數 logid）', test: () => /^(?:<\d{1,3}>)?(?=[^\n]*\bdate=\d{4}-\d{2}-\d{2}\s)(?=[^\n]*\stime=\d{2}:\d{2}:\d{2}\b)(?=[^\n]*\blogid="?\d{10}\b)[a-z_]+=/m.test(t) },
+    { reason: '命中沒有 syslog 外殼的 Palo Alto PAN-OS CSV（`1,時間,序號,TRAFFIC|THREAT|GLOBALPROTECT|USERID…,`）', test: () => /^\d+,(?:\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z),[^,]*,(?:TRAFFIC|THREAT|GLOBALPROTECT|USERID|HIPMATCH|HIP-MATCH|SYSTEM|CONFIG|DECRYPTION|AUTHENTICATION),/m.test(t) },
+    { reason: '命中 Cisco Umbrella CSV 匯出（DNS／IP／Proxy／Cloud Firewall 欄位形狀）', test: () => /^"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}","[^"\n]*","[^"\n]*","[^"\n]*","[^"\n]*","(?:Allowed|Blocked|\d+)"/m.test(t) ||
+      /^"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}","[^"\n]*","[^"\n]*","[^"\n]*","[^"\n]*","[^"\n]*","(?:ALLOWED|BLOCKED)","\w+:\/\//m.test(t) ||
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\[\d+\],[^\n]*,(?:INBOUND|OUTBOUND),/m.test(t) },
+    { reason: '命中 SonicWall（`id=… sn=… time="…"`）或 Sophos Firewall（`device="SFW"`）原生 log', test: () => /^(?:<\d{1,3}>)?(?:id=\S+\s+sn=\S+\s+time="|device="SFW"\s)/m.test(t) },
+    { reason: '命中 Cisco ASA／FTD syslog（帶主機、時區或類別的表頭，行內有 `%ASA-` 或 `%FTD-` 等級與六位數訊息號）', test: () => /^(?:<\d{1,3}>)?\s*[A-Z][a-z]{2}\s+\d{1,2}\s[^\n]*%(?:ASA|FTD)-(?:[a-z]+-)?\d-\d{6}:/m.test(t) },
     { reason: '命中標準 Syslog RFC3164 表頭', test: () => /^(?:<\d{1,3}>)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s/m.test(t) },
     ...LOG_HEAD_SIGS.map(([re, v]) => ({ reason: '命中 ' + VENDOR_NAMES[v] + ' 行首格式（與 log_analyzer 判斷式相同）', test: () => re.test(t) })),
     { reason: '命中 FortiGate 設定檔（`#config-version=FG…` 檔頭，或 `config firewall policy`／`config vdom`）', test: () => /^#config-version=FG/m.test(t) || /config firewall policy|config vdom/i.test(t) },

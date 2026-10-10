@@ -105,8 +105,9 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 **Supported formats**
 - CEF, LEEF, Syslog (RFC3164 / RFC5424), JSON
-- Firewalls: FortiGate key=value, Cisco ASA, Juniper SRX RT_FLOW, H3C SecPath session / filter logs, SonicWall, Sophos Firewall, MikroTik, Linux iptables / nftables LOG
-- Intrusion detection: Suricata EVE JSON
+- Firewalls: FortiGate key=value (including syslog forwarding), Cisco ASA / FTD, Palo Alto PAN-OS (including GlobalProtect / User-ID), Check Point Log Exporter, Juniper SRX RT_FLOW and IDP / UTM, H3C SecPath session / filter logs, SonicWall, Sophos Firewall, MikroTik, Linux iptables / nftables LOG
+- Intrusion detection and endpoint protection: Suricata EVE JSON, Cisco Secure Endpoint (AMP) event JSON
+- DNS / cloud security: Cisco Umbrella CSV
 - Network devices: Cisco IOS (including ACL logs) and Comware device logs
 - Servers and cloud: Windows event XML and Sysmon, IIS / web access logs, AWS VPC / Azure NSG flow logs
 
