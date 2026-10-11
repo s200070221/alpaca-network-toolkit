@@ -106,7 +106,7 @@
 **支援格式**
 - CEF、LEEF、Syslog（RFC3164／RFC5424）、JSON
 - 防火牆：FortiGate key=value（含 syslog 轉送）、Cisco ASA／FTD、Palo Alto PAN-OS（含 GlobalProtect／User-ID）、Check Point Log Exporter、Cisco FTD Firepower 事件、Juniper SRX RT_FLOW 與 IDP／UTM、H3C SecPath 工作階段／過濾紀錄、SonicWall、Sophos Firewall、MikroTik、EdgeRouter／VyOS 與 Linux iptables／nftables LOG
-- 入侵偵測與端點防護：Suricata EVE JSON、Cisco Secure Endpoint（AMP）事件 JSON
+- 入侵偵測與端點防護：Suricata EVE JSON、Cisco Secure Endpoint（AMP）事件 JSON、Zeek（JSON／TSV）、CrowdStrike Falcon 串流事件、Microsoft Defender for Endpoint／365 Defender
 - DNS／雲端安全：Cisco Umbrella CSV
 - 網路設備：Cisco IOS（含 ACL 記錄）、Comware 設備 log
 - 伺服器與雲端：Windows 事件 XML 與 Sysmon、IIS／Web 與 AWS ELB 存取紀錄、AWS VPC／Azure NSG／GCP 流量紀錄

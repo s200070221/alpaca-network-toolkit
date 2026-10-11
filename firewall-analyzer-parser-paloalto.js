@@ -74,6 +74,21 @@ const PaloAltoParser = (() => {
     return xva(inner, 'member').filter(Boolean);
   }
 
+  // 規則類型（第十八輪 TH）：intrazone 只比對同區域、interzone 只比對跨區域流量（universal 為預設）；
+  // 查詢條件沒有目的區域，只在備註標示
+  const ruleTypeTag = t => (t && t !== 'universal') ? `[${t}]` : '';
+  // 預設規則（第十八輪 TH）：intrazone-default 預設允許、interzone-default 預設拒絕，可在
+  // default-security-rules 覆寫動作（XML entry 的 <action>、set `rulebase default-security-rules rules X action Y`）
+  function parseDefaultRules(text) {
+    const act = n => {
+      const x = text.match(new RegExp(`<entry name="${n}-default">(?:(?!</entry>)[\\s\\S])*?<action>(\\w+)</action>`));
+      const y = text.match(new RegExp(`default-security-rules\\s+rules\\s+${n}-default\\s+action\\s+(\\w+)`));
+      const v = (x || y || [])[1];
+      return v ? (v === 'allow' ? 'accept' : 'deny') : (n === 'intrazone' ? 'accept' : 'deny');
+    };
+    return { intrazone: act('intrazone'), interzone: act('interzone') };
+  }
+
   // ─── Set-format helpers ───────────────────────────────────────────────────
   function setVal(text, key) {
     const re = new RegExp(`^set\\s+${key.replace(/\s+/g,'\\s+')}\\s+(.+)$`, 'im');
@@ -331,7 +346,8 @@ const PaloAltoParser = (() => {
             appctrl:   app !== 'any' ? app.slice(0,40) : '-',
           },
           status:   dis ? 'disable' : 'enable',
-          comments: xv(inner,'description') || '-',
+          comments: [ruleTypeTag(xv(inner,'rule-type')), xv(inner,'description')].filter(Boolean).join(' ') || '-',
+          ruleType: xv(inner,'rule-type') || 'universal',
           users:    xlist(inner,'user').join(', ') || '-',
           groups:   xlist(xv(inner,'source-user'),'entry').join(', ') || xva(inner,'source-user').join(', ') || '-',
           app, srcNegate, dstNegate,
@@ -381,7 +397,8 @@ const PaloAltoParser = (() => {
             appctrl:   gv('application') || '-',
           },
           status:   gv('disabled') === 'yes' ? 'disable' : 'enable',
-          comments: gv('description') || '-',
+          comments: [ruleTypeTag(gv('rule-type')), gv('description')].filter(Boolean).join(' ') || '-',
+          ruleType: gv('rule-type') || 'universal',
           srcNegate: gv('negate-source') === 'yes', dstNegate: gv('negate-destination') === 'yes',
           users: gv('source-user') || '-', groups: '-',
           _vdom: vsysName || 'vsys1',
@@ -676,6 +693,7 @@ const PaloAltoParser = (() => {
           category:'address', name, type, subnet, fqdn: fqdn||'-',
           startIp, endIp, wildcard: wild||'-', iface:'-', color:'0',
           comment: xv(inner,'description') || xv(inner,'tag') || '-',
+          tags: xlist(inner,'tag'),
           _vdom: vsysName || 'vsys1',
         });
       });
@@ -685,9 +703,10 @@ const PaloAltoParser = (() => {
       xblks(xv(aoContent,'address-group')||(vsysXml!==undefined?'':xv(text,'address-group'))||'', 'entry').forEach(e => {
         const name = xname(e);
         const mems = xlist(e._inner,'static').concat(xlist(e._inner,'dynamic-filter'));
+        const dyn = xv(xv(e._inner,'dynamic')||'','filter');
         objs.push({
           category:'address-group', name, type:'group',
-          members: mems.join(', ')||'-',
+          members: mems.join(', ')||'-', ...(dyn ? { dynFilter: dyn } : {}),
           comment: xv(e._inner,'description')||'-', color:'0',
           _vdom: vsysName || 'vsys1',
         });
@@ -710,6 +729,7 @@ const PaloAltoParser = (() => {
           category:'address', name, type, subnet, fqdn:fq||'-',
           startIp, endIp, wildcard:'-', iface:'-', color:'0',
           comment: gv('description') || '-',
+          tags: [...setLines(text,`${p} tag`), ...setLines(text,`${p2} tag`)].flatMap(splitSetList),
         });
       });
 
@@ -721,14 +741,42 @@ const PaloAltoParser = (() => {
         const p = `address-group "${name}"`;
         const p2 = `address-group ${name}`;
         const mems = (setVal(text,`${p} static`) || setVal(text,`${p2} static`)).split(/\s+/).filter(Boolean);
+        const dyn = (setVal(text,`${p} dynamic filter`) || setVal(text,`${p2} dynamic filter`)).replace(/^"([\s\S]*)"$/, '$1');
         objs.push({
           category:'address-group', name, type:'group',
-          members: mems.join(', ')||'-',
+          members: mems.join(', ')||'-', ...(dyn ? { dynFilter: dyn } : {}),
           comment: setVal(text,`${p} description`) || '-', color:'0',
         });
       });
     }
+    // 動態位址群組（第十八輪 TG）：dynamic filter 以位址物件的 tag 運算（and／or／not、括號），
+    // 成員為同一 vsys（或 shared）中 tag 符合的位址物件；靜態成員與篩選結果合併
+    objs.filter(g => g.dynFilter).forEach(g => {
+      const hit = objs.filter(a => a.category === 'address' && (a._vdom === g._vdom || a._vdom === 'shared' || !a._vdom || !g._vdom) && evalTagFilter(g.dynFilter, a.tags || []));
+      const st = g.members === '-' ? [] : g.members.split(', ');
+      g.members = [...new Set([...st, ...hit.map(a => a.name)])].join(', ') || '-';
+    });
     return objs;
+  }
+  // set 格式清單值：`[ tag1 "tag with spaces"]` 或單一值
+  function splitSetList(v) {
+    return (String(v).replace(/^\[|\]$/g, '').match(/"[^"]*"|'[^']*'|[^\s\[\]]+/g) || []).map(x => x.replace(/^["']|["']$/g, ''));
+  }
+  // PAN-OS 動態群組篩選式：tag 名稱（可加單引號）、and、or、not、括號
+  function evalTagFilter(expr, tags) {
+    const tk = String(expr).match(/'[^']*'|"[^"]*"|\(|\)|[^\s()]+/g) || [];
+    let i = 0;
+    const has = t => tags.includes(t.replace(/^['"]|['"]$/g, ''));
+    const factor = () => {
+      const t = tk[i++];
+      if (t === undefined) return false;
+      if (/^not$/i.test(t)) return !factor();
+      if (t === '(') { const v = orExpr(); if (tk[i] === ')') i++; return v; }
+      return has(t);
+    };
+    const andExpr = () => { let v = factor(); while (/^and$/i.test(tk[i] || '')) { i++; const r = factor(); v = v && r; } return v; };
+    const orExpr = () => { let v = andExpr(); while (/^or$/i.test(tk[i] || '')) { i++; const r = andExpr(); v = v || r; } return v; };
+    return orExpr();
   }
 
   // ─── Service objects ──────────────────────────────────────────────────────
@@ -1256,6 +1304,7 @@ const PaloAltoParser = (() => {
       dns,
       snmp:       parseSnmp(text),
       logservers: parseLogServers(text),
+      paDefault:  parseDefaultRules(text),
       // VDOM-compatible metadata for UI filtering
       _vdomNames:   isMultiVsys ? vsysNames : [],
       _isMultiVdom: isMultiVsys,

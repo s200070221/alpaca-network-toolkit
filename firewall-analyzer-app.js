@@ -1056,7 +1056,7 @@ function onParsed(){
         data=d.interfaces;
         sumCards=sumC([{l:tr('sl.total'),v:data.length,c:'var(--accent)'},{l:'WAN',v:data.filter(x=>x.role==='WAN').length,c:'var(--red)'},{l:'LAN',v:data.filter(x=>x.role==='LAN').length,c:'var(--green)'},{l:'DMZ',v:data.filter(x=>x.role==='DMZ').length,c:'var(--yellow)'},{l:tr('sl.vpn'),v:data.filter(x=>x.role==='VPN'||x.type==='tunnel').length,c:'var(--purple)'},{l:'VLAN',v:data.filter(x=>x.type==='vlan').length,c:'var(--orange)'}]);
         thead=`<tr><th>${tr('col.name')}</th><th>${tr('col.alias')}</th><th>${tr('col.ip')}</th><th>${tr('col.mask')}</th><th>${tr('col.secondaryIp')}</th><th>${tr('col.ipv6')}</th><th>${tr('col.type')}</th><th>VLAN</th><th>${tip('tip.vdom','VDOM/Zone')}</th><th>${tr('col.role')}</th><th>${tip('tip.mtu','MTU')}</th><th>${tr('col.speed')}</th><th>${tr('col.mode')}</th><th>${tip('tip.status',tr('col.status'))}</th><th>${tip('tip.allowaccess',tr('col.allowaccess'))}</th><th>${tr('col.desc')}</th></tr>`;
-        rowFn=r=>`<tr><td class="mono" style="color:var(--accent)">${esc(r.name)}</td><td style="color:#94a3b8;font-size:11px">${esc(r.alias)}</td><td class="mono">${esc(r.ip)}</td><td class="mono" style="color:var(--text-dim)">${esc(r.mask)}</td><td class="mono" style="color:var(--text-dim)">${esc((r.secondaryIps&&r.secondaryIps.length)?r.secondaryIps.map(s=>s.ip+(s.mask&&s.mask!=='-'?'/'+s.mask:'')).join(', '):'-')}</td><td class="mono" style="color:var(--text-dim)">${esc(r.ip6||'-')}</td><td>${pType(r.type)}</td><td class="mono" style="color:var(--text-dim)">${esc(r.vlanId)}</td><td style="color:var(--text-dim)">${esc(r.vdom)}</td><td>${pRole(r.role)}</td><td class="mono" style="color:var(--text-dim)">${esc(r.mtu)}</td><td style="color:var(--text-dim)">${esc(r.speed)}</td><td style="color:var(--text-dim)">${esc(r.mode)}</td><td>${r.status==='down'||r.status==='Disable'?pill('DOWN','p-deny'):pill('UP','p-allow')}</td><td style="font-size:11px;color:var(--text-dim)">${esc(r.allowaccess)}</td><td style="color:var(--text-dim)">${esc(r.desc)}</td></tr>`;
+        rowFn=r=>`<tr><td class="mono" style="color:var(--accent)">${esc(r.name)}</td><td style="color:#94a3b8;font-size:11px">${esc(r.alias)}</td><td class="mono">${esc(r.ip)}</td><td class="mono" style="color:var(--text-dim)">${esc(r.mask)}</td><td class="mono" style="color:var(--text-dim)">${esc((r.secondaryIps&&r.secondaryIps.length)?r.secondaryIps.map(s=>s.ip+(s.mask&&s.mask!=='-'?'/'+s.mask:'')).join(', '):'-')}</td><td class="mono" style="color:var(--text-dim)">${esc(r.ip6||'-')}</td><td>${pType(r.type)}</td><td class="mono" style="color:var(--text-dim)">${esc(r.vlanId)}</td><td style="color:var(--text-dim)">${esc(r.vdom)}${r.zone?' / '+esc(r.zone):''}</td><td>${pRole(r.role)}</td><td class="mono" style="color:var(--text-dim)">${esc(r.mtu)}</td><td style="color:var(--text-dim)">${esc(r.speed)}</td><td style="color:var(--text-dim)">${esc(r.mode)}</td><td>${r.status==='down'||r.status==='Disable'?pill('DOWN','p-deny'):pill('UP','p-allow')}</td><td style="font-size:11px;color:var(--text-dim)">${esc(r.allowaccess)}</td><td style="color:var(--text-dim)">${esc(r.desc)}</td></tr>`;
         break;
       case 'policies':
         data=d.policies;$('filter-action').style.display='';
@@ -2597,9 +2597,15 @@ function onParsed(){
     } else {
       banner = `<div style="padding:12px 16px;border-radius:8px;background:color-mix(in srgb,var(--text-dim) 15%,var(--bg2));border:1px solid var(--border);margin-bottom:12px;font-weight:600;font-size:13px">
         ${_qLbl}${tr('query.result_implicit')}
+        ${res.paDefault ? `<div style="margin-top:6px;font-size:12px;font-weight:400;color:var(--text-dim)">${esc(tr('query.pan_default_note').replace('{intra}', res.paDefault.intrazone === 'accept' ? 'ACCEPT' : 'DENY').replace('{inter}', res.paDefault.interzone === 'accept' ? 'ACCEPT' : 'DENY'))}</div>` : ''}
       </div>`;
     }
 
+    // ASA 兩段式判斷的路徑說明（第十八輪 TF）
+    if (res.asa) {
+      const ap = tr('query.asa_path').replace('{in}', res.asa.ingress).replace('{sin}', res.asa.secIn).replace('{out}', res.asa.egress).replace('{sout}', res.asa.secOut);
+      banner += `<div style="margin:-6px 0 12px;font-size:12px;color:var(--text-dim)">${esc(ap)}${res.asa.stage === 'seclevel' && res.action !== 'accept' ? '<br>' + esc(tr('query.asa_seclevel_deny')) : ''}</div>`;
+    }
     // Trace 表格
     const traceRows = res.trace.map((t,i) => {
       const isMatch = t.result==='match';
