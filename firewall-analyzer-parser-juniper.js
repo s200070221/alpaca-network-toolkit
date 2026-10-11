@@ -1203,6 +1203,10 @@ const JuniperParser = (() => {
       deviceInfo: parseDeviceInfo(text, tree),
       interfaces: parseInterfaces(tree),
       policies:   parsePolicies(tree, buildAddrTypeMap(addresses)),
+      // 預設政策（第十八輪 TH）：security policies default-policy permit-all|deny-all（未設定為 deny-all）
+      defaultPolicy: (() => { const pn = path(tree, ['security', 'policies']); if (!pn) return 'deny';
+        const dp = [...pn._values, ...Object.keys(pn._children).map(k => k + ' ' + Object.keys(pn._children[k]._children).join(' ') + ' ' + pn._children[k]._values.join(' '))].find(v => /^default-policy\b/.test(v)) || '';
+        return /permit-all/.test(dp) ? 'accept' : 'deny'; })(),
       routes:     parseRoutes(tree, text),
       vpn:        parseVPN(tree, text),
       addresses,

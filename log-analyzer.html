@@ -1837,6 +1837,9 @@ function _idsAlertOf(e) {
   if (e.netVendor === 'suricata' && f.alert) return { key: 's:' + String(f.alert.signature_id || f.alert.signature || ''), sig: f.alert.signature_id || '-', name: f.alert.signature || '', sev: Number(f.alert.severity) || 3, src: f.src_ip, dst: f.dest_ip, dpt: f.dest_port };
   if (e.netVendor === 'amp' && (f.detection || /threat|malware|ioc|dropper|infect/i.test(f.ampType || ''))) return { key: 'a:' + (f.detection || f.ampType), sig: 'AMP', name: [f.ampType, f.detection].filter(Boolean).join(' '), sev: { Critical: 1, High: 1, Medium: 2, Low: 3 }[e.severityRaw] || 2, src: f.computer || f.srcip, dst: f.dstip, dpt: f.dstport };
   if (e.format === 'asa' && f.fpEvent === '430001' && f.signature) return { key: 'f:' + (f.sid || f.signature), sig: 'FTD ' + (f.sid || ''), name: f.signature, sev: Math.min(3, Number(f.priority) || 2), src: f.srcip, dst: f.dstip, dpt: f.dstport };
+  if (e.netVendor === 'defender' && classifyByKeyword(e) === 'attack') return { key: 'd:' + f.title, sig: f.defType === 'm365' ? 'M365 Defender' : 'Defender', name: f.title + (f.category ? ' [' + f.category + ']' : ''), sev: { Critical: 1, High: 1, Medium: 2 }[e.severityNorm] || 3, src: f.computer || f.srcip, dst: '', dpt: '' };
+  if (e.netVendor === 'falcon' && f.falconType === 'DetectionSummaryEvent') return { key: 'c:' + (f.detection || '') + '|' + (f.technique || ''), sig: 'Falcon', name: [f.detection, f.tactic, f.technique].filter(Boolean).join(' / '), sev: { Critical: 1, High: 1, Medium: 2 }[e.severityNorm] || 3, src: f.computer || f.srcip, dst: f.dstip, dpt: f.dstport };
+  if (e.netVendor === 'zeek' && (f.zeekType === 'notice' || f.zeekType === 'intel')) return { key: 'z:' + (f.note || 'Intel ' + (f.indicator || '')), sig: f.zeekType === 'intel' ? 'Zeek Intel' : 'Zeek', name: f.note || ('Intel ' + (f.indicator || '')), sev: f.zeekType === 'intel' ? 1 : 2, src: f.srcip, dst: f.dstip, dpt: f.dstport };
   if (e.netVendor === 'junos' && (f.jsec === 'idp' || f.jsec === 'ids') && f.attack) return { key: 'j:' + f.attack, sig: f.jsec.toUpperCase(), name: f.attack, sev: JUNOS_THREAT_SEV[String(f.threatsev || '').toUpperCase()] || 2, src: f.srcip, dst: f.dstip, dpt: f.dstport };
   return null;
 }
@@ -2008,6 +2011,7 @@ function parseLogLine(line, lineNo) {
 // classifyByKeyword()（只看 msg/appName 文字），不額外針對 JSON 欄位擴充比對來源，維持單一判定
 // 邏輯來源，且大多數 JSON log 的語意本就會落在 message 欄位而非另一組動作欄位
 function looksLikeLogRecord(obj) {
+  if (isZeekLog(obj)) return true;
   return !!(pickField(obj, TS_KEYS) || pickField(obj, SEV_KEYS) || pickField(obj, MSG_KEYS) || pickField(obj, HOST_KEYS));
 }
 // Cisco Secure Endpoint（AMP for Endpoints）事件（第十五輪 VH）：欄位依 Elastic Beats cisco amp 模組的真實測試資料——
@@ -2048,6 +2052,208 @@ function ampEvent(a, lineNo) {
 }
 // 威脅類事件（偵測、隔離、隔離失敗、雲端 IOC、惡意程式執行…）
 const AMP_THREAT_RE = /threat|detection|malware|malicious|quarantine|ioc|dropper|infect|vulnerab/i;
+// Zeek（第十八輪 TI）：JSON log 每行一個物件，ts（Unix 秒或 ISO）、uid、id.orig_h／id.orig_p／id.resp_h／id.resp_p 為共同欄位，
+// log 種類由 _path（有設定時）或欄位形狀判斷——conn（conn_state）、dns（query＋qtype／rcode）、http（method＋uri／host）、
+// ssh（auth_success）、notice（note）、intel（seen.indicator）、ssl（server_name／ja3）、files（fuid＋mime_type）、weird（name＋notice）。
+// 欄位依 Zeek 官方 log 說明與 Elastic Beats zeek 模組的真實測試 log。TSV 格式（#separator／#fields 表頭）另由 parseZeekTsv() 轉成同樣的物件
+function zeekGet(o, k) { if (k in o) return o[k]; return k.split('.').reduce((v, p) => (v && typeof v === 'object' ? v[p] : undefined), o); }
+function isZeekLog(o) {
+  if (!o || typeof o !== 'object' || o.ts === undefined) return false;
+  if (zeekGet(o, 'id.orig_h') !== undefined || typeof o.uid === 'string' || typeof o.fuid === 'string' || typeof o._path === 'string') return true;
+  // 沒有 uid 的種類：stats／capture_loss（peer）、notice（peer_descr）、dhcp（uids）、x509（certificate.*）、pe（id 為檔案 ID）、traceroute（src＋dst）
+  return typeof o.ts === 'number' && (typeof o.peer === 'string' || 'peer_descr' in o || Array.isArray(o.uids) || 'certificate.version' in o || (typeof o.id === 'string' && /^F[A-Za-z0-9]{10,}$/.test(o.id)) || (typeof o.src === 'string' && typeof o.dst === 'string'));
+}
+function zeekType(o) {
+  if (typeof o._path === 'string' && o._path) return o._path;
+  if ('conn_state' in o) return 'conn';
+  if ('query' in o && ('qtype' in o || 'rcode' in o || 'trans_id' in o)) return 'dns';
+  if ('method' in o && ('uri' in o || 'host' in o)) return 'http';
+  if ('auth_success' in o || ('kex_alg' in o && 'client' in o)) return 'ssh';
+  if ('note' in o) return 'notice';
+  if (zeekGet(o, 'seen.indicator') !== undefined) return 'intel';
+  if ('server_name' in o || 'ja3' in o || ('cipher' in o && 'version' in o)) return 'ssl';
+  if ('fuid' in o && 'mime_type' in o) return 'files';
+  if ('name' in o && 'notice' in o) return 'weird';
+  return 'zeek';
+}
+function zeekFields(o) {
+  const f = { zeekType: zeekType(o) };
+  const map = { srcip: 'id.orig_h', srcport: 'id.orig_p', dstip: 'id.resp_h', dstport: 'id.resp_p' };
+  for (const [k, z] of Object.entries(map)) { const v = zeekGet(o, z); if (v !== undefined && v !== null && v !== '-') f[k] = String(v); }
+  if (!f.srcip && o.src) f.srcip = String(o.src);
+  if (!f.dstip && o.dst) f.dstip = String(o.dst);
+  if (o.proto) f.proto = String(o.proto).toLowerCase();
+  if (o.service) f.service = Array.isArray(o.service) ? o.service.join(',') : String(o.service);
+  if (o.conn_state) f.connState = o.conn_state;
+  if (f.zeekType === 'ssh' && o.auth_success !== undefined) f.authSuccess = String(o.auth_success);
+  if (o.note) f.note = o.note;
+  const ind = zeekGet(o, 'seen.indicator');
+  if (ind !== undefined) f.indicator = String(ind);
+  if (o.uid) f.uid = o.uid;
+  return f;
+}
+const ZEEK_DENY_STATES = new Set(['REJ', 'S0']);
+function zeekMsg(o, f) {
+  const tup = `${f.srcip || '-'}${f.srcport ? ':' + f.srcport : ''} -> ${f.dstip || '-'}${f.dstport ? ':' + f.dstport : ''}`;
+  switch (f.zeekType) {
+    case 'conn': return `${(f.proto || '').toUpperCase()} ${tup}${f.service ? ' ' + f.service : ''} ${o.conn_state || ''}`.trim();
+    case 'dns': return `DNS ${o.query || ''} ${o.qtype_name || ''} ${o.rcode_name || ''} ${tup}`.replace(/\s+/g, ' ').trim();
+    case 'http': return `${o.method || ''} ${o.host || ''}${o.uri || ''} ${o.status_code || ''} ${tup}`.replace(/\s+/g, ' ').trim();
+    case 'ssh': return `SSH ${o.auth_success === false ? 'auth failed' : o.auth_success === true ? 'auth ok' : ''}${o.auth_attempts ? ' attempts=' + o.auth_attempts : ''} ${tup}`.replace(/\s+/g, ' ').trim();
+    case 'notice': return `${o.note || 'Notice'}: ${o.msg || ''}${o.sub ? ' (' + o.sub + ')' : ''}`;
+    case 'intel': return `Intel ${f.indicator || ''} [${zeekGet(o, 'seen.indicator_type') || ''}] ${(o.sources || []).join(', ')} ${tup}`.replace(/\s+/g, ' ').trim();
+    case 'ssl': return `TLS ${o.server_name || ''} ${o.version || ''} ${tup}`.replace(/\s+/g, ' ').trim();
+    case 'weird': return `weird ${o.name || ''} ${tup}`;
+    default: return `${f.zeekType} ${tup}`;
+  }
+}
+function zeekEvent(o, lineNo) {
+  const f = zeekFields(o);
+  const t = typeof o.ts === 'number' ? new Date(o.ts * 1000) : new Date(o.ts);
+  if (f.zeekType === 'conn' && ZEEK_DENY_STATES.has(o.conn_state)) f.action = 'deny';
+  const sev = f.zeekType === 'intel' ? 'High' : f.zeekType === 'notice' || (f.zeekType === 'ssh' && o.auth_success === false) ? 'Medium' : 'Info';
+  return {
+    format: 'json', raw: JSON.stringify(o), lineNo, netFields: !!(f.srcip && f.dstip), netVendor: 'zeek', zeekRaw: o,
+    timestamp: isNaN(t.getTime()) ? null : t, timestampRaw: String(o.ts),
+    host: '', appName: 'zeek', procid: '', msgid: f.zeekType,
+    severityRaw: '', severityNorm: sev, facility: null, facilityAuth: false,
+    url: '', httpMethod: o.method || '',
+    msg: zeekMsg(o, f), fields: f
+  };
+}
+// Zeek TSV：#separator \x09、#path、#fields 欄位名稱、#types；'-' 為未設定、'(empty)' 為空集合，set／vector 以 , 分隔
+function parseZeekTsv(text) {
+  if (!/^#separator\s/m.test(text) || !/^#fields\t/m.test(text)) return null;
+  const events = [], unparsed = [];
+  let cols = null, path = '';
+  text.split('\n').forEach((line, i) => {
+    if (!line.trim()) return;
+    if (line.startsWith('#')) {
+      if (line.startsWith('#fields\t')) cols = line.split('\t').slice(1);
+      else if (line.startsWith('#path\t')) path = line.split('\t')[1];
+      return;
+    }
+    const parts = line.split('\t');
+    if (!cols || parts.length !== cols.length) { unparsed.push({ lineNo: i + 1, raw: line }); return; }
+    const o = { _path: path };
+    cols.forEach((c, k) => {
+      const v = parts[k];
+      if (v === '-' || v === undefined) return;
+      if (v === '(empty)') { o[c] = []; return; }
+      o[c] = c === 'ts' ? Number(v) : /^(?:T|F)$/.test(v) && /^(?:auth_success|local_orig|local_resp|AA|TC|RD|RA|rejected)$/.test(c) ? v === 'T' : /^(?:id\.orig_p|id\.resp_p|status_code|auth_attempts)$/.test(c) ? Number(v) : v;
+    });
+    events.push(zeekEvent(o, i + 1));
+  });
+  return events.length ? { events, unparsed } : null;
+}
+// CrowdStrike Falcon Streaming API 事件（第十八輪 TJ）：{metadata:{eventType, eventCreationTime(毫秒)…}, event:{…}}，常見匯出為
+// 多個縮排 JSON 物件前後相接。欄位依 Elastic Beats crowdstrike 模組的真實測試資料——DetectionSummaryEvent（ComputerName、UserName、
+// LocalIP、DetectName、DetectDescription、Severity 1～5／SeverityName、FileName、FilePath、CommandLine、SHA256String、Tactic、Technique、
+// PatternDispositionDescription）、IncidentSummaryEvent（State、FineScore）、AuthActivityAuditEvent（UserId、UserIp、OperationName、Success）、
+// UserActivityAuditEvent、RemoteResponseSession*、FirewallMatchEvent（ConnectionDirection "1" 為入站：來源為 RemoteAddress，否則來源為
+// LocalAddress；RuleAction 數值意義未查證，不判斷允許／阻擋）。原始事件存 falconRaw 供去識別化重建
+const FALCON_SEV = { 1: 'Info', 2: 'Low', 3: 'Medium', 4: 'High', 5: 'Critical' };
+function isFalconEvent(o) { return !!o && typeof o === 'object' && !!o.metadata && typeof o.metadata.eventType === 'string' && !!o.event && typeof o.event === 'object'; }
+function splitConcatJson(text) {
+  const docs = []; let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') { if (depth++ === 0) start = i; }
+    else if (ch === '}') { if (depth > 0 && --depth === 0 && start >= 0) { try { docs.push(JSON.parse(text.slice(start, i + 1))); } catch (e) { /* 壞物件跳過 */ } start = -1; } }
+  }
+  return docs;
+}
+function falconFields(o) {
+  const e = o.event, t = o.metadata.eventType, f = { falconType: t };
+  const set = (k, v) => { if (v !== undefined && v !== null && v !== '') f[k] = String(v); };
+  if (t === 'FirewallMatchEvent') {
+    const inbound = String(e.ConnectionDirection) === '1';
+    set('srcip', inbound ? e.RemoteAddress : e.LocalAddress); set('srcport', inbound ? e.RemotePort : e.LocalPort);
+    set('dstip', inbound ? e.LocalAddress : e.RemoteAddress); set('dstport', inbound ? e.LocalPort : e.RemotePort);
+    set('proto', FLOW_PROTO[String(e.Protocol)] || e.Protocol); set('rule', e.RuleName); set('policy', e.PolicyName); set('computer', e.HostName);
+    set('direction', inbound ? 'inbound' : 'outbound');
+  } else {
+    set('computer', e.ComputerName || e.HostnameField || e.HostName);
+    set('user', e.UserName || e.UserId);
+    set('srcip', e.LocalIP || e.UserIp);
+    set('detection', e.DetectName); set('tactic', e.Tactic); set('technique', e.Technique);
+    set('filename', e.FileName); set('filepath', e.FilePath); set('sha256', e.SHA256String);
+    set('disposition', e.PatternDispositionDescription); set('operation', e.OperationName);
+    if (typeof e.Success === 'boolean') f.success = String(e.Success);
+    set('state', e.State); set('score', e.FineScore);
+  }
+  return f;
+}
+function falconMsg(o, f) {
+  const e = o.event;
+  switch (f.falconType) {
+    case 'DetectionSummaryEvent': return `${e.DetectName || 'Detection'}: ${e.DetectDescription || ''}${e.FileName ? ' (' + e.FileName + ')' : ''}${e.Tactic ? ' [' + e.Tactic + (e.Technique ? ' / ' + e.Technique : '') + ']' : ''}`;
+    case 'IncidentSummaryEvent': return `Incident ${e.State || ''} score=${e.FineScore !== undefined ? e.FineScore : '-'}`;
+    case 'AuthActivityAuditEvent': return `${e.OperationName || 'auth'} ${e.Success === false ? 'FAILURE' : 'success'} ${e.UserId || ''}${e.UserIp ? ' from ' + e.UserIp : ''}`.trim();
+    case 'UserActivityAuditEvent': return `${e.OperationName || ''} ${e.ServiceName || ''} ${e.UserId || ''}${e.UserIp ? ' from ' + e.UserIp : ''}`.replace(/\s+/g, ' ').trim();
+    case 'FirewallMatchEvent': return `FW ${f.direction} ${(f.proto || '').toUpperCase()} ${f.srcip || '-'}${f.srcport ? ':' + f.srcport : ''} -> ${f.dstip || '-'}${f.dstport ? ':' + f.dstport : ''}${f.rule ? ' rule=' + f.rule : ''}`;
+    default: return `${f.falconType} ${f.user || ''} ${f.computer || ''}`.trim();
+  }
+}
+function falconEvent(o, lineNo) {
+  const f = falconFields(o), e = o.event;
+  const t = new Date(Number(o.metadata.eventCreationTime));
+  let sev = 'Info';
+  if (f.falconType === 'DetectionSummaryEvent') sev = FALCON_SEV[e.Severity] || (['Critical', 'High', 'Medium', 'Low'].includes(e.SeverityName) ? e.SeverityName : 'Medium');
+  else if (f.falconType === 'IncidentSummaryEvent') sev = 'Medium';
+  else if (f.success === 'false') sev = 'Medium';
+  return {
+    format: 'json', raw: JSON.stringify(o), lineNo, netFields: !!(f.srcip && f.dstip), netVendor: 'falcon', falconRaw: o,
+    timestamp: isNaN(t.getTime()) ? null : t, timestampRaw: String(o.metadata.eventCreationTime || ''),
+    host: f.computer || '', appName: 'crowdstrike', procid: '', msgid: f.falconType,
+    severityRaw: String(e.Severity || e.SeverityName || ''), severityNorm: sev, facility: null, facilityAuth: false,
+    url: '', httpMethod: '', msg: falconMsg(o, f), fields: f
+  };
+}
+// Microsoft Defender for Endpoint 告警與 Microsoft 365 Defender 事件（第十八輪 TK）：欄位依 Elastic Beats microsoft 模組的真實測試資料——
+// MDE 告警（alerts API）：title、category、severity（Informational／Low／Medium／High）、status、determination、classification、
+// alertCreationTime、detectionSource、computerDnsName、relatedUser.userName／domainName、evidence（ipAddress、fileName、sha256、
+// accountName、userPrincipalName、url）、mitreTechniques；365 Defender 事件（incidents API）：incidentId、incidentName、severity、status、
+// createdTime、alerts（陣列或單筆，欄位同上，主機在 devices[].deviceDnsName、實體在 entities）。每筆告警一筆事件，原始物件存 defRaw
+const DEFENDER_SEV = { High: 'High', Medium: 'Medium', Low: 'Low', Informational: 'Info', Critical: 'Critical' };
+function isDefenderAlert(o) { return !!o && typeof o === 'object' && typeof o.title === 'string' && ('alertCreationTime' in o || 'creationTime' in o) && 'detectionSource' in o; }
+function isM365Incident(o) { return !!o && typeof o === 'object' && 'incidentId' in o && 'incidentName' in o && !!o.alerts && typeof o.alerts === 'object'; }
+function defenderFields(a, inc) {
+  const list = v => (Array.isArray(v) ? v : v && typeof v === 'object' ? [v] : []);
+  const ents = [...list(a.evidence), ...list(a.entities)];
+  const pick = k => { const e = ents.find(x => x && x[k]); return e ? String(e[k]) : ''; };
+  const f = { defType: inc ? 'm365' : 'mde', title: a.title };
+  const set = (k, v) => { if (v !== undefined && v !== null && v !== '') f[k] = String(v); };
+  set('category', a.category); set('severity', a.severity); set('status', a.status);
+  set('determination', a.determination || a.classification); set('detectionSource', a.detectionSource);
+  set('computer', a.computerDnsName || (list(a.devices)[0] || {}).deviceDnsName);
+  set('user', (a.relatedUser && a.relatedUser.userName) || pick('accountName') || pick('userPrincipalName'));
+  set('srcip', pick('ipAddress'));
+  set('filename', pick('fileName')); set('sha256', pick('sha256')); set('url', pick('url'));
+  const mt = list(a.mitreTechniques).filter(x => typeof x === 'string');
+  if (mt.length) f.mitre = mt.join(',');
+  if (inc) { set('incidentId', inc.incidentId); set('incidentName', inc.incidentName); }
+  return f;
+}
+function defenderEvent(a, inc, lineNo, raw) {
+  const f = defenderFields(a, inc);
+  const t = new Date(a.alertCreationTime || a.creationTime || (inc && inc.createdTime) || '');
+  return {
+    format: 'json', raw: JSON.stringify(raw), lineNo, netFields: false, netVendor: 'defender', defRaw: raw, defInc: !!inc,
+    timestamp: isNaN(t.getTime()) ? null : t, timestampRaw: a.alertCreationTime || a.creationTime || '',
+    host: f.computer || '', appName: inc ? 'm365-defender' : 'defender-endpoint', procid: '', msgid: f.category || '',
+    severityRaw: a.severity || '', severityNorm: DEFENDER_SEV[a.severity] || 'Medium', facility: null, facilityAuth: false,
+    url: f.url || '', httpMethod: '',
+    msg: `${a.title}${f.category ? ' [' + f.category + ']' : ''}${f.status ? ' ' + f.status : ''}${f.mitre ? ' ' + f.mitre : ''}`, fields: f
+  };
+}
+function defenderEvents(o, lineNo) {
+  if (isDefenderAlert(o)) return [defenderEvent(o, null, lineNo, o)];
+  const alerts = Array.isArray(o.alerts) ? o.alerts : [o.alerts];
+  return alerts.filter(a => a && typeof a.title === 'string').map(a => defenderEvent(a, o, lineNo, o));
+}
 // Suricata EVE JSON（第十四輪 OG）：每行一個物件，event_type 為 alert／flow／dns／http…，src_ip／src_port／dest_ip／
 // dest_port／proto 在頂層，alert 物件含 action（allowed／blocked）、signature_id、signature、category、severity（1 最高、3 最低）。
 // 欄位依 Elastic Beats suricata 模組的真實 eve 測試 log。alert 以 signature 為訊息、severity 換算等級，IPS 模式 blocked 視為拒絕
@@ -2110,6 +2316,8 @@ function cloudAuthEvent(o, ci, lineNo) {
 function eventFromJSONObject(obj, lineNo) {
   const ci = cloudAuthInfo(obj);
   if (ci) return cloudAuthEvent(obj, ci, lineNo);
+  if (isZeekLog(obj)) return zeekEvent(obj, lineNo);
+  if (isFalconEvent(obj)) return falconEvent(obj, lineNo);
   if (isSuricataEve(obj)) {
     const ts = new Date(String(obj.timestamp).replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
     const al = obj.alert && typeof obj.alert === 'object' ? obj.alert : null;
@@ -2230,13 +2438,17 @@ function parseWinEventLogEvents(text) {
 function parseJSONLogEvents(text) {
   const { arr, singleObj } = parseJSONOrNDJSON(text);
   let list = arr;
-  if (!list && singleObj && looksLikeLogRecord(singleObj)) list = [singleObj];
+  if (!list && singleObj && (looksLikeLogRecord(singleObj) || isFalconEvent(singleObj) || isDefenderAlert(singleObj) || isM365Incident(singleObj))) list = [singleObj];
+  // 多個縮排 JSON 物件前後相接（CrowdStrike Falcon 串流匯出，第十八輪 TJ）
+  if (!list && /^\s*\{/.test(text) && /"eventType"/.test(text)) { const docs = splitConcatJson(text); if (docs.length && docs.every(isFalconEvent)) list = docs; }
   if (!list) return null;
   const events = [];
   list.forEach((item, idx) => {
     if (!item || typeof item !== 'object') return;
     // Cisco Secure Endpoint（AMP）事件 API 回應：{version, metadata, data:[事件…]}（或逐筆 data:{事件}），展開成逐筆事件（第十五輪 VH）
     if (isCiscoAmpEvent(item)) { events.push(ampEvent(item, idx + 1)); return; }
+    // Microsoft Defender 告警／365 Defender 事件（一個事件可含多筆告警，第十八輪 TK）
+    if (isDefenderAlert(item) || isM365Incident(item)) { const d = defenderEvents(item, idx + 1); if (d.length) { events.push(...d); return; } }
     // CloudTrail 檔案（S3）為 {"Records":[事件…]}，逐行 NDJSON 時每行一個這種物件（第十六輪 PF）
     if (Array.isArray(item.Records) && item.Records.length && item.Records.every(r => r && r.eventSource && r.eventName)) { item.Records.forEach(r => events.push(eventFromJSONObject(r, idx + 1))); return; }
     const amp = item.data && (Array.isArray(item.data) ? item.data : [item.data]);
@@ -2377,6 +2589,8 @@ function parseLogText(text) {
   if (winEvents) return { events: winEvents, unparsed: [] };
   const flow = parseFlowLogEvents(norm);
   if (flow) return flow;
+  const zeekTsv = parseZeekTsv(norm);
+  if (zeekTsv) return zeekTsv;
   const jsonEvents = parseJSONLogEvents(norm);
   if (jsonEvents) return { events: jsonEvents, unparsed: [] };
   const w3c = parseW3CLogEvents(norm);
@@ -2689,6 +2903,27 @@ function classifyByKeyword(evt) {
     // EventData 欄位；常見安全事件（登入/帳號變更）欄位名稱補進比對文字
     parts.push(evt.fields.SubjectUserName || '', evt.fields.TargetUserName || '',
       evt.fields.Status || '', evt.fields.FailureReason || '', evt.fields.SubStatus || '');
+  }
+  // Microsoft Defender（第十八輪 TK）：告警歸 attack，Informational 或判定為誤報／良性者為 other
+  if (evt.netVendor === 'defender' && evt.fields) {
+    const d = evt.fields;
+    if (d.severity === 'Informational' || /falsePositive|FalsePositive|Benign|NotMalicious/i.test(d.determination || '')) return 'other';
+    return 'attack';
+  }
+  // CrowdStrike Falcon（第十八輪 TJ）：偵測與事件彙整為 attack、主控台登入失敗為 authFail
+  if (evt.netVendor === 'falcon' && evt.fields) {
+    const c = evt.fields;
+    if (c.falconType === 'DetectionSummaryEvent' || c.falconType === 'IncidentSummaryEvent') return 'attack';
+    if (c.falconType === 'AuthActivityAuditEvent' && c.success === 'false') return 'authFail';
+    return 'other';
+  }
+  // Zeek（第十八輪 TI）：SSH 登入失敗、notice／intel 告警、連線被拒（REJ）或無回應（S0）
+  if (evt.netVendor === 'zeek' && evt.fields) {
+    const z = evt.fields;
+    if (z.zeekType === 'ssh' && z.authSuccess === 'false') return 'authFail';
+    if (z.zeekType === 'notice' || z.zeekType === 'intel') return 'attack';
+    if (z.action === 'deny') return 'denyBlock';
+    return 'other';
   }
   // netfilter 核心 LOG：前綴已判斷出拒絕時直接歸為封鎖（前綴如 "RDP-DROP"，連字號相連的字也算）
   if (evt.netVendor === 'netfilter' && evt.fields && evt.fields.action === 'deny') return 'denyBlock';
@@ -3811,6 +4046,8 @@ function parseJSONOrNDJSON(text) {
   try {
     const data = JSON.parse(trimmed);
     if (Array.isArray(data)) return { arr: data, singleObj: null };
+    // 單筆 Zeek log 的 matched／sources 等欄位是陣列，不可當成資料陣列取出（第十八輪 TI）
+    if (data && typeof data === 'object' && isZeekLog(data)) return { arr: null, singleObj: data };
     if (data && typeof data === 'object') {
       const arrKeys = Object.keys(data).filter(k => Array.isArray(data[k]));
       if (arrKeys.length) {
@@ -5781,6 +6018,45 @@ function anonymizeEvent(evt, opts) {
       const ci = cloudAuthInfo(a);
       const ev = cloudAuthEvent(a, ci, clone.lineNo);
       Object.assign(clone, { cloudRaw: a, fields: ev.fields, msg: ev.msg, raw: ev.raw });
+      return clone;
+    }
+    // Microsoft Defender（第十八輪 TK）：深拷貝後帳號類欄位與 email 換假帳號、主機名稱換假名、其餘換 IP／MAC，重建同一筆告警
+    if (clone.netVendor === 'defender' && clone.defRaw) {
+      const a = JSON.parse(JSON.stringify(clone.defRaw));
+      const walk = o => Object.keys(o).forEach(k => { const v = o[k]; if (v && typeof v === 'object') walk(v); else if (typeof v === 'string' && v) {
+        let x;
+        if (/^(?:userName|accountName|userPrincipalName|assignedTo|aadUserId|userSid)$/.test(k)) x = anonUser(v);
+        else if (/^(?:computerDnsName|deviceDnsName|domainName|hostName)$/.test(k)) x = anonHostname(v);
+        else x = replaceMACsInLine(replaceIPsInLine(v, opts)).replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, m => anonUser(m));
+        o[k] = x; } });
+      walk(a);
+      const all = defenderEvents(a, clone.lineNo);
+      const ev = all.find(x => x.fields.title === clone.fields.title) || all[0];
+      if (ev) Object.assign(clone, { defRaw: a, fields: ev.fields, msg: ev.msg, raw: ev.raw, host: ev.host });
+      return clone;
+    }
+    // CrowdStrike Falcon（第十八輪 TJ）：深拷貝後換 IP／MAC；帳號（UserName／UserId，含 email）換假名、
+    // 主機名稱（ComputerName／HostName／HostnameField／MachineDomain）換假名、路徑中的使用者資料夾換假帳號
+    if (clone.netVendor === 'falcon' && clone.falconRaw) {
+      const a = JSON.parse(JSON.stringify(clone.falconRaw));
+      const walk = o => Object.keys(o).forEach(k => { const v = o[k]; if (v && typeof v === 'object') walk(v); else if (typeof v === 'string' && v) {
+        let x;
+        if (/^(?:UserName|UserId)$/.test(k)) x = anonUser(v);
+        else if (/^(?:ComputerName|HostName|HostnameField|MachineDomain)$/.test(k)) x = anonHostname(v);
+        else x = replaceMACsInLine(replaceIPsInLine(v, opts)).replace(/(\\Users\\)([^\\]+)/gi, (m, p, u) => p + anonUser(u)).replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, m => anonUser(m));
+        o[k] = x; } });
+      walk(a);
+      const ev = falconEvent(a, clone.lineNo);
+      Object.assign(clone, { falconRaw: a, fields: ev.fields, msg: ev.msg, raw: ev.raw, host: ev.host });
+      return clone;
+    }
+    // Zeek（第十八輪 TI）：原始物件深拷貝後換 IP／MAC，再重建欄位與訊息
+    if (clone.netVendor === 'zeek' && clone.zeekRaw) {
+      const a = JSON.parse(JSON.stringify(clone.zeekRaw));
+      const walk = o => Object.keys(o).forEach(k => { const v = o[k]; if (v && typeof v === 'object') walk(v); else if (typeof v === 'string') o[k] = replaceMACsInLine(replaceIPsInLine(v, opts)); });
+      walk(a);
+      const ev = zeekEvent(a, clone.lineNo);
+      Object.assign(clone, { zeekRaw: a, fields: ev.fields, msg: ev.msg, raw: ev.raw });
       return clone;
     }
     if (clone.netVendor === 'amp' && clone.ampRaw) {

@@ -122,14 +122,42 @@ function _addrMatchesIp(name, targetInt, addrList, seen) {
   if (obj.type==='iprange')
     return _ipInRange(targetInt, obj.startIp, obj.endIp);
   if (obj.type==='fqdn') return null;
+  // Cisco ASA `object network`（type host，第十八輪 TF 發現）：subnet 為第一個成員——單一位址、`位址/遮罩`、
+  // `起-迄` 或 IPv6 前綴；原本落到最後的 return false，規則引用 ASA 物件時查詢永遠不命中
+  if (obj.type==='host' && obj.subnet && obj.subnet!=='-') {
+    const rg = obj.subnet.match(/^([^-\s]+)-([^-\s]+)$/);
+    return rg ? _ipInRange(targetInt, rg[1], rg[2]) : _ipInSubnet(targetInt, obj.subnet);
+  }
+  // FortiGate 位址型別（第十八輪 TE）：wildcard 為「位址 萬用遮罩」（遮罩 1 的位元須相符）；
+  // interface-subnet 帶 subnet 時同 ipmask；geography／mac／dynamic（SDN、FSSO）等無法由 IP 判斷
+  if (obj.type==='wildcard') {
+    const w = String(obj.wildcard||'').trim().split(/\s+/);
+    const a = _ipToInt(w[0]), m = _ipToInt(w[1]||'');
+    if (typeof targetInt === 'object') return false;
+    if (a === null || m === null) return null;
+    return ((targetInt & m) >>> 0) === ((a & m) >>> 0);
+  }
+  if (obj.type==='interface-subnet' && obj.subnet && obj.subnet!=='-') return _ipInSubnet(targetInt, obj.subnet);
+  if (/^(?:geography|mac|dynamic|wildcard-fqdn|interface-subnet)$/.test(obj.type)) return null;
   if (obj.type==='group'||obj.category==='address-group') {
     const mems = (obj.members||'').split(',').map(s=>s.trim()).filter(Boolean);
-    let fqdn = false;
+    let fqdn = false, hit = false;
     for (const m of mems) {
       const r = _addrMatchesIp(m, targetInt, addrList, seen);
-      if (r===true) return true;
+      if (r===true) { hit = true; break; }
       if (r===null) fqdn=true;
     }
+    // FortiGate addrgrp 排除成員（第十八輪 TC）：exclude enable＋exclude-member 的位址從群組中扣除
+    if (hit && obj.excludeMembers && obj.excludeMembers !== '-') {
+      let unsure = false;
+      for (const x of obj.excludeMembers.split(',').map(s=>s.trim()).filter(Boolean)) {
+        const r = _addrMatchesIp(x, targetInt, addrList, new Set());
+        if (r===true) return false;
+        if (r===null) unsure = true;
+      }
+      return unsure ? null : true;
+    }
+    if (hit) return true;
     return fqdn ? null : false;
   }
   return false;
@@ -221,11 +249,60 @@ function _ruleAppliesToNew(p) {
 function _queryIntfMatch(p, name) {
   if (!name) return true;
   const raw = (p._chain && p.srcIntf === p._chain) ? '-' : String(p.srcIntf || '-');
-  const items = raw.split(/\s*,\s*/).map(s => s.trim().toLowerCase());
+  // FortiGate zone（第十八輪 TD）：srcIntfMembers 為規則來源 zone 的成員介面
+  const items = (raw + (p.srcIntfMembers ? ', ' + p.srcIntfMembers : '')).split(/\s*,\s*/).map(s => s.trim().toLowerCase());
   return items.some(s => s === 'any' || s === 'all' || s === '-' || s === '' || s === name.trim().toLowerCase());
 }
 // opts.newOnly：預設 true（查詢「新連線會不會被放行」）；false 時沿用舊行為，狀態規則一律視為可能符合
 // opts.srcIntf：選填，進入介面／區域名稱
+// Cisco ASA／FTD 兩段式判斷（第十八輪 TF）：依連線網段與靜態路由（最長前綴）找出進入與離開介面（nameif），
+// 先比對進入介面的 in ACL（其後接 global ACL，皆無命中為隱含拒絕）；兩者都沒有時依 security-level
+// 高→低放行、同等級看 same-security-traffic；通過後再比對離開介面的 out ACL。判斷不出介面時回傳 null，沿用一般逐條比對
+function _asaIfFor(ipInt, PARSED) {
+  let best = null, bl = -1;
+  const consider = (net, mask, name, conn) => {
+    if (!name || !net || !mask || net === '-' || mask === '-') return;
+    if (_ipInSubnet(ipInt, `${net} ${mask}`) !== true) return;
+    const l = _cidrPrefixLen(mask); if (l === null) return;
+    if (l > bl || (l === bl && conn)) { best = name; bl = l; }
+  };
+  (PARSED.interfaces || []).forEach(i => consider(i.ip, i.mask, i.nameif, true));
+  (PARSED.routes || []).forEach(r => { const [a, m] = String(r.dst || '').split(/\s+/); consider(a, m, r.device, false); });
+  return best;
+}
+function _runAsaQuery(srcStr, dstStr, proto, port, PARSED, opts, srcInt, dstInt) {
+  const ifs = (PARSED.interfaces || []).filter(i => i.nameif);
+  const byName = n => ifs.find(i => i.nameif === n);
+  const ingress = (opts && opts.srcIntf && byName(String(opts.srcIntf).trim())) ? String(opts.srcIntf).trim() : _asaIfFor(srcInt, PARSED);
+  const egress = _asaIfFor(dstInt, PARSED);
+  if (!ingress || !egress || !byName(ingress) || !byName(egress)) return null;
+  const secIn = byName(ingress).secLevel, secOut = byName(egress).secLevel;
+  const has = (v, n) => String(v || '').split(',').includes(n);
+  const run = pols => _runPolicyQuery(srcStr, dstStr, proto, port, '__all__', Object.assign({}, PARSED, { policies: pols }), Object.assign({}, opts, { srcIntf: '', _asaStage: true }));
+  const asa = { ingress, egress, secIn, secOut };
+  const inPols = [...PARSED.policies.filter(p => has(p.srcIntf, ingress)), ...PARSED.policies.filter(p => has(p.srcIntf, 'any'))];
+  let first = null;
+  if (inPols.length) {
+    first = run(inPols);
+    if (first.action !== 'accept') return Object.assign(first, { asa: Object.assign(asa, { stage: 'in' }) });
+  } else {
+    const ss = PARSED.sameSecurity || {};
+    const ok = secIn > secOut || (secIn === secOut && (ingress === egress ? ss.intra : ss.inter));
+    if (!ok) return { matched: null, action: 'implicit_deny', trace: [], asa: Object.assign(asa, { stage: 'seclevel' }) };
+  }
+  const outPols = PARSED.policies.filter(p => has(p.dstIntf, egress));
+  const trace0 = first ? first.trace : [];
+  if (outPols.length) {
+    const second = run(outPols);
+    const trace = trace0.concat(second.trace);
+    if (second.action !== 'accept') return Object.assign(second, { trace, asa: Object.assign(asa, { stage: 'out' }) });
+    return { matched: first ? first.matched : second.matched, action: 'accept', trace, asa: Object.assign(asa, { stage: 'out' }) };
+  }
+  if (first) return Object.assign(first, { asa: Object.assign(asa, { stage: 'in' }) });
+  const sl = { id: 'security-level', name: `security-level ${secIn} → ${secOut}`, action: 'accept', status: 'enable', srcIntf: ingress, dstIntf: egress,
+    srcAddr: 'any', dstAddr: 'any', service: 'any', comments: '-', _default: true };
+  return { matched: sl, action: 'accept', trace: [], defaultRule: true, asa: Object.assign(asa, { stage: 'seclevel' }) };
+}
 function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) {
   const newOnly = !opts || opts.newOnly !== false;
   const qIntf = opts && opts.srcIntf ? String(opts.srcIntf).trim() : '';
@@ -235,6 +312,10 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
   // 來源與目的必須同一家族
   const isV6 = typeof srcInt === 'object';
   if (isV6 !== (typeof dstInt === 'object')) return {error:'invalid_ip'};
+  if (!isV6 && !(opts && opts._asaStage) && (!vdomFilter || vdomFilter === '__all__') && /cisco\s*(?:asa|ftd)/i.test(PARSED.vendor || '')) {
+    const ar = _runAsaQuery(srcStr, dstStr, proto, port, PARSED, opts, srcInt, dstInt);
+    if (ar) return ar;
+  }
   // IPv6 查詢：有 srcAddr6/dstAddr6（parser 依位址物件家族拆分）的廠牌只看 IPv6 那組，並把字面
   // 'any' 視為兩個家族皆適用（Palo Alto／Juniper／ASA 等的 any 本身不分家族；FortiGate 的 'all'
   // 是 IPv4 專用，不在此列）；沒有拆分欄位的廠牌沿用原欄位
@@ -268,7 +349,14 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
     trace.push({policy:p,result:'match',hasFqdn:sm===null||dm===null,resolvedSrc,resolvedDst});
     return {matched:p,action:p.action==='accept'?'accept':'deny',trace};
   }
-  return {matched:null,action:'implicit_deny',trace};
+  // 預設規則（第十八輪 TH）：Junos default-policy permit-all 時沒命中的流量放行，以合成的預設規則回傳；
+  // PAN-OS 的預設規則依目的區域而定（查詢條件無目的區域），只附上 paDefault 供畫面說明
+  if (PARSED.defaultPolicy === 'accept') {
+    const dp = { id: 'default-policy', name: 'default-policy permit-all', action: 'accept', status: 'enable', srcIntf: 'any', dstIntf: 'any',
+      srcAddr: 'any', dstAddr: 'any', service: 'any', comments: '-', _default: true };
+    return { matched: dp, action: 'accept', trace, defaultRule: true };
+  }
+  return PARSED.paDefault ? {matched:null,action:'implicit_deny',trace,paDefault:PARSED.paDefault} : {matched:null,action:'implicit_deny',trace};
 }
 
 function _addrResolvePath(name, targetInt, addrList, seen, pathPfx) {

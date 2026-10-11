@@ -471,6 +471,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="vyos">VyOS</option>
                 <option value="netfilter">Linux iptables/nftables</option>
                 <option value="cloudsg">AWS / Azure / Meraki (JSON)</option>
+                <option value="checkpoint_api">Check Point Management API (JSON)</option>
                 <option value="cumulus">NVIDIA Cumulus Linux (NVUE)</option>
                 <option value="voss">Extreme VOSS / Fabric Engine</option>
                 <option value="efos">Broadcom EFOS</option>
@@ -1300,6 +1301,8 @@ const VENDOR_SIGS = {
   tnsr:        { p:[/^nacm\s+(?:enable|disable|group\s)[\s\S]*^dataplane\s|^dataplane\s[\s\S]*^nacm\s+(?:enable|disable|group\s)/m, /^[ \t]+access-list\s+(?:input|output)\s+acl\s+\S+\s+sequence\s+\d+/m, /^vpf\s+(?:filter\s+ruleset|options)\b/m, /^[ \t]+next-hop\s+\d+\s+via\s/m], min:1 },
   // 無線控制器（2026-10-05，KD／KH／KI）：務必與 firewall_analyzer 的 FW_VENDOR_SIGS.wlc 一致，排在 comware／cisco_ios 前
   wlc:         { p:[/^(?:config\s+)?wlan\s+create\s+\d+\s+\S+/m, /^\s*wlan\s+service-template\s+\S+/m, /^\s*wlan\s+ssid-profile\s+\S+/m, /^wlan\s+\S+\s+\d{1,4}\s+\S+/m], min:1 },
+  // Check Point Management API JSON（第十八輪 TL），與 firewall_analyzer detectFwVendor() 的判斷一致
+  checkpoint_api: { p:[/"objects-dictionary"\s*:/, /"type"\s*:\s*"(?:access|nat)-(?:rule|section)"/], min:2 },
   cloudsg:     { p:[/"IpPermissions(?:Egress)?"\s*:\s*\[/, /"(?:default)?[sS]ecurityRules"\s*:\s*\[/, /"destCidr"\s*:/, /"applianceIp"\s*:/, /"publicPort"\s*:/], min:1 },
   // 務必與 firewall_analyzer 的 FW_VENDOR_SIGS.netfilter 保持一致（2026-10-02 新增）
   // Cumulus Linux NVUE（YAML 的 `- set:` 段或 nv set 指令），務必與 switch_analyzer isCumulusNVUE() 一致（2026-10-02）
@@ -1336,7 +1339,7 @@ const VENDOR_SIGS = {
 // "Sophos"/"Aruba" 文字比對），故刻意排在最後——讓其他更具結構特徵的廠牌訊號優先判定，
 // 只有在都沒命中時才輪到這兩家，降低誤判機率
 const VENDOR_ORDER = [
-  'cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','netgearsmart','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
+  'checkpoint_api','cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','netgearsmart','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
   'checkpoint','pfsense','sonicwall','watchguard','mikrotik','fsos','arista',
   'extreme','alcatel','brocade','procurve','dell_os10','planet','ruijie','netgear','edgeswitch','sonic',
   'ciscoasa','cisco_biz','cisco_ios',
@@ -1350,7 +1353,7 @@ const VENDOR_LABELS = {
   arista:'Arista EOS',aruba_cx:'Aruba CX',procurve:'Aruba ProCurve',
   dell_os10:'Dell OS10',extreme:'Extreme XOS',alcatel:'Alcatel OmniSwitch',
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
-  edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',cumulus:'NVIDIA Cumulus Linux (NVUE)',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',netgearsmart:'Netgear Smart Managed Pro',awplus:'Allied Telesis AlliedWare Plus',
+  edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',checkpoint_api:'Check Point Management API (JSON)',cumulus:'NVIDIA Cumulus Linux (NVUE)',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',netgearsmart:'Netgear Smart Managed Pro',awplus:'Allied Telesis AlliedWare Plus',
   planet:'Planet Technology',ruijie:'Ruijie (RGOS)',netgear:'Netgear M4300 (ICOS)',
   edgeswitch:'Ubiquiti EdgeSwitch',sonic:'SONiC (config_db.json)',watchguard:'WatchGuard Firebox',
   unknown:''
@@ -3769,6 +3772,44 @@ function anonCloudSG(text, opts) {
   return out;
 }
 
+// ---- Check Point Management API JSON（第十八輪 TL）----
+// show-access-rulebase／show-nat-rulebase 與 show-* 物件清單（firewall_analyzer parseMgmtApi() 讀的格式），可多個回應前後相接。
+// UID 保留（規則以 UID 引用物件，換掉會斷），自訂位址物件、規則、區段與 layer 名稱以物件名稱對照替換（同名一致，勾選備註時），
+// 預先定義物件（domain-type 為 data domain、Any／Accept／Original 等系統型別）保留；comments 為 REDACTED_COMMENT；
+// 閘道名稱以主機名稱對照；meta-info 的建立者／修改者帳號換假名（System 保留）；其餘字串做 IP 替換
+const CP_API_BUILTIN_TYPES = /^(?:CpmiAnyObject|RulebaseAction|Track|Global|Internet|CpmiHostCkp)$/;
+const CP_API_GW_TYPES = /^(?:simple-gateway|simple-cluster|CpmiGatewayCluster|CpmiClusterMember|CpmiGatewayPlain|checkpoint-host|Gateway)$/i;
+function anonCheckPointApi(text, opts) {
+  const parts = text.split(/\n(?=[{[])/);
+  if (parts.length > 1 && parts.every(p => { try { JSON.parse(p); return true; } catch { return false; } })) return parts.map(p => anonCheckPointApi(p, opts)).join('\n');
+  let db;
+  try { db = JSON.parse(text); } catch (e) { return anonGeneric(text, opts); }
+  const builtin = o => (o.domain && o.domain['domain-type'] === 'data domain') || CP_API_BUILTIN_TYPES.test(o.type || '') || o.name === 'Original';
+  const walk = (o, key, parent) => {
+    if (Array.isArray(o)) return o.map(v => walk(v, key, o));
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) o[k] = walk(o[k], k, o);
+      return o;
+    }
+    if (typeof o !== 'string' || !o) return o;
+    if (key === 'name' && parent && !Array.isArray(parent)) {
+      if ('domain-type' in parent) return o;                             // domain 物件名稱（SMC User 等）
+      if (CP_API_GW_TYPES.test(parent.type || '')) return opts.hostname ? anonHostname(o, 'gw', opts) : o;
+      if (builtin(parent) || /^service-/.test(parent.type || '')) return o;   // 服務名稱比照其他廠牌保留
+      if ('rulebase' in parent && !parent.type && o === 'Network') return o; // 預設 layer 名稱
+      return opts.comments ? anonAlias(o) : o;
+    }
+    if (key === 'comments') { if (opts.comments && o.trim()) { stats.comment++; return 'REDACTED_COMMENT'; } return o; }
+    if ((key === 'creator' || key === 'last-modifier') && o !== 'System') return opts.user ? anonUser(o) : o;
+    if (key === 'uid' || key === 'type' || /-uid$/.test(key) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(o)) return o;
+    return opts.ip ? replaceIPsInLine(o, opts) : o;
+  };
+  walk(db, '', null);
+  let out = JSON.stringify(db, null, 2);
+  if (opts.mac) out = replaceMACsInLine(out, opts);
+  return out;
+}
+
 // ---- Allied Telesis AlliedWare Plus ----
 // 2026-10-02 新增（第十輪 ZH）。帳號、community、描述、主機名稱與 IOS 同語法，沿用 anonCiscoIOS()；
 // 另處理 AW+ 的 `ssh server allow-users 帳號`（log host 的位址由通用 IP 替換處理）
@@ -3951,7 +3992,7 @@ const VENDOR_FNS = {
   procurve: anonProCurve,
   dell_os10: anonDellOS10, extreme: anonExtreme, alcatel: anonAlcatel,
   brocade: anonBrocade, ciscoasa: anonCiscoASA, zyxel: anonZyxel,
-  edgerouter: anonEdgeRouter, openwrt: anonOpenWrt, vyos: anonVyOS, netfilter: anonNetfilter, cloudsg: anonCloudSG, cumulus: anonCumulus, voss: anonVOSS, efos: anonEFOS, netgearsmart: anonNetgearSmart, awplus: anonAlliedWare,
+  edgerouter: anonEdgeRouter, openwrt: anonOpenWrt, vyos: anonVyOS, netfilter: anonNetfilter, cloudsg: anonCloudSG, checkpoint_api: anonCheckPointApi, cumulus: anonCumulus, voss: anonVOSS, efos: anonEFOS, netgearsmart: anonNetgearSmart, awplus: anonAlliedWare,
   planet: anonPlanet, ruijie: anonRuijie, netgear: anonNetgear,
   edgeswitch: anonEdgeSwitch, sonic: anonSonic, watchguard: anonWatchGuard,
   unknown: anonGeneric
@@ -3987,7 +4028,22 @@ function anonymize(text, vendor, opts, keepState) {
   }
 
   const fn = VENDOR_FNS[vendor] || anonGeneric;
-  return anonUrlCredentials(anonPemBlocks(anonContactInfo(anonCommentsFallback(fn(text, opts), opts, vendor))), opts);
+  return anonDomainNames(anonUrlCredentials(anonPemBlocks(anonContactInfo(anonCommentsFallback(fn(text, opts), opts, vendor))), opts), opts);
+}
+// 網域名稱（第十八輪 TA）：各廠牌模式原本只遮主機名稱，`ip domain-name`、`domain-name`、FortiGate `set domain`／
+// FQDN 位址物件、VPN 對端 `fqdn`、NTP 伺服器主機名稱等內部網域原樣保留，可直接辨識公司。不分廠牌：含 domain／fqdn
+// 關鍵字的行與 NTP 行中的網域名稱以主機名稱對照替換（可還原）；公開網域（廠牌雲端、時間伺服器、example）保留
+const PUBLIC_DOMAIN_RE = /(?:^|\.)(?:ntp\.org|nist\.gov|time\.gov|google\.com|googleapis\.com|gstatic\.com|windows\.com|microsoft\.com|windowsupdate\.com|apple\.com|cloudflare\.com|amazon\.com|amazonaws\.com|fortinet\.com|fortinet\.net|fortiguard\.com|fortiguard\.net|forticloud\.com|paloaltonetworks\.com|cisco\.com|meraki\.com|juniper\.net|arubanetworks\.com|hpe\.com|ui\.com|ubnt\.com|mikrotik\.com|checkpoint\.com|sonicwall\.com|zyxel\.com|netgate\.com|openwrt\.org|example\.(?:com|net|org)|localdomain)$/i;
+const DOMAIN_LINE_RE = /\b(?:domain|domain-name|domain-list|domain-search|dns-domain|search-domain|default-domain|domainname|fqdn)\b|<(?:domain|fqdn|domainname)>|^\s*(?:\S+\s+)*(?:s?ntp|ntp-service|ntp-server)\b/i;
+function anonDomainNames(text, opts) {
+  if (opts && opts.hostname === false) return text;
+  return text.split('\n').map(line => {
+    if (!DOMAIN_LINE_RE.test(line) || /^\s*(?:#|!|\/\/)/.test(line)) return line;
+    return line.replace(FQDN_RE, (m, fq, tld) => {
+      if (FILE_EXT_RE.test(tld) || PUBLIC_DOMAIN_RE.test(fq) || /\.example$/i.test(fq)) return m;
+      return anonHostname(fq, 'dom', opts);
+    });
+  }).join('\n');
 }
 // PEM 區塊（第十三輪 NA 實跑 Oxidized 的 FortiGate 91G 錄製發現）：FortiGate 的 set private-key／set certificate、
 // 其他廠牌貼上的金鑰與憑證都是多行 PEM，逐行規則只處理到開頭那一行，私鑰內文原樣殘留（checkResidual() 只會警示）。
@@ -4028,7 +4084,7 @@ const COMMENT_FALLBACK_RES = [
   [/<(descr|description|Description|comment|Comment)>(<!\[CDATA\[[\s\S]*?\]\]>|[^<]+)<\/\1>/g, (m, tag, v) => `<${tag}>REDACTED_COMMENT</${tag}>`, 2],
 ];
 function anonCommentsFallback(text, opts, vendor) {
-  if (!opts || !opts.comments || vendor === 'sonic' || vendor === 'cloudsg') return text;
+  if (!opts || !opts.comments || vendor === 'sonic' || vendor === 'cloudsg' || vendor === 'checkpoint_api') return text;
   return text.split('\n').map(line => {
     for (const [re, fn, vi] of COMMENT_FALLBACK_RES) {
       line = line.replace(re, (...a) => {
@@ -4296,7 +4352,9 @@ function checkResidual(text) {
     // 網域名稱殘留（2026-09-29 新增，RB）：只在「domain-name 類關鍵字後」或「內部網域結尾」時示警，
     // 公開網域（如 pool.ntp.org、廠牌更新伺服器）不列入，避免各廠牌模式大量誤報
     // PAN-OS 設定固定以 localhost.localdomain 當裝置節點名稱（Panorama／防火牆 XML 皆然），不是內部網域（2026-10-05）
-    if (!/REDACTED/.test(t) && (DOMAIN_KW_RESIDUAL_RE.test(t) || INTERNAL_DOMAIN_RE.test(t.replace(/\blocalhost\.localdomain\b/gi, '')))) {
+    // 公開網域（anonDomainNames() 刻意保留者，第十八輪 TA）不算殘留
+    const tDom = t.replace(FQDN_RE, (m, fq) => PUBLIC_DOMAIN_RE.test(fq) ? 'public' : m);
+    if (!/REDACTED/.test(t) && (DOMAIN_KW_RESIDUAL_RE.test(tDom) || INTERNAL_DOMAIN_RE.test(tDom.replace(/\blocalhost\.localdomain\b/gi, '')))) {
       warnings.push({ line: lineNum, text: t });
     }
     if (COMPANY_DOMAIN_SUFFIX && t.toLowerCase().includes(COMPANY_DOMAIN_SUFFIX.toLowerCase())) {
@@ -5080,7 +5138,7 @@ function runAnonymize() {
 // ── 結構保持度自檢（2026-10-02，第九輪發想 YD）──
 // 以隱藏 iframe 開啟對應分析工具（?structcheck=1，該頁不碰交接 key），postMessage 送出原始檔與
 // 去識別化結果，對方各自解析後只回傳數量。不直接呼叫 iframe 內函式，離線 file:// 開啟時也能運作。
-const STRUCT_FW_VENDORS = new Set(['fortigate','sophos','checkpoint','paloalto','pfsense','sonicwall','ciscoasa','zyxel','edgerouter','openwrt','watchguard','vyos','netfilter','cloudsg','h3c_secpath','tnsr']);
+const STRUCT_FW_VENDORS = new Set(['fortigate','sophos','checkpoint','paloalto','pfsense','sonicwall','ciscoasa','zyxel','edgerouter','openwrt','watchguard','vyos','netfilter','cloudsg','checkpoint_api','h3c_secpath','tnsr']);
 const STRUCT_LABELS = { vlans:'VLAN', interfaces:'Interface', routes:'Route', users:'User', acls:'ACL', lacp:'LACP', vrrp:'VRRP', dhcp:'DHCP', policies:'Policy', addresses:'Address', services:'Service', nat:'NAT', vpn:'VPN' };
 // MikroTik／Juniper 兩個分析工具都支援：有防火牆規則／security 區塊時交給防火牆分析，否則交給交換器解析
 function structCheckTool(vendor, text) {

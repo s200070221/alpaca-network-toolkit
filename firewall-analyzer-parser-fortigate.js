@@ -340,12 +340,27 @@ const FortigateParser = (() => {
     });
   }
 
+  // 介面區域（第十八輪 TD）：config system zone → {名稱:{interfaces, intrazone}}；規則的 srcintf／dstintf
+  // 常寫 zone 名稱，查詢以實體介面為進入介面時須展開成員介面才對得上
+  function parseZones(lines, vdomName) {
+    const { sectionLines } = extractSection(lines, 'system zone');
+    return parseEdits(sectionLines).map(e => ({ name: e.name, interfaces: (gvs(e.text, 'interface') || '').split(', ').filter(Boolean),
+      intrazone: gv(e.text, 'intrazone') || 'deny', _vdom: vdomName }));
+  }
+  const zoneIfaces = (intfStr, zones) => [...new Set((intfStr || '').split(', ').flatMap(n => (zones.find(z => z.name === n) || {}).interfaces || []))].join(', ');
+
   function parsePolicies(lines, vdomName, addrTypeMap) {
     const { sectionLines } = extractSection(lines, 'firewall policy');
     return parseEdits(sectionLines).map(e => {
       const t = e.text;
-      const srcAddrStr = gvs(t, 'srcaddr') || 'all';
-      const dstAddrStr = gvs(t, 'dstaddr') || 'all';
+      // Internet Service（ISDB，第十八輪 TB）：internet-service enable 時目的改由 ISDB 名稱決定、沒有 dstaddr，
+      // 原本預設成 all 被當成目的不限；改列 ISDB 名稱（加註 ISDB），查詢以無法判斷呈現。來源端 internet-service-src 同理
+      const isdb = pre => ['name', 'group', 'custom', 'custom-group', 'id']
+        .map(k => gvs(t, `${pre}-${k}`)).filter(Boolean).join(', ').split(', ').filter(Boolean).map(n => `${n} (ISDB)`).join(', ');
+      const dstIsdb = gv(t, 'internet-service') === 'enable' ? isdb('internet-service') : '';
+      const srcIsdb = gv(t, 'internet-service-src') === 'enable' ? isdb('internet-service-src') : '';
+      const srcAddrStr = [gvs(t, 'srcaddr'), srcIsdb].filter(Boolean).join(', ') || (gv(t, 'internet-service-src') === 'enable' ? 'ISDB (ISDB)' : 'all');
+      const dstAddrStr = [gvs(t, 'dstaddr'), dstIsdb].filter(Boolean).join(', ') || (gv(t, 'internet-service') === 'enable' ? 'ISDB (ISDB)' : 'all');
       const srcAddrSplit = _splitAddr(srcAddrStr, addrTypeMap);
       const dstAddrSplit = _splitAddr(dstAddrStr, addrTypeMap);
       return {
@@ -427,6 +442,8 @@ const FortigateParser = (() => {
           wildcard: gv(t, 'wildcard') || '-', iface: gv(t, 'associated-interface') || '-',
           color: gv(t, 'color') || '0', comment: gv(t, 'comment') || '-',
           members: gvs(t, 'member') || '-', _vdom: vdomName,
+          // addrgrp 排除成員（第十八輪 TC）
+          ...(gv(t, 'exclude') === 'enable' ? { excludeMembers: gvs(t, 'exclude-member') || '-' } : {}),
         });
       });
     };
@@ -1224,10 +1241,17 @@ const FortigateParser = (() => {
     const perVdom = vdomBlocks.map(vb => {
       const addresses = parseAddressObjects(vb.lines, vb.name);
       const addrTypeMap = buildAddrTypeMap(addresses);
+      const zones = parseZones(vb.lines, vb.name);
+      const pols = [...parsePolicies(vb.lines, vb.name, addrTypeMap), ...parsePolicies6(vb.lines, vb.name)];
+      if (zones.length) pols.forEach(p => {
+        const s = zoneIfaces(p.srcIntf, zones), d = zoneIfaces(p.dstIntf, zones);
+        if (s) p.srcIntfMembers = s;
+        if (d) p.dstIntfMembers = d;
+      });
       return {
-      name: vb.name,
+      name: vb.name, zones,
       interfaces: parseInterfaces(vb.lines, vb.name),
-      policies:   [...parsePolicies(vb.lines, vb.name, addrTypeMap), ...parsePolicies6(vb.lines, vb.name)],
+      policies:   pols,
       routes:     parseRoutes(vb.lines, vb.name),
       vpn:        parseVPN(vb.lines, vb.name),
       addresses,
@@ -1253,6 +1277,11 @@ const FortigateParser = (() => {
     const interfaces = isMultiVdom
       ? [...globalInterfaces, ...perVdom.flatMap(v => v.interfaces)]
       : globalInterfaces;
+    // 介面所屬 zone（第十八輪 TD），顯示在介面表 VDOM/Zone 欄
+    perVdom.forEach(v => v.zones.forEach(z => z.interfaces.forEach(n => {
+      const i = interfaces.find(x => x.name === n && (!isMultiVdom || x.vdom === v.name || x.vdom === 'global'));
+      if (i) i.zone = z.name;
+    })));
     const globalUsers = isMultiVdom
       ? parseUsers(globalLineArr, '__global__', profiles)
       : [];

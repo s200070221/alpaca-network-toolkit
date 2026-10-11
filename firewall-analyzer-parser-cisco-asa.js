@@ -492,6 +492,8 @@ const CiscoASAParser = (() => {
       deviceInfo:  parseDeviceInfo(text),
       interfaces:  parseInterfaces(text),
       policies:    parsePolicies(text, addrTypeMap),
+      // same-security-traffic permit inter-interface|intra-interface（第十八輪 TF，查詢的 security-level 判斷用）
+      sameSecurity: { inter: /^same-security-traffic\s+permit\s+inter-interface/m.test(text), intra: /^same-security-traffic\s+permit\s+intra-interface/m.test(text) },
       addresses,
       services:    parseServiceObjects(text),
       nat:         parseNAT(text),
