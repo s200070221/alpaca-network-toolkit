@@ -109,8 +109,8 @@
 - 入侵偵測與端點防護：Suricata EVE JSON、Cisco Secure Endpoint（AMP）事件 JSON、Zeek（JSON／TSV）、CrowdStrike Falcon 串流事件、Microsoft Defender for Endpoint／365 Defender
 - DNS／雲端安全：Cisco Umbrella CSV
 - 網路設備：Cisco IOS（含 ACL 記錄）、Comware 設備 log
-- 伺服器與雲端：Windows 事件 XML 與 Sysmon、IIS／Web 與 AWS ELB 存取紀錄、AWS VPC／Azure NSG／GCP 流量紀錄
-- 雲端身分與稽核：Microsoft Entra ID 登入、Okta、Microsoft 365 稽核、Google Workspace 登入、AWS CloudTrail
+- 伺服器與雲端：Windows 事件 XML 與 Sysmon、IIS／Web、AWS ELB 與 S3 存取紀錄、AWS VPC／Azure NSG／GCP 流量紀錄
+- 雲端身分與稽核：Microsoft Entra ID 登入、Okta、Microsoft 365 稽核、Google Workspace 登入、AWS CloudTrail、Azure Activity Log、GCP Cloud Audit Logs
 
 **主要功能**
 - 依嚴重程度排序，找出可能問題：頻率異常、掃描、認證失敗、Kerberoasting、橫向移動、介面異常、MAC 飄移、跨事件攻擊鏈等，附 MITRE ATT&CK 編號
