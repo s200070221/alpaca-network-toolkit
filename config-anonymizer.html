@@ -1242,6 +1242,9 @@ const bucketSeen = { n1:new Set(), n2:new Set(), n3:new Set() };
 const stats = { ip:0, hostname:0, user:0, password:0, key:0, community:0, ssid:0, comment:0, vdom:0, mac:0 };
 // 已使用的匿名化輸出 IP 集合（防止二次映射，如 MikroTik 兩段式處理）
 const anonOutputIPs = new Set();
+// 原檔中出現過的 IPv4 字面值：逐一對應配發假位址時跳過這些值。原檔本身含 192.0.2／198.51.100／203.0.113
+// 位址時，原本另一個位址可能被配到同一個假值（兩台主機變成同一個位址，還原時也分不開）
+const srcIPv4 = new Set(), srcIPv6 = new Set();
 // 保留網段結構模式（2026-10-02，第十輪 ZN）的逐層對照：top＝原始 /16 → 假 /16，
 // oct3＝「假 /16|原始第三段」→ 假第三段；used 記錄已配發的假值，確保不同來源不會撞在一起
 const subnetMaps = { top: new Map(), topUsed: new Set(), oct3: new Map(), oct3Used: new Set() };
@@ -1485,9 +1488,9 @@ function anonIP(ip, opts) {
   bucketSeen[cls].add(ip);
   const lastPart = opts.preserveLastOctet ? Number(ip.split('.')[3]) : null;
   let mapped;
-  if (cls === 'n1') { ctrs.n1 = (ctrs.n1 % 254) + 1; mapped = `192.0.2.${lastPart ?? ctrs.n1}`; }
-  else if (cls === 'n2') { ctrs.n2 = (ctrs.n2 % 254) + 1; mapped = `198.51.100.${lastPart ?? ctrs.n2}`; }
-  else { ctrs.n3 = (ctrs.n3 % 254) + 1; mapped = `203.0.113.${lastPart ?? ctrs.n3}`; }
+  const pre = cls === 'n1' ? '192.0.2.' : cls === 'n2' ? '198.51.100.' : '203.0.113.';
+  if (lastPart != null) mapped = pre + lastPart;
+  else for (let i = 0; i < 254; i++) { ctrs[cls] = (ctrs[cls] % 254) + 1; mapped = pre + ctrs[cls]; if (!srcIPv4.has(mapped)) break; }
   mappings.ip.set(ip, mapped);
   anonOutputIPs.add(mapped);
   stats.ip++;
@@ -1512,6 +1515,8 @@ function canonIPv6(ip) {
 }
 function anonIPv6(ip) {
   if (mappings.ip.has(ip)) return mappings.ip.get(ip);
+  // 已配發的假值不再換一次（同一行被處理兩次時 2001:db8::1 會再被換成 ::2，比照 IPv4 的 anonOutputIPs）
+  if (anonOutputIPs.has(String(ip).toLowerCase())) return ip;
   // 映射表裡已有同一位址的其他寫法時沿用同一個假值（不新增狀態，匯入的對照表種子與批次共用映射也適用）
   const c = canonIPv6(ip);
   if (c) {
@@ -1519,9 +1524,11 @@ function anonIPv6(ip) {
       if (k.includes(':') && canonIPv6(k) === c) { mappings.ip.set(ip, v); return v; }
     }
   }
-  ctrs.ip6++;
-  const mapped = `2001:db8::${ctrs.ip6}`;
+  // 原檔本身含 2001:db8::N 時跳過，避免兩個位址配到同一個假值（比照 IPv4 的 srcIPv4）
+  let mapped;
+  for (let i = 0; i < 1000; i++) { ctrs.ip6++; mapped = `2001:db8::${ctrs.ip6}`; if (!srcIPv6.has(mapped)) break; }
   mappings.ip.set(ip, mapped);
+  anonOutputIPs.add(mapped);
   stats.ip++;
   return mapped;
 }
@@ -1721,7 +1728,8 @@ function replaceDescLine(line, opts) {
 }
 
 // IPv4 regex — avoid matching bare version-number segments
-const IPv4_RE = /(?<![.\d])(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?![.\d])/g;
+// 前面緊接英文字母的不算（Cisco Business 檔頭 v3.2.1.1、RCBS3.2.1.1_950 這類版本字串原本被換成假位址）
+const IPv4_RE = /(?<![.\dA-Za-z])(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?![.\d])/g;
 // IPv6（含 :: 零壓縮縮寫）— 原本的簡化版本只認得展開式（8 組或至少 3 組以冒號結尾），
 // 完全無法匹配真實世界最常見的 :: 縮寫格式（如 2001:db8::1、fe80::1），已改用涵蓋
 // 全 8 組/:: 縮寫全部位置（開頭/中間/結尾/單獨 ::）的完整寫法
@@ -1869,7 +1877,8 @@ function anonFortiGate(text, opts) {
 
     // ── Hostname（config system global 或 multivdom config global）
     if (opts.hostname && (inSysGlobal || inGlobal)) {
-      line = line.replace(/^(\s*set\s+hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n.replace(/"/g, ''), 'fw', opts));
+      // 保留原本的引號（原本一律去掉，set hostname "FW-01" 變成 set hostname dev-…，還原後格式也不同）
+      line = line.replace(/^(\s*set\s+hostname\s+)(\S+)/, (m, p, n) => { const q = n.startsWith('"') ? '"' : ''; return p + q + anonHostname(n.replace(/"/g, ''), 'fw', opts) + q; });
     }
 
     // ── VDOM 名稱（config vdom 內 depth=0 的 edit）────────
@@ -1972,7 +1981,7 @@ function anonFortiSwitch(text, opts) {
       if (snmpNR !== line) line = snmpNR;
     }
     if (opts.hostname && inGlobal) {
-      line = line.replace(/^(\s*set\s+hostname\s+)(\S+)/, (m, p, n) => p + anonHostname(n.replace(/"/g,''),'sw',opts));
+      line = line.replace(/^(\s*set\s+hostname\s+)(\S+)/, (m, p, n) => { const q = n.startsWith('"') ? '"' : ''; return p + q + anonHostname(n.replace(/"/g,''),'sw',opts) + q; });
     }
     if (opts.user && inAdmin) {
       line = line.replace(/^(\s*edit\s+)"([^"]+)"/, (m, p, n) => p + '"' + anonUser(n) + '"');
@@ -4025,7 +4034,10 @@ function anonymize(text, vendor, opts, keepState) {
     // mappings，否則每次執行去識別化都會把剛匯入的假值洗掉、改產生全新假值（見上方 IMPORTED_SEED
     // 宣告處的說明）。
     if (IMPORTED_SEED) seedLiveMappingsFromImported(IMPORTED_SEED);
+    srcIPv4.clear(); srcIPv6.clear();
   }
+  for (const m of text.matchAll(/(?<![\d.])\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?![\d])/g)) srcIPv4.add(m[0]);
+  for (const m of text.matchAll(/(?<![0-9A-Fa-f:])2001:db8::[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])/gi)) srcIPv6.add(m[0].toLowerCase());
 
   const fn = VENDOR_FNS[vendor] || anonGeneric;
   return anonDomainNames(anonUrlCredentials(anonPemBlocks(anonContactInfo(anonCommentsFallback(fn(text, opts), opts, vendor))), opts), opts);
@@ -5888,16 +5900,17 @@ async function doExportEncrypted(password) {
 
 // ---- 還原邏輯 ----
 function restoreConfig(anonText, rev) {
-  let text = anonText;
   // ssid/alias/vdom/mac 4 類 2026-09-18 補上（見 doExportEncrypted() 對應修復註解）；
   // 向下相容舊版 .acmap（無這 4 類欄位）：rev.ssid||{} 等 fallback 安全處理不拋錯。
   // 2026-09-21 改用 MAPPING_CATEGORIES 統一迭代，避免未來新增類別時漏改這裡
-  const entries = MAPPING_CATEGORIES.flatMap(cat => Object.entries(rev[cat] || {}))
-    .sort((a, b) => b[0].length - a[0].length); // 長字串優先，避免子字串誤替換
-  for (const [anon, orig] of entries) {
-    text = text.split(anon).join(orig); // replaceAll polyfill-safe
-  }
-  return text;
+  const map = new Map();
+  MAPPING_CATEGORIES.forEach(cat => Object.entries(rev[cat] || {}).forEach(([anon, orig]) => { if (anon && !map.has(anon)) map.set(anon, orig); }));
+  if (!map.size) return anonText;
+  // 一次替換（長字串優先）且假值前後不可緊接英數字或「.數字」：原本逐一以純字串替換，假值 203.0.113.3
+  // 會換進 203.0.113.31，已換回的原值也可能被後面的項目再換一次
+  const keys = [...map.keys()].sort((a, b) => b.length - a.length).map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const re = new RegExp(`(?<![A-Za-z0-9])(?:${keys.join('|')})(?![A-Za-z0-9]|\\.\\d)`, 'g');
+  return anonText.replace(re, m => map.get(m));
 }
 
 // ---- 還原模式 UI 狀態 ----
