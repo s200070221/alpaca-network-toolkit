@@ -420,16 +420,18 @@ const PaloAltoParser = (() => {
         xblks(xv(vr._inner,'routing-table')||vr._inner, 'entry').forEach((e, i) => {
           const inner = e._inner;
           const dst = xv(inner,'destination') || '-';
+          // nexthop 內為 <ip-address>／<next-vr>／<discard/> 子標籤，取子標籤的值（原本整段含標籤當成下一跳）
+          const nh = xv(inner,'nexthop');
           routes.push({
             type: 'static', id: `${vrName}-${i+1}`,
-            dst, gateway: xv(inner,'nexthop')||xv(inner,'ip-address')||'-',
+            dst, gateway: xv(nh,'ip-address')||xv(nh,'next-vr')||(nh&&!nh.includes('<')?nh:'')||xv(inner,'ip-address')||'-',
             device: xv(inner,'interface') || '-',
             distance: xv(inner,'admin-dist') || xv(inner,'metric') || '10',
             priority: xv(inner,'priority') || '0',
             weight: '0',
             comment: '-',
             status: e._outer.includes('disabled="yes"') ? 'disable' : 'enable',
-            blackhole: xv(inner,'nexthop-type') === 'discard' ? 'enable' : 'disable',
+            blackhole: xv(inner,'nexthop-type') === 'discard' || /<discard\s*\/?>/.test(nh) ? 'enable' : 'disable',
             vrf: vrName,
           });
         });

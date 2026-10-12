@@ -357,6 +357,20 @@ const EdgeRouterParser = (() => {
         });
       });
     });
+    // 只指定出口介面的靜態路由（set protocols static interface-route X next-hop-interface IF）
+    const ifRoutes = childrenPrefixed(child(child(tree, 'protocols'), 'static'), 'interface-route');
+    Object.entries(ifRoutes).forEach(([key, node]) => {
+      const dst = key.replace(/^interface-route\s+/, '');
+      Object.entries(childrenPrefixed(node, 'next-hop-interface')).forEach(([nkey, nnode]) => {
+        out.push({
+          type: dst === '0.0.0.0/0' ? 'default' : 'static', id: String(seq++),
+          dst, gateway: '-', device: nkey.replace(/^next-hop-interface\s+/, ''),
+          distance: val(nnode, 'distance') || '1', priority: val(nnode, 'distance') || '1',
+          blackhole: 'disable', vrf: 'main', status: 'enable', comment: val(nnode, 'description') || '',
+          protocol_detail: '-', _vdom: '',
+        });
+      });
+    });
     return out;
   }
 

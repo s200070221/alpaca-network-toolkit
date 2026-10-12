@@ -374,7 +374,7 @@ const PfsenseParser = (() => {
         const name = xv(b._inner,'name');
         const gw   = xv(b._inner,'gateway');
         const ifc  = xv(b._inner,'interface');
-        if (name) gwMap[name] = { gw, ifc };
+        if (name) gwMap[name] = { gw, ifc, def: hasTag(b._inner,'defaultgw') };
       });
     }
 
@@ -397,6 +397,13 @@ const PfsenseParser = (() => {
     // Add default gateway route
     const sys = xv(xml,'system');
     const defGw = xv(sys||xml,'defaultgw');
+    // 預設閘道也可能只標在 gateway_item 的 <defaultgw> 上（無 system/defaultgw）
+    const defItem = Object.values(gwMap).find(g => g.def && /^\d+\.\d+\.\d+\.\d+$/.test(g.gw||''));
+    if (!defGw && defItem && !routes.find(r=>r.dst==='0.0.0.0/0')) {
+      routes.push({ type:'static', id:'gw', dst:'0.0.0.0/0',
+        gateway:defItem.gw, device:defItem.ifc||'-', distance:'1', priority:'0', weight:'0',
+        comment:'Default gateway', status:'enable', blackhole:'disable', vrf:'0' });
+    }
     if (defGw && !routes.find(r=>r.dst==='0.0.0.0/0')) {
       routes.push({ type:'static', id:'gw', dst:'0.0.0.0/0',
         gateway:defGw, device:'-', distance:'1', priority:'0', weight:'0',
