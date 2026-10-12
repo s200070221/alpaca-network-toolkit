@@ -511,27 +511,33 @@ const JuniperParser = (() => {
     while ((srm = staticRe.exec(staticText)) !== null) {
       const dst = srm[1];
       const body = srm[2];
-      const nhM = body.match(/next-hop\s+(\S+);/);
-      const nh = nhM ? nhM[1].replace(';','') : '-';
+      // 多個下一跳（重複 next-hop 或 next-hop [ A B ]）各列一筆，原本只取第一個
+      const nhs = [];
+      for (const m of body.matchAll(/next-hop\s+(\[[^\]]*\]|[^\s;]+)\s*;/g))
+        m[1].replace(/[\[\]]/g,' ').trim().split(/\s+/).forEach(x => nhs.push(x));
+      if (!nhs.length) nhs.push('-');
       const bh = /discard|reject/.test(body) ? 'enable' : 'disable';
       const prefM = body.match(/preference\s+(\d+);/);
       const metM  = body.match(/metric\s+(\d+);/);
-      routes.push({ type:'static', id:String(srtId++), dst,
+      nhs.forEach(nh => routes.push({ type:'static', id:String(srtId++), dst,
         gateway: bh==='enable' ? 'blackhole' : nh,
         device: '-', distance: prefM?prefM[1]:'5',
         priority: metM?metM[1]:'-', weight:'0',
         comment: (body.match(/description\s+"([^"]+)"/)||[])[1]||'-',
-        status:'enable', blackhole:bh, vrf:'0' });
+        status:'enable', blackhole:bh, vrf:'0' }));
     }
     // Also try simple "route DST next-hop GW;" form
-    const simpleRe = /route\s+(\S+)\s+next-hop\s+(\S+);/g;
+    const simpleRe = /route\s+(\S+)\s+next-hop\s+(\[[^\]]*\]|[^\s;]+)\s*;/g;
     let sm2;
     while ((sm2 = simpleRe.exec(staticText)) !== null) {
-      if (!routes.find(r=>r.dst===sm2[1])) {
-        routes.push({ type:'static', id:String(srtId++), dst:sm2[1],
-          gateway:sm2[2], device:'-', distance:'5', priority:'-', weight:'0',
-          comment:'-', status:'enable', blackhole:'disable', vrf:'0' });
-      }
+      const dst = sm2[1];
+      sm2[2].replace(/[\[\]]/g,' ').trim().split(/\s+/).forEach(gw => {
+        if (!routes.find(r=>r.dst===dst&&r.gateway===gw)) {
+          routes.push({ type:'static', id:String(srtId++), dst,
+            gateway:gw, device:'-', distance:'5', priority:'-', weight:'0',
+            comment:'-', status:'enable', blackhole:'disable', vrf:'0' });
+        }
+      });
     }
     const discardRe = /route\s+(\S+)\s+discard;/g;
     let dm;

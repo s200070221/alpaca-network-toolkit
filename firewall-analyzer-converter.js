@@ -60,11 +60,54 @@ const Converter = (() => {
   // VPN phase2 子網等欄位可能是「IP/前綴」「IP/點分遮罩」或「IP 空白 點分遮罩」，統一轉成合法
   // 「IP/前綴」；原本各轉換函式直接把空白換成斜線（產生 IP/255.255.255.0）或把點分遮罩當前綴
   // 換算（產生 255.255.255.254），目標廠牌會拒絕或解讀成錯誤網段
+  // 靜態路由目的網段：來源可能是「位址 遮罩」「位址/遮罩」或 default，原本只把空白換成斜線，
+  // 輸出 0.0.0.0/0.0.0.0 這種目標廠牌不接受的寫法
+  function routeCidr(dst){ return String(dst||'').trim()==='default' ? '0.0.0.0/0' : subCidr(dst); }
+  // FortiGate 等「位址 遮罩」寫法：原本把斜線換成遮罩卻留下前綴數字（192.168.1.0 255.255.255.024）
+  function addrMask(sub){ const c=subCidr(sub); const [ip,b]=c.split('/'); return ip.includes(':')?c:ip+' '+maskOf(b); }
   function subCidr(sub){
     const t=String(sub||'').trim();
     if(t.includes('/')){ const [ip,p]=t.split('/'); return ip+'/'+(p.includes('.')?bits(p):p); }
     const p=t.split(/\s+/);
     return p.length>=2?cidr(p[0],p[1]):t+'/32';
+  }
+  // 單一服務名稱 → {proto,port}：先查設定檔自己的服務物件（各廠牌分類名稱不同，custom／service
+  // 皆收），再查常見服務名稱；原本各轉換目標查不到就退成不帶埠（tcp 或不限協定），HTTPS 規則
+  // 會變成 permit tcp any any 甚至全放行。仍查不到時回傳 unresolved，由呼叫端停用該規則並註記
+  const WELL_KNOWN_SVC={http:['tcp','80'],https:['tcp','443'],ssh:['tcp','22'],telnet:['tcp','23'],smtp:['tcp','25'],smtps:['tcp','465'],
+    ftp:['tcp','21'],dns:['udp','53'],ntp:['udp','123'],snmp:['udp','161'],rdp:['tcp','3389'],pop3:['tcp','110'],pop3s:['tcp','995'],
+    imap:['tcp','143'],imaps:['tcp','993'],ldap:['tcp','389'],ping:['icmp',null],icmp:['icmp',null],all_icmp:['icmp',null]};
+  function resolveSvc(svc, parsed){
+    const raw=String(svc||'any').trim(), first=raw.toLowerCase();
+    if(!first||first==='any'||first==='all'||first==='-'||first==='ip') return {proto:'ip',port:null};
+    const m=first.match(/^(tcp|udp|icmp)(?:[\/:](\d+(?:-\d+)?))?$/);
+    if(m) return {proto:m[1],port:m[2]||null};
+    if(/^\d+$/.test(first)) return {proto:'tcp',port:first};
+    const obj=((parsed&&parsed.services)||[]).find(o=>(o.category==='custom'||o.category==='service')&&o.name===raw);
+    if(obj){
+      const pr=(obj.proto||'').toLowerCase();
+      const proto=pr.includes('icmp')?'icmp':(pr.includes('udp')&&!pr.includes('tcp'))?'udp':'tcp';
+      const port=proto==='udp'?obj.udpPorts:obj.tcpPorts;
+      if(proto==='icmp') return {proto,port:null};
+      if(port&&/^\d+(-\d+)?$/.test(port)) return {proto,port};
+    }
+    const wk=WELL_KNOWN_SVC[first];
+    if(wk) return {proto:wk[0],port:wk[1]};
+    return {proto:'ip',port:null,unresolved:raw};
+  }
+  // 規則的來源／目的／服務有多個值時，對只接受單一值的目標廠牌逐一展開成多條規則（原本只取
+  // 第一個值，HTTP,HTTPS 轉完只剩 HTTP）；名稱第二條起加 _2、_3 後綴
+  function splitPolicies(policies){
+    const out=[];
+    (policies||[]).forEach(p=>{
+      const S=sl(p.srcAddr), D=sl(p.dstAddr), V=sl(p.service);
+      if(S.length<=1&&D.length<=1&&V.length<=1){ out.push(p); return; }
+      let n=0;
+      (V.length?V:[p.service]).forEach(v=>(S.length?S:[p.srcAddr]).forEach(a=>(D.length?D:[p.dstAddr]).forEach(b=>{
+        n++; out.push({...p, srcAddr:a, dstAddr:b, service:v, name:n===1?p.name:`${p.name}_${n}`});
+      })));
+    });
+    return out;
   }
   // 規則名稱去重：Cisco ASA 等來源同一個 ACL 名稱底下有多筆 ACE，轉成 Sophos／Palo Alto／Juniper
   // 這類「規則名稱必須唯一」的目標時，同名規則讀回會互相覆蓋或被裝置拒絕。第一次出現沿用原名，
@@ -331,7 +374,7 @@ const Converter = (() => {
         else if(a.type==='iprange') { L.push('        set type iprange'); L.push(`        set start-ip ${a.startIp}`); L.push(`        set end-ip ${a.endIp}`); }
         else {
           const sub=a.subnet||(a.ip&&a.mask?`${a.ip} ${a.mask}`:a.ip?`${a.ip} 255.255.255.255`:'0.0.0.0 0.0.0.0');
-          const subFmt=sub.includes('/')?sub.replace('/',` ${maskOf(sub.split('/')[1])}`):sub;
+          const subFmt=addrMask(sub);
           L.push(`        set type ipmask`); L.push(`        set subnet ${subFmt}`);
         }
         if(a.comment&&a.comment!=='-') L.push(`        set comment "${qstr(a.comment)}"`);
@@ -394,7 +437,7 @@ const Converter = (() => {
       L.push('config router static');
       sroutes.forEach((r,i)=>{
         L.push(`    edit ${i+1}`);
-        const dst=r.dst.includes('/')?r.dst.replace('/',` ${maskOf(r.dst.split('/')[1])}`):r.dst;
+        const dst=addrMask(routeCidr(r.dst));
         L.push(`        set dst ${dst}`);
         if(r.gateway&&r.gateway!=='-'&&r.gateway!=='blackhole') L.push(`        set gateway ${r.gateway}`);
         if(r.device&&r.device!=='-') L.push(`        set device "${qstr(r.device)}"`);
@@ -658,8 +701,8 @@ const Converter = (() => {
         else if(a.type==='iprange') { L.push(`    <IPRange><Name>${esc(a.name)}</Name><StartIPAddress>${esc(a.startIp)}</StartIPAddress><EndIPAddress>${esc(a.endIp)}</EndIPAddress><Description>${esc(a.comment)}</Description></IPRange>`); }
         else {
           const sub=a.subnet||(a.ip?a.ip+'/32':'0.0.0.0/0');
-          const ip=sub.split('/')[0]||sub.split(' ')[0];
-          const nm=sub.includes('/')?maskOf(sub.split('/')[1]):sub.split(' ')[1]||'255.255.255.255';
+          const [ip,b]=subCidr(sub).split('/');
+          const nm=ip.includes(':')?b:maskOf(b);
           L.push(`    <Host><Name>${esc(a.name)}</Name><IPAddress>${esc(ip)}</IPAddress><Subnet>${esc(nm)}</Subnet><Description>${esc(a.comment)}</Description></Host>`);
         }
       });
@@ -693,7 +736,7 @@ const Converter = (() => {
     const ospf=parsed.routes.find(r=>r.type==='ospf');
     if(sroutes.length||ospf) {
       L.push('  <Routing>');
-      sroutes.forEach(r=>{ const dst=r.dst.includes('/')?r.dst:r.dst.replace(/\s+/,'/'); L.push(`    <Unicast><DestinationIP>${esc(dst.split('/')[0]||dst.split(' ')[0])}</DestinationIP><Mask>${esc(dst.includes('/')?maskOf(dst.split('/')[1]):dst.split(' ')[1]||'0.0.0.0')}</Mask><Gateway>${esc(r.gateway)}</Gateway><Interface>${esc(r.device||'Port1')}</Interface><Distance>${esc(r.distance||'1')}</Distance><Description>${esc(r.comment)}</Description></Unicast>`); });
+      sroutes.forEach(r=>{ const dst=routeCidr(r.dst); L.push(`    <Unicast><DestinationIP>${esc(dst.split('/')[0]||dst.split(' ')[0])}</DestinationIP><Mask>${esc(dst.includes('/')?maskOf(dst.split('/')[1]):dst.split(' ')[1]||'0.0.0.0')}</Mask><Gateway>${esc(r.gateway)}</Gateway><Interface>${esc(r.device||'Port1')}</Interface><Distance>${esc(r.distance||'1')}</Distance><Description>${esc(r.comment)}</Description></Unicast>`); });
       if(ospf) L.push(`    <OSPF><RouterID>${esc(ospf.routerId||'-')}</RouterID><AdminDistance>${esc(ospf.distance||'110')}</AdminDistance></OSPF>`);
       L.push('  </Routing>');
     }
@@ -829,7 +872,7 @@ const Converter = (() => {
     L.push('');
     // Routes
     parsed.routes.filter(r=>r.type==='static'||r.type==='default').forEach(r=>{
-      const dst=r.dst.includes('/')?r.dst:r.dst.replace(/\s+/,'/');
+      const dst=routeCidr(r.dst);
       if(r.blackhole==='enable') L.push(`set static-route ${dst} blackhole on`);
       else if(r.gateway&&r.gateway!=='-') L.push(`set static-route ${dst} nexthop gateway address ${r.gateway} on`);
     });
@@ -844,8 +887,8 @@ const Converter = (() => {
       else if(a.type==='iprange') L.push(`set network-object ip-range "${qstr(a.name)}" first-ip ${a.startIp} last-ip ${a.endIp}`);
       else {
         const sub=a.subnet||(a.ip?a.ip+'/32':'0.0.0.0/0');
-        const ip=sub.split(/[\/\s]/)[0]; const sfx=sub.includes('/')?sub.split('/')[1]:bits(sub.split(' ')[1]||'255.255.255.255');
-        if(sfx==='32'||!sub.includes('/')) L.push(`set network-object host "${qstr(a.name)}" ipaddr ${ip}`);
+        const ip=sub.split(/[\/\s]/)[0]; const sfx=subCidr(sub).split('/')[1];
+        if(String(sfx)==='32') L.push(`set network-object host "${qstr(a.name)}" ipaddr ${ip}`);
         else L.push(`set network-object network "${qstr(a.name)}" ipaddr ${ip} mask-length ${sfx}`);
       }
     });
@@ -967,7 +1010,7 @@ const Converter = (() => {
     L.push('      <virtual-router><entry name="default">');
     if(sroutes.length) {
       L.push('        <routing-table><ip><static-route>');
-      sroutes.forEach(r=>{ const dst=r.dst.includes('/')?r.dst:r.dst.replace(/\s+/,'/'); L.push(`          <entry name="${esc(r.comment&&r.comment!=='-'?r.comment:'route-'+r.id)}"><destination>${esc(dst)}</destination>${r.gateway&&r.gateway!=='-'&&r.gateway!=='blackhole'?`<nexthop><ip-address>${esc(r.gateway)}</ip-address></nexthop>`:''}<admin-dist>${esc(r.distance||'10')}</admin-dist></entry>`); });
+      sroutes.forEach(r=>{ const dst=routeCidr(r.dst); L.push(`          <entry name="${esc(r.comment&&r.comment!=='-'?r.comment:'route-'+r.id)}"><destination>${esc(dst)}</destination>${r.gateway&&r.gateway!=='-'&&r.gateway!=='blackhole'?`<nexthop><ip-address>${esc(r.gateway)}</ip-address></nexthop>`:''}<admin-dist>${esc(r.distance||'10')}</admin-dist></entry>`); });
       L.push('        </static-route></ip></routing-table>');
     }
     if(ospf) L.push(`        <ospf><enable>yes</enable>${ospf.routerId?`<router-id>${esc(ospf.routerId)}</router-id>`:''}</ospf>`);
@@ -1119,7 +1162,7 @@ const Converter = (() => {
       if(bgp3) { L.push(`${I(1)}autonomous-system ${bgp3.as||'65000'};`); if(bgp3.routerId) L.push(`${I(1)}router-id ${bgp3.routerId};`); }
       if(sr2.length) {
         L.push(`${I(1)}static {`);
-        sr2.forEach(r=>{ const dst=r.dst.includes('/')?r.dst:r.dst.replace(/\s+/,'/'); L.push(r.blackhole==='enable'?`${I(2)}route ${dst} discard;`:`${I(2)}route ${dst} next-hop ${r.gateway};`); });
+        sr2.forEach(r=>{ const dst=routeCidr(r.dst); L.push(r.blackhole==='enable'?`${I(2)}route ${dst} discard;`:`${I(2)}route ${dst} next-hop ${r.gateway};`); });
         L.push(`${I(1)}}`);
       }
       L.push('}'); L.push('');
@@ -1318,13 +1361,24 @@ const Converter = (() => {
       L.push('  </virtualip>');
     }
 
-    // gateways
-    const defRoute=parsed.routes.find(r=>(r.type==='static'||r.type==='default')&&(r.dst==='0.0.0.0/0'||r.dst.startsWith('0.0.0.0')));
-    if(defRoute) L.push(`  <gateways><gateway_item><name>GW_WAN</name><gateway>${esc(defRoute.gateway)}</gateway><interface>wan</interface><defaultgw>yes</defaultgw></gateway_item></gateways>`);
+    // gateways：原本只為預設路由建 GW_WAN，其餘路由一律引用 GW_WAN，下一跳全部變成預設閘道；
+    // 改為每個下一跳各建一個 gateway_item（預設路由的為 GW_WAN），路由引用對應名稱
+    const sroutesAll=parsed.routes.filter(r=>(r.type==='static'||r.type==='default'||r.type==='static6')&&r.gateway&&r.gateway!=='-'&&r.gateway!=='blackhole');
+    const isDefDst=r=>routeCidr(r.dst)==='0.0.0.0/0';
+    const defRoute=sroutesAll.find(isDefDst);
+    const gwName={};
+    if(defRoute) gwName[defRoute.gateway]='GW_WAN';
+    sroutesAll.forEach(r=>{ if(!gwName[r.gateway]) gwName[r.gateway]='GW_'+r.gateway.replace(/[^A-Za-z0-9]/g,'_'); });
+    const gwKeys=Object.keys(gwName);
+    if(gwKeys.length){
+      L.push('  <gateways>');
+      gwKeys.forEach(g=>L.push(`    <gateway_item><name>${esc(gwName[g])}</name><gateway>${esc(g)}</gateway><interface>${gwName[g]==='GW_WAN'?'wan':'lan'}</interface>${gwName[g]==='GW_WAN'?'<defaultgw>yes</defaultgw>':''}</gateway_item>`));
+      L.push('  </gateways>');
+    }
 
-    // static routes
-    const sroutes2=parsed.routes.filter(r=>(r.type==='static'||r.type==='default')&&!r.dst.startsWith('0.0.0.0'));
-    if(sroutes2.length){ L.push('  <staticroutes>'); sroutes2.forEach(r=>{ const dst2=r.dst.includes('/')?r.dst:r.dst.replace(/\s+/,'/'); L.push(`    <route><network>${esc(dst2)}</network><gateway>GW_WAN</gateway><descr>${esc(r.comment)}</descr>${r.status==='disable'?'<disabled></disabled>':''}</route>`); }); L.push('  </staticroutes>'); }
+    // static routes（預設路由由 gateway_item 的 defaultgw 表示，不另列）
+    const sroutes2=sroutesAll.filter(r=>!isDefDst(r));
+    if(sroutes2.length){ L.push('  <staticroutes>'); sroutes2.forEach(r=>{ const dst2=r.dst.includes(':')?r.dst:routeCidr(r.dst); L.push(`    <route><network>${esc(dst2)}</network><gateway>${esc(gwName[r.gateway])}</gateway><descr>${esc(r.comment)}</descr>${r.status==='disable'?'<disabled></disabled>':''}</route>`); }); L.push('  </staticroutes>'); }
 
     // aliases
     const allAddrs2=parsed.addresses.filter(a=>a.category==='address');
@@ -1347,23 +1401,27 @@ const Converter = (() => {
     // firewall rules
     if(parsed.policies.length){
       L.push('  <filter>');
-      parsed.policies.forEach(p=>{
+      // 服務原本直接把名稱當協定（HTTPS → <protocol>https</protocol>），改為解析成協定＋目的埠；
+      // 多個來源／目的／服務逐一展開成多條規則
+      splitPolicies(parsed.policies).forEach(p=>{
+        const sv=resolveSvc(sl(p.service)[0]||'any', parsed);
         L.push('    <rule>');
         L.push(`      <type>${mapAction(p.action,'pfsense')}</type>`);
         L.push(`      <interface>${esc(mapZone(p.srcIntf,'pfsense'))}</interface>`);
-        const proto3=(p.service&&p.service!=='ANY'&&p.service!=='any'&&p.service!=='-'&&p.service!=='-')?p.service.split(/[,\s:]/)[0].toLowerCase():'any';
-        L.push(`      <protocol>${esc(proto3)}</protocol>`);
+        L.push(`      <protocol>${esc(sv.proto==='ip'?'any':sv.proto)}</protocol>`);
+        const isAny=v=>!v||/^(any|all|-)$/i.test(String(v).trim());
         L.push('      <source>');
-        if(p.srcAddr&&p.srcAddr!=='any'&&p.srcAddr!=='-') L.push(`        <address>${esc(sl(p.srcAddr)[0]||p.srcAddr)}</address>`);
+        if(!isAny(p.srcAddr)) L.push(`        <address>${esc(sl(p.srcAddr)[0]||p.srcAddr)}</address>`);
         else L.push('        <any/>');
         L.push('      </source>');
         L.push('      <destination>');
-        if(p.dstAddr&&p.dstAddr!=='any'&&p.dstAddr!=='-') L.push(`        <address>${esc(sl(p.dstAddr)[0]||p.dstAddr)}</address>`);
+        if(!isAny(p.dstAddr)) L.push(`        <address>${esc(sl(p.dstAddr)[0]||p.dstAddr)}</address>`);
         else L.push('        <any/>');
+        if(sv.port) L.push(`        <port>${esc(sv.port)}</port>`);
         L.push('      </destination>');
-        L.push(`      <descr>${esc(p.name)}</descr>`);
+        L.push(`      <descr>${esc((sv.unresolved?`UNRESOLVED service ${sv.unresolved} - `:'')+p.name)}</descr>`);
         if(p.logtraffic&&p.logtraffic!=='disable') L.push('      <log></log>');
-        if(p.status==='disable') L.push('      <disabled></disabled>');
+        if(p.status==='disable'||sv.unresolved) L.push('      <disabled></disabled>');
         if(p.schedule&&p.schedule!=='always'&&p.schedule!=='-') L.push(`      <sched>${esc(p.schedule)}</sched>`);
         L.push('    </rule>');
       });
@@ -1417,29 +1475,9 @@ const Converter = (() => {
     // 具名服務：先查設定檔自己的服務物件（各廠牌分類名稱不同，custom／service 皆收），再查常見
     // 服務名稱；原本查不到就退成不帶埠的 tcp，HTTPS 規則會變成 permit tcp any any（放寬）。
     // 仍查不到時標記 unresolved，由呼叫端輸出成停用規則並加 remark，不做靜默放寬
-    const WELL_KNOWN_SVC={http:['tcp','80'],https:['tcp','443'],ssh:['tcp','22'],telnet:['tcp','23'],smtp:['tcp','25'],smtps:['tcp','465'],
-      ftp:['tcp','21'],dns:['udp','53'],ntp:['udp','123'],snmp:['udp','161'],rdp:['tcp','3389'],pop3:['tcp','110'],pop3s:['tcp','995'],
-      imap:['tcp','143'],imaps:['tcp','993'],ldap:['tcp','389'],ping:['icmp',null],icmp:['icmp',null],all_icmp:['icmp',null]};
-    const svcOf = svc => {
-      const raw=sl(svc)[0]||'any', first=raw.toLowerCase();
-      if(!first||first==='any'||first==='all'||first==='-'||first==='ip') return {proto:'ip',port:null};
-      const m=first.match(/^(tcp|udp|icmp)(?:\/(\d+(?:-\d+)?))?$/);
-      if(m) return {proto:m[1],port:m[2]||null};
-      if(/^\d+$/.test(first)) return {proto:'tcp',port:first};
-      const obj=(parsed.services||[]).find(o=>(o.category==='custom'||o.category==='service')&&o.name===raw);
-      if(obj){
-        const pr=(obj.proto||'').toLowerCase();
-        const proto=pr.includes('icmp')?'icmp':(pr.includes('udp')&&!pr.includes('tcp'))?'udp':'tcp';
-        const port=proto==='udp'?obj.udpPorts:obj.tcpPorts;
-        if(proto==='icmp') return {proto,port:null};
-        if(port&&/^\d+(-\d+)?$/.test(port)) return {proto,port};
-      }
-      const wk=WELL_KNOWN_SVC[first];
-      if(wk) return {proto:wk[0],port:wk[1]};
-      return {proto:'ip',port:null,unresolved:raw};
-    };
+    const svcOf = svc => resolveSvc(svc, parsed);
     const addrOf = addr => {
-      const first=sl(addr)[0]||'any';
+      const first=addr||'any';
       if(!first||/^(any|all|-)$/i.test(first)) return 'any';
       const ipMask=first.match(/^(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)$/);
       if(ipMask) return `${ipMask[1]} ${ipMask[2]}`;
@@ -1497,8 +1535,8 @@ const Converter = (() => {
       else if(a.type==='iprange') L.push(` range ${a.startIp} ${a.endIp}`);
       else {
         const sub=a.subnet||(a.ip?a.ip+'/32':'0.0.0.0/0');
-        const ip=sub.split(/[\/\s]/)[0]; const sfx=sub.includes('/')?sub.split('/')[1]:bits(sub.split(' ')[1]||'255.255.255.255');
-        if(String(sfx)==='32'||!sub.includes('/')) L.push(` host ${ip}`);
+        const ip=sub.split(/[\/\s]/)[0]; const sfx=subCidr(sub).split('/')[1];
+        if(String(sfx)==='32') L.push(` host ${ip}`);
         else L.push(` subnet ${ip} ${maskOf(sfx)}`);
       }
     });
@@ -1565,12 +1603,18 @@ const Converter = (() => {
     parsed.policies.forEach(p=>{
       const intf=intfOf(p.srcIntf);
       const aclName=`${intf}_access_in`;
-      const {proto,port,unresolved}=svcOf(p.service);
-      if(unresolved) L.push(`access-list ${aclName} remark UNRESOLVED service ${String(unresolved).replace(/[\r\n]/g,'')} - rule below set inactive, please review`);
-      let line=`access-list ${aclName} extended ${mapAction(p.action,'ciscoasa')} ${proto} ${addrOf(p.srcAddr)} ${addrOf(p.dstAddr)}`;
-      if(port) line+=port.includes('-')?` range ${port.replace('-',' ')}`:` eq ${port}`;
-      if(p.status==='disable'||unresolved) line+=' inactive';
-      L.push(line);
+      // 多個服務／來源／目的各展開一行 ACE；原本只取第一個，HTTP,HTTPS 規則轉完只剩 HTTP
+      const svcs=sl(p.service), srcs=sl(p.srcAddr), dsts=sl(p.dstAddr);
+      (svcs.length?svcs:['any']).forEach(sv=>{
+        const {proto,port,unresolved}=svcOf(sv);
+        if(unresolved) L.push(`access-list ${aclName} remark UNRESOLVED service ${String(unresolved).replace(/[\r\n]/g,'')} - rule below set inactive, please review`);
+        (srcs.length?srcs:['any']).forEach(sa=>(dsts.length?dsts:['any']).forEach(da=>{
+          let line=`access-list ${aclName} extended ${mapAction(p.action,'ciscoasa')} ${proto} ${addrOf(sa)} ${addrOf(da)}`;
+          if(port) line+=port.includes('-')?` range ${port.replace('-',' ')}`:` eq ${port}`;
+          if(p.status==='disable'||unresolved) line+=' inactive';
+          L.push(line);
+        }));
+      });
       boundIntf.add(intf);
     });
     boundIntf.forEach(intf=>L.push(`access-group ${intf}_access_in in interface ${intf}`));
@@ -1756,7 +1800,7 @@ const Converter = (() => {
       // 2026-08-09 修正：改用 SonicWallParser 註明「主要（已驗證）」的標籤 <Rule>，原本用
       // 的 <AccessRule> 是該 parser 自己標註「未證實對應版本」的欄位命名容錯別名
       L.push('  <AccessRules>');
-      parsed.policies.forEach(p=>{
+      splitPolicies(parsed.policies).forEach(p=>{
         L.push('    <Rule>');
         L.push(`      <Name>${esc(p.name)}</Name>`);
         L.push(`      <SourceZone>${esc(mapZone(p.srcIntf,'sonicwall'))}</SourceZone>`);
@@ -1874,10 +1918,21 @@ const Converter = (() => {
       return name;
     }
     const ruleBlocks=[];
-    parsed.policies.forEach((p,idx)=>{
+    splitPolicies(parsed.policies).forEach((p,idx)=>{
       const srcObj=addrObjFor(p.srcAddr,p._vdom);
       const dstObj=addrObjFor(p.dstAddr,p._vdom);
-      const svcObj=svcObjFor(p.service,p._vdom);
+      let svcObj=svcObjFor(p.service,p._vdom);
+      // 設定檔沒有對應物件的常見服務名稱（HTTP、HTTPS…）原本省略 service 行，規則變成不限服務；
+      // 改用常見服務埠建立物件，仍查不到時停用規則
+      let svcUnresolved=false;
+      if(!svcObj&&p.service&&!/^(any|all|-)$/i.test(String(p.service).trim())){
+        const sv=resolveSvc(sl(p.service)[0], parsed);
+        if((sv.proto==='tcp'||sv.proto==='udp')&&sv.port&&!sv.port.includes('-')){
+          const key=`${sv.proto}/${sv.port}`;
+          if(!svcNames[key]){ svcNames[key]=`SVC_${svcSeq++}`; svcObjLines.push(`service-object ${svcNames[key]} ${sv.proto} eq ${sv.port}`); }
+          svcObj=svcNames[key];
+        } else if(sv.proto!=='ip'||sv.unresolved) svcUnresolved=true;
+      }
       const lines=[`secure-policy insert ${idx+1}`];
       lines.push(` from ${nz(p.srcIntf,'any')}`);
       lines.push(` to ${nz(p.dstIntf,'any')}`);
@@ -1886,7 +1941,7 @@ const Converter = (() => {
       if(svcObj)lines.push(` service ${svcObj}`);
       lines.push(` action ${mapAction(p.action,'zyxel')}`);
       if(p.name)lines.push(` name ${p.name.replace(/\s+/g,'_')}`);
-      if(p.status==='disable')lines.push(' no activate');
+      if(p.status==='disable'||svcUnresolved)lines.push(' no activate');
       lines.push('exit');
       ruleBlocks.push(lines.join('\n'));
     });
@@ -1924,7 +1979,8 @@ const Converter = (() => {
     });
     if(ifaceLines.length){L.push('interfaces {');L.push(...ifaceLines);L.push('}');}
 
-    const rules=parsed.policies||[];
+    // 多個來源／目的／服務原本整串寫進 address／protocol（address A, B 不合法），逐一展開
+    const rules=splitPolicies(parsed.policies);
     if(rules.length){
       // 2026-09-10 新增：具名位址物件攤平。EdgeOS 的 source/destination 子區塊要引用「具名
       // 物件」須用 `group { address-group NAME; }` 取代裸 `address NAME;`，與 parseAddrOrPort()
@@ -1945,7 +2001,7 @@ const Converter = (() => {
       // 來源時後綴為空字串，行為與修復前相同）
       const erVk=(vdom,name)=>(vdom?vdom+'/':'')+name;
       function addrGroupRef(val,vdom){
-        if(!val||/^(any|-)$/i.test(val)||literalAddrRe.test(val))return null;
+        if(!val||/^(any|all|-)$/i.test(val)||literalAddrRe.test(val))return null;
         const obj=(parsed.addresses||[]).find(a=>a.name===val&&(a._vdom||null)===(vdom||null)&&(a.category==='address'||a.category==='address-group')&&a.type!=='fqdn');
         if(!obj)return null;
         const key=erVk(vdom,obj.name);
@@ -1999,16 +2055,16 @@ const Converter = (() => {
           lines.push(`                    address-group ${srcGroup}`);
           lines.push('                }');
           lines.push('            }');
-        } else if(p.srcAddr&&!/^(any|-)$/.test(p.srcAddr)){
+        } else if(p.srcAddr&&!/^(any|all|-)$/i.test(p.srcAddr)){
           lines.push('            source {');
           lines.push(`                address ${p.srcAddr}`);
           lines.push('            }');
         }
         const dstGroup=p.dstAddr?addrGroupRef(p.dstAddr,p._vdom):null;
-        if(dstGroup||(p.dstAddr&&!/^(any|-)$/.test(p.dstAddr))||svcPort){
+        if(dstGroup||(p.dstAddr&&!/^(any|all|-)$/i.test(p.dstAddr))||svcPort){
           lines.push('            destination {');
           if(dstGroup) { lines.push('                group {'); lines.push(`                    address-group ${dstGroup}`); lines.push('                }'); }
-          else if(p.dstAddr&&!/^(any|-)$/.test(p.dstAddr)) lines.push(`                address ${p.dstAddr}`);
+          else if(p.dstAddr&&!/^(any|all|-)$/i.test(p.dstAddr)) lines.push(`                address ${p.dstAddr}`);
           if(svcPort)lines.push(`                port ${svcPort}`);
           lines.push('            }');
         }
@@ -2028,9 +2084,10 @@ const Converter = (() => {
           grouped.forEach((g,gi)=>ruleBlocks.push(buildOneRule(num+gi,p,g.proto,g.port)));
           return;
         }
-        const [litProto,litPort]=(p.service&&p.service.includes('/'))?p.service.split('/'):[p.service||'all',''];
-        const svcProto=named?named.proto:litProto, svcPort=named?named.port:litPort;
-        ruleBlocks.push(buildOneRule(num,p,svcProto,svcPort));
+        // 常見服務名稱（HTTP、HTTPS…）原本整個當協定名稱輸出，改解析成協定＋埠；查不到時停用
+        const sv=named?null:resolveSvc(p.service, parsed);
+        const svcProto=named?named.proto:(sv.proto==='ip'?'all':sv.proto), svcPort=named?named.port:(sv.port||'');
+        ruleBlocks.push(buildOneRule(num,sv&&sv.unresolved?{...p,status:'disable',comments:`UNRESOLVED service ${sv.unresolved}`}:p,svcProto,svcPort));
       });
       L.push('firewall {');
       if(neededAddrGroups.size){
@@ -2096,12 +2153,22 @@ const Converter = (() => {
     if(routes.length){
       L.push('protocols {');
       L.push('    static {');
+      // 同一目的網段多個下一跳要寫在同一個 route 區塊內（分開寫讀回只剩最後一個）；
+      // 只有出口介面沒有下一跳位址的路由用 interface-route／next-hop-interface
+      const grp={};
       routes.forEach(r=>{
-        L.push(`        route ${r.dst} {`);
-        const nh=r.gateway&&r.gateway!=='-'?r.gateway:(r.device||'0.0.0.0');
-        L.push(`            next-hop ${nh} {`);
-        if(r.distance&&r.distance!=='-'&&r.distance!=='0')L.push(`                distance ${r.distance}`);
-        L.push('            }');
+        const viaIf=!(r.gateway&&r.gateway!=='-')&&r.device&&r.device!=='-';
+        const k=(viaIf?'interface-route ':'route ')+routeCidr(r.dst);
+        (grp[k]=grp[k]||[]).push(r);
+      });
+      Object.entries(grp).forEach(([k,rs])=>{
+        L.push(`        ${k} {`);
+        rs.forEach(r=>{
+          const viaIf=k.startsWith('interface-route');
+          L.push(viaIf?`            next-hop-interface ${r.device} {`:`            next-hop ${r.gateway} {`);
+          if(r.distance&&r.distance!=='-'&&r.distance!=='0')L.push(`                distance ${r.distance}`);
+          L.push('            }');
+        });
         L.push('        }');
       });
       L.push('    }');
@@ -2138,7 +2205,7 @@ const Converter = (() => {
     });
     const routes=(parsed.routes||[]).filter(r=>r.type==='static'||r.type==='default');
     routes.forEach(r=>{
-      const [net,bitsStr]=r.dst.split('/');
+      const [net,bitsStr]=routeCidr(r.dst).split('/');
       L.push(`config route`);
       L.push(`\toption target '${net}'`);
       if(bitsStr)L.push(`\toption netmask '${maskFromBits(parseInt(bitsStr,10))}'`);
@@ -2183,7 +2250,7 @@ const Converter = (() => {
       return obj.type==='iprange'?`${obj.startIp}-${obj.endIp}`:addrCidr(obj);
     }
     function owAddrLiteral(val){
-      if(!val||/^(any|-)$/i.test(val)||owLiteralAddrRe.test(val))return{literal:val};
+      if(!val||/^(any|all|-)$/i.test(val)||owLiteralAddrRe.test(val))return{literal:val};
       const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===val&&a.type!=='fqdn');
       if(obj)return{literal:owAddrObjLiteral(obj)};
       const grp=(parsed.addresses||[]).find(a=>a.category==='address-group'&&a.name===val);
@@ -2220,21 +2287,24 @@ const Converter = (() => {
       });
       L.push('');
     });
-    (parsed.policies||[]).forEach(p=>{
+    // 多值逐一展開；常見服務名稱解析成協定＋埠，查不到時停用（原本 option proto 'HTTP, HTTPS'）
+    splitPolicies(parsed.policies).forEach(p0=>{
+      const named0=owSvcLiteral(p0.service);
+      const sv=named0?null:resolveSvc(p0.service, parsed);
+      const p=sv&&sv.unresolved?{...p0,status:'disable',name:`UNRESOLVED service ${sv.unresolved} - ${p0.name}`}:p0;
       L.push(`config rule`);
       if(p.name)L.push(`\toption name '${p.name}'`);
       if(p.srcIntf&&p.srcIntf!=='any')L.push(`\toption src '${p.srcIntf}'`);
       if(p.dstIntf&&p.dstIntf!=='any')L.push(`\toption dest '${p.dstIntf}'`);
       const named=owSvcLiteral(p.service);
-      const [litProto,litPort]=(p.service&&p.service.includes('/'))?p.service.split('/'):[p.service||'any',''];
-      const svcProto=named?named.proto:litProto, svcPort=named?named.port:litPort;
+      const svcProto=named?named.proto:(sv.proto==='ip'?'any':sv.proto), svcPort=named?named.port:(sv.port||'');
       if(svcProto&&!/^(any|all)$/i.test(svcProto))L.push(`\toption proto '${svcProto}'`);
       if(svcPort)L.push(`\toption dest_port '${svcPort}'`);
       const srcRes=owAddrLiteral(p.srcAddr), dstRes=owAddrLiteral(p.dstAddr);
       if(srcRes.ipset)L.push(`\toption ipset '${srcRes.ipset}'`);
-      else if(srcRes.literal&&!/^(any|-)$/.test(srcRes.literal))L.push(`\toption src_ip '${srcRes.literal}'`);
+      else if(srcRes.literal&&!/^(any|all|-)$/i.test(srcRes.literal))L.push(`\toption src_ip '${srcRes.literal}'`);
       if(dstRes.ipset&&dstRes.ipset!==srcRes.ipset)L.push(`\toption ipset '${dstRes.ipset}'`);
-      else if(!dstRes.ipset&&dstRes.literal&&!/^(any|-)$/.test(dstRes.literal))L.push(`\toption dest_ip '${dstRes.literal}'`);
+      else if(!dstRes.ipset&&dstRes.literal&&!/^(any|all|-)$/i.test(dstRes.literal))L.push(`\toption dest_ip '${dstRes.literal}'`);
       L.push(`\toption target '${p.action==='accept'?'ACCEPT':'REJECT'}'`);
       if(p.status==='disable')L.push(`\toption enabled '0'`);
       L.push('');
@@ -2521,7 +2591,7 @@ const Converter = (() => {
         return Array.from(buckets,([proto,ports])=>({proto,port:[...ports].join(',')}));
       }
       const ruleLines=[];
-      parsed.policies.forEach(p=>{
+      splitPolicies(parsed.policies).forEach(p=>{
         const baseLine=`add chain=forward action=${mapAction(p.action,'mikrotik')}`;
         const src=addrRef(p.srcAddr), dst=addrRef(p.dstAddr);
         let addrPart='';
@@ -2541,16 +2611,17 @@ const Converter = (() => {
           return;
         }
         let line=baseLine+addrPart;
-        let proto='', port='';
+        let proto='', port='', unresolved='';
         if(named){ proto=named.proto; port=named.port; }
         else {
-          const svc=(sl(p.service)[0]||'').toLowerCase();
-          proto=/udp/.test(svc)?'udp':/icmp/.test(svc)?'icmp':/tcp|^\d/.test(svc)?'tcp':'';
-          port=(svc.match(/(\d+)$/)||[])[1]||'';
+          // 原本只看名稱是否含 tcp／udp 字樣，HTTP、HTTPS 這類名稱解析不出協定，規則變成不限服務
+          const sv=resolveSvc(sl(p.service)[0]||'any', parsed);
+          if(sv.unresolved) unresolved=sv.unresolved;
+          else if(sv.proto!=='ip'){ proto=sv.proto; port=sv.port?String(sv.port):''; }
         }
         if(proto) line+=` protocol=${proto}`;
         if(proto&&proto!=='icmp'&&port) line+=` dst-port=${port}`;
-        line+=commentPart;
+        line+=unresolved?` comment="UNRESOLVED service ${String(unresolved).replace(/"/g,'')} - ${p.name}" disabled=yes`:commentPart;
         ruleLines.push(line);
       });
       if(neededLists.size){
