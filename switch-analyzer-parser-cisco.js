@@ -199,23 +199,27 @@ function parseCiscoBreakout(cfg){
 // ── Routes ────────────────────────────────────────────────────
 function parseCiscoRoutes(cfg){
   const routes=[];
-  // "ip route [vrf VRF] DST MASK GW"
-  const re=/^ip route(?:\s+vrf\s+(\S+))?\s+(\S+)\s+(\S+)\s+(\S+)/gm;
+  // "ip route [vrf VRF] DST MASK GW"；Arista／FS 等也寫 "ip route DST/LEN GW" 與 "ip route default GW"。
+  // 欄位間只認空白與 tab：原本 \s+ 會跨行，CIDR 寫法少一欄時把下一行的 "ip" 當成下一跳（0.0.0.0/0/9 → ip）
+  const re=/^ip route(?:[ \t]+vrf[ \t]+(\S+))?[ \t]+(\S+)[ \t]+(\S+)(?:[ \t]+(\S+))?/gm;
   let m;
   while((m=re.exec(cfg))!==null){
     const vrf=m[1]||'';
-    let dst=m[2],mask=m[3],gw=m[4];
+    let dst=m[2],mask=m[3],gw=m[4]||'';
+    if(dst==='default'){dst='0.0.0.0/0';gw=mask;}
+    else if(dst.includes('/')){gw=mask;}
     // Fix 3: Support interface-name as next-hop (e.g. Null0, Serial0/1)
-    if(mask.match(/^\d+\.\d+\.\d+\.\d+$/)){dst=dst+'/'+cidrFromMask(mask);}
+    else if(mask.match(/^\d+\.\d+\.\d+\.\d+$/)){dst=dst+'/'+cidrFromMask(mask);}
     else if(/^\d+$/.test(mask)){dst=dst+'/'+mask;}
     else{const iface=mask;gw=iface+(gw?' '+gw:'');dst=dst+'/0';}
+    if(!gw)continue;
     const gwIsInterface=gw&&!gw.match(/^\d+\.\d+\.\d+\.\d+/);
     routes.push({dst,gw,vrf,gwIsInterface});
   }
   // IPv6 靜態路由（2026-08-13 十一續新增）：官方語法 "ipv6 route [vrf VRF] PREFIX/LEN NEXTHOP"，
   // 獨立關鍵字非 "ip route" 放寬字元類別可解決，prefix/length 已是單一 token 不需 mask 換算；
   // Arista EOS 委派同一函式（parseArista()→parseCiscoRoutes()）免費一起修好
-  const re6=/^ipv6 route(?:\s+vrf\s+(\S+))?\s+(\S+)\s+(\S+)/gm;
+  const re6=/^ipv6 route(?:[ \t]+vrf[ \t]+(\S+))?[ \t]+(\S+)[ \t]+(\S+)/gm;
   while((m=re6.exec(cfg))!==null){
     const vrf=m[1]||'';
     const dst=m[2],gw=m[3];

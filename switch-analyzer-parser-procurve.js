@@ -27,7 +27,12 @@ function parseProCurve(cfg) {
       // IP 是主要位址，後續設定的（不同子網）自動變成次要位址，最多 7 個；官方 HP
       // "Configuring IP Addressing" 章節確認機制存在，惟 WebFetch 對該 PDF 解析不完整
       // 未能取得逐字指令範例）
-      const ipMatches=[...b.matchAll(/^\s+ip address\s+(\S+)\s+(\S+)/mg)];
+      // 位址可寫「A 遮罩」或 CIDR「A/長度」；欄位間只認空白與 tab（原本 \s+ 會跨行，CIDR 寫法
+      // 把下一行的第一個字當成遮罩，變成 192.168.0.3/24/ip）。CIDR 換成點分遮罩，沿用「位址/遮罩」慣例
+      const pfxMask=n=>{const v=n<=0?0:(0xFFFFFFFF<<(32-n))>>>0;return [v>>>24,(v>>>16)&255,(v>>>8)&255,v&255].join('.');};
+      const ipMatches=[...b.matchAll(/^[ \t]+ip address[ \t]+(\S+)(?:[ \t]+(\S+))?/mg)]
+        .map(m=>{const c=m[1].match(/^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/);return c?[m[0],c[1],pfxMask(+c[2])]:m;})
+        .filter(m=>m[2]&&/^\d+\.\d+\.\d+\.\d+$/.test(m[1]));
       const mIp=ipMatches[0];
       // 修正既有 bug：其餘所有廠牌的 vlan 物件皆有 ipSubnets 欄位（共用 UI 摘要卡片
       // buildSumCards() 讀 v.ipSubnets.length 判斷有 IP 的 VLAN 數），parseProCurve()
