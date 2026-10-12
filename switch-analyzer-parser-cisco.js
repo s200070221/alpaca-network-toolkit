@@ -122,7 +122,9 @@ function parseCiscoInterfaces(cfg,vendor){
     }
     // Physical / Stack
     let mode='',vlans='',nativeVlan='',vrf='';
-    const noRouting=/no switchport/.test(body);
+    // 路由介面（第十九輪 EA）：除了 `no switchport` 外，沒有任何 switchport 指令卻設定 IPv4 位址的介面也是路由介面——
+    // 路由器（ISR 等）的實體埠、子介面（Gi0/0.10＋encapsulation dot1Q）、Tunnel 都沒有 switchport 指令，原本 IP 被略過
+    const noRouting=/no switchport/.test(body)||(!/^\s*switchport\b/m.test(body)&&/^\s*ip address[ \t]+\d/m.test(body));
     if(noRouting){
       // Routed port
       let ip=(body.match(/^\s*ip address[ \t]+(\S+(?:[ \t]+(?!secondary\b)\S+)?)/m)||[])[1]||'';
@@ -130,7 +132,9 @@ function parseCiscoInterfaces(cfg,vendor){
       // 雙棧修復（2026-08-13 新增，同 Loopback）
       const ip6=(body.match(/^\s*ipv6 address\s+(\S+)/m)||[])[1]||'';
       vrf=(body.match(vrfRe)||[])[1]||'';
-      ifaces.push({name,type:'physical',desc,mode:'routed',vlans:'',nativeVlan:'',vrf,ip,ip6,secondaryIps,shutdown,member,hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
+      // 子介面的 VLAN 標籤（encapsulation dot1Q N）記在 vlans，Tunnel 標為 tunnel 型別
+      const dot1q=(body.match(/^\s*encapsulation dot1Q\s+(\d+)/mi)||[])[1]||'';
+      ifaces.push({name,type:/^Tunnel/i.test(name)?'tunnel':'physical',desc,mode:'routed',vlans:dot1q,nativeVlan:'',vrf,ip,ip6,secondaryIps,shutdown,member,hybrid:null,vrrp:[],breakoutChild:false,breakoutParent:'',breakoutMode:'',breakoutScheme:''});
       continue;
     }
     // Switchport

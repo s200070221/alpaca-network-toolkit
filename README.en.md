@@ -104,7 +104,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 ![Log Analyzer: issue list](docs/images/07-log-en.png)
 
 **Supported formats**
-- CEF, LEEF, Syslog (RFC3164 / RFC5424), JSON
+- CEF, LEEF, Syslog (RFC3164 / RFC5424, with fields extracted from JSON messages), JSON
 - Firewalls: FortiGate key=value (including syslog forwarding), Cisco ASA / FTD, Palo Alto PAN-OS (including GlobalProtect / User-ID), Check Point Log Exporter, Cisco FTD Firepower events, Juniper SRX RT_FLOW and IDP / UTM, H3C SecPath session / filter logs, SonicWall, Sophos Firewall, MikroTik, EdgeRouter / VyOS and Linux iptables / nftables LOG
 - Intrusion detection and endpoint protection: Suricata EVE JSON, Cisco Secure Endpoint (AMP) event JSON, Zeek (JSON / TSV), CrowdStrike Falcon streaming events, Microsoft Defender for Endpoint / 365 Defender
 - DNS / cloud security: Cisco Umbrella CSV
@@ -114,7 +114,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 **Main features**
 - Sorts by severity and flags likely problems: frequency anomalies, scans, authentication failures, Kerberoasting, lateral movement, interface problems, MAC flapping, multi-stage attack chains and more, tagged with MITRE ATT&CK IDs
-- Local threat-intel and ASN list matching (no network access)
+- Local threat-intel, file-hash and ASN list matching (no network access; imports OTX, URLhaus, MISP, ThreatQ, STIX 2 and MalwareBazaar exports directly)
 - Anonymization of sensitive fields, CSV and report export
 - Send an event to the Firewall Analyzer to find the matching rule; send an interface problem to the Switch Config Parser to view that port
 

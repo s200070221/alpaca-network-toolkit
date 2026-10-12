@@ -2611,7 +2611,7 @@ function exportHTMLReport(mode){
     ${p.interfaces.filter(i=>i.type!=='null').map(i=>`<tr>
       <td class="mono" style="white-space:nowrap">${esc(i.name)}</td>
       <td style="color:#555;font-size:12px">${esc(i.desc||'—')}</td>
-      <td><span class="badge" style="background:#f1f5f9;color:#475569">${esc(i.type==='svi'?'SVI':i.type==='loopback'?'Loopback':i.type==='stack'?'Stack':'Physical')}</span></td>
+      <td><span class="badge" style="background:#f1f5f9;color:#475569">${esc(i.type==='svi'?'SVI':i.type==='loopback'?'Loopback':i.type==='stack'?'Stack':i.type==='tunnel'?'Tunnel':'Physical')}</span></td>
       <td>${modeBadge(i)}</td>
       <td class="mono">${esc(i.vlans||'—')}${i.nativeVlan?'<br><small>Native:'+esc(i.nativeVlan)+'</small>':''}</td>
       <td style="font-size:11px;line-height:1.7">${fmtHybrid(i.hybrid)}</td>

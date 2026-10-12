@@ -832,8 +832,50 @@ function parseStructuredData(sd) {
   }
   return fields;
 }
+// Syslog 訊息本體為 JSON 物件（第十九輪 ED）：應用程式與部分產品（如 CyberArk Vault 的 syslog 稽核記錄）以
+// JSON 物件當訊息，可帶 rsyslog CEE 前綴 @cee:。巢狀物件攤平為「最後一層鍵名（小寫）→值」（同名取第一個），
+// 再依常見鍵名取連線元組、帳號與動作；位址欄位須為合法 IP。原始物件另存 jsonMsgObj 供去識別化重建
+const JSON_MSG_KEYS = {
+  srcip: ['srcip', 'src_ip', 'source_ip', 'sourceip', 'src', 'client_ip', 'clientip', 'remote_addr', 'remote_ip', 'remoteip', 'station', 'ip_address', 'ipaddress', 'ip'],
+  dstip: ['dstip', 'dst_ip', 'destination_ip', 'destinationip', 'dest_ip', 'dst', 'server_ip', 'serverip', 'target_ip'],
+  srcport: ['srcport', 'src_port', 'source_port', 'sport', 'client_port'],
+  dstport: ['dstport', 'dst_port', 'destination_port', 'dest_port', 'dport', 'server_port'],
+  proto: ['proto', 'protocol', 'transport'],
+  user: ['user', 'username', 'user_name', 'userid', 'user_id', 'account', 'accountname', 'issuer', 'src_user', 'login'],
+  action: ['action', 'outcome', 'result', 'status', 'event_action']
+};
+function jsonMsgLeaves(o, out) {
+  Object.keys(o).forEach(k => {
+    const v = o[k];
+    if (v && typeof v === 'object' && !Array.isArray(v)) jsonMsgLeaves(v, out);
+    else if ((typeof v === 'string' && v !== '') || typeof v === 'number' || typeof v === 'boolean') { const lk = k.toLowerCase(); if (!(lk in out)) out[lk] = String(v); }
+  });
+  return out;
+}
+function jsonMsgFields(o) {
+  const leaf = jsonMsgLeaves(o, {});
+  const f = {};
+  const ipOk = v => isValidIPv4(v) || (v.includes(':') && ipv6ToBigInt(v) !== null);
+  Object.keys(JSON_MSG_KEYS).forEach(k => {
+    const hit = JSON_MSG_KEYS[k].find(x => leaf[x] !== undefined && (!/ip$/.test(k) || ipOk(leaf[x])));
+    if (hit) f[k] = leaf[hit];
+  });
+  if (/^(?:deny|denied|drop|dropped|block|blocked|reject|rejected)$/i.test(f.action || '')) f.action = 'deny';
+  else if (/^(?:allow|allowed|accept|accepted|permit|permitted|pass)$/i.test(f.action || '')) f.action = 'accept';
+  return Object.assign(leaf, f);
+}
+function parseJsonInMsg(msg) {
+  const t = String(msg || '').trim().replace(/^@cee:\s*/, '');
+  if (!/^\{[\s\S]*\}$/.test(t)) return null;
+  let o;
+  try { o = JSON.parse(t); } catch (e) { return null; }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  return { vendor: '', fields: jsonMsgFields(o), obj: o };
+}
 function parseRFC5424Line(line, lineNo) {
-  const m = line.match(/^<(\d{1,3})>1\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+([\s\S]*)$/);
+  // 主機後直接接 JSON 訊息、省略 APP-NAME／PROCID／MSGID 的寫法（CyberArk Vault 等，第十九輪 ED）視為三者皆為 -
+  const mj = line.match(/^<(\d{1,3})>1\s+(\S+)\s+(\S+)\s+(\{[\s\S]*\})\s*$/);
+  const m = mj ? [mj[0], mj[1], mj[2], mj[3], '-', '-', '-', '- ' + mj[4]] : line.match(/^<(\d{1,3})>1\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+([\s\S]*)$/);
   if (!m) return null;
   const [, pri, ts, host, app, procid, msgid, rest] = m;
   const { sd, msg } = splitSDandMSG(rest);
@@ -853,10 +895,12 @@ function parseRFC5424Line(line, lineNo) {
   if (!mt && !vf) { const hf = parseH3CFlowLog(msg); if (hf) vf = { vendor: 'h3c', fields: hf }; }
   if (!mt && !vf) { const cf = parseCiscoAclInMsg(msg); if (cf) vf = { vendor: 'ciscoios', fields: cf }; }
   if (!mt && !vf) vf = parseKvFwInMsg(msg);
+  if (!mt && !vf) vf = parseJsonInMsg(msg);
   const extra = mt ? mt.fields : (vf ? vf.fields : null);
   if (extra) Object.keys(extra).forEach(k => { if (fields[k] === undefined) fields[k] = extra[k]; });
   return {
     format: 'rfc5424', raw: line, lineNo, mikrotik: !!mt, netFields: !!(mt || vf), netVendor: mt ? 'mikrotik' : (vf ? vf.vendor : ''), sdKeys,
+    ...(vf && vf.obj ? { jsonMsg: true } : {}),
     timestamp: parseSyslogTimestamp(ts, 'iso'), timestampRaw: ts,
     host, appName: app === '-' ? '' : app, procid: procid === '-' ? '' : procid, msgid: msgid === '-' ? '' : msgid,
     severityRaw, severityNorm: normSyslogSeverity(severityRaw),
@@ -961,8 +1005,10 @@ function parseRFC3164Line(line, lineNo) {
   if (!mt && !vf) { const hf = parseH3CFlowLog(msg); if (hf) vf = { vendor: 'h3c', fields: hf }; }
   if (!mt && !vf) { const cf = parseCiscoAclInMsg(msg); if (cf) vf = { vendor: 'ciscoios', fields: cf }; }
   if (!mt && !vf) vf = parseKvFwInMsg(msg);
+  if (!mt && !vf) vf = parseJsonInMsg(msg);
   return {
     format: 'rfc3164', raw: line, lineNo, mikrotik: !!mt, netFields: !!(mt || vf), netVendor: mt ? 'mikrotik' : (vf ? vf.vendor : ''),
+    ...(vf && vf.obj ? { jsonMsg: true } : {}),
     timestamp: isoTs ? parseISOSyslogTimestamp(ts) : parseSyslogTimestamp(ts, 'bsd'), timestampRaw: ts,
     host, appName, procid, msgid: '',
     severityRaw, severityNorm: hasPri ? normSyslogSeverity(severityRaw) : (mt && mt.topics.length ? mikrotikTopicSeverity(mt.topics) : 'Info'),
@@ -2090,6 +2136,7 @@ function zeekFields(o) {
   const ind = zeekGet(o, 'seen.indicator');
   if (ind !== undefined) f.indicator = String(ind);
   if (o.uid) f.uid = o.uid;
+  ['md5', 'sha1', 'sha256'].forEach(k => { if (typeof o[k] === 'string') f[k] = o[k]; });   // files.log（第十九輪 EC）
   return f;
 }
 const ZEEK_DENY_STATES = new Set(['REJ', 'S0']);
@@ -2179,7 +2226,7 @@ function falconFields(o) {
     set('user', e.UserName || e.UserId);
     set('srcip', e.LocalIP || e.UserIp);
     set('detection', e.DetectName); set('tactic', e.Tactic); set('technique', e.Technique);
-    set('filename', e.FileName); set('filepath', e.FilePath); set('sha256', e.SHA256String);
+    set('filename', e.FileName); set('filepath', e.FilePath); set('sha256', e.SHA256String); set('md5', e.MD5String);
     set('disposition', e.PatternDispositionDescription); set('operation', e.OperationName);
     if (typeof e.Success === 'boolean') f.success = String(e.Success);
     set('state', e.State); set('score', e.FineScore);
@@ -2898,6 +2945,7 @@ function classifyByKeyword(evt) {
     // 額外用 ACTION_KEYS 別名撈出 action/outcome/result 等結構化欄位輔助分類
     parts.push(pickField(evt.fields, ACTION_KEYS) || '');
   }
+  if (evt.jsonMsg && evt.fields) parts.push(evt.fields.action || '');
   if (evt.format === 'winevent' && evt.fields) {
     // WEL 原始 XML 無 rendered message（見 parseWinEventFragment 註解），語意落在
     // EventData 欄位；常見安全事件（登入/帳號變更）欄位名稱補進比對文字
@@ -4073,7 +4121,74 @@ function parseJSONOrNDJSON(text) {
 function parseIntelListJSON(text) {
   const { arr, singleObj } = parseJSONOrNDJSON(text);
   if (arr) return arr;
-  if (singleObj && (extractIPFieldFromObj(singleObj) || extractDomainFieldFromObj(singleObj))) return [singleObj];
+  if (singleObj && ((intelIndicatorsFromObj(singleObj) || []).length || extractIPFieldFromObj(singleObj) || extractDomainFieldFromObj(singleObj))) return [singleObj];
+  return null;
+}
+
+// 常見情資來源的指標欄位（第十九輪 EB）：OTX（indicator＋type）、abuse.ch URLhaus（url／host）、
+// abuse.ch malware／MalwareBazaar（md5_hash／sha1_hash／sha256_hash）、MISP（Event.Attribute[]、
+// Event.Object[].Attribute[] 的 type／value，複合型 a|b 依型別取對應段）、ThreatQ（value＋type.name）、
+// STIX 2 indicator（pattern 中的 ipv4-addr／ipv6-addr／domain-name／url／file:hashes）。
+// URL 取主機名稱；其他型別（檔名、登錄機碼、email 等）不取。回傳 null 代表不是這些來源的形狀
+const INTEL_HASH_LENS = { 32: 'md5', 40: 'sha1', 64: 'sha256' };
+function intelHostOfUrl(u) {
+  const m = String(u || '').trim().match(/^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?(\[[^\]]+\]|[^/:?#]+)/i);
+  return m ? m[1].replace(/^\[|\]$/g, '').toLowerCase() : null;
+}
+function intelValueByKind(kind, v) {
+  if (v === undefined || v === null || v === '') return null;
+  const s = String(v).trim();
+  if (kind === 'url') return intelHostOfUrl(s);
+  if (kind === 'hash') return /^[0-9a-f]+$/i.test(s) && INTEL_HASH_LENS[s.length] ? s.toLowerCase() : null;
+  if (kind === 'domain') return s.toLowerCase();
+  return s;   // ip／cidr
+}
+// 型別字串 → ip／domain／url／hash（不認得回傳空字串）
+function intelKindOf(type) {
+  const t = String(type || '').toLowerCase();
+  if (/^(ip|ipv4|ipv6|ip address|ipv6 address|cidr|ip-src|ip-dst|ipv4-addr|ipv6-addr)$/.test(t)) return 'ip';
+  if (/^(domain|hostname|fqdn|domain-name)$/.test(t)) return 'domain';
+  if (/^(url|uri|link)$/.test(t)) return t === 'uri' ? '' : 'url';
+  if (/^(md5|sha1|sha-1|sha256|sha-256|filehash-md5|filehash-sha1|filehash-sha256)$/.test(t)) return 'hash';
+  return '';
+}
+function intelIndicatorsFromObj(item) {
+  if (!item || typeof item !== 'object') return null;
+  const out = [];
+  const push = (kind, v) => { const x = intelValueByKind(kind, v); if (x && !out.includes(x)) out.push(x); };
+  if (typeof item.indicator === 'string' && item.type) {             // OTX
+    push(intelKindOf(item.type), item.indicator); return out;
+  }
+  if (item.Event && typeof item.Event === 'object') {                 // MISP
+    const attrs = [];
+    const add = a => { if (Array.isArray(a)) attrs.push(...a); else if (a && typeof a === 'object') attrs.push(a); };
+    add(item.Event.Attribute);
+    (Array.isArray(item.Event.Object) ? item.Event.Object : (item.Event.Object ? [item.Event.Object] : [])).forEach(o => add(o && o.Attribute));
+    attrs.forEach(a => {
+      const types = String(a.type || '').split('|'), vals = String(a.value || '').split('|');
+      types.forEach((t, i) => { const k = intelKindOf(t); if (k) push(k, vals[i]); });
+    });
+    return out;
+  }
+  if (typeof item.pattern === 'string' && /\[\s*[a-z0-9-]+:/i.test(item.pattern)) {   // STIX 2
+    const re = /([a-z0-9-]+):([a-z0-9_.'-]+)\s*=\s*'((?:[^'\\]|\\.)*)'/gi;
+    let m;
+    while ((m = re.exec(item.pattern))) {
+      const obj = m[1].toLowerCase();
+      if (obj === 'file' && /^hashes\./i.test(m[2])) push('hash', m[3]);
+      else if (m[2].toLowerCase() === 'value') push(intelKindOf(obj), m[3]);
+    }
+    return out;
+  }
+  if (item.value !== undefined && item.type && typeof item.type === 'object' && item.type.name) {   // ThreatQ
+    push(intelKindOf(item.type.name), item.value); return out;
+  }
+  if (item.urlhaus_reference || (typeof item.url === 'string' && typeof item.host === 'string')) {   // URLhaus
+    push('ip', item.host || intelHostOfUrl(item.url)); return out;
+  }
+  if (item.md5_hash || item.sha256_hash || item.sha1_hash) {          // abuse.ch malware／MalwareBazaar
+    push('hash', item.sha256_hash); push('hash', item.sha1_hash); push('hash', item.md5_hash); return out;
+  }
   return null;
 }
 
@@ -4084,6 +4199,8 @@ function parseIntelList(text, name) {
     const entries = [];
     jsonArr.forEach(item => {
       if (typeof item === 'string') { entries.push({ value: item, meta: {} }); return; }
+      const known = intelIndicatorsFromObj(item);
+      if (known) { known.forEach(v => entries.push({ value: v, meta: item })); return; }
       const val = extractIPFieldFromObj(item) || extractDomainFieldFromObj(item);
       if (val) entries.push({ value: val, meta: item });
     });
@@ -4580,6 +4697,15 @@ function extractCandidateHashes(evt) {
       const key = pair.slice(0, eq).trim().toUpperCase();
       const v = pair.slice(eq + 1).trim();
       if (lens[key] && v.length === lens[key] && /^[0-9a-fA-F]+$/.test(v)) out.add(v.toLowerCase());
+    });
+  }
+  // 端點與網路 log 的單一雜湊欄位（第十九輪 EC）：Cisco Secure Endpoint／CrowdStrike Falcon／
+  // Microsoft Defender／Sophos 的 sha256、Falcon 的 md5、Zeek files.log 的 md5／sha1／sha256
+  const f = evt && evt.fields;
+  if (f && !f.Hashes) {
+    [['md5', 32], ['sha1', 40], ['sha256', 64]].forEach(([k, n]) => {
+      const v = typeof f[k] === 'string' ? f[k].trim() : '';
+      if (v.length === n && /^[0-9a-fA-F]+$/.test(v)) out.add(v.toLowerCase());
     });
   }
   return Array.from(out);
@@ -5926,6 +6052,28 @@ function anonNetfilterMac(msg) {
     return 'MAC=' + anonMAC(h.slice(0, 6).join(':')) + ':' + anonMAC(h.slice(6, 12).join(':')) + tail;
   });
 }
+// Syslog 內的 JSON 訊息（第十九輪 ED）：帳號類鍵換假帳號、主機類鍵換假名，其餘字串換 IP／MAC，
+// 重新序列化成訊息（保留 @cee: 前綴）並重拆欄位；RFC5424 結構化資料段的欄位保留
+const JSON_MSG_USER_KEYS = new Set(['user', 'username', 'user_name', 'userid', 'user_id', 'account', 'accountname', 'issuer', 'src_user', 'login', 'sourceuser', 'targetuser', 'targetusername', 'email']);
+const JSON_MSG_HOST_KEYS = new Set(['host', 'hostname', 'computer', 'computername', 'device', 'devicename', 'machine']);
+function anonJsonMsg(clone, opts) {
+  const lead = (String(clone.msg || '').match(/^\s*(?:@cee:\s*)?/) || [''])[0];
+  const r = parseJsonInMsg(clone.msg);
+  if (!r) { clone.msg = anonUsersInMsg(replaceMACsInLine(replaceIPsInLine(clone.msg || '', opts))); return; }
+  const walk = o => Object.keys(o).forEach(k => {
+    const v = o[k];
+    if (v && typeof v === 'object') walk(v);
+    else if (typeof v === 'string' && v) {
+      const lk = k.toLowerCase();
+      o[k] = JSON_MSG_USER_KEYS.has(lk) ? anonUser(v) : JSON_MSG_HOST_KEYS.has(lk) ? anonHostname(v) : anonUsersInMsg(replaceMACsInLine(replaceIPsInLine(v, opts)));
+    }
+  });
+  walk(r.obj);
+  clone.msg = lead + JSON.stringify(r.obj);
+  const keep = {};
+  (clone.sdKeys || []).forEach(k => { if (clone.fields[k] !== undefined) keep[k] = clone.fields[k]; });
+  clone.fields = Object.assign(jsonMsgFields(r.obj), keep);
+}
 function anonymizeEvent(evt, opts) {
   const clone = { ...evt, fields: { ...evt.fields } };
   if (clone.netVendor === 'netfilter') clone.msg = anonNetfilterMac(clone.msg);
@@ -6105,13 +6253,17 @@ function anonymizeEvent(evt, opts) {
     const anonFields = {};
     Object.keys(clone.fields || {}).forEach(k => { anonFields[k] = replaceMACsInLine(replaceIPsInLine(String(clone.fields[k]), opts)); });
     clone.fields = anonFields;
-    clone.msg = anonUsersInMsg(replaceMACsInLine(replaceIPsInLine(clone.msg || '', opts)));
-    if (clone.netVendor === 'sonicwall' || clone.netVendor === 'sophos') anonKvFwMsg(clone, opts);
-    else if (clone.netFields) anonymizeNetFields(clone, opts, true);
+    if (clone.jsonMsg) anonJsonMsg(clone, opts);
+    else {
+      clone.msg = anonUsersInMsg(replaceMACsInLine(replaceIPsInLine(clone.msg || '', opts)));
+      if (clone.netVendor === 'sonicwall' || clone.netVendor === 'sophos') anonKvFwMsg(clone, opts);
+      else if (clone.netFields) anonymizeNetFields(clone, opts, true);
+    }
     clone.raw = rebuildSyslogRaw(clone);
   } else {
     if (clone.host) clone.host = anonHostname(clone.host);
-    if (clone.netVendor === 'sonicwall' || clone.netVendor === 'sophos') anonKvFwMsg(clone, opts);
+    if (clone.jsonMsg) anonJsonMsg(clone, opts);
+    else if (clone.netVendor === 'sonicwall' || clone.netVendor === 'sophos') anonKvFwMsg(clone, opts);
     else {
       clone.msg = anonUsersInMsg(replaceMACsInLine(replaceIPsInLine(clone.msg || '', opts)));
       if (clone.netFields) anonymizeNetFields(clone, opts, false);
@@ -6216,7 +6368,7 @@ const LANG = {
     'chain.title':'疑似關聯攻擊鏈','chain.empty':'未發現符合條件的關聯攻擊鏈','chain.col_actor':'來源/行為者','chain.col_stages':'階段序列','chain.col_first':'首次時間','chain.col_last':'最後時間','chain.col_span':'涵蓋時間','topn.title':'Top-N 摘要','topn.src_title':'前 10 大來源 IP','topn.user_title':'前 10 大使用者','topn.category_title':'前 10 大分類','topn.col_value':'項目','topn.col_count':'次數','topn.empty':'無資料','filemeta.export_btn':'匯出中繼資料','filemeta.lines_suffix':'行','chain.stage_recon':'🔍 偵察','chain.stage_access':'🔑 嘗試存取','chain.stage_malicious':'⚠ 已知惡意','chain.stage_postActivity':'📤 疑似後續行為',
     'conf.confirmed':'已確認','conf.heuristic':'推測',
     'cat.authFail':'認證失敗','cat.denyBlock':'連線遭拒/阻擋','cat.attack':'攻擊/惡意軟體','cat.scanFlood':'掃描/洪水攻擊','cat.exceedThreshold':'超過門檻','cat.other':'其他','cat.freqLabel':'頻率異常：','mitre.disclaimer':'MITRE ATT&CK 技術編號僅供參考，非事件最終定性判斷','cat.possibleScan':'疑似掃描行為','cat.knownIOC':'已知情資命中','cat.volumeAnomaly':'異常流量','cat.geoRisk':'地理位置風險','cat.geoIPRisk':'地理位置風險（IP查表）','cat.beaconing':'疑似定期回報信標(C2)','cat.lateralMovement':'疑似橫向移動','cat.privEsc':'權限提升/新增帳號','cat.geoVelocity':'地理位置速度異常','note.bruteForce':'疑似猜密碼/暴力破解','note.scanOrMisconfig':'疑似掃描或誤設定','note.freqAnomaly':'頻率異常','note.possibleScan':'疑似 Port/主機掃描','note.knownIOC':'已知情資命中',
-    'intel.title':'④ 威脅情資本機比對清單','intel.hint':'匯入公開或內部的 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON，如 Spamhaus DROP 匯出格式），僅在本機比對，工具不會主動連網查詢。命中會標記為「已確認」的高風險問題。','intel.add_btn':'上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自填）','intel.count_label':'筆','intel.remove_btn':'移除','intel.empty':'尚未匯入任何情資清單','hashintel.title':'④雜湊威脅情資本機比對清單','hashintel.hint':'匯入已知惡意檔案雜湊清單（純文字，每行一個 MD5/SHA1/SHA256），僅在本機比對，工具不會主動連網查詢。命中會標記為「已確認」的高風險問題。','hashintel.add_btn':'上傳雜湊清單','hashintel.name_placeholder':'清單名稱','hashintel.date_placeholder':'情資日期（自填）','hashintel.empty':'尚未匯入任何雜湊清單','cat.knownHashIOC':'已知惡意檔案雜湊',
+    'intel.title':'④ 威脅情資本機比對清單','intel.hint':'匯入公開或內部的 IP/CIDR 黑名單（純文字、CSV 或 JSON／NDJSON，如 Spamhaus DROP、OTX、URLhaus、MISP、ThreatQ、STIX 2 匯出），僅在本機比對，工具不會主動連網查詢。命中會標記為「已確認」的高風險問題。','intel.add_btn':'上傳清單','intel.name_placeholder':'清單名稱','intel.date_placeholder':'情資日期（自填）','intel.count_label':'筆','intel.remove_btn':'移除','intel.empty':'尚未匯入任何情資清單','hashintel.title':'④雜湊威脅情資本機比對清單','hashintel.hint':'匯入已知惡意檔案雜湊清單（純文字每行一個 MD5/SHA1/SHA256，或 MalwareBazaar、OTX、MISP、STIX 2 匯出），僅在本機比對，工具不會主動連網查詢。命中會標記為「已確認」的高風險問題。','hashintel.add_btn':'上傳雜湊清單','hashintel.name_placeholder':'清單名稱','hashintel.date_placeholder':'情資日期（自填）','hashintel.empty':'尚未匯入任何雜湊清單','cat.knownHashIOC':'已知惡意檔案雜湊',
     'safelist.title':'⑤ 已知安全清單（白名單）','safelist.hint':'匯入自行維護的已知安全 IP/CIDR 清單（純文字、CSV 或 JSON／NDJSON），命中時不會被標記為已知情資命中，用於排除公開清單常誤中的內網網段或已知合法服務。','safelist.name_placeholder':'清單名稱','safelist.add_btn':'上傳清單','safelist.template_btn':'下載範例CSV','safelist.empty':'尚未匯入任何安全清單',
     'geo.title':'⑥ GeoIP 位置資料庫比對','asn.title':'ASN 資料庫比對','asn.hint':'匯入 IP→ASN 對照表：純文字/CSV/TSV 格式，支援 IPtoASN.com（range_start/range_end/AS_number/country/AS_description，Tab 分隔）、DB-IP IP to ASN Lite（逗號分隔，無表頭）、IPinfo.io（含表頭，start_ip/end_ip/asn/name/domain）三種來源匯出格式，可至各官方網站免費下載最新版本。命中後若該 ASN 落在上方「風險 ASN 標記」勾選清單，會標記為 ASN 風險。資料庫需自行下載，本工具不內建。','asn.name_placeholder':'名稱（選填，未填則用檔名）','asn.add_btn':'上傳資料庫','asn.empty':'尚未匯入任何 ASN 資料庫','asn.risk_import_title':'風險 ASN 清單匯入（如 Spamhaus ASN-DROP）','asn.risk_import_hint':'接受 JSON Lines 格式（每行一筆 JSON 物件，如官方 Spamhaus ASN-DROP：{"asn":245,...}），僅需 asn 欄位。此清單只提供「哪些 ASN 是已知風險」，仍需另外在上方上傳至少一份 IP→ASN 對照資料庫才能實際比對事件 IP。','customrule.title':'🛠️ 自訂偵測規則','customrule.hint':'建立自己的關鍵字/正則比對規則，掃描全部已解析事件；命中時聚合成一筆問題清單項目','customrule.add_btn':'＋ 新增規則','customrule.export_btn':'📤 匯出規則','customrule.import_btn':'📥 匯入規則','customrule.delete_title':'刪除','customrule.invalid_regex':'正則表達式無效','customrule.name_ph':'規則名稱','customrule.matchtype_contains':'關鍵字','customrule.matchtype_regex':'正則表達式','customrule.pattern_ph':'比對樣式','customrule.format_any':'任意格式','customrule.import_invalid':'規則檔案格式錯誤','customrule.imported_msg':'已匯入 {n} 條規則','customrule.stage_hint':'選填：讓此規則命中的問題能被攻擊鏈關聯功能追蹤','customrule.stage_none':'（不納入攻擊鏈）','customrule.stage_recon':'偵查','customrule.stage_access':'存取','customrule.stage_malicious':'惡意行為','customrule.stage_postActivity':'後續影響','asn.risk_import_add_btn':'上傳風險清單','asn.risk_import_empty':'尚未匯入任何風險 ASN 清單','opt.asnRiskLabel':'風險 ASN 標記：','opt.asnRiskFilter':'篩選 ASN…','cat.asnRisk':'ASN 風險','opt.enable4688':'啟用 EventID 4688（處理程序建立）解析','opt.procWatchlist':'可疑關鍵字（比對 CommandLine/NewProcessName，逗號或換行分隔）…','cat.processCreate':'疑似可疑處理程序建立','cat.asnVelocity':'ASN 速度異常','cat.sysmonNetConn':'Sysmon 網路連線','cat.sysmonFileCreate':'Sysmon 檔案建立','cat.sysmonDnsQuery':'Sysmon DNS 查詢','cat.sysmonProcessCreate':'疑似可疑 Sysmon 處理程序建立','cat.sysmonRemoteThread':'疑似 Process Injection（Sysmon CreateRemoteThread）','cat.powershellScriptBlock':'疑似惡意 PowerShell 指令碼','cat.sysmonImageLoad':'疑似惡意 DLL 側載/注入','cat.powershellModuleLog':'疑似惡意 PowerShell 模組使用','cat.timeGap':'時間戳斷點（可能為日誌蒐集中斷）','opt.enableSysmonProc':'啟用 Sysmon EventID 1（處理程序建立）關鍵字偵測','opt.enableSysmonThread':'啟用 Sysmon EventID 8（CreateRemoteThread）關鍵字偵測','opt.enablePsScriptBlock':'啟用 PowerShell Script Block Logging（EventID 4104）關鍵字偵測','opt.enableSysmonImageLoad':'啟用 Sysmon EventID 7（ImageLoad）關鍵字偵測（事件量體極高，預設關閉）','opt.enablePsModuleLog':'啟用 PowerShell 模組記錄 EventID 4103 關鍵字偵測（預設關閉）','opt.sysmonProcWatchlist':'可疑關鍵字（比對 Image/CommandLine/ParentImage/Hashes，逗號或換行分隔）…','opt.sysmonThreadWatchlist':'可疑關鍵字（比對 SourceImage/TargetImage/StartModule，逗號或換行分隔）…','opt.psScriptBlockWatchlist':'可疑關鍵字（比對 ScriptBlockText，逗號或換行分隔）…','opt.sysmonImageLoadWatchlist':'可疑關鍵字（比對 ImageLoaded/Image/OriginalFileName，逗號或換行分隔）…','opt.psModuleLogWatchlist':'可疑關鍵字（比對 ContextInfo/Payload，逗號或換行分隔）…','cat.acctLockout':'帳號鎖定','cat.pwReset':'密碼遭管理員重設','cat.groupRemoved':'移出安全群組','cat.acctStatusChange':'帳號狀態變更','cat.auditCleared':'稽核記錄遭清除','cat.persistence':'疑似持久性建立','cat.sysmonRegistryPersistence':'疑似登錄機碼自動啟動持久化','cat.kerberoasting':'疑似 Kerberoasting','cat.lsassAccess':'疑似 LSASS 記憶體存取（憑證竊取）','cat.passTheHash':'疑似 Pass-the-Hash（雜湊傳遞）','cat.asrepRoasting':'疑似 AS-REP Roasting','cat.asrepRoastingRisk':'帳號遭設定為免驗證（AS-REP Roasting 風險）','cat.specialPrivLogon':'特殊權限登入','cat.groupEnum':'群組成員列舉','cat.explicitCredLogon':'明確認證登入(RunAs)','cat.acctDeleted':'帳號遭刪除','cat.registryValueChange':'登錄值變更','cat.tokenPrivAdjust':'Token 權限被調整','cat.auditPolicyChanged':'系統稽核政策遭變更','cat.auditLogFull':'安全記錄已滿','cat.adminShareAccess':'存取系統管理共用資料夾','geo.hint':'匯入 CIDR→國家對照表：可上傳純文字/CSV（表頭需含 cidr 與 country 欄位）或 v2fly/Xray 格式的 geoip.dat 二進位檔（僅解析 IPv4）。命中後若該國家落在上方「地理位置風險標記」勾選清單，會標記為地理位置風險（IP查表版）。資料庫需自行下載，本工具不內建。','geo.name_placeholder':'清單名稱（選填，未填則用檔名）','geo.add_btn':'上傳清單','geo.empty':'尚未匯入任何 GeoIP 資料庫','geo.riskGroupLabel':'高風險國家','geo.continent.asia':'亞洲','geo.continent.europe':'歐洲','geo.continent.africa':'非洲','geo.continent.namerica':'北美洲','geo.continent.samerica':'南美洲','geo.continent.oceania':'大洋洲','geo.continent.other':'其他/未分類',
     'guide.title':'⑦ 如何取得外部情資','guide.body':'本工具僅做本機比對，不會主動連網抓取或回傳任何資料。\n常見公開情資來源（用途說明，正式下載網址請自行查詢官方頁面）：\n• Spamhaus DROP/EDROP — 已知惡意網段（CIDR）清單\n• Emerging Threats / Proofpoint compromised-ips — 已知遭入侵主機 IP 清單\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — 惡意軟體 C2 相關 IOC\n• FireHOL Level 1 — 聚合 Spamhaus/DShield/Abuse.ch 等多來源網段清單：https://iplists.firehol.org/files/firehol_level1.netset（純文字、# 開頭註解，可直接貼上本頁匯入）\n• EmergingThreats Block List — IDS/IPS 常用攻擊者 IP 清單：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt（純文字，可直接貼上匯入）\n• CINS Army List — 高信譽度攻擊來源 IP：https://cinsscore.com/list/ci-badguys.txt（純文字、每行一個 IP，可直接貼上匯入）\n• Blocklist.de — 蜜罐/入侵偵測回報彙整攻擊來源 IP：https://www.blocklist.de/downloads/export-ips_all.txt（純文字、每行一個 IP，可直接貼上匯入）\n• DShield/SANS ISC Block List — 近 3 天最活躍攻擊網段：https://www.dshield.org/block.txt（⚠️ tab 分隔多欄位表格，非單欄 CIDR，直接貼上只會取到每列第一欄的網段起始 IP 做單一 IP 精確比對、不會展開成 /24，比對涵蓋率大幅降低，建議先自行處理組成 CIDR 再匯入）\n上述皆為公開純文字檔案，可直接下載後貼上或另存檔案再用本頁「上傳清單」匯入；AbuseIPDB 等需註冊/API 金鑰才能取得的服務未列入。\n多數公開清單各自有使用條款（部分僅供非商業/個人使用），下載與使用前請自行確認條款；建議至少每月更新一次，過舊清單參考價值降低。',
@@ -6236,7 +6388,7 @@ const LANG = {
     'chain.title':'Suspected Correlation Chains','chain.empty':'No correlation chains found','chain.col_actor':'Source/Actor','chain.col_stages':'Stage Sequence','chain.col_first':'First Seen','chain.col_last':'Last Seen','chain.col_span':'Span','topn.title':'Top-N Summary','topn.src_title':'Top 10 Source IPs','topn.user_title':'Top 10 Users','topn.category_title':'Top 10 Categories','topn.col_value':'Item','topn.col_count':'Count','topn.empty':'No data','filemeta.export_btn':'Export Metadata','filemeta.lines_suffix':'lines','chain.stage_recon':'🔍 Recon','chain.stage_access':'🔑 Access Attempt','chain.stage_malicious':'⚠ Known Malicious','chain.stage_postActivity':'📤 Post-Activity',
     'conf.confirmed':'Confirmed','conf.heuristic':'Heuristic',
     'cat.authFail':'Auth Failure','cat.denyBlock':'Connection Denied/Blocked','cat.attack':'Attack/Malware','cat.scanFlood':'Scan/Flood','cat.exceedThreshold':'Threshold Exceeded','cat.other':'Other','cat.freqLabel':'Frequency Anomaly: ','mitre.disclaimer':'MITRE ATT&CK Technique ID — reference only, not a final determination','cat.possibleScan':'Possible Scan Activity','cat.knownIOC':'Known Threat-Intel Hit','cat.volumeAnomaly':'Volume Anomaly','cat.geoRisk':'Geo-Location Risk','cat.geoIPRisk':'Geo Risk (IP Lookup)','cat.beaconing':'Suspected Beaconing (C2)','cat.lateralMovement':'Suspected Lateral Movement','cat.privEsc':'Privilege Escalation / New Account','cat.geoVelocity':'Geo-Velocity Anomaly','note.bruteForce':'Suspected Brute-Force/Password Guessing','note.scanOrMisconfig':'Suspected Scan or Misconfiguration','note.freqAnomaly':'Frequency Anomaly','note.possibleScan':'Suspected Port/Host Scan','note.knownIOC':'Known Threat-Intel Hit',
-    'intel.title':'④ Local Threat-Intel Matching List','intel.hint':'Import public or internal IP/CIDR blocklists (plain text, CSV, or JSON/NDJSON — e.g. Spamhaus DROP export format). Matching happens locally only — no outbound network calls. Hits are flagged as "Confirmed" high-severity issues.','intel.add_btn':'Upload List','intel.name_placeholder':'List name','intel.date_placeholder':'Intel date (manual)','intel.count_label':'entries','intel.remove_btn':'Remove','intel.empty':'No intel list imported yet','hashintel.title':'Local Hash Threat-Intel Matching List','hashintel.hint':'Import known-malicious file hash lists (plain text, one MD5/SHA1/SHA256 per line). Matching happens locally only. Hits are flagged as "Confirmed" high-severity issues.','hashintel.add_btn':'Upload Hash List','hashintel.name_placeholder':'List name','hashintel.date_placeholder':'Intel date (manual)','hashintel.empty':'No hash list imported yet','cat.knownHashIOC':'Known Malicious File Hash',
+    'intel.title':'④ Local Threat-Intel Matching List','intel.hint':'Import public or internal IP/CIDR blocklists (plain text, CSV, or JSON/NDJSON — e.g. Spamhaus DROP, OTX, URLhaus, MISP, ThreatQ, STIX 2 exports). Matching happens locally only — no outbound network calls. Hits are flagged as "Confirmed" high-severity issues.','intel.add_btn':'Upload List','intel.name_placeholder':'List name','intel.date_placeholder':'Intel date (manual)','intel.count_label':'entries','intel.remove_btn':'Remove','intel.empty':'No intel list imported yet','hashintel.title':'Local Hash Threat-Intel Matching List','hashintel.hint':'Import known-malicious file hash lists (plain text, one MD5/SHA1/SHA256 per line, or MalwareBazaar, OTX, MISP, STIX 2 exports). Matching happens locally only. Hits are flagged as "Confirmed" high-severity issues.','hashintel.add_btn':'Upload Hash List','hashintel.name_placeholder':'List name','hashintel.date_placeholder':'Intel date (manual)','hashintel.empty':'No hash list imported yet','cat.knownHashIOC':'Known Malicious File Hash',
     'safelist.title':'⑤ Known-Safe List (Whitelist)','safelist.hint':'Import your own known-safe IP/CIDR list (plain text, CSV, or JSON/NDJSON). Matches here are excluded from threat-intel hits — use it to exclude internal ranges or known-legitimate services that public lists sometimes misflag.','safelist.name_placeholder':'List name','safelist.add_btn':'Upload List','safelist.template_btn':'Download Sample CSV','safelist.empty':'No safe list imported yet',
     'geo.title':'⑥ GeoIP Database Lookup','asn.title':'ASN Database Lookup','asn.hint':'Import an IP→ASN lookup table: plain text/CSV/TSV. Supports IPtoASN.com (range_start/range_end/AS_number/country/AS_description, tab-separated), DB-IP IP to ASN Lite (comma-separated, no header), and IPinfo.io (with header, start_ip/end_ip/asn/name/domain) export formats — free downloads available from each provider\'s site. Matches whose ASN falls in the "Risk ASNs" selection above are flagged as ASN risk. You must supply your own database — none is bundled.','asn.name_placeholder':'Name (optional, defaults to filename)','asn.add_btn':'Upload Database','asn.empty':'No ASN database imported yet','asn.risk_import_title':'Risk ASN List Import (e.g. Spamhaus ASN-DROP)','asn.risk_import_hint':'Accepts JSON Lines format (one JSON object per line, e.g. official Spamhaus ASN-DROP: {"asn":245,...}), only the asn field is used. This list only supplies "which ASNs are known-risk" — you still need to upload at least one IP-to-ASN mapping database above to actually match event IPs.','customrule.title':'🛠️ Custom Detection Rules','customrule.hint':'Build your own keyword/regex rules to scan all parsed events; matches aggregate into one issue entry','customrule.add_btn':'+ Add Rule','customrule.export_btn':'📤 Export Rules','customrule.import_btn':'📥 Import Rules','customrule.delete_title':'Delete','customrule.invalid_regex':'Invalid regex','customrule.name_ph':'Rule name','customrule.matchtype_contains':'Keyword','customrule.matchtype_regex':'Regex','customrule.pattern_ph':'Match pattern','customrule.format_any':'Any format','customrule.import_invalid':'Invalid rules file format','customrule.imported_msg':'{n} rules imported','customrule.stage_hint':'Optional: lets hits from this rule be tracked by the correlation-chain feature','customrule.stage_none':'(not in chain)','customrule.stage_recon':'Recon','customrule.stage_access':'Access','customrule.stage_malicious':'Malicious','customrule.stage_postActivity':'Post-Activity','asn.risk_import_add_btn':'Upload Risk List','asn.risk_import_empty':'No risk ASN list imported yet','opt.asnRiskLabel':'Risk ASNs:','opt.asnRiskFilter':'Filter ASNs…','cat.asnRisk':'ASN Risk','opt.enable4688':'Enable EventID 4688 (Process Creation) parsing','opt.procWatchlist':'Suspicious keywords (matched against CommandLine/NewProcessName, comma or newline separated)…','cat.processCreate':'Suspicious Process Creation','cat.asnVelocity':'ASN Velocity Anomaly','cat.sysmonNetConn':'Sysmon Network Connection','cat.sysmonFileCreate':'Sysmon File Create','cat.sysmonDnsQuery':'Sysmon DNS Query','cat.sysmonProcessCreate':'Suspicious Sysmon Process Creation','cat.sysmonRemoteThread':'Suspicious Process Injection (Sysmon CreateRemoteThread)','cat.powershellScriptBlock':'Suspicious Malicious PowerShell Script','cat.sysmonImageLoad':'Suspicious Malicious DLL Sideloading/Injection','cat.powershellModuleLog':'Suspicious Malicious PowerShell Module Usage','cat.timeGap':'Log Timestamp Gap (Possible Collection Interruption)','opt.enableSysmonProc':'Enable Sysmon EventID 1 (Process Creation) keyword detection','opt.enableSysmonThread':'Enable Sysmon EventID 8 (CreateRemoteThread) keyword detection','opt.enablePsScriptBlock':'Enable PowerShell Script Block Logging (EventID 4104) keyword detection','opt.enableSysmonImageLoad':'Enable Sysmon EventID 7 (ImageLoad) keyword detection (extremely high volume, off by default)','opt.enablePsModuleLog':'Enable PowerShell Module Logging EventID 4103 keyword detection (off by default)','opt.sysmonProcWatchlist':'Suspicious keywords (matched against Image/CommandLine/ParentImage/Hashes, comma or newline separated)…','opt.sysmonThreadWatchlist':'Suspicious keywords (matched against SourceImage/TargetImage/StartModule, comma or newline separated)…','opt.psScriptBlockWatchlist':'Suspicious keywords (matched against ScriptBlockText, comma or newline separated)…','opt.sysmonImageLoadWatchlist':'Suspicious keywords (matched against ImageLoaded/Image/OriginalFileName, comma or newline separated)…','opt.psModuleLogWatchlist':'Suspicious keywords (matched against ContextInfo/Payload, comma or newline separated)…','cat.acctLockout':'Account Lockout','cat.pwReset':'Admin Password Reset','cat.groupRemoved':'Removed from Security Group','cat.acctStatusChange':'Account Status Change','cat.auditCleared':'Audit Log Cleared','cat.persistence':'Suspected Persistence','cat.sysmonRegistryPersistence':'Suspected Registry Autostart Persistence','cat.kerberoasting':'Suspected Kerberoasting','cat.lsassAccess':'Suspected LSASS Memory Access (Credential Theft)','cat.passTheHash':'Suspected Pass-the-Hash','cat.asrepRoasting':'Suspected AS-REP Roasting','cat.asrepRoastingRisk':'Account Set to Skip Preauth (AS-REP Roasting Risk)','cat.specialPrivLogon':'Special-Privilege Logon','cat.groupEnum':'Group Membership Enumeration','cat.explicitCredLogon':'Explicit Credential Logon','cat.acctDeleted':'Account Deleted','cat.registryValueChange':'Registry Value Changed','cat.tokenPrivAdjust':'Token Privilege Adjusted','cat.auditPolicyChanged':'Audit Policy Changed','cat.auditLogFull':'Security Log Full','cat.adminShareAccess':'Admin Share Access','geo.hint':'Import a CIDR→country lookup table: plain text/CSV (header must include cidr and country columns) or a v2fly/Xray-format geoip.dat binary file (IPv4 only). Matches whose country falls in the "Geo-risk countries" selection above are flagged as geo risk (IP-lookup based). You must supply your own database — none is bundled.','geo.name_placeholder':'List name (optional, defaults to filename)','geo.add_btn':'Upload List','geo.empty':'No GeoIP database imported yet','geo.riskGroupLabel':'High-Risk Countries','geo.continent.asia':'Asia','geo.continent.europe':'Europe','geo.continent.africa':'Africa','geo.continent.namerica':'North America','geo.continent.samerica':'South America','geo.continent.oceania':'Oceania','geo.continent.other':'Other/Unclassified',
     'guide.title':'⑦ How to Get External Threat Intel','guide.body':'This tool only matches locally — it never fetches or sends data over the network.\nCommon public sources (purpose only — verify current official URLs yourself):\n• Spamhaus DROP/EDROP — known malicious netblocks (CIDR)\n• Emerging Threats / Proofpoint compromised-ips — known compromised host IPs\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — malware C2 related IOCs\n• FireHOL Level 1 — aggregates Spamhaus/DShield/Abuse.ch and more: https://iplists.firehol.org/files/firehol_level1.netset (plain text, # comments, paste directly into this page)\n• EmergingThreats Block List — attacker IPs commonly used for IDS/IPS: https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt (plain text, paste directly)\n• CINS Army List — high-reputation attacker IPs: https://cinsscore.com/list/ci-badguys.txt (plain text, one IP per line, paste directly)\n• Blocklist.de — attacker IPs aggregated from honeypot/IDS reports: https://www.blocklist.de/downloads/export-ips_all.txt (plain text, one IP per line, paste directly)\n• DShield/SANS ISC Block List — most active attacking netblocks over the last 3 days: https://www.dshield.org/block.txt (⚠️ tab-delimited table, not a plain CIDR list — pasting it as-is only captures each row\'s first column, the block\'s start IP, as a single exact-match IP; it will NOT expand to the full /24, so coverage drops sharply. Pre-process it into CIDR notation before importing.)\nAll of the above are public plain-text files — download and paste, or save the file and use "Upload List" on this page. Services requiring registration/an API key (e.g. AbuseIPDB) are not included.\nMost public lists carry their own usage terms (some are non-commercial/personal use only) — check before downloading. Recommended refresh: at least monthly, stale lists lose value.',
@@ -6256,7 +6408,7 @@ const LANG = {
     'chain.title':'疑わしい相関攻撃チェーン','chain.empty':'該当する相関攻撃チェーンは見つかりませんでした','chain.col_actor':'送信元/行為者','chain.col_stages':'段階シーケンス','chain.col_first':'初回検知','chain.col_last':'最終検知','chain.col_span':'継続時間','topn.title':'Top-N サマリー','topn.src_title':'送信元IP トップ10','topn.user_title':'ユーザー トップ10','topn.category_title':'カテゴリ トップ10','topn.col_value':'項目','topn.col_count':'件数','topn.empty':'データなし','filemeta.export_btn':'メタデータをエクスポート','filemeta.lines_suffix':'行','chain.stage_recon':'🔍 偵察','chain.stage_access':'🔑 アクセス試行','chain.stage_malicious':'⚠ 既知の悪意','chain.stage_postActivity':'📤 事後活動の疑い',
     'conf.confirmed':'確認済み','conf.heuristic':'推定',
     'cat.authFail':'認証失敗','cat.denyBlock':'接続拒否/ブロック','cat.attack':'攻撃/マルウェア','cat.scanFlood':'スキャン/フラッド','cat.exceedThreshold':'しきい値超過','cat.other':'その他','cat.freqLabel':'頻度異常：','mitre.disclaimer':'MITRE ATT&CK 技術番号は参考情報であり、最終的な判定ではありません','cat.possibleScan':'スキャンの疑い','cat.knownIOC':'既知の脅威情報に一致','cat.volumeAnomaly':'異常なトラフィック量','cat.geoRisk':'地理的リスク','cat.geoIPRisk':'地理的リスク（IP照合）','cat.beaconing':'疑わしい定期通信（C2）','cat.lateralMovement':'疑わしい横方向移動','cat.privEsc':'権限昇格/新規アカウント','cat.geoVelocity':'地理的速度異常','note.bruteForce':'ブルートフォース/パスワード推測の疑い','note.scanOrMisconfig':'スキャンまたは設定ミスの疑い','note.freqAnomaly':'頻度異常','note.possibleScan':'ポート/ホストスキャンの疑い','note.knownIOC':'既知の脅威情報に一致',
-    'intel.title':'④ ローカル脅威インテリジェンス照合リスト','intel.hint':'公開または社内の IP/CIDR ブロックリストを取り込みます（テキスト、CSV、または JSON／NDJSON——Spamhaus DROP 形式など）。照合はローカルのみで行い、外部通信は一切行いません。一致した場合は「確認済み」の高リスク問題として表示されます。','intel.add_btn':'リストをアップロード','intel.name_placeholder':'リスト名','intel.date_placeholder':'インテリジェンス日付（手動入力）','intel.count_label':'件','intel.remove_btn':'削除','intel.empty':'まだインテリジェンスリストが取り込まれていません','hashintel.title':'ローカルハッシュ脅威インテリジェンス照合リスト','hashintel.hint':'既知の悪意あるファイルハッシュリストを取り込みます（テキスト、1行に1つのMD5/SHA1/SHA256）。照合はローカルのみで行います。一致した場合は「確認済み」の高リスク問題として表示されます。','hashintel.add_btn':'ハッシュリストをアップロード','hashintel.name_placeholder':'リスト名','hashintel.date_placeholder':'インテリジェンス日付（手動入力）','hashintel.empty':'まだハッシュリストが取り込まれていません','cat.knownHashIOC':'既知の悪意あるファイルハッシュ',
+    'intel.title':'④ ローカル脅威インテリジェンス照合リスト','intel.hint':'公開または社内の IP/CIDR ブロックリストを取り込みます（テキスト、CSV、または JSON／NDJSON——Spamhaus DROP、OTX、URLhaus、MISP、ThreatQ、STIX 2 形式など）。照合はローカルのみで行い、外部通信は一切行いません。一致した場合は「確認済み」の高リスク問題として表示されます。','intel.add_btn':'リストをアップロード','intel.name_placeholder':'リスト名','intel.date_placeholder':'インテリジェンス日付（手動入力）','intel.count_label':'件','intel.remove_btn':'削除','intel.empty':'まだインテリジェンスリストが取り込まれていません','hashintel.title':'ローカルハッシュ脅威インテリジェンス照合リスト','hashintel.hint':'既知の悪意あるファイルハッシュリストを取り込みます（テキスト（1行に1つのMD5/SHA1/SHA256）、または MalwareBazaar、OTX、MISP、STIX 2 形式）。照合はローカルのみで行います。一致した場合は「確認済み」の高リスク問題として表示されます。','hashintel.add_btn':'ハッシュリストをアップロード','hashintel.name_placeholder':'リスト名','hashintel.date_placeholder':'インテリジェンス日付（手動入力）','hashintel.empty':'まだハッシュリストが取り込まれていません','cat.knownHashIOC':'既知の悪意あるファイルハッシュ',
     'safelist.title':'⑤ 既知の安全リスト（ホワイトリスト）','safelist.hint':'自分で管理する既知の安全な IP/CIDR リストを取り込みます（テキスト、CSV、または JSON／NDJSON）。一致した場合は脅威インテリジェンスの命中対象から除外されます——内部ネットワークや既知の正規サービスが公開リストで誤検知されるのを防ぐ用途です。','safelist.name_placeholder':'リスト名','safelist.add_btn':'リストをアップロード','safelist.template_btn':'サンプルCSVをダウンロード','safelist.empty':'まだ安全リストが取り込まれていません',
     'geo.title':'⑥ GeoIP データベース照合','asn.title':'ASN データベース照合','asn.hint':'IP→ASN 対応表をインポートします：プレーンテキスト/CSV/TSV 形式。IPtoASN.com（range_start/range_end/AS_number/country/AS_description、タブ区切り）、DB-IP IP to ASN Lite（カンマ区切り、ヘッダーなし）、IPinfo.io（ヘッダーあり、start_ip/end_ip/asn/name/domain）の3形式に対応、各公式サイトから無料でダウンロードできます。一致した ASN が上の「リスク ASN」選択に含まれる場合、ASN リスクとして検出されます。データベースは自分で用意する必要があり、本ツールには同梱されていません。','asn.name_placeholder':'名称（任意、未入力時はファイル名）','asn.add_btn':'データベースをアップロード','asn.empty':'ASN データベース未インポート','asn.risk_import_title':'リスクASNリストのインポート（例：Spamhaus ASN-DROP）','asn.risk_import_hint':'JSON Lines形式に対応（1行1つのJSONオブジェクト、公式Spamhaus ASN-DROP例：{"asn":245,...}）、asnフィールドのみ使用。このリストは「どのASNが既知のリスクか」を提供するだけで、実際にイベントIPと照合するには上記でIP→ASN対応データベースを別途アップロードする必要があります。','customrule.title':'🛠️ カスタム検知ルール','customrule.hint':'独自のキーワード/正規表現ルールを作成し、解析済みイベント全体をスキャン。ヒットすると1件の問題としてまとめられます','customrule.add_btn':'＋ ルール追加','customrule.export_btn':'📤 ルールをエクスポート','customrule.import_btn':'📥 ルールをインポート','customrule.delete_title':'削除','customrule.invalid_regex':'正規表現が無効です','customrule.name_ph':'ルール名','customrule.matchtype_contains':'キーワード','customrule.matchtype_regex':'正規表現','customrule.pattern_ph':'比較パターン','customrule.format_any':'任意の形式','customrule.import_invalid':'ルールファイルの形式が不正です','customrule.imported_msg':'{n} 件のルールをインポートしました','customrule.stage_hint':'任意：このルールの命中を攻撃チェーン関連機能で追跡できるようにします','customrule.stage_none':'（攻撃チェーンに含めない）','customrule.stage_recon':'偵察','customrule.stage_access':'アクセス','customrule.stage_malicious':'悪意のある行為','customrule.stage_postActivity':'事後影響','asn.risk_import_add_btn':'リスクリストをアップロード','asn.risk_import_empty':'リスクASNリスト未インポート','opt.asnRiskLabel':'リスク ASN：','opt.asnRiskFilter':'ASN を絞り込み…','cat.asnRisk':'ASN リスク','opt.enable4688':'EventID 4688（プロセス作成）解析を有効化','opt.procWatchlist':'疑わしいキーワード（CommandLine/NewProcessName と照合、カンマまたは改行区切り）…','cat.processCreate':'疑わしいプロセス作成','cat.asnVelocity':'ASN 速度異常','cat.sysmonNetConn':'Sysmon ネットワーク接続','cat.sysmonFileCreate':'Sysmon ファイル作成','cat.sysmonDnsQuery':'Sysmon DNS クエリ','cat.sysmonProcessCreate':'疑わしい Sysmon プロセス作成','cat.sysmonRemoteThread':'疑わしいプロセスインジェクション（Sysmon CreateRemoteThread）','cat.powershellScriptBlock':'疑わしい悪意のある PowerShell スクリプト','cat.sysmonImageLoad':'疑わしい悪意のある DLL サイドローディング／注入','cat.powershellModuleLog':'疑わしい悪意のある PowerShell モジュール使用','cat.timeGap':'タイムスタンプの欠落（ログ収集の中断の可能性）','opt.enableSysmonProc':'Sysmon EventID 1（プロセス作成）キーワード検出を有効化','opt.enableSysmonThread':'Sysmon EventID 8（CreateRemoteThread）キーワード検出を有効化','opt.enablePsScriptBlock':'PowerShell スクリプトブロックログ（EventID 4104）キーワード検出を有効化','opt.enableSysmonImageLoad':'Sysmon EventID 7（ImageLoad）キーワード検出を有効化（イベント量が非常に多いためデフォルトで無効）','opt.enablePsModuleLog':'PowerShell モジュールログ記録 EventID 4103 キーワード検出を有効化（デフォルトで無効）','opt.sysmonProcWatchlist':'疑わしいキーワード（Image/CommandLine/ParentImage/Hashes と照合、カンマまたは改行区切り）…','opt.sysmonThreadWatchlist':'疑わしいキーワード（SourceImage/TargetImage/StartModule と照合、カンマまたは改行区切り）…','opt.psScriptBlockWatchlist':'疑わしいキーワード（ScriptBlockText と照合、カンマまたは改行区切り）…','opt.sysmonImageLoadWatchlist':'疑わしいキーワード（ImageLoaded/Image/OriginalFileName と照合、カンマまたは改行区切り）…','opt.psModuleLogWatchlist':'疑わしいキーワード（ContextInfo/Payload と照合、カンマまたは改行区切り）…','cat.acctLockout':'アカウントロックアウト','cat.pwReset':'管理者によるパスワードリセット','cat.groupRemoved':'セキュリティグループから削除','cat.acctStatusChange':'アカウント状態変更','cat.auditCleared':'監査ログのクリア','cat.persistence':'疑わしい永続化','cat.sysmonRegistryPersistence':'疑わしいレジストリ自動起動の永続化','cat.kerberoasting':'Kerberoasting の疑い','cat.lsassAccess':'LSASS メモリアクセスの疑い（認証情報窃取）','cat.passTheHash':'Pass-the-Hash の疑い','cat.asrepRoasting':'AS-REP Roasting の疑い','cat.asrepRoastingRisk':'アカウントが事前認証不要に設定（AS-REP Roasting のリスク）','cat.specialPrivLogon':'特権付与ログオン','cat.groupEnum':'グループメンバー列挙','cat.explicitCredLogon':'明示的資格情報ログオン','cat.acctDeleted':'アカウント削除','cat.registryValueChange':'レジストリ値変更','cat.tokenPrivAdjust':'トークン権限の調整','cat.auditPolicyChanged':'監査ポリシーの変更','cat.auditLogFull':'セキュリティログが満杯','cat.adminShareAccess':'管理共有へのアクセス','geo.hint':'CIDR→国名対応表をインポートします：プレーンテキスト/CSV（ヘッダーに cidr と country 列が必要）、または v2fly/Xray 形式の geoip.dat バイナリファイル（IPv4のみ対応）。一致した国が上の「地理的リスク国」選択に含まれる場合、地理的リスク（IP照合版）として検出されます。データベースは自分で用意する必要があり、本ツールには同梱されていません。','geo.name_placeholder':'リスト名（省略可、未入力時はファイル名を使用）','geo.add_btn':'リストをアップロード','geo.empty':'GeoIP データベース未インポート','geo.riskGroupLabel':'高リスク国','geo.continent.asia':'アジア','geo.continent.europe':'ヨーロッパ','geo.continent.africa':'アフリカ','geo.continent.namerica':'北アメリカ','geo.continent.samerica':'南アメリカ','geo.continent.oceania':'オセアニア','geo.continent.other':'その他/未分類',
     'guide.title':'⑦ 外部脅威インテリジェンスの入手方法','guide.body':'本ツールはローカル照合のみを行い、データを外部に取得・送信することはありません。\n代表的な公開情報源（用途のみ記載、正式なダウンロード URL は公式ページでご確認ください）：\n• Spamhaus DROP/EDROP — 既知の悪意あるネットブロック（CIDR）\n• Emerging Threats / Proofpoint compromised-ips — 既知の侵害済みホスト IP\n• abuse.ch Feodo Tracker / URLhaus / ThreatFox — マルウェア C2 関連 IOC\n• FireHOL Level 1 — Spamhaus/DShield/Abuse.ch 等を統合：https://iplists.firehol.org/files/firehol_level1.netset （プレーンテキスト、# コメント、このページに直接貼り付け可）\n• EmergingThreats Block List — IDS/IPS 向け攻撃者 IP リスト：https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt （プレーンテキスト、直接貼り付け可）\n• CINS Army List — 高信頼度の攻撃元 IP：https://cinsscore.com/list/ci-badguys.txt （プレーンテキスト、1 行 1 IP、直接貼り付け可）\n• Blocklist.de — ハニーポット/IDS 報告を集約した攻撃元 IP：https://www.blocklist.de/downloads/export-ips_all.txt （プレーンテキスト、1 行 1 IP、直接貼り付け可）\n• DShield/SANS ISC Block List — 直近 3 日間の攻撃元ネットブロック：https://www.dshield.org/block.txt （⚠️ タブ区切りの表形式で単純な CIDR リストではありません。そのまま貼り付けると各行の先頭列（ブロック開始 IP）のみが単一 IP として厳密一致比較の対象になり、/24 全体には展開されないため命中率が大幅に低下します。事前に CIDR 形式へ加工してから取り込んでください）\n上記はすべて公開のプレーンテキストファイルです。ダウンロードして貼り付けるか、ファイルを保存して本ページの「リストをアップロード」から取り込めます。登録や API キーが必要なサービス（AbuseIPDB 等）は含まれていません。\n多くの公開リストには独自の利用規約があります（非商用/個人利用限定の場合あり）。ダウンロード前にご確認ください。月 1 回以上の更新を推奨します。',
