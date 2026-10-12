@@ -109,8 +109,8 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - Intrusion detection and endpoint protection: Suricata EVE JSON, Cisco Secure Endpoint (AMP) event JSON, Zeek (JSON / TSV), CrowdStrike Falcon streaming events, Microsoft Defender for Endpoint / 365 Defender
 - DNS / cloud security: Cisco Umbrella CSV
 - Network devices: Cisco IOS (including ACL logs) and Comware device logs
-- Servers and cloud: Windows event XML and Sysmon, IIS / web and AWS ELB access logs, AWS VPC / Azure NSG / GCP flow logs
-- Cloud identity and audit: Microsoft Entra ID sign-ins, Okta, Microsoft 365 audit, Google Workspace logins, AWS CloudTrail
+- Servers and cloud: Windows event XML and Sysmon, IIS / web, AWS ELB and S3 access logs, AWS VPC / Azure NSG / GCP flow logs
+- Cloud identity and audit: Microsoft Entra ID sign-ins, Okta, Microsoft 365 audit, Google Workspace logins, AWS CloudTrail, Azure Activity Log, GCP Cloud Audit Logs
 
 **Main features**
 - Sorts by severity and flags likely problems: frequency anomalies, scans, authentication failures, Kerberoasting, lateral movement, interface problems, MAC flapping, multi-stage attack chains and more, tagged with MITRE ATT&CK IDs
