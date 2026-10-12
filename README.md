@@ -104,7 +104,7 @@
 ![Log 分析工具：問題清單](docs/images/07-log-zh.png)
 
 **支援格式**
-- CEF、LEEF、Syslog（RFC3164／RFC5424）、JSON
+- CEF、LEEF、Syslog（RFC3164／RFC5424，訊息為 JSON 時也會拆欄位）、JSON
 - 防火牆：FortiGate key=value（含 syslog 轉送）、Cisco ASA／FTD、Palo Alto PAN-OS（含 GlobalProtect／User-ID）、Check Point Log Exporter、Cisco FTD Firepower 事件、Juniper SRX RT_FLOW 與 IDP／UTM、H3C SecPath 工作階段／過濾紀錄、SonicWall、Sophos Firewall、MikroTik、EdgeRouter／VyOS 與 Linux iptables／nftables LOG
 - 入侵偵測與端點防護：Suricata EVE JSON、Cisco Secure Endpoint（AMP）事件 JSON、Zeek（JSON／TSV）、CrowdStrike Falcon 串流事件、Microsoft Defender for Endpoint／365 Defender
 - DNS／雲端安全：Cisco Umbrella CSV
@@ -114,7 +114,7 @@
 
 **主要功能**
 - 依嚴重程度排序，找出可能問題：頻率異常、掃描、認證失敗、Kerberoasting、橫向移動、介面異常、MAC 飄移、跨事件攻擊鏈等，附 MITRE ATT&CK 編號
-- 本機威脅情資與 ASN 清單比對（不連網）
+- 本機威脅情資、檔案雜湊與 ASN 清單比對（不連網；可直接匯入 OTX、URLhaus、MISP、ThreatQ、STIX 2、MalwareBazaar 匯出檔）
 - 敏感欄位去識別化、CSV 與報表匯出
 - 事件一鍵帶到防火牆分析器反查規則；介面異常帶到交換器解析器查看該埠
 
