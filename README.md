@@ -41,7 +41,7 @@
 **支援來源（20 種）**
 - FortiGate、Sophos XG、Check Point（Gaia clish 或 Management API JSON）、Palo Alto（含 Panorama）、Juniper SRX、pfSense、OPNsense、SonicWall、MikroTik、Cisco ASA／FTD、Zyxel USG／ATP、WatchGuard Firebox、H3C SecPath
 - EdgeRouter（EdgeOS）、VyOS、OpenWrt（UCI）、Netgate TNSR、Linux iptables／nftables
-- 雲端：AWS 安全群組與 Network ACL、Azure NSG、GCP VPC 防火牆規則、Cisco Meraki MX（API 回應 JSON）
+- 雲端：AWS 安全群組與 Network ACL、Azure NSG、Azure Firewall Policy、GCP VPC 防火牆規則與 network firewall policy、Cisco Meraki MX（API 回應 JSON）
 - 無線控制器（只做 WiFi 分析）：Cisco Catalyst 9800／AireOS、Aruba 控制器／Instant、H3C WX
 
 **主要功能**
@@ -105,11 +105,11 @@
 
 **支援格式**
 - CEF、LEEF、Syslog（RFC3164／RFC5424，訊息為 JSON 時也會拆欄位）、JSON
-- 防火牆：FortiGate key=value（含 syslog 轉送）、Cisco ASA／FTD、Palo Alto PAN-OS（含 GlobalProtect／User-ID）、Check Point Log Exporter、Cisco FTD Firepower 事件、Juniper SRX RT_FLOW 與 IDP／UTM、H3C SecPath 工作階段／過濾紀錄、SonicWall、Sophos Firewall、MikroTik、EdgeRouter／VyOS 與 Linux iptables／nftables LOG
+- 防火牆：FortiGate key=value（含 syslog 轉送）、Cisco ASA／FTD、Palo Alto PAN-OS（含 GlobalProtect／User-ID）、Check Point Log Exporter、Cisco FTD Firepower 事件、Juniper SRX RT_FLOW 與 IDP／UTM、H3C SecPath 工作階段／過濾紀錄、SonicWall、Sophos Firewall、MikroTik、EdgeRouter／VyOS 與 Linux iptables／nftables LOG、Windows Defender 防火牆 pfirewall.log、AWS Network Firewall、Azure Firewall
 - 入侵偵測與端點防護：Suricata EVE JSON、Cisco Secure Endpoint（AMP）事件 JSON、Zeek（JSON／TSV）、CrowdStrike Falcon 串流事件、Microsoft Defender for Endpoint／365 Defender
 - DNS／DHCP：BIND、dnsmasq／Pi-hole、CoreDNS、Windows DNS 偵錯 log 與 DNS 異常偵測（疑似 DGA、DNS tunneling、大量 NXDOMAIN），Windows DHCP、ISC dhcpd、dnsmasq 租約紀錄（事件位址對照主機名稱），Cisco Umbrella CSV
 - 網路設備與存取控制：Cisco IOS（含 ACL 記錄）、Comware 設備 log、Cisco ISE 802.1X／MAB 認證紀錄（交換器埠認證反覆失敗可連到交換器分析）、Linux sshd／sudo（多次失敗後成功偵測）；VPN／RADIUS 指派位址與 DHCP 租約可把事件位址對照到帳號與主機
-- 伺服器與雲端：Windows 事件 XML 與 Sysmon、IIS／Web、AWS ELB 與 S3 存取紀錄、AWS VPC／Azure NSG／GCP 流量紀錄
+- 伺服器與雲端：Windows 事件 XML 與 Sysmon、IIS／Web、Squid access.log、AWS ELB 與 S3 存取紀錄、AWS VPC／Azure NSG／GCP 流量紀錄
 - 雲端身分與稽核：Microsoft Entra ID 登入、Okta、Microsoft 365 稽核、Google Workspace 登入、AWS CloudTrail、Azure Activity Log、GCP Cloud Audit Logs
 
 **主要功能**

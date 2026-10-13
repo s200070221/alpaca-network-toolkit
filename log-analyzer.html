@@ -601,6 +601,7 @@ function detectLineFormat(line) {
   if (/^(?:<\d{1,3}>)?[a-z_]+=/.test(line) && /(?:^|[\s>])date=\d{4}-\d{2}-\d{2}\s/.test(line) && /\stime=\d{2}:\d{2}:\d{2}\b/.test(line) && /\blogid="?\d{10}\b/.test(line)) return 'fortigate';
   // SonicWall／Sophos Firewall（SFOS）直送 syslog 沒有時間主機外殼，<PRI> 後直接是 key=value（第十四輪 OH）
   if (KVFW_LINE_RE.test(line)) return 'kvfw';
+  if (SQUID_LINE_RE.test(line)) return 'squid';
   if (WEB_ACCESS_RE.test(line)) return 'weblog';
   // MikroTik RouterOS 本機 /log print 匯出（無 syslog 外殼）與不含時間／主機名的遠端 syslog，
   // 需開頭為 <PRI> 或時間，且接著的 topics 清單含嚴重度字（見 splitMikroTikTopics()）才判定
@@ -2271,6 +2272,25 @@ function annotateAddrOwners(events) {
   return events;
 }
 const ipWithName = (ip, name, user) => ((name || user) && ip && ip !== '-') ? `${ip} (${[user, name].filter(Boolean).join(' / ')})` : ip;
+// Squid 原生 access.log（第二十二輪 HD，依 Squid 原始碼 src/cf.data.pre 的 logformat squid：
+//   %ts.%03tu %6tr %>a %Ss/%03>Hs %<st %rm %ru %[un %Sh/%<a %mt，耗時欄靠右補空白）
+// 以 weblog 事件輸出：結果碼 squid（TCP_MISS／TCP_DENIED…）、status、bytes、method、url、user、hier（DIRECT…）、dstip（上游位址）、ctype；
+// 結果碼含 DENIED 為拒絕（407 代理認證要求除外）
+const SQUID_LINE_RE = /^(\d{9,11})\.(\d{3})\s+(\d+)\s+(\S+)\s+([A-Z_]+)\/(\d{3})\s+(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+([A-Z_]+)\/(\S+)\s+(\S+)\s*$/;
+function parseSquidLine(line, lineNo) {
+  const m = line.match(SQUID_LINE_RE);
+  if (!m) return null;
+  const [, sec, ms, elapsed, client, code, status, bytes, method, url, user, hier, peer, ctype] = m;
+  const fields = { squid: code, srcip: client, status, bytes, method, url, hier, elapsed };
+  if (user !== '-') fields.user = user;
+  if (peer !== '-' && /^[\d.:a-fA-F]+$/.test(peer) && /[.:]/.test(peer)) fields.dstip = peer;
+  if (ctype !== '-') fields.ctype = ctype;
+  const ts = new Date(Number(sec) * 1000 + Number(ms));
+  const evt = webEvent('weblog', line, lineNo, ts, `${sec}.${ms}`, '', fields);
+  evt.netVendor = 'squid';
+  evt.msg = `${code}/${status} ${method} ${url}${fields.user ? ' ' + fields.user : ''}`;
+  return evt;
+}
 function parseWebAccessLine(line, lineNo) {
   const m = line.match(WEB_ACCESS_RE);
   if (!m || !WEB_MONTHS[m[5]]) return null;
@@ -2284,16 +2304,46 @@ function parseWebAccessLine(line, lineNo) {
   const ts = new Date(`${yyyy}-${WEB_MONTHS[mon]}-${dd}T${hms}${tzh}:${tzm}`);
   return webEvent('weblog', line, lineNo, ts, `${dd}/${mon}/${yyyy}:${hms} ${tzh}${tzm}`, '', fields);
 }
+// Windows Defender 防火牆 log（pfirewall.log，第二十二輪 HC）：與 IIS 同為 W3C 風格，表頭 `#Software: Microsoft Windows Firewall`，
+// 欄位依 #Fields（1.5 版：date time action protocol src-ip dst-ip src-port dst-port size tcpflags tcpsyn tcpack tcpwin icmptype icmpcode info path，
+// 新版另有 pid），空值為 -；`#Time Format: Local` 為本機時間。格式依 Plaso 開源鑑識工具的 winfirewall 解析器（同樣依 #Fields 動態對應）；
+// Microsoft 文件站被網路政策擋下，只取得搜尋摘要。動作 DROP 為拒絕、ALLOW 為放行，另有 OPEN／CLOSE／INFO-EVENTS-LOST
+function winFwEvent(cols, line, lineNo, utc) {
+  const parts = line.trim().split(' ');
+  if (parts.length !== cols.length) return null;
+  const w = {};
+  cols.forEach((c, i) => { w[c] = parts[i] === '-' ? '' : parts[i]; });
+  const act = String(w.action || '').toUpperCase();
+  const fields = { winfw: act, action: act === 'DROP' ? 'deny' : (act === 'ALLOW' ? 'accept' : ''), proto: w.protocol || '' };
+  [['srcip', 'src-ip'], ['dstip', 'dst-ip'], ['srcport', 'src-port'], ['dstport', 'dst-port'], ['size', 'size'], ['tcpflags', 'tcpflags'],
+    ['icmptype', 'icmptype'], ['icmpcode', 'icmpcode'], ['direction', 'path'], ['pid', 'pid'], ['info', 'info']].forEach(([k, c]) => { if (w[c]) fields[k] = w[c]; });
+  const tsRaw = [w.date, w.time].filter(Boolean).join(' ');
+  const ts = w.date && w.time ? new Date(`${w.date}T${w.time}${utc ? 'Z' : ''}`) : null;
+  return {
+    format: 'w3c', raw: line, lineNo, netFields: true, netVendor: 'winfw', w3cCols: cols, winfwUtc: !!utc,
+    timestamp: ts && !isNaN(ts.getTime()) ? ts : null, timestampRaw: tsRaw,
+    host: '', appName: 'Windows Firewall', procid: w.pid || '', msgid: '', severityRaw: act, severityNorm: act === 'DROP' ? 'Low' : 'Info',
+    facility: null, facilityAuth: false,
+    msg: `${act} ${fields.proto} ${fields.srcip || '-'}${fields.srcport ? ':' + fields.srcport : ''} -> ${fields.dstip || '-'}${fields.dstport ? ':' + fields.dstport : ''}${fields.direction ? ' ' + fields.direction : ''}`, fields
+  };
+}
 // IIS W3C：回傳 null 表示文字中沒有 #Fields 指令（交給其他解析器）；欄位數不符的行交給逐行解析器
 function parseW3CLogEvents(text) {
   if (!/^#Fields:/m.test(text)) return null;
   const events = [], unparsed = [];
-  let cols = null;
+  let cols = null, winfw = false, utc = false;
   text.split('\n').forEach((line, idx) => {
     if (!line.trim()) return;
     if (line.startsWith('#')) {
       const fm = line.match(/^#Fields:\s*(.+)$/);
       if (fm) cols = fm[1].trim().split(/\s+/);
+      if (/^#Software:/.test(line)) winfw = /Microsoft Windows Firewall/i.test(line);
+      if (/^#Time Format:/.test(line)) utc = /UTC/i.test(line);
+      return;
+    }
+    if (winfw && cols) {
+      const evt = winFwEvent(cols, line, idx + 1, utc);
+      if (evt) events.push(evt); else unparsed.push({ lineNo: idx + 1, raw: line });
       return;
     }
     const parts = line.trim().split(' ');
@@ -2333,6 +2383,7 @@ function _idsAlertOf(e) {
   if (e.netVendor === 'falcon' && f.falconType === 'DetectionSummaryEvent') return { key: 'c:' + (f.detection || '') + '|' + (f.technique || ''), sig: 'Falcon', name: [f.detection, f.tactic, f.technique].filter(Boolean).join(' / '), sev: { Critical: 1, High: 1, Medium: 2 }[e.severityNorm] || 3, src: f.computer || f.srcip, dst: f.dstip, dpt: f.dstport };
   if (e.netVendor === 'zeek' && (f.zeekType === 'notice' || f.zeekType === 'intel')) return { key: 'z:' + (f.note || 'Intel ' + (f.indicator || '')), sig: f.zeekType === 'intel' ? 'Zeek Intel' : 'Zeek', name: f.note || ('Intel ' + (f.indicator || '')), sev: f.zeekType === 'intel' ? 1 : 2, src: f.srcip, dst: f.dstip, dpt: f.dstport };
   if (e.netVendor === 'paloalto' && f.logtype === 'THREAT' && PAN_IDS_SUBTYPES.has(f.subtype) && f.threat) return { key: 'p:' + (f.threatid || f.threat), sig: 'PAN-OS ' + (f.threatid || f.subtype), name: f.threat + ' [' + f.subtype + ']', sev: PAN_THREAT_SEV[String(f.threatsev || '').toLowerCase()] || 2, src: f.srcip, dst: f.dstip, dpt: f.dstport };
+  if (e.netVendor === 'azfw' && f.threatIntel) return { key: 'az:' + f.threatIntel, sig: 'Azure Firewall TI', name: f.threatIntel, sev: 1, src: f.srcip, dst: f.fqdn || f.dstip, dpt: f.dstport };
   if (e.netVendor === 'junos' && (f.jsec === 'idp' || f.jsec === 'ids') && f.attack) return { key: 'j:' + f.attack, sig: f.jsec.toUpperCase(), name: f.attack, sev: JUNOS_THREAT_SEV[String(f.threatsev || '').toUpperCase()] || 2, src: f.srcip, dst: f.dstip, dpt: f.dstport };
   return null;
 }
@@ -2562,6 +2613,7 @@ function parseLogLine(line, lineNo) {
   if (fmt === 'kvfw') return parseKvFwLine(line, lineNo);
   if (fmt === 'mikrotik') return parseMikroTikLine(line, lineNo);
   if (fmt === 'weblog') return parseWebAccessLine(line, lineNo);
+  if (fmt === 'squid') return parseSquidLine(line, lineNo);
   if (fmt === 'elb') return parseElbLine(line, lineNo);
   if (fmt === 's3') return parseS3AccessLine(line, lineNo);
   if (fmt === 'dns') return parseDnsServerLine(line, lineNo);
@@ -2892,7 +2944,69 @@ function cloudAuthEvent(o, ci, lineNo) {
     msg: [ci.event, ci.ok ? '' : 'FAILURE', ci.user, ci.ip ? 'from ' + ci.ip : '', ci.reason].filter(Boolean).join(' '), fields: f
   };
 }
+// ── 雲端防火牆 log（第二十二輪 HE，格式依 Elastic integrations aws／azure firewall_logs 的真實測試 log）──
+// AWS Network Firewall：{firewall_name, availability_zone, event_timestamp, event:{Suricata EVE（alert／netflow／tls…）}}，
+//   內層沿用 Suricata 處理（告警進 idsAlert、blocked 為拒絕），主機為防火牆名稱
+// Azure Firewall 診斷 log：舊版 category AzureFirewallNetworkRule／ApplicationRule（properties.msg 字串
+//   「協定[ Type=N] request from 來源[:埠] to 目的[:埠]. Action: 動作. …」，operationName 含 ThreatIntel 為威脅情資）
+//   與結構化 AZFWNetworkRule／AZFWApplicationRule／AZFWNatRule／AZFWThreatIntel 等（SourceIp／DestinationIp／Fqdn／Action／Rule…）；
+//   可為逐行 JSON 或 {"records":[…]}；Deny 為拒絕、威脅情資為 attack
+const isAwsNfwLog = o => !!o && typeof o.firewall_name === 'string' && !!o.event && isSuricataEve(o.event);
+const isAzureFwLog = o => !!o && typeof o.category === 'string' && /^(?:AzureFirewall\w+|AZFW\w+)$/.test(o.category) && !!o.properties && typeof o.properties === 'object';
+const AZFW_MSG_RE = /^(\w+)(?: Type=(\d+))?\s+request from (\S+?)(?::(\d+))?(?: to (\S+?)(?::(\d+))?)?\.(?: Url: (\S+)\.)? Action: (\w+)\.?\s*(.*)$/;
+// DNS Proxy 舊版 msg 為 CoreDNS 格式：DNS Request: 用戶端:埠 - 編號 類型 類別 名稱 協定 大小 do 緩衝 RCODE …；新版 AZFWDnsQuery 為結構化欄位
+const AZFW_DNS_RE = /^DNS Request: (\S+):(\d+) - \d+ (\S+) \S+ (\S+) \w+ \d+ \w+ \d+ ([A-Z]+)/;
+function nfwEvent(obj, lineNo) {
+  const e = eventFromJSONObject(obj.event, lineNo);
+  return Object.assign(e, { raw: JSON.stringify(obj), host: obj.firewall_name, nfwRaw: obj, appName: 'aws-network-firewall' });
+}
+function azfwEvent(obj, lineNo) {
+  const p = obj.properties, f = { azfw: obj.category };
+  const isIp = v => /^[\d.]+$|:/.test(String(v || ''));
+  const dm = typeof p.msg === 'string' ? p.msg.match(AZFW_DNS_RE) : null;
+  if (dm) Object.assign(f, { dns: 'reply', srcip: dm[1], srcport: dm[2], qtype: dm[3], domain: dnsName(dm[4]), rcode: dm[5] });
+  else if (p.QueryName) Object.assign(f, { dns: 'reply', srcip: String(p.SourceIp || ''), srcport: String(p.SourcePort || ''), qtype: String(p.QueryType || ''), domain: dnsName(p.QueryName), rcode: String(p.ResponseCode || '') });
+  else if (typeof p.msg === 'string') {
+    const m = p.msg.match(AZFW_MSG_RE);
+    if (m) {
+      Object.assign(f, { proto: m[1], srcip: m[3], actionRaw: m[8] });
+      if (m[6]) f.dstport = m[6];
+      if (m[2]) f.icmptype = m[2];
+      if (m[4]) f.srcport = m[4];
+      if (m[5]) { if (isIp(m[5])) f.dstip = m[5]; else f.fqdn = m[5]; }
+      if (m[7]) f.url = m[7];
+      const ti = m[9].match(/ThreatIntel:\s*([^.]+)/);
+      if (ti || /ThreatIntel/i.test(obj.operationName || '')) f.threatIntel = ti ? ti[1].trim() : 'ThreatIntel';
+      const r = m[9].match(/Rule Collection: ([^.]+)\. Rule: ([^.,]+)/);
+      if (r) { f.ruleCollection = r[1]; f.rule = r[2]; }
+      const pol = m[9].match(/Policy: ([^.]+)\./);
+      if (pol) f.policy = pol[1];
+    }
+  } else {
+    const g = k => (p[k] === undefined || p[k] === null || p[k] === '' ? '' : String(p[k]));
+    Object.assign(f, { proto: g('Protocol'), srcip: g('SourceIp'), srcport: g('SourcePort'), dstip: g('DestinationIp'), dstport: g('DestinationPort'),
+      actionRaw: g('Action'), rule: g('Rule'), ruleCollection: g('RuleCollection'), policy: g('Policy') });
+    if (g('Fqdn')) f.fqdn = g('Fqdn');
+    if (g('TargetUrl')) f.url = g('TargetUrl');
+    if (g('TranslatedIp')) { f.natip = g('TranslatedIp'); f.natport = g('TranslatedPort'); }
+    if (/ThreatIntel/i.test(obj.category)) f.threatIntel = g('ThreatDescription') || 'ThreatIntel';
+    Object.keys(f).forEach(k => { if (f[k] === '') delete f[k]; });
+  }
+  f.action = /^(?:deny|drop)$/i.test(f.actionRaw || '') ? 'deny' : (/^allow$/i.test(f.actionRaw || '') ? 'accept' : (f.actionRaw || '').toLowerCase());
+  const ts = new Date(obj.time || '');
+  const host = String(obj.resourceId || '').split('/').pop() || '';
+  return {
+    format: 'json', raw: JSON.stringify(obj), lineNo, netFields: true, netVendor: 'azfw', azfwRaw: obj,
+    timestamp: isNaN(ts.getTime()) ? null : ts, timestampRaw: String(obj.time || ''),
+    host, appName: 'azure-firewall', procid: '', msgid: obj.category, severityRaw: f.actionRaw || '',
+    severityNorm: f.threatIntel ? 'High' : (f.action === 'deny' ? 'Low' : 'Info'), facility: null, facilityAuth: false, url: f.url || '', httpMethod: '',
+    msg: f.dns ? `DNS ${f.qtype} ${f.domain} ${f.rcode} from ${f.srcip}` : `${(f.actionRaw || '').toUpperCase()} ${f.proto || ''} ${f.srcip || '-'}${f.srcport ? ':' + f.srcport : ''} -> ${f.fqdn || f.dstip || '-'}${f.dstport ? ':' + f.dstport : ''}${f.rule ? ' rule=' + f.rule : ''}${f.threatIntel ? ' ThreatIntel: ' + f.threatIntel : ''}`.replace(/\s+/g, ' ').trim(),
+    fields: f
+  };
+}
 function eventFromJSONObject(obj, lineNo) {
+  if (isAwsNfwLog(obj)) return nfwEvent(obj, lineNo);
+  if (isAzureFwLog(obj)) return azfwEvent(obj, lineNo);
   const ci = cloudAuthInfo(obj);
   if (ci) return cloudAuthEvent(obj, ci, lineNo);
   if (isZeekLog(obj)) return zeekEvent(obj, lineNo);
@@ -3017,7 +3131,7 @@ function parseWinEventLogEvents(text) {
 function parseJSONLogEvents(text) {
   const { arr, singleObj } = parseJSONOrNDJSON(text);
   let list = arr;
-  if (!list && singleObj && (looksLikeLogRecord(singleObj) || isFalconEvent(singleObj) || isDefenderAlert(singleObj) || isM365Incident(singleObj))) list = [singleObj];
+  if (!list && singleObj && ((Array.isArray(singleObj.records) && singleObj.records.some(isAzureFwLog)) || looksLikeLogRecord(singleObj) || isFalconEvent(singleObj) || isDefenderAlert(singleObj) || isM365Incident(singleObj))) list = [singleObj];
   // 多個縮排 JSON 物件前後相接（CrowdStrike Falcon 串流匯出，第十八輪 TJ）
   if (!list && /^\s*\{/.test(text) && /"eventType"/.test(text)) { const docs = splitConcatJson(text); if (docs.length && docs.every(isFalconEvent)) list = docs; }
   if (!list) return null;
@@ -3028,6 +3142,8 @@ function parseJSONLogEvents(text) {
     if (isCiscoAmpEvent(item)) { events.push(ampEvent(item, idx + 1)); return; }
     // Microsoft Defender 告警／365 Defender 事件（一個事件可含多筆告警，第十八輪 TK）
     if (isDefenderAlert(item) || isM365Incident(item)) { const d = defenderEvents(item, idx + 1); if (d.length) { events.push(...d); return; } }
+    // Azure 診斷 log 匯出為 {"records":[…]}（第二十二輪 HE）
+    if (Array.isArray(item.records) && item.records.length && item.records.every(isAzureFwLog)) { item.records.forEach(r => events.push(azfwEvent(r, idx + 1))); return; }
     // CloudTrail 檔案（S3）為 {"Records":[事件…]}，逐行 NDJSON 時每行一個這種物件（第十六輪 PF）
     if (Array.isArray(item.Records) && item.Records.length && item.Records.every(r => r && r.eventSource && r.eventName)) { item.Records.forEach(r => events.push(eventFromJSONObject(r, idx + 1))); return; }
     const amp = item.data && (Array.isArray(item.data) ? item.data : [item.data]);
@@ -3460,7 +3576,10 @@ function classifyByKeyword(evt) {
   // DNS 查詢紀錄本身不是事件（BIND 的 query failed 等字樣不可落入認證失敗等關鍵字），異常由 detectDnsAnomalies() 判斷
   if (evt.fields && ((evt.fields.dns && evt.fields.domain) || evt.fields.dhcp)) return 'other';
   if (evt.fields && evt.fields.ise) return iseAuthFailed(evt.fields) ? 'authFail' : 'other';
+  if (evt.netVendor === 'azfw' && evt.fields) return evt.fields.threatIntel ? 'attack' : (evt.fields.action === 'deny' ? 'denyBlock' : 'other');
+  if (evt.netVendor === 'winfw') return evt.fields && evt.fields.action === 'deny' ? 'denyBlock' : 'other';
   if (evt.fields && (evt.fields.ssh || evt.fields.sudo)) return sshAuthFailed(evt.fields) ? 'authFail' : 'other';
+  if (evt.netVendor === 'squid' && evt.fields) return /DENIED/.test(evt.fields.squid) && evt.fields.status !== '407' ? 'denyBlock' : 'other';
   if ((evt.format === 'weblog' || evt.format === 'w3c') && evt.fields) {
     return evt.fields.status === '401' ? 'authFail' : (evt.fields.status === '403' ? 'denyBlock' : 'other');
   }
@@ -6662,6 +6781,24 @@ function anonymizeWebEvent(clone, opts) {
     clone.raw = raw;
     return;
   }
+  if (f.winfw !== undefined) {
+    const ev = winFwEvent(clone.w3cCols, raw, clone.lineNo, clone.winfwUtc);
+    if (ev) { clone.fields = ev.fields; clone.msg = ev.msg; }
+    clone.raw = raw;
+    return;
+  }
+  // Squid：帳號欄換假帳號、網址內的非公開網域以主機名稱對照替換（同 DNS），再重拆欄位
+  if (f.squid) {
+    const parts = raw.split(/(\s+)/);
+    const tok = parts.filter((x, i) => i % 2 === 0);
+    if (tok[7] && tok[7] !== '-') tok[7] = anonUser(tok[7]);
+    if (tok[6]) tok[6] = tok[6].replace(/^((?:[a-z][\w+.-]*:\/\/)?)([^\/:\s]+)/i, (m, p, h) => p + (isValidIPv4(h) ? h : anonDnsName(h)));
+    raw = parts.map((x, i) => i % 2 === 0 ? tok[i / 2] : x).join('');
+    const ev = parseSquidLine(raw, clone.lineNo);
+    if (ev) { clone.fields = ev.fields; clone.msg = ev.msg; }
+    clone.raw = raw;
+    return;
+  }
   if (clone.format === 'weblog') {
     if (f.user) { f.user = anonUser(f.user); raw = raw.replace(/^(\S+ \S+ )\S+(?= \[)/, `$1${f.user}`); }
   } else {
@@ -6810,7 +6947,7 @@ function anonymizeEvent(evt, opts) {
   if (evt.fields && (evt.fields.ssh || evt.fields.sudo)) { const c = { ...evt, fields: { ...evt.fields } }; anonymizeSshEvent(c, opts); return c; }
   if (evt.fields && evt.fields.ise) { const c = { ...evt, fields: { ...evt.fields } }; anonymizeIseEvent(c, opts); return c; }
   if (evt.fields && evt.fields.dhcp) { const c = { ...evt, fields: { ...evt.fields } }; anonymizeDhcpEvent(c, opts); return c; }
-  if (evt.fields && evt.fields.dns) { const c = { ...evt, fields: { ...evt.fields } }; anonymizeDnsEvent(c, opts); return c; }
+  if (evt.fields && evt.fields.dns && !evt.azfwRaw) { const c = { ...evt, fields: { ...evt.fields } }; anonymizeDnsEvent(c, opts); return c; }
   const clone = { ...evt, fields: { ...evt.fields } };
   if (clone.netVendor === 'netfilter') clone.msg = anonNetfilterMac(clone.msg);
   if (evt.format === 'weblog' || evt.format === 'w3c') { anonymizeWebEvent(clone, opts); return clone; }
@@ -6909,6 +7046,22 @@ function anonymizeEvent(evt, opts) {
       const ci = cloudAuthInfo(a);
       const ev = cloudAuthEvent(a, ci, clone.lineNo);
       Object.assign(clone, { cloudRaw: a, fields: ev.fields, msg: ev.msg, raw: ev.raw });
+      return clone;
+    }
+    // 雲端防火牆（第二十二輪 HE）：深拷貝後換 IP／MAC，防火牆名稱與資源 ID 的訂閱／資源群組換假名、非公開網域以主機名稱對照替換，再重建
+    if (clone.nfwRaw || clone.azfwRaw) {
+      const a = JSON.parse(JSON.stringify(clone.nfwRaw || clone.azfwRaw));
+      const walk = o => Object.keys(o).forEach(k => { const v = o[k]; if (v && typeof v === 'object') walk(v); else if (typeof v === 'string' && v) {
+        let x;
+        if (k === 'firewall_name') x = anonHostname(v);
+        else if (k === 'resourceId') x = v.replace(/(\/SUBSCRIPTIONS\/)([0-9a-fA-F-]{36})/i, (m, p, id) => p + anonHostname(id.toLowerCase())).replace(/(\/RESOURCEGROUPS\/)([^\/]+)/i, (m, p, n) => p + anonHostname(n)).replace(/[^\/]+$/, n => anonHostname(n));
+        else if (/^(?:hostname|Fqdn|sni|QueryName)$/i.test(k)) x = isValidIPv4(v) ? replaceIPsInLine(v, opts) : anonDnsName(v);
+        else if (k === 'msg' || k === 'TargetUrl') x = anonDnsText(replaceIPsInLine(v, opts));
+        else x = replaceMACsInLine(replaceIPsInLine(v, opts));
+        o[k] = x; } });
+      walk(a);
+      const ev = clone.nfwRaw ? nfwEvent(a, clone.lineNo) : azfwEvent(a, clone.lineNo);
+      Object.assign(clone, { fields: ev.fields, msg: ev.msg, raw: ev.raw, host: ev.host, nfwRaw: ev.nfwRaw, azfwRaw: ev.azfwRaw });
       return clone;
     }
     // Microsoft Defender（第十八輪 TK）：深拷貝後帳號類欄位與 email 換假帳號、主機名稱換假名、其餘換 IP／MAC，重建同一筆告警
@@ -7061,6 +7214,20 @@ function anonymizeEvents(events, opts) {
     return { ...e, fields: rest };
   });
   return annotateAddrOwners(out);
+}
+// 去識別化結果轉回文字：W3C（IIS、Windows 防火牆）事件在欄位定義改變處補回 #Software／#Time Format／#Fields 表頭，
+// 下載後再匯入仍能依欄位解析（第二十二輪 HC）
+function anonEventsToText(events) {
+  const out = [];
+  let lastHead = '';
+  events.forEach(e => {
+    if (e.w3cCols) {
+      const head = (e.netVendor === 'winfw' ? `#Software: Microsoft Windows Firewall\n#Time Format: ${e.winfwUtc ? 'UTC' : 'Local'}\n` : '') + '#Fields: ' + e.w3cCols.join(' ');
+      if (head !== lastHead) { out.push(head); lastHead = head; }
+    }
+    out.push(e.raw);
+  });
+  return out.join('\n');
 }
 function checkResidualLog(text) {
   const warnings = [];
@@ -8915,7 +9082,7 @@ function renderDeidSummary() {
 }
 function doDownloadDeid() {
   if (!ANON_EVENTS) doRunDeid();
-  const text = tr('notice.disclaimer') + '\n' + ANON_EVENTS.map(e => e.raw).join('\n') + '\n';
+  const text = tr('notice.disclaimer') + '\n' + anonEventsToText(ANON_EVENTS) + '\n';
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
