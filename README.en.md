@@ -107,7 +107,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - CEF, LEEF, Syslog (RFC3164 / RFC5424, with fields extracted from JSON messages), JSON
 - Firewalls: FortiGate key=value (including syslog forwarding), Cisco ASA / FTD, Palo Alto PAN-OS (including GlobalProtect / User-ID), Check Point Log Exporter, Cisco FTD Firepower events, Juniper SRX RT_FLOW and IDP / UTM, H3C SecPath session / filter logs, SonicWall, Sophos Firewall, MikroTik, EdgeRouter / VyOS and Linux iptables / nftables LOG
 - Intrusion detection and endpoint protection: Suricata EVE JSON, Cisco Secure Endpoint (AMP) event JSON, Zeek (JSON / TSV), CrowdStrike Falcon streaming events, Microsoft Defender for Endpoint / 365 Defender
-- DNS / cloud security: Cisco Umbrella CSV
+- DNS / DHCP: BIND, dnsmasq / Pi-hole, CoreDNS and Windows DNS debug logs with DNS anomaly detection (likely DGA, DNS tunneling, NXDOMAIN bursts); Windows DHCP, ISC dhcpd and dnsmasq lease logs (event addresses annotated with host names); Cisco Umbrella CSV
 - Network devices: Cisco IOS (including ACL logs) and Comware device logs
 - Servers and cloud: Windows event XML and Sysmon, IIS / web, AWS ELB and S3 access logs, AWS VPC / Azure NSG / GCP flow logs
 - Cloud identity and audit: Microsoft Entra ID sign-ins, Okta, Microsoft 365 audit, Google Workspace logins, AWS CloudTrail, Azure Activity Log, GCP Cloud Audit Logs
