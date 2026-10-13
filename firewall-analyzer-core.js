@@ -190,12 +190,14 @@ function _literalSvcMatches(raw, proto, port) {
   // 查 443 會命中只放行 udp/53 的規則
   if (!proto || proto === 'any') {
     if (!port) return true;
-    if (/^icmp6?$|^ipv6-icmp$/.test(t)) return false;
+    if (/^icmp(?:v?6)?(?:\/\d+)?$|^ipv6-icmp$|^proto-\d+$/.test(t)) return false;
     const pm = t.match(/^(?:tcp|udp|tcp\/udp|tcp-udp)\/(\d+(?:-\d+)?(?:,\s*\d+(?:-\d+)?)*)$/) || t.match(/^(\d+(?:-\d+)?)$/);
     return pm ? _portInRange(port, pm[1]) : true;
   }
   const q = proto.toUpperCase();
-  if (/^icmp6?$|^ipv6-icmp$/.test(t)) return q === 'ICMP';
+  // icmp／icmp/類型／icmpv6 只對 ICMP 查詢；proto-N（tcp／udp／icmp 以外的協定號碼）不符合任何查詢協定
+  if (/^icmp(?:v?6)?(?:\/\d+)?$|^ipv6-icmp$/.test(t)) return q === 'ICMP';
+  if (/^proto-\d+$/.test(t)) return false;
   let m = t.match(/^(tcp|udp|tcp\/udp|tcp-udp)\/(\d+(?:-\d+)?(?:,\s*\d+(?:-\d+)?)*)$/);
   if (m) {
     const lp = m[1] === 'tcp' ? ['TCP'] : m[1] === 'udp' ? ['UDP'] : ['TCP', 'UDP'];
