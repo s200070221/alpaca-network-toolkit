@@ -1220,6 +1220,9 @@ function _isLogJsonObj(o) {
   if ((o.response && Array.isArray(o.response.authlogs)) || (typeof o.txid === 'string' && typeof o.result === 'string' && typeof o.event_type === 'string')) return true;
   // Kubernetes 稽核 log（第二十三輪 ID）：單筆 Event 或 EventList
   if ((o.kind === 'Event' || o.kind === 'EventList') && /^audit\.k8s\.io\//.test(String(o.apiVersion || ''))) return true;
+  // AKS 診斷 log 包裝的 Kubernetes 稽核（category kube-audit／kube-audit-admin）
+  if (/^kube-audit(?:-admin)?$/i.test(String(o.category || '')) && o.properties && o.properties.log) return true;
+  if (Array.isArray(o.records) && o.records.length && /^kube-audit/i.test(String((o.records[0] || {}).category || ''))) return true;
   // Microsoft Defender for Endpoint 告警／365 Defender 事件（第十八輪 TK，與 log_analyzer 判斷一致）
   if ((typeof o.title === 'string' && ('alertCreationTime' in o || 'creationTime' in o) && 'detectionSource' in o) || ('incidentId' in o && 'incidentName' in o && o.alerts && typeof o.alerts === 'object')) return true;
   // CrowdStrike Falcon Streaming API 事件（第十八輪 TJ）
@@ -1265,6 +1268,7 @@ const AWS_FLOW_RE = /^(?:(?=[a-z][a-z0-9 -]*\bsrcaddr\b)(?=[a-z][a-z0-9 -]*\bdst
 const CUMULUS_RE = t => (/^\s*-\s+set:\s*$/m.test(t) && (/nvue-api-version/.test(t) || /^\s+(?:interface|bridge|system|router|vrf):\s*$/m.test(t))) ||
   /^nv set (?:interface|bridge|system|router|vrf|service) /m.test(t);
 // Meraki MX Dashboard API 回應（L3 規則 destCidr、VLAN applianceIp、通訊埠轉送 publicPort），與 firewall_analyzer FW_VENDOR_SIGS.cloudsg 一致
+const K8S_NETPOL_YAML_RE = /^\s*kind:\s*NetworkPolicy\b/m;
 const CLOUD_SG_RE = /"(?:IpPermissions(?:Egress)?|(?:default)?[sS]ecurityRules)"\s*:\s*\[|"(?:destCidr|applianceIp|publicPort|NetworkAclId)"\s*:|"kind"\s*:\s*"compute#firewall"|"ruleCollections"\s*:\s*\[|"kind"\s*:\s*"compute#firewallPolicy"|"kind"\s*:\s*"NetworkPolicy"|"(?:ingress|egress)[-_]?[sS]ecurity[-_]?[rR]ules"\s*:\s*\[|"(?:source|destination)[-_]?[tT]ype"\s*:\s*"(?:CIDR_BLOCK|SERVICE_CIDR_BLOCK|NETWORK_SECURITY_GROUP)"/;
 function detectTool(text) {
   const t = text.slice(0, 8000);
@@ -1279,6 +1283,8 @@ function detectTool(text) {
     if (/^[\[{]/.test(trimmedFull) && /"objects-dictionary"\s*:/.test(text) && /"type"\s*:\s*"(?:access|nat)-(?:rule|section)"/.test(text)) return {idx:0, vendor:'c'};
     // 雲端安全群組 JSON（AWS describe-security-groups／Azure NSG，2026-10-02），訊號與 FW_VENDOR_SIGS.cloudsg 一致
     if (/^[\[{]/.test(trimmedFull) && CLOUD_SG_RE.test(text)) return {idx:0, vendor:'k'};
+    // Kubernetes NetworkPolicy 的 YAML（kubectl -o yaml、官方範例），與 firewall_analyzer CloudSGParser 的 YAML 判斷一致
+    if (K8S_NETPOL_YAML_RE.test(text)) return {idx:0, vendor:'k'};
     // Cumulus Linux NVUE（2026-10-02）：YAML 的 `- set:` 段或 nv set 指令，判斷式與 switch_analyzer isCumulusNVUE() 一致
     if (CUMULUS_RE(text)) return {idx:1, vendor:'cumulus'};
     // 雲端流量紀錄（2026-10-02）：Azure NSG／VNet flow logs 的 JSON 與 AWS VPC Flow Logs（預設格式或第一行欄位名稱）
@@ -1521,7 +1527,8 @@ function _detectToolReasons(text) {
       } },
     { reason: '命中 Check Point Management API JSON（rulebase 回應的 objects-dictionary 與 access／nat 規則）', test: () => /^[\[{]/.test(text.trim()) && /"objects-dictionary"\s*:/.test(text) && /"type"\s*:\s*"(?:access|nat)-(?:rule|section)"/.test(text) },
     { reason: '命中 Cumulus Linux NVUE 設定（YAML 的 `- set:` 段或 `nv set` 指令）', test: () => CUMULUS_RE(text) },
-    { reason: '命中 AWS 安全群組（IpPermissions）、AWS Network ACL（NetworkAclId）、Azure NSG（securityRules）、Azure Firewall Policy（ruleCollections）、GCP network firewall policy（compute#firewallPolicy）、GCP 防火牆規則（compute#firewall）或 Meraki MX API（destCidr／applianceIp／publicPort）JSON', test: () => /^[\[{]/.test(text.trim()) && CLOUD_SG_RE.test(text) },
+    { reason: '命中 AWS 安全群組（IpPermissions）、AWS Network ACL（NetworkAclId）、Azure NSG（securityRules）、Azure Firewall Policy（ruleCollections）、GCP network firewall policy（compute#firewallPolicy）、GCP 防火牆規則（compute#firewall）、OCI 安全清單／NSG、Kubernetes NetworkPolicy 或 Meraki MX API（destCidr／applianceIp／publicPort）JSON', test: () => /^[\[{]/.test(text.trim()) && CLOUD_SG_RE.test(text) },
+    { reason: '命中 Kubernetes NetworkPolicy YAML（kind: NetworkPolicy）', test: () => K8S_NETPOL_YAML_RE.test(text) },
     { reason: '命中 Azure NSG／VNet flow logs（category 為 NetworkSecurityGroupFlowEvent／FlowLogFlowEvent 且含 flowTuples）', test: () => AZURE_FLOW_RE.test(text) && /"flowTuples"/.test(text) },
     { reason: '命中 AWS VPC Flow Logs（預設 v2 格式，或第一行為含 srcaddr／dstaddr 的欄位名稱）', test: () => AWS_FLOW_RE.test(text.trim()) },
     { reason: 'JSON 物件含常見 log 欄位（message/msg/severity/timestamp/@timestamp/log）→ JSON/NDJSON Log', test: () => {

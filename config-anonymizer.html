@@ -1306,7 +1306,7 @@ const VENDOR_SIGS = {
   wlc:         { p:[/^(?:config\s+)?wlan\s+create\s+\d+\s+\S+/m, /^\s*wlan\s+service-template\s+\S+/m, /^\s*wlan\s+ssid-profile\s+\S+/m, /^wlan\s+\S+\s+\d{1,4}\s+\S+/m], min:1 },
   // Check Point Management API JSON（第十八輪 TL），與 firewall_analyzer detectFwVendor() 的判斷一致
   checkpoint_api: { p:[/"objects-dictionary"\s*:/, /"type"\s*:\s*"(?:access|nat)-(?:rule|section)"/], min:2 },
-  cloudsg:     { p:[/"IpPermissions(?:Egress)?"\s*:\s*\[/, /"(?:default)?[sS]ecurityRules"\s*:\s*\[/, /"destCidr"\s*:/, /"applianceIp"\s*:/, /"publicPort"\s*:/, /"kind"\s*:\s*"compute#firewall"/, /"NetworkAclId"\s*:/, /"ruleCollections"\s*:\s*\[/, /"kind"\s*:\s*"compute#firewallPolicy"/, /"kind"\s*:\s*"NetworkPolicy"/, /"(?:ingress|egress)[-_]?[sS]ecurity[-_]?[rR]ules"\s*:\s*\[/, /"(?:source|destination)[-_]?[tT]ype"\s*:\s*"(?:CIDR_BLOCK|SERVICE_CIDR_BLOCK|NETWORK_SECURITY_GROUP)"/], min:1 },
+  cloudsg:     { p:[/"IpPermissions(?:Egress)?"\s*:\s*\[/, /"(?:default)?[sS]ecurityRules"\s*:\s*\[/, /"destCidr"\s*:/, /"applianceIp"\s*:/, /"publicPort"\s*:/, /"kind"\s*:\s*"compute#firewall"/, /"NetworkAclId"\s*:/, /"ruleCollections"\s*:\s*\[/, /"kind"\s*:\s*"compute#firewallPolicy"/, /"kind"\s*:\s*"NetworkPolicy"/, /^\s*kind:\s*NetworkPolicy\b/m, /"(?:ingress|egress)[-_]?[sS]ecurity[-_]?[rR]ules"\s*:\s*\[/, /"(?:source|destination)[-_]?[tT]ype"\s*:\s*"(?:CIDR_BLOCK|SERVICE_CIDR_BLOCK|NETWORK_SECURITY_GROUP)"/], min:1 },
   // 務必與 firewall_analyzer 的 FW_VENDOR_SIGS.netfilter 保持一致（2026-10-02 新增）
   // Cumulus Linux NVUE（YAML 的 `- set:` 段或 nv set 指令），務必與 switch_analyzer isCumulusNVUE() 一致（2026-10-02）
   // Allied Telesis AlliedWare Plus：與 switch_analyzer isAlliedWare() 一致（2026-10-02）
@@ -3718,6 +3718,61 @@ function anonWatchGuard(text, opts) {
 // 換完仍對得上；規則名稱（Allow-HTTPS、Azure 預設規則名稱）保留。
 // Meraki MX Dashboard API 回應（ZD）：L3 規則 comment、轉送／1:1 NAT／VLAN／靜態路由的 name、networkId、各處 IP；
 // 多個回應前後相接時逐段處理
+// 精簡 YAML 讀取（Kubernetes NetworkPolicy 的 kubectl -o yaml／官方範例用，與 firewall_analyzer CloudSGParser 的 yamlLite() 同一份邏輯、另行維護）：縮排區塊對應與序列、「- 鍵: 值」、{}／[] 空集合、引號字串、數字、
+// true／false／null、| 與 > 區塊字串、註解與 --- 多文件；不支援錨點、別名、流式集合內容與多行純量
+function yamlLite(text) {
+  const docs = [];
+  String(text || '').replace(/\r\n/g, '\n').split(/^---[^\n]*$/m).forEach(doc => {
+    const lines = doc.split('\n').filter(l => l.trim() && !/^\s*#/.test(l)).map(l => ({ ind: l.match(/^ */)[0].length, t: l.trim(), raw: l }));
+    if (!lines.length) return;
+    let i = 0;
+    const isItem = t => t === '-' || t.startsWith('- ');
+    const unq = v => (/^"[\s\S]*"$/.test(v) ? (() => { try { return JSON.parse(v); } catch (e) { return v.slice(1, -1); } })() : /^'[\s\S]*'$/.test(v) ? v.slice(1, -1).replace(/''/g, "'") : v);
+    const scalar = v => {
+      v = v.replace(/\s+#.*$/, '');
+      if (v === '{}') return {};
+      if (v === '[]') return [];
+      if (/^["']/.test(v)) return unq(v);
+      if (/^-?\d+(?:\.\d+)?$/.test(v)) return Number(v);
+      if (/^(?:true|false)$/.test(v)) return v === 'true';
+      if (/^(?:null|~)$/.test(v)) return null;
+      return v;
+    };
+    const KEY_RE = /^("[^"]*"|'[^']*'|[^\s"'{[#-][^:]*?|-[^\s][^:]*?):(?:\s+(.*))?$/;
+    function block(ind) { return isItem(lines[i].t) ? seq(ind) : map(ind); }
+    function map(ind) {
+      const o = {};
+      while (i < lines.length && lines[i].ind === ind && !isItem(lines[i].t)) {
+        const m = lines[i].t.match(KEY_RE);
+        if (!m) throw new Error('YAML: ' + lines[i].t);
+        i++;
+        const k = unq(m[1].trim()), v = m[2] === undefined ? '' : m[2].trim();
+        if (/^[|>][-+]?$/.test(v)) {
+          const buf = [];
+          while (i < lines.length && lines[i].ind > ind) { buf.push(lines[i].raw.slice(lines[i].ind)); i++; }
+          o[k] = buf.join(v[0] === '|' ? '\n' : ' ');
+        } else if (v) o[k] = scalar(v);
+        else if (i < lines.length && (lines[i].ind > ind || (lines[i].ind === ind && isItem(lines[i].t)))) o[k] = block(lines[i].ind);
+        else o[k] = null;
+      }
+      return o;
+    }
+    function seq(ind) {
+      const a = [];
+      while (i < lines.length && lines[i].ind === ind && isItem(lines[i].t)) {
+        const rest = lines[i].t.replace(/^-\s*/, '');
+        if (!rest) { i++; a.push(i < lines.length && lines[i].ind > ind ? block(lines[i].ind) : null); continue; }
+        if (KEY_RE.test(rest)) {
+          lines[i] = { ind: ind + lines[i].t.length - rest.length, t: rest, raw: ' '.repeat(ind + lines[i].t.length - rest.length) + rest };
+          a.push(map(lines[i].ind));
+        } else { a.push(scalar(rest)); i++; }
+      }
+      return a;
+    }
+    docs.push(block(lines[0].ind));
+  });
+  return docs.length === 1 ? docs[0] : docs;
+}
 function anonCloudSG(text, opts) {
   let db;
   try { db = JSON.parse(text); } catch (e) {
@@ -3725,7 +3780,9 @@ function anonCloudSG(text, opts) {
       // Meraki：多個 API 回應前後相接（每段由行首的 { 或 [ 開始），逐段處理後照原順序接回
       const parts = text.split(/\n(?=[{[])/);
       if (parts.length > 1 && parts.every(p => { try { JSON.parse(p); return true; } catch { return false; } })) return parts.map(p => anonCloudSG(p, opts)).join('\n');
-      return anonGeneric(text, opts);
+      // Kubernetes NetworkPolicy 的 YAML：轉成物件後同樣處理，輸出為 JSON（kubectl 可直接套用）
+      if (!/^\s*kind:\s*NetworkPolicy\b/m.test(text)) return anonGeneric(text, opts);
+      try { db = yamlLite(text); } catch (e3) { return anonGeneric(text, opts); }
     }
   }
   const fake = (orig, make) => {
