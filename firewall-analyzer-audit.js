@@ -689,7 +689,8 @@
     // items（2026-09-29 新增，AA）：完整命中對象 {kind, id?, name, vdom?}，供 buildFirewallAuditEvidence() 找原始設定行
     const f = (id, check, value, risk, detail, standards, items) => findings.push({ id, check, value, risk, detail, standards: standards||[], items: items||[] });
     const polItems = arr => arr.map(p => ({ kind: 'policy', id: p.id, name: p.name, vdom: p._vdom }));
-    const policies = parsed.policies || [];
+    // 平台內建規則（GCP 隱含規則、AWS NACL 的 * 預設規則，platformRule）無法修改，不列入稽核
+    const policies = (parsed.policies || []).filter(p => !p.platformRule);
     // 多 VDOM 時以 VDOM/ID 顯示，避免各 VDOM 重複的 ID 混淆
     const isMultiVdom = policies.some(p => p._vdom !== undefined && p._vdom !== null);
     const idLabel = p => (isMultiVdom && p._vdom) ? `${p._vdom}/${p.id}` : p.id;
@@ -1406,7 +1407,7 @@
   // issues 內並標 accepted:true，讓畫面／報表能顯示「已接受」而非讓問題憑空消失；未傳 opts
   // 時行為與先前完全相同
   function computeFirewallHealth(parsed, opts) {
-    const policies = parsed.policies || [];
+    const policies = (parsed.policies || []).filter(p => !p.platformRule);
     let score = 100;
     const issues = [];
     const acceptedRisks = (opts && opts.acceptedRisks) ? new Set(opts.acceptedRisks) : new Set();

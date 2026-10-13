@@ -1306,7 +1306,7 @@ const VENDOR_SIGS = {
   wlc:         { p:[/^(?:config\s+)?wlan\s+create\s+\d+\s+\S+/m, /^\s*wlan\s+service-template\s+\S+/m, /^\s*wlan\s+ssid-profile\s+\S+/m, /^wlan\s+\S+\s+\d{1,4}\s+\S+/m], min:1 },
   // Check Point Management API JSON（第十八輪 TL），與 firewall_analyzer detectFwVendor() 的判斷一致
   checkpoint_api: { p:[/"objects-dictionary"\s*:/, /"type"\s*:\s*"(?:access|nat)-(?:rule|section)"/], min:2 },
-  cloudsg:     { p:[/"IpPermissions(?:Egress)?"\s*:\s*\[/, /"(?:default)?[sS]ecurityRules"\s*:\s*\[/, /"destCidr"\s*:/, /"applianceIp"\s*:/, /"publicPort"\s*:/], min:1 },
+  cloudsg:     { p:[/"IpPermissions(?:Egress)?"\s*:\s*\[/, /"(?:default)?[sS]ecurityRules"\s*:\s*\[/, /"destCidr"\s*:/, /"applianceIp"\s*:/, /"publicPort"\s*:/, /"kind"\s*:\s*"compute#firewall"/, /"NetworkAclId"\s*:/], min:1 },
   // 務必與 firewall_analyzer 的 FW_VENDOR_SIGS.netfilter 保持一致（2026-10-02 新增）
   // Cumulus Linux NVUE（YAML 的 `- set:` 段或 nv set 指令），務必與 switch_analyzer isCumulusNVUE() 一致（2026-10-02）
   // Allied Telesis AlliedWare Plus：與 switch_analyzer isAlliedWare() 一致（2026-10-02）
@@ -3736,8 +3736,12 @@ function anonCloudSG(text, opts) {
     return v;
   };
   const name = v => opts.hostname && v ? anonHostname(v, 'sg', opts) : v;
+  const proj = v => fake('gcp-project:' + v, n => `project-${n}`);
   const ids = s => (/^\/subscriptions\//i.test(s) ? s.replace(/\/(resourceGroups|networkSecurityGroups|virtualNetworks|networkInterfaces|applicationSecurityGroups|subnets)\/([^/"]+)/gi, (m, k, v) => `/${k}/${name(v)}`) : s)
-    .replace(/\b(sg|vpc|pl|subnet|eni|igw|nat|rtb|acl|vpce|tgw|i)-[0-9a-f]{8,17}\b/g, (m, p) => fake(m, n => `${p}-${String(n).padStart(17, '0')}`))
+    .replace(/\b(sg|vpc|pl|subnet|eni|igw|nat|rtb|acl|aclassoc|vpce|tgw|i)-[0-9a-f]{8,17}\b/g, (m, p) => fake(m, n => `${p}-${String(n).padStart(17, '0')}`))
+    // GCP（第二十一輪 GF）：資源 URL 的專案與 VPC 網路名稱（服務帳戶電子郵件由通用的電子郵件替換處理）
+    .replace(/\/projects\/([^/"]+)/g, (m, v) => '/projects/' + proj(v))
+    .replace(/\/networks\/([^/"]+)/g, (m, v) => '/networks/' + name(v))
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, m => /^[0-]+$/.test(m) ? m : fake(m.toLowerCase(), n => `00000000-0000-0000-0000-${String(n).padStart(12, '0')}`))
   ;
   // NSG 本身的 name（規則的 name 不換）
@@ -4293,8 +4297,10 @@ function checkResidual(text) {
       const val = camelM[2].trim();
       if (val && !/REDACTED/.test(val)) warnings.push({ line: lineNum, text: t });
     }
-    if (hashLike.test(t) && !/[^\x20-\x7e]/.test(t) && !/REDACTED/.test(t)) {
-      const match = t.match(hashLike);
+    // 網址路徑逐段檢查（GCP 資源 URL 的 compute/v1/projects/… 連起來不是金鑰；webhook 權杖等單一長段仍會命中，第二十一輪 GF）
+    const tHash = t.replace(/\bhttps?:\/\/[^\s"'?#]+/gi, u => u.replace(/\//g, ' '));
+    if (hashLike.test(tHash) && !/[^\x20-\x7e]/.test(t) && !/REDACTED/.test(t)) {
+      const match = tHash.match(hashLike);
       // 只有字母與斜線的長字串（JSON 欄位名稱如 destinationAddressPrefixes、資源類型路徑）不是金鑰；
       // 雜湊／base64 幾乎必含數字或 + =（2026-10-02，雲端 JSON 誤報）
       if (match && !/^[\d.]+$/.test(match[0]) && /[1-9+=]/.test(match[0])) {
@@ -4357,8 +4363,9 @@ function checkResidual(text) {
     // email／公司網域尾綴偵測（2026-09-14 新增）：email 位址本身沒有對應的 anonXxx()
     // 匿名化函式（本工具原本就不處理 email 欄位），故此處純粹是「找得到就一律示警」，
     // 不像上面 IP/MAC/IPv6 需要排除已正確匿名化的輸出格式
-    const emailMatches = t.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g);
-    if (emailMatches && emailMatches.length) {
+    // 去識別化自己產生的 user-N@example.com 不算（第二十一輪 GF）
+    const emailMatches = (t.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g) || []).filter(m => !/@example\.(?:com|net|org)$/i.test(m));
+    if (emailMatches.length) {
       warnings.push({ line: lineNum, text: t });
     }
     // 網域名稱殘留（2026-09-29 新增，RB）：只在「domain-name 類關鍵字後」或「內部網域結尾」時示警，

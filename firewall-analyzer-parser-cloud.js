@@ -21,6 +21,18 @@
 //   vlans [{id, name, subnet, applianceIp}]、staticRoutes [{name, subnet, gatewayIp, enabled}]。
 //   設定分散在多個 API，可貼單一回應、多個回應前後相接，或以端點名稱為鍵的物件；依欄位形狀辨識各段。
 //   L3 規則為 LAN 往外（WAN／VPN）由上而下比對，介面列為 any。
+// - GCP VPC 防火牆規則（2026-10-13，第二十一輪 GF）：`gcloud compute firewall-rules list --format=json` 或 REST
+//   firewalls.list 回應，欄位依 Compute Engine API discovery 文件的 Firewall 資源：{kind:"compute#firewall", name, network（URL）,
+//   direction INGRESS|EGRESS, priority（0～65535，預設 1000，數字小者優先，同優先權拒絕優先）, sourceRanges, destinationRanges,
+//   sourceTags, targetTags, sourceServiceAccounts, targetServiceAccounts, allowed|denied[{IPProtocol, ports[]}], disabled,
+//   logConfig{enable}, description}。每個 VPC 網路為一個 VDOM；網路標記與服務帳戶列為位址物件不展開；
+//   有目的範圍時目的取範圍、套用目標（targetTags／targetServiceAccounts）記在備註，否則目的為套用目標；
+//   隱含規則（優先權 65535：入站全部拒絕、出站全部允許）列在最後並標註。
+// - AWS Network ACL（2026-10-13，第二十一輪 GG）：`aws ec2 describe-network-acls`，依 aws-cli 官方範例與 botocore
+//   服務模型：NetworkAcls[].{NetworkAclId, VpcId, IsDefault, Tags, Associations[{SubnetId}], Entries[{RuleNumber,
+//   Egress, Protocol（-1 或協定號碼）, RuleAction allow|deny, CidrBlock|Ipv6CidrBlock, PortRange{From,To},
+//   IcmpTypeCode{Type,Code}}]}。每個 NACL 為一個 VDOM，依方向、RuleNumber 由小到大比對；32767／32768 為預設
+//   拒絕（*）。NACL 無狀態，回應流量需另有規則放行（查詢只看單一方向）。
 // 對應方式：每個安全群組／NSG 當成一個 VDOM（可用上方 VDOM 列切換）；入站規則目的介面為群組名稱、
 // 出站規則來源介面為群組名稱。AWS 只有允許規則，未列出的流量一律拒絕（不另列規則，比照預設政策）；
 // Azure 依方向、priority 排序，預設規則（65000 起）一併列出並標註。
@@ -36,19 +48,24 @@ const CloudSGParser = (() => {
   }
   const isAwsGroup = o => o && typeof o === 'object' && Array.isArray(o.IpPermissions) && ('GroupId' in o || 'GroupName' in o);
   const nsgProps = o => (o && o.properties && (o.properties.securityRules || o.properties.defaultSecurityRules)) ? o.properties : o;
+  const isGcpFw = o => !!o && typeof o === 'object' && !Array.isArray(o) && (o.kind === 'compute#firewall' ||
+    ((Array.isArray(o.allowed) || Array.isArray(o.denied)) && typeof o.direction === 'string' && 'network' in o));
+  const isAwsNacl = o => !!o && typeof o === 'object' && !Array.isArray(o) && Array.isArray(o.Entries) && 'NetworkAclId' in o;
   const isAzureNsg = o => { const p = nsgProps(o); return !!p && typeof p === 'object' && (Array.isArray(p.securityRules) || Array.isArray(p.defaultSecurityRules)); };
 
   // 從任意 JSON 結構中找出 AWS 安全群組與 Azure NSG（describe 輸出、nsg list 陣列、ARM 範本 resources）
   function collect(root) {
-    const aws = [], az = [], seen = new Set();
+    const aws = [], az = [], gcp = [], nacl = [], seen = new Set();
     (function walk(o, depth) {
       if (!o || typeof o !== 'object' || depth > 6 || seen.has(o)) return;
       seen.add(o);
       if (isAwsGroup(o)) { aws.push(o); return; }
+      if (isAwsNacl(o)) { nacl.push(o); return; }
+      if (isGcpFw(o)) { gcp.push(o); return; }
       if (isAzureNsg(o)) { az.push(o); return; }
       (Array.isArray(o) ? o : Object.values(o)).forEach(v => walk(v, depth + 1));
     })(root, 0);
-    return { aws, az };
+    return { aws, az, gcp, nacl };
   }
 
   // Meraki：依欄位形狀找出各 API 回應的項目陣列（規則陣列保留原順序）
@@ -84,11 +101,11 @@ const CloudSGParser = (() => {
 
   function detect(text) {
     const s = String(text || '');
-    if (!/"(?:IpPermissions|securityRules|defaultSecurityRules|destCidr|publicPort|publicIp|applianceIp)"/.test(s)) return false;
+    if (!/"(?:IpPermissions|securityRules|defaultSecurityRules|destCidr|publicPort|publicIp|applianceIp|IPProtocol|NetworkAclId)"/.test(s)) return false;
     const d = loadAll(s);
     if (!d) return false;
-    const { aws, az } = collect(d);
-    return aws.length + az.length + merakiCount(collectMeraki(d)) > 0;
+    const { aws, az, gcp, nacl } = collect(d);
+    return aws.length + az.length + gcp.length + nacl.length + merakiCount(collectMeraki(d)) > 0;
   }
 
   function basePolicy(o) {
@@ -207,6 +224,103 @@ const CloudSGParser = (() => {
     });
   }
 
+  // ── GCP VPC 防火牆規則 ───────────────────────────────────
+  function gcpService(list) {
+    const out = [];
+    (list || []).forEach(a => {
+      const proto = String(a && a.IPProtocol != null ? a.IPProtocol : 'all').toLowerCase();
+      const name = PROTO_NUM[proto] || proto;
+      if (name === 'all') { out.push('ALL'); return; }
+      const ports = Array.isArray(a.ports) ? a.ports.map(String) : [];
+      if (name === 'tcp' || name === 'udp' || name === 'sctp') out.push(...(ports.length ? ports.map(p => `${name}/${p}`) : [`${name}/0-65535`]));
+      else out.push(/^\d+$/.test(name) ? `proto-${name}` : name);
+    });
+    return out.includes('ALL') || !out.length ? 'ALL' : out.join(', ');
+  }
+  function gcpRefs(tags, sas, vdom, out) {
+    const vals = [];
+    (tags || []).forEach(t => { const n = 'tag:' + t; vals.push(n); out.refs.set(vdom + '/' + n, refObj(n, 'GCP 網路標記（成員為帶此標記的執行個體）', vdom)); });
+    (sas || []).forEach(t => { const n = 'sa:' + t; vals.push(n); out.refs.set(vdom + '/' + n, refObj(n, 'GCP 服務帳戶（成員為使用此帳戶的執行個體）', vdom)); });
+    return vals;
+  }
+  function parseGcp(rules, out) {
+    const nets = new Map();
+    rules.forEach(r => {
+      const net = String(r.network || 'default').split('/').pop() || 'default';
+      if (!nets.has(net)) nets.set(net, []);
+      nets.get(net).push(r);
+    });
+    for (const [vdom, list] of nets) {
+      out.vdoms.push(vdom);
+      const rank = r => (String(r.direction || 'INGRESS').toUpperCase() === 'EGRESS' ? 1 : 0);
+      const prio = r => (r.priority == null ? 1000 : +r.priority);
+      const sorted = [...list].sort((a, b) => rank(a) - rank(b) || prio(a) - prio(b) || (Array.isArray(b.denied) ? 1 : 0) - (Array.isArray(a.denied) ? 1 : 0));
+      const push = (r, implied) => {
+        const egress = rank(r) === 1, deny = Array.isArray(r.denied);
+        const targets = gcpRefs(r.targetTags, r.targetServiceAccounts, vdom, out);
+        let src, dst;
+        if (egress) {
+          src = targets.length ? targets.join(', ') : 'any';
+          dst = (r.destinationRanges || []).length ? r.destinationRanges.join(', ') : 'any';
+        } else {
+          const s = [...(r.sourceRanges || []), ...gcpRefs(r.sourceTags, r.sourceServiceAccounts, vdom, out)];
+          src = s.length ? s.join(', ') : 'any';
+          dst = (r.destinationRanges || []).length ? r.destinationRanges.join(', ') : (targets.length ? targets.join(', ') : 'any');
+        }
+        const note = [implied ? '隱含規則' : '', r.description || '', targets.length && dst !== targets.join(', ') && !egress ? '套用目標：' + targets.join(', ') : ''].filter(Boolean).join('：');
+        const pol = basePolicy({
+          id: out.policies.length + 1, name: r.name || `${vdom}-${prio(r)}`, vdom, chain: egress ? 'EGRESS' : 'INGRESS', ruleNum: prio(r),
+          srcIntf: egress ? vdom : 'any', dstIntf: egress ? 'any' : vdom, src, dst,
+          service: gcpService(deny ? r.denied : r.allowed), action: deny ? 'deny' : 'accept', actionRaw: deny ? 'deny' : 'allow', comment: note,
+        });
+        if (implied) pol.platformRule = true;
+        if (r.disabled === true) pol.status = 'disable';
+        if (r.logConfig && r.logConfig.enable) pol.logtraffic = 'all';
+        out.policies.push(pol);
+      };
+      sorted.forEach(r => push(r, false));
+      push({ name: 'implied-deny-ingress', direction: 'INGRESS', priority: 65535, sourceRanges: ['0.0.0.0/0', '::/0'], denied: [{ IPProtocol: 'all' }] }, true);
+      push({ name: 'implied-allow-egress', direction: 'EGRESS', priority: 65535, destinationRanges: ['0.0.0.0/0', '::/0'], allowed: [{ IPProtocol: 'all' }] }, true);
+      out.groups.push({ name: vdom, id: '-', vpc: vdom, desc: 'VPC 網路', tag: '', type: 'vpc-network' });
+    }
+  }
+
+  // ── AWS Network ACL ──────────────────────────────────────
+  function naclService(e) {
+    const proto = String(e.Protocol == null ? '-1' : e.Protocol).toLowerCase();
+    if (proto === '-1' || proto === 'all') return 'ALL';
+    const name = PROTO_NUM[proto] || proto;
+    if (name === 'icmp' || name === 'icmpv6') { const t = e.IcmpTypeCode && e.IcmpTypeCode.Type; return t == null || t === -1 ? name : `${name}/${t}`; }
+    if (name === 'tcp' || name === 'udp') {
+      const r = e.PortRange || {};
+      if (r.From == null) return `${name}/0-65535`;
+      return r.From === r.To || r.To == null ? `${name}/${r.From}` : `${name}/${r.From}-${r.To}`;
+    }
+    return /^\d+$/.test(name) ? `proto-${name}` : name;
+  }
+  function parseNacl(acls, out) {
+    acls.forEach(a => {
+      const nameTag = (a.Tags || []).find(t => t && t.Key === 'Name');
+      const vdom = (nameTag && nameTag.Value) || a.NetworkAclId;
+      out.vdoms.push(vdom);
+      const entries = [...a.Entries].sort((x, y) => (x.Egress ? 1 : 0) - (y.Egress ? 1 : 0) || (+x.RuleNumber || 0) - (+y.RuleNumber || 0));
+      entries.forEach(e => {
+        const egress = e.Egress === true, peer = e.CidrBlock || e.Ipv6CidrBlock || 'any';
+        const def = +e.RuleNumber >= 32767;
+        const pol = basePolicy({
+          id: out.policies.length + 1, name: `${vdom}-${egress ? 'out' : 'in'}-${e.RuleNumber}`, vdom, chain: egress ? 'outbound' : 'inbound', ruleNum: def ? '*' : e.RuleNumber,
+          srcIntf: egress ? vdom : 'any', dstIntf: egress ? 'any' : vdom, src: egress ? 'any' : peer, dst: egress ? peer : 'any',
+          service: naclService(e), action: /^allow$/i.test(e.RuleAction || '') ? 'accept' : 'deny', actionRaw: e.RuleAction || '',
+          comment: def ? '預設規則（*）' : '',
+        });
+        if (def) pol.platformRule = true;
+        out.policies.push(pol);
+      });
+      const subnets = (a.Associations || []).map(x => x && x.SubnetId).filter(Boolean);
+      out.groups.push({ name: vdom, id: a.NetworkAclId, vpc: a.VpcId || '-', desc: (a.IsDefault ? '預設 NACL；' : '') + (subnets.length ? '子網：' + subnets.join(', ') : '未關聯子網'), tag: nameTag ? a.NetworkAclId : '', type: 'network-acl' });
+    });
+  }
+
   // ── Meraki ───────────────────────────────────────────────
   const csv = v => String(v == null ? '' : v).split(',').map(x => x.trim()).filter(Boolean);
   const isAny = v => !csv(v).length || csv(v).some(x => /^any$/i.test(x));
@@ -268,20 +382,22 @@ const CloudSGParser = (() => {
 
   function parse(text) {
     const d = loadAll(text);
-    const { aws, az } = collect(d || {});
+    const { aws, az, gcp, nacl } = collect(d || {});
     const mk = collectMeraki(d || {});
     const out = { policies: [], refs: new Map(), vdoms: [], groups: [], nat: [], ifaces: [], routes: [] };
     parseAws(aws, out);
+    parseNacl(nacl, out);
     parseAzure(az, out);
+    parseGcp(gcp, out);
     parseMeraki(mk, out);
-    const kinds = [aws.length && 'AWS Security Group', az.length && 'Azure NSG', merakiCount(mk) && 'Cisco Meraki MX'].filter(Boolean);
+    const kinds = [aws.length && 'AWS Security Group', nacl.length && 'AWS Network ACL', az.length && 'Azure NSG', gcp.length && 'GCP VPC Firewall', merakiCount(mk) && 'Cisco Meraki MX'].filter(Boolean);
     const vendor = kinds.length === 1 ? kinds[0] : 'Cloud Security Group';
     const vpcs = [...new Set(out.groups.map(g => g.vpc).filter(v => v && v !== '-'))];
     return {
       vendor,
       deviceInfo: { vendor, hostname: '-', firmware: '-', model: vpcs.join(', ') || '-', serial: '-', vdom: out.vdoms },
       // 安全群組沒有介面；以群組本身列在介面頁，方便看出各群組套用範圍與說明
-      interfaces: out.groups.map(g => ({ name: g.name, ip: '-', mask: '-', secondaryIps: [], type: 'security-group', vlanId: '-', alias: g.tag || g.id,
+      interfaces: out.groups.map(g => ({ name: g.name, ip: '-', mask: '-', secondaryIps: [], type: g.type || 'security-group', vlanId: '-', alias: g.tag || g.id,
         desc: g.desc, status: 'up', mtu: '-', speed: '-', mode: '-', vdom: g.name, role: '-', allowaccess: '-' })).concat(out.ifaces),
       policies: out.policies, routes: out.routes, ha: null, nat: out.nat, vpn: [], addresses: [...out.refs.values()], services: [], users: [], schedules: [],
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
