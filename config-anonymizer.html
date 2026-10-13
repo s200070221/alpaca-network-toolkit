@@ -1306,7 +1306,7 @@ const VENDOR_SIGS = {
   wlc:         { p:[/^(?:config\s+)?wlan\s+create\s+\d+\s+\S+/m, /^\s*wlan\s+service-template\s+\S+/m, /^\s*wlan\s+ssid-profile\s+\S+/m, /^wlan\s+\S+\s+\d{1,4}\s+\S+/m], min:1 },
   // Check Point Management API JSON（第十八輪 TL），與 firewall_analyzer detectFwVendor() 的判斷一致
   checkpoint_api: { p:[/"objects-dictionary"\s*:/, /"type"\s*:\s*"(?:access|nat)-(?:rule|section)"/], min:2 },
-  cloudsg:     { p:[/"IpPermissions(?:Egress)?"\s*:\s*\[/, /"(?:default)?[sS]ecurityRules"\s*:\s*\[/, /"destCidr"\s*:/, /"applianceIp"\s*:/, /"publicPort"\s*:/, /"kind"\s*:\s*"compute#firewall"/, /"NetworkAclId"\s*:/, /"ruleCollections"\s*:\s*\[/, /"kind"\s*:\s*"compute#firewallPolicy"/], min:1 },
+  cloudsg:     { p:[/"IpPermissions(?:Egress)?"\s*:\s*\[/, /"(?:default)?[sS]ecurityRules"\s*:\s*\[/, /"destCidr"\s*:/, /"applianceIp"\s*:/, /"publicPort"\s*:/, /"kind"\s*:\s*"compute#firewall"/, /"NetworkAclId"\s*:/, /"ruleCollections"\s*:\s*\[/, /"kind"\s*:\s*"compute#firewallPolicy"/, /"kind"\s*:\s*"NetworkPolicy"/, /"(?:ingress|egress)[-_]?[sS]ecurity[-_]?[rR]ules"\s*:\s*\[/, /"(?:source|destination)[-_]?[tT]ype"\s*:\s*"(?:CIDR_BLOCK|SERVICE_CIDR_BLOCK|NETWORK_SECURITY_GROUP)"/], min:1 },
   // 務必與 firewall_analyzer 的 FW_VENDOR_SIGS.netfilter 保持一致（2026-10-02 新增）
   // Cumulus Linux NVUE（YAML 的 `- set:` 段或 nv set 指令），務必與 switch_analyzer isCumulusNVUE() 一致（2026-10-02）
   // Allied Telesis AlliedWare Plus：與 switch_analyzer isAlliedWare() 一致（2026-10-02）
@@ -3742,21 +3742,26 @@ function anonCloudSG(text, opts) {
     // GCP（第二十一輪 GF）：資源 URL 的專案與 VPC 網路名稱（服務帳戶電子郵件由通用的電子郵件替換處理）
     .replace(/\/projects\/([^/"]+)/g, (m, v) => '/projects/' + proj(v))
     .replace(/\/networks\/([^/"]+)/g, (m, v) => '/networks/' + name(v))
+    // OCI 資源 OCID（第二十三輪 IH）：最後一段唯一識別碼換掉（類型與區域保留），compartment／tenancy 的 OCID 同樣處理；
+    // 假值只用英文字母（數字編號轉成字母），殘留檢查才不會當成金鑰
+    .replace(/\b(ocid1\.[a-z0-9]+\.oc\d+\.[a-z0-9-]*\.)([a-z0-9]{16,})\b/g, (m, p, u) => p + fake(m, n => 'anonymizedocid' + String(n).replace(/\d/g, d => 'abcdefghij'[d])))
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, m => /^[0-]+$/.test(m) ? m : fake(m.toLowerCase(), n => `00000000-0000-0000-0000-${String(n).padStart(12, '0')}`))
   ;
   // NSG 本身的 name（規則的 name 不換）
-  const nsgObjs = new Set();
+  const nsgObjs = new Set(), k8sMeta = new Set();
   (function find(o, d) {
     if (!o || typeof o !== 'object' || d > 6) return;
     const p = o.properties && typeof o.properties === 'object' ? o.properties : o;
     if (Array.isArray(p.securityRules) || Array.isArray(p.defaultSecurityRules)) nsgObjs.add(o);
+    // Kubernetes NetworkPolicy 的 metadata（第二十三輪 IG）
+    if (o.kind === 'NetworkPolicy' && o.metadata && typeof o.metadata === 'object') k8sMeta.add(o.metadata);
     (Array.isArray(o) ? o : Object.values(o)).forEach(v => find(v, d + 1));
   })(db, 0);
   const walk = (o, key, parent) => {
     if (Array.isArray(o)) return o.map(v => walk(v, key, o));
     if (o && typeof o === 'object') {
       for (const k of Object.keys(o)) {
-        if (k === 'tags' && o[k] && typeof o[k] === 'object' && !Array.isArray(o[k])) {
+        if (/^(?:tags|freeform[-_]?[tT]ags)$/.test(k) && o[k] && typeof o[k] === 'object' && !Array.isArray(o[k])) {
           if (opts.comments) for (const t of Object.keys(o[k])) o[k][t] = anonAlias(String(o[k][t]));
           continue;
         }
@@ -3775,6 +3780,13 @@ function anonCloudSG(text, opts) {
     if (key === 'name' && parent && ('lanIp' in parent || 'applianceIp' in parent || 'gatewayIp' in parent)) return opts.comments ? anonAlias(o) : o;
     if (key === 'networkId' && opts.hostname) return fake(o, n => `N_${String(n).padStart(8, '0')}`);
     if (/^(GroupName|resourceGroup)$/.test(key) || (key === 'name' && nsgObjs.has(parent))) return name(o);
+    // Kubernetes NetworkPolicy（第二十三輪 IG）：政策名稱、namespace 與選擇 namespace 用的 kubernetes.io/metadata.name 標籤值以同一對照替換；
+    // kubectl 留下的 last-applied-configuration 註記是整份原始設定，一律遮蔽
+    if ((key === 'name' || key === 'namespace') && k8sMeta.has(parent)) return name(o);
+    if (key === 'kubernetes.io/metadata.name') return name(o);
+    // OCI 安全清單名稱（CLI 為 display-name、REST 為 displayName）
+    if (/^display[-_]?[nN]ame$/.test(key)) return name(o);
+    if (key === 'kubectl.kubernetes.io/last-applied-configuration') return 'REDACTED_COMMENT';
     // GCP 防火牆政策本身與關聯的名稱（第二十二輪 HG，關聯名稱常含網路名稱）
     if (key === 'name' && parent && (parent.kind === 'compute#firewallPolicy' || 'attachmentTarget' in parent)) return name(o);
     // AWS Tags 為 [{Key, Value}]：Name 標籤視同名稱，其餘值視同備註
