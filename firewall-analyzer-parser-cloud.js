@@ -131,17 +131,73 @@ const CloudSGParser = (() => {
     return res;
   }
   const merakiCount = m => m.l3.length + m.pf.length + m.nat11.length + m.vlan.length + m.route.length;
-  // 多個 API 回應前後相接時逐段解析（每段由行首的 { 或 [ 開始）
+  // 精簡 YAML 讀取（Kubernetes manifest 用，功能驗證時補上）：縮排區塊對應與序列、「- 鍵: 值」、{}／[] 空集合、引號字串、數字、
+  // true／false／null、| 與 > 區塊字串、註解與 --- 多文件；不支援錨點、別名、流式集合內容與多行純量
+  function yamlLite(text) {
+    const docs = [];
+    String(text || '').replace(/\r\n/g, '\n').split(/^---[^\n]*$/m).forEach(doc => {
+      const lines = doc.split('\n').filter(l => l.trim() && !/^\s*#/.test(l)).map(l => ({ ind: l.match(/^ */)[0].length, t: l.trim(), raw: l }));
+      if (!lines.length) return;
+      let i = 0;
+      const isItem = t => t === '-' || t.startsWith('- ');
+      const unq = v => (/^"[\s\S]*"$/.test(v) ? (() => { try { return JSON.parse(v); } catch (e) { return v.slice(1, -1); } })() : /^'[\s\S]*'$/.test(v) ? v.slice(1, -1).replace(/''/g, "'") : v);
+      const scalar = v => {
+        v = v.replace(/\s+#.*$/, '');
+        if (v === '{}') return {};
+        if (v === '[]') return [];
+        if (/^["']/.test(v)) return unq(v);
+        if (/^-?\d+(?:\.\d+)?$/.test(v)) return Number(v);
+        if (/^(?:true|false)$/.test(v)) return v === 'true';
+        if (/^(?:null|~)$/.test(v)) return null;
+        return v;
+      };
+      const KEY_RE = /^("[^"]*"|'[^']*'|[^\s"'{[#-][^:]*?|-[^\s][^:]*?):(?:\s+(.*))?$/;
+      function block(ind) { return isItem(lines[i].t) ? seq(ind) : map(ind); }
+      function map(ind) {
+        const o = {};
+        while (i < lines.length && lines[i].ind === ind && !isItem(lines[i].t)) {
+          const m = lines[i].t.match(KEY_RE);
+          if (!m) throw new Error('YAML: ' + lines[i].t);
+          i++;
+          const k = unq(m[1].trim()), v = m[2] === undefined ? '' : m[2].trim();
+          if (/^[|>][-+]?$/.test(v)) {
+            const buf = [];
+            while (i < lines.length && lines[i].ind > ind) { buf.push(lines[i].raw.slice(lines[i].ind)); i++; }
+            o[k] = buf.join(v[0] === '|' ? '\n' : ' ');
+          } else if (v) o[k] = scalar(v);
+          else if (i < lines.length && (lines[i].ind > ind || (lines[i].ind === ind && isItem(lines[i].t)))) o[k] = block(lines[i].ind);
+          else o[k] = null;
+        }
+        return o;
+      }
+      function seq(ind) {
+        const a = [];
+        while (i < lines.length && lines[i].ind === ind && isItem(lines[i].t)) {
+          const rest = lines[i].t.replace(/^-\s*/, '');
+          if (!rest) { i++; a.push(i < lines.length && lines[i].ind > ind ? block(lines[i].ind) : null); continue; }
+          if (KEY_RE.test(rest)) {
+            lines[i] = { ind: ind + lines[i].t.length - rest.length, t: rest, raw: ' '.repeat(ind + lines[i].t.length - rest.length) + rest };
+            a.push(map(lines[i].ind));
+          } else { a.push(scalar(rest)); i++; }
+        }
+        return a;
+      }
+      docs.push(block(lines[0].ind));
+    });
+    return docs.length === 1 ? docs[0] : docs;
+  }
+  // 多個 API 回應前後相接時逐段解析（每段由行首的 { 或 [ 開始）；Kubernetes NetworkPolicy 的 YAML（kubectl -o yaml、官方範例）改用 yamlLite()
   function loadAll(text) {
     const one = loadJson(text);
     if (one) return one;
+    if (/^\s*kind:\s*NetworkPolicy\b/m.test(String(text || ''))) { try { return yamlLite(text); } catch (e) { return null; } }
     const parts = String(text || '').split(/\n(?=[{[])/).map(loadJson).filter(Boolean);
     return parts.length ? parts : null;
   }
 
   function detect(text) {
     const s = String(text || '');
-    if (!/"(?:IpPermissions|securityRules|defaultSecurityRules|destCidr|publicPort|publicIp|applianceIp|IPProtocol|NetworkAclId|ruleCollections|layer4Configs|podSelector|ingress[-_]?[sS]ecurity[-_]?[rR]ules|egress[-_]?[sS]ecurity[-_]?[rR]ules|direction)"/.test(s)) return false;
+    if (!/^\s*kind:\s*NetworkPolicy\b/m.test(s) && !/"(?:IpPermissions|securityRules|defaultSecurityRules|destCidr|publicPort|publicIp|applianceIp|IPProtocol|NetworkAclId|ruleCollections|layer4Configs|podSelector|ingress[-_]?[sS]ecurity[-_]?[rR]ules|egress[-_]?[sS]ecurity[-_]?[rR]ules|direction)"/.test(s)) return false;
     const d = loadAll(s);
     if (!d) return false;
     const { aws, az, gcp, nacl, azfw, gcpPol, k8s, oci, ociNsg } = collect(d);
@@ -690,5 +746,5 @@ const CloudSGParser = (() => {
     };
   }
 
-  return { parse, detect, _loadJson: loadJson, _loadAll: loadAll };
+  return { parse, detect, _loadJson: loadJson, _loadAll: loadAll, _yamlLite: yamlLite };
 })();

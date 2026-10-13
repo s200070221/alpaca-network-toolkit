@@ -604,6 +604,7 @@ function detectLineFormat(line) {
   // SonicWall／Sophos Firewall（SFOS）直送 syslog 沒有時間主機外殼，<PRI> 後直接是 key=value（第十四輪 OH）
   if (KVFW_LINE_RE.test(line)) return 'kvfw';
   if (SQUID_LINE_RE.test(line)) return 'squid';
+  if (HAPROXY_RAW_RE.test(line) && parseHaproxyLine(line, 0)) return 'haproxy';
   if (WEB_ACCESS_RE.test(line)) return 'weblog';
   // MikroTik RouterOS 本機 /log print 匯出（無 syslog 外殼）與不含時間／主機名的遠端 syslog，
   // 需開頭為 <PRI> 或時間，且接著的 topics 清單含嚴重度字（見 splitMikroTikTopics()）才判定
@@ -2226,20 +2227,43 @@ function linkVpnSessions(events) {
 // option tcplog：用戶端:埠 [時間] 前端 後端/伺服器 Tw/Tc/Tt 位元組 終止狀態 actconn/…/retries 佇列/佇列
 // 終止狀態第一字 P 表示由 HAProxy 擋下（如 http-request deny），與 403／429 同列為拒絕；欄位 haproxy（http／tcp）、srcip、srcport、
 // frontend、backend、server、status、bytes、termState、method、url
-const HAPROXY_HTTP_RE = /^(\S+):(\d+) \[(\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2}\.\d{3})\] (\S+) ([^\s/]+)\/(\S+) -?\d+\/-?\d+\/-?\d+\/-?\d+\/\+?-?\d+ (-?\d+) \+?(\d+) \S+ \S+ ([-A-Za-z]{4}) \d+\/\d+\/\d+\/\d+\/\+?\d+ \d+\/\d+(?: \{[^}]*\}){0,2}(?: "([^"]*)")?\s*$/;
-const HAPROXY_TCP_RE = /^(\S+):(\d+) \[(\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2}\.\d{3})\] (\S+) ([^\s/]+)\/(\S+) -?\d+\/-?\d+\/\+?-?\d+ \+?(\d+) ([-A-Za-z]{2}) \d+\/\d+\/\d+\/\d+\/\+?\d+ \d+\/\d+\s*$/;
+// 第二十三輪功能驗證（依 Elastic integrations haproxy 套件的 grok 與真實測試 log）：用戶端位址可為 -、伺服器與計時欄之間可多一個
+// 目的位址或主機欄（自訂格式，存 dstip 或 dsthost）、請求行可能被截斷沒有結尾引號
+const HAPROXY_HTTP_RE = /^(\S+):(\d+) \[(\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2}\.\d{3})\] (\S+) ([^\s/]+)\/(\S+) (?:(\S+) )?-?\d+\/-?\d+\/-?\d+\/-?\d+\/\+?-?\d+ (-?\d+) \+?(\d+) \S+ \S+ ([-A-Za-z]{4}) \d+\/\d+\/\d+\/\d+\/\+?\d+ \d+\/\d+(?: \{[^}]*\}){0,2}(?: "([^"]*)"?)?\s*$/;
+const HAPROXY_TCP_RE = /^(\S+):(\d+) \[(\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2}\.\d{3})\] (\S+) ([^\s/]+)\/(\S+) (?:(\S+) )?-?\d+\/-?\d+\/\+?-?\d+ \+?(\d+) ([-A-Za-z]{2}) \d+\/\d+\/\d+\/\d+\/\+?\d+ \d+\/\d+\s*$/;
+function haproxyBase(m) {
+  const f = { srcport: m[2], frontend: m[4], backend: m[5], server: m[6] };
+  if (m[1] !== '-') f.srcip = m[1];
+  if (m[7]) { if (/^[\d.]+$|:/.test(m[7])) f.dstip = m[7]; else f.dsthost = m[7]; }
+  return f;
+}
 function parseHaproxyMsg(appName, msg) {
   if (!/^haproxy/i.test(appName || '')) return null;
   const s = String(msg || '').trim();
   let m = s.match(HAPROXY_HTTP_RE);
   if (m) {
-    const f = { haproxy: 'http', srcip: m[1], srcport: m[2], frontend: m[4], backend: m[5], server: m[6], status: m[7], bytes: m[8], termState: m[9] };
-    const rq = (m[10] || '').match(/^(\S+) (\S+)/);
+    const f = { haproxy: 'http', ...haproxyBase(m), status: m[8], bytes: m[9], termState: m[10] };
+    const rq = (m[11] || '').match(/^(\S+) (\S+)/);
     if (rq) { f.method = rq[1]; f.url = rq[2]; }
     return { vendor: 'haproxy', fields: f };
   }
-  if ((m = s.match(HAPROXY_TCP_RE))) return { vendor: 'haproxy', fields: { haproxy: 'tcp', srcip: m[1], srcport: m[2], frontend: m[4], backend: m[5], server: m[6], bytes: m[7], termState: m[8] } };
+  if ((m = s.match(HAPROXY_TCP_RE))) return { vendor: 'haproxy', fields: { haproxy: 'tcp', ...haproxyBase(m), bytes: m[8], termState: m[9] } };
   return null;
+}
+// 不經 syslog 的原始行（log stdout format raw，容器常見）或只有「haproxy[pid]: 」前綴的行，格式 haproxy
+const HAPROXY_RAW_RE = /^((?:haproxy\[\d+\]: )?)(\S+:\d+ \[\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2}\.\d{3}\] [\s\S]*)$/;
+function parseHaproxyLine(line, lineNo) {
+  const m = line.match(HAPROXY_RAW_RE);
+  const vf = m && parseHaproxyMsg('haproxy', m[2]);
+  if (!vf) return null;
+  const d = m[2].match(/\[(\d{2})\/(\w{3})\/(\d{4}):(\d{2}:\d{2}:\d{2})\.(\d{3})\]/);
+  const ts = d && DNS_MONTHS[d[2]] ? new Date(`${d[3]}-${DNS_MONTHS[d[2]]}-${d[1]}T${d[4]}.${d[5]}`) : null;
+  return {
+    format: 'haproxy', raw: line, lineNo, netFields: true, netVendor: 'haproxy',
+    timestamp: ts && !isNaN(ts.getTime()) ? ts : null, timestampRaw: d ? d[0].slice(1, -1) : '',
+    host: '', appName: 'haproxy', procid: '', msgid: '', severityRaw: '', severityNorm: 'Info',
+    facility: null, facilityAuth: false, msg: m[2], rawPrefix: m[1], fields: vf.fields
+  };
 }
 const haproxyDenied = f => !!f && !!f.haproxy && (/^P/.test(f.termState || '') || f.status === '403' || f.status === '429');
 // ── Cisco ISE 認證紀錄（第二十一輪 GE，依 Elastic integrations cisco_ise 套件的真實測試 log）──
@@ -2793,6 +2817,7 @@ function parseLogLine(line, lineNo) {
   if (fmt === 'weblog') return parseWebAccessLine(line, lineNo);
   if (fmt === 'squid') return parseSquidLine(line, lineNo);
   if (fmt === 'vpnauth') return parseVpnFileLine(line, lineNo);
+  if (fmt === 'haproxy') return parseHaproxyLine(line, lineNo);
   if (fmt === 'elb') return parseElbLine(line, lineNo);
   if (fmt === 's3') return parseS3AccessLine(line, lineNo);
   if (fmt === 'dns') return parseDnsServerLine(line, lineNo);
@@ -3329,12 +3354,25 @@ function parseWinEventLogEvents(text) {
 // 主要 log 匯入若整段文字可解析成 JSON/NDJSON，優先走這條路徑（格式判定在文字層級，非逐行）；
 // 解析不到任何看起來像 log 事件的物件則回傳 null，交給既有逐行 CEF/Syslog dispatcher 處理，
 // 兩者互不干擾——CEF/Syslog 每行都不是合法 JSON，JSON.parse 必定失敗，不會誤判
+// AKS 診斷 log（category kube-audit／kube-audit-admin，properties.log 為 Kubernetes 稽核 Event 物件或 JSON 字串，依 Elastic integrations
+// kubernetes audit_logs 的真實測試 log）：取出內層 Event，主機為資源 ID 最後一段（叢集名稱）
+function aksAuditInner(o) {
+  if (!o || !/^kube-audit(?:-admin)?$/i.test(String(o.category || '')) || !o.properties) return null;
+  let ev = o.properties.log;
+  if (typeof ev === 'string') { try { ev = JSON.parse(ev); } catch (e) { return null; } }
+  return ev && ev.kind === 'Event' && /^audit\.k8s\.io\//.test(String(ev.apiVersion || '')) ? ev : null;
+}
+function aksAuditEvent(o, lineNo) {
+  const e = eventFromJSONObject(aksAuditInner(o), lineNo);
+  e.host = String(o.resourceId || '').split('/').pop() || '';
+  return e;
+}
 const isDuoAuthResp = o => !!o && !!o.response && Array.isArray(o.response.authlogs);
 const isK8sAuditList = o => !!o && o.kind === 'EventList' && /^audit\.k8s\.io\//.test(String(o.apiVersion || '')) && Array.isArray(o.items);
 function parseJSONLogEvents(text) {
   const { arr, singleObj } = parseJSONOrNDJSON(text);
   let list = arr;
-  if (!list && singleObj && ((Array.isArray(singleObj.records) && singleObj.records.some(isAzureFwLog)) || looksLikeLogRecord(singleObj) || isFalconEvent(singleObj) || isDefenderAlert(singleObj) || isM365Incident(singleObj) || isK8sAuditList(singleObj) || isDuoAuthResp(singleObj))) list = [singleObj];
+  if (!list && singleObj && ((Array.isArray(singleObj.records) && singleObj.records.some(isAzureFwLog)) || looksLikeLogRecord(singleObj) || isFalconEvent(singleObj) || isDefenderAlert(singleObj) || isM365Incident(singleObj) || isK8sAuditList(singleObj) || isDuoAuthResp(singleObj) || aksAuditInner(singleObj) || (Array.isArray(singleObj.records) && singleObj.records.some(aksAuditInner)))) list = [singleObj];
   // 多個縮排 JSON 物件前後相接（CrowdStrike Falcon 串流匯出，第十八輪 TJ）
   if (!list && /^\s*\{/.test(text) && /"eventType"/.test(text)) { const docs = splitConcatJson(text); if (docs.length && docs.every(isFalconEvent)) list = docs; }
   if (!list) return null;
@@ -3347,6 +3385,9 @@ function parseJSONLogEvents(text) {
     if (isDefenderAlert(item) || isM365Incident(item)) { const d = defenderEvents(item, idx + 1); if (d.length) { events.push(...d); return; } }
     // Azure 診斷 log 匯出為 {"records":[…]}（第二十二輪 HE）
     if (Array.isArray(item.records) && item.records.length && item.records.every(isAzureFwLog)) { item.records.forEach(r => events.push(azfwEvent(r, idx + 1))); return; }
+    // AKS 診斷 log 包裝的 Kubernetes 稽核（逐行或 {records:[…]}）
+    if (aksAuditInner(item)) { events.push(aksAuditEvent(item, idx + 1)); return; }
+    if (Array.isArray(item.records) && item.records.length && item.records.every(aksAuditInner)) { item.records.forEach(r => events.push(aksAuditEvent(r, idx + 1))); return; }
     // Duo Admin API 回應 {stat, response:{authlogs:[…], metadata}}（第二十三輪 IF）
     if (isDuoAuthResp(item)) { item.response.authlogs.forEach(r => events.push(eventFromJSONObject(r, idx + 1))); return; }
     // Kubernetes 稽核 EventList（kubectl 或 API 回應，第二十三輪 ID）
@@ -4227,7 +4268,7 @@ function getEventNetTuple(e) {
   // （SD 內容已被 splitSDandMSG() 從 msg 切走，兩者不會重複比對到同一段文字）
   // rfc3164／mikrotik 的 fields 只有 MikroTik 訊息拆解時才有內容（見 parseMikroTikMsg()），
   // 一般 rfc3164 為空物件，照舊落回下方 msg 文字擷取
-  if ((e.format === 'rfc5424' || e.format === 'rfc3164' || e.format === 'asa' || e.format === 'mikrotik' || e.format === 'weblog' || e.format === 'w3c' || e.format === 'ciscoios' || e.format === 'comware' || e.format === 'flowlog' || e.format === 'kvfw' || e.format === 'pancsv' || e.format === 'umbrella' || e.format === 'dns' || e.format === 'dhcp' || e.format === 'vpnauth') && e.fields && Object.keys(e.fields).length) {
+  if ((e.format === 'rfc5424' || e.format === 'rfc3164' || e.format === 'asa' || e.format === 'mikrotik' || e.format === 'weblog' || e.format === 'w3c' || e.format === 'ciscoios' || e.format === 'comware' || e.format === 'flowlog' || e.format === 'kvfw' || e.format === 'pancsv' || e.format === 'umbrella' || e.format === 'dns' || e.format === 'dhcp' || e.format === 'vpnauth' || e.format === 'haproxy') && e.fields && Object.keys(e.fields).length) {
     const src = pickField(e.fields, SRC_IP_KEYS);
     const dst = pickField(e.fields, DST_IP_KEYS);
     const spt = pickField(e.fields, SRC_PORT_KEYS);
@@ -4524,7 +4565,13 @@ function cloudRiskOf(e) {
   if (!ci || !ci.ok || ci.pending) return null;
   if (ci.vendor === 'cloudtrail') return CLOUDTRAIL_RISK_MAP[ci.event] || null;
   if (ci.vendor === 'azact') return AZURE_RISK_MAP[String(ci.event).toLowerCase()] || null;
-  if (ci.vendor === 'gcpaudit') { const h = GCP_RISK_MAP.find(([re]) => re.test(ci.event)); return h ? h[1] : null; }
+  if (ci.vendor === 'gcpaudit') {
+    // GKE 的 Kubernetes 稽核：methodName 為 io.k8s.<群組>.<版本>.<資源>[.<子資源>].<動詞>（如 io.k8s.core.v1.pods.exec.create，
+    // 依 Elastic 官方 GKE 偵測規則），拆出動詞與資源後套用同一套 Kubernetes 判斷
+    const km = String(ci.event).match(/^io\.k8s\.(?:[\w.]+\.)?v\d\w*\.([a-z]+)(?:\.([a-z]+))?\.([a-z]+)$/);
+    if (km) return k8sRiskOf({ user: ci.user, verb: km[3], resource: km[2] ? `${km[1]}/${km[2]}` : km[1] });
+    const h = GCP_RISK_MAP.find(([re]) => re.test(ci.event)); return h ? h[1] : null;
+  }
   if (ci.vendor === 'k8s') return k8sRiskOf(ci);
   return null;
 }
@@ -6869,7 +6916,7 @@ function syslogTag(evt) {
 }
 function rebuildSyslogRaw(evt) {
   if (evt.format === 'pancsv') return evt.msg || '';
-  if (evt.format === 'ciscoios' || evt.format === 'vpnauth') return `${evt.rawPrefix || ''}${evt.msg || ''}`;
+  if (evt.format === 'ciscoios' || evt.format === 'vpnauth' || evt.format === 'haproxy') return `${evt.rawPrefix || ''}${evt.msg || ''}`;
   if (evt.format === 'comware') return `${evt.rawHead || ''}${evt.host} ${evt.rawTag || ''}${evt.msg || ''}`;
   if (evt.format === 'mikrotik') {
     const pri = evt.facility === null ? '' : `<${evt.facility * 8 + Number(evt.severityRaw || 0)}>`;
@@ -7206,6 +7253,9 @@ function anonymizeHaproxyEvent(clone, opts) {
   if (clone.host) clone.host = anonHostname(clone.host);
   let msg = String(clone.msg || '').replace(/^(\S+ \[[^\]]+\] \S+ [^\s/]+\/)(\S+)/, (m, p, sv) => p + (/^<NOSRV>$/.test(sv) ? sv : anonHostname(sv)))
     .replace(/\{([^}]*)\}/g, (m, v) => '{' + v.split('|').map(x => /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?$/.test(x) && !isValidIPv4(x.replace(/:\d+$/, '')) ? x.replace(/^[^:]+/, h => anonDnsName(h)) : x).join('|') + '}');
+  // 自訂格式的目的主機欄（非位址時）比照 DNS 以主機名稱對照替換
+  const dh = clone.fields.dsthost;
+  if (dh) msg = msg.replace(new RegExp('(\\] \\S+ [^\\s/]+\\/\\S+ )' + dh.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' '), '$1' + anonDnsName(dh) + ' ');
   clone.msg = replaceIPsInLine(msg, opts);
   const re = parseHaproxyMsg(clone.appName, clone.msg);
   clone.fields = re ? re.fields : {};
@@ -7301,11 +7351,18 @@ function anonymizeEvent(evt, opts) {
         if (a.auth_device && a.auth_device.name) a.auth_device.name = anonHostname(a.auth_device.name);
         if (a.access_device && a.access_device.hostname) a.access_device.hostname = anonHostname(a.access_device.hostname);
         if (a.alias) a.alias = anonUser(a.alias);
+        // 位址後面可能直接接埠號寫法（#1234、p1234、.1234），先取出開頭的位址再替換
+        ['access_device', 'auth_device'].forEach(k => {
+          const d = a[k];
+          if (!d || typeof d.ip !== 'string') return;
+          const m = d.ip.match(/^(\[?)((?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|[0-9A-Fa-f:]*::[0-9A-Fa-f:]*|\d{1,3}(?:\.\d{1,3}){3})/);
+          if (m) d.ip = m[1] + replaceIPsInLine(m[2], opts) + d.ip.slice(m[0].length);
+        });
       }
       const USER_KEY_RE = /^(?:userPrincipalName|userName|UserId|alternateId|email|identity|userDisplayName|displayName|UserKey|principalId|userId)$/;
       const walk = o => Object.keys(o).forEach(k => { const v = o[k]; if (v && typeof v === 'object') walk(v); else if (typeof v === 'string') {
-        // Kubernetes 內建身分（system: 開頭）保留，判斷高風險操作時要排除控制平面元件；service account 只換名稱
-        const k8sSys = ci0 && ci0.vendor === 'k8s' && /^system:/.test(v);
+        // Kubernetes 內建身分（system: 開頭，含 GKE 經 Cloud Audit Logs 記錄的）保留，判斷高風險操作時要排除控制平面元件；service account 只換名稱
+        const k8sSys = ci0 && (ci0.vendor === 'k8s' || ci0.vendor === 'gcpaudit') && /^system:/.test(v);
         let x = k8sSys ? v.replace(/^(system:serviceaccount:[^:]+:)(.+)$/, (m, p, n) => p + anonUser(n))
           : (USER_KEY_RE.test(k) || (ci0 && v === ci0.user)) && v ? anonUser(v) : replaceMACsInLine(replaceIPsInLine(v, opts));
         x = x.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, m => anonUser(m));
@@ -7325,6 +7382,7 @@ function anonymizeEvent(evt, opts) {
       const ci = cloudAuthInfo(a);
       const ev = cloudAuthEvent(a, ci, clone.lineNo);
       Object.assign(clone, { cloudRaw: a, fields: ev.fields, msg: ev.msg, raw: ev.raw });
+      if (clone.host) clone.host = anonHostname(clone.host);
       return clone;
     }
     // 雲端防火牆（第二十二輪 HE）：深拷貝後換 IP／MAC，防火牆名稱與資源 ID 的訂閱／資源群組換假名、非公開網域以主機名稱對照替換，再重建
@@ -7516,7 +7574,8 @@ function checkResidualLog(text) {
     if (!line.trim()) return;
     const ipMatches = line.match(new RegExp(ipLike.source, 'g'));
     // 去識別化刻意保留的位址（0.x 未指定、127.x 迴路、224 以上群播／保留，見 classifyIP()）不算殘留
-    if (ipMatches && ipMatches.some(m => !/^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(m) && !(isValidIPv4(m) && classifyIP(m) === 'skip'))) warnings.push({ line: i + 1, text: line.trim() });
+    // 有段落超過 255 的點分數字是版本號（如 Duo security_agents 的 1.24.0.967），不是位址
+    if (ipMatches && ipMatches.some(m => isValidIPv4(m) && !/^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(m) && classifyIP(m) !== 'skip')) warnings.push({ line: i + 1, text: line.trim() });
     // 2026-08-09 稽核修復：先前只檢查 IPv4，救援網對 IPv6 完全沒有偵測能力
     const ip6Matches = line.match(new RegExp(IPv6_RE.source, 'g'));
     if (ip6Matches && ip6Matches.some(m => !/^2001:db8::/i.test(m) && !MAC_SHAPE_RE.test(m) && m !== '::')) warnings.push({ line: i + 1, text: line.trim() });
