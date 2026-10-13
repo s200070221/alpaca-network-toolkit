@@ -1306,7 +1306,7 @@ const VENDOR_SIGS = {
   wlc:         { p:[/^(?:config\s+)?wlan\s+create\s+\d+\s+\S+/m, /^\s*wlan\s+service-template\s+\S+/m, /^\s*wlan\s+ssid-profile\s+\S+/m, /^wlan\s+\S+\s+\d{1,4}\s+\S+/m], min:1 },
   // Check Point Management API JSON（第十八輪 TL），與 firewall_analyzer detectFwVendor() 的判斷一致
   checkpoint_api: { p:[/"objects-dictionary"\s*:/, /"type"\s*:\s*"(?:access|nat)-(?:rule|section)"/], min:2 },
-  cloudsg:     { p:[/"IpPermissions(?:Egress)?"\s*:\s*\[/, /"(?:default)?[sS]ecurityRules"\s*:\s*\[/, /"destCidr"\s*:/, /"applianceIp"\s*:/, /"publicPort"\s*:/, /"kind"\s*:\s*"compute#firewall"/, /"NetworkAclId"\s*:/], min:1 },
+  cloudsg:     { p:[/"IpPermissions(?:Egress)?"\s*:\s*\[/, /"(?:default)?[sS]ecurityRules"\s*:\s*\[/, /"destCidr"\s*:/, /"applianceIp"\s*:/, /"publicPort"\s*:/, /"kind"\s*:\s*"compute#firewall"/, /"NetworkAclId"\s*:/, /"ruleCollections"\s*:\s*\[/, /"kind"\s*:\s*"compute#firewallPolicy"/], min:1 },
   // 務必與 firewall_analyzer 的 FW_VENDOR_SIGS.netfilter 保持一致（2026-10-02 新增）
   // Cumulus Linux NVUE（YAML 的 `- set:` 段或 nv set 指令），務必與 switch_analyzer isCumulusNVUE() 一致（2026-10-02）
   // Allied Telesis AlliedWare Plus：與 switch_analyzer isAlliedWare() 一致（2026-10-02）
@@ -3737,7 +3737,7 @@ function anonCloudSG(text, opts) {
   };
   const name = v => opts.hostname && v ? anonHostname(v, 'sg', opts) : v;
   const proj = v => fake('gcp-project:' + v, n => `project-${n}`);
-  const ids = s => (/^\/subscriptions\//i.test(s) ? s.replace(/\/(resourceGroups|networkSecurityGroups|virtualNetworks|networkInterfaces|applicationSecurityGroups|subnets)\/([^/"]+)/gi, (m, k, v) => `/${k}/${name(v)}`) : s)
+  const ids = s => (/^\/subscriptions\//i.test(s) ? s.replace(/\/(resourceGroups|networkSecurityGroups|virtualNetworks|networkInterfaces|applicationSecurityGroups|subnets|firewallPolicies|ipGroups)\/([^/"]+)/gi, (m, k, v) => `/${k}/${name(v)}`) : s)
     .replace(/\b(sg|vpc|pl|subnet|eni|igw|nat|rtb|acl|aclassoc|vpce|tgw|i)-[0-9a-f]{8,17}\b/g, (m, p) => fake(m, n => `${p}-${String(n).padStart(17, '0')}`))
     // GCP（第二十一輪 GF）：資源 URL 的專案與 VPC 網路名稱（服務帳戶電子郵件由通用的電子郵件替換處理）
     .replace(/\/projects\/([^/"]+)/g, (m, v) => '/projects/' + proj(v))
@@ -3767,12 +3767,16 @@ function anonCloudSG(text, opts) {
     if (typeof o === 'number' && /^(OwnerId|UserId)$/.test(key)) o = String(o);
     if (typeof o !== 'string' || !o) return o;
     if (/^(OwnerId|UserId)$/.test(key) && /^\d{12}$/.test(o)) return opts.hostname ? fake(o, n => String(100000000000 + n)) : o;
+    // Azure Firewall Policy 與 GCP 防火牆政策的 FQDN（第二十二輪 HF／HG）：非公開網域以主機名稱對照替換
+    if (/^(targetFqdns|destinationFqdns|translatedFqdn|destFqdns|srcFqdns)$/.test(key) && opts.hostname && !PUBLIC_DOMAIN_RE.test(o)) return anonHostname(o, 'sg', opts);
     if (/^description$/i.test(key)) { if (opts.comments) { stats.comment++; return 'REDACTED_COMMENT'; } return o; }
     // Meraki（2026-10-02，ZD）：L3 規則的 comment（Meraki 自動產生的 Default rule 保留）、轉送／NAT／VLAN／路由的 name、networkId
     if (key === 'comment' && parent && 'policy' in parent) { if (opts.comments && o !== 'Default rule') { stats.comment++; return 'REDACTED_COMMENT'; } return o; }
     if (key === 'name' && parent && ('lanIp' in parent || 'applianceIp' in parent || 'gatewayIp' in parent)) return opts.comments ? anonAlias(o) : o;
     if (key === 'networkId' && opts.hostname) return fake(o, n => `N_${String(n).padStart(8, '0')}`);
     if (/^(GroupName|resourceGroup)$/.test(key) || (key === 'name' && nsgObjs.has(parent))) return name(o);
+    // GCP 防火牆政策本身與關聯的名稱（第二十二輪 HG，關聯名稱常含網路名稱）
+    if (key === 'name' && parent && (parent.kind === 'compute#firewallPolicy' || 'attachmentTarget' in parent)) return name(o);
     // AWS Tags 為 [{Key, Value}]：Name 標籤視同名稱，其餘值視同備註
     if (key === 'Value' && parent && 'Key' in parent) return parent.Key === 'Name' ? name(o) : (opts.comments ? anonAlias(o) : o);
     let v = opts.hostname ? ids(o) : o;
@@ -4298,7 +4302,8 @@ function checkResidual(text) {
       if (val && !/REDACTED/.test(val)) warnings.push({ line: lineNum, text: t });
     }
     // 網址路徑逐段檢查（GCP 資源 URL 的 compute/v1/projects/… 連起來不是金鑰；webhook 權杖等單一長段仍會命中，第二十一輪 GF）
-    const tHash = t.replace(/\bhttps?:\/\/[^\s"'?#]+/gi, u => u.replace(/\//g, ' '));
+    // Azure 資源 ID（/subscriptions/…/providers/…）與 GCP 安全標記 ID（tagValues/數字）同樣逐段判斷（第二十二輪 HF／HG）
+    const tHash = t.replace(/\bhttps?:\/\/[^\s"'?#]+|\/subscriptions\/[^\s"']+|\btag(?:Values|Keys)\/\d+/gi, u => u.replace(/\//g, ' '));
     if (hashLike.test(tHash) && !/[^\x20-\x7e]/.test(t) && !/REDACTED/.test(t)) {
       const match = tHash.match(hashLike);
       // 只有字母與斜線的長字串（JSON 欄位名稱如 destinationAddressPrefixes、資源類型路徑）不是金鑰；

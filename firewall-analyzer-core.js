@@ -349,7 +349,8 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
     const resolvedSrc=_policyAddrResolve(pSrc,srcInt,addrs);
     const resolvedDst=_policyAddrResolve(pDst,dstInt,addrs);
     trace.push({policy:p,result:'match',hasFqdn:sm===null||dm===null,resolvedSrc,resolvedDst});
-    return {matched:p,action:p.action==='accept'?'accept':'deny',trace};
+    // GCP 防火牆政策的 goto_next（第二十二輪 HG）：本層不決定，交給下一層（VPC 防火牆規則或其他政策）
+    return {matched:p,action:p.gotoNext?'goto_next':(p.action==='accept'?'accept':'deny'),trace};
   }
   // 預設規則（第十八輪 TH）：Junos default-policy permit-all 時沒命中的流量放行，以合成的預設規則回傳；
   // PAN-OS 的預設規則依目的區域而定（查詢條件無目的區域），只附上 paDefault 供畫面說明
