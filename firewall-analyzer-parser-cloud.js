@@ -47,6 +47,18 @@
 //   srcSecureTags, layer4Configs[{ipProtocol, ports}]}}]。每個政策為一個 VDOM，依方向＋priority 排序；goto_next 交給下一層判斷（與 VPC 防火牆
 //   規則的先後由網路的 networkFirewallPolicyEnforcementOrder 決定，設定不在此檔，不合併），action 記為 accept 並標 gotoNext，查詢回傳 goto_next；自動建立的預設規則
 //   （priority 2147483644 起）標為平台規則
+// - Kubernetes NetworkPolicy（2026-10-13，第二十三輪 IG）：`kubectl get networkpolicy -A -o json`（List）或單筆 JSON，欄位依 kubernetes
+//   staging/src/k8s.io/api/networking/v1/types.go：spec.podSelector（空為該 namespace 全部 Pod）、policyTypes（未指定時一律含 Ingress，
+//   有 egress 段才含 Egress）、ingress[].from／egress[].to（peer：podSelector、namespaceSelector、ipBlock{cidr, except}；清單為空表示不限）、
+//   ports[]（protocol 預設 TCP、port 數字或具名埠、endPort）。每個 namespace 一個 VDOM；各政策的規則彼此疊加（任一條允許即放行），故先列全部允許規則，
+//   再列被選取 Pod 的隱含拒絕（平台規則）；未被任何政策選取的 Pod 不受限制（不在此檔判斷）。Pod／namespace 選擇器列為物件不展開
+//   （查詢視為可能命中）；ipBlock 的 except 以群組排除成員表示；具名埠對應容器埠名稱，無法由設定判斷，以全部埠表示並註記。只接受 JSON
+// - Oracle Cloud（OCI）安全清單與 NSG 規則（2026-10-13，第二十三輪 IH）：`oci network security-list get|list`（CLI 輸出為連字號鍵名
+//   ingress-security-rules）、REST／SDK 的 camelCase（ingressSecurityRules）皆可，欄位依 oracle/oci-python-sdk core models：
+//   SecurityList{displayName, id, vcnId, ingressSecurityRules[{protocol（all 或協定號碼）, source, sourceType, isStateless,
+//   tcpOptions|udpOptions{destinationPortRange{min,max}}, icmpOptions{type,code}, description}], egressSecurityRules[{destination…}]}；
+//   `oci network nsg rules list` 的 SecurityRule{direction INGRESS|EGRESS, source／destination, sourceType／destinationType
+//   （CIDR_BLOCK、SERVICE_CIDR_BLOCK、NETWORK_SECURITY_GROUP）…}。比照 AWS 安全群組：只有允許規則、隱含拒絕不列；服務網段與 NSG 參照列為物件不展開
 // 對應方式：每個安全群組／NSG 當成一個 VDOM（可用上方 VDOM 列切換）；入站規則目的介面為群組名稱、
 // 出站規則來源介面為群組名稱。AWS 只有允許規則，未列出的流量一律拒絕（不另列規則，比照預設政策）；
 // Azure 依方向、priority 排序，預設規則（65000 起）一併列出並標註。
@@ -66,6 +78,11 @@ const CloudSGParser = (() => {
     ((Array.isArray(o.allowed) || Array.isArray(o.denied)) && typeof o.direction === 'string' && 'network' in o));
   const isGcpFwPolicy = o => !!o && typeof o === 'object' && !Array.isArray(o) && Array.isArray(o.rules) &&
     (o.kind === 'compute#firewallPolicy' || (o.rules.length > 0 && o.rules.every(r => r && r.match && 'priority' in r && 'action' in r)));
+  // OCI：鍵名統一成 camelCase（CLI 為連字號、Python SDK to_dict 為底線）
+  const ociCamel = o => Array.isArray(o) ? o.map(ociCamel) : (o && typeof o === 'object') ? Object.fromEntries(Object.entries(o).map(([k, v]) => [k.replace(/[-_]([a-z])/g, (m, c) => c.toUpperCase()), ociCamel(v)])) : o;
+  const isOciSecList = o => !!o && typeof o === 'object' && !Array.isArray(o) && ['ingressSecurityRules', 'ingress-security-rules', 'ingress_security_rules', 'egressSecurityRules', 'egress-security-rules', 'egress_security_rules'].some(k => Array.isArray(o[k]));
+  const isOciNsgRule = o => !!o && typeof o === 'object' && /^(?:INGRESS|EGRESS)$/.test(String(o.direction || '')) && 'protocol' in o && ('source' in o || 'destination' in o);
+  const isK8sNetPol = o => !!o && typeof o === 'object' && !Array.isArray(o) && o.kind === 'NetworkPolicy' && !!o.spec && typeof o.spec === 'object';
   const isAwsNacl = o => !!o && typeof o === 'object' && !Array.isArray(o) && Array.isArray(o.Entries) && 'NetworkAclId' in o;
   const azRcgProps = o => (o && o.properties && Array.isArray(o.properties.ruleCollections)) ? o.properties : o;
   const isAzureRcg = o => { const p = azRcgProps(o); return !!p && typeof p === 'object' && !Array.isArray(p) && Array.isArray(p.ruleCollections); };
@@ -73,19 +90,22 @@ const CloudSGParser = (() => {
 
   // 從任意 JSON 結構中找出 AWS 安全群組與 Azure NSG（describe 輸出、nsg list 陣列、ARM 範本 resources）
   function collect(root) {
-    const aws = [], az = [], gcp = [], nacl = [], azfw = [], gcpPol = [], seen = new Set();
+    const aws = [], az = [], gcp = [], nacl = [], azfw = [], gcpPol = [], k8s = [], oci = [], ociNsg = [], seen = new Set();
     (function walk(o, depth) {
       if (!o || typeof o !== 'object' || depth > 6 || seen.has(o)) return;
       seen.add(o);
       if (isAwsGroup(o)) { aws.push(o); return; }
       if (isAwsNacl(o)) { nacl.push(o); return; }
+      if (isK8sNetPol(o)) { k8s.push(o); return; }
+      if (isOciSecList(o)) { oci.push(ociCamel(o)); return; }
+      if (Array.isArray(o) && o.length && o.every(isOciNsgRule)) { ociNsg.push(ociCamel(o)); return; }
       if (isGcpFw(o)) { gcp.push(o); return; }
       if (isGcpFwPolicy(o)) { gcpPol.push(o); return; }
       if (isAzureNsg(o)) { az.push(o); return; }
       if (isAzureRcg(o)) { azfw.push(o); return; }
       (Array.isArray(o) ? o : Object.values(o)).forEach(v => walk(v, depth + 1));
     })(root, 0);
-    return { aws, az, gcp, nacl, azfw, gcpPol };
+    return { aws, az, gcp, nacl, azfw, gcpPol, k8s, oci, ociNsg };
   }
 
   // Meraki：依欄位形狀找出各 API 回應的項目陣列（規則陣列保留原順序）
@@ -121,11 +141,11 @@ const CloudSGParser = (() => {
 
   function detect(text) {
     const s = String(text || '');
-    if (!/"(?:IpPermissions|securityRules|defaultSecurityRules|destCidr|publicPort|publicIp|applianceIp|IPProtocol|NetworkAclId|ruleCollections|layer4Configs)"/.test(s)) return false;
+    if (!/"(?:IpPermissions|securityRules|defaultSecurityRules|destCidr|publicPort|publicIp|applianceIp|IPProtocol|NetworkAclId|ruleCollections|layer4Configs|podSelector|ingress[-_]?[sS]ecurity[-_]?[rR]ules|egress[-_]?[sS]ecurity[-_]?[rR]ules|direction)"/.test(s)) return false;
     const d = loadAll(s);
     if (!d) return false;
-    const { aws, az, gcp, nacl, azfw, gcpPol } = collect(d);
-    return aws.length + az.length + gcp.length + nacl.length + azfw.length + gcpPol.length + merakiCount(collectMeraki(d)) > 0;
+    const { aws, az, gcp, nacl, azfw, gcpPol, k8s, oci, ociNsg } = collect(d);
+    return aws.length + az.length + gcp.length + nacl.length + azfw.length + gcpPol.length + k8s.length + oci.length + ociNsg.length + merakiCount(collectMeraki(d)) > 0;
   }
 
   function basePolicy(o) {
@@ -383,6 +403,137 @@ const CloudSGParser = (() => {
     });
   }
 
+  // ── Oracle Cloud（OCI）安全清單／NSG ───────────────────
+  function ociService(r) {
+    const proto = String(r.protocol == null ? 'all' : r.protocol).toLowerCase();
+    if (proto === 'all') return 'ALL';
+    const name = PROTO_NUM[proto] || proto;
+    if (name === 'icmp' || name === 'icmpv6') { const t = r.icmpOptions && r.icmpOptions.type; return t == null ? name : `${name}/${t}`; }
+    if (name === 'tcp' || name === 'udp') {
+      const pr = (r[name + 'Options'] || {}).destinationPortRange;
+      if (!pr || pr.min == null) return `${name}/0-65535`;
+      return pr.min === pr.max || pr.max == null ? `${name}/${pr.min}` : `${name}/${pr.min}-${pr.max}`;
+    }
+    return /^\d+$/.test(name) ? `proto-${name}` : name;
+  }
+  function ociPeer(v, type, vdom, out) {
+    const val = String(v || '');
+    if (!val) return 'any';
+    if (/^NETWORK_SECURITY_GROUP$/i.test(type || '') || /^ocid1\.networksecuritygroup\./.test(val)) {
+      const n = 'nsg:' + val;
+      out.refs.set(vdom + '/' + n, refObj(n, 'OCI 網路安全群組（成員為該 NSG 內的 VNIC）', vdom));
+      return n;
+    }
+    if (/^SERVICE_CIDR_BLOCK$/i.test(type || '')) {
+      out.refs.set(vdom + '/' + val, refObj(val, 'OCI 服務網段（Oracle Services Network，成員由 Oracle 定義）', vdom));
+      return val;
+    }
+    return val;
+  }
+  function ociRule(r, egress, vdom, n, out) {
+    const peer = ociPeer(egress ? r.destination : r.source, egress ? r.destinationType : r.sourceType, vdom, out);
+    return basePolicy({
+      id: out.policies.length + 1, name: `${vdom}-${egress ? 'egress' : 'ingress'}-${n}`, vdom, chain: egress ? 'EGRESS' : 'INGRESS', ruleNum: n,
+      srcIntf: egress ? vdom : 'any', dstIntf: egress ? 'any' : vdom, src: egress ? 'any' : peer, dst: egress ? peer : 'any',
+      service: ociService(r), action: 'accept', actionRaw: 'allow',
+      comment: [r.isStateless ? '無狀態（回應流量需另有規則）' : '', r.description || ''].filter(Boolean).join('：'),
+    });
+  }
+  function parseOci(lists, nsgRuleSets, out) {
+    lists.forEach(l => {
+      const vdom = l.displayName || l.id || 'security-list';
+      out.vdoms.push(vdom);
+      (l.ingressSecurityRules || []).forEach((r, i) => out.policies.push(ociRule(r, false, vdom, i + 1, out)));
+      (l.egressSecurityRules || []).forEach((r, i) => out.policies.push(ociRule(r, true, vdom, i + 1, out)));
+      out.groups.push({ name: vdom, id: l.id || '-', vpc: l.vcnId || '-', desc: 'OCI 安全清單', tag: '', type: 'security-list' });
+    });
+    nsgRuleSets.forEach((rules, k) => {
+      const vdom = nsgRuleSets.length > 1 ? `oci-nsg-${k + 1}` : 'oci-nsg';
+      out.vdoms.push(vdom);
+      let ni = 0, ne = 0;
+      [...rules].sort((a, b) => (a.direction === 'EGRESS' ? 1 : 0) - (b.direction === 'EGRESS' ? 1 : 0)).forEach(r => {
+        const eg = r.direction === 'EGRESS';
+        const p = ociRule(r, eg, vdom, eg ? ++ne : ++ni, out);
+        if (r.isValid === false) p.status = 'disable';
+        out.policies.push(p);
+      });
+      out.groups.push({ name: vdom, id: '-', vpc: '-', desc: `OCI NSG 規則 ${rules.length} 筆（規則清單不含 NSG 名稱）`, tag: '', type: 'network-security-group' });
+    });
+  }
+
+  // ── Kubernetes NetworkPolicy ─────────────────────────────
+  function k8sSel(sel) {
+    if (!sel || typeof sel !== 'object') return '';
+    const parts = Object.entries(sel.matchLabels || {}).map(([k, v]) => `${k}=${v}`);
+    (sel.matchExpressions || []).forEach(e => parts.push(`${e.key} ${e.operator}${e.values && e.values.length ? ' (' + e.values.join(',') + ')' : ''}`));
+    return parts.join(',');
+  }
+  function k8sPeer(p, ns, vdom, out) {
+    if (p.ipBlock && p.ipBlock.cidr) {
+      const ex = (p.ipBlock.except || []).map(String);
+      if (!ex.length) return String(p.ipBlock.cidr);
+      const name = `ipBlock:${p.ipBlock.cidr} except ${ex.join(',')}`;
+      out.refs.set(vdom + '/' + name, { ...refObj(name, 'ipBlock（扣除 except 網段）', vdom), members: String(p.ipBlock.cidr), excludeMembers: ex.join(',') });
+      return name;
+    }
+    const nsPart = p.namespaceSelector ? `ns(${k8sSel(p.namespaceSelector) || '全部'})` : '';
+    const podPart = p.podSelector ? `pods(${k8sSel(p.podSelector) || '全部'})` : '';
+    const name = nsPart && podPart ? `${nsPart}/${podPart}` : nsPart || `${ns}/${podPart || 'pods(全部)'}`;
+    out.refs.set(vdom + '/' + name, refObj(name, nsPart ? '符合標籤的 namespace 內的 Pod（成員不在此檔）' : `namespace ${ns} 內符合標籤的 Pod（成員不在此檔）`, vdom));
+    return name;
+  }
+  function k8sService(ports) {
+    if (!Array.isArray(ports) || !ports.length) return { svc: 'ALL', named: [] };
+    const svc = [], named = [];
+    ports.forEach(p => {
+      const proto = String(p.protocol || 'TCP').toLowerCase();
+      if (p.port == null) { svc.push(`${proto}/0-65535`); return; }
+      if (typeof p.port === 'string' && !/^\d+$/.test(p.port)) { named.push(`${proto}/${p.port}`); svc.push(`${proto}/0-65535`); return; }
+      svc.push(p.endPort != null ? `${proto}/${p.port}-${p.endPort}` : `${proto}/${p.port}`);
+    });
+    return { svc: svc.join(', '), named };
+  }
+  function parseK8sNetPol(pols, out) {
+    const byNs = new Map();
+    pols.forEach(p => { const ns = (p.metadata && p.metadata.namespace) || 'default'; if (!byNs.has(ns)) byNs.set(ns, []); byNs.get(ns).push(p); });
+    for (const [ns, list] of byNs) {
+      const vdom = ns;
+      out.vdoms.push(vdom);
+      const allow = { ingress: [], egress: [] }, deny = { ingress: [], egress: [] };
+      list.forEach(pol => {
+        const name = (pol.metadata && pol.metadata.name) || 'networkpolicy';
+        const sp = pol.spec;
+        const selName = `${ns}/pods(${k8sSel(sp.podSelector) || '全部'})`;
+        out.refs.set(vdom + '/' + selName, refObj(selName, `NetworkPolicy ${name} 選取的 Pod（成員不在此檔）`, vdom));
+        const types = Array.isArray(sp.policyTypes) && sp.policyTypes.length ? sp.policyTypes.map(String) : ['Ingress', ...(sp.egress ? ['Egress'] : [])];
+        ['ingress', 'egress'].forEach(dir => {
+          if (!types.some(t => t.toLowerCase() === dir)) return;
+          const eg = dir === 'egress';
+          (sp[dir] || []).forEach((r, i) => {
+            const peers = r[eg ? 'to' : 'from'];
+            const pl = Array.isArray(peers) && peers.length ? peers.map(p => k8sPeer(p || {}, ns, vdom, out)) : ['any'];
+            const { svc, named } = k8sService(r.ports);
+            allow[dir].push({ name: `${name}/${dir}-${i + 1}`, src: eg ? selName : pl.join(', '), dst: eg ? pl.join(', ') : selName, svc,
+              comment: named.length ? `具名埠 ${named.join(', ')}（對應容器埠名稱，以全部埠表示）` : '' });
+          });
+          deny[dir].push({ name: `${name}/${dir}-default-deny`, src: eg ? selName : 'any', dst: eg ? 'any' : selName, svc: 'ALL',
+            comment: `被 ${name} 選取的 Pod：其他${eg ? '出站' : '入站'}流量拒絕（所有選取同一 Pod 的政策都沒有允許時）` });
+        });
+      });
+      const push = (r, dir, action, n) => {
+        const eg = dir === 'egress';
+        const p = basePolicy({ id: out.policies.length + 1, name: r.name, vdom, chain: eg ? 'EGRESS' : 'INGRESS', ruleNum: n,
+          srcIntf: eg ? vdom : 'any', dstIntf: eg ? 'any' : vdom, src: r.src, dst: r.dst, service: r.svc, action, actionRaw: action === 'accept' ? 'allow' : 'deny', comment: r.comment });
+        if (action === 'deny') p.platformRule = true;
+        out.policies.push(p);
+      };
+      let n = 0;
+      ['ingress', 'egress'].forEach(dir => allow[dir].forEach(r => push(r, dir, 'accept', ++n)));
+      ['ingress', 'egress'].forEach(dir => deny[dir].forEach(r => push(r, dir, 'deny', ++n)));
+      out.groups.push({ name: vdom, id: '-', vpc: '-', desc: `NetworkPolicy ${list.length} 筆：${list.map(p => (p.metadata && p.metadata.name) || '-').join(', ')}`, tag: '', type: 'network-policy' });
+    }
+  }
+
   // ── Azure Firewall Policy ───────────────────────────────
   function azfwAddr(list, vdom, out, note, type) {
     const vals = [];
@@ -512,7 +663,7 @@ const CloudSGParser = (() => {
 
   function parse(text) {
     const d = loadAll(text);
-    const { aws, az, gcp, nacl, azfw, gcpPol } = collect(d || {});
+    const { aws, az, gcp, nacl, azfw, gcpPol, k8s, oci, ociNsg } = collect(d || {});
     const mk = collectMeraki(d || {});
     const out = { policies: [], refs: new Map(), vdoms: [], groups: [], nat: [], ifaces: [], routes: [] };
     parseAws(aws, out);
@@ -521,8 +672,10 @@ const CloudSGParser = (() => {
     parseGcp(gcp, out);
     parseAzureFwPolicy(azfw, out);
     parseGcpPolicy(gcpPol, out);
+    parseK8sNetPol(k8s, out);
+    parseOci(oci, ociNsg, out);
     parseMeraki(mk, out);
-    const kinds = [aws.length && 'AWS Security Group', nacl.length && 'AWS Network ACL', az.length && 'Azure NSG', gcp.length && 'GCP VPC Firewall', azfw.length && 'Azure Firewall Policy', gcpPol.length && 'GCP Network Firewall Policy', merakiCount(mk) && 'Cisco Meraki MX'].filter(Boolean);
+    const kinds = [aws.length && 'AWS Security Group', nacl.length && 'AWS Network ACL', az.length && 'Azure NSG', gcp.length && 'GCP VPC Firewall', azfw.length && 'Azure Firewall Policy', gcpPol.length && 'GCP Network Firewall Policy', k8s.length && 'Kubernetes NetworkPolicy', oci.length && 'OCI Security List', ociNsg.length && 'OCI NSG', merakiCount(mk) && 'Cisco Meraki MX'].filter(Boolean);
     const vendor = kinds.length === 1 ? kinds[0] : 'Cloud Security Group';
     const vpcs = [...new Set(out.groups.map(g => g.vpc).filter(v => v && v !== '-'))];
     return {
