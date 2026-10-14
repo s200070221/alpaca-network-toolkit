@@ -375,3 +375,57 @@ function renderIfaceDescTemplate(tpl,ctx){
   const map={name:c.name||'',n:num,hostname:c.hostname||'',vlan:c.vlan||''};
   return String(tpl||'').replace(/\{(\w+)\}/g,(m,k)=>Object.prototype.hasOwnProperty.call(map,k)?map[k]:m);
 }
+
+// 配線表 CSV 匯入（2026-10-14，第二十四輪 JG）：每列一個埠，第一列為表頭（不分大小寫，接受別名）。
+// 只回傳有填的欄位（空白欄位維持表單原值）；模式不在 access／trunk／hybrid、VLAN 不在 1-4094 的列記入 errors 不套用。
+// VLAN 清單接受空白、分號或逗號分隔（逗號需整格加引號），輸出統一為空白分隔，與表單欄位格式一致
+const PORTMAP_HEADER_ALIASES={
+  name:['port','interface','iface','name','埠','介面'],desc:['desc','description','描述'],mode:['mode','模式'],
+  accessVlan:['vlan','access_vlan','accessvlan','access'],trunkVlans:['trunk','allowed','trunk_vlans','trunkvlans','allowed_vlans'],
+  nativeVlan:['native','native_vlan','nativevlan'],untagged:['untagged'],tagged:['tagged'],pvid:['pvid'],shutdown:['shutdown','status','狀態'],
+};
+function _portMapCsvLine(line){
+  const out=[];let cur='',q=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(q){if(ch==='"'){if(line[i+1]==='"'){cur+='"';i++;}else q=false;}else cur+=ch;}
+    else if(ch==='"')q=true;else if(ch===','){out.push(cur);cur='';}else cur+=ch;
+  }
+  out.push(cur);
+  return out.map(v=>v.trim());
+}
+function _portMapVlanList(v){
+  const toks=String(v).split(/[\s,;]+/).filter(Boolean);
+  const ok=toks.every(t=>{const m=t.match(/^(\d+)(?:-(\d+))?$/);return !!m&&+m[1]>=1&&+m[1]<=4094&&(!m[2]||(+m[2]>=+m[1]&&+m[2]<=4094));});
+  return ok?toks.join(' '):null;
+}
+function parsePortMapCsv(text){
+  const lines=String(text||'').replace(/^﻿/,'').split(/\r?\n/);
+  const rows=[],errors=[];
+  const hi=lines.findIndex(l=>l.trim());
+  if(hi<0)return {rows,errors:[{line:0,key:'portmap.err_empty'}]};
+  const head=_portMapCsvLine(lines[hi]).map(h=>h.toLowerCase().replace(/\s+/g,'_'));
+  const col={};
+  Object.keys(PORTMAP_HEADER_ALIASES).forEach(k=>{const i=head.findIndex(h=>PORTMAP_HEADER_ALIASES[k].includes(h));if(i>=0)col[k]=i;});
+  if(col.name===undefined)return {rows,errors:[{line:hi+1,key:'portmap.err_no_port'}]};
+  for(let li=hi+1;li<lines.length;li++){
+    if(!lines[li].trim())continue;
+    const c=_portMapCsvLine(lines[li]);
+    const get=k=>col[k]===undefined?'':(c[col[k]]||'');
+    const name=get('name');
+    if(!name){errors.push({line:li+1,key:'portmap.err_no_port'});continue;}
+    const row={name};
+    let bad='';
+    const mode=get('mode').toLowerCase();
+    if(mode){if(['access','trunk','hybrid'].includes(mode))row.mode=mode;else bad='portmap.err_mode';}
+    if(get('desc'))row.desc=get('desc');
+    ['accessVlan','nativeVlan','pvid'].forEach(k=>{const v=get(k);if(!v)return;if(/^\d+$/.test(v)&&+v>=1&&+v<=4094)row[k]=v;else bad=bad||'portmap.err_vlan';});
+    ['trunkVlans','untagged','tagged'].forEach(k=>{const v=get(k);if(!v)return;const l=_portMapVlanList(v);if(l!==null)row[k]=l;else bad=bad||'portmap.err_vlan';});
+    const sh=get('shutdown').toLowerCase();
+    if(sh)row.shutdown=/^(yes|y|true|1|down|shutdown|disable|disabled|關閉|停用)$/.test(sh);
+    if(bad){errors.push({line:li+1,key:bad,port:name});continue;}
+    rows.push(row);
+  }
+  return {rows,errors};
+}
+

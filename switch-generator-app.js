@@ -68,6 +68,40 @@ function applyIfaceBulk(){
   msg.style.color=(!indexes.length||invalid.length)?'var(--warn,#d97706)':'var(--text-dim,#64748b)';
 }
 
+// 配線表 CSV 匯入（2026-10-14，第二十四輪 JG）：解析交給 validate.js 的 parsePortMapCsv()；同名介面列（不分大小寫）
+// 更新有填的欄位，沒有的新增一列；結果訊息顯示更新／新增／錯誤數
+function applyPortMapRows(rows){
+  let updated=0,added=0;
+  rows.forEach(pm=>{
+    let r=rowsOf('#iface-body tr').find(x=>(x.querySelector('.i-name')?.value||'').trim().toLowerCase()===pm.name.toLowerCase());
+    if(r)updated++;else{addIfaceRow(pm.name,pm.mode||'access',inferSpeedFromName(pm.name,currentVendor()));r=rowsOf('#iface-body tr').pop();added++;}
+    const set=(cls,v)=>{if(v!==undefined)r.querySelector(cls).value=v;};
+    if(pm.mode){const sel=r.querySelector('.i-mode');sel.value=pm.mode;updateIfaceRowDisplay(sel);}
+    set('.i-desc',pm.desc);set('.i-access-vlan',pm.accessVlan);set('.i-trunk-vlans',pm.trunkVlans);set('.i-native-vlan',pm.nativeVlan);
+    set('.i-hy-untagged',pm.untagged);set('.i-hy-tagged',pm.tagged);set('.i-hy-pvid',pm.pvid);
+    if(pm.shutdown!==undefined)r.querySelector('.i-shutdown').checked=pm.shutdown;
+  });
+  updateIfaceTableDisplay();
+  return {updated,added};
+}
+function importPortMapCsv(file){
+  if(!file)return;
+  file.text().then(text=>{
+    const {rows,errors}=parsePortMapCsv(text);
+    const {updated,added}=applyPortMapRows(rows);
+    const msg=document.getElementById('portmap-msg');
+    let t=tr('portmap.done').replace('{updated}',updated).replace('{added}',added);
+    if(errors.length)t+=' '+tr('portmap.errors').replace('{n}',errors.length)+' '+errors.slice(0,5).map(e=>tr('portmap.err_line').replace('{line}',e.line)+(e.port?' '+e.port:'')+' '+tr(e.key)).join('；');
+    msg.textContent=t;
+    msg.style.color=errors.length?'var(--warn,#d97706)':'var(--text-dim,#64748b)';
+  });
+}
+function downloadPortMapSample(){
+  const csv='port,description,mode,vlan,trunk,native,shutdown\nGigabitEthernet1/0/1,PC-101,access,10,,,\nGigabitEthernet1/0/2,AP-2F,trunk,,"10,20,30",99,\nGigabitEthernet1/0/3,spare,access,10,,,yes\n';
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob(['﻿'+csv],{type:'text/csv'}));a.download='port_map_sample.csv';a.click();URL.revokeObjectURL(a.href);
+}
+
 // VLAN 範圍一次新增（2026-09-24 新增）：解析交給 switch-generator-validate.js 的純函式
 // parseVlanRangeSpec()；表格中已存在的 VLAN ID 略過不重複新增，結果訊息顯示在輸入框旁
 function addVlanRange(){
@@ -3200,6 +3234,7 @@ function checkGeneratorEggs(hostname){
     wintermute:tr('egg.wintermute'),
     ultron:tr('egg.ultron'), viki:tr('egg.ultron'),
     tardis:tr('egg.tardis'), timelord:tr('egg.tardis'),
+    '114514':tr('egg.smelly'),
   };
   for(const [k,v] of Object.entries(SPECIAL_HN)){
     if(h.includes(k)){setTimeout(()=>showEggToast(v),1200);break;}
@@ -4823,7 +4858,7 @@ function setLang(lang){
   const savedModelValue=deviceModelSel?deviceModelSel.value:'';
   applyI18n(document);
   document.getElementById('h-title').textContent=tr('title');
-  document.title=tr('title');
+  document.title=(window._aprilFools?'🦙 ':'')+tr('title');
   // 更新文件輸入按鈕文本
   document.querySelectorAll('.file-input-btn[data-i18n]').forEach(btn=>{
     btn.textContent=tr(btn.dataset.i18n);
@@ -4879,6 +4914,14 @@ window.addEventListener('afterprint',function(){
 });
 
 // ── 彩蛋 toast ─────────────────────────────────────────────────────
+// 彩蛋：愚人節（本機日期 4/1）標題前加 🦙 並跳提示；window._aprilFools 供會重設標題的工具沿用（2026-10-14，6 個工具各一份）
+(function(){
+  const d=new Date();
+  if(d.getMonth()!==3||d.getDate()!==1)return;
+  window._aprilFools=true;
+  document.title='🦙 '+document.title.replace(/^🦙 /,'');
+  setTimeout(()=>showEggToast(tr('egg.april_fools')),1500);
+})();
 // 彩蛋：鍵盤依序輸入 1145141919810（輸入框內也算）→ toast，文案 egg.smelly 依語言顯示（2026-10-14，6 個工具各一份）
 (function(){
   const SEQ='1145141919810';
@@ -5087,7 +5130,7 @@ document.querySelectorAll('.lang-btn[data-lang]').forEach(b=>b.classList.toggle(
 applyI18n(document);
 document.getElementById('h-title').textContent=tr('title');
 autoLabelControls();
-document.title=tr('title');
+document.title=(window._aprilFools?'🦙 ':'')+tr('title');
 
 // 第二步：確保 vendor 下拉有正確的初始值
 const vendorSel=document.getElementById('vendor');

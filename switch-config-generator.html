@@ -492,6 +492,15 @@ end</pre>
       <div style="font-size:12px;color:var(--text-dim,#64748b);margin-top:4px" data-i18n="bulkIf.hint">依介面名稱結尾的編號選取，例如 1/0/1-24 選中 GigabitEthernet1/0/1～24；只輸入數字範圍則比對名稱最後的編號。欄位留空即維持原值。</div>
       <div id="bulkif-msg" style="font-size:12px;margin-top:4px"></div>
     </details>
+    <details id="iface-portmap" style="margin-top:8px">
+      <summary data-i18n="portmap.title">匯入配線表 CSV</summary>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px">
+        <input type="file" id="portmap-file" accept=".csv,.txt" onchange="importPortMapCsv(this.files[0]);this.value=''">
+        <button class="add-btn" data-i18n="portmap.sample" onclick="downloadPortMapSample()">下載範例 CSV</button>
+      </div>
+      <div style="font-size:12px;color:var(--text-dim,#64748b);margin-top:4px" data-i18n="portmap.hint">每列一個埠。</div>
+      <div id="portmap-msg" style="font-size:12px;margin-top:4px"></div>
+    </details>
   </div>
 
   <div class="card" id="ospf-card">
