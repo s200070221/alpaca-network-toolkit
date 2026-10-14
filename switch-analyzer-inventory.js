@@ -228,6 +228,10 @@ function invVlanSet(v) {
 function invVlanMatrix(entries) {
   const devs = entries.map(e => {
     const p = e.parsed || {};
+    // Juniper 介面的 vlans 為 VLAN 名稱，先換成編號
+    const byName = new Map();
+    (p.vlans || []).forEach(v => { if (v && v.name && /^\d+$/.test(String(v.id))) byName.set(String(v.name).toLowerCase(), String(v.id)); });
+    const ids = v => invVlanSet(String(v == null ? '' : v).split(/[\s,;]+/).map(x => byName.get(x.toLowerCase()) || x).join(','));
     const decl = new Map();
     (p.vlans || []).forEach(v => { const id = +v.id; if (id >= 1 && id <= 4094) decl.set(id, v); });
     const svi = new Set();
@@ -238,10 +242,12 @@ function invVlanMatrix(entries) {
     (p.interfaces || []).forEach(i => {
       if (i.type === 'svi') { const m = String(i.name || '').match(/(\d+)\s*$/); if (m && (i.ip || (i.secondaryIps || []).length)) svi.add(+m[1]); return; }
       if (i.type === 'loopback' || i.type === 'null') return;
-      if (i.mode === 'access') { const id = [...invVlanSet(i.vlans != null && i.vlans !== '' ? i.vlans : i.vlan)][0]; if (id) bump(access, id); }
+      if (i.mode === 'access') { const id = [...ids(i.vlans != null && i.vlans !== '' ? i.vlans : i.vlan)][0]; if (id) bump(access, id); }
       else if (i.mode === 'trunk') {
         const raw = String(i.vlans != null && i.vlans !== '' ? i.vlans : (i.vlan || ''));
-        if (/\ball\b/i.test(raw) || !raw.trim()) trunkAll++; else trunkLists.push(invVlanSet(raw));
+        if (/\ball\b/i.test(raw) || !raw.trim()) trunkAll++; else trunkLists.push(ids(raw));
+        // native（untagged）VLAN 算 access 成員（ProCurve 的 untagged VLAN 只在這裡）
+        const nv = [...ids(i.nativeVlan)][0]; if (nv) bump(access, nv);
       } else if (i.mode === 'hybrid' && i.hybrid) {
         const h = i.hybrid;
         const u = invVlanSet((h.untagged || []).join(',')), t = invVlanSet((h.tagged || []).join(','));

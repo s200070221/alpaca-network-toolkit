@@ -175,13 +175,16 @@ const CiscoASAParser = (() => {
       const m = block.match(/^object-group\s+service\s+(\S+)(?:\s+(\S+))?/);
       if (!m) continue;
       const name=m[1], proto=m[2]||'';
-      const ports = [];
+      const ports = [], refs = [];
       for (const l of block.split('\n').slice(1)) {
         const t = l.trim();
         const mP = t.match(/^(?:port-object|service-object\s+\S+)\s+(?:eq\s+(\S+)|range\s+(\S+)\s+(\S+))/);
         if (mP) ports.push(mP[1]||`${mP[2]}-${mP[3]}`);
+        // 引用其他物件／群組（group-object NAME、service-object object NAME），供未使用物件稽核展開
+        const mR = t.match(/^(?:group-object|service-object\s+object)\s+(\S+)/);
+        if (mR) refs.push(mR[1]);
       }
-      svcs.push({ name, proto, port:ports.join(',')||'-', type:'group', color:'0' });
+      svcs.push({ name, proto, port:ports.join(',')||'-', type:'group', color:'0', members:refs.join(', ')||'-' });
     }
     return svcs;
   }

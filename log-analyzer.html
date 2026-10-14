@@ -3523,7 +3523,7 @@ const isK8sAuditList = o => !!o && o.kind === 'EventList' && /^audit\.k8s\.io\//
 function parseJSONLogEvents(text) {
   const { arr, singleObj } = parseJSONOrNDJSON(text);
   let list = arr;
-  if (!list && singleObj && ((Array.isArray(singleObj.records) && singleObj.records.some(isAzureFwLog)) || looksLikeLogRecord(singleObj) || isFalconEvent(singleObj) || isDefenderAlert(singleObj) || isM365Incident(singleObj) || isK8sAuditList(singleObj) || isDuoAuthResp(singleObj) || aksAuditInner(singleObj) || (Array.isArray(singleObj.records) && singleObj.records.some(aksAuditInner)))) list = [singleObj];
+  if (!list && singleObj && ((Array.isArray(singleObj.records) && singleObj.records.some(isAzureFwLog)) || looksLikeLogRecord(singleObj) || isCloudflareEvent(singleObj) || isFalconEvent(singleObj) || isDefenderAlert(singleObj) || isM365Incident(singleObj) || isK8sAuditList(singleObj) || isDuoAuthResp(singleObj) || aksAuditInner(singleObj) || (Array.isArray(singleObj.records) && singleObj.records.some(aksAuditInner)))) list = [singleObj];
   // 多個縮排 JSON 物件前後相接（CrowdStrike Falcon 串流匯出，第十八輪 TJ）
   if (!list && /^\s*\{/.test(text) && /"eventType"/.test(text)) { const docs = splitConcatJson(text); if (docs.length && docs.every(isFalconEvent)) list = docs; }
   if (!list) return null;
@@ -4203,11 +4203,22 @@ function isOffHours(ts, cfg) {
   const t = d.getUTCHours() * 60 + d.getUTCMinutes();
   return t < cfg.start || t >= cfg.end;
 }
+// 事件的「操作者」帳號：Windows 事件中 TargetUserName 多半是被操作的對象（被加入的群組、被建立的帳號），
+// 只有登入／驗證類事件的 TargetUserName 才是登入者，其餘以 SubjectUserName 為準；SYSTEM、服務帳號與電腦帳號（$ 結尾）不算
+const ACTOR_LOGON_EVENT_IDS = new Set(['4624', '4625', '4634', '4647', '4648', '4768', '4769', '4771', '4772', '4776', '4778', '4779']);
+const ACTOR_SKIP_RE = /^(?:-|SYSTEM|LOCAL SERVICE|NETWORK SERVICE|ANONYMOUS LOGON|.*\$)$/i;
+function eventActorUser(e) {
+  const f = e.fields || {};
+  const ok = u => (u && !ACTOR_SKIP_RE.test(String(u).trim()) ? String(u) : '');
+  if (f.user) return ok(f.user);
+  if (e.format === 'winevent') {
+    return ACTOR_LOGON_EVENT_IDS.has(String(f.EventID)) ? (ok(f.TargetUserName) || ok(f.SubjectUserName)) : (ok(f.SubjectUserName) || ok(f.TargetUserName));
+  }
+  return ok(f.SubjectUserName) || ok(f.TargetUserName);
+}
 function offHoursActor(e) {
   const f = e.fields || {};
-  const u = f.user || f.TargetUserName || f.SubjectUserName || '';
-  if (u && u !== '-') return u;
-  return f.srcip || e.host || '';
+  return eventActorUser(e) || f.srcip || e.host || '';
 }
 function detectOffHours(issues, events, cfg) {
   if (!cfg || !cfg.enabled) return [];
@@ -4245,9 +4256,7 @@ function detectOffHours(issues, events, cfg) {
 // 帳號常用時段基線（第二十五輪 LD）：只統計帳號（不取 IP／主機），每個帳號 24 小時各幾筆；
 // 小時以基線本身記錄的時區位移換算，本期偵測沿用同一位移
 function usualHourActor(e) {
-  const f = e.fields || {};
-  const u = f.user || f.TargetUserName || f.SubjectUserName || '';
-  return u && u !== '-' ? String(u) : '';
+  return eventActorUser(e);
 }
 function eventLocalHour(ts, tzOffsetMin) {
   return new Date(ts.getTime() + (tzOffsetMin || 0) * 60000).getUTCHours();
@@ -4300,7 +4309,7 @@ function sourceKeyType(opts) {
 }
 function eventSourceIp(e) {
   const f = e.fields || {};
-  const ip = String(f.srcip || f.IpAddress || f.src || '').trim();
+  const ip = String(f.srcip || f.IpAddress || f.src || '').trim().replace(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i, '$1');
   if (!ip || ip === '-' || /^(127\.|::1$|0\.0\.0\.0$)/.test(ip)) return '';
   return /^\d+\.\d+\.\d+\.\d+$/.test(ip) || /^[0-9a-f:]+$/i.test(ip) && ip.includes(':') ? ip : '';
 }
@@ -4315,7 +4324,12 @@ function sourceKeyOf(e, keyType, opts) {
     for (const idx of opts.geoIndexes) { const h = intelLookup(idx, ip); const c = h && h.meta && h.meta.country; if (c) return String(c).trim().toUpperCase(); }
     return '';
   }
-  if (ip.includes(':')) return ip.toLowerCase().split(':').slice(0, 3).join(':') + '::/48';
+  if (ip.includes(':')) {
+    // 先展開成 8 組再取前 3 組，同一網段的不同寫法（::、補零）才會得到同一個鍵
+    const n = ipv6ToBigInt(ip.split('%')[0]);
+    if (n === null) return '';
+    return [(n >> 112n) & 0xffffn, (n >> 96n) & 0xffffn, (n >> 80n) & 0xffffn].map(x => x.toString(16)).join(':') + '::/48';
+  }
   return ip.split('.').slice(0, 3).join('.') + '.0/24';
 }
 const NEW_SOURCE_MAX_KEYS = 50;
@@ -6417,7 +6431,7 @@ function _sigmaStripComment(t) {
   let q = '';
   for (let i = 0; i < t.length; i++) {
     const c = t[i];
-    if (q) { if (c === q) q = ''; continue; }
+    if (q) { if (c === q) { if (q === "'" && t[i + 1] === "'") { i++; continue; } q = ''; } continue; }
     if ((c === "'" || c === '"') && (i === 0 || /[\s\[,:]/.test(t[i - 1]))) q = c;
     else if (c === '#' && (i === 0 || /\s/.test(t[i - 1]))) return t.slice(0, i).trimEnd();
   }
@@ -6585,16 +6599,57 @@ function parseSigmaRule(text) {
     const t = tags.map(x => (x.match(/^attack\.(t\d{4}(?:\.\d{3})?)$/i) || [])[1]).find(Boolean);
     const ls = doc.logsource && typeof doc.logsource === 'object' ? doc.logsource : {};
     return { title: String(doc.title || doc.id || 'Sigma'), severity: SIGMA_LEVEL_SEV[String(doc.level || '').toLowerCase()] || 'Medium',
-      mitre: t ? t.toUpperCase() : '', tags, windowsOnly: String(ls.product || '').toLowerCase() === 'windows', sels, cond };
+      mitre: t ? t.toUpperCase() : '', tags, windowsOnly: String(ls.product || '').toLowerCase() === 'windows',
+      category: String(ls.category || '').toLowerCase(), service: String(ls.service || '').toLowerCase(), sels, cond };
   } catch (e) { return { error: e.message || 'detection', detail: e.detail || '' }; }
 }
 function _sigmaFieldValue(e, field) {
   const f = e.fields || {};
   const want = String(field).toLowerCase();
   const names = [want, ...((SIGMA_FIELD_ALIASES[want] || []).map(x => x.toLowerCase()))];
-  for (const n of names) { const k = Object.keys(f).find(x => x.toLowerCase() === n); if (k !== undefined && f[k] != null) return String(f[k]); }
+  for (const n of names) { const k = Object.keys(f).find(x => x.toLowerCase() === n); if (k !== undefined && f[k] != null && typeof f[k] !== 'object') return String(f[k]); }
+  // 點號欄位（userIdentity.type）沿巢狀物件逐層找，不分大小寫
+  if (want.includes('.')) {
+    let o = f;
+    for (const part of want.split('.')) {
+      if (!o || typeof o !== 'object') return undefined;
+      const k = Object.keys(o).find(x => x.toLowerCase() === part);
+      if (k === undefined) return undefined;
+      o = o[k];
+    }
+    return o != null && typeof o !== 'object' ? String(o) : undefined;
+  }
   return undefined;
 }
+// logsource（product windows）的 category／service 對應 Windows 事件：Sysmon 事件編號（Channel 為 Sysmon）、
+// 4688 為 Security 的處理程序建立、4103／4104 為 PowerShell；未列出的 category 不限定
+const SIGMA_SYSMON_CHANNEL_RE = /Sysmon/i;
+const SIGMA_WIN_CATEGORY = {
+  process_creation: e => (_sigmaSysmon(e) && _sigmaEid(e) === '1') || _sigmaEid(e) === '4688',
+  network_connection: e => _sigmaSysmon(e) && _sigmaEid(e) === '3',
+  process_termination: e => _sigmaSysmon(e) && _sigmaEid(e) === '5',
+  driver_load: e => _sigmaSysmon(e) && _sigmaEid(e) === '6',
+  image_load: e => _sigmaSysmon(e) && _sigmaEid(e) === '7',
+  create_remote_thread: e => _sigmaSysmon(e) && _sigmaEid(e) === '8',
+  raw_access_thread: e => _sigmaSysmon(e) && _sigmaEid(e) === '9',
+  process_access: e => _sigmaSysmon(e) && _sigmaEid(e) === '10',
+  file_event: e => _sigmaSysmon(e) && _sigmaEid(e) === '11',
+  registry_add: e => _sigmaSysmon(e) && _sigmaEid(e) === '12',
+  registry_delete: e => _sigmaSysmon(e) && _sigmaEid(e) === '12',
+  registry_set: e => _sigmaSysmon(e) && _sigmaEid(e) === '13',
+  registry_rename: e => _sigmaSysmon(e) && _sigmaEid(e) === '14',
+  registry_event: e => _sigmaSysmon(e) && ['12', '13', '14'].includes(_sigmaEid(e)),
+  create_stream_hash: e => _sigmaSysmon(e) && _sigmaEid(e) === '15',
+  pipe_created: e => _sigmaSysmon(e) && ['17', '18'].includes(_sigmaEid(e)),
+  wmi_event: e => _sigmaSysmon(e) && ['19', '20', '21'].includes(_sigmaEid(e)),
+  dns_query: e => _sigmaSysmon(e) && _sigmaEid(e) === '22',
+  file_delete: e => _sigmaSysmon(e) && ['23', '26'].includes(_sigmaEid(e)),
+  ps_module: e => _sigmaEid(e) === '4103',
+  ps_script: e => _sigmaEid(e) === '4104',
+};
+const SIGMA_WIN_SERVICE = { security: /^Security$/i, system: /^System$/i, sysmon: SIGMA_SYSMON_CHANNEL_RE, powershell: /PowerShell/i, application: /^Application$/i };
+function _sigmaEid(e) { return String((e.fields || {}).EventID || ''); }
+function _sigmaSysmon(e) { return SIGMA_SYSMON_CHANNEL_RE.test(String((e.fields || {}).Channel || '')); }
 function _sigmaSelMatch(sel, e, hay) {
   if (sel.or) return sel.or.some(x => _sigmaSelMatch(x, e, hay));
   if (sel.any) return sel.any.some(re => re.test(hay));
@@ -6608,7 +6663,13 @@ function _sigmaSelMatch(sel, e, hay) {
   });
 }
 function sigmaMatchEvent(rule, e) {
-  if (rule.windowsOnly && e.format !== 'winevent') return false;
+  if (rule.windowsOnly) {
+    if (e.format !== 'winevent') return false;
+    const cat = SIGMA_WIN_CATEGORY[rule.category];
+    if (cat && !cat(e)) return false;
+    const svc = SIGMA_WIN_SERVICE[rule.service];
+    if (svc && !svc.test(String((e.fields || {}).Channel || ''))) return false;
+  }
   const hay = [e.raw, e.msg, JSON.stringify(e.fields || {})].join(' ');
   const memo = {};
   const sel = id => (id in memo ? memo[id] : (memo[id] = _sigmaSelMatch(rule.sels[id], e, hay)));
@@ -7874,7 +7935,7 @@ function anonymizeCloudflareEvent(clone, opts) {
     if (typeof v !== 'string' || !v) return;
     let x;
     if (secret) x = 'REDACTED';
-    else if (/Host$/.test(k)) x = isValidIPv4(v) ? replaceIPsInLine(v, opts) : anonDnsName(v);
+    else if (/(?:Host|ZoneName)$/.test(k)) x = isValidIPv4(v) ? replaceIPsInLine(v, opts) : anonDnsName(v);
     else if (/Referer$/.test(k)) x = replaceIPsInLine(v, opts).replace(/^([a-z][\w+.-]*:\/\/)([^\/:?#]+)/i, (m, p, h) => p + (isValidIPv4(h) ? h : anonDnsName(h)));
     else if (/(?:URI|Path|Query)$/.test(k)) x = replaceIPsInLine(v, opts);
     else x = replaceMACsInLine(replaceIPsInLine(v, opts));
@@ -9978,7 +10039,9 @@ async function doAnalyze() {
         open: ISSUES.filter(is => issueStatusOf(_baselineDiffKey(is)) === 'open').length, top: _top };
       // 問題數趨勢（第二十五輪 LH）：覆蓋前把同一來源上一筆的問題數放進 history，最多 5 筆
       const _prev = _sum.find(x => x && x.tool === 'log_analyzer' && x.name === _name);
-      _entry.history = _prev ? [{ ts: _prev.ts, n: _prev.n, crit: _prev.crit }].concat(Array.isArray(_prev.history) ? _prev.history : []).slice(0, 5) : [];
+      // 兩分鐘內重新分析（例如載入前期 log 後自動重跑）視為同一次，不另記一筆歷史
+      _entry.history = !_prev ? [] : (Date.now() - (_prev.ts || 0) < 120000 ? (Array.isArray(_prev.history) ? _prev.history : [])
+        : [{ ts: _prev.ts, n: _prev.n, crit: _prev.crit }].concat(Array.isArray(_prev.history) ? _prev.history : []).slice(0, 5));
       _sum = _sum.filter(x => !(x && x.tool === 'log_analyzer' && x.name === _name));
       _sum.unshift(_entry);
       localStorage.setItem('_netAnalyzer_summaries', JSON.stringify(_sum.slice(0, 20)));
