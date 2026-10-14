@@ -429,3 +429,42 @@ function parsePortMapCsv(text){
   return {rows,errors};
 }
 
+// 配線表 CSV 匯出（第二十五輪 LE）：欄位與 parsePortMapCsv() 相同，由 collectModel().interfaces 組成，匯出後可再匯入
+const PORTMAP_CSV_HEADERS=['port','description','mode','vlan','trunk','native','untagged','tagged','pvid','shutdown'];
+function buildPortMapCsv(interfaces){
+  const cell=v=>{const t=String(v==null?'':v);const safe=/^[=+\-@]/.test(t)?"'"+t:t;return /[",\r\n]/.test(safe)?'"'+safe.replace(/"/g,'""')+'"':safe;};
+  const rows=(interfaces||[]).filter(i=>i&&i.name).map(i=>{
+    const hy=i.mode==='hybrid'&&i.hybrid?i.hybrid:null;
+    return [i.name,i.desc||'',i.mode||'',i.mode==='access'?i.accessVlan||'':'',i.mode==='trunk'?i.trunkVlans||'':'',i.mode==='trunk'?i.nativeVlan||'':'',
+      hy?(hy.untagged||[]).join(' '):'',hy?(hy.tagged||[]).join(' '):'',hy?hy.pvid||'':'',i.shutdown?'yes':''];
+  });
+  return [PORTMAP_CSV_HEADERS,...rows].map(r=>r.map(cell).join(',')).join('\r\n')+'\r\n';
+}
+
+
+// 黃金基準線檢查（第二十五輪 LF）：規則語法與交換器分析器 invParseRules()／invCheckRules() 相同（另行維護一份）
+//   + 內容  必須存在；- 內容  不得存在；可用 * ? 萬用字元，re: 開頭為正規表示式；行尾「 ## 名稱」為規則名稱
+function genGoldParseRules(text){
+  const rules=[],errors=[];
+  String(text||'').replace(/\r\n/g,'\n').split('\n').forEach((raw,idx)=>{
+    const line=raw.trim();
+    if(!line||line.startsWith('#'))return;
+    const m=line.match(/^([+\-])\s*(.*)$/);
+    if(!m||!m[2].trim()){errors.push({line:idx+1,text:line});return;}
+    let body=m[2],label='';
+    const li=body.indexOf(' ## ');
+    if(li>=0){label=body.slice(li+4).trim();body=body.slice(0,li);}
+    body=body.trim();
+    let re;
+    try{
+      if(/^re:/i.test(body))re=new RegExp(body.slice(3).trim(),'i');
+      else re=new RegExp('^'+body.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'.*').replace(/\?/g,'.')+'$','i');
+    }catch(e){errors.push({line:idx+1,text:line});return;}
+    rules.push({mode:m[1]==='+'?'must':'mustNot',pattern:body,label:label||(m[1]+' '+body),re});
+  });
+  return {rules,errors};
+}
+function genGoldCheckRules(cfg,rules){
+  const lines=String(cfg||'').replace(/\r\n/g,'\n').split('\n').map(l=>l.trim()).filter(Boolean);
+  return rules.map(r=>{const hit=lines.find(l=>r.re.test(l))||'';return {ok:r.mode==='must'?!!hit:!hit,hit};});
+}
