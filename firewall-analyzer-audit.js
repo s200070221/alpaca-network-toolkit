@@ -2267,6 +2267,71 @@
     if (vendor === 'PaloAlto') return parsePaloAltoHitCounts(text);
     return null;
   }
+  // ── 規則年度清查表（2026-10-14，第二十四輪 JE）──────────────────────────────
+  // 每條非平台規則一列，flags 只彙整既有分析結果（合規檢查命中、遮蔽、完全重複、到期、缺備註、命中數），
+  // 不新增判斷邏輯。opts.hit 為 analyzeRuleHitCounts() 結果（未匯入則 null），opts.now／expiryKeywords 傳給到期檢查
+  function buildRecertRows(parsed, opts) {
+    opts = opts || {};
+    const pols = (parsed.policies || []).filter(p => !p.platformRule);
+    const key = (vdom, id) => (vdom || '') + '\u0000' + id;
+    const flags = new Map(pols.map(p => [p, []]));
+    const byKey = new Map();
+    pols.forEach(p => { const k = key(p._vdom, p.id); if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push(p); });
+    const add = (p, f) => { const a = flags.get(p); if (a && !a.includes(f)) a.push(f); };
+    analyzeCompliance(parsed).forEach(fd => (fd.items || []).forEach(it => {
+      if (it.kind !== 'policy') return;
+      (byKey.get(key(it.vdom, it.id)) || []).forEach(p => add(p, fd.check));
+    }));
+    analyzeRuleShadowing(parsed.policies || [], parsed.addresses || []).forEach(r => pols
+      .filter(p => p.id === r.shadowedId && p.name === r.shadowedName)
+      .forEach(p => add(p, tr('recert.flag_shadowed').replace('{id}', r.shadowingId))));
+    analyzeExactDuplicates(parsed.policies || []).forEach(g => pols
+      .filter(p => g.ids.includes(p.id) && p.srcAddr === g.srcAddr && p.dstAddr === g.dstAddr && p.service === g.service && p.action === g.action)
+      .forEach(p => add(p, tr('recert.flag_duplicate').replace('{ids}', g.ids.filter(x => x !== p.id).join(', ')))));
+    analyzeExpiredRules(parsed, { now: opts.now, keywords: opts.expiryKeywords }).results.forEach(r =>
+      (byKey.get(key(r.vdom, r.id)) || []).forEach(p => add(p, tr(r.status === 'expired' ? 'recert.flag_expired' : 'recert.flag_expiring').replace('{date}', r.date))));
+    analyzeMissingComments({ policies: pols }).forEach(p => add(p, tr('recert.flag_no_comment')));
+    const hitOf = new Map();
+    if (opts.hit && opts.hit.rows) opts.hit.rows.forEach(r => { if (r._pol) hitOf.set(r._pol, r); });
+    return pols.map(p => {
+      const h = hitOf.get(p);
+      if (h && h.kind === 'zero') add(p, tr('recert.flag_zero_hits'));
+      if (h && h.kind === 'stale') add(p, tr('recert.flag_stale_hits'));
+      return { vdom: p._vdom || '', id: p.id, name: p.name || '', enabled: !_isDisabledStatus(p), action: p.action || '',
+        src: p.srcAddr || '', dst: p.dstAddr || '', service: p.service || '',
+        comment: p.comments && p.comments !== '-' ? p.comments : '',
+        hits: h ? h.hits : null, lastUsed: h ? h.lastUsed : null, flags: flags.get(p) };
+    });
+  }
+  function _recertHeaders(multiVdom) {
+    return [...(multiVdom ? ['VDOM'] : []), 'ID', tr('recert.col_name'), tr('recert.col_enabled'), tr('recert.col_action'), tr('recert.col_src'),
+      tr('recert.col_dst'), tr('recert.col_service'), tr('recert.col_comment'), tr('recert.col_hits'), tr('recert.col_last'),
+      tr('recert.col_flags'), tr('recert.col_decision'), tr('recert.col_reviewer'), tr('recert.col_note')];
+  }
+  function _recertCells(r, multiVdom) {
+    return [...(multiVdom ? [r.vdom] : []), r.id, r.name, r.enabled ? tr('recert.yes') : tr('recert.no'), r.action, r.src, r.dst, r.service,
+      r.comment, r.hits === null ? '' : r.hits, r.lastUsed ? new Date(r.lastUsed).toISOString().slice(0, 10) : '', r.flags.join('; '), '', '', ''];
+  }
+  // CSV 由呼叫端交給 Reporter.toCSV()（已含公式注入中和）
+  function buildRecertCsv(rows) {
+    const mv = rows.some(r => r.vdom);
+    return { headers: _recertHeaders(mv), rows: rows.map(r => _recertCells(r, mv)) };
+  }
+  function buildRecertMarkdown(rows, meta) {
+    meta = meta || {};
+    const mv = rows.some(r => r.vdom);
+    const cell = v => String(v === null || v === undefined ? '' : v).replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
+    const flagged = rows.filter(r => r.flags.length).length;
+    const lines = ['# ' + tr('recert.title'), '',
+      tr('recert.md_meta').replace('{host}', meta.host || '-').replace('{vendor}', meta.vendor || '-').replace('{date}', meta.date || '')
+        .replace('{n}', rows.length).replace('{flagged}', flagged), '',
+      tr('recert.md_hint'), ''];
+    const head = _recertHeaders(mv);
+    lines.push('| ' + head.map(cell).join(' | ') + ' |', '|' + head.map(() => '---').join('|') + '|');
+    rows.forEach(r => lines.push('| ' + _recertCells(r, mv).map(cell).join(' | ') + ' |'));
+    return lines.join('\n') + '\n';
+  }
+
   function analyzeRuleHitCounts(parsed, hc, opts) {
     if (parsed.vendor === 'FortiGate') return analyzeFortiHitCounts(parsed, hc, opts);
     const pols = (parsed.policies || []).filter(p => !_isDisabledStatus(p));
@@ -2290,7 +2355,7 @@
       const p = ps[0];
       const kind = it.hits === 0 ? 'zero' : (it.lastUsed && now - it.lastUsed > days * 86400000 ? 'stale' : 'ok');
       if (kind === 'zero') out.zero++; else if (kind === 'stale') out.stale++;
-      out.rows.push({ id: it.label || String(p.id), name: p.name || '', vdom: p._vdom || '', action: p.action || '', hits: it.hits, lastUsed: it.lastUsed, kind });
+      out.rows.push({ id: it.label || String(p.id), name: p.name || '', vdom: p._vdom || '', action: p.action || '', hits: it.hits, lastUsed: it.lastUsed, kind, _pol: p });
     });
     Object.keys(byId).forEach(id => { if (!seen.has(id)) out.missing.push(id); });
     const rank = { zero: 0, stale: 1, ok: 2 };

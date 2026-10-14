@@ -126,6 +126,14 @@ function startMatrixRain(){
   setTimeout(close,9000);
 }
 
+// 彩蛋：愚人節（本機日期 4/1）標題前加 🦙 並跳提示；window._aprilFools 供會重設標題的工具沿用（2026-10-14，6 個工具各一份）
+(function(){
+  const d=new Date();
+  if(d.getMonth()!==3||d.getDate()!==1)return;
+  window._aprilFools=true;
+  document.title='🦙 '+document.title.replace(/^🦙 /,'');
+  setTimeout(()=>window.showEggToast(tr('egg.april_fools')),1500);
+})();
 // 彩蛋：鍵盤依序輸入 1145141919810（輸入框內也算）→ toast，文案 egg.smelly 依語言顯示（2026-10-14，6 個工具各一份）
 (function(){
   const SEQ='1145141919810';
@@ -188,6 +196,7 @@ function checkAnalyzeEggs(p) {
     wintermute:tr('egg.wintermute'),
     ultron:tr('egg.ultron'), viki:tr('egg.ultron'),
     tardis:tr('egg.tardis'), timelord:tr('egg.tardis'),
+    '114514':tr('egg.smelly'),
   };
   for(const [k,v] of Object.entries(SPECIAL_HN)) {
     if(h.includes(k)) { setTimeout(() => showEggToast(v), 1200); break; }
@@ -200,12 +209,15 @@ function checkAnalyzeEggs(p) {
     setTimeout(() => showEggToast(tr('egg.fortress')), 1500);
   }
   // 彩蛋4b：偵測到萬用 accept 規則
+  // 2026-10-14（EB）：原本只認 FortiGate 的 all，ASA／Palo Alto／Juniper／雲端的 any、0.0.0.0/0、::/0 也算
   const wildcard = p.policies.some(x => {
-    if(x.action !== 'accept') return false;
-    const isAll = v => v === 'all' || (Array.isArray(v) && v.some(a => a === 'all'));
+    if(x.action !== 'accept' || x.platformRule) return false;
+    const isAll = v => (Array.isArray(v) ? v : String(v || '').split(/[\s,]+/)).some(a => /^(?:all|any|any4|any6|0\.0\.0\.0\/0|::\/0)$/i.test(String(a).trim()));
     return isAll(x.srcAddr || x.srcaddr) && isAll(x.dstAddr || x.dstaddr);
   });
   if(wildcard) setTimeout(() => showEggToast(tr('egg.wildcard')), 1800);
+  // 彩蛋：規則數剛好是 114514／1919／810（2026-10-14，EC）
+  if([114514, 1919, 810].includes(p.policies.length)) setTimeout(() => showEggToast(tr('egg.smelly')), 2400);
 }
 
 // Console 彩蛋

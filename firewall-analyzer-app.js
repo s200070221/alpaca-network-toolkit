@@ -259,6 +259,28 @@ const App = (() => {
     const host = (PARSED.deviceInfo && PARSED.deviceInfo.hostname && PARSED.deviceInfo.hostname !== '-') ? PARSED.deviceInfo.hostname : 'firewall';
     Reporter.download(Reporter.toCSV(rows, headers), host.replace(/[^\w.\-]/g, '_') + '_policy_hits.csv', 'text/csv');
   };
+  // ── 規則年度清查表（2026-10-14，第二十四輪 JE）：buildRecertRows() 在 audit.js，命中數取自上方卡片的 _fwHit.res ──
+  function _fwRecertCardHtml() {
+    return `<div id="recert-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px">📋 ${esc(tr('recert.title'))}</div>
+      <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--accent)">${esc(tr('recert.hint'))}</div>
+      <button class="btn btn-ghost btn-sm" onclick="window._fwRecertDownload('csv')">${esc(tr('recert.csv_btn'))}</button>
+      <button class="btn btn-ghost btn-sm" onclick="window._fwRecertDownload('md')">${esc(tr('recert.md_btn'))}</button>
+    </div>`;
+  }
+  window._fwRecertDownload = function(fmt) {
+    if (!PARSED) return;
+    const rows = buildRecertRows(PARSED, { hit: _fwHit.res, expiryKeywords: _loadExpiryKeywords() });
+    const host = (PARSED.deviceInfo && PARSED.deviceInfo.hostname && PARSED.deviceInfo.hostname !== '-') ? PARSED.deviceInfo.hostname : 'firewall';
+    const base = host.replace(/[^\w.\-]/g, '_') + '_rule_recert';
+    if (fmt === 'md') {
+      const md = buildRecertMarkdown(rows, { host, vendor: PARSED.vendor, date: new Date().toISOString().slice(0, 10) });
+      Reporter.download(md, base + '.md', 'text/markdown');
+    } else {
+      const c = buildRecertCsv(rows);
+      Reporter.download(Reporter.toCSV(c.rows, c.headers), base + '.csv', 'text/csv');
+    }
+  };
   window._fwCleanupCopy = _fwCleanupCopy;
   window._fwCleanupDownload = _fwCleanupDownload;
   // ── 開通需求檢查（FortiGate，2026-09-29 新增，第六輪 WI）──────────────────
@@ -1449,6 +1471,7 @@ function onParsed(){
         $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildDuplicateObjectsHtml(_do) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules()) + buildExpiredRulesHtml(analyzeExpiredRules(PARSED, { keywords: _loadExpiryKeywords() }), _loadExpiryKeywords())
           + (PARSED.vendor === 'FortiGate' ? _fwCleanupCardHtml() : '')
           + (_HIT_VENDOR_SUFFIX[PARSED.vendor] !== undefined ? _fwHitCardHtml() : '')
+          + _fwRecertCardHtml()
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
               <div id="health-result" style="margin-top:12px"></div>
