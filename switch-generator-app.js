@@ -4879,14 +4879,14 @@ window.addEventListener('afterprint',function(){
 });
 
 // ── 彩蛋 toast ─────────────────────────────────────────────────────
-// 彩蛋：鍵盤依序輸入 1145141919810（輸入框內也算）→ toast（2026-10-14，6 個工具各一份）
+// 彩蛋：鍵盤依序輸入 1145141919810（輸入框內也算）→ toast，文案 egg.smelly 依語言顯示（2026-10-14，6 個工具各一份）
 (function(){
   const SEQ='1145141919810';
   let buf='';
   document.addEventListener('keydown',e=>{
     if(!e.key||e.key.length!==1)return;
     buf=(buf+e.key).slice(-SEQ.length);
-    if(buf===SEQ){buf='';showEggToast('這麼臭的彩蛋有存在的必要嗎');}
+    if(buf===SEQ){buf='';showEggToast(tr('egg.smelly'));}
   });
 })();
 
