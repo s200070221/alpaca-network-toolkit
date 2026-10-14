@@ -266,8 +266,42 @@ const App = (() => {
       <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--accent)">${esc(tr('recert.hint'))}</div>
       <button class="btn btn-ghost btn-sm" onclick="window._fwRecertDownload('csv')">${esc(tr('recert.csv_btn'))}</button>
       <button class="btn btn-ghost btn-sm" onclick="window._fwRecertDownload('md')">${esc(tr('recert.md_btn'))}</button>
+      <div style="margin-top:10px;font-size:12px">${esc(tr('recert.import_label'))}
+        <input type="file" id="recert-import" accept=".csv,.txt" style="font-size:12px" onchange="window._fwRecertImport(this)"></div>
+      <div id="recert-msg" style="font-size:12px;margin-top:6px"></div>
     </div>`;
   }
+  // 清查表回填（第二十五輪 LA）：刪除／停用的決定併入規則變更模擬清單；FortiGate 另可下載對應指令
+  let _recertReview = null;
+  window._fwRecertImport = function(input) {
+    const f = input.files && input.files[0]; if (!f || !PARSED) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      input.value = '';
+      const box = $('recert-msg'); if (!box) return;
+      const r = parseRecertDecisions(String(rd.result || ''), PARSED);
+      if (r.error) { _recertReview = null; box.innerHTML = `<div style="color:var(--red)">${esc(tr('recert.import_err_' + r.error))}</div>`; return; }
+      let added = 0;
+      r.changes.forEach(c => { if (!_whatIf.some(w => w.op === c.op && w.idx === c.idx)) { _whatIf.push(c); added++; } });
+      _recertReview = r;
+      let h = `<div>${esc(tr('recert.import_done').replace('{added}', added).replace('{del}', r.counts.delete).replace('{dis}', r.counts.disable))}</div>`;
+      if (r.unknown.length) h += `<div style="color:var(--orange)">${esc(tr('recert.import_unknown').replace('{list}', r.unknown.slice(0, 20).join(', ') + (r.unknown.length > 20 ? '…' : '')))}</div>`;
+      if (r.changes.length) {
+        h += `<div style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="window.showSection('query')">${esc(tr('recert.import_goto'))}</button>`
+          + (PARSED.vendor === 'FortiGate' ? ` <button class="btn btn-ghost btn-sm" onclick="window._fwRecertScript()">${esc(tr('recert.import_script'))}</button>` : '') + '</div>';
+      }
+      box.innerHTML = h;
+    };
+    rd.readAsText(f);
+  };
+  window._fwRecertScript = function() {
+    const r = _recertReview; if (!r || !PARSED) return;
+    const pick = op => new Set(r.changes.filter(c => c.op === op).map(c => c.idx));
+    const res = buildFortiGateCleanupScript(PARSED, { disabled: false, unused: false, shadowed: false, review: { delete: pick('delete'), disable: pick('disable') } });
+    if (!res.total) return;
+    const host = (PARSED.deviceInfo && PARSED.deviceInfo.hostname && PARSED.deviceInfo.hostname !== '-') ? PARSED.deviceInfo.hostname : 'firewall';
+    Reporter.download(res.text, host.replace(/[^\w.\-]/g, '_') + '_recert_changes.txt', 'text/plain');
+  };
   window._fwRecertDownload = function(fmt) {
     if (!PARSED) return;
     const rows = buildRecertRows(PARSED, { hit: _fwHit.res, expiryKeywords: _loadExpiryKeywords() });
@@ -738,6 +772,9 @@ const App = (() => {
       let a=[];
       try{a=JSON.parse(localStorage.getItem('_netAnalyzer_summaries')||'[]');}catch(e){a=[];}
       if(!Array.isArray(a))a=[];
+      // 分數趨勢（第二十五輪 LH）：覆蓋前把同一設備上一筆的分數放進 history，最多 5 筆
+      const prev=a.find(x=>x&&x.tool===entry.tool&&x.name===entry.name);
+      entry.history=prev?[{ts:prev.ts,score:prev.score,grade:prev.grade,n:prev.n,crit:prev.crit}].concat(Array.isArray(prev.history)?prev.history:[]).slice(0,5):[];
       a=a.filter(x=>!(x&&x.tool===entry.tool&&x.name===entry.name));
       a.unshift(entry);
       localStorage.setItem('_netAnalyzer_summaries',JSON.stringify(a.slice(0,20)));
@@ -2474,7 +2511,7 @@ function onParsed(){
     if (!_whatIf.length) { el.innerHTML = `<div class="nodata">${tr('whatif.empty')}</div>`; return; }
     const { rows, errors } = parseBatchQueryCSV(($('batch-input') || {}).value || '');
     const sim = applyPolicyWhatIf(PARSED, _whatIf);
-    LAST_WHATIF = rows.length ? compareBatchQuery(rows, PARSED, sim.parsed, _queryOpts(false)) : [];
+    LAST_WHATIF = rows.length ? compareBatchQuery(rows, PARSED, sim.parsed, _batchOpts()) : [];
     const shadow = compareShadowing(analyzeRuleShadowing(PARSED.policies || [], PARSED.addresses), analyzeRuleShadowing(sim.parsed.policies, PARSED.addresses));
     el.innerHTML = buildWhatIfResultHtml(LAST_WHATIF, errors, shadow, rows.length);
   };
@@ -2482,7 +2519,7 @@ function onParsed(){
     const el = $('batch-result'); if (!el) return;
     const { rows, errors } = parseBatchQueryCSV(($('batch-input')||{}).value||'');
     const vdom = $('q-vdom') ? $('q-vdom').value : '__all__';
-    LAST_BATCH_RESULTS = runBatchPolicyQuery(rows, vdom, PARSED, _queryOpts(false));
+    LAST_BATCH_RESULTS = runBatchPolicyQuery(rows, vdom, PARSED, _batchOpts());
     el.innerHTML = buildBatchQueryResultHtml(LAST_BATCH_RESULTS, errors);
   };
   window._loadBatchFile = function(input) {
@@ -2530,6 +2567,10 @@ function onParsed(){
   // ── IP/Policy Query: run ────────────────────────────────────────────────
   // 查詢選項（2026-10-01，YC／YA）：只看新連線（預設勾選）、進入介面／區域；批次查詢共用「只看新連線」，
   // 介面則由 CSV 的 srcintf 欄逐列指定
+  // 批次查詢與變更模擬共用：與單筆查詢同一個「考慮目的 NAT」勾選（第二十五輪 LB）
+  function _batchOpts() {
+    return Object.assign(_queryOpts(false), { nat: !$('q-nat') || $('q-nat').checked });
+  }
   function _queryOpts(withIntf = true) {
     const nb = $('q-newonly'), it = $('q-srcintf');
     return { newOnly: nb ? nb.checked : true, srcIntf: withIntf && it ? it.value.trim() : '' };

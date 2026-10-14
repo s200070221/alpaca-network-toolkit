@@ -626,10 +626,26 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED, opts) {
   return rows.map(r => {
     const srcs = r.srcList || [r.src], dsts = r.dstList || [r.dst];
     const results = [];
+    const qo = Object.assign({}, opts, r.srcIntf ? { srcIntf: r.srcIntf } : {});
+    let nat = null;
     srcs.forEach(s => dsts.forEach(d => {
-      const res = _runPolicyQuery(s, d, r.proto, r.port, vdomFilter, PARSED, Object.assign({}, opts, r.srcIntf ? { srcIntf: r.srcIntf } : {})) || { matched: null, action: 'implicit_deny', trace: [] };
+      // 目的 NAT（2026-10-14，第二十五輪 LB）：opts.nat 時比照單筆查詢，依廠牌比對轉換前或轉換後位址；
+      // 比對時點不明（unknown）時以原位址判斷，另記轉換後的結果。多組合時只記第一筆命中的 NAT
+      let qd = d, qp = r.port, dn = null, stage = '';
+      if (opts && opts.nat) {
+        dn = _findDestNat(d, r.proto, r.port, PARSED, qo);
+        if (dn) { stage = _natStage(PARSED && PARSED.vendor); if (stage === 'post') { qd = dn.toIp; qp = dn.toPort; } }
+      }
+      const res = _runPolicyQuery(s, qd, r.proto, qp, vdomFilter, PARSED, qo) || { matched: null, action: 'implicit_deny', trace: [] };
       const mt = (res.trace || []).find(t => t.result === 'match');
       results.push({ action: res.action, policy: res.matched, hasFqdn: !!(mt && mt.hasFqdn) });
+      if (dn && !nat) {
+        nat = { name: dn.name, to: dn.toIp + (dn.toPort ? ':' + dn.toPort : ''), stage };
+        if (stage === 'unknown') {
+          const alt = _runPolicyQuery(s, dn.toIp, r.proto, dn.toPort, vdomFilter, PARSED, qo);
+          nat.altAction = alt && !alt.error ? alt.action : '';
+        }
+      }
     }));
     const acceptCount = results.filter(x => x.action === 'accept').length;
     const actions = [...new Set(results.map(x => x.action))];
@@ -638,7 +654,7 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED, opts) {
     const single = pols.length === 1 && results.every(x => x.policy) ? pols[0] : null;
     const check = r.expect ? (r.expect === 'accept' ? acceptCount === results.length : acceptCount === 0) : null;
     return { ...r, action, policyId: single ? single.id : pols.map(p => p.id).join(';'), policyName: single ? (single.name || '') : '',
-      hasFqdn: results.some(x => x.hasFqdn), combos: results.length, acceptCount, check };
+      hasFqdn: results.some(x => x.hasFqdn), combos: results.length, acceptCount, check, nat };
   });
 }
 // 規則變更模擬（2026-10-06，第十二輪 MD）：在 parsed 的副本上套用變更，不動原物件。

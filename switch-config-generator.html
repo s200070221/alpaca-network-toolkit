@@ -497,6 +497,7 @@ end</pre>
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px">
         <input type="file" id="portmap-file" accept=".csv,.txt" onchange="importPortMapCsv(this.files[0]);this.value=''">
         <button class="add-btn" data-i18n="portmap.sample" onclick="downloadPortMapSample()">下載範例 CSV</button>
+        <button class="add-btn" data-i18n="portmap.export" onclick="exportPortMapCsv()">匯出目前介面表</button>
       </div>
       <div style="font-size:12px;color:var(--text-dim,#64748b);margin-top:4px" data-i18n="portmap.hint">每列一個埠。</div>
       <div id="portmap-msg" style="font-size:12px;margin-top:4px"></div>
@@ -1306,6 +1307,13 @@ end</pre>
     <div id="import-diff-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:10px;max-height:360px;overflow-y:auto;font-family:Menlo,'Courier New',monospace;font-size:11px;line-height:1.5"></div>
     <div id="delta-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:10px;font-size:12px;line-height:1.5"></div>
     <div id="session-diff-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:10px;max-height:300px;overflow-y:auto;font-family:Menlo,'Courier New',monospace;font-size:11px;line-height:1.5"></div>
+    <details id="gen-gold" style="margin-top:10px">
+      <summary data-i18n="genGold.title">黃金基準線檢查</summary>
+      <div class="hint" data-i18n="genGold.hint">每行一條規則：「+ 內容」必須存在、「- 內容」不得存在，可用 * 與 ? 萬用字元，re: 開頭為正規表示式，行尾「 ## 名稱」為規則名稱。規則與交換器設定解析器的黃金範本共用，每次產生設定後自動檢查。</div>
+      <textarea id="gen-gold-rules" rows="5" spellcheck="false" style="width:100%;font-family:Menlo,'Courier New',monospace;font-size:12px" oninput="saveGenGoldRules()"></textarea>
+      <button class="add-btn" data-i18n="genGold.run" onclick="renderGenGoldCheck()">檢查目前產生結果</button>
+      <div id="gen-gold-result" style="margin-top:8px;font-size:12px;line-height:1.6"></div>
+    </details>
   </div>
 
 </div>

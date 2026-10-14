@@ -96,6 +96,11 @@ function importPortMapCsv(file){
     msg.style.color=errors.length?'var(--warn,#d97706)':'var(--text-dim,#64748b)';
   });
 }
+function exportPortMapCsv(){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob(['\uFEFF'+buildPortMapCsv(collectModel().interfaces)],{type:'text/csv'}));
+  a.download=((document.getElementById('hostname')?.value||'').trim().replace(/[^\w.\-]/g,'_')||'switch')+'_port_map.csv';a.click();URL.revokeObjectURL(a.href);
+}
 function downloadPortMapSample(){
   const csv='port,description,mode,vlan,trunk,native,shutdown\nGigabitEthernet1/0/1,PC-101,access,10,,,\nGigabitEthernet1/0/2,AP-2F,trunk,,"10,20,30",99,\nGigabitEthernet1/0/3,spare,access,10,,,yes\n';
   const a=document.createElement('a');
@@ -3112,6 +3117,7 @@ function generate(fromImport=false,quiet=false){
   checkGeneratorEggs(model.sysname);
   renderSessionDiff(_lastGeneratedCfg,cfg);
   _lastGeneratedCfg=cfg;
+  renderGenGoldCheck();
   // 跨工具活動時間軸（2026-09-23 新增）：寫入 `_netAnalyzer_activityHistory` rolling-history
   // （持續累積歷史，無 TTL，比照 config_anonymizer 既有 `_netAnalyzer_anonHistory` 樣式），
   // 供 network_analyzer hub 合併顯示；跑到這裡代表設定檔已成功組裝完成
@@ -3121,6 +3127,33 @@ function generate(fromImport=false,quiet=false){
     _hist.unshift({tool:'switch_config_generator',name:model.sysname||'',vendor:model.vendor||null,ts:Date.now()});
     localStorage.setItem('_netAnalyzer_activityHistory',JSON.stringify(_hist.slice(0,5)));
   }catch(e){/* localStorage 滿了或被封鎖時靜默略過，不影響產生設定主流程 */}
+}
+// 黃金基準線檢查（第二十五輪 LF）：規則存在 localStorage sw_golden_rules，與交換器分析器共用
+function loadGenGoldRules(){
+  const ta=document.getElementById('gen-gold-rules');
+  if(!ta)return;
+  try{ta.value=localStorage.getItem('sw_golden_rules')||'';}catch(e){ta.value='';}
+}
+function saveGenGoldRules(){
+  const ta=document.getElementById('gen-gold-rules');
+  if(!ta)return;
+  try{localStorage.setItem('sw_golden_rules',ta.value||'');}catch(e){}
+}
+function renderGenGoldCheck(){
+  const ta=document.getElementById('gen-gold-rules'),box=document.getElementById('gen-gold-result');
+  if(!ta||!box)return;
+  const cfg=(document.getElementById('output')||{}).value||'';
+  const {rules,errors}=genGoldParseRules(ta.value);
+  if(!rules.length&&!errors.length){box.innerHTML='';return;}
+  if(!cfg){box.innerHTML='<div class="hint">'+esc(tr('genGold.no_output'))+'</div>';return;}
+  const res=genGoldCheckRules(cfg,rules);
+  const failed=rules.map((r,i)=>({r,x:res[i]})).filter(o=>!o.x.ok);
+  let h='<div>'+esc(tr('genGold.summary').replace('{pass}',rules.length-failed.length).replace('{total}',rules.length))+'</div>';
+  if(failed.length){
+    h+='<ul style="margin:4px 0 0 18px;padding:0">'+failed.map(o=>'<li style="color:var(--red)">'+esc(o.r.label)+' — '+esc(tr(o.r.mode==='must'?'genGold.missing':'genGold.forbidden'))+(o.x.hit?' <code>'+esc(o.x.hit)+'</code>':'')+'</li>').join('')+'</ul>';
+  }else h+='<div style="color:var(--green)">'+esc(tr('genGold.all_ok'))+'</div>';
+  if(errors.length)h+='<div class="hint">'+esc(tr('genGold.bad_lines'))+' '+errors.map(e=>esc('#'+e.line)).join(', ')+'</div>';
+  box.innerHTML=h;
 }
 // renderSessionDiff()：比對「上一次」與「這一次」產生的設定文字，讓使用者快速看出剛剛調整
 // 表單後實際改動了哪些行；獨立容器（#session-diff-result），不覆蓋既有「上傳兩份設定檔比對」
@@ -4778,6 +4811,7 @@ function generateDocumentationAsJSON(){
 
 // 在產生結果卡片加入批量按鈕
 window.addEventListener('load',function(){
+  loadGenGoldRules();
   const outActions=document.querySelector('.out-actions');
   if(outActions&&!outActions.querySelector('[onclick*="toggleBulkCard"]')){
     const bulkBtn=document.createElement('button');

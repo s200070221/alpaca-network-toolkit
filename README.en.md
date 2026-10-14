@@ -28,9 +28,11 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 `network-analyzer.html`
 
-- Drop config files or logs; the vendor is detected and the matching tool opens. Several files can be dropped at once.
+- Drop config files or logs; the vendor is detected and the matching tool opens. Several files can be dropped at once, including .gz / .zip archives.
 - "Anonymize & Analyze" masks sensitive data first, then sends the result to the analysis tool.
-- Collects each tool's latest analysis results and can download a combined health report.
+- Collects each tool's latest analysis results, shows how the score and issue count changed since the last run, and can download a combined health report.
+- Alpaca achievement badges unlock as you use the tools.
+- Workspace export: save each tool's browser-stored settings to one file and restore them on another computer.
 
 ## 🛡️ Firewall Config Analyzer
 
@@ -46,10 +48,13 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 **Main features**
 - Visualizes rules, routes, NAT, VPN and address objects
-- IP/port lookup: which rule allows or blocks a given connection (destination NAT is applied when querying a public address)
+- IP/port lookup: which rule allows or blocks a given connection (destination NAT is applied when querying a public address); batch lookup checks many connections at once, also with destination NAT
+- Rule change simulation: try disabling, deleting, changing the action of or moving rules, then compare lookup results and shadowed rules
 - Shadowed-rule analysis, compliance audit (including IPv6 protection gaps) and health score
 - Old-vs-new config comparison (including HA primary/secondary), conversion between config formats
 - Rule hit-count import (FortiGate, Cisco ASA / FTD, Palo Alto, Juniper SRX) to find rules never hit or not hit for a long time
+- Expired or soon-to-expire temporary rules, and duplicate objects (same value, different name)
+- Annual rule review sheet: download it, fill in the review decision and import it back into the rule change simulation; for FortiGate, the matching delete and disable commands can be generated
 - WiFi analysis: SSID encryption, PMF, hidden SSIDs, captive portal, client isolation and security grade (FortiGate, MikroTik, OpenWrt, pfSense and wireless LAN controllers)
 
 ![Firewall Config Analyzer: audit](docs/images/03-firewall-audit-en.png)
@@ -69,6 +74,8 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - Visualizes ports, VLANs, routing and stack topology
 - Security audit with a health score (including baseline management checks: NTP, syslog, centralized authentication, login banner, plain HTTP, SSH v1, idle timeout), config comparison
 - Cabling sheet and endpoint lookup (paste MAC / ARP tables to find which port a device is on)
+- Export a port map CSV in the generator's format, edit it in the generator and regenerate the config
+- Golden template: your own "must exist / must not exist" config rules, checked across several devices
 
 ## 🛠️ Switch Config Generator
 
@@ -84,6 +91,8 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - Generate configs from a form: VLANs, interfaces, IPv6, secondary IPs, OSPF / OSPFv3, BGP, VRRP, ACL, QoS, stacking and more
 - CSV batch generation for many devices, template library
 - Import an existing config into the form (or receive it directly from the Switch Config Parser)
+- Port map CSV import and export: edit port descriptions and VLANs in a spreadsheet and apply them in one go
+- Golden baseline check: after generating, check the output against the golden template rules shared with the Switch Config Parser
 
 ## 🔒 Config Anonymizer
 
@@ -91,7 +100,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 ![Config Anonymizer: side-by-side comparison](docs/images/06-anonymizer-en.png)
 
-- Supports 36 firewall / switch / cloud config formats
+- Supports 43 firewall / switch / wireless controller / cloud config formats
 - Consistently replaces IPs, hostnames, user names, passwords, keys, SNMP communities, MAC addresses and more; IPv4 and IPv6 supported
 - Optional subnet preservation: addresses in the same subnet map to the same fake subnet, so lookups and routing results stay the same after anonymization
 - Checks that the config structure is unchanged after anonymization
@@ -115,6 +124,10 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 **Main features**
 - Sorts by severity and flags likely problems: frequency anomalies, scans, authentication failures, Kerberoasting, lateral movement, interface problems, MAC flapping, multi-stage attack chains and more, tagged with MITRE ATT&CK IDs
 - Local threat-intel, file-hash and ASN list matching (no network access; imports OTX, URLhaus, MISP, ThreatQ, STIX 2 and MalwareBazaar exports directly)
+- Upload .gz / .zip archives directly; each file inside an archive is treated as a separate source
+- Privileged activity outside working hours (custom working hours, time zone and holidays); after loading a previous-period log, flags accounts active at hours they never used before
+- Actor view: events, 24-hour activity, top peers and address ownership for one account or address
+- Previous-period comparison: new, resolved and ongoing issues with count changes
 - Anonymization of sensitive fields, CSV and report export
 - Send an event to the Firewall Analyzer to find the matching rule; send an interface problem to the Switch Config Parser to view that port
 

@@ -1837,7 +1837,9 @@
     const vdoms = [...new Set([...pols, ...(parsed.addresses || []), ...(parsed.services || [])].map(x => x._vdom || ''))];
     // 只有真正的多 VDOM 設定才包 config vdom（單一 VDOM 的 FortiGate 沒有此指令；parser 對單一 VDOM 也會把 _vdom 設為 root）
     const multi = !!(parsed.deviceInfo && parsed.deviceInfo.isMultiVdom);
-    const counts = { disabled: 0, shadowed: 0, addresses: 0, services: 0 };
+    const counts = { disabled: 0, shadowed: 0, addresses: 0, services: 0, review: 0, reviewDisable: 0 };
+    // 清查表回填（LA）：o.review = {delete:Set(索引), disable:Set(索引)}，索引為 parsed.policies 的位置
+    const rv = o.review || null;
     const un = o.unused ? analyzeUnusedObjects(parsed) : { unusedAddrs: [], unusedSvcs: [] };
     const body = [];
     for (const vd of vdoms.sort()) {
@@ -1848,6 +1850,15 @@
       if (o.disabled) vp.filter(p => _isDisabledStatus(p)).forEach(p => { delPol.set(p.id, 'disabled'); });
       if (o.shadowed) analyzeRuleShadowing(vp, parsed.addresses).forEach(r => { if (!delPol.has(r.shadowedId)) delPol.set(r.shadowedId, 'shadowed'); });
       const v4 = [], v6 = [];
+      if (rv) pols.forEach((p, i) => {
+        if ((p._vdom || '') !== vd) return;
+        if (rv.delete && rv.delete.has(i) && !delPol.has(p.id)) delPol.set(p.id, 'review');
+        else if (rv.disable && rv.disable.has(i) && !delPol.has(p.id) && !_isDisabledStatus(p)) {
+          counts.reviewDisable++;
+          const s = String(p.id);
+          (s.startsWith('v6/') ? v6 : v4).push('edit ' + s.replace(/^v6\//, ''), '    set status disable', 'next');
+        }
+      });
       delPol.forEach((why, id) => {
         counts[why]++;
         const s = String(id);
@@ -1867,7 +1878,7 @@
       else body.push(...blk);
     }
     if (multi && body.length) { body.unshift('config vdom'); body.push('end'); }
-    const total = counts.disabled + counts.shadowed + counts.addresses + counts.services;
+    const total = counts.disabled + counts.shadowed + counts.addresses + counts.services + counts.review + counts.reviewDisable;
     const head = String(tr('cleanup.script_header')).split('\n').map(l => '# ' + l);
     return { text: total ? [...head, '', ...body, ''].join('\n') : '', counts, total };
   }
@@ -2330,6 +2341,57 @@
     lines.push('| ' + head.map(cell).join(' | ') + ' |', '|' + head.map(() => '---').join('|') + '|');
     rows.forEach(r => lines.push('| ' + _recertCells(r, mv).map(cell).join(' | ') + ' |'));
     return lines.join('\n') + '\n';
+  }
+
+  // ── 清查表回填（2026-10-14，第二十五輪 LA）：讀回 buildRecertCsv() 匯出、已填「審查結果」的檔案 ──
+  // 第一欄為 VDOM 時第二欄是 ID；審查結果固定在倒數第三欄（之後是審查人、備註）。審查結果含刪除字樣→delete、
+  // 含停用字樣→disable，其餘（保留、修改、空白）略過。以 VDOM＋ID 對到 policies 索引（與規則變更模擬相同的指定方式）；
+  // 匯出時公式字元前加的單引號會先去掉。儲存格內可含換行（備註），故整段解析不逐行切
+  function _parseCsvRows(text) {
+    const rows = []; let row = [], cur = '', q = false;
+    const t = String(text || '').replace(/^﻿/, '');
+    for (let i = 0; i < t.length; i++) {
+      const c = t[i];
+      if (q) {
+        if (c === '"' && t[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') q = false;
+        else cur += c;
+      } else if (c === '"') q = true;
+      else if (c === ',') { row.push(cur); cur = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && t[i + 1] === '\n') i++;
+        row.push(cur); rows.push(row); row = []; cur = '';
+      } else cur += c;
+    }
+    if (cur || row.length) { row.push(cur); rows.push(row); }
+    return rows.filter(r => r.some(x => String(x).trim()));
+  }
+  const RECERT_DELETE_RE = /刪除|删除|削除|移除|delete|remove/i;
+  const RECERT_DISABLE_RE = /停用|無効|disable|deactivate/i;
+  function parseRecertDecisions(text, parsed) {
+    const out = { changes: [], unknown: [], counts: { delete: 0, disable: 0 }, error: '' };
+    const rows = _parseCsvRows(text);
+    if (rows.length < 2) { out.error = 'empty'; return out; }
+    const head = rows[0].map(h => String(h).trim());
+    const hasVdom = /^vdom$/i.test(head[0]);
+    const idCol = hasVdom ? 1 : 0, decCol = head.length - 3;
+    if (head[idCol] !== 'ID' || head.length < 14) { out.error = 'format'; return out; }
+    const pols = (parsed && parsed.policies) || [];
+    const clean = v => String(v == null ? '' : v).trim().replace(/^'/, '');
+    const seen = new Set();
+    rows.slice(1).forEach(r => {
+      const dec = clean(r[decCol]);
+      const op = RECERT_DELETE_RE.test(dec) ? 'delete' : (RECERT_DISABLE_RE.test(dec) ? 'disable' : '');
+      if (!op) return;
+      const id = clean(r[idCol]), vd = hasVdom ? clean(r[0]) : '';
+      const idx = pols.findIndex(p => !p.platformRule && String(p.id) === id && (!hasVdom || (p._vdom || '') === vd));
+      if (idx < 0) { out.unknown.push((vd ? vd + '/' : '') + id); return; }
+      if (seen.has(idx)) return;
+      seen.add(idx);
+      out.changes.push({ op, idx });
+      out.counts[op]++;
+    });
+    return out;
   }
 
   function analyzeRuleHitCounts(parsed, hc, opts) {

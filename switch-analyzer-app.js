@@ -353,6 +353,9 @@ function _pushToolSummary(entry){
     let a=[];
     try{a=JSON.parse(localStorage.getItem('_netAnalyzer_summaries')||'[]');}catch(e){a=[];}
     if(!Array.isArray(a))a=[];
+    // 分數趨勢（第二十五輪 LH）：覆蓋前把同一設備上一筆的分數放進 history，最多 5 筆
+    const prev=a.find(x=>x&&x.tool===entry.tool&&x.name===entry.name);
+    entry.history=prev?[{ts:prev.ts,score:prev.score,grade:prev.grade,n:prev.n,crit:prev.crit}].concat(Array.isArray(prev.history)?prev.history:[]).slice(0,5):[];
     a=a.filter(x=>!(x&&x.tool===entry.tool&&x.name===entry.name));
     a.unshift(entry);
     localStorage.setItem('_netAnalyzer_summaries',JSON.stringify(a.slice(0,20)));
@@ -1336,6 +1339,7 @@ function renderPorts(){
   const toggleHtml=`<div style="display:flex;gap:6px;margin-bottom:10px;padding:12px 18px 0">
     <button onclick="portView='table';navGo('ports')" style="${btnStyle(portView==='table')}">${tr('port.view_table')}</button>
     <button onclick="portView='heatmap';navGo('ports')" style="${btnStyle(portView==='heatmap')}">${tr('port.view_heatmap')}</button>
+    <button onclick="exportPortMapCSV()" title="${esc(tr('port.portmap_tip'))}" style="${btnStyle(false)};margin-left:auto">⬇ ${esc(tr('port.portmap_btn'))}</button>
   </div>`;
   if(portView==='heatmap') return toggleHtml+renderPortHeatmap(ph);
   const rows=ph.map(i=>({
@@ -1659,6 +1663,8 @@ function dlTxt(t,fn){const b=new Blob([t],{type:'text/plain;charset=utf-8;'});co
 function dlHtml(t,fn){const b=new Blob([t],{type:'text/html;charset=utf-8;'});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);}
 function exportVLANsCSV(){if(!parsed){alert(tr('msg.no_config'));return;}dlCSV(parsed.vlans.map(v=>[v.id,v.name,v.ipSubnets.map(s=>s.cidr).join(';'),v.ipSubnets.length]),['VLAN_ID',tr('col.vlan_name'),'ip-subnet-vlan',tr('col.subnet_count')],`${hn()}_vlans.csv`);}
 function exportPortsCSV(){if(!parsed){alert(tr('msg.no_config'));return;}const ph=parsed.interfaces.filter(i=>i.type!=='null');dlCSV(ph.map(i=>[i.name,i.member,i.type,i.desc,i.mode,i.vlans,i.nativeVlan,i.ip,i.ip6||'',(i.secondaryIps&&i.secondaryIps.length)?i.secondaryIps.join(';'):'',i.vrf,i.shutdown?tr('rt.auto_sum_off'):tr('rt.auto_sum_on'),i.hybrid?[i.hybrid.pvid,...i.hybrid.untagged,...i.hybrid.tagged].join(';'):'',i.hybrid?.hasIPSub?tr('val.yes'):'',i.hybrid?.hasQinQ?tr('val.yes'):'']),[tr('col.iface'),tr('col.member'),tr('col.type'),tr('col.desc'),tr('col.mode'),'VLAN','Native','IP',tr('col.ipv6_addr'),tr('col.secondaryIp'),'VRF',tr('col.status'),tr('col.hybrid_info'),'IPsub','QinQ'],`${hn()}_ports.csv`);}
+// 配線表（產生器格式）：欄位與交換器設定產生器的「匯入配線表 CSV」相同，可直接匯入（第二十五輪 LE）
+function exportPortMapCSV(){if(!parsed){alert(tr('msg.no_config'));return;}const pm=epPortMapRows(parsed);dlCSV(pm.rows,pm.headers,`${hn()}_port_map.csv`);}
 function exportRoutesCSV(){if(!parsed){alert(tr('msg.no_config'));return;}dlCSV(parsed.routes.map(r=>[r.dst,r.gw,r.vrf||'']),[tr('col.dst'),tr('col.gw'),'VRF'],`${hn()}_routes.csv`);}
 // 修正既有 bug（同 renderLACP()）：ProCurve/ArubaOS-Switch 的 members 是逗號分隔字串非陣列
 function _lacpMembersArr(x){return Array.isArray(x.members)?x.members:String(x.members||'').split(',').map(s=>s.trim()).filter(Boolean);}

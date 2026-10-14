@@ -322,3 +322,33 @@ th.chk,td.chk{width:5%;text-align:center}th.note,td.note{width:16%}
 ${body}
 </tbody></table></body></html>`;
 }
+
+// ── 配線表 CSV（產生器格式，2026-10-14，第二十五輪 LE）────────────────────────
+// 輸出與 switch_config_generator 的 parsePortMapCsv() 相同欄位，可直接匯入產生器的介面表。
+// 只列實體埠與聚合介面（SVI、loopback、null、堆疊埠、通道略過）；VLAN 清單轉成空白分隔、「A to B」轉為 A-B，
+// 值為 all 等非數字清單時留空（產生器只接受 1-4094 的清單）
+const EP_PORTMAP_HEADERS = ['port', 'description', 'mode', 'vlan', 'trunk', 'native', 'untagged', 'tagged', 'pvid', 'shutdown'];
+const EP_PORTMAP_SKIP_TYPES = new Set(['svi', 'loopback', 'null', 'stack', 'tunnel', 'vlan']);
+function epPortMapVlans(v) {
+  const t = String(v == null ? '' : v).trim().replace(/\s+to\s+/gi, '-').replace(/[,;]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return /^\d+(?:-\d+)?(?: \d+(?:-\d+)?)*$/.test(t) ? t : '';
+}
+function epPortMapRows(parsed) {
+  const rows = [];
+  ((parsed && parsed.interfaces) || []).forEach(i => {
+    if (!i || !i.name || EP_PORTMAP_SKIP_TYPES.has(i.type)) return;
+    const hy = i.hybrid && (i.hybrid.untagged || i.hybrid.tagged) ? i.hybrid : null;
+    const mode = hy ? 'hybrid' : (i.mode === 'trunk' || i.mode === 'access' ? i.mode : '');
+    const vl = i.vlans != null && i.vlans !== '' ? i.vlans : (i.vlan || '');
+    rows.push([i.name, i.desc || '', mode,
+      mode === 'access' ? epPortMapVlans(vl) : '',
+      mode === 'trunk' ? epPortMapVlans(vl) : '',
+      mode === 'trunk' ? epPortMapVlans(i.nativeVlan) : '',
+      hy ? epPortMapVlans((hy.untagged || []).join(' ')) : '',
+      hy ? epPortMapVlans((hy.tagged || []).join(' ')) : '',
+      hy ? epPortMapVlans(hy.pvid) : '',
+      i.shutdown ? 'yes' : '']);
+  });
+  return { headers: EP_PORTMAP_HEADERS.slice(), rows };
+}
+
