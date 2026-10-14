@@ -654,7 +654,7 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED, opts) {
     const single = pols.length === 1 && results.every(x => x.policy) ? pols[0] : null;
     const check = r.expect ? (r.expect === 'accept' ? acceptCount === results.length : acceptCount === 0) : null;
     return { ...r, action, policyId: single ? single.id : pols.map(p => p.id).join(';'), policyName: single ? (single.name || '') : '',
-      hasFqdn: results.some(x => x.hasFqdn), combos: results.length, acceptCount, check, nat };
+      hasFqdn: results.some(x => x.hasFqdn), combos: results.length, acceptCount, check, nat, policyRef: single };
   });
 }
 // 規則變更模擬（2026-10-06，第十二輪 MD）：在 parsed 的副本上套用變更，不動原物件。

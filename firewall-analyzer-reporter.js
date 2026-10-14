@@ -310,6 +310,16 @@ const Reporter = (() => {
     return toCSV(rows, headers);
   }
 
+  // 依實際流量收斂建議（第二十六輪 SA）：每個觀察值一列，field 為 src／dst／service；broad 為該欄位是否寬鬆
+  function exportTightenCSV(items) {
+    if (!items || !items.length) return null;
+    const headers = ['vdom','policy_id','policy_name','field','broad','value','count'];
+    const rows = [];
+    items.forEach(it => [['src','src'],['dst','dst'],['svc','service']].forEach(([k, f]) =>
+      it.observed[k].forEach(x => rows.push([it.policy._vdom || '', it.policy.id, it.policy.name || '', f, it.broad[k] ? 'yes' : '', x.v, x.n]))));
+    return toCSV(rows, headers);
+  }
+
   // 批次查詢跨版本比對（2026-09-29 新增，FE）：輸出全部列（含未改變者），change 欄為 action／policy／空白
   function exportBatchDiffCSV(results) {
     if (!results || !results.length) return null;
@@ -1029,7 +1039,7 @@ ${(parsed.schedules&&parsed.schedules.length)?`<div class="section" id="sec-sche
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 500);
   }
 
-  return { toCSV, exportCSV, exportZoneMatrixCSV, exportQueryTraceCSV, exportBatchQueryCSV, exportBatchDiffCSV, exportDiffCSV, exportComplianceDiffCSV, exportJSON, exportHTML, download };
+  return { toCSV, exportCSV, exportZoneMatrixCSV, exportQueryTraceCSV, exportBatchQueryCSV, exportTightenCSV, exportBatchDiffCSV, exportDiffCSV, exportComplianceDiffCSV, exportJSON, exportHTML, download };
 })();
 
 

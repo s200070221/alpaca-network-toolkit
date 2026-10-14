@@ -600,6 +600,7 @@ function buildQuerySectionHtml(qvdoms, isFortiGate, qintfs, wiRules){
             style="padding:7px 20px;border-radius:6px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600;font-size:13px">▶ ${tr('batch.run')}</button>
         </div>
         <div id="batch-result" style="margin-top:14px"></div>
+        <div id="tighten-result"></div>
       </div>
       ${buildWhatIfHtml(wiRules||[])}
       ${isFortiGate ? buildAllowRequestHtml(qvdoms) : ''}
@@ -695,6 +696,29 @@ function buildBatchQueryResultHtml(results, errors){
   });
   return h+'</tbody></table></div>';
 }
+
+// 依實際流量收斂建議（2026-10-14，第二十六輪 SA）：items 為 analyzeObservedTraffic() 結果
+function buildObservedTrafficHtml(items, isFortiGate){
+  if(!items||!items.length) return '';
+  const MAX=10;
+  const cell=(broad,list)=>{
+    if(!broad) return `<span style="color:var(--text-dim)">${esc(tr('tighten.not_broad'))}</span>`;
+    return list.slice(0,MAX).map(x=>`<span class="mono">${esc(x.v)}</span> <span style="color:var(--text-dim)">×${x.n}</span>`).join('<br>')
+      +(list.length>MAX?`<br><span style="color:var(--text-dim)">${esc(tr('tighten.more').replace('{n}',list.length-MAX))}</span>`:'');
+  };
+  let h=`<div id="tighten-card" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:10px 12px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:4px">🎯 ${esc(tr('tighten.title'))} (${items.length})</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('tighten.hint'))}</div>
+    <button type="button" class="btn btn-ghost btn-sm" onclick="doExport('csv-tighten')">⬇ ${esc(tr('tighten.export'))}</button>`
+    +(isFortiGate?` <button type="button" class="btn btn-ghost btn-sm" onclick="window._fwTightenScript()">⬇ ${esc(tr('tighten.script'))}</button>`:'')
+    +`<div class="tbl-wrap" style="margin-top:8px"><table class="data-tbl"><thead><tr><th>${esc(tr('batch.col_policy'))}</th><th>${esc(tr('tighten.col_rows'))}</th><th>${esc(tr('query.src_ip'))}</th><th>${esc(tr('query.dst_ip'))}</th><th>${esc(tr('tighten.col_svc'))}</th></tr></thead><tbody>`;
+  items.forEach(it=>{
+    const p=it.policy;
+    h+=`<tr><td class="mono">${esc(String(p.id))}${p.name?' '+esc(p.name):''}${p._vdom?` <span style="color:var(--text-dim)">[${esc(p._vdom)}]</span>`:''}</td><td class="mono">${it.total}</td><td>${cell(it.broad.src,it.observed.src)}</td><td>${cell(it.broad.dst,it.observed.dst)}</td><td>${cell(it.broad.svc,it.observed.svc)}</td></tr>`;
+  });
+  return h+'</tbody></table></div></div>';
+}
+window.buildObservedTrafficHtml=buildObservedTrafficHtml;
 
 // WiFi Analysis Renderer（原封不動從 app.js 搬移，本來就是零 PARSED/ST/document. 依賴的
 // 純函式，只需要 tr/esc/pill 即可安全獨立成檔案）

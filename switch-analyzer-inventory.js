@@ -212,6 +212,70 @@ function invConsistency(entries) {
   return res;
 }
 
+// 多設備 VLAN 對照表（2026-10-14，第二十六輪 SC）：entries 同 invConsistency()。
+// 列的範圍：任一台宣告的 VLAN，加上 access／hybrid untagged／PVID 用到的 VLAN；trunk 允許清單只計入這些 VLAN
+// （避免 1-4094 這類範圍展開成上千列），trunk 為 all 時計入該設備宣告的全部 VLAN。
+// 每格 {declared, name, svi, access, trunk}（access／trunk 為埠數）；旗標 single（多台中只有一台宣告）、
+// nameMismatch（名稱不一致，空名稱不比、不分大小寫）、undeclared（有埠使用但該設備沒宣告的主機清單）
+function invVlanSet(v) {
+  const out = new Set();
+  String(v == null ? '' : v).replace(/\s*(?:\bto\b|-)\s*/gi, '-').split(/[\s,;]+/).filter(Boolean).forEach(t => {
+    const m = t.match(/^(\d+)(?:-(\d+))?$/); if (!m) return;
+    for (let k = +m[1]; k <= +(m[2] || m[1]) && k - m[1] < 4095; k++) if (k >= 1 && k <= 4094) out.add(k);
+  });
+  return out;
+}
+function invVlanMatrix(entries) {
+  const devs = entries.map(e => {
+    const p = e.parsed || {};
+    const decl = new Map();
+    (p.vlans || []).forEach(v => { const id = +v.id; if (id >= 1 && id <= 4094) decl.set(id, v); });
+    const svi = new Set();
+    decl.forEach((v, id) => { if (v.ip || (v.ipSubnets || []).length) svi.add(id); });
+    const access = new Map(), trunkLists = [];
+    let trunkAll = 0;
+    const bump = (m, id) => m.set(id, (m.get(id) || 0) + 1);
+    (p.interfaces || []).forEach(i => {
+      if (i.type === 'svi') { const m = String(i.name || '').match(/(\d+)\s*$/); if (m && (i.ip || (i.secondaryIps || []).length)) svi.add(+m[1]); return; }
+      if (i.type === 'loopback' || i.type === 'null') return;
+      if (i.mode === 'access') { const id = [...invVlanSet(i.vlans != null && i.vlans !== '' ? i.vlans : i.vlan)][0]; if (id) bump(access, id); }
+      else if (i.mode === 'trunk') {
+        const raw = String(i.vlans != null && i.vlans !== '' ? i.vlans : (i.vlan || ''));
+        if (/\ball\b/i.test(raw) || !raw.trim()) trunkAll++; else trunkLists.push(invVlanSet(raw));
+      } else if (i.mode === 'hybrid' && i.hybrid) {
+        const h = i.hybrid;
+        const u = invVlanSet((h.untagged || []).join(',')), t = invVlanSet((h.tagged || []).join(','));
+        if (h.pvid) u.add(+h.pvid);
+        u.forEach(id => bump(access, id));
+        trunkLists.push(t);
+      }
+    });
+    return { host: e.hostname, decl, svi, access, trunkLists, trunkAll };
+  });
+  const ids = new Set();
+  devs.forEach(d => { d.decl.forEach((v, id) => ids.add(id)); d.access.forEach((n, id) => ids.add(id)); });
+  const rows = [...ids].sort((a, b) => a - b).map(id => {
+    const cells = devs.map(d => {
+      const declared = d.decl.has(id);
+      const trunk = d.trunkLists.filter(s => s.has(id)).length + (declared ? d.trunkAll : 0);
+      return { host: d.host, declared, name: declared ? String(d.decl.get(id).name || '').trim() : '', svi: d.svi.has(id), access: d.access.get(id) || 0, trunk };
+    });
+    const names = new Set(cells.map(c => c.name.toLowerCase()).filter(Boolean));
+    const nDecl = cells.filter(c => c.declared).length;
+    return { id, cells, single: devs.length > 1 && nDecl === 1, nameMismatch: names.size > 1,
+      undeclared: cells.filter(c => !c.declared && (c.access || c.trunk)).map(c => c.host) };
+  });
+  return { hosts: devs.map(d => d.host), rows };
+}
+// CSV：每列一個 VLAN，每台設備一欄（宣告名稱／SVI／access 與 trunk 埠數），最後是旗標
+function invVlanMatrixRows(m) {
+  const headers = ['vlan', ...m.hosts, 'flags'];
+  const rows = m.rows.map(r => [r.id, ...r.cells.map(c => !c.declared && !c.access && !c.trunk ? '' :
+    [c.declared ? (c.name || 'declared') : 'not declared', c.svi ? 'SVI' : '', c.access ? 'access ' + c.access : '', c.trunk ? 'trunk ' + c.trunk : ''].filter(Boolean).join(' / ')),
+    [r.single ? 'single' : '', r.nameMismatch ? 'name-mismatch' : '', r.undeclared.length ? 'undeclared:' + r.undeclared.join(' ') : ''].filter(Boolean).join('; ')]);
+  return { headers, rows };
+}
+
 // 同型號韌體版本不一致（2026-09-30 新增，第八輪 XE）：同廠牌＋同型號卻有兩種以上版本，通常代表有設備漏升級。
 // 型號／版本沿用清冊欄位的取法（invModel()／sys.version），版本依設定檔原文比對不做正規化；
 // 型號或版本讀不出來的設備不列入。回傳 [{vendor, model, versions:[{version, hosts, majority}]}]，

@@ -1883,6 +1883,104 @@
     return { text: total ? [...head, '', ...body, ''].join('\n') : '', counts, total };
   }
 
+  // ── 依實際流量收斂寬鬆規則（2026-10-14，第二十六輪 SA）──────────────────
+  // results 為 runBatchPolicyQuery() 結果（log 批次反查時每列帶 count）。只看全部組合皆放行且命中單一規則的列；
+  // 規則來源／目的為 all／any／0.0.0.0/0、或服務為 ALL／any 時，依規則彙整實際出現的來源、目的與協定／埠（含筆數）
+  const _TIGHTEN_ANY_ADDR = /^(all|any|any4|any6|0\.0\.0\.0\/0|::\/0)$/i;
+  const _TIGHTEN_ANY_SVC = /^(all|any|ALL_TCP_UDP|application-default)$/i;
+  // anyObj：值為 0.0.0.0/0 或 ::/0 的位址物件名稱（小寫），例如 FortiGate 的 INTERNET 物件
+  function _tightenIsAny(v, re, anyObj) {
+    const parts = String(v == null ? '' : v).split(/[,;]\s*|\s+/).map(x => x.replace(/"/g, '').trim()).filter(Boolean);
+    return !parts.length || parts.some(x => re.test(x) || (anyObj && anyObj.has(x.toLowerCase())));
+  }
+  function _tightenAnyObjects(parsed) {
+    const set = new Set();
+    ((parsed && parsed.addresses) || []).forEach(a => {
+      const v = String(a.subnet || a.value || '').trim();
+      if (a.name && /^(0\.0\.0\.0(\/0| 0\.0\.0\.0)|::\/0)$/.test(v)) set.add(String(a.name).toLowerCase());
+    });
+    return set;
+  }
+  function analyzeObservedTraffic(results, parsed) {
+    const anyObj = _tightenAnyObjects(parsed);
+    const byPol = new Map();
+    (results || []).forEach(r => {
+      const p = r && r.policyRef;
+      if (!p || r.action !== 'accept' || p.action !== 'accept') return;
+      const broad = { src: _tightenIsAny(p.srcAddr, _TIGHTEN_ANY_ADDR, anyObj), dst: _tightenIsAny(p.dstAddr, _TIGHTEN_ANY_ADDR, anyObj), svc: _tightenIsAny(p.service, _TIGHTEN_ANY_SVC) };
+      if (!broad.src && !broad.dst && !broad.svc) return;
+      if (!byPol.has(p)) byPol.set(p, { policy: p, broad, observed: { src: new Map(), dst: new Map(), svc: new Map() }, rows: 0, total: 0 });
+      const it = byPol.get(p), n = Number(r.count) > 0 ? Number(r.count) : 1;
+      const add = (k, v) => { if (v) it.observed[k].set(v, (it.observed[k].get(v) || 0) + n); };
+      add('src', r.src); add('dst', r.dst);
+      const proto = String(r.proto || '').toLowerCase();
+      add('svc', proto && proto !== 'any' ? proto + (r.port ? '/' + r.port : '') : (r.port ? 'any/' + r.port : ''));
+      it.rows++; it.total += n;
+    });
+    const list = m => [...m.entries()].map(([v, n]) => ({ v, n })).sort((a, b) => b.n - a.n || String(a.v).localeCompare(String(b.v)));
+    return [...byPol.values()].map(it => Object.assign(it, { observed: { src: list(it.observed.src), dst: list(it.observed.dst), svc: list(it.observed.svc) } }))
+      .sort((a, b) => b.total - a.total);
+  }
+  // FortiGate 收斂指令草稿：觀察到的位址建成 obs_<規則>_src|dst_N 位址物件、協定／埠建成自訂服務，
+  // 只改寬鬆的欄位；IPv6、沒有埠的 TCP／UDP、超過 TIGHTEN_MAX_VALUES 筆的欄位不改並在註解說明
+  const TIGHTEN_MAX_VALUES = 50;
+  function buildFortiGateTightenScript(parsed, items) {
+    const multi = !!(parsed && parsed.deviceInfo && parsed.deviceInfo.isMultiVdom);
+    const byVd = new Map();
+    let changed = 0;
+    (items || []).forEach(it => {
+      const p = it.policy, id = String(p.id);
+      if (id.startsWith('v6/')) return;
+      const addr = [], svc = [], pol = [], notes = [];
+      const addrField = (k, field) => {
+        if (!it.broad[k]) return;
+        const vals = it.observed[k];
+        if (vals.length > TIGHTEN_MAX_VALUES) { notes.push(`# ${field}: ${vals.length} > ${TIGHTEN_MAX_VALUES}`); return; }
+        const parsedVals = vals.map(({ v }) => {
+          const t = String(v).trim();
+          return { t, m: t.match(/^(\d+\.\d+\.\d+\.\d+)(?:\/(\d{1,2}))?$/), r: t.match(/^(\d+\.\d+\.\d+\.\d+)\s*-\s*(\d+\.\d+\.\d+\.\d+)$/) };
+        });
+        const bad = parsedVals.find(x => !x.m && !x.r);
+        if (bad) { notes.push(`# ${field}: ${bad.t} ?`); return; }
+        const names = [];
+        for (const { m, r } of parsedVals) {
+          const nm = `obs_${id}_${k}_${names.length + 1}`;
+          names.push(_fgQuote(nm));
+          addr.push('edit ' + _fgQuote(nm), ...(r ? ['    set type iprange', '    set start-ip ' + r[1], '    set end-ip ' + r[2]] : ['    set subnet ' + m[1] + '/' + (m[2] || '32')]), 'next');
+        }
+        if (names.length) pol.push(`    set ${field} ${names.join(' ')}`);
+      };
+      addrField('src', 'srcaddr'); addrField('dst', 'dstaddr');
+      if (it.broad.svc) {
+        const vals = it.observed.svc, names = [];
+        let ok = vals.length <= TIGHTEN_MAX_VALUES;
+        const lines = [];
+        if (!ok) notes.push(`# service: ${vals.length} > ${TIGHTEN_MAX_VALUES}`);
+        for (const { v } of ok ? vals : []) {
+          const [proto, port] = String(v).split('/');
+          if ((proto === 'tcp' || proto === 'udp') && /^\d+(-\d+)?$/.test(port || '')) {
+            const nm = `obs_${id}_${proto}_${port}`;
+            names.push(_fgQuote(nm)); lines.push('edit ' + _fgQuote(nm), `    set ${proto}-portrange ${port}`, 'next');
+          } else if (proto === 'icmp') { names.push('"ALL_ICMP"'); }
+          else { ok = false; notes.push(`# service: ${v} ?`); break; }
+        }
+        if (ok && names.length) { svc.push(...lines); pol.push(`    set service ${[...new Set(names)].join(' ')}`); }
+      }
+      if (!pol.length && !notes.length) return;
+      const vd = p._vdom || 'root';
+      if (!byVd.has(vd)) byVd.set(vd, []);
+      const blk = byVd.get(vd);
+      blk.push(`# ${tr('tighten.script_rule').replace('{id}', id).replace('{name}', p.name || '').replace('{n}', it.total)}`, ...notes);
+      if (addr.length) blk.push('config firewall address', ...addr.map(l => '    ' + l), 'end');
+      if (svc.length) blk.push('config firewall service custom', ...svc.map(l => '    ' + l), 'end');
+      if (pol.length) { blk.push('config firewall policy', '    edit ' + id, ...pol.map(l => '    ' + l), '    next', 'end'); changed++; }
+    });
+    const body = [];
+    byVd.forEach((blk, vd) => { if (multi) body.push('config vdom', 'edit ' + vd, ...blk, 'end'); else body.push(...blk); });
+    const head = String(tr('tighten.script_header')).split('\n').map(l => '# ' + l);
+    return { text: body.length ? [...head, '', ...body, ''].join('\n') : '', changed };
+  }
+
   // ── FortiGate 開通指令產生（2026-09-29 新增，第六輪 WI）──────────────────
   // 在既有「IP/Policy 查詢」判定為未放行（明確 deny 或 implicit deny）時，產生新增放行規則的
   // FortiOS CLI：沿用同 VDOM 內已存在的主機位址物件（/32）與單一埠服務物件，沒有才新增；新規則
