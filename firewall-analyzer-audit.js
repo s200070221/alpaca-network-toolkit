@@ -242,7 +242,7 @@
         const tier = (eq(eSrc,lSrc) && eq(eDst,lDst) && eq(eSvc,lSvc)) ? 1 : 2;
         const reason = tier === 1 ? 'audit.reason1_short' : 'audit.reason2_short';
         results.push({ shadowedId: later.id, shadowedName: later.name,
-          shadowingId: earlier.id, shadowingName: earlier.name, tier, reason });
+          shadowingId: earlier.id, shadowingName: earlier.name, tier, reason, vdom: later._vdom || '' });
         break;
       }
     }
@@ -366,17 +366,19 @@
     const usedAddr = new Set(), usedSvc = new Set();
     function addRefs(str, target, vdom) {
       if (!str || str === '-') return;
-      str.split(/[,"\s]+/).forEach(n => { const t = n.trim(); if (t) target.add(vk(vdom, t)); });
+      // 名稱可能含空白（如 "All Branches"）：以逗號切出的完整名稱與空白切開的片段都算引用
+      String(str).split(/\s*,\s*/).forEach(n => { const t = n.replace(/^"|"$/g, '').trim(); if (t) target.add(vk(vdom, t)); });
+      String(str).split(/[,"\s]+/).forEach(n => { const t = n.trim(); if (t) target.add(vk(vdom, t)); });
     }
 
-    // 1. Firewall policies
+    // 1. Firewall policies：位址與服務欄位的引用兩邊都算（EdgeRouter／VyOS 的 port-group 掛在位址欄位）
     for (const p of (parsed.policies || [])) {
-      addRefs(p.srcAddr, usedAddr, p._vdom); addRefs(p.dstAddr, usedAddr, p._vdom); addRefs(p.service, usedSvc, p._vdom);
+      [p.srcAddr, p.dstAddr, p.service].forEach(f => { addRefs(f, usedAddr, p._vdom); addRefs(f, usedSvc, p._vdom); });
     }
-    // 2. NAT：VIP/ippool 名稱、vipgrp members
+    // 2. NAT：VIP/ippool 名稱與 NAT 各欄位引用的物件（ASA 的 origSrc／transSrc、MikroTik 的位址清單等）
     for (const n of (parsed.nat || [])) {
-      usedAddr.add(vk(n._vdom, n.name)); // VIP/ippool 本身名稱（policy dstAddr 會直接引用）
-      if (n.members) addRefs(n.members, usedAddr, n._vdom); // vipgrp members
+      if (n.name) usedAddr.add(vk(n._vdom, n.name)); // VIP/ippool 本身名稱（policy dstAddr 會直接引用）
+      Object.keys(n).forEach(k => { if (k !== 'name' && k !== 'comment' && typeof n[k] === 'string') { addRefs(n[k], usedAddr, n._vdom); addRefs(n[k], usedSvc, n._vdom); } });
     }
     // 3. SSL-VPN source-address / tunnel-ip-pools；SSL Portal ip-pools / split-tunneling-routing-address
     for (const v of (parsed.vpn || [])) {
@@ -395,18 +397,30 @@
       if (a.iface && a.iface !== '-') usedAddr.add(vk(a._vdom, a.name));
     }
 
-    // 展開 address/service groups（迭代直到穩定）
+    // 範圍：物件的 _vdom 與規則的 _vdom 屬同一套命名（FortiGate VDOM、Palo Alto vsys）時依範圍比對；
+    // 物件範圍不在任何規則範圍內（Juniper 全域／區域通訊錄、Palo Alto shared、pfSense global 等共用物件）時只比名稱
+    const polScopes = new Set((parsed.policies || []).map(p => p._vdom || ''));
+    const sharedScope = o => !polScopes.has(o._vdom || '') && (!o._vdom || /^(?:global|shared|default|predefined)$/i.test(o._vdom) || /juniper/i.test(parsed.vendor || ''));
+    const isUsed = (set, o) => {
+      if (set.has(vk(o._vdom, o.name))) return true;
+      if (!sharedScope(o)) return false;
+      return [...set].some(k => k === o.name || k.endsWith('/' + o.name));
+    };
+    // 群組成員：ASA 為「object X」「object-group X」片段，去掉前綴後才是物件名稱
+    const memberNames = m => String(m || '').split(/,\s*/).map(x => x.trim().replace(/^(?:object|object-group|group-object)\s+/, '')).filter(x => x && x !== '-');
+
+    // 展開 address/service groups（迭代直到穩定）；群組的成員也記到群組所在範圍
     let changed = true;
     while (changed) {
       changed = false;
       for (const a of (parsed.addresses || [])) {
-        if (a.members && usedAddr.has(vk(a._vdom, a.name))) {
-          a.members.split(/,\s*/).forEach(m => { const t = m.trim(); if (t && !usedAddr.has(vk(a._vdom, t))) { usedAddr.add(vk(a._vdom, t)); changed = true; } });
+        if (a.members && isUsed(usedAddr, a)) {
+          memberNames(a.members).forEach(t => { if (!usedAddr.has(vk(a._vdom, t))) { usedAddr.add(vk(a._vdom, t)); changed = true; } });
         }
       }
       for (const s of (parsed.services || [])) {
-        if (s.members && usedSvc.has(vk(s._vdom, s.name))) {
-          s.members.split(/,\s*/).forEach(m => { const t = m.trim(); if (t && !usedSvc.has(vk(s._vdom, t))) { usedSvc.add(vk(s._vdom, t)); changed = true; } });
+        if (s.members && isUsed(usedSvc, s)) {
+          memberNames(s.members).forEach(t => { if (!usedSvc.has(vk(s._vdom, t))) { usedSvc.add(vk(s._vdom, t)); changed = true; } });
         }
       }
     }
@@ -414,13 +428,16 @@
     const unusedAddrs = (parsed.addresses || []).filter(a =>
       !BUILTINS.has(a.name) &&
       !AUTO_TYPES.has(a.type) &&
-      !usedAddr.has(vk(a._vdom, a.name))
+      !isUsed(usedAddr, a)
     );
     const unusedSvcs = (parsed.services || []).filter(s =>
       !BUILTINS.has(s.name) &&
-      !usedSvc.has(vk(s._vdom, s.name))
+      !isUsed(usedSvc, s)
     );
-    return { unusedAddrs, unusedSvcs };
+    // 只被（同樣未使用的）群組包含的物件：標出包含它的群組名稱，畫面說明原因；清理指令會先刪群組再刪成員
+    const groupsOf = (list, o) => list.filter(g => g.members && (g._vdom || '') === (o._vdom || '') && memberNames(g.members).includes(o.name)).map(g => g.name);
+    const tag = (list, src) => list.map(o => { const g = groupsOf(src, o); return g.length ? Object.assign({}, o, { inGroups: g }) : o; });
+    return { unusedAddrs: tag(unusedAddrs, parsed.addresses || []), unusedSvcs: tag(unusedSvcs, parsed.services || []) };
   }
 
   // ── NAT 規則健檢（2026-09-01 新增，功能5）─────────────────────
@@ -662,7 +679,7 @@
       const first = group[0];
       results.push({
         srcAddr: first.srcAddr, dstAddr: first.dstAddr, service: first.service, action: first.action,
-        ids: group.map(p => p.id), count: group.length,
+        ids: group.map(p => p.id), count: group.length, vdom: first._vdom || '',
       });
     });
     return results;
@@ -1133,6 +1150,8 @@
     return h;
   }
 
+  // 只被未使用群組包含的物件：說明是哪些群組（群組本身也列在未使用清單）
+  const _inGroupNote = o => o.inGroups && o.inGroups.length ? `<div style="font-size:11px;color:var(--text-dim);font-family:inherit">${esc(tr('audit.unused_in_group').replace('{groups}', o.inGroups.join(', ')))}</div>` : '';
   function buildUnusedHtml({ unusedAddrs, unusedSvcs }) {
     let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--yellow);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + tip('tip.unused_obj', tr('audit.unused_title')) + '</div>';
     h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;padding:6px 10px;background:var(--bg2);border-radius:4px;border-left:3px solid var(--yellow)">' + esc(tr('audit.unused_warn')) + '</div>';
@@ -1141,7 +1160,7 @@
     } else {
       h += `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${esc(tr('audit.unused_addr_header'))}（${unusedAddrs.length}）</div><div style="overflow-x:auto;margin-bottom:14px"><table class="data-tbl"><thead><tr><th>${tr('audit.col_name')}</th><th>${tr('audit.col_category')}</th><th>${tr('audit.col_type')}</th><th>${tr('audit.col_subnet')}</th></tr></thead><tbody>`;
       unusedAddrs.forEach(a => {
-        h += `<tr><td class="mono" style="color:var(--accent)">${esc(a.name)}</td><td>${pill(a.category||'address','p-info')}</td><td style="color:var(--text-dim)">${esc(a.type||'-')}</td><td class="mono" style="color:var(--text-dim)">${esc(a.subnet||a.fqdn||'-')}</td></tr>`;
+        h += `<tr><td class="mono" style="color:var(--accent)">${esc(a.name)}${_inGroupNote(a)}</td><td>${pill(a.category||'address','p-info')}</td><td style="color:var(--text-dim)">${esc(a.type||'-')}</td><td class="mono" style="color:var(--text-dim)">${esc(a.subnet||a.fqdn||'-')}</td></tr>`;
       });
       h += '</tbody></table></div>';
     }
@@ -1150,7 +1169,7 @@
     } else {
       h += `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${esc(tr('audit.unused_svc_header'))}（${unusedSvcs.length}）</div><div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${tr('audit.col_name')}</th><th>${tr('audit.col_category')}</th><th>${tr('audit.col_proto')}</th><th>${tr('audit.col_port')}</th></tr></thead><tbody>`;
       unusedSvcs.forEach(s => {
-        h += `<tr><td class="mono" style="color:var(--accent)">${esc(s.name)}</td><td>${pill(s.category||'service','p-info')}</td><td style="color:var(--text-dim)">${esc(s.proto||'-')}</td><td class="mono" style="color:var(--text-dim)">${esc(s.tcpPorts||s.udpPorts||'-')}</td></tr>`;
+        h += `<tr><td class="mono" style="color:var(--accent)">${esc(s.name)}${_inGroupNote(s)}</td><td>${pill(s.category||'service','p-info')}</td><td style="color:var(--text-dim)">${esc(s.proto||'-')}</td><td class="mono" style="color:var(--text-dim)">${esc(s.tcpPorts||s.udpPorts||'-')}</td></tr>`;
       });
       h += '</tbody></table></div>';
     }
@@ -1890,7 +1909,7 @@
   const _TIGHTEN_ANY_SVC = /^(all|any|ALL_TCP_UDP|application-default)$/i;
   // anyObj：值為 0.0.0.0/0 或 ::/0 的位址物件名稱（小寫），例如 FortiGate 的 INTERNET 物件
   function _tightenIsAny(v, re, anyObj) {
-    const parts = String(v == null ? '' : v).split(/[,;]\s*|\s+/).map(x => x.replace(/"/g, '').trim()).filter(Boolean);
+    const parts = String(v == null ? '' : v).split(/[,;]\s*/).map(x => x.replace(/"/g, '').trim()).filter(Boolean);
     return !parts.length || parts.some(x => re.test(x) || (anyObj && anyObj.has(x.toLowerCase())));
   }
   function _tightenAnyObjects(parsed) {
@@ -1912,9 +1931,12 @@
       if (!byPol.has(p)) byPol.set(p, { policy: p, broad, observed: { src: new Map(), dst: new Map(), svc: new Map() }, rows: 0, total: 0 });
       const it = byPol.get(p), n = Number(r.count) > 0 ? Number(r.count) : 1;
       const add = (k, v) => { if (v) it.observed[k].set(v, (it.observed[k].get(v) || 0) + n); };
-      add('src', r.src); add('dst', r.dst);
+      // 轉換後比對的廠牌（目的 NAT 為 post）以實際比對的位址與埠為準
+      add('src', r.src); add('dst', r.qDst || r.dst);
       const proto = String(r.proto || '').toLowerCase();
-      add('svc', proto && proto !== 'any' ? proto + (r.port ? '/' + r.port : '') : (r.port ? 'any/' + r.port : ''));
+      // 協定不限且沒有埠時記為 any，草稿就不會收斂服務（否則會漏掉這筆流量）
+      const port = r.qPort || r.port;
+      add('svc', proto && proto !== 'any' ? proto + (port ? '/' + port : '') : (port ? 'any/' + port : 'any'));
       it.rows++; it.total += n;
     });
     const list = m => [...m.entries()].map(([v, n]) => ({ v, n })).sort((a, b) => b.n - a.n || String(a.v).localeCompare(String(b.v)));
@@ -2392,10 +2414,10 @@
       (byKey.get(key(it.vdom, it.id)) || []).forEach(p => add(p, fd.check));
     }));
     analyzeRuleShadowing(parsed.policies || [], parsed.addresses || []).forEach(r => pols
-      .filter(p => p.id === r.shadowedId && p.name === r.shadowedName)
+      .filter(p => p.id === r.shadowedId && p.name === r.shadowedName && (p._vdom || '') === r.vdom)
       .forEach(p => add(p, tr('recert.flag_shadowed').replace('{id}', r.shadowingId))));
     analyzeExactDuplicates(parsed.policies || []).forEach(g => pols
-      .filter(p => g.ids.includes(p.id) && p.srcAddr === g.srcAddr && p.dstAddr === g.dstAddr && p.service === g.service && p.action === g.action)
+      .filter(p => g.ids.includes(p.id) && (p._vdom || '') === g.vdom && p.srcAddr === g.srcAddr && p.dstAddr === g.dstAddr && p.service === g.service && p.action === g.action)
       .forEach(p => add(p, tr('recert.flag_duplicate').replace('{ids}', g.ids.filter(x => x !== p.id).join(', ')))));
     analyzeExpiredRules(parsed, { now: opts.now, keywords: opts.expiryKeywords }).results.forEach(r =>
       (byKey.get(key(r.vdom, r.id)) || []).forEach(p => add(p, tr(r.status === 'expired' ? 'recert.flag_expired' : 'recert.flag_expiring').replace('{date}', r.date))));
@@ -2466,6 +2488,8 @@
   }
   const RECERT_DELETE_RE = /刪除|删除|削除|移除|delete|remove/i;
   const RECERT_DISABLE_RE = /停用|無効|disable|deactivate/i;
+  // 否定寫法（不刪除、勿停用、do not remove、keep、保留、削除しない）不視為刪除或停用
+  const RECERT_NEGATE_RE = /(?:不|勿|別|無需|不需|不用|不要|無須)\s*(?:刪除|删除|移除|停用)|\b(?:not|never|don't|do not)\s+(?:to\s+)?(?:delete|remove|disable|deactivate)|\bkeep\b|保留|維持|残す|しない/i;
   function parseRecertDecisions(text, parsed) {
     const out = { changes: [], unknown: [], counts: { delete: 0, disable: 0 }, error: '' };
     const rows = _parseCsvRows(text);
@@ -2479,7 +2503,7 @@
     const seen = new Set();
     rows.slice(1).forEach(r => {
       const dec = clean(r[decCol]);
-      const op = RECERT_DELETE_RE.test(dec) ? 'delete' : (RECERT_DISABLE_RE.test(dec) ? 'disable' : '');
+      const op = RECERT_NEGATE_RE.test(dec) ? '' : RECERT_DELETE_RE.test(dec) ? 'delete' : (RECERT_DISABLE_RE.test(dec) ? 'disable' : '');
       if (!op) return;
       const id = clean(r[idCol]), vd = hasVdom ? clean(r[0]) : '';
       const idx = pols.findIndex(p => !p.platformRule && String(p.id) === id && (!hasVdom || (p._vdom || '') === vd));

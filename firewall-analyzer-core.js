@@ -627,7 +627,7 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED, opts) {
     const srcs = r.srcList || [r.src], dsts = r.dstList || [r.dst];
     const results = [];
     const qo = Object.assign({}, opts, r.srcIntf ? { srcIntf: r.srcIntf } : {});
-    let nat = null;
+    let nat = null, qDst = '', qPort = '';  // qDst／qPort：轉換後比對時實際查詢的目的位址與埠（單一目的才記）
     srcs.forEach(s => dsts.forEach(d => {
       // 目的 NAT（2026-10-14，第二十五輪 LB）：opts.nat 時比照單筆查詢，依廠牌比對轉換前或轉換後位址；
       // 比對時點不明（unknown）時以原位址判斷，另記轉換後的結果。多組合時只記第一筆命中的 NAT
@@ -641,6 +641,7 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED, opts) {
       results.push({ action: res.action, policy: res.matched, hasFqdn: !!(mt && mt.hasFqdn) });
       if (dn && !nat) {
         nat = { name: dn.name, to: dn.toIp + (dn.toPort ? ':' + dn.toPort : ''), stage };
+        if (stage === 'post' && dsts.length === 1) { qDst = qd; qPort = qp; }
         if (stage === 'unknown') {
           const alt = _runPolicyQuery(s, dn.toIp, r.proto, dn.toPort, vdomFilter, PARSED, qo);
           nat.altAction = alt && !alt.error ? alt.action : '';
@@ -654,7 +655,7 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED, opts) {
     const single = pols.length === 1 && results.every(x => x.policy) ? pols[0] : null;
     const check = r.expect ? (r.expect === 'accept' ? acceptCount === results.length : acceptCount === 0) : null;
     return { ...r, action, policyId: single ? single.id : pols.map(p => p.id).join(';'), policyName: single ? (single.name || '') : '',
-      hasFqdn: results.some(x => x.hasFqdn), combos: results.length, acceptCount, check, nat, policyRef: single };
+      hasFqdn: results.some(x => x.hasFqdn), combos: results.length, acceptCount, check, nat, policyRef: single, ...(qDst ? { qDst, qPort } : {}) };
   });
 }
 // 規則變更模擬（2026-10-06，第十二輪 MD）：在 parsed 的副本上套用變更，不動原物件。

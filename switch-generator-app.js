@@ -76,6 +76,10 @@ function applyPortMapRows(rows){
     let r=rowsOf('#iface-body tr').find(x=>(x.querySelector('.i-name')?.value||'').trim().toLowerCase()===pm.name.toLowerCase());
     if(r)updated++;else{addIfaceRow(pm.name,pm.mode||'access',inferSpeedFromName(pm.name,currentVendor()));r=rowsOf('#iface-body tr').pop();added++;}
     const set=(cls,v)=>{if(v!==undefined)r.querySelector(cls).value=v;};
+    // 廠牌不支援 hybrid（模式選單沒有 hybrid）時比照 updateModeOptions() 換成 trunk：允許 untagged＋tagged、native 為 PVID
+    if(pm.mode==='hybrid'&&![...r.querySelector('.i-mode').options].some(o=>o.value==='hybrid')){
+      pm=Object.assign({},pm,{mode:'trunk',trunkVlans:[pm.untagged,pm.tagged].filter(Boolean).join(' ')||undefined,nativeVlan:pm.pvid,untagged:undefined,tagged:undefined,pvid:undefined});
+    }
     if(pm.mode){const sel=r.querySelector('.i-mode');sel.value=pm.mode;updateIfaceRowDisplay(sel);}
     set('.i-desc',pm.desc);set('.i-access-vlan',pm.accessVlan);set('.i-trunk-vlans',pm.trunkVlans);set('.i-native-vlan',pm.nativeVlan);
     set('.i-hy-untagged',pm.untagged);set('.i-hy-tagged',pm.tagged);set('.i-hy-pvid',pm.pvid);

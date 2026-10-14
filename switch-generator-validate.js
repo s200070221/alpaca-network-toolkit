@@ -411,7 +411,8 @@ function parsePortMapCsv(text){
   for(let li=hi+1;li<lines.length;li++){
     if(!lines[li].trim())continue;
     const c=_portMapCsvLine(lines[li]);
-    const get=k=>col[k]===undefined?'':(c[col[k]]||'');
+    // 匯出時為防公式注入加在開頭的單引號，匯入時去掉
+    const get=k=>col[k]===undefined?'':String(c[col[k]]||'').replace(/^'(?=[=+\-@])/,'');
     const name=get('name');
     if(!name){errors.push({line:li+1,key:'portmap.err_no_port'});continue;}
     const row={name};
@@ -431,12 +432,18 @@ function parsePortMapCsv(text){
 
 // 配線表 CSV 匯出（第二十五輪 LE）：欄位與 parsePortMapCsv() 相同，由 collectModel().interfaces 組成，匯出後可再匯入
 const PORTMAP_CSV_HEADERS=['port','description','mode','vlan','trunk','native','untagged','tagged','pvid','shutdown'];
+// VLAN 欄只輸出數字清單（10-20 30）；all、VLAN 名稱等匯入時無法驗證的值留空，匯入後維持表單原值
+function _portMapCsvVlans(v){
+  const t=String(v==null?'':v).trim().replace(/\s+to\s+/gi,'-').replace(/[,;]+/g,' ').replace(/\s+/g,' ').trim();
+  return /^\d+(?:-\d+)?(?: \d+(?:-\d+)?)*$/.test(t)?t:'';
+}
 function buildPortMapCsv(interfaces){
   const cell=v=>{const t=String(v==null?'':v);const safe=/^[=+\-@]/.test(t)?"'"+t:t;return /[",\r\n]/.test(safe)?'"'+safe.replace(/"/g,'""')+'"':safe;};
+  const V=_portMapCsvVlans;
   const rows=(interfaces||[]).filter(i=>i&&i.name).map(i=>{
     const hy=i.mode==='hybrid'&&i.hybrid?i.hybrid:null;
-    return [i.name,i.desc||'',i.mode||'',i.mode==='access'?i.accessVlan||'':'',i.mode==='trunk'?i.trunkVlans||'':'',i.mode==='trunk'?i.nativeVlan||'':'',
-      hy?(hy.untagged||[]).join(' '):'',hy?(hy.tagged||[]).join(' '):'',hy?hy.pvid||'':'',i.shutdown?'yes':''];
+    return [i.name,i.desc||'',i.mode||'',i.mode==='access'?V(i.accessVlan):'',i.mode==='trunk'?V(i.trunkVlans):'',i.mode==='trunk'?V(i.nativeVlan):'',
+      hy?V((hy.untagged||[]).join(' ')):'',hy?V((hy.tagged||[]).join(' ')):'',hy?V(hy.pvid):'',i.shutdown?'yes':''];
   });
   return [PORTMAP_CSV_HEADERS,...rows].map(r=>r.map(cell).join(',')).join('\r\n')+'\r\n';
 }

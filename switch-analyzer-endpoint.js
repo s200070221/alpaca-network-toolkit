@@ -328,25 +328,35 @@ ${body}
 // 只列實體埠與聚合介面（SVI、loopback、null、堆疊埠、通道略過）；VLAN 清單轉成空白分隔、「A to B」轉為 A-B，
 // 值為 all 等非數字清單時留空（產生器只接受 1-4094 的清單）
 const EP_PORTMAP_HEADERS = ['port', 'description', 'mode', 'vlan', 'trunk', 'native', 'untagged', 'tagged', 'pvid', 'shutdown'];
-const EP_PORTMAP_SKIP_TYPES = new Set(['svi', 'loopback', 'null', 'stack', 'tunnel', 'vlan']);
-function epPortMapVlans(v) {
-  const t = String(v == null ? '' : v).trim().replace(/\s+to\s+/gi, '-').replace(/[,;]+/g, ' ').replace(/\s+/g, ' ').trim();
+// stack 不略過：Comware／Cisco 的 stack 型別只依埠名（10G 以上）推測，多數是一般上下行埠
+const EP_PORTMAP_SKIP_TYPES = new Set(['svi', 'loopback', 'null', 'tunnel', 'vlan']);
+// VLAN 名稱 → 編號（Juniper 介面的 vlans 為 VLAN 名稱）
+function epVlanNameMap(parsed) {
+  const m = new Map();
+  ((parsed && parsed.vlans) || []).forEach(v => { if (v && v.name && /^\d+$/.test(String(v.id))) m.set(String(v.name).toLowerCase(), String(v.id)); });
+  return m;
+}
+function epPortMapVlans(v, names) {
+  let t = String(v == null ? '' : v).trim().replace(/^(?:add|only)\s+/i, '').replace(/\s+to\s+/gi, '-').replace(/[,;]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (names && names.size) t = t.split(' ').map(x => /^\d+(?:-\d+)?$/.test(x) ? x : (names.get(x.toLowerCase()) || x)).join(' ');
   return /^\d+(?:-\d+)?(?: \d+(?:-\d+)?)*$/.test(t) ? t : '';
 }
 function epPortMapRows(parsed) {
   const rows = [];
+  const names = epVlanNameMap(parsed);
+  const vls = v => epPortMapVlans(v, names);
   ((parsed && parsed.interfaces) || []).forEach(i => {
     if (!i || !i.name || EP_PORTMAP_SKIP_TYPES.has(i.type)) return;
     const hy = i.hybrid && (i.hybrid.untagged || i.hybrid.tagged) ? i.hybrid : null;
     const mode = hy ? 'hybrid' : (i.mode === 'trunk' || i.mode === 'access' ? i.mode : '');
     const vl = i.vlans != null && i.vlans !== '' ? i.vlans : (i.vlan || '');
     rows.push([i.name, i.desc || '', mode,
-      mode === 'access' ? epPortMapVlans(vl) : '',
-      mode === 'trunk' ? epPortMapVlans(vl) : '',
-      mode === 'trunk' ? epPortMapVlans(i.nativeVlan) : '',
-      hy ? epPortMapVlans((hy.untagged || []).join(' ')) : '',
-      hy ? epPortMapVlans((hy.tagged || []).join(' ')) : '',
-      hy ? epPortMapVlans(hy.pvid) : '',
+      mode === 'access' ? vls(vl) : '',
+      mode === 'trunk' ? vls(vl) : '',
+      mode === 'trunk' ? vls(i.nativeVlan) : '',
+      hy ? vls((hy.untagged || []).join(' ')) : '',
+      hy ? vls((hy.tagged || []).join(' ')) : '',
+      hy ? vls(hy.pvid) : '',
       i.shutdown ? 'yes' : '']);
   });
   return { headers: EP_PORTMAP_HEADERS.slice(), rows };
