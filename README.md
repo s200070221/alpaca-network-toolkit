@@ -30,7 +30,7 @@
 
 - 拖放設定檔或 log，自動判斷廠牌並導向對應工具；可一次拖放多個檔案，也可直接拖放 .gz／.zip 壓縮檔。
 - 可選擇「去識別化後分析」：先遮蔽敏感資訊，再送到分析工具。
-- 彙整各工具最近的分析結果，顯示與上次相比的分數與問題數變化，可下載綜合健檢報告。
+- 彙整各工具最近的分析結果，顯示與上次相比的分數與問題數變化及歷次趨勢小圖，可下載綜合健檢報告。
 - 依各工具的使用紀錄解鎖羊駝成就徽章。
 - 工作區打包：把各工具存在瀏覽器的設定匯出成一個檔案，在另一台電腦還原。
 
@@ -50,6 +50,7 @@
 - 規則、路由、NAT、VPN、位址物件視覺化
 - IP／埠查詢：這條連線會被哪條規則放行或擋下（以對外位址查詢時可依目的 NAT 換算）；批次查詢一次比對多組連線，同樣可套用目的 NAT
 - 規則變更模擬：先模擬停用、刪除、改動作或調整順序，比較查詢結果與遮蔽規則的變化
+- 依 log 實際流量收斂寬鬆規則：批次反查命中不限來源／目的／服務的規則時，列出實際出現的位址與埠，FortiGate 可產生收斂指令草稿
 - 遮蔽規則分析、合規稽核（含 IPv6 防護缺口）與健康度評分
 - 新舊設定比對（含 HA 主備比對）、設定檔格式互轉
 - 規則命中數匯入（FortiGate、Cisco ASA／FTD、Palo Alto、Juniper SRX），找出從未或長期未命中的規則
@@ -76,6 +77,7 @@
 - 配線表、終端定位（貼上 MAC／ARP 表查設備接在哪個埠）
 - 匯出產生器格式的配線表 CSV，可在產生器修改後重新產生設定
 - 黃金範本：自訂「必須存在／不得存在」的設定規則，多台設定一起檢查
+- 多設備 VLAN 對照表：VLAN × 設備列出宣告名稱、SVI 與埠數，標出只有一台宣告、名稱不一致或未宣告卻在使用的 VLAN
 
 ## 🛠️ 交換器設定產生器
 
@@ -92,7 +94,7 @@
 - CSV 批次產生多台設定、設定模板庫
 - 匯入既有設定檔帶入表單（也可從交換器設定解析器直接送過來）
 - 配線表 CSV 匯入與匯出：在試算表整理埠描述與 VLAN 後一次套用
-- 黃金基準線檢查：產生後依與交換器設定解析器共用的黃金範本規則逐條檢查
+- 黃金基準線檢查：產生後依與交換器設定解析器共用的黃金範本規則逐條檢查；CSV 批次產生時每台也會檢查
 
 ## 🔒 設定檔去識別化工具
 
@@ -118,14 +120,15 @@
 - 入侵偵測與端點防護：Suricata EVE JSON、Cisco Secure Endpoint（AMP）事件 JSON、Zeek（JSON／TSV）、CrowdStrike Falcon 串流事件、Microsoft Defender for Endpoint／365 Defender
 - DNS／DHCP：BIND、dnsmasq／Pi-hole、CoreDNS、Windows DNS 偵錯 log 與 DNS 異常偵測（疑似 DGA、DNS tunneling、大量 NXDOMAIN），Windows DHCP、ISC dhcpd、dnsmasq 租約紀錄（事件位址對照主機名稱），Cisco Umbrella CSV
 - 網路設備與存取控制：Cisco IOS（含 ACL 記錄）、Comware 設備 log、Cisco ISE 802.1X／MAB 認證紀錄（交換器埠認證反覆失敗可連到交換器分析）、Linux sshd／sudo（多次失敗後成功偵測）、OpenVPN、strongSwan、FreeRADIUS、HAProxy；VPN／RADIUS 指派位址與 DHCP 租約可把事件位址對照到帳號與主機
-- 伺服器與雲端：Windows 事件 XML 與 Sysmon、IIS／Web、Squid access.log、AWS ELB 與 S3 存取紀錄、AWS VPC／Azure NSG／GCP 流量紀錄
+- 伺服器與雲端：Windows 事件 XML 與 Sysmon、IIS／Web、Squid access.log、AWS ELB 與 S3 存取紀錄、AWS VPC／Azure NSG／GCP 流量紀錄、Cloudflare Logpush（HTTP 請求與防火牆事件）
 - 雲端身分與稽核：Microsoft Entra ID 登入、Okta、Microsoft 365 稽核、Google Workspace 登入、Duo 驗證紀錄、AWS CloudTrail、Azure Activity Log、GCP Cloud Audit Logs、Kubernetes 稽核紀錄
 
 **主要功能**
 - 依嚴重程度排序，找出可能問題：頻率異常、掃描、認證失敗、Kerberoasting、橫向移動、介面異常、MAC 飄移、跨事件攻擊鏈等，附 MITRE ATT&CK 編號
 - 本機威脅情資、檔案雜湊與 ASN 清單比對（不連網；可直接匯入 OTX、URLhaus、MISP、ThreatQ、STIX 2、MalwareBazaar 匯出檔）
+- 匯入 Sigma 規則（.yml，支援常用的 detection 語法與修飾子，不支援的會列出原因）
 - 可直接上傳 .gz／.zip 壓縮檔，壓縮檔內每個檔案各為一個來源
-- 非上班時間高權限操作（自訂上班時段、時區與假日）；載入前期 log 後，標出帳號在前期不曾活動的時段出現的事件
+- 非上班時間高權限操作（自訂上班時段、時區與假日）；載入前期 log 後，標出帳號在前期不曾活動的時段，或從前期沒出現過的來源登入的事件
 - 行為者檢視：單一帳號或位址的事件、24 小時活動分布、主要往來對象與位址歸屬
 - 前後期 log 比較：列出新增、消失與持續的問題及筆數變化
 - 敏感欄位去識別化、CSV 與報表匯出

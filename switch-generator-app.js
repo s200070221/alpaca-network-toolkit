@@ -4305,6 +4305,9 @@ function processBulkCSV(){
     const sectionTemplatesForBulk=loadSectionTemplates();
 
     window.bulkConfigs={};
+    // 黃金基準線（第二十六輪 SF）：每台產生後依 #gen-gold-rules 檢查，結果供清單與 manifest 使用
+    window.bulkGold={};
+    const goldRules=genGoldParseRules((document.getElementById('gen-gold-rules')||{}).value||'').rules;
     const results=[];
     const progressDiv=document.getElementById('bulk-progress');
     const listDiv=document.getElementById('bulk-list');
@@ -4411,11 +4414,20 @@ function processBulkCSV(){
         else if(model.vendor==='planet')cfg=assemblePlanetConfig(model);
         else cfg=assembleComwareConfig(model);
 
-        window.bulkConfigs[sanitizeZipEntryName(row.devicename)+'.cfg']=cfg;
+        const fname=sanitizeZipEntryName(row.devicename)+'.cfg';
+        window.bulkConfigs[fname]=cfg;
+        let goldNote='',goldFail=0;
+        if(goldRules.length){
+          const res=genGoldCheckRules(cfg,goldRules);
+          const failed=goldRules.filter((r,k)=>!res[k].ok).map(r=>r.label);
+          goldFail=failed.length;
+          window.bulkGold[fname]={fail:goldFail,total:goldRules.length,labels:failed};
+          goldNote=' — '+tr('genGold.bulk_note').replace('{fail}',goldFail).replace('{total}',goldRules.length)+(goldFail?'：'+failed.join('、'):'');
+        }
         results.push({
           name:row.devicename,
-          status:`✅ ${row.hostname} (${row.vendor})`,
-          color:'var(--green)'
+          status:`✅ ${row.hostname} (${row.vendor})${goldNote}`,
+          color:goldFail?'var(--yellow)':'var(--green)'
         });
       }catch(e){
         results.push({
@@ -4485,10 +4497,12 @@ function downloadBulkZip(){
   let manifest=tr('msg.bulkManifestTitle')+'\n';
   manifest+=tr('msg.bulkManifestTimestamp').replace('{time}',new Date().toLocaleString())+'\n';
   manifest+=tr('msg.bulkManifestCount').replace('{count}',Object.keys(window.bulkConfigs).length)+'\n\n';
-  manifest+=tr('msg.bulkManifestHeader')+'\n';
+  const gold=window.bulkGold||{};
+  const hasGold=Object.keys(gold).length>0;
+  manifest+=tr('msg.bulkManifestHeader')+(hasGold?','+tr('genGold.manifest_col'):'')+'\n';
   Object.entries(window.bulkConfigs).forEach(([name,cfg])=>{
     const lineCount=cfg.split('\n').length;
-    manifest+=`${csvCell(name)},${lineCount}\n`;
+    manifest+=`${csvCell(name)},${lineCount}${hasGold?','+(gold[name]?gold[name].fail+'/'+gold[name].total:''):''}\n`;
   });
 
   // 使用純 JavaScript 建立 ZIP（未壓縮格式，相容所有解壓工具）

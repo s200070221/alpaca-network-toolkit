@@ -3978,7 +3978,7 @@ function renderInventoryCard(){
         <td>${r.score==null?'-':pill(gc,r.score+' '+r.grade)}</td><td style="font-size:11px">${esc(r.file)}</td>
         <td><button style="${btn2};padding:2px 10px" onclick="invOpen(${i})">${esc(tr('inv.open_btn'))}</button></td></tr>`;
     }).join('')+'</tbody></table></div>';
-  return h+renderConsistencyCard()+renderAccountsCard()+renderGoldenCard()+'</div>';
+  return h+renderConsistencyCard()+renderVlanMatrixCard()+renderAccountsCard()+renderGoldenCard()+'</div>';
 }
 // 跨設備一致性（WH）：invConsistency() 在 switch-analyzer-inventory.js
 function renderConsistencyCard(){
@@ -4006,6 +4006,40 @@ function renderConsistencyCard(){
       r.overlaps.map(o=>`<tr><td>${esc(o.a.host+' '+o.a.iface)} <span class="mono">${esc(o.a.cidr)}</span></td><td>${esc(o.b.host+' '+o.b.iface)} <span class="mono">${esc(o.b.cidr)}</span></td></tr>`).join('')+'</tbody></table>';
   }
   return h+'</div>';
+}
+// 多設備 VLAN 對照表（第二十六輪 SC）：invVlanMatrix() 在 switch-analyzer-inventory.js
+function _invEntries(){return invRows.map((row,i)=>({hostname:row.hostname||row.file,parsed:invParsed[i]}));}
+function renderVlanMatrixCard(){
+  let h=`<div id="vm-card" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:6px">${esc(tr('vm.title'))}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('vm.hint'))}</div>`;
+  if(invRows.length<2)return h+`<div class="nodata">${esc(tr('wh.need_two'))}</div></div>`;
+  const m=invVlanMatrix(_invEntries());
+  if(!m.rows.length)return h+`<div class="nodata">${esc(tr('vm.empty'))}</div></div>`;
+  const onlyFlag=_vmOnlyFlagged;
+  const rows=onlyFlag?m.rows.filter(r=>r.single||r.nameMismatch||r.undeclared.length):m.rows;
+  const nFlag=m.rows.filter(r=>r.single||r.nameMismatch||r.undeclared.length).length;
+  h+=`<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;font-size:12px">
+    <label><input type="checkbox" ${onlyFlag?'checked':''} onchange="_vmOnlyFlagged=this.checked;navGo('inventory')"> ${esc(tr('vm.only_flagged').replace('{n}',nFlag))}</label>
+    <button style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer" onclick="invVlanMatrixCSV()">${esc(tr('vm.csv_btn'))}</button></div>`;
+  const cell=c=>{
+    if(!c.declared&&!c.access&&!c.trunk)return '<td style="color:var(--text-muted)">-</td>';
+    const bits=[c.declared?`<b>${esc(c.name||'✓')}</b>`:`<span style="color:var(--red)">${esc(tr('vm.not_declared'))}</span>`];
+    if(c.svi)bits.push('SVI');
+    if(c.access)bits.push('A '+c.access);
+    if(c.trunk)bits.push('T '+c.trunk);
+    return `<td style="font-size:12px">${bits.join(' · ')}</td>`;
+  };
+  const flags=r=>[r.single?pill('warn',tr('vm.flag_single')):'',r.nameMismatch?pill('warn',tr('vm.flag_name')):'',r.undeclared.length?pill('down',tr('vm.flag_undeclared')):''].join(' ');
+  h+=`<div class="tbl-wrap" style="overflow-x:auto;max-height:420px"><table class="data-tbl"><thead><tr><th>VLAN</th>${m.hosts.map(x=>`<th>${esc(x)}</th>`).join('')}<th>${esc(tr('vm.col_flags'))}</th></tr></thead><tbody>`
+    +rows.map(r=>`<tr><td class="mono">${r.id}</td>${r.cells.map(cell).join('')}<td>${flags(r)}</td></tr>`).join('')+'</tbody></table></div>';
+  return h+`<div style="font-size:11px;color:var(--text-dim);margin-top:6px">${esc(tr('vm.legend'))}</div></div>`;
+}
+let _vmOnlyFlagged=false;
+function invVlanMatrixCSV(){
+  if(invRows.length<2)return;
+  const r=invVlanMatrixRows(invVlanMatrix(_invEntries()));
+  dlCSV(r.rows,r.headers,'vlan_matrix.csv');
 }
 // 帳號與密碼保存方式盤點（AD）：invAccounts() 在 switch-analyzer-inventory.js
 function renderAccountsCard(){

@@ -32,6 +32,7 @@ const App = (() => {
   let LAST_QUERY_TRACE = null;
   // 批次查詢結果快取（2026-09-29 新增），供匯出按鈕使用；重新解析新檔案時清除
   let LAST_BATCH_RESULTS = null;
+  let LAST_TIGHTEN = [];  // 依實際流量收斂建議（第二十六輪 SA），隨批次查詢更新
   // 無法解析設定檔回報（2026-09-29 新增）：上傳檢查時未命中任何廠牌簽章的欄位廠牌（如 'fortigate'）
   // 與本次上傳的第一個欄位廠牌，供 renderReportBar()／_sendReportToAnonymizer() 使用
   let REPORT_UNKNOWN_SLOTS = [], REPORT_FIRST_SLOT_VENDOR = '';
@@ -681,7 +682,7 @@ const App = (() => {
       // 開過 Query 分頁，切換到新檔案後直接按「查詢追蹤結果」CSV 匯出按鈕會拿到
       // 舊檔案的過期查詢結果（唯讀稽核發現的既有 bug）
       LAST_QUERY_TRACE = null;
-      LAST_BATCH_RESULTS = null;
+      LAST_BATCH_RESULTS = null; LAST_TIGHTEN = [];
       _whatIf = []; LAST_WHATIF = null;
       // WiFi analysis（2026-08-19 擴大：原僅 FortiGate，對外查證後新增 mikrotik/openwrt/
       // pfsense 三家「自身即為 AP」架構的廠牌，合併各自 vaps 並重新計算共用 summary；
@@ -2209,6 +2210,11 @@ function onParsed(){
       // 稽核結果 Markdown 匯出（2026-09-24 新增），內容由 -audit.js buildFirewallAuditMarkdown() 即時計算
       Reporter.download(buildFirewallAuditMarkdown(d, { acceptedRisks: _loadAcceptedRisks(), sources: _fwEvidenceSources() }),`fw_audit_${hn}_${ds}.md`,'text/markdown');
     }
+    else if(type==='csv-tighten'){
+      const content=Reporter.exportTightenCSV(LAST_TIGHTEN);
+      if(content)Reporter.download(content,`fw_tighten_${hn}_${ds}.csv`,'text/csv');
+      else showErr(tr('batch.empty'));
+    }
     else if(type==='csv-batch-query'){
       const content=Reporter.exportBatchQueryCSV(LAST_BATCH_RESULTS);
       if(content)Reporter.download(content,`fw_batch_query_${hn}_${ds}.csv`,'text/csv');
@@ -2520,7 +2526,16 @@ function onParsed(){
     const { rows, errors } = parseBatchQueryCSV(($('batch-input')||{}).value||'');
     const vdom = $('q-vdom') ? $('q-vdom').value : '__all__';
     LAST_BATCH_RESULTS = runBatchPolicyQuery(rows, vdom, PARSED, _batchOpts());
+    LAST_TIGHTEN = analyzeObservedTraffic(LAST_BATCH_RESULTS, PARSED);
     el.innerHTML = buildBatchQueryResultHtml(LAST_BATCH_RESULTS, errors);
+    const tg = $('tighten-result'); if (tg) tg.innerHTML = buildObservedTrafficHtml(LAST_TIGHTEN, PARSED.vendor === 'FortiGate');
+  };
+  window._fwTightenScript = function() {
+    if (!PARSED || !LAST_TIGHTEN.length) return;
+    const r = buildFortiGateTightenScript(PARSED, LAST_TIGHTEN);
+    if (!r.text) { alert(tr('tighten.script_none')); return; }
+    const host = (PARSED.deviceInfo && PARSED.deviceInfo.hostname && PARSED.deviceInfo.hostname !== '-') ? PARSED.deviceInfo.hostname : 'firewall';
+    Reporter.download(r.text, host.replace(/[^\w.\-]/g, '_') + '_tighten_draft.txt', 'text/plain');
   };
   window._loadBatchFile = function(input) {
     const f = input.files && input.files[0]; if (!f) return;

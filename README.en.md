@@ -30,7 +30,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 - Drop config files or logs; the vendor is detected and the matching tool opens. Several files can be dropped at once, including .gz / .zip archives.
 - "Anonymize & Analyze" masks sensitive data first, then sends the result to the analysis tool.
-- Collects each tool's latest analysis results, shows how the score and issue count changed since the last run, and can download a combined health report.
+- Collects each tool's latest analysis results, shows how the score and issue count changed since the last run (with a small history sparkline), and can download a combined health report.
 - Alpaca achievement badges unlock as you use the tools.
 - Workspace export: save each tool's browser-stored settings to one file and restore them on another computer.
 
@@ -50,6 +50,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - Visualizes rules, routes, NAT, VPN and address objects
 - IP/port lookup: which rule allows or blocks a given connection (destination NAT is applied when querying a public address); batch lookup checks many connections at once, also with destination NAT
 - Rule change simulation: try disabling, deleting, changing the action of or moving rules, then compare lookup results and shadowed rules
+- Tighten broad rules from real log traffic: when a log batch lookup hits a rule with any source, destination or service, the addresses and ports actually seen are listed, and a FortiGate command draft can be generated
 - Shadowed-rule analysis, compliance audit (including IPv6 protection gaps) and health score
 - Old-vs-new config comparison (including HA primary/secondary), conversion between config formats
 - Rule hit-count import (FortiGate, Cisco ASA / FTD, Palo Alto, Juniper SRX) to find rules never hit or not hit for a long time
@@ -76,6 +77,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - Cabling sheet and endpoint lookup (paste MAC / ARP tables to find which port a device is on)
 - Export a port map CSV in the generator's format, edit it in the generator and regenerate the config
 - Golden template: your own "must exist / must not exist" config rules, checked across several devices
+- Multi-device VLAN matrix: VLANs × devices with declared names, SVIs and port counts, flagging VLANs declared on only one device, with mismatched names, or used but not declared
 
 ## 🛠️ Switch Config Generator
 
@@ -92,7 +94,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - CSV batch generation for many devices, template library
 - Import an existing config into the form (or receive it directly from the Switch Config Parser)
 - Port map CSV import and export: edit port descriptions and VLANs in a spreadsheet and apply them in one go
-- Golden baseline check: after generating, check the output against the golden template rules shared with the Switch Config Parser
+- Golden baseline check: after generating, check the output against the golden template rules shared with the Switch Config Parser; CSV batch generation checks every device too
 
 ## 🔒 Config Anonymizer
 
@@ -118,14 +120,15 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - Intrusion detection and endpoint protection: Suricata EVE JSON, Cisco Secure Endpoint (AMP) event JSON, Zeek (JSON / TSV), CrowdStrike Falcon streaming events, Microsoft Defender for Endpoint / 365 Defender
 - DNS / DHCP: BIND, dnsmasq / Pi-hole, CoreDNS and Windows DNS debug logs with DNS anomaly detection (likely DGA, DNS tunneling, NXDOMAIN bursts); Windows DHCP, ISC dhcpd and dnsmasq lease logs (event addresses annotated with host names); Cisco Umbrella CSV
 - Network devices and access control: Cisco IOS (including ACL logging), Comware device logs, Cisco ISE 802.1X / MAB authentication logs (repeated failures on a switch port link to the switch analyzer), Linux sshd / sudo (success after repeated failures), OpenVPN, strongSwan, FreeRADIUS, HAProxy; VPN / RADIUS address assignments and DHCP leases map event addresses to accounts and hosts
-- Servers and cloud: Windows event XML and Sysmon, IIS / web, Squid access.log, AWS ELB and S3 access logs, AWS VPC / Azure NSG / GCP flow logs
+- Servers and cloud: Windows event XML and Sysmon, IIS / web, Squid access.log, AWS ELB and S3 access logs, AWS VPC / Azure NSG / GCP flow logs, Cloudflare Logpush (HTTP requests and firewall events)
 - Cloud identity and audit: Microsoft Entra ID sign-ins, Okta, Microsoft 365 audit, Google Workspace logins, Duo authentication logs, AWS CloudTrail, Azure Activity Log, GCP Cloud Audit Logs, Kubernetes audit logs
 
 **Main features**
 - Sorts by severity and flags likely problems: frequency anomalies, scans, authentication failures, Kerberoasting, lateral movement, interface problems, MAC flapping, multi-stage attack chains and more, tagged with MITRE ATT&CK IDs
 - Local threat-intel, file-hash and ASN list matching (no network access; imports OTX, URLhaus, MISP, ThreatQ, STIX 2 and MalwareBazaar exports directly)
+- Import Sigma rules (.yml; common detection syntax and modifiers are supported, and unsupported rules are listed with the reason)
 - Upload .gz / .zip archives directly; each file inside an archive is treated as a separate source
-- Privileged activity outside working hours (custom working hours, time zone and holidays); after loading a previous-period log, flags accounts active at hours they never used before
+- Privileged activity outside working hours (custom working hours, time zone and holidays); after loading a previous-period log, flags accounts active at hours they never used before or signing in from sources not seen before
 - Actor view: events, 24-hour activity, top peers and address ownership for one account or address
 - Previous-period comparison: new, resolved and ongoing issues with count changes
 - Anonymization of sensitive fields, CSV and report export
