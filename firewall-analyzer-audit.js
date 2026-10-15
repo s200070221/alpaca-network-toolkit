@@ -64,6 +64,17 @@
     }
     return null;
   }
+  // 位址物件依小寫名稱建索引（同名依原陣列順序），避免大型設定每次 find() 線性搜尋（第二十八輪 OP2）
+  const _addrNameIdx = new WeakMap();
+  function _addrsByName(addrs, nm) {
+    let idx = _addrNameIdx.get(addrs);
+    if (!idx || idx.n !== addrs.length) {
+      idx = { n: addrs.length, map: new Map() };
+      for (const a of addrs) { if (!a.name) continue; const k = a.name.toLowerCase(); if (!idx.map.has(k)) idx.map.set(k, []); idx.map.get(k).push(a); }
+      _addrNameIdx.set(addrs, idx);
+    }
+    return idx.map.get(nm) || [];
+  }
   function _rangesOfName(name, addrs, vdom, seen) {
     const raw = name.trim(), nm = raw.toLowerCase();
     if (nm === 'all' || nm === 'any' || nm === '0.0.0.0/0' || nm === '0.0.0.0 0.0.0.0') return [_V4_FULL, _V6_FULL];
@@ -71,7 +82,8 @@
     if (nm === 'any6') return [_V6_FULL];
     if (seen.has(nm)) return [];
     seen.add(nm);
-    const obj = addrs.find(a => a.name && a.name.toLowerCase() === nm && (!vdom || !a._vdom || a._vdom === vdom)) || addrs.find(a => a.name && a.name.toLowerCase() === nm);
+    const same = _addrsByName(addrs, nm);
+    const obj = same.find(a => !vdom || !a._vdom || a._vdom === vdom) || same[0];
     if (obj) {
       if ((obj.type === 'ipmask' || obj.type === 'ipprefix') && obj.subnet && obj.subnet !== '-') { const r = _rangeOfLiteral(obj.subnet); return r ? [r] : null; }
       if (obj.type === 'iprange') { const r = _rangeOfLiteral(`${obj.startIp}-${obj.endIp}`) || _rangeOfLiteral(obj.startIp); return r ? [r] : null; }
@@ -109,16 +121,23 @@
     return active.map(p => {
       const src = _shadowToSet(p.srcAddr), dst = _shadowToSet(p.dstAddr), svc = _shadowToSet(p.service);
       return { src, dst, svc, srcW: _shadowIsWild(src), dstW: _shadowIsWild(dst), svcW: _shadowIsWild(svc),
-        si: _shadowIntfPrep(p.srcIntf), di: _shadowIntfPrep(p.dstIntf),
+        si: _shadowIntfPrep(p.srcIntf), di: _shadowIntfPrep(p.dstIntf), srcA: [...src], dstA: [...dst], svcA: [...svc],
         srcR: _shadowAddrRanges(p.srcAddr, addresses, p._vdom), dstR: _shadowAddrRanges(p.dstAddr, addresses, p._vdom) };
     });
   }
   // 以預先整理的資料判斷 e（較早規則）是否涵蓋 l（較晚規則）：介面涵蓋，且 src/dst/service
   // 各欄位 earlier 為萬用字元、與 later 完全相同，或（位址欄位）earlier 的範圍包含 later 的範圍
+  function _intfOk(ei, li) {
+    if (ei === null || li === null || ei === 'any') return true;
+    if (li === 'any') return false;
+    for (const x of li) if (!ei.has(x)) return false;
+    return true;
+  }
+  function _fieldOk(eA, eW, lS, eR, lR) {
+    return eW || (eA.length === lS.size && eA.every(v => lS.has(v))) || _rangesCover(eR, lR);
+  }
   function _shadowPrepCovers(e, l) {
-    const intfOk = (ei, li) => ei === null || li === null || ei === 'any' || (li !== 'any' && [...li].every(x => ei.has(x)));
-    const fieldOk = (eS, eW, lS, eR, lR) => eW || (eS.size === lS.size && [...eS].every(v => lS.has(v))) || _rangesCover(eR, lR);
-    return intfOk(e.si, l.si) && intfOk(e.di, l.di) && fieldOk(e.src, e.srcW, l.src, e.srcR, l.srcR) && fieldOk(e.dst, e.dstW, l.dst, e.dstR, l.dstR) && fieldOk(e.svc, e.svcW, l.svc);
+    return _intfOk(e.si, l.si) && _intfOk(e.di, l.di) && _fieldOk(e.srcA, e.srcW, l.src, e.srcR, l.srcR) && _fieldOk(e.dstA, e.dstW, l.dst, e.dstR, l.dstR) && _fieldOk(e.svcA, e.svcW, l.svc);
   }
 
   // ── 新舊設定檔結構化比對（單一設備）────────────────────────────
@@ -224,7 +243,21 @@
 
   // 有取反條件的規則（srcNegate／dstNegate／svcNegate，第十七輪 QB）涵蓋範圍是「清單以外」，集合比對不適用，遮蔽／阻擋分析略過
   const _hasNegate = p => p.srcNegate === true || p.dstNegate === true || p.svcNegate === true;
+  // 遮蔽類分析為規則兩兩比對，同一次畫面更新會在側邊欄、稽核頁、健康度各呼叫一次；以「同一批規則物件＋同一位址陣列」
+  // 為條件保留上一次結果（逐一比對物件身分為 O(n)，重算為 O(n²)），回傳副本（第二十八輪 OP2）
+  const _pairMemo = {};
+  function _memoPairs(name, policies, addresses, compute) {
+    const m = _pairMemo[name];
+    if (m && m.addr === addresses && m.pol.length === policies.length && m.pol.every((p, i) => p === policies[i])) return m.copy(m.result);
+    const result = compute();
+    const copy = Array.isArray(result) ? r => r.slice() : r => Object.assign({}, r);
+    _pairMemo[name] = { pol: policies.slice(), addr: addresses, result, copy };
+    return copy(result);
+  }
   function analyzeRuleShadowing(policies, addresses) {
+    return _memoPairs('shadow', policies, addresses, () => _analyzeRuleShadowing(policies, addresses));
+  }
+  function _analyzeRuleShadowing(policies, addresses) {
     const results = [];
     const eq = (a, b) => a.size === b.size && [...a].every(v => b.has(v));
     const active = policies.filter(p => !_isDisabledStatus(p) && !_hasNegate(p));
@@ -250,6 +283,9 @@
   }
 
   function buildShadowMap(policies, addresses) {
+    return _memoPairs('shadowMap', policies, addresses, () => _buildShadowMap(policies, addresses));
+  }
+  function _buildShadowMap(policies, addresses) {
     // 建立每個規則遮蔽的下游規則清單（用於流程排序顯示）
     const map = {};
     const active = policies.filter(p => !_isDisabledStatus(p) && !_hasNegate(p));
@@ -276,6 +312,9 @@
   // policies 正規化模型 action 欄位只有二元值 accept/deny（見 firewall-analyzer-parser-fortigate.js
   // 的 `gv(t,'action')||'deny'` 預設值慣例），不需處理 vendor 專屬的 drop/reject 同義詞。
   function analyzeDenyBlocking(policies, addresses) {
+    return _memoPairs('deny', policies, addresses, () => _analyzeDenyBlocking(policies, addresses));
+  }
+  function _analyzeDenyBlocking(policies, addresses) {
     const results = [];
     const active = policies.filter(p => !_isDisabledStatus(p) && !_hasNegate(p));
     const prep = _shadowPrep(active, addresses);
@@ -435,8 +474,16 @@
       !isUsed(usedSvc, s)
     );
     // 只被（同樣未使用的）群組包含的物件：標出包含它的群組名稱，畫面說明原因；清理指令會先刪群組再刪成員
-    const groupsOf = (list, o) => list.filter(g => g.members && (g._vdom || '') === (o._vdom || '') && memberNames(g.members).includes(o.name)).map(g => g.name);
-    const tag = (list, src) => list.map(o => { const g = groupsOf(src, o); return g.length ? Object.assign({}, o, { inGroups: g }) : o; });
+    const memberIdx = list => {
+      const idx = new Map();
+      list.forEach(g => { if (!g.members) return; new Set(memberNames(g.members)).forEach(m => { const k = (g._vdom || '') + '\u0000' + m; if (!idx.has(k)) idx.set(k, []); idx.get(k).push(g.name); }); });
+      return idx;
+    };
+    const tag = (list, src) => {
+      if (!list.length) return list;
+      const idx = memberIdx(src);
+      return list.map(o => { const g = idx.get((o._vdom || '') + '\u0000' + o.name) || []; return g.length ? Object.assign({}, o, { inGroups: g }) : o; });
+    };
     return { unusedAddrs: tag(unusedAddrs, parsed.addresses || []), unusedSvcs: tag(unusedSvcs, parsed.services || []) };
   }
 
@@ -1427,7 +1474,7 @@
   // 時行為與先前完全相同
   function computeFirewallHealth(parsed, opts) {
     const policies = (parsed.policies || []).filter(p => !p.platformRule);
-    let score = 100;
+    let score = 100, rawScore = 100;  // rawScore：不扣除已接受風險時的分數（第二十八輪 OP2，免得畫面再算一次）
     const issues = [];
     const acceptedRisks = (opts && opts.acceptedRisks) ? new Set(opts.acceptedRisks) : new Set();
     // 每項扣分上限（2026-09-24 使用者決定）：逐筆扣分但單一檢查最多扣「每筆權重×3」，避免
@@ -1436,9 +1483,10 @@
     const HEALTH_CAP_MULTIPLIER = 3;
     const deduct = (labelKey, sev, count, amount, perItem) => {
       const key = labelKey.replace(/^health\./, '');
-      if (acceptedRisks.has(key)) { issues.push({ key, sev, label: tr(labelKey), count, accepted: true }); return; }
       const cap = perItem * HEALTH_CAP_MULTIPLIER;
       const capped = amount > cap;
+      rawScore -= capped ? cap : amount;
+      if (acceptedRisks.has(key)) { issues.push({ key, sev, label: tr(labelKey), count, accepted: true }); return; }
       score -= capped ? cap : amount;
       issues.push(capped ? { key, sev, label: tr(labelKey), count, capped: true } : { key, sev, label: tr(labelKey), count });
     };
@@ -1533,9 +1581,10 @@
     const expSched = expired.filter(r => r.source === 'schedule').length;
     if (expSched) deduct('health.schedule_expired', 'info', expSched, expSched * HEALTH_WEIGHT.low, HEALTH_WEIGHT.low);
     score = Math.max(0, Math.min(100, score));
+    rawScore = Math.max(0, Math.min(100, rawScore));
     const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
     const gradeColor = grade === 'A' ? 'var(--green)' : grade === 'B' ? 'var(--teal)' : grade === 'C' ? 'var(--yellow)' : grade === 'D' ? 'var(--orange)' : 'var(--red)';
-    return {score, grade, gradeColor, issues};
+    return {score, grade, gradeColor, issues, rawScore};
   }
 
   // 命名規範檢查（2026-09-24 新增）：rules = {address, service, policy} 三條使用者自訂正則字串

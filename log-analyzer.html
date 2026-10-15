@@ -4132,41 +4132,46 @@ function detectFrequencyIssues(events, opts) {
   const issues = [];
   for (const [key, list] of groups) {
     const sorted = [...list].sort((a, b) => effectiveTime(a) - effectiveTime(b));
+    const times = sorted.map(effectiveTime);
+    const [host, category] = key.split('|');
     let winStart = 0;
-    let episode = null;
+    let episode = null, bestStart = 0, bestEnd = 0;
+    // 短時間大量事件時視窗可達數萬筆，逐筆 slice 會呈平方成長（第二十八輪 OP1）：
+    // 只記錄最大視窗的起訖索引，波段結束時才取出事件
+    const closeEpisode = () => { if (episode) episode.relatedEvents = sorted.slice(bestStart, bestEnd + 1); episode = null; };
     for (let i = 0; i < sorted.length; i++) {
-      const ti = effectiveTime(sorted[i]);
-      while (effectiveTime(sorted[winStart]) < ti - windowMs) winStart++;
+      const ti = times[i];
+      while (times[winStart] < ti - windowMs) winStart++;
       const windowCount = i - winStart + 1;
       if (windowCount >= threshold) {
-        const [host, category] = key.split('|');
-        const windowEvents = sorted.slice(winStart, i + 1);
         if (!episode) {
           episode = {
             category: `freq:${category}`,
             severityNorm: category === 'authFail' ? 'Critical' : 'High',
             count: windowCount,
-            firstSeen: windowEvents[0].timestamp || null,
-            lastSeen: windowEvents[windowEvents.length - 1].timestamp || null,
-            sampleRaw: windowEvents[windowEvents.length - 1].raw,
+            firstSeen: sorted[winStart].timestamp || null,
+            lastSeen: sorted[i].timestamp || null,
+            sampleRaw: sorted[i].raw,
             relatedHosts: [host],
-            relatedEvents: windowEvents,
+            relatedEvents: [],
             confidence: 'confirmed',
             windowMs, threshold
           };
+          bestStart = winStart; bestEnd = i;
           issues.push(episode);
         } else {
-          episode.lastSeen = windowEvents[windowEvents.length - 1].timestamp || null;
+          episode.lastSeen = sorted[i].timestamp || null;
           if (windowCount > episode.count) {
             episode.count = windowCount;
-            episode.sampleRaw = windowEvents[windowEvents.length - 1].raw;
-            episode.relatedEvents = windowEvents;
+            episode.sampleRaw = sorted[i].raw;
+            bestStart = winStart; bestEnd = i;
           }
         }
       } else {
-        episode = null;
+        closeEpisode();
       }
     }
+    closeEpisode();
   }
   return issues;
 }
@@ -5428,6 +5433,8 @@ function parseJSONOrNDJSON(text) {
     // （2026-09 全功能審查發現）
     const objs = [];
     for (const l of lines) {
+      // 只試 { 或 [ 開頭的行，一般文字 log 不必逐行丟例外（第二十八輪 OP3）
+      if (l[0] !== '{' && l[0] !== '[') continue;
       try { const parsed = JSON.parse(l); if (parsed && typeof parsed === 'object') objs.push(parsed); } catch (e) { /* 壞行跳過 */ }
     }
     if (objs.length && objs.length >= lines.length / 2) return { arr: objs, singleObj: null };
@@ -7335,10 +7342,10 @@ function applyImportedMappings(parsed) {
   }
   return { applied, skipped };
 }
+const IPV4_SHAPE_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 function isValidIPv4(s) {
-  const parts = s.split('.');
-  if (parts.length !== 4) return false;
-  return parts.every(p => /^\d{1,3}$/.test(p) && parseInt(p, 10) <= 255);
+  if (!IPV4_SHAPE_RE.test(s)) return false;
+  return s.split('.').every(p => +p <= 255);
 }
 function classifyIP(ip) {
   const [a, b] = ip.split('.').map(Number);
@@ -7393,8 +7400,9 @@ function registerSubnetMapping(orig, mapped) {
 // opts.preserveLastOctet（2026-08-20 新增，移植自 config_anonymizer 既有邏輯）：開啟後不同
 // 子網但末位相同的 IP 會被映射成相同的假 IP（保留末段方便交叉比對同一台主機在不同網段的紀錄）
 function anonIP(ip, opts) {
+  const hit = mappings.ip.get(ip);
+  if (hit !== undefined) return hit;
   if (!isValidIPv4(ip)) return ip;
-  if (mappings.ip.has(ip)) return mappings.ip.get(ip);
   const cls = classifyIP(ip);
   if (cls === 'skip') return ip;
   if (anonOutputIPs.has(ip)) return ip;
@@ -7500,8 +7508,10 @@ function anonIPv6(ip) {
 const MAC_COLON_RE = /\b([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b/g;
 const MAC_HYPHEN_RE = /\b([0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}\b/g;
 const MAC_DOT_RE = /\b([0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}\b/g;
+// 會被替換的 IPv6 至少 4 組（有 :: 或連續 3 組「十六進位:」），其餘行略過整段 IPv6 正則（第二十八輪 OP3）
+const IPV6_HINT_RE = /::|(?:[0-9a-fA-F]{1,4}:){3}/;
 function replaceIPsInLine(line, opts) {
-  line = line.replace(IPv6_RE, m => (m.split(':').length >= 4 && !MAC_SHAPE_RE.test(m) ? anonIPv6(m) : m));
+  if (IPV6_HINT_RE.test(line)) line = line.replace(IPv6_RE, m => (m.split(':').length >= 4 && !MAC_SHAPE_RE.test(m) ? anonIPv6(m) : m));
   return line.replace(IPv4_RE, m => (isValidIPv4(m) && classifyIP(m) !== 'skip' ? anonIP(m, opts) : m));
 }
 function replaceMACsInLine(line) {
@@ -8226,9 +8236,12 @@ function anonymizeFlowEvent(clone, opts) {
 function anonymizeEvents(events, opts) {
   resetAnonState();
   srcIPv4.clear(); srcIPv6.clear();
-  const all = JSON.stringify(events);
-  for (const m of all.matchAll(/(?<![\d.])\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?![\d])/g)) srcIPv4.add(m[0]);
-  for (const m of all.matchAll(/(?<![0-9A-Fa-f:])2001:db8::[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])/gi)) srcIPv6.add(m[0].toLowerCase());
+  // 原檔既有位址只需從原始行、訊息與欄位收集（整批 JSON.stringify 在 10 萬筆時達百 MB，第二十八輪 OP3）
+  for (const e of events) {
+    const all = (e.raw || '') + '\n' + (e.msg || '') + '\n' + (e.fields ? JSON.stringify(e.fields) : '');
+    for (const m of all.matchAll(/(?<![\d.])\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?![\d])/g)) srcIPv4.add(m[0]);
+    if (all.includes('2001:')) for (const m of all.matchAll(/(?<![0-9A-Fa-f:])2001:db8::[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])/gi)) srcIPv6.add(m[0].toLowerCase());
+  }
   // IP 對照的主機名稱與帳號（srcName／dstName／srcUser／dstUser）去識別化後依替換後的租約與 VPN 紀錄重新對應
   const out = events.map(evt => anonymizeEvent(evt, opts)).map(e => {
     if (!e.fields || !(e.fields.srcName || e.fields.dstName || e.fields.srcUser || e.fields.dstUser)) return e;
@@ -8610,6 +8623,9 @@ let ANON_EVENTS = null;
 // 檔案上傳超過門檻時，全文不塞進可見的 paste-area textarea（本身就會讓瀏覽器 reflow 卡頓，
 // 與後續解析快慢無關），改存這裡；doAnalyze() 優先讀這個變數，沒有才回退讀 textarea.value
 let PENDING_LARGE_TEXT = null;
+// 只改分析條件再按「分析」時文字未變，沿用上次解析結果（第二十八輪 OP4）；分析過程對事件的改動
+// （category 重算、netOps 補欄位、notes 每次重設）可重複執行，不受分析條件影響
+let PARSE_CACHE = null;
 const LARGE_FILE_LINE_THRESHOLD = 20000;
 const LARGE_FILE_BYTE_THRESHOLD = 2 * 1024 * 1024;
 // 多檔上傳真正分組（2026-09 新增）：doUploadFile() 上傳 2 個以上檔案時才會填值（見該函式），
@@ -9995,7 +10011,8 @@ async function doAnalyze() {
     showProgress('import.progress_parsing');
     await yieldToUI();
     if (myGen !== _analyzeGen) return;
-    const { events, unparsed } = parseLogText(text);
+    if (!PARSE_CACHE || PARSE_CACHE.text !== text) { const r = parseLogText(text); PARSE_CACHE = { text, events: r.events, unparsed: r.unparsed }; }
+    const { events, unparsed } = PARSE_CACHE;
     UNPARSED_LINES = unparsed;
     EVENTS = annotateEventsWithSourceFile(events, SOURCE_FILE_BOUNDARIES);
     showProgress('import.progress_analyzing');
@@ -10059,7 +10076,7 @@ function doClear() {
   document.getElementById('file-loaded-label').textContent = '';
   document.getElementById('large-file-notice').style.display = 'none';
   PENDING_LARGE_TEXT = null;
-  RAW_TEXT = ''; EVENTS = []; ISSUES = []; CHAINS = []; ANON_EVENTS = null; UNPARSED_LINES = [];
+  RAW_TEXT = ''; EVENTS = []; ISSUES = []; CHAINS = []; ANON_EVENTS = null; UNPARSED_LINES = []; PARSE_CACHE = null;
   SOURCE_FILE_BOUNDARIES = []; RESULTS_FILE_FILTER = '';
   FILE_METADATA = null;
   renderResults(); renderTopN(); renderFileMetadata(); renderIssues(); renderChains(); renderTimeline(); renderBaselineDiff();
