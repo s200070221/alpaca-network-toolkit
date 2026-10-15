@@ -3089,6 +3089,7 @@ function showValidationResults(results,fromImport=false){
 let _lastGeneratedCfg=null;
 // quiet（2026-09-29，UC）：頁面初始化時使用者什麼都還沒做，不跳出「所有檢查通過」浮窗
 // （手機上還會蓋住頁首），只有檢查失敗才顯示；按「產生設定」等使用者操作仍一律顯示
+let _smellyVlanShown=false;
 function generate(fromImport=false,quiet=false){
   // 驗證表單
   const validation=validateForm();
@@ -3119,6 +3120,8 @@ function generate(fromImport=false,quiet=false){
   else cfg=assembleComwareConfig(model);
   document.getElementById('output').value=cfg;
   checkGeneratorEggs(model.sysname);
+  // 彩蛋：VLAN 1919 與 810 同時存在（第二十七輪），同一頁面只提示一次
+  if(!_smellyVlanShown){const ids=new Set((model.vlans||[]).map(v=>String(v&&v.id)));if(ids.has('1919')&&ids.has('810')){_smellyVlanShown=true;setTimeout(()=>showEggToast(tr('egg.smelly_vlan')),1500);}}
   renderSessionDiff(_lastGeneratedCfg,cfg);
   _lastGeneratedCfg=cfg;
   renderGenGoldCheck();
@@ -3271,6 +3274,7 @@ function checkGeneratorEggs(hostname){
     wintermute:tr('egg.wintermute'),
     ultron:tr('egg.ultron'), viki:tr('egg.ultron'),
     tardis:tr('egg.tardis'), timelord:tr('egg.tardis'),
+    yjsnpi:tr('egg.smelly_student'), yajuu:tr('egg.smelly_student'),
     '114514':tr('egg.smelly'),
   };
   for(const [k,v] of Object.entries(SPECIAL_HN)){
@@ -4977,11 +4981,13 @@ window.addEventListener('afterprint',function(){
 // 彩蛋：鍵盤依序輸入 1145141919810（輸入框內也算）→ toast，文案 egg.smelly 依語言顯示（2026-10-14，6 個工具各一份）
 (function(){
   const SEQ='1145141919810';
+  // 連續輸入時依序換句（冰紅茶、屋頂），之後循環
+  const SMELLY_LINES=['egg.smelly','egg.smelly_tea','egg.smelly_roof'];let smellyN=0;
   let buf='';
   document.addEventListener('keydown',e=>{
     if(!e.key||e.key.length!==1)return;
     buf=(buf+e.key).slice(-SEQ.length);
-    if(buf===SEQ){buf='';showEggToast(tr('egg.smelly'));}
+    if(buf===SEQ){buf='';showEggToast(tr(SMELLY_LINES[smellyN++%SMELLY_LINES.length]));}
   });
 })();
 
