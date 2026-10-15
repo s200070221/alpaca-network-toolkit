@@ -3090,6 +3090,12 @@ let _lastGeneratedCfg=null;
 // quiet（2026-09-29，UC）：頁面初始化時使用者什麼都還沒做，不跳出「所有檢查通過」浮窗
 // （手機上還會蓋住頁首），只有檢查失敗才顯示；按「產生設定」等使用者操作仍一律顯示
 let _smellyVlanShown=false;
+// 首次使用導覽（第二十九輪 NU6）：上傳區的三步驟提示，持續性 key `_netAnalyzer_tourSeen`（{工具:1}，已加入入口頁 WS_KEYS）；
+// 按「知道了」或第一次分析出結果後不再顯示。行內卡片不覆蓋畫面
+function _tourSeen(){try{return JSON.parse(localStorage.getItem('_netAnalyzer_tourSeen')||'{}')||{};}catch(e){return {};}}
+function tourInit(){const el=document.getElementById('tour');if(el&&!_tourSeen()['gen'])el.hidden=false;}
+function tourDone(){const el=document.getElementById('tour');if(el)el.hidden=true;try{const s=_tourSeen();if(s['gen'])return;s['gen']=1;localStorage.setItem('_netAnalyzer_tourSeen',JSON.stringify(s));}catch(e){}}
+if(typeof document!=='undefined'){if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',tourInit);else tourInit();}
 function generate(fromImport=false,quiet=false){
   // 驗證表單
   const validation=validateForm();
@@ -3119,6 +3125,9 @@ function generate(fromImport=false,quiet=false){
   else if(model.vendor==='planet')cfg=assemblePlanetConfig(model);
   else cfg=assembleComwareConfig(model);
   document.getElementById('output').value=cfg;
+  // 頁面載入時的靜默產生不算使用者已上手
+  if(!quiet)tourDone();
+  refreshCardFold();
   checkGeneratorEggs(model.sysname);
   // 彩蛋：VLAN 1919 與 810 同時存在（第二十七輪），同一頁面只提示一次
   if(!_smellyVlanShown){const ids=new Set((model.vlans||[]).map(v=>String(v&&v.id)));if(ids.has('1919')&&ids.has('810')){_smellyVlanShown=true;setTimeout(()=>showEggToast(tr('egg.smelly_vlan')),1500);}}
@@ -5178,6 +5187,92 @@ function loadExampleData(){
 }
 window.loadExampleData=loadExampleData;
 
+// 快速開始（第二十九輪 NU10）：用途範本＋只展開有資料的卡片
+// 用途範本依目前介面表格（先選常用機種）取代 VLAN、介面模式與 LACP／VRRP／OSPF／路由表格；
+// 廠牌不支援的功能（VENDOR_INCAPABLE 或卡片隱藏）不填。位址皆為私有網段範例
+function _cardUsable(id,key){
+  const card=document.getElementById(id);
+  if(!card||getComputedStyle(card).display==='none')return false;
+  return !key||!(VENDOR_INCAPABLE[currentVendor()]||[]).includes(key);
+}
+function _unsupported(key){return (VENDOR_UNSUPPORTED[currentVendor()]||[]).includes(key);}
+function applyRolePreset(){
+  const role=document.getElementById('role-preset').value;
+  const msg=document.getElementById('role-msg');
+  if(!role)return;
+  const ports=rowsOf('#iface-body tr').filter(r=>{const n=(r.querySelector('.i-name')?.value||'').trim();return n&&!/mgmt|management|^me\d|^fxp|^em\d|^meth|^eth0$/i.test(n);});
+  if(ports.length<3){msg.textContent=tr('qs.needModel');return;}
+  const up=ports.slice(-2),down=ports.slice(0,-2);
+  const setIf=(r,mode,vlans,desc)=>{
+    r.querySelector('.i-mode').value=mode;
+    if(mode==='access')r.querySelector('.i-access-vlan').value=vlans;else r.querySelector('.i-trunk-vlans').value=vlans;
+    r.querySelector('.i-desc').value=desc;
+  };
+  const upNames=up.map(r=>r.querySelector('.i-name').value.trim());
+  // 換用途時先清掉其他範本填過的表格，避免殘留
+  ['vlan-body','vrrp-body','area-body','route-body','lacp-body'].forEach(id=>{const b=document.getElementById(id);if(b)b.innerHTML='';});
+  document.getElementById('ospf-pid').value='';document.getElementById('ospf-rid').value='';
+  const hn=document.getElementById('hostname');
+  if(!hn.value.trim()||/^SW-(CORE|AGG|ACC)-01$/.test(hn.value.trim()))hn.value={access:'SW-ACC-01',agg:'SW-AGG-01',core:'SW-CORE-01'}[role];
+  if(role==='access'){
+    addVlanRow('10','Data');addVlanRow('20','Voice');addVlanRow('99','Mgmt','192.168.99.11/24');
+    down.forEach(r=>setIf(r,'access','10','User'));up.forEach(r=>setIf(r,'trunk','10 20 99','Uplink'));
+    if(_cardUsable('route-body')&&!_unsupported('routes'))addRouteRow('0.0.0.0/0','192.168.99.1');
+  }else if(role==='agg'){
+    const vrrp=_cardUsable('vrrp-card','vrrp')&&!_unsupported('vrrp');
+    addVlanRow('10','Data',vrrp?'':'192.168.10.1/24');addVlanRow('20','Voice',vrrp?'':'192.168.20.1/24');addVlanRow('99','Mgmt','192.168.99.2/24');
+    down.forEach(r=>setIf(r,'trunk','10 20 99','Downlink'));up.forEach(r=>setIf(r,'trunk','10 20 99','Uplink'));
+    if(vrrp){addVrrpRow('10','192.168.10.2/24','10','192.168.10.1','110',true);addVrrpRow('20','192.168.20.2/24','20','192.168.20.1','110',true);}
+  }else{
+    addVlanRow('99','Mgmt','192.168.99.1/24');addVlanRow('100','Core-Link','10.255.0.1/30');
+    ports.forEach(r=>setIf(r,'trunk','99 100','Core'));
+    if(_cardUsable('ospf-card','ospf')&&!_unsupported('ospf')){
+      document.getElementById('ospf-pid').value='1';document.getElementById('ospf-rid').value='10.255.255.1';
+      addAreaRow('0.0.0.0','10.255.0.0','0.0.255.255','normal');addAreaRow('0.0.0.0','192.168.99.0','0.0.0.255','normal');
+    }
+  }
+  // LACP 成員以空白分隔，埠名本身含空白的廠牌（如 Ruijie、Planet）不填
+  if(_cardUsable('lacp-body')&&!_unsupported('lacp')&&upNames.every(n=>!/\s/.test(n)))addLacpRow('1','active',upNames.join(' '));
+  updateIfaceTableDisplay();
+  applyI18n(document.getElementById('lacp-body')||document);
+  generate();
+  msg.textContent=tr('qs.applied');
+}
+window.applyRolePreset=applyRolePreset;
+
+const FOLD_KEEP=['sec.import','sec.sys','sec.vlan','sec.iface','sec.auditPreview','sec.output'];
+function _cardHasData(card){
+  if([...card.querySelectorAll('tbody[id$="-body"]')].some(b=>b.children.length))return true;
+  return [...card.querySelectorAll('input,textarea')].some(el=>{
+    if(el.type==='file'||el.type==='button')return false;
+    if(el.type==='checkbox'||el.type==='radio')return el.checked!==el.defaultChecked;
+    return el.value.trim()!==''&&el.value!==el.defaultValue;
+  });
+}
+function _toggleCard(card){
+  const folded=card.classList.toggle('folded');
+  card.dataset.userOpen=folded?'':'1';
+  card.firstElementChild.setAttribute('aria-expanded',String(!folded));
+}
+// 精簡模式：沒有資料、使用者也沒手動展開的功能卡片收合；點標題（或 Enter／空白鍵）展開
+function refreshCardFold(){
+  const on=document.getElementById('compact-cards')?.checked;
+  document.querySelectorAll('.wrap>.card').forEach(card=>{
+    const h=card.firstElementChild;
+    if(!h||h.tagName!=='H2'||FOLD_KEEP.includes(h.dataset.i18n))return;
+    if(!card.dataset.foldInit){
+      card.dataset.foldInit='1';card.classList.add('foldable');
+      h.setAttribute('role','button');h.tabIndex=0;
+      h.addEventListener('click',e=>{if(!e.target.closest('button,a,input,select,label'))_toggleCard(card);});
+      h.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();_toggleCard(card);}});
+    }
+    const fold=!!on&&!card.dataset.userOpen&&!_cardHasData(card);
+    card.classList.toggle('folded',fold);
+    h.setAttribute('aria-expanded',String(!fold));
+  });
+}
+window.refreshCardFold=refreshCardFold;
+
 // ── init ───────────────────────────────────────────────────────────
 // 初始化流程：確保所有依賴都已加載
 
@@ -5227,6 +5322,7 @@ function _focusRemediationField(findingId){
   const el=document.getElementById(targetId);
   if(!el)return;
   const card=el.closest('.card')||el;
+  if(card.classList.contains('folded')){card.classList.remove('folded');card.dataset.userOpen='1';}
   card.scrollIntoView({behavior:'smooth',block:'center'});
   card.classList.add('remediation-focus');
   setTimeout(()=>card.classList.remove('remediation-focus'),2500);
@@ -5247,7 +5343,7 @@ function _focusRemediationField(findingId){
 // access/trunk，見 `parseAndImport()`）。`_netAnalyzer_anonThenOpen` 本工具仍非其消費目標，
 // 僅在過期時順手清掉。
 (function(){
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000, _netAnalyzer_swPortQuery:30000};
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000, _netAnalyzer_swPortQuery:30000, _netAnalyzer_route:30000};
   var parsed = {};
   Object.keys(TTL).forEach(function(k){
     var raw = localStorage.getItem(k);
@@ -5374,3 +5470,6 @@ function discardDraft(){try{localStorage.removeItem(DRAFT_KEY);}catch(e){}_close
   if(document.body)new MutationObserver(schedule).observe(document.body,{childList:true,subtree:true,characterData:true});
   schedule();
 })();
+
+// 入口頁「看範例」（第二十九輪 NU4）：網址帶 ?demo=1 時開頁即載入範例並分析
+window.addEventListener('load', function () { if (/[?&]demo=1(?:&|$)/.test(location.search)) setTimeout(function () { loadExampleData(); if (typeof generate === 'function') generate(); }, 0); });

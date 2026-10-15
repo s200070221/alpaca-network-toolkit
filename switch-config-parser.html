@@ -143,6 +143,19 @@ input[type=file]{display:none}
 .lldp-input-wrap{margin-top:10px}
 .lldp-toggle{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text-muted);padding:4px 8px;border-radius:6px;border:1px dashed var(--border);transition:color .2s,border-color .2s;user-select:none}
 .lldp-toggle:hover{color:var(--accent);border-color:var(--accent)}
+.howto{margin:6px 0 2px;font-size:12px;color:var(--text-dim)}
+.tour{box-sizing:border-box;width:100%;max-width:860px;margin:8px auto;padding:10px 14px;border:1px solid var(--accent);border-radius:8px;background:var(--surface2);color:var(--text);font-size:12.5px;line-height:1.6;text-align:left}
+.tour[hidden]{display:none}
+.tour-title{font-weight:600;color:var(--accent)}
+.tour-steps{margin:4px 0 8px;padding-left:22px}
+.tour-ok{font-size:12px;padding:3px 10px;border:1px solid var(--border);border-radius:5px;background:none;color:var(--text);cursor:pointer}
+.howto>summary{cursor:pointer;color:var(--accent);width:max-content;max-width:100%}
+.howto-tip{margin:6px 0;line-height:1.6}
+#howto-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:4px 12px}
+.howto-row{display:flex;align-items:center;gap:6px;min-width:0}
+.howto-row .hv{flex:0 0 auto;color:var(--text)}
+.howto-row code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'JetBrains Mono',monospace;font-size:11px;background:var(--surface2);border-radius:4px;padding:2px 6px}
+.howto-row button{flex:0 0 auto;font-size:11px;padding:1px 6px;border:1px solid var(--border);border-radius:4px;background:none;color:var(--text-dim);cursor:pointer}
 .lldp-area{height:120px;min-height:80px;margin-top:6px}
 .up-btn-row{display:flex;align-items:center;gap:12px;margin-top:14px}
 .btn-analyze{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#000;border:none;border-radius:10px;padding:11px 28px;font-size:14px;font-weight:700;cursor:pointer;transition:all .25s;box-shadow:0 4px 16px rgba(0,200,240,.25);font-family:'IBM Plex Sans TC',sans-serif}
@@ -588,6 +601,7 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
       <a href="firewall-analyzer-fixed.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_fw">防火牆分析</a>
       <a href="config-anonymizer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_ca">設定去識別化</a>
       <a href="log-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_log">日誌分析</a>
+      <a href="network-analyzer.html#glossary" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px;border-top:1px solid var(--border);margin-top:4px;padding-top:8px" data-i18n="nav.glossary">📖 術語小辭典</a>
     </div>
     <div class="tb-right" id="tb-actions" style="display:none">
       <input type="text" id="global-search-inp" data-i18n="search.global_placeholder" style="width:150px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--text);font-size:12px;margin-right:6px" onkeydown="if(event.key==='Enter')doGlobalSearch()">
@@ -606,10 +620,12 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
   <div id="content">
     <!-- log → 交換器介面對照（YH）：log 分析帶入的介面，載入設定前顯示待查，載入後顯示該埠資料 -->
     <div id="swq-bar" role="status" style="display:none;margin:8px 16px 0;padding:8px 12px;border-left:3px solid var(--accent);background:var(--surface2);border-radius:4px;font-size:12px"></div>
+    <div id="next-bar" role="status" style="display:none;flex-wrap:wrap;align-items:center;gap:8px;margin:8px 16px 0;padding:8px 12px;border:1px solid var(--border);background:var(--surface2);border-radius:6px;font-size:12px"></div>
     <!-- Upload View -->
     <div id="view-upload" class="show">
       <h1 class="up-headline" data-i18n="up.headline">多廠牌交換器設定解析轉換工具</h1>
       <div class="up-sub" data-i18n="up.sub">自動偵測廠牌 · 純前端處理 · 資料不離開瀏覽器</div>
+      <div id="tour" class="tour" role="note" hidden><div class="tour-title" data-i18n="tour.title">第一次使用？三步驟上手</div><ol class="tour-steps"><li data-i18n="tour.s1">上傳或貼上交換器設定檔；不知道怎麼取得，展開下方「如何取得設定檔？」</li><li data-i18n="tour.s2">按「⚡ 解析設定」，自動偵測廠牌並整理介面、VLAN、路由與安全稽核</li><li data-i18n="tour.s3">看結果上方的提示列：健康度、稽核問題與匯出報表；分享給別人前先去識別化</li></ol><button type="button" class="tour-ok" data-i18n="tour.ok" onclick="tourDone()">知道了，不再顯示</button></div>
 
       <!-- Vendor support grid -->
       <div class="vendor-grid">
@@ -715,6 +731,12 @@ Cisco IOS/IOS-XE：hostname、switchport mode trunk、ip route..."></textarea>
             data-i18n="lldp.input_placeholder"
             placeholder="貼入 show lldp neighbors detail / show cdp neighbors detail 結果"></textarea>
         </div>
+        <!-- 如何取得設定檔（第二十九輪 NU5）：依廠牌列出匯出指令，可一鍵複製 -->
+        <details class="howto" id="howto">
+          <summary data-i18n="howto.title">如何取得設定檔？</summary>
+          <div class="howto-tip" data-i18n="howto.tip"></div>
+          <div id="howto-list"></div>
+        </details>
         <div class="up-btn-row" style="gap:8px;align-items:center">
           <label for="force-vendor-select" data-i18n="lbl.forceVendor" data-tip="自動判斷廠牌失準時，手動指定要用哪個廠牌的解析邏輯" style="font-size:12px;color:var(--text-dim)">手動指定廠牌：</label>
           <select id="force-vendor-select" style="font-size:12px;padding:2px 6px">

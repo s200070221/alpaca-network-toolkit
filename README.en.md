@@ -10,6 +10,8 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 - **Use online (no download)**: https://s200070221.github.io/alpaca-network-toolkit/
 - **Use offline**: download the whole repository, open `network-analyzer.html` in your browser and drop a config file or log onto it. The vendor is detected automatically and the matching tool opens.
+- **Just try it**: every tool card on the entry page has a "Try sample" button that loads a sample and shows the results (or add `?demo=1` to a tool's URL). Each tool shows a three-step guide on first use, and the entry page has a searchable glossary of common terms.
+- **Not sure how to get a config?** The switch tool's "How to get the config?" lists export commands for 20 vendors. If you paste into the wrong tool, the result bar offers to hand the content back to the entry page for detection.
 
 ![Entry page](docs/images/01-hub-en.png)
 

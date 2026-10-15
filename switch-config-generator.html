@@ -172,6 +172,20 @@ input.valid,select.valid{border-color:var(--green)!important}
   #output-print{display:block!important}
   @page{margin:1.5cm}
 }
+.tour{box-sizing:border-box;width:100%;max-width:860px;margin:8px auto;padding:10px 14px;border:1px solid var(--accent);border-radius:8px;background:var(--surface2);color:var(--text);font-size:12.5px;line-height:1.6;text-align:left}
+.tour[hidden]{display:none}
+.tour-title{font-weight:600;color:var(--accent)}
+.tour-steps{margin:4px 0 8px;padding-left:22px}
+.tour-ok{font-size:12px;padding:3px 10px;border:1px solid var(--border);border-radius:5px;background:none;color:var(--text);cursor:pointer}
+.card.foldable>h2{cursor:pointer}
+.card.foldable>h2::before{content:'▾';font-size:11px;color:var(--text-dim)}
+.card.folded>h2::before{content:'▸'}
+.card.folded>h2{margin-bottom:0}
+.card.folded>:not(h2){display:none!important}
+.card.folded{padding-top:12px;padding-bottom:12px}
+.qs-row{flex-wrap:wrap}
+.qs-hint{font-size:12px;color:var(--text-mid);line-height:1.5}
+.qs-compact{display:inline-flex;align-items:center;gap:4px;font-size:12px;cursor:pointer}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/docx@8.10.16/build/index.js"></script>
 </head>
@@ -219,6 +233,7 @@ input.valid,select.valid{border-color:var(--green)!important}
       <a href="firewall-analyzer-fixed.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_fw">防火牆分析</a>
       <a href="config-anonymizer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_ca">設定去識別化</a>
       <a href="log-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_log">日誌分析</a>
+      <a href="network-analyzer.html#glossary" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px;border-top:1px solid var(--border);margin-top:4px;padding-top:8px" data-i18n="nav.glossary">📖 術語小辭典</a>
     </div>
   </div>
 </header>
@@ -226,6 +241,8 @@ input.valid,select.valid{border-color:var(--green)!important}
 <div class="notice" data-i18n="notice.disclaimer">此功能匯出之設定檔僅供參考，請謹慎使用</div>
 
 <div class="wrap">
+
+  <div id="tour" class="tour" role="note" hidden><div class="tour-title" data-i18n="tour.title">第一次使用？三步驟上手</div><ol class="tour-steps"><li data-i18n="tour.s1">在「基本資訊」選擇廠牌與常用機種，或先「載入範例資料」看看</li><li data-i18n="tour.s2">填寫主機名稱、VLAN 與介面，其他功能卡片用不到可以留空</li><li data-i18n="tour.s3">按「產生設定」，看過產生前稽核與提示再複製或下載</li></ol><button type="button" class="tour-ok" data-i18n="tour.ok" onclick="tourDone()">知道了，不再顯示</button></div>
 
   <div class="card">
     <h2 data-i18n="sec.import">匯入既有設定檔</h2>
@@ -295,6 +312,18 @@ input.valid,select.valid{border-color:var(--green)!important}
     <div class="row">
       <button class="add-btn" data-i18n="btn.loadExample" onclick="loadExampleData()">📋 載入範例資料</button>
     </div>
+    <div class="row qs-row">
+      <label for="role-preset" data-i18n="qs.role">用途範本</label>
+      <select id="role-preset">
+        <option value="" data-i18n="qs.roleNone">不套用</option>
+        <option value="access" data-i18n="qs.roleAccess">接入（使用者端口＋上聯）</option>
+        <option value="agg" data-i18n="qs.roleAgg">匯聚（全 trunk＋VRRP 閘道）</option>
+        <option value="core" data-i18n="qs.roleCore">核心（trunk＋OSPF）</option>
+      </select>
+      <button class="add-btn" type="button" data-i18n="qs.apply" onclick="applyRolePreset()">套用範本</button>
+      <label class="qs-compact"><input type="checkbox" id="compact-cards" checked onchange="refreshCardFold()"> <span data-i18n="qs.compact">只展開有資料的卡片</span></label>
+    </div>
+    <div class="qs-hint" id="role-msg" data-i18n="qs.hint">先選廠牌與常用機種，再選用途套用範本；會取代 VLAN、介面模式與相關表格，之後仍可逐項調整。</div>
   </div>
 
   <div class="card" id="capability-matrix-card">

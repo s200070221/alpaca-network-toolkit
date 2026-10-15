@@ -72,11 +72,13 @@ body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans TC',syste
 #content{flex:1;overflow:hidden;display:flex;flex-direction:column}
 /* Upload */
 #view-upload{flex:1;display:none;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px 32px 32px;overflow-y:auto;}
+/* 捲動容器內的區塊不可被壓縮（自動偵測上傳區原本被壓成 26px，第二十九輪 NU1） */
+#view-upload>*{flex-shrink:0}
 .upload-headline{font-size:20px;font-weight:700;margin-bottom:4px;background:linear-gradient(90deg,var(--accent),#ffffff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
 .upload-sub{font-size:12px;color:var(--text-dim);margin-bottom:28px;font-family:'JetBrains Mono',monospace}
 .upload-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;width:100%;max-width:860px;margin-bottom:20px}
 .ucard{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;cursor:pointer;transition:all .25s;position:relative;overflow:hidden;-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
-.ucard::after{content:'';position:absolute;inset:0;opacity:0;transition:opacity .25s;}
+.ucard::after{content:'';position:absolute;inset:0;opacity:0;transition:opacity .25s;pointer-events:none;}
 .ucard.forti::after{background:radial-gradient(ellipse at 0 0,rgba(238,49,36,.07),transparent 60%)}
 .ucard.sophos::after{background:radial-gradient(ellipse at 0 0,rgba(0,114,206,.07),transparent 60%)}
 .ucard.checkpoint::after{background:radial-gradient(ellipse at 0 0,rgba(227,24,55,.07),transparent 60%)}
@@ -455,6 +457,11 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 .ref-id{font-size:11px;color:var(--text-dim);width:42px;flex-shrink:0;font-family:'JetBrains Mono',monospace}
 .ref-name{flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ref-empty{font-size:12px;color:var(--text-muted);padding:6px 0}
+.tour{box-sizing:border-box;width:100%;max-width:860px;margin:8px auto;padding:10px 14px;border:1px solid var(--accent);border-radius:8px;background:var(--surface2);color:var(--text);font-size:12.5px;line-height:1.6;text-align:left}
+.tour[hidden]{display:none}
+.tour-title{font-weight:600;color:var(--accent)}
+.tour-steps{margin:4px 0 8px;padding-left:22px}
+.tour-ok{font-size:12px;padding:3px 10px;border:1px solid var(--border);border-radius:5px;background:none;color:var(--text);cursor:pointer}
 </style>
 </head>
 <body>
@@ -518,6 +525,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
       <a href="switch-config-generator.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_gen">交換器產生器</a>
       <a href="config-anonymizer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_ca">設定去識別化</a>
       <a href="log-analyzer.html" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px" data-i18n="nav.tool_log">日誌分析</a>
+      <a href="network-analyzer.html#glossary" style="display:block;padding:6px 10px;border-radius:6px;color:var(--text);text-decoration:none;font-size:12px;margin-bottom:2px;border-top:1px solid var(--border);margin-top:4px;padding-top:8px" data-i18n="nav.glossary">📖 術語小辭典</a>
     </div>
     <div class="topbar-actions" id="tb-actions" style="display:none">
       <button class="btn btn-ghost btn-sm" onclick="showView('perms')">🔑 <span data-i18n="btn.perms">權限</span></button>
@@ -534,6 +542,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
   <!-- 無法解析設定檔回報提示（2026-09-29 新增）：renderReportBar() 依 fwReportTrigger() 顯示 -->
   <div id="report-bar" style="display:none;margin:8px 16px 0;padding:8px 12px;border-left:3px solid var(--yellow);background:var(--surface2);border-radius:4px;font-size:12px"></div>
   <div id="fwq-bar" role="status" style="display:none;margin:8px 16px 0;padding:8px 12px;border-left:3px solid var(--accent);background:var(--surface2);border-radius:4px;font-size:12px"></div>
+  <div id="next-bar" role="status" style="display:none;flex-wrap:wrap;align-items:center;gap:8px;margin:8px 16px 0;padding:8px 12px;border:1px solid var(--border);background:var(--surface2);border-radius:6px;font-size:12px"></div>
   <div id="fw-print-header"></div>
 
   <div id="content">
@@ -541,6 +550,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
     <div id="view-upload">
       <h1 class="upload-headline" data-i18n="upload.headline">防火牆設定分析器</h1>
       <div class="upload-sub" data-i18n="upload.sub">支援 13 家主流防火牆（FortiGate、Palo Alto、Check Point、Cisco ASA／FTD、Juniper SRX、Sophos 等）— 純前端 · 離線 · 不依賴外部 AI</div>
+      <div id="tour" class="tour" role="note" hidden><div class="tour-title" data-i18n="tour.title">第一次使用？三步驟上手</div><ol class="tour-steps"><li data-i18n="tour.s1">把設定檔拖到自動偵測區（或放進對應廠牌欄位），可一次放多台</li><li data-i18n="tour.s2">按「開始分析」，整理規則、物件、NAT、VPN 與路由</li><li data-i18n="tour.s3">看結果上方的提示列：健康度、稽核問題與匯出報表；「IP/Policy 查詢」可查某條連線會命中哪條規則</li></ol><button type="button" class="tour-ok" data-i18n="tour.ok" onclick="tourDone()">知道了，不再顯示</button></div>
       <!-- 自動偵測上傳（PC）：依檔案內容特徵放入下方對應廠牌欄位，可一次多檔 -->
       <div class="ucard" id="autoc" style="width:100%;max-width:860px;margin-bottom:10px;border-style:dashed;padding:12px" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('autoc').classList.add('drag-over')" ondragleave="document.getElementById('autoc').classList.remove('drag-over')" ondrop="handleAutoDrop(event)" onclick="if(event.target.closest('#auto-msg'))return;document.getElementById('auto-fi').click()">
         <div class="dropzone" style="border:none;padding:4px"><div class="dz-icon">🔍</div><div class="dz-text" data-i18n="upload.auto_title">自動偵測廠牌：拖曳或點擊上傳（可多檔）</div><div class="dz-hint" data-i18n="upload.auto_hint">依檔案內容特徵自動放入下方對應廠牌欄位，認不出時可手動選擇</div></div>

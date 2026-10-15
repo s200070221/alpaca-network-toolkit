@@ -15,7 +15,7 @@
 (function(){
   // 去識別化結構自檢用的隱藏頁面（?structcheck=1）不碰交接 key，避免搶走使用者另一個分頁要接收的內容
   if (/[?&]structcheck=1(?:&|$)/.test(location.search)) return;
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000, _netAnalyzer_swPortQuery:30000};
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000, _netAnalyzer_swPortQuery:30000, _netAnalyzer_route:30000};
   var parsed = {};
   Object.keys(TTL).forEach(function(k){
     var raw = localStorage.getItem(k);
@@ -286,3 +286,12 @@ function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'li
   if(document.body)new MutationObserver(schedule).observe(document.body,{childList:true,subtree:true,characterData:true});
   schedule();
 })();
+
+// 入口頁「看範例」（第二十九輪 NU4）：網址帶 ?demo=1 時開頁即載入範例並分析
+window.addEventListener('load', function () { if (/[?&]demo=1(?:&|$)/.test(location.search)) setTimeout(function () { window._loadSampleConfig(); }, 0); });
+// 首次使用導覽（第二十九輪 NU6）：上傳區的三步驟提示，持續性 key `_netAnalyzer_tourSeen`（{工具:1}，已加入入口頁 WS_KEYS）；
+// 按「知道了」或第一次分析出結果後不再顯示。行內卡片不覆蓋畫面
+function _tourSeen(){try{return JSON.parse(localStorage.getItem('_netAnalyzer_tourSeen')||'{}')||{};}catch(e){return {};}}
+function tourInit(){const el=document.getElementById('tour');if(el&&!_tourSeen()['firewall'])el.hidden=false;}
+function tourDone(){const el=document.getElementById('tour');if(el)el.hidden=true;try{const s=_tourSeen();if(s['firewall'])return;s['firewall']=1;localStorage.setItem('_netAnalyzer_tourSeen',JSON.stringify(s));}catch(e){}}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',tourInit);else tourInit();
