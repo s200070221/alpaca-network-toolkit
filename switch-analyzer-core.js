@@ -63,6 +63,8 @@ function _onLangChange() {
   }
   if (typeof renderReportBar === 'function') renderReportBar();
   if (typeof renderSwqBar === 'function') renderSwqBar();
+  if (typeof renderNextBar === 'function') renderNextBar();
+  if (typeof renderHowto === 'function') renderHowto();
   if (typeof parsed !== 'undefined' && parsed && typeof buildSumCards === 'function') {
     buildSumCards();
   }

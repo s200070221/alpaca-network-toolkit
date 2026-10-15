@@ -293,6 +293,7 @@ function doAnalyze(){
   recordSwitchActivity(parsed);
   recordSwitchSummary(parsed);
   renderSwqBar();
+  renderNextBar();
 }
 // log → 交換器介面對照（2026-10-02，第九輪發想 YH）：log 分析的介面反覆上下線／err-disable／PoE
 // 異常問題帶來設備與介面（交接 key `_netAnalyzer_swPortQuery`，開頁時取出並清除後呼叫
@@ -3701,7 +3702,7 @@ _initParseCoverageMatrix();
 (function(){
   // 去識別化結構自檢用的隱藏頁面（?structcheck=1）不碰交接 key，避免搶走使用者另一個分頁要接收的內容
   if (/[?&]structcheck=1(?:&|$)/.test(location.search)) return;
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000, _netAnalyzer_swPortQuery:30000};
+  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000, _netAnalyzer_swPortQuery:30000, _netAnalyzer_route:30000};
   var parsed = {};
   Object.keys(TTL).forEach(function(k){
     var raw = localStorage.getItem(k);
@@ -3797,6 +3798,56 @@ function _sendReportToAnonymizer(){
   if(wrote&&!w){ localStorage.removeItem('_netAnalyzer_pending'); alert(tr('err.send_popup_blocked')); }
 }
 
+// 首次使用導覽（第二十九輪 NU6）：上傳區的三步驟提示，持續性 key `_netAnalyzer_tourSeen`（{工具:1}，已加入入口頁 WS_KEYS）；
+// 按「知道了」或第一次分析出結果後不再顯示。行內卡片不覆蓋畫面
+function _tourSeen(){try{return JSON.parse(localStorage.getItem('_netAnalyzer_tourSeen')||'{}')||{};}catch(e){return {};}}
+function tourInit(){const el=document.getElementById('tour');if(el&&!_tourSeen()['switch'])el.hidden=false;}
+function tourDone(){const el=document.getElementById('tour');if(el)el.hidden=true;try{const s=_tourSeen();if(s['switch'])return;s['switch']=1;localStorage.setItem('_netAnalyzer_tourSeen',JSON.stringify(s));}catch(e){}}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',tourInit);else tourInit();
+// 如何取得設定檔（第二十九輪 NU5）：各廠牌在設備上匯出完整設定的指令
+// 用函式宣告：頁面初始化的 setLang() 在本段之前執行，const 會尚未初始化
+function swExportCmds(){return [
+  ['H3C / HPE Comware','display current-configuration'],['Cisco IOS / IOS-XE','show running-config'],['Cisco NX-OS','show running-config'],
+  ['Cisco Business (CBS/SG)','show running-config'],['Arista EOS','show running-config'],['Aruba CX','show running-config'],
+  ['Aruba ProCurve','show running-config'],['FortiSwitch','show full-configuration'],['Juniper EX/QFX','show configuration'],
+  ['Dell OS10','show running-configuration'],['Ruckus/Brocade ICX','show running-config'],['Extreme EXOS','show configuration'],
+  ['Extreme VOSS','show running-config'],['Alcatel OmniSwitch','show configuration snapshot'],['MikroTik RouterOS','/export'],
+  ['Ruijie RGOS','show running-config'],['Netgear / EdgeSwitch','show running-config'],['Planet','show running-config'],
+  ['NVIDIA Cumulus','nv config show'],['SONiC','cat /etc/sonic/config_db.json'],
+];}
+function renderHowto(){
+  const box=document.getElementById('howto-list');if(!box)return;
+  box.innerHTML=swExportCmds().map((r,i)=>`<div class="howto-row"><span class="hv">${esc(r[0])}</span><code title="${esc(r[1])}">${esc(r[1])}</code><button type="button" onclick="copyHowto(${i},this)">${esc(tr('howto.copy'))}</button></div>`).join('');
+}
+function copyHowto(i,btn){
+  const cmd=swExportCmds()[i][1];
+  const done=()=>{btn.textContent=tr('howto.copied');setTimeout(()=>{btn.textContent=tr('howto.copy');},1500);};
+  if(navigator.clipboard&&window.isSecureContext)navigator.clipboard.writeText(cmd).then(done,()=>{});
+  else{const t=document.createElement('textarea');t.value=cmd;document.body.appendChild(t);t.select();try{document.execCommand('copy');done();}catch(e){}t.remove();}
+}
+// 分析結果提示列（第二十九輪 NU7／NU9）：有結果時列出健康度與三個主要下一步；介面與 VLAN 都沒有時（多半是貼錯工具）
+// 提示交給入口頁判斷該用哪個工具（一次性交接 key `_netAnalyzer_route`）
+function renderNextBar(){
+  const b=document.getElementById('next-bar');if(!b)return;
+  if(!parsed){b.style.display='none';b.innerHTML='';return;}
+  b.style.display='flex';
+  if(!(parsed.interfaces||[]).length&&!(parsed.vlans||[]).length){
+    b.innerHTML=`<span>⚠ ${esc(tr('next.empty'))}</span><button class="btn btn-ghost btn-sm" onclick="_routeToHub()">${esc(tr('next.route'))}</button>`;return;
+  }
+  tourDone();
+  let h=null;try{h=computeSwitchHealth(parsed);}catch(e){h=null;}
+  const crit=h?h.issues.filter(i=>i.sev==='crit').length:0;
+  const head=h?`<span style="font-weight:600">${esc(tr('next.health').replace('{grade}',h.grade).replace('{score}',h.score))}${crit?` · <span style="color:var(--red)">${esc(tr('next.crit').replace('{n}',crit))}</span>`:''}</span>`:'';
+  b.innerHTML=head+`<button class="btn btn-ghost btn-sm" onclick="navGo('audit')">${esc(tr('next.audit'))}</button><button class="btn btn-ghost btn-sm" onclick="exportHTMLReport()">${esc(tr('next.report'))}</button><button class="btn btn-ghost btn-sm" onclick="_sendToAnonymizer()">${esc(tr('next.share'))}</button>`;
+}
+function _routeToHub(){
+  const cfg=(document.getElementById('paste-area')||{}).value||'';
+  if(!cfg.trim())return;
+  let wrote=false;
+  try{localStorage.setItem('_netAnalyzer_route',JSON.stringify({name:(document.getElementById('fname')||{}).textContent||'',text:cfg,from:'switch',ts:Date.now()}));wrote=true;}catch(e){alert(tr('err.send_fail'));}
+  const w=window.open('network-analyzer.html','_blank');
+  if(wrote&&!w){localStorage.removeItem('_netAnalyzer_route');alert(tr('err.send_popup_blocked'));}
+}
 // Phase 4 第 18 項：傳送目前貼上的原始設定文字給 config_anonymizer 去識別化，補齊「本工具只能
 // 被動接收 config_anonymizer 轉送、無法主動送出」的單向缺口；沿用既有 `_netAnalyzer_pending`
 // key（config_anonymizer 本來就已消費此 key），不需要新增接收端程式碼
@@ -4515,3 +4566,6 @@ function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'li
   if(document.body)new MutationObserver(schedule).observe(document.body,{childList:true,subtree:true,characterData:true});
   schedule();
 })();
+
+// 入口頁「看範例」（第二十九輪 NU4）：網址帶 ?demo=1 時開頁即載入範例並分析
+window.addEventListener('load', function () { if (/[?&]demo=1(?:&|$)/.test(location.search)) setTimeout(function () { loadSampleConfig(); }, 0); });

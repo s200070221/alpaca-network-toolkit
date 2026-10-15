@@ -1018,6 +1018,7 @@ function onParsed(){
     // 只上傳無線控制器時沒有防火牆規則，直接開 WiFi 分析頁
     showSection(_onlyWlcUpload()&&WIFI_DATA?'wifi':'policies');
     _applyPendingFwQuery();
+    renderNextBar();
   }
 
   function buildVdomBar(parsed) {
@@ -3291,6 +3292,7 @@ function startMatrixRain(){
     _fwHit.text = ''; _fwHit.res = null; _fwHit.hc = null;
     REPORT_UNKNOWN_SLOTS = [];
     if($('report-bar')){$('report-bar').style.display='none';$('report-bar').innerHTML='';}
+    if($('next-bar')){$('next-bar').style.display='none';$('next-bar').innerHTML='';}
     WIFI_DATA = null;
     FORTISWITCH_DATA = null;
     const navWifi = $('nav-wifi');
@@ -3426,6 +3428,33 @@ function startMatrixRain(){
   // （`_netAnalyzer_anonResult`）、無法主動送出的單向缺口；沿用既有 `_netAnalyzer_pending`
   // key（config_anonymizer 本來就已消費此 key），不需要新增接收端程式碼。ST 只在此 IIFE
   // 內部可見，故此函式必須定義在這裡透過 window 暴露，比照上一行 `_loadFromPending` 的既有寫法
+  // 分析結果提示列（第二十九輪 NU7／NU9）：有規則時列出健康度與三個主要下一步；規則、介面、位址物件都沒有時
+  //（多半是貼錯工具）提示交給入口頁判斷（一次性交接 key `_netAnalyzer_route`）
+  const _fwRawTexts = () => ['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','l'].map(v => ST.raw[v] || '').filter(Boolean);
+  function renderNextBar() {
+    const b = $('next-bar'); if (!b) return;
+    if (!PARSED) { b.style.display = 'none'; b.innerHTML = ''; return; }
+    b.style.display = 'flex';
+    if (!(PARSED.policies || []).length && !(PARSED.interfaces || []).length && !(PARSED.addresses || []).length && !_onlyWlcUpload()) {
+      b.innerHTML = `<span>⚠ ${esc(tr('next.empty'))}</span><button class="btn btn-ghost btn-sm" onclick="window._fwRouteToHub()">${esc(tr('next.route'))}</button>`;
+      return;
+    }
+    if (typeof tourDone === 'function') tourDone();
+    let h = null;
+    try { h = computeFirewallHealth(PARSED, { acceptedRisks: _loadAcceptedRisks(), expiryKeywords: _loadExpiryKeywords() }); } catch (e) { h = null; }
+    const crit = h ? h.issues.filter(i => i.sev === 'crit' && !i.accepted).length : 0;
+    const head = h ? `<span style="font-weight:600">${esc(tr('next.health').replace('{grade}', h.grade).replace('{score}', h.score))}${crit ? ` · <span style="color:var(--red)">${esc(tr('next.crit').replace('{n}', crit))}</span>` : ''}</span>` : '';
+    b.innerHTML = head + `<button class="btn btn-ghost btn-sm" onclick="showSection('audit')">${esc(tr('next.audit'))}</button><button class="btn btn-ghost btn-sm" onclick="doExport('html-report')">${esc(tr('next.report'))}</button><button class="btn btn-ghost btn-sm" onclick="window._sendToAnonymizer()">${esc(tr('next.share'))}</button>`;
+  }
+  window._fwRenderNextBar = renderNextBar;
+  window._fwRouteToHub = function () {
+    const texts = _fwRawTexts();
+    if (!texts.length) return;
+    let wrote = false;
+    try { localStorage.setItem('_netAnalyzer_route', JSON.stringify({ name: '', text: texts.join('\n'), from: 'firewall', ts: Date.now() })); wrote = true; } catch (e) { alert(tr('err.sendFail')); }
+    const w = window.open('network-analyzer.html', '_blank');
+    if (wrote && !w) { localStorage.removeItem('_netAnalyzer_route'); alert(tr('err.sendPopupBlocked')); }
+  };
   window._sendToAnonymizer = function(){
     var slots=['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','l'];
     var texts=slots.map(function(v){return ST.raw[v]||'';}).filter(Boolean);
