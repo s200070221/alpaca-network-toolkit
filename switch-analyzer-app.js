@@ -82,11 +82,13 @@ function startRain(alpaca){
 // 彩蛋：鍵盤依序輸入 1145141919810（輸入框內也算）→ toast，文案 egg.smelly 依語言顯示（2026-10-14，6 個工具各一份）
 (function(){
   const SEQ='1145141919810';
+  // 連續輸入時依序換句（冰紅茶、屋頂），之後循環
+  const SMELLY_LINES=['egg.smelly','egg.smelly_tea','egg.smelly_roof'];let smellyN=0;
   let buf='';
   document.addEventListener('keydown',e=>{
     if(!e.key||e.key.length!==1)return;
     buf=(buf+e.key).slice(-SEQ.length);
-    if(buf===SEQ){buf='';showEggToast(tr('egg.smelly'));}
+    if(buf===SEQ){buf='';showEggToast(tr(SMELLY_LINES[smellyN++%SMELLY_LINES.length]));}
   });
 })();
 
@@ -202,6 +204,7 @@ function checkSwitchEggs(p) {
     wintermute:tr('egg.wintermute'),
     ultron:tr('egg.ultron'), viki:tr('egg.ultron'),
     tardis:tr('egg.tardis'), timelord:tr('egg.tardis'),
+    yjsnpi:tr('egg.smelly_student'), yajuu:tr('egg.smelly_student'),
     '114514':tr('egg.smelly'),
   };
   for(const [k,v] of Object.entries(SPECIAL_HN)) {
@@ -214,6 +217,12 @@ function checkSwitchEggs(p) {
   if(p.vlans?.length >= 100) setTimeout(() => showEggToast(tr('egg.vlan_collector').replace('{n}',p.vlans.length)), 1500);
   // 彩蛋：介面數剛好是 114514／1919／810（2026-10-14，EC）
   if([114514, 1919, 810].includes((p.interfaces || []).length)) setTimeout(() => showEggToast(tr('egg.smelly')), 2200);
+  // 彩蛋：VLAN 1919 與 810 同時存在（第二十七輪）
+  else if(hasSmellyVlans(p.vlans)) setTimeout(() => showEggToast(tr('egg.smelly_vlan')), 2200);
+}
+function hasSmellyVlans(vlans) {
+  const ids = new Set((vlans || []).map(v => String(v && v.id)));
+  return ids.has('1919') && ids.has('810');
 }
 
 function toggleLldpInput(){
