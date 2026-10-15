@@ -1899,7 +1899,7 @@ function _doSwitchHealthCheck(){
     h+=`<div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border)">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <span style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px">${esc(tr('health.history_title'))}</span>
-        <button class="btn btn-ghost btn-sm" onclick="_clearHealthHistory(${JSON.stringify(hostname).replace(/"/g,'&quot;')})">${esc(tr('health.history_clear_btn'))}</button>
+        <button class="btn btn-ghost btn-sm" onclick="_clearHealthHistory(${JSON.stringify(hostname).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})">${esc(tr('health.history_clear_btn'))}</button>
       </div>
       ${buildHealthSparklineSVG(history)}
     </div>`;

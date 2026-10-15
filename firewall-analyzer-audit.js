@@ -88,6 +88,8 @@
       if ((obj.type === 'ipmask' || obj.type === 'ipprefix') && obj.subnet && obj.subnet !== '-') { const r = _rangeOfLiteral(obj.subnet); return r ? [r] : null; }
       if (obj.type === 'iprange') { const r = _rangeOfLiteral(`${obj.startIp}-${obj.endIp}`) || _rangeOfLiteral(obj.startIp); return r ? [r] : null; }
       if (obj.type === 'group' || obj.category === 'address-group') {
+        // 有排除成員（FortiGate exclude-member、Kubernetes ipBlock except）時範圍不是成員聯集，視為無法確定
+        if (obj.excludeMembers && obj.excludeMembers !== '-') return null;
         const out = [];
         for (const mem of String(obj.members || '').split(',').map(x => x.trim()).filter(x => x && x !== '-')) {
           const r = _rangesOfName(mem, addrs, vdom, seen); if (!r) return null; out.push(...r);
@@ -453,8 +455,9 @@
     while (changed) {
       changed = false;
       for (const a of (parsed.addresses || [])) {
-        if (a.members && isUsed(usedAddr, a)) {
-          memberNames(a.members).forEach(t => { if (!usedAddr.has(vk(a._vdom, t))) { usedAddr.add(vk(a._vdom, t)); changed = true; } });
+        if ((a.members || a.excludeMembers) && isUsed(usedAddr, a)) {
+          // 排除成員（exclude-member）同樣被群組引用，刪除會被設備拒絕
+          memberNames([a.members, a.excludeMembers].filter(x => x && x !== '-').join(',')).forEach(t => { if (!usedAddr.has(vk(a._vdom, t))) { usedAddr.add(vk(a._vdom, t)); changed = true; } });
         }
       }
       for (const s of (parsed.services || [])) {
@@ -1141,7 +1144,7 @@
       const reasonTip = r.tier === 1
         ? tr('audit.reason_t1a') + esc(r.shadowingId) + tr('audit.reason_t1b')
         : tr('audit.reason_t2a') + esc(r.shadowingId) + tr('audit.reason_t2b');
-      h += `<tr><td>${tp}</td><td class="mono"><span class="clickable-cell" style="color:var(--red)" onclick="window._jumpToPolicy(${JSON.stringify(r.shadowedId).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.shadowedId)}</span></td><td>${esc(r.shadowedName||'-')}</td><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.shadowingId).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.shadowingId)}</span></td><td>${esc(r.shadowingName||'-')}</td><td style="color:var(--text-dim);font-size:11px"><span data-tip="${reasonTip.replace(/"/g,'&quot;')}">${esc(tr(r.reason))}<sup style="font-size:8px;opacity:.45;margin-left:2px;cursor:help">ⓘ</sup></span></td></tr>`;
+      h += `<tr><td>${tp}</td><td class="mono"><span class="clickable-cell" style="color:var(--red)" onclick="window._jumpToPolicy(${JSON.stringify(r.shadowedId).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.shadowedId)}</span></td><td>${esc(r.shadowedName||'-')}</td><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.shadowingId).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.shadowingId)}</span></td><td>${esc(r.shadowingName||'-')}</td><td style="color:var(--text-dim);font-size:11px"><span data-tip="${reasonTip.replace(/"/g,'&quot;')}">${esc(tr(r.reason))}<sup style="font-size:8px;opacity:.45;margin-left:2px;cursor:help">ⓘ</sup></span></td></tr>`;
     });
     h += '</tbody></table></div></div>';
     return h;
@@ -1156,7 +1159,7 @@
     h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_blocked_id') + '</th><th>' + tr('audit.col_blocked_name') + '</th><th>' + tr('audit.col_blocking_id') + '</th><th>' + tr('audit.col_blocking_name') + '</th></tr></thead><tbody>';
     results.forEach(r => {
       const jh = tr('audit.jump_hint');
-      h += `<tr><td class="mono"><span class="clickable-cell" style="color:var(--red)" onclick="window._jumpToPolicy(${JSON.stringify(r.blockedId).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.blockedId)}</span></td><td>${esc(r.blockedName||'-')}</td><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.blockingId).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.blockingId)}</span></td><td>${esc(r.blockingName||'-')}</td></tr>`;
+      h += `<tr><td class="mono"><span class="clickable-cell" style="color:var(--red)" onclick="window._jumpToPolicy(${JSON.stringify(r.blockedId).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.blockedId)}</span></td><td>${esc(r.blockedName||'-')}</td><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.blockingId).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.blockingId)}</span></td><td>${esc(r.blockingName||'-')}</td></tr>`;
     });
     h += '</tbody></table></div></div>';
     return h;
@@ -1173,7 +1176,7 @@
     h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_merge_field') + '</th><th>' + tr('audit.col_merge_ids') + '</th><th>' + tr('audit.col_merge_values') + '</th><th>' + tr('audit.col_merge_count') + '</th></tr></thead><tbody>';
     results.forEach(r => {
       const jh = tr('audit.jump_hint');
-      const idCells = r.ids.map(id => `<span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(id).replace(/"/g,'&quot;')})" title="${esc(jh)}" style="margin-right:6px">${esc(id)}</span>`).join('');
+      const idCells = r.ids.map(id => `<span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(id).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${esc(jh)}" style="margin-right:6px">${esc(id)}</span>`).join('');
       h += `<tr><td>${pill(tr(_MERGE_FIELD_LABEL[r.field]), 'p-info')}</td><td class="mono">${idCells}</td><td style="font-size:11px">${esc(r.values.join(', '))}</td><td class="mono">${r.count}</td></tr>`;
     });
     h += '</tbody></table></div></div>';
@@ -1190,7 +1193,7 @@
     h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_merge_ids') + '</th><th>' + tr('col.src_addr') + '</th><th>' + tr('col.dst_addr') + '</th><th>' + tr('col.service') + '</th><th>' + tr('col.action') + '</th><th>' + tr('audit.col_merge_count') + '</th></tr></thead><tbody>';
     results.forEach(r => {
       const jh = tr('audit.jump_hint');
-      const idCells = r.ids.map(id => `<span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(id).replace(/"/g,'&quot;')})" title="${esc(jh)}" style="margin-right:6px">${esc(id)}</span>`).join('');
+      const idCells = r.ids.map(id => `<span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(id).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${esc(jh)}" style="margin-right:6px">${esc(id)}</span>`).join('');
       h += `<tr><td class="mono">${idCells}</td><td class="mono" style="font-size:11px">${esc(r.srcAddr)}</td><td class="mono" style="font-size:11px">${esc(r.dstAddr)}</td><td class="mono" style="font-size:11px">${esc(r.service)}</td><td>${pill(r.action,'p-info')}</td><td class="mono">${r.count}</td></tr>`;
     });
     h += '</tbody></table></div></div>';
@@ -1236,7 +1239,7 @@
     h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>ID</th><th>' + tr('audit.col_name') + '</th><th>' + tr('audit.col_vdom') + '</th></tr></thead><tbody>';
     results.forEach(p => {
       const jh = tr('audit.jump_hint');
-      h += `<tr><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(p.id).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(p.id)}</span></td><td>${esc(p.name||'-')}</td><td style="color:var(--text-dim)">${esc(p._vdom||'-')}</td></tr>`;
+      h += `<tr><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(p.id).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(p.id)}</span></td><td>${esc(p.name||'-')}</td><td style="color:var(--text-dim)">${esc(p._vdom||'-')}</td></tr>`;
     });
     h += '</tbody></table></div></div>';
     return h;
@@ -1254,7 +1257,7 @@
     h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>ID</th><th>' + tr('audit.col_name') + '</th><th>' + tr('col.src_addr') + '</th><th>' + tr('col.dst_addr') + '</th><th>' + tr('col.service') + '</th><th>' + tr('col.action') + '</th><th>' + tr('audit.col_vdom') + '</th><th>' + tr('col.comments') + '</th></tr></thead><tbody>';
     results.forEach(p => {
       const jh = tr('audit.jump_hint');
-      h += `<tr><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(p.id).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(p.id)}</span></td><td>${esc(p.name||'-')}</td><td class="mono">${esc(p.srcAddr||'-')}</td><td class="mono">${esc(p.dstAddr||'-')}</td><td class="mono">${esc(p.service||'-')}</td><td>${esc(p.action||'-')}</td><td style="color:var(--text-dim)">${esc(p._vdom||'-')}</td><td style="color:var(--text-dim)">${esc(p.comments||'-')}</td></tr>`;
+      h += `<tr><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(p.id).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(p.id)}</span></td><td>${esc(p.name||'-')}</td><td class="mono">${esc(p.srcAddr||'-')}</td><td class="mono">${esc(p.dstAddr||'-')}</td><td class="mono">${esc(p.service||'-')}</td><td>${esc(p.action||'-')}</td><td style="color:var(--text-dim)">${esc(p._vdom||'-')}</td><td style="color:var(--text-dim)">${esc(p.comments||'-')}</td></tr>`;
     });
     h += '</tbody></table></div></div>';
     return h;
@@ -1627,7 +1630,7 @@
     if (!res.results.length) return h + '<div class="nodata" style="padding:14px 0;color:var(--green)">' + esc(tr('naming.none')) + '</div></div>';
     h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('naming.col_kind') + '</th><th>ID</th><th>' + tr('audit.col_name') + '</th><th>' + tr('audit.col_vdom') + '</th></tr></thead><tbody>';
     res.results.forEach(r => {
-      const idCell = r.kind === 'policy' ? `<span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.id).replace(/"/g,'&quot;')})" title="${esc(tr('audit.jump_hint'))}">${esc(r.id)}</span>` : '-';
+      const idCell = r.kind === 'policy' ? `<span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.id).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${esc(tr('audit.jump_hint'))}">${esc(r.id)}</span>` : '-';
       h += `<tr><td>${pill(kindLabel[r.kind], 'p-info')}</td><td class="mono">${idCell}</td><td class="mono" style="color:var(--accent)">${esc(r.name)}</td><td style="color:var(--text-dim)">${esc(r.vdom || '-')}</td></tr>`;
     });
     return h + '</tbody></table></div></div>';
@@ -1707,7 +1710,7 @@
         ? pill(tr('expiry.expired').replace('{n}', -r.days), 'p-deny')
         : pill(tr('expiry.soon').replace('{n}', r.days), 'p-warn');
       const src = (r.source === 'schedule' ? tr('expiry.src_schedule') : tr('expiry.src_comment')) + ': ' + r.ref;
-      h += `<tr><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.id).replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.id)}</span></td><td>${esc(r.name)}</td><td style="color:var(--text-dim)">${esc(r.vdom || '-')}</td><td style="font-size:11px">${esc(src)}</td><td class="mono">${esc(r.date)}</td><td>${st}</td></tr>`;
+      h += `<tr><td class="mono"><span class="clickable-cell" onclick="window._jumpToPolicy(${JSON.stringify(r.id).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${esc(jh)}">${esc(r.id)}</span></td><td>${esc(r.name)}</td><td style="color:var(--text-dim)">${esc(r.vdom || '-')}</td><td style="font-size:11px">${esc(src)}</td><td class="mono">${esc(r.date)}</td><td>${st}</td></tr>`;
     });
     return h + '</tbody></table></div></div>';
   }

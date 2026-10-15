@@ -397,7 +397,12 @@ function _portMapCsvLine(line){
 function _portMapVlanList(v){
   const toks=String(v).split(/[\s,;]+/).filter(Boolean);
   const ok=toks.every(t=>{const m=t.match(/^(\d+)(?:-(\d+))?$/);return !!m&&+m[1]>=1&&+m[1]<=4094&&(!m[2]||(+m[2]>=+m[1]&&+m[2]<=4094));});
-  return ok?toks.join(' '):null;
+  if(!ok)return null;
+  // 範圍展開成逐一 VLAN：各廠牌產生器的表單欄位只認逐一編號（Comware 範圍要寫 A to B、ProCurve 等以單一編號比對），
+  // 保留 A-B 會在部分廠牌輸出錯誤語法或整段遺失
+  const out=[];
+  toks.forEach(t=>{const [a,b]=t.split('-').map(Number);for(let n=a;n<=(b||a);n++)out.push(String(n));});
+  return [...new Set(out)].join(' ');
 }
 function parsePortMapCsv(text){
   const lines=String(text||'').replace(/^﻿/,'').split(/\r?\n/);

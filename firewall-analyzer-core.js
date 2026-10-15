@@ -651,10 +651,12 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED, opts) {
     const acceptCount = results.filter(x => x.action === 'accept').length;
     const actions = [...new Set(results.map(x => x.action))];
     const action = actions.length === 1 ? actions[0] : (acceptCount === 0 ? 'deny' : 'mixed');
-    const pols = [...new Map(results.filter(x => x.policy).map(x => [String(x.policy.id), x.policy])).values()];
+    // 以規則物件去重：多 VDOM 時不同 VDOM 的規則可能同編號，不可當成同一條
+    const pols = [...new Set(results.filter(x => x.policy).map(x => x.policy))];
     const single = pols.length === 1 && results.every(x => x.policy) ? pols[0] : null;
+    const multiVdom = new Set(pols.map(p => p._vdom || '')).size > 1;
     const check = r.expect ? (r.expect === 'accept' ? acceptCount === results.length : acceptCount === 0) : null;
-    return { ...r, action, policyId: single ? single.id : pols.map(p => p.id).join(';'), policyName: single ? (single.name || '') : '',
+    return { ...r, action, policyId: single ? single.id : pols.map(p => (multiVdom && p._vdom ? p._vdom + '/' : '') + p.id).join(';'), policyName: single ? (single.name || '') : '',
       hasFqdn: results.some(x => x.hasFqdn), combos: results.length, acceptCount, check, nat, policyRef: single, ...(qDst ? { qDst, qPort } : {}) };
   });
 }

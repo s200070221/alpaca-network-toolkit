@@ -3729,9 +3729,13 @@ function yamlLite(text) {
     const isItem = t => t === '-' || t.startsWith('- ');
     const unq = v => (/^"[\s\S]*"$/.test(v) ? (() => { try { return JSON.parse(v); } catch (e) { return v.slice(1, -1); } })() : /^'[\s\S]*'$/.test(v) ? v.slice(1, -1).replace(/''/g, "'") : v);
     const scalar = v => {
-      v = v.replace(/\s+#.*$/, '');
+      // 行尾註解：引號字串只去掉結尾引號之後的 # 註解，引號內的 # 保留
+      const qm = v.match(/^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*')(?:\s+#.*)?$/);
+      v = qm ? qm[1] : v.replace(/\s+#.*$/, '');
       if (v === '{}') return {};
       if (v === '[]') return [];
+      // 流式清單（policyTypes: [Ingress, Egress]），只支援純量成員
+      if (/^\[[^\[\]{}]*\]$/.test(v)) return v.slice(1, -1).split(',').map(x => x.trim()).filter(Boolean).map(scalar);
       if (/^["']/.test(v)) return unq(v);
       if (/^-?\d+(?:\.\d+)?$/.test(v)) return Number(v);
       if (/^(?:true|false)$/.test(v)) return v === 'true';
@@ -3822,6 +3826,13 @@ function anonCloudSG(text, opts) {
           if (opts.comments) for (const t of Object.keys(o[k])) o[k][t] = anonAlias(String(o[k][t]));
           continue;
         }
+        // OCI defined-tags 為「命名空間 → 鍵 → 值」兩層，值比照 freeform-tags
+        if (/^defined[-_]?[tT]ags$/.test(k) && o[k] && typeof o[k] === 'object' && !Array.isArray(o[k])) {
+          if (opts.comments) for (const ns of Object.values(o[k])) if (ns && typeof ns === 'object') for (const t of Object.keys(ns)) ns[t] = anonAlias(String(ns[t]));
+          continue;
+        }
+        // NetworkPolicy 常以 namespaceSelector.matchLabels.name 指定 namespace，與 namespace 名稱用同一對照
+        if (k === 'namespaceSelector' && o[k] && o[k].matchLabels && typeof o[k].matchLabels.name === 'string') o[k].matchLabels.name = name(o[k].matchLabels.name);
         o[k] = walk(o[k], k, o);
       }
       return o;

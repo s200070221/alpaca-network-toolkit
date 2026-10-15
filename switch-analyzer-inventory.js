@@ -231,7 +231,7 @@ function invVlanMatrix(entries) {
     // Juniper 介面的 vlans 為 VLAN 名稱，先換成編號
     const byName = new Map();
     (p.vlans || []).forEach(v => { if (v && v.name && /^\d+$/.test(String(v.id))) byName.set(String(v.name).toLowerCase(), String(v.id)); });
-    const ids = v => invVlanSet(String(v == null ? '' : v).split(/[\s,;]+/).map(x => byName.get(x.toLowerCase()) || x).join(','));
+    const ids = v => invVlanSet(String(v == null ? '' : v).replace(/\s+to\s+/gi, '-').split(/[\s,;]+/).map(x => byName.get(x.toLowerCase()) || x).join(','));  // 「A to B」先轉成範圍再切，否則會變成 A,to,B
     const decl = new Map();
     (p.vlans || []).forEach(v => { const id = +v.id; if (id >= 1 && id <= 4094) decl.set(id, v); });
     const svi = new Set();

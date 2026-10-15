@@ -280,7 +280,11 @@ const App = (() => {
     rd.onload = () => {
       input.value = '';
       const box = $('recert-msg'); if (!box) return;
-      const r = parseRecertDecisions(String(rd.result || ''), PARSED);
+      // 繁中 Excel 另存「CSV（逗號分隔）」為 Big5：不是合法 UTF-8 時改以 Big5 解碼，否則審查結果欄會變亂碼而整批略過
+      const bytes = new Uint8Array(rd.result);
+      let text;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch (e) { text = new TextDecoder('big5').decode(bytes); }
+      const r = parseRecertDecisions(text, PARSED);
       if (r.error) { _recertReview = null; box.innerHTML = `<div style="color:var(--red)">${esc(tr('recert.import_err_' + r.error))}</div>`; return; }
       let added = 0;
       r.changes.forEach(c => { if (!_whatIf.some(w => w.op === c.op && w.idx === c.idx)) { _whatIf.push(c); added++; } });
@@ -293,7 +297,7 @@ const App = (() => {
       }
       box.innerHTML = h;
     };
-    rd.readAsText(f);
+    rd.readAsArrayBuffer(f);
   };
   window._fwRecertScript = function() {
     const r = _recertReview; if (!r || !PARSED) return;
@@ -1150,7 +1154,7 @@ function onParsed(){
           const evalOrderDisplay = r.status === 'disable' ? '-' : String(_evalOrderMap.get(r.id) ?? '-');
           // NAT cell
           const natTd = r.nat === 'enable'
-            ? `<td><span class="nat-badge pill p-warn" onclick="showNatById(${JSON.stringify(r.id).replace(/"/g,'&quot;')})" title="${tr('nat.view_tip')}">🔀 NAT</span></td>`
+            ? `<td><span class="nat-badge pill p-warn" onclick="showNatById(${JSON.stringify(r.id).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${tr('nat.view_tip')}">🔀 NAT</span></td>`
             : '<td>-</td>';
           // 遮蔽規則數
           const shadowedCount = _shadowMap[r.id] ? _shadowMap[r.id].length : 0;
@@ -1176,9 +1180,9 @@ function onParsed(){
             <td style="color:var(--text-dim);font-size:11px">${esc(r.users !== '-' ? r.users : r.groups !== '-' ? r.groups : '-')}</td>
             <td>${r.utm && r.utm.av  !== '-' ? pill('AV', 'p-purple') : '-'}</td>
             <td>${(()=>{ const n=r.utm&&r.utm.webfilter!=='-'?r.utm.webfilter:''; if(!n)return '-';
-              return d.webfilterProfiles ? `<span class="clickable-cell pill p-purple" onclick="showWebfilterDetail(${JSON.stringify(n).replace(/"/g,'&quot;')})" title="${tr('wf.click_tip')}">Web</span>` : pill('Web','p-purple'); })()}</td>
+              return d.webfilterProfiles ? `<span class="clickable-cell pill p-purple" onclick="showWebfilterDetail(${JSON.stringify(n).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${tr('wf.click_tip')}">Web</span>` : pill('Web','p-purple'); })()}</td>
             <td>${(()=>{ const n=r.utm&&r.utm.ips!=='-'?r.utm.ips:''; if(!n)return '-';
-              return d.ipsSensors ? `<span class="clickable-cell pill p-orange" onclick="showIpsDetail(${JSON.stringify(n).replace(/"/g,'&quot;')})" title="${tr('ips.click_tip')}">IPS</span>` : pill('IPS','p-orange'); })()}</td>
+              return d.ipsSensors ? `<span class="clickable-cell pill p-orange" onclick="showIpsDetail(${JSON.stringify(n).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${tr('ips.click_tip')}">IPS</span>` : pill('IPS','p-orange'); })()}</td>
             <td style="font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${r.app&&r.app!=='any'?'var(--purple)':'var(--text-dim)'}" title="${esc(r.app||'')}">${r.app&&r.app!=='any'?esc(r.app.length>35?r.app.slice(0,35)+'…':r.app):'-'}</td>
             <td style="color:var(--text-dim)">${esc(r.logtraffic)}</td>
             <td>${r.status === 'disable' ? pill(tr('wwan.pill_disable'),'p-deny') : pill(tr('wwan.pill_enable'),'p-allow')}</td>
@@ -1226,7 +1230,7 @@ function onParsed(){
         rowFn=r=>`<tr>
             <td>${pVpnType(r.type)}</td>
             <td class="mono" style="color:var(--accent)">
-              <span class="clickable-cell" onclick="showVpnDetail(${JSON.stringify(r.name).replace(/"/g,'&quot;')})" title="${tr('vpn.click_tip')}">${esc(r.name)}</span>
+              <span class="clickable-cell" onclick="showVpnDetail(${JSON.stringify(r.name).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${tr('vpn.click_tip')}">${esc(r.name)}</span>
             </td>
             <td class="mono">${esc(r.remote)}</td>
             <td style="color:var(--text-dim)">${esc(r.iface)}</td>
@@ -1237,7 +1241,7 @@ function onParsed(){
             <td class="mono" style="color:var(--text-dim)">${esc(r.lifetime)}</td>
             <td style="color:var(--text-dim)">${esc(r.natTraversal||'-')}</td>
             <td style="color:var(--text-dim)">${esc(r.dpd||'-')}</td>
-            <td class="mono">${r.phase2&&r.phase2.length?`<span class="clickable-cell" onclick="showVpnPhase2Detail(${JSON.stringify(r.name).replace(/"/g,'&quot;')})" title="${tr('vpn.phase2_tip')}">${pill(r.phase2.length+' P2','p-info')}</span>`:'-'}</td>
+            <td class="mono">${r.phase2&&r.phase2.length?`<span class="clickable-cell" onclick="showVpnPhase2Detail(${JSON.stringify(r.name).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${tr('vpn.phase2_tip')}">${pill(r.phase2.length+' P2','p-info')}</span>`:'-'}</td>
             <td>${r.status==='disable'||r.status==='Disable'?pill(tr('wwan.pill_disable'),'p-deny'):pill(tr('wwan.pill_enable'),'p-allow')}</td>
           </tr>`;
         {const _orphanVpn=analyzeOrphanVPN(d);
@@ -1569,7 +1573,7 @@ function onParsed(){
 
   function _scf(type,val){if(type==='action'){$('filter-action').value=val;doFilter();}else if(type==='type'){$('filter-type').value=val;doFilter();}else if(type==='clear'){$('filter-action').value='';$('filter-type').value='';window._searchQ='';$('search-inp').value='';applyFilters();}}
   window._scf=_scf;
-  function sumC(items){return items.map(i=>{const cl=i.sf?' clickable':'';const oc=i.sf?` onclick="_scf(${JSON.stringify(i.sf.t).replace(/"/g,'&quot;')},${JSON.stringify(i.sf.v||'').replace(/"/g,'&quot;')})"`:'';;return`<div class="sum-card${cl}"${oc}><div class="sl">${i.l}</div><div class="sv" style="color:${i.c}">${i.v}</div></div>`;}).join('');}
+  function sumC(items){return items.map(i=>{const cl=i.sf?' clickable':'';const oc=i.sf?` onclick="_scf(${JSON.stringify(i.sf.t).replace(/&/g,'&amp;').replace(/"/g,'&quot;')},${JSON.stringify(i.sf.v||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;')})"`:'';;return`<div class="sum-card${cl}"${oc}><div class="sl">${i.l}</div><div class="sv" style="color:${i.c}">${i.v}</div></div>`;}).join('');}
 
   function rebuildSumForFiltered(sec, filtered, total) {
     const pct = Math.round(filtered.length/total*100);
@@ -1854,7 +1858,7 @@ function onParsed(){
         <span style="font-size:14px">${sevIcon[i.sev]||''}</span>
         <span style="font-size:13px;color:var(--text)${i.accepted ? ';text-decoration:line-through' : ''}">${esc(i.label)}</span>
         <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">${i.count}${i.capped ? ` <span title="${esc(tr('health.capped_tip'))}">(${esc(tr('health.capped_mark'))})</span>` : ''}</span>
-        <label style="font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:3px;cursor:pointer" title="${esc(tr('health.accept_risk_tip'))}"><input type="checkbox" ${i.accepted ? 'checked' : ''} onchange="_toggleAcceptedRisk(${JSON.stringify(i.key).replace(/"/g,'&quot;')}, this.checked)">${esc(tr('health.accept_risk'))}</label>
+        <label style="font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:3px;cursor:pointer" title="${esc(tr('health.accept_risk_tip'))}"><input type="checkbox" ${i.accepted ? 'checked' : ''} onchange="_toggleAcceptedRisk(${JSON.stringify(i.key).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}, this.checked)">${esc(tr('health.accept_risk'))}</label>
       </div>`).join('');
     }
     if (history.length > 1) {
@@ -2340,7 +2344,7 @@ function onParsed(){
         const actPill = r.action === 'accept'
           ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(34,197,94,.15);color:var(--green)">✓</span>`
           : `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(239,68,68,.15);color:var(--red)">✕</span>`;
-        return `<div class="ref-row" onclick="_jumpToPolicy(${JSON.stringify(r.id).replace(/"/g,'&quot;')});document.getElementById('_ref-modal-overlay')?.remove()">
+        return `<div class="ref-row" onclick="_jumpToPolicy(${JSON.stringify(r.id).replace(/&/g,'&amp;').replace(/"/g,'&quot;')});document.getElementById('_ref-modal-overlay')?.remove()">
           <span class="ref-id">#${esc(String(r.id))}</span>
           <span class="ref-name">${esc(r.name||'-')}</span>
           ${rolePill}${actPill}
