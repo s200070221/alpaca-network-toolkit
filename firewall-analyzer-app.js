@@ -1835,7 +1835,7 @@ function onParsed(){
     if (btn) btn.textContent = tr('health.recheck');
     const accepted = _loadAcceptedRisks();
     const res = computeFirewallHealth(PARSED, { acceptedRisks: accepted, expiryKeywords: _loadExpiryKeywords() });
-    const rawScore = accepted.length ? computeFirewallHealth(PARSED, { expiryKeywords: _loadExpiryKeywords() }).score : res.score;
+    const rawScore = res.rawScore;
     // onclick="_doHealthCheck()" 傳入的是 undefined，事件物件不會傳進來，故以 !== true 判斷
     if (skipRecord !== true) _saveFwHealthHistory(res.score, res.grade);
     const history = _loadFwHealthHistory();
