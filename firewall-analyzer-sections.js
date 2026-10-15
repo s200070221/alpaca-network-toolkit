@@ -26,7 +26,7 @@
 (function(){
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const pill=(t,c)=>`<span class="pill ${c}">${esc(t)}</span>`;
-function sumC(items){return items.map(i=>{const cl=i.sf?' clickable':'';const oc=i.sf?` onclick="_scf(${JSON.stringify(i.sf.t).replace(/"/g,'&quot;')},${JSON.stringify(i.sf.v||'').replace(/"/g,'&quot;')})"`:'';;return`<div class="sum-card${cl}"${oc}><div class="sl">${i.l}</div><div class="sv" style="color:${i.c}">${esc(i.v)}</div></div>`;}).join('');}
+function sumC(items){return items.map(i=>{const cl=i.sf?' clickable':'';const oc=i.sf?` onclick="_scf(${JSON.stringify(i.sf.t).replace(/&/g,'&amp;').replace(/"/g,'&quot;')},${JSON.stringify(i.sf.v||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;')})"`:'';;return`<div class="sum-card${cl}"${oc}><div class="sl">${i.l}</div><div class="sv" style="color:${i.c}">${esc(i.v)}</div></div>`;}).join('');}
 
 function buildHaSectionHtml(ha){
   const sumHtml=sumC([
@@ -457,7 +457,7 @@ function buildFortiswitchSectionHtml(fSwitches, fPorts, fMacPolicies, fNacPolici
       <td class="mono">${esc(p.vlan)}</td>
       <td class="mono" style="color:var(--text-dim)">${esc(p.nativeVlan)}</td>
       <td class="mono" style="color:var(--text-dim);font-size:11px">${esc(p.allowedVlans)}</td>
-      <td class="mono">${p.nacVlan&&p.nacVlan!=='-'?`<span class="clickable-cell" onclick="showFswNacDetail(${JSON.stringify(p.switchId).replace(/"/g,'&quot;')},${JSON.stringify(p.name).replace(/"/g,'&quot;')})" title="${tr('nac.click_tip')}">${esc(p.nacVlan)}</span>`:'-'}</td>
+      <td class="mono">${p.nacVlan&&p.nacVlan!=='-'?`<span class="clickable-cell" onclick="showFswNacDetail(${JSON.stringify(p.switchId).replace(/&/g,'&amp;').replace(/"/g,'&quot;')},${JSON.stringify(p.name).replace(/&/g,'&amp;').replace(/"/g,'&quot;')})" title="${tr('nac.click_tip')}">${esc(p.nacVlan)}</span>`:'-'}</td>
       <td>${p.poeStatus==='enable'?pill(tr('wwan.pill_enable'),'p-allow'):'-'}</td>
       <td class="mono" style="color:var(--text-dim)">${esc(p.speed)}</td>
       <td>${p.status==='down'?pill(tr('wwan.pill_disable'),'p-deny'):pill(tr('wwan.pill_enable'),'p-allow')}</td>

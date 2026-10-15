@@ -142,9 +142,13 @@ const CloudSGParser = (() => {
       const isItem = t => t === '-' || t.startsWith('- ');
       const unq = v => (/^"[\s\S]*"$/.test(v) ? (() => { try { return JSON.parse(v); } catch (e) { return v.slice(1, -1); } })() : /^'[\s\S]*'$/.test(v) ? v.slice(1, -1).replace(/''/g, "'") : v);
       const scalar = v => {
-        v = v.replace(/\s+#.*$/, '');
+        // 行尾註解：引號字串只去掉結尾引號之後的 # 註解，引號內的 # 保留
+        const qm = v.match(/^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*')(?:\s+#.*)?$/);
+        v = qm ? qm[1] : v.replace(/\s+#.*$/, '');
         if (v === '{}') return {};
         if (v === '[]') return [];
+        // 流式清單（policyTypes: [Ingress, Egress]），只支援純量成員
+        if (/^\[[^\[\]{}]*\]$/.test(v)) return v.slice(1, -1).split(',').map(x => x.trim()).filter(Boolean).map(scalar);
         if (/^["']/.test(v)) return unq(v);
         if (/^-?\d+(?:\.\d+)?$/.test(v)) return Number(v);
         if (/^(?:true|false)$/.test(v)) return v === 'true';

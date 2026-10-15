@@ -2189,10 +2189,24 @@ function renderWorkspaceCard() {
 let _dropMultiItems = [];
 // .gz 檔（2026-10-14，JA）：開頭為 gzip 標記 1f 8b 時以瀏覽器內建 DecompressionStream 解壓後再判斷工具，
 // 交接內容為解壓後文字、名稱去掉 .gz；與 log-analyzer.html 的 readTextFile() 為同一份邏輯（另行維護）
-async function _decodeBytes(buf) {
-  if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
-    return new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+// 多個 gzip 成員串接（cat a.gz b.gz > all.gz）時 Chromium 的 DecompressionStream 會拒絕，
+// 失敗時依成員檔頭（1f 8b 08）切開逐段解壓；檔頭位元組也可能出現在壓縮資料中，該處解壓失敗就繼續往後找
+async function gunzipText(buf) {
+  const one = b => new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+  try { return await one(buf); } catch (e) {
+    const parts = [];
+    let start = 0;
+    for (let i = 1; i + 2 < buf.length; i++) {
+      if (buf[i] !== 0x1f || buf[i + 1] !== 0x8b || buf[i + 2] !== 0x08) continue;
+      try { parts.push(await one(buf.subarray(start, i))); start = i; } catch (e2) { /* 不是成員邊界 */ }
+    }
+    if (!parts.length) throw e;
+    parts.push(await one(buf.subarray(start)));
+    return parts.join('');
   }
+}
+async function _decodeBytes(buf) {
+  if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) return gunzipText(buf);
   // 依 BOM 判斷 UTF-16（與 FileReader.readAsText 相同行為），其餘 UTF-8
   const enc = buf[0] === 0xff && buf[1] === 0xfe ? 'utf-16le' : (buf[0] === 0xfe && buf[1] === 0xff ? 'utf-16be' : 'utf-8');
   return new TextDecoder(enc).decode(buf);

@@ -555,10 +555,24 @@ function issueSample(is) {
 // 讀取上傳檔案（2026-10-14，JA）：開頭為 gzip 標記 1f 8b 時以瀏覽器內建 DecompressionStream 解壓
 // （S3 上的 VPC Flow Logs／CloudTrail／ELB 紀錄、輪替後的 syslog 多為 .gz），其餘以 UTF-8 解碼；
 // 解壓失敗丟出錯誤由呼叫端提示。gzipFileLabel() 顯示名稱去掉 .gz
-async function decodeLogBytes(buf) {
-  if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
-    return new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+// 多個 gzip 成員串接（cat a.gz b.gz > all.gz）時 Chromium 的 DecompressionStream 會拒絕，
+// 失敗時依成員檔頭（1f 8b 08）切開逐段解壓；檔頭位元組也可能出現在壓縮資料中，該處解壓失敗就繼續往後找
+async function gunzipText(buf) {
+  const one = b => new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+  try { return await one(buf); } catch (e) {
+    const parts = [];
+    let start = 0;
+    for (let i = 1; i + 2 < buf.length; i++) {
+      if (buf[i] !== 0x1f || buf[i + 1] !== 0x8b || buf[i + 2] !== 0x08) continue;
+      try { parts.push(await one(buf.subarray(start, i))); start = i; } catch (e2) { /* 不是成員邊界 */ }
+    }
+    if (!parts.length) throw e;
+    parts.push(await one(buf.subarray(start)));
+    return parts.join('');
   }
+}
+async function decodeLogBytes(buf) {
+  if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) return gunzipText(buf);
   // 依 BOM 判斷 UTF-16（與 FileReader.readAsText 相同行為），其餘 UTF-8
   const enc = buf[0] === 0xff && buf[1] === 0xfe ? 'utf-16le' : (buf[0] === 0xfe && buf[1] === 0xff ? 'utf-16be' : 'utf-8');
   return new TextDecoder(enc).decode(buf);
@@ -2146,7 +2160,8 @@ const SSHD_AUTH_RE = /^(Accepted|Failed) (\S+) for (invalid user )?(\S+) from (\
 const SSHD_INVALID_RE = /^Invalid user (\S*) from (\S+?)(?: port (\d+))?$/;
 const SSHD_NOIDENT_RE = /^Did not receive identification string from (\S+?)(?: port (\d+))?$/;
 const SSHD_PREAUTH_RE = /^(?:Connection closed by|Disconnected from) (?:(?:authenticating|invalid) user (\S+) )?(\S+) port (\d+) \[preauth\]/;
-const SUDO_RE = /^\s*(\S+) : (?:(.+?) ; )?TTY=(\S+) ; PWD=(.*?) ; USER=(\S+) ; COMMAND=(.*)$/;
+// USER 與 COMMAND 之間可能有 GROUP=／TSID=／ENV= 等欄位
+const SUDO_RE = /^\s*(\S+) : (?:(.+?) ; )?TTY=(\S+) ; PWD=(.*?) ; USER=(\S+) ; (?:[A-Z]+=.*? ; )*COMMAND=(.*)$/;
 function parseSshdMsg(appName, msg) {
   const s = String(msg || '').trim();
   let m;
@@ -2180,7 +2195,12 @@ function detectSshBruteSuccess(events) {
     const fails = [];
     sorted.forEach(e => {
       const t = e.timestamp.getTime();
-      if (e.fields.ssh !== 'accepted') { fails.push(e); return; }
+      if (e.fields.ssh !== 'accepted') {
+        // 同一次連線 sshd 會先記 Invalid user 再記 Failed password for invalid user，同來源埠只算一次
+        const last = fails[fails.length - 1];
+        if (last && e.fields.srcport && last.fields.srcport === e.fields.srcport && t - last.timestamp.getTime() <= 60000 && (last.fields.ssh === 'invalid' || e.fields.ssh === 'invalid')) return;
+        fails.push(e); return;
+      }
       const recent = fails.filter(x => t - x.timestamp.getTime() <= SSH_BRUTE_WINDOW_MS);
       if (recent.length < SSH_BRUTE_MIN) return;
       const users = [...new Set(recent.map(x => x.fields.user).filter(Boolean))];
@@ -2210,7 +2230,8 @@ function detectSshBruteSuccess(events) {
 //   [ (原因)]: [帳號[/密碼]] (from client 名稱 port 埠[ cli 主叫端][ via …])；開啟 auth_badpass／auth_goodpass 時方括號內帶密碼，去識別化一律遮蔽
 // 欄位：ovpn／ipsec／radius（事件種類）、user、cn（OpenVPN 憑證名稱）、srcip、srcport、assignIp、saName／saId、localIp／localId、
 //   netHost（RADIUS 用戶端）、nasPort、mac、failReason
-const OVPN_PREFIX_RE = /^(?:([^\s/]+)\/)?([0-9A-Fa-f.:]+):(\d+) ([\s\S]*)$/;
+// OpenVPN 2.4 起 CN 保留空白（John Doe/1.2.3.4:5），CN 為斜線前不含冒號與方括號的文字
+const OVPN_PREFIX_RE = /^(?:([^/:\[\]]+?)\/)?([0-9A-Fa-f.:]+):(\d+) ([\s\S]*)$/;
 function parseOpenVpnMsg(msg) {
   let s = String(msg || '').trim(), cn = '', srcip = '', srcport = '', m;
   const p = s.match(OVPN_PREFIX_RE);
@@ -2227,7 +2248,8 @@ function parseOpenVpnMsg(msg) {
   } else if ((m = s.match(/^\[([^\]]+)\] Peer Connection Initiated with /))) {
     f.ovpn = 'connect'; cn = cn || m[1];
   } else if ((m = s.match(/^TLS: Username\/(?:Password|auth-token) authentication (succeeded|failed|deferred) for username '([^']*)'/))) {
-    f.ovpn = m[1] === 'failed' ? 'authfail' : 'authok'; if (m[2]) f.user = m[2];
+    // deferred 是交給外掛非同步驗證，結果另有記錄，不算成功
+    f.ovpn = m[1] === 'failed' ? 'authfail' : m[1] === 'deferred' ? 'info' : 'authok'; if (m[2]) f.user = m[2];
   } else if (/^TLS Auth Error: /.test(s)) { f.ovpn = 'authfail'; f.failReason = s.slice(16); }
   else if (/^VERIFY ERROR: /.test(s)) { f.ovpn = 'verifyfail'; f.failReason = s.slice(14); }
   else if (/^TLS Error: TLS handshake failed/.test(s)) f.ovpn = 'tlsfail';
@@ -2269,7 +2291,8 @@ const RADIUS_AUTH_RE = /^(?:\((\d+)\) )?(Login OK|Login incorrect|Invalid user|R
 function parseFreeRadiusMsg(msg) {
   const m = String(msg || '').trim().match(RADIUS_AUTH_RE);
   if (!m) return null;
-  const slash = m[4].indexOf('/');
+  // 機器驗證的帳號本身帶斜線（host/PC01.corp.local），之後的斜線才是記錄下來的密碼
+  const slash = m[4].indexOf('/', /^host\//i.test(m[4]) ? 5 : 0);
   const f = { radius: m[2] === 'Login OK' ? 'accept' : 'reject', user: slash >= 0 ? m[4].slice(0, slash) : m[4], netHost: m[5], nasPort: m[6] };
   if (m[1]) f.reqId = m[1];
   if (slash >= 0) f.pwLogged = true;
@@ -2292,7 +2315,7 @@ const VPN_CTIME_SRC = '[A-Z][a-z]{2} [A-Z][a-z]{2} [ \\d]\\d \\d{2}:\\d{2}:\\d{2
 const RADIUS_FILE_RE = new RegExp(`^(${VPN_CTIME_SRC}) : (Auth|Info|Error|Warning|Proxy|Debug): ([\\s\\S]*)$`);
 const OVPN_FILE_RE = new RegExp(`^(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}|${VPN_CTIME_SRC}) ([\\s\\S]*)$`);
 const CHARON_FILE_RE = /^(?:([A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2}) )?(\d{2}\[[A-Z]{2,4}\] [\s\S]*)$/;
-const OVPN_FILE_HINT_RE = /^(?:OpenVPN \d|Initialization Sequence Completed|(?:[^\s/]+\/)?[0-9A-Fa-f.:]+:\d+ \S)/;
+const OVPN_FILE_HINT_RE = /^(?:OpenVPN \d|Initialization Sequence Completed|(?:[^/:\[\]]+?\/)?[0-9A-Fa-f.:]+:\d+ \S)/;
 function vpnFileKind(line) {
   let m = line.match(RADIUS_FILE_RE);
   if (m) return { app: 'radiusd', vendor: 'freeradius', tsRaw: m[1], level: m[2], msg: m[3], prefix: line.slice(0, line.length - m[3].length) };
@@ -2316,7 +2339,7 @@ function parseVpnFileLine(line, lineNo) {
 // 同一工作階段的事件互補：strongSwan 依連線名稱＋編號帶入對端位址（認證失敗訊息沒有位址）、依編號或對端 ID 帶入
 // 指派位址給 deleting IKE_SA；OpenVPN 依用戶端「位址:埠」帶入指派位址給 client-instance exiting（位址歸屬結束點）
 function linkVpnSessions(events) {
-  const sa = new Map(), peer = new Map(), ovpn = new Map();
+  const sa = new Map(), peer = new Map(), ovpn = new Map(), lastUp = new Map();
   events.forEach(e => {
     const f = e.fields;
     if (!f) return;
@@ -2324,7 +2347,14 @@ function linkVpnSessions(events) {
       const k = f.saId ? `${e.host}|${f.saName}|${f.saId}` : '';
       const s = k ? (sa.get(k) || {}) : {};
       if (f.srcip) s.srcip = f.srcip; else if (s.srcip) f.srcip = s.srcip;
-      if (f.ipsec === 'assign' && f.assignIp) { s.assignIp = f.assignIp; if (f.user) peer.set(`${e.host}|${f.user}`, f.assignIp); }
+      if (f.ipsec === 'up' && k && f.user) lastUp.set(`${e.host}|${f.user}`, k);
+      if (f.ipsec === 'assign' && f.assignIp) {
+        s.assignIp = f.assignIp;
+        if (f.user) peer.set(`${e.host}|${f.user}`, f.assignIp);
+        // 沒有 <連線|編號> 前綴的 syslog：指派位址記到同帳號最近建立的 SA，同帳號多個 SA 結束時才不會對錯位址
+        const up = !k && f.user ? sa.get(lastUp.get(`${e.host}|${f.user}`)) : null;
+        if (up && !up.assignIp) up.assignIp = f.assignIp;
+      }
       if (f.ipsec === 'down' && !f.assignIp) {
         const ip = s.assignIp || peer.get(`${e.host}|${f.user}`);
         if (ip) f.assignIp = ip;
@@ -3248,7 +3278,7 @@ function cloudAuthInfo(o) {
   // user.name、access_device.ip（可能帶埠）、application.name、isotimestamp（或 Unix 秒 timestamp）
   if (typeof o.txid === 'string' && typeof o.result === 'string' && typeof o.event_type === 'string' && (o.access_device || o.user)) {
     const ipRaw = String(g('access_device', 'ip') || '');
-    const ip = (ipRaw.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/) || ipRaw.match(/^\[?([0-9A-Fa-f:]+?)\]?(?::\d+)?$/) || [])[1] || '';
+    const ip = (ipRaw.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/) || ipRaw.match(/^\[([0-9A-Fa-f:]+)\](?::\d+)?$/) || ipRaw.match(/^([0-9A-Fa-f:]+)$/) || [])[1] || '';  // IPv6 只有加方括號時才可能接埠號
     return { vendor: 'duo', event: `${o.event_type} ${o.result}`, user: g('user', 'name') || o.email || '', ip, login: o.event_type === 'authentication', ok: o.result === 'success',
       fraud: o.result === 'fraud', reason: [o.reason, o.factor, g('application', 'name')].filter(Boolean).join(' '),
       ts: o.isotimestamp || (typeof o.timestamp === 'number' ? new Date(o.timestamp * 1000).toISOString() : '') };
@@ -3299,6 +3329,8 @@ const isAwsNfwLog = o => !!o && typeof o.firewall_name === 'string' && !!o.event
 const isAzureFwLog = o => !!o && typeof o.category === 'string' && /^(?:AzureFirewall\w+|AZFW\w+)$/.test(o.category) && !!o.properties && typeof o.properties === 'object';
 const AZFW_MSG_RE = /^(\w+)(?: Type=(\d+))?\s+request from (\S+?)(?::(\d+))?(?: to (\S+?)(?::(\d+))?)?\.(?: Url: (\S+)\.)? Action: (\w+)\.?\s*(.*)$/;
 // DNS Proxy 舊版 msg 為 CoreDNS 格式：DNS Request: 用戶端:埠 - 編號 類型 類別 名稱 協定 大小 do 緩衝 RCODE …；新版 AZFWDnsQuery 為結構化欄位
+// 舊版 NAT 規則 msg：TCP request from A:P to B:Q was DNAT'ed to C:R（Microsoft Azure Firewall 記錄文件）
+const AZFW_DNAT_RE = /^(\w+) request from (\S+?):(\d+) to (\S+?):(\d+) was DNAT'ed to (\S+?):(\d+)/;
 const AZFW_DNS_RE = /^DNS Request: (\S+):(\d+) - \d+ (\S+) \S+ (\S+) \w+ \d+ \w+ \d+ ([A-Z]+)/;
 function nfwEvent(obj, lineNo) {
   const e = eventFromJSONObject(obj.event, lineNo);
@@ -3325,6 +3357,9 @@ function azfwEvent(obj, lineNo) {
       if (r) { f.ruleCollection = r[1]; f.rule = r[2]; }
       const pol = m[9].match(/Policy: ([^.]+)\./);
       if (pol) f.policy = pol[1];
+    } else {
+      const d = p.msg.match(AZFW_DNAT_RE);
+      if (d) Object.assign(f, { proto: d[1], srcip: d[2], srcport: d[3], dstip: d[4], dstport: d[5], natip: d[6], natport: d[7], actionRaw: 'Dnat' });
     }
   } else {
     const g = k => (p[k] === undefined || p[k] === null || p[k] === '' ? '' : String(p[k]));
@@ -3336,7 +3371,7 @@ function azfwEvent(obj, lineNo) {
     if (/ThreatIntel/i.test(obj.category)) f.threatIntel = g('ThreatDescription') || 'ThreatIntel';
     Object.keys(f).forEach(k => { if (f[k] === '') delete f[k]; });
   }
-  f.action = /^(?:deny|drop)$/i.test(f.actionRaw || '') ? 'deny' : (/^allow$/i.test(f.actionRaw || '') ? 'accept' : (f.actionRaw || '').toLowerCase());
+  f.action = /^(?:deny|drop)$/i.test(f.actionRaw || '') ? 'deny' : (/^(?:allow|dnat)$/i.test(f.actionRaw || '') ? 'accept' : (f.actionRaw || '').toLowerCase());
   const ts = new Date(obj.time || '');
   const host = String(obj.resourceId || '').split('/').pop() || '';
   return {
@@ -3783,7 +3818,7 @@ function buildTimelineBuckets(events, bucketCount) {
   const n = bucketCount || 48;
   if (!events.length) return { buckets: [], startTime: null, endTime: null, bucketMs: 0 };
   const times = events.map(effectiveTime);
-  const startTime = Math.min(...times), endTime = Math.max(...times);
+  const startTime = arrMin(times), endTime = arrMax(times);
   const span = Math.max(endTime - startTime, 1);
   const bucketMs = span / n;
   const buckets = Array.from({ length: n }, () => ({ Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0, total: 0 }));
@@ -3862,7 +3897,7 @@ function buildTimelineSVG(buckets, startTime, endTime, bucketMs, selectedRange, 
   // 攻擊鏈色條畫在長條圖下方（每列高 5、間距 2），有色條時整張圖與時間刻度一併往下延伸；
   // 點擊色條以該攻擊鏈的時間範圍篩選事件清單（沿用既有 selectTimelineRange()）
   const lanes = buildTimelineChainLanes(chains, startTime, endTime, chartW);
-  const laneCount = lanes.length ? Math.max(...lanes.map(l => l.lane)) + 1 : 0;
+  const laneCount = lanes.length ? arrMax(lanes.map(l => l.lane)) + 1 : 0;
   const extraH = laneCount * 7;
   const chainBars = lanes.map(l => {
     const c = l.chain;
@@ -4109,6 +4144,9 @@ function analyzeEvents(events) {
   });
   return events;
 }
+// 陣列最小／最大值：Math.min(...陣列) 在十幾萬筆時會超出呼叫堆疊
+function arrMin(a) { let m = Infinity; for (const v of a) { const x = +v; if (x < m) m = x; } return m; }
+function arrMax(a) { let m = -Infinity; for (const v of a) { const x = +v; if (x > m) m = x; } return m; }
 function effectiveTime(e) {
   return e.timestamp ? e.timestamp.getTime() : e.lineNo * 1000;
 }
@@ -4199,14 +4237,19 @@ function parseWorkDays(v) {
   });
   return set.size ? set : new Set([1, 2, 3, 4, 5]);
 }
+// UTC 位移：'local' 代表依瀏覽器時區逐筆換算（跨夏令時間的 log 每筆用當時的位移），其餘為固定分鐘數
+function tzOffsetAt(ts, tz) {
+  return tz === 'local' ? -ts.getTimezoneOffset() : (Number(tz) || 0);
+}
 function isOffHours(ts, cfg) {
   if (!ts) return false;
-  const d = new Date(ts.getTime() + (cfg.tzOffsetMin || 0) * 60000);
+  const d = new Date(ts.getTime() + tzOffsetAt(ts, cfg.tzOffsetMin) * 60000);
   const ymd = d.toISOString().slice(0, 10);
   if (cfg.holidays && cfg.holidays.has(ymd)) return true;
   if (!cfg.days.has(d.getUTCDay())) return true;
   const t = d.getUTCHours() * 60 + d.getUTCMinutes();
-  return t < cfg.start || t >= cfg.end;
+  // 跨午夜的上班時段（如 22:00-06:00）：落在結束與開始之間才是時段外
+  return cfg.start <= cfg.end ? (t < cfg.start || t >= cfg.end) : (t >= cfg.end && t < cfg.start);
 }
 // 事件的「操作者」帳號：Windows 事件中 TargetUserName 多半是被操作的對象（被加入的群組、被建立的帳號），
 // 只有登入／驗證類事件的 TargetUserName 才是登入者，其餘以 SubjectUserName 為準；SYSTEM、服務帳號與電腦帳號（$ 結尾）不算
@@ -4247,7 +4290,7 @@ function detectOffHours(issues, events, cfg) {
   byActor.forEach((list, actor) => {
     list.sort((x, y) => x.e.timestamp - y.e.timestamp);
     const first = list[0];
-    const local = new Date(first.e.timestamp.getTime() + (cfg.tzOffsetMin || 0) * 60000).toISOString().slice(0, 16).replace('T', ' ');
+    const local = new Date(first.e.timestamp.getTime() + tzOffsetAt(first.e.timestamp, cfg.tzOffsetMin) * 60000).toISOString().slice(0, 16).replace('T', ' ');
     const kind = first.cat === 'sudo' ? { key: 'sample.offHours_sudo' } : { key: 'cat.' + first.cat };
     out.push({
       category: 'offHours', severityNorm: 'Medium', count: list.length,
@@ -4264,7 +4307,7 @@ function usualHourActor(e) {
   return eventActorUser(e);
 }
 function eventLocalHour(ts, tzOffsetMin) {
-  return new Date(ts.getTime() + (tzOffsetMin || 0) * 60000).getUTCHours();
+  return new Date(ts.getTime() + tzOffsetAt(ts, tzOffsetMin) * 60000).getUTCHours();
 }
 function buildActorHourBaseline(events, tzOffsetMin) {
   const actors = {};
@@ -4274,13 +4317,13 @@ function buildActorHourBaseline(events, tzOffsetMin) {
     if (!actors[a]) actors[a] = new Array(24).fill(0);
     actors[a][eventLocalHour(e.timestamp, tzOffsetMin)]++;
   });
-  return { tzOffsetMin: tzOffsetMin || 0, actors };
+  return { tzOffsetMin: tzOffsetMin === 'local' ? 'local' : (tzOffsetMin || 0), actors };
 }
 const UNUSUAL_HOUR_MIN_BASE = 20;
 // 帳號在基線至少 20 筆，本期事件所在小時與前後一小時在基線都沒有紀錄時列入，依帳號彙整
 function detectUnusualHours(events, baseline) {
   if (!baseline || !baseline.actors || typeof baseline.actors !== 'object') return [];
-  const tz = Number(baseline.tzOffsetMin) || 0;
+  const tz = baseline.tzOffsetMin === 'local' ? 'local' : (Number(baseline.tzOffsetMin) || 0);
   const byActor = new Map();
   (events || []).forEach(e => {
     const a = e.timestamp ? usualHourActor(e) : '';
@@ -6858,8 +6901,8 @@ function detectCustomRules(events, rules) {
     issues.push({
       category: 'custom:' + rule.id, customRuleName: rule.name, severityNorm: rule.severity,
       count: matches.length,
-      firstSeen: times.length ? new Date(Math.min(...times.map(t => +t))) : null,
-      lastSeen: times.length ? new Date(Math.max(...times.map(t => +t))) : null,
+      firstSeen: times.length ? new Date(arrMin(times.map(t => +t))) : null,
+      lastSeen: times.length ? new Date(arrMax(times.map(t => +t))) : null,
       sampleRaw: matches[0].raw, relatedHosts: hosts.slice(0, 20), relatedEvents: matches.slice(0, 50),
       confidence: 'heuristic', customRuleId: rule.id, customRuleMatchType: rule.matchType, customRulePattern: rule.pattern,
       chainStage: rule.stage || '', mitre: sg && sg.mitre ? sg.mitre : undefined
@@ -6955,7 +6998,7 @@ function buildMitreLayer(issues) {
     cur.comments.push(`${tr(CAT_KEY_MAP[baseCat] || 'cat.other')}: ${is.count}`);
   });
   const techniques = Array.from(byTech, ([techniqueID, v]) => ({ techniqueID, score: v.score, comment: v.comments.join('; ') }));
-  const maxScore = techniques.length ? Math.max(...techniques.map(t => t.score)) : 1;
+  const maxScore = techniques.length ? arrMax(techniques.map(t => t.score)) : 1;
   return {
     name: `log_analyzer — ${new Date().toISOString()}`,
     versions: { attack: '15', navigator: '4.9.0', layer: '4.5' },
@@ -7123,7 +7166,7 @@ function buildActorProfile(actor, events, issues, chains) {
     if (side) [f[side + 'Name'], f[side + 'User']].forEach(v => { if (v) owners.add(String(v)); });
   });
   return { actor: a, events: evs, issues: iss, chains: chs,
-    firstSeen: times.length ? Math.min(...times) : 0, lastSeen: times.length ? Math.max(...times) : 0,
+    firstSeen: times.length ? arrMin(times) : 0, lastSeen: times.length ? arrMax(times) : 0,
     hours, peers: [...peers].sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1)).slice(0, 10).map(([peer, count]) => ({ peer, count })),
     owners: [...owners] };
 }
@@ -7162,7 +7205,7 @@ function issueTime(issue, which) {
   const events = issue.relatedEvents || [];
   if (!events.length) return 0;
   const times = events.map(e => effectiveTime(e));
-  return which === 'first' ? Math.min(...times) : Math.max(...times);
+  return which === 'first' ? arrMin(times) : arrMax(times);
 }
 
 // 階段對照：possibleScan／freq:denyBlock→偵察；freq:authFail→嘗試存取；knownIOC→已知惡意
@@ -7226,8 +7269,8 @@ function detectCorrelationChains(issues, opts) {
       const stageEntries = group.map(is => ({ stage: _issueChainStage(is), issue: is, time: issueTime(is, 'first') }))
         .sort((a, b) => a.time - b.time);
       const times = group.flatMap(is => [issueTime(is, 'first'), issueTime(is, 'last')]);
-      const first = Math.min(...times), last = Math.max(...times);
-      const sevRank = Math.min(...group.map(is => SEV_RANK[is.severityNorm]));
+      const first = arrMin(times), last = arrMax(times);
+      const sevRank = arrMin(group.map(is => SEV_RANK[is.severityNorm]));
       const severityNorm = Object.keys(SEV_RANK).find(k => SEV_RANK[k] === sevRank);
       chains.push({ actor, stages: stageEntries, severityNorm, firstSeen: first, lastSeen: last, spanMs: last - first });
     };
@@ -7459,7 +7502,8 @@ function anonMAC(mac) {
   stats.mac++;
   return formatMAC(hex, mac);
 }
-const IPv4_RE = /(?<![.\d])(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?![.\d])/g;
+// 前後不可接數字或「.數字」（版本號、OID 不當成位址），但句尾的句點可以（Azure Firewall 的 to 10.0.3.4. Action:）
+const IPv4_RE = /(?<!\d|\d\.)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?!\d|\.\d)/g;
 // 2026-08-09 稽核修復：去識別化模組先前完全沒有 IPv6 支援，真實 IPv6 位址在自由文字 msg
 // 中會原樣殘留；比照 config_anonymizer 已有的 IPv6_RE/anonIPv6() 邏輯移植（ctrs.ip6 計數器
 // 早已存在於上方 ctrs 物件定義，先前只是缺對應的正則與函式，形同虛設）
@@ -7511,8 +7555,12 @@ const MAC_DOT_RE = /\b([0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}\b/g;
 // 會被替換的 IPv6 至少 4 組（有 :: 或連續 3 組「十六進位:」），其餘行略過整段 IPv6 正則（第二十八輪 OP3）
 const IPV6_HINT_RE = /::|(?:[0-9a-fA-F]{1,4}:){3}/;
 function replaceIPsInLine(line, opts) {
+  // ::ffff:IPv4 映射位址：IPv4 部分與一般 IPv4 用同一對照（否則 IPv6 正則只吃到 ::ffff:10，剩下的 .1.2.3 又被另外替換）
+  const mapped = [];
+  line = line.replace(/(?<![0-9A-Fa-f:])::ffff:(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])/gi, (m, v4) => { mapped.push(v4); return '\u0000' + (mapped.length - 1) + '\u0000'; });
   if (IPV6_HINT_RE.test(line)) line = line.replace(IPv6_RE, m => (m.split(':').length >= 4 && !MAC_SHAPE_RE.test(m) ? anonIPv6(m) : m));
-  return line.replace(IPv4_RE, m => (isValidIPv4(m) && classifyIP(m) !== 'skip' ? anonIP(m, opts) : m));
+  line = line.replace(IPv4_RE, m => (isValidIPv4(m) && classifyIP(m) !== 'skip' ? anonIP(m, opts) : m));
+  return mapped.length ? line.replace(/\u0000(\d+)\u0000/g, (m, i) => '::ffff:' + (isValidIPv4(mapped[i]) && classifyIP(mapped[i]) !== 'skip' ? anonIP(mapped[i], opts) : mapped[i])) : line;
 }
 function replaceMACsInLine(line) {
   return line.replace(MAC_COLON_RE, m => anonMAC(m)).replace(MAC_HYPHEN_RE, m => anonMAC(m)).replace(MAC_DOT_RE, m => anonMAC(m));
@@ -7745,6 +7793,8 @@ function anonymizeWebEvent(clone, opts) {
     const tok = parts.filter((x, i) => i % 2 === 0);
     if (tok[7] && tok[7] !== '-') tok[7] = anonUser(tok[7]);
     if (tok[6]) tok[6] = tok[6].replace(/^((?:[a-z][\w+.-]*:\/\/)?)([^\/:\s]+)/i, (m, p, h) => p + (isValidIPv4(h) ? h : anonDnsName(h)));
+    // 階層欄（HIER_DIRECT/主機、FIRSTUP_PARENT/上層 proxy）在 log_ip_on_direct off 或 cache peer 時是主機名稱
+    if (tok[8]) tok[8] = tok[8].replace(/^([A-Z_]+\/)(.+)$/, (m, p, h) => p + (h === '-' || isValidIPv4(h) || /^[0-9A-Fa-f:]+$/.test(h) ? h : anonDnsName(h)));
     raw = parts.map((x, i) => i % 2 === 0 ? tok[i / 2] : x).join('');
     const ev = parseSquidLine(raw, clone.lineNo);
     if (ev) { clone.fields = ev.fields; clone.msg = ev.msg; }
@@ -7905,7 +7955,7 @@ function anonymizeVpnAuthEvent(clone, opts) {
   let msg = String(clone.msg || '');
   if (f0.radius) {
     msg = msg.replace(/: \[(.*?)\] \(from client (\S+) /, (x, who, cl) => {
-      const i = who.indexOf('/');
+      const i = who.indexOf('/', /^host\//i.test(who) ? 5 : 0);
       const u = i >= 0 ? who.slice(0, i) : who;
       return `: [${u ? anonUser(u) : ''}${i >= 0 ? '/REDACTED_PASSWORD' : ''}] (from client ${anonHostname(cl)} `;
     });
@@ -7915,9 +7965,11 @@ function anonymizeVpnAuthEvent(clone, opts) {
     });
     // 憑證主體（OpenVPN VERIFY OK／ERROR、strongSwan DN 形式的 ID）中的 CN 也換假帳號
     msg = msg.replace(/\bCN=([^,/\s\]']+)/g, (x, v) => 'CN=' + anonUser(v));
+    // strongSwan 的「位址[IKE ID]」：未拆出欄位的行（looking for peer configs matching …）也要換；ID 為位址或 %any 時留給位址替換
+    msg = msg.replace(/(\d+\.\d+\.\d+\.\d+|[0-9A-Fa-f]*:[0-9A-Fa-f:]+)\[([^\]\s]+)\]/g, (m, ip, id) =>
+      ip + '[' + (isValidIPv4(id) || /^[0-9A-Fa-f:]+$/.test(id) || id === '%any' || /^(?:C|CN|O|OU)=/.test(id) ? id : id.includes('@') || !id.includes('.') ? anonUser(id) : anonHostname(id)) + ']');
   }
-  // strongSwan 的「本端[ID]...對端[ID]」中對端位址前緊接句點，分段替換才不會被當成更長的數字串而略過
-  clone.msg = replaceMACsInLine(msg.split(']...').map(p => replaceIPsInLine(p, opts)).join(']...'));
+  clone.msg = replaceMACsInLine(replaceIPsInLine(msg, opts));
   const re = parseVpnAuthMsg(clone.appName, clone.msg);
   clone.fields = { ...sd, ...(re ? re.fields : {}) };
   ['assignIp', 'srcip', 'srcport'].forEach(k => { if (f0[k] && !clone.fields[k]) clone.fields[k] = replaceIPsInLine(String(f0[k]), opts); });
@@ -7957,7 +8009,8 @@ function anonymizeCloudflareEvent(clone, opts) {
 }
 function anonymizeEvent(evt, opts) {
   if (evt.fields && evt.fields.haproxy) { const c = { ...evt, fields: { ...evt.fields } }; anonymizeHaproxyEvent(c, opts); return c; }
-  if (isVpnAuthFields(evt.fields)) { const c = { ...evt, fields: { ...evt.fields } }; anonymizeVpnAuthEvent(c, opts); return c; }
+  // 未拆出欄位的 VPN 記錄行（charon 的 looking for peer configs 等）也走同一套，IKE ID 才會一併替換
+  if (isVpnAuthFields(evt.fields) || evt.format === 'vpnauth' || (/^rfc(?:3164|5424)$/.test(evt.format) && /^(?:charon|ipsec|openvpn|ovpn-|radiusd)/.test(evt.appName || ''))) { const c = { ...evt, fields: { ...(evt.fields || {}) } }; anonymizeVpnAuthEvent(c, opts); return c; }
   if (evt.fields && (evt.fields.ssh || evt.fields.sudo)) { const c = { ...evt, fields: { ...evt.fields } }; anonymizeSshEvent(c, opts); return c; }
   if (evt.fields && evt.fields.ise) { const c = { ...evt, fields: { ...evt.fields } }; anonymizeIseEvent(c, opts); return c; }
   if (evt.fields && evt.fields.dhcp) { const c = { ...evt, fields: { ...evt.fields } }; anonymizeDhcpEvent(c, opts); return c; }
@@ -9617,7 +9670,7 @@ function renderIssues() {
     const noteText = issueNotes[noteKey] || '';
     // 動態值塞進 onclick 屬性一律用 JSON.stringify()+跳脫雙引號（本專案既有慣例，見
     // firewall-analyzer-audit.js 等既有 onclick 寫法），而非自行處理單引號跳脫
-    const noteKeyArg = JSON.stringify(noteKey).replace(/"/g, '&quot;');
+    const noteKeyArg = esc(JSON.stringify(noteKey));
     const noteCell = `<button class="note-btn${noteText ? ' has-note' : ''}" onclick="onIssueNoteClick(${noteKeyArg})" title="${esc(noteText || tr('issues.note_prompt'))}">📝</button>`;
     const status = issueStatusOf(noteKey);
     const statusCell = `<select onchange="onIssueStatusChange(${noteKeyArg}, this.value)">${ISSUE_STATUS_VALUES.map(v => `<option value="${v}"${v === status ? ' selected' : ''}>${esc(tr('status.' + v))}</option>`).join('')}</select>`;
@@ -9660,7 +9713,7 @@ function setActorExportProfile(p) {
 function issueActorLink(is) {
   const a = deriveIssueActorByUser(is) || deriveIssueActor(is);
   if (!a) return '';
-  return `<a href="#actor-card" class="actor-link" title="${esc(tr('actor.title'))}: ${esc(a)}" onclick="showActorProfile(${JSON.stringify(String(a)).replace(/"/g, '&quot;')});return false;">👤</a> `;
+  return `<a href="#actor-card" class="actor-link" title="${esc(tr('actor.title'))}: ${esc(a)}" onclick="showActorProfile(${esc(JSON.stringify(String(a)))});return false;">👤</a> `;
 }
 function showActorProfile(actor) {
   const input = document.getElementById('actor-input');
@@ -9686,7 +9739,7 @@ function showActorProfile(actor) {
   const hourBars = p.events.some(e => e.timestamp) ? `<h3>${esc(tr('actor.hours_title'))}</h3><div class="actor-hours" style="display:flex;align-items:flex-end;gap:2px;height:60px">`
     + p.hours.map((n, h) => `<div title="${h}:00 · ${n}" style="flex:1;background:var(--accent);opacity:${n ? 0.35 + 0.65 * n / maxH : 0.12};height:${n ? Math.max(4, Math.round(56 * n / maxH)) : 2}px"></div>`).join('')
     + `</div><div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim)"><span>0</span><span>6</span><span>12</span><span>18</span><span>23</span></div>` : '';
-  const peerRows = p.peers.map(x => `<tr><td class="mono"><a href="#actor-card" class="actor-link" onclick="showActorProfile(${JSON.stringify(x.peer).replace(/"/g, '&quot;')});return false;">${esc(x.peer)}</a></td><td>${x.count}</td></tr>`).join('');
+  const peerRows = p.peers.map(x => `<tr><td class="mono"><a href="#actor-card" class="actor-link" onclick="showActorProfile(${esc(JSON.stringify(x.peer))});return false;">${esc(x.peer)}</a></td><td>${x.count}</td></tr>`).join('');
   box.innerHTML = `<p><strong>${esc(a)}</strong>：${esc(summary)}${range}</p>`
     + (p.owners.length ? `<p>${esc(tr('actor.owners'))}${esc(p.owners.join(', '))}</p>` : '')
     + hourBars
@@ -9720,7 +9773,7 @@ function renderChains() {
       return `<span class="badge ${s.issue.severityNorm}">${tr(CHAIN_STAGE_KEY_MAP[s.stage])}</span>${mitreBadge}`;
     }).join(' → ');
     return `<tr>
-      <td><a href="#actor-card" class="actor-link" onclick="showActorProfile(${JSON.stringify(c.actor).replace(/"/g, '&quot;')});return false;">${esc(c.actor)}</a></td>
+      <td><a href="#actor-card" class="actor-link" onclick="showActorProfile(${esc(JSON.stringify(c.actor))});return false;">${esc(c.actor)}</a></td>
       <td><span class="badge ${c.severityNorm}">${tr(SEV_KEY_MAP[c.severityNorm])}</span></td>
       <td>${stageText}</td>
       <td>${fmtTime(c.firstSeen)}</td>
@@ -9993,7 +10046,7 @@ function collectAnalyzeOpts() {
     enabled: document.getElementById('opt-enable-offhours').checked,
     start: parseWorkTime(val('opt-work-start'), 8 * 60), end: parseWorkTime(val('opt-work-end'), 18 * 60),
     days: parseWorkDays(val('opt-work-days')),
-    tzOffsetMin: tzHours !== null && Math.abs(tzHours) <= 14 ? Math.round(tzHours * 60) : -new Date().getTimezoneOffset(),
+    tzOffsetMin: tzHours !== null && Math.abs(tzHours) <= 14 ? Math.round(tzHours * 60) : 'local',
     holidays: new Set(val('opt-holidays').split(/[\s,]+/).filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x))),
   };
   const actorHourBaseline = BASELINE_SNAPSHOT && BASELINE_SNAPSHOT.actorHours ? BASELINE_SNAPSHOT.actorHours : null;
@@ -10538,7 +10591,7 @@ function buildReportTimelineSVG(events) {
 function buildLogExecSummary(issues, events, statusOf) {
   const lines = [];
   const ts = events.map(e => e.timestamp ? new Date(e.timestamp).getTime() : NaN).filter(t => !isNaN(t));
-  if (ts.length) lines.push(tr('exec.period').replace('{from}', fmtTime(Math.min(...ts))).replace('{to}', fmtTime(Math.max(...ts))).replace('{events}', events.length));
+  if (ts.length) lines.push(tr('exec.period').replace('{from}', fmtTime(arrMin(ts))).replace('{to}', fmtTime(arrMax(ts))).replace('{events}', events.length));
   else lines.push(tr('exec.events_only').replace('{events}', events.length));
   if (!issues.length) { lines.push(tr('exec.none')); return lines; }
   const top = issues.slice().sort((a, b) => SEV_RANK[a.severityNorm] - SEV_RANK[b.severityNorm] || b.count - a.count).slice(0, 3);
