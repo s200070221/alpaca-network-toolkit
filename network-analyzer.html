@@ -1289,7 +1289,7 @@ const VENDOR_NAMES = {t:'Cisco FTD',netgearsmart:'Netgear Smart Managed Pro',vos
   // 2026-08-19 新增：log_analyzer 拖放偵測的格式標籤（非廠牌，沿用同一份對照表顯示於拖放
   // 提示 chip），key 與 detectTool() 回傳的 vendor 字串一致
   rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog',kvfw:'SonicWall／Sophos Firewall Log',pancsv:'Palo Alto PAN-OS CSV',umbrella:'Cisco Umbrella CSV',elb:'AWS ELB Access Log',s3access:'AWS S3 Access Log',dnslog:'DNS 查詢紀錄',dhcplog:'DHCP 租約紀錄',winfw:'Windows 防火牆 log',vpnauth:'OpenVPN／strongSwan／FreeRADIUS log',squid:'Squid access.log',awsnfw:'AWS Network Firewall log',azfw:'Azure Firewall log',zeek:'Zeek Log (TSV)', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log',
-  ciscoios:'Cisco IOS Log', comwarelog:'Comware Log', isosyslog:'Syslog（ISO 時間）', w3c:'IIS W3C Log', weblog:'Web Access Log', mikrotiklog:'MikroTik Log'};
+  ciscoios:'Cisco IOS Log', comwarelog:'Comware Log', isosyslog:'Syslog（ISO 時間）', w3c:'IIS W3C Log', weblog:'Web Access Log', mikrotiklog:'MikroTik Log', ldap:'OpenLDAP／389 Directory Server log', radacct:'FreeRADIUS detail（radacct）'};
 let _dropPending = null;
 // 快速連續拖放/選檔的競態防呆：每次啟動新的 FileReader 讀取時遞增，onload 觸發時比對
 // 是否仍是最新一次讀取的世代號，避免較舊、讀取較慢（如檔案較大）的結果晚於較新的讀取
@@ -1341,7 +1341,7 @@ const LOG_HEAD_SIGS = [
   // 第三十輪（與 log_analyzer 一致）：FreeRADIUS detail 檔（ctime 時間行後接縮排屬性）、389 Directory Server access log、
   // 事件檢視器 CSV 與 PowerShell Export-Csv 的 Windows 事件
   [/^[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} \d{4}\s*\n[ \t]+[A-Za-z][\w-]* = /m, 'radacct'],
-  [/^\[\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2}(?:\.\d+)?\s*[+-]\d{4}\] conn=\d+ /m, 'ldap'],
+  [/^\[\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2}(?:\.\d+)?\s*[+-]\d{4}\] conn=\d+ |^[0-9a-f]{8}\.[0-9a-f]{8} (?:0x[0-9a-f]+ )?conn=\d+ /m, 'ldap'],
   [/^(?:Level|Keywords|層級|關鍵字),(?:Date and Time|日期和時間),(?:Source|來源),(?:Event ID|事件識別碼),/m, 'winevent'],
   [/^"?(?:Message|Id)"?,(?=[^\n]*"?ProviderName"?)(?=[^\n]*"?TimeCreated"?)/m, 'winevent'],
   [/^(?:<\d{1,3}>)?(?:\d+:\s+)?(?:[*.]?(?:(?:[A-Z][a-z]{2}\s+\d{1,2}(?:\s+\d{4})?\s+)?\d{1,2}:\d{2}:\d{2}(?:\.\d+)?(?:\s+[A-Za-z]{2,5})?|\d+[ywdh]\d+[ywdhm](?:\d+[dhm])?)\s*:\s*)?%[A-Z][A-Z0-9_]*-\d-[A-Z0-9_]+:/m, 'ciscoios'],
@@ -1351,7 +1351,7 @@ const LOG_HEAD_SIGS = [
   [/^#separator\s[^\n]*\n(?:#[^\n]*\n)*#fields\t/m, 'zeek'],
   [/^#Software: Microsoft Windows Firewall/m, 'winfw'],
   // OpenVPN／strongSwan charon.log／FreeRADIUS radius.log 記錄檔（第二十三輪 IA～IC，與 log_analyzer vpnFileKind() 一致）
-  [/^(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}|[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} \d{4}) (?:OpenVPN \d|(?:[^\s/]+\/)?[0-9A-Fa-f.:]+:\d+ (?:MULTI|TLS|VERIFY|\[|SIG))|^[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} \d{4} : (?:Auth|Info|Error|Warning|Proxy|Debug): |^(?:[A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} )?\d{2}\[(?:IKE|CFG|NET|ENC|KNL|DMN|MGR|CHD|JOB|LIB|ASN|TLS|ESP|APP|IMC|IMV|PTS|TNC)\] /m, 'vpnauth'],
+  [/^(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}|[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} \d{4}) (?:OpenVPN \d|(?:[^\s/]+\/)?[0-9A-Fa-f.:]+:\d+ (?:MULTI|TLS|VERIFY|\[|SIG))|^[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} \d{4} : (?:Auth|Info|Error|ERROR|Warning|WARNING|Proxy|Debug): |^(?:[A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} )?\d{2}\[(?:IKE|CFG|NET|ENC|KNL|DMN|MGR|CHD|JOB|LIB|ASN|TLS|ESP|APP|IMC|IMV|PTS|TNC)\] /m, 'vpnauth'],
   // 雲端防火牆 log（第二十二輪 HE）：AWS Network Firewall（firewall_name＋event）、Azure Firewall 診斷 log（category）
   [/"firewall_name"\s*:\s*"[^"]*"[\s\S]{0,200}?"event"\s*:\s*\{/, 'awsnfw'],
   [/"category"\s*:\s*"(?:AzureFirewall\w+|AZFW\w+)"/, 'azfw'],
@@ -2134,6 +2134,7 @@ const WS_KEYS = [
   { key: 'fw_log_retention_days', tool: 'firewall_analyzer', group: 'settings' },
   { key: 'fw_audit_marks', tool: 'firewall_analyzer', group: 'settings', json: true }, { key: 'fw_audit_reviewer', tool: 'firewall_analyzer', group: 'settings' },
   { key: 'log_analyzer_settings_v1', tool: 'log_analyzer', group: 'settings', json: true },
+  { key: '_netAnalyzer_intelSources', tool: 'log_analyzer', group: 'settings', json: true }, { key: 'intel_builder_lang', tool: 'log_analyzer', group: 'settings' },
   { key: 'switch_analyzer_health_history_v1', tool: 'switch_analyzer', group: 'history', json: true },
   { key: 'firewall_analyzer_health_history_v1', tool: 'firewall_analyzer', group: 'history', json: true },
   { key: '_netAnalyzer_summaries', tool: 'common', group: 'history', json: true }, { key: '_netAnalyzer_activityHistory', tool: 'common', group: 'history', json: true },
