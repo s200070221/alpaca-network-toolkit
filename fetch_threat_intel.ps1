@@ -1,5 +1,7 @@
 ﻿# fetch_threat_intel.ps1 — 下載並合併公開黑名單 IP/CIDR 情資清單，輸出 NDJSON 供 log_analyzer
 # 「④ 威脅情資本機比對清單」的「上傳清單」按鈕匯入。
+# 不想用 PowerShell，或要在 macOS／Linux 使用時，可改用同資料夾的 threat-intel-builder.html（以瀏覽器開啟，
+# 另支援 IPv6、網域、檔案雜湊與 ASN，並可自行增減來源）；本腳本保留給 Windows 排程定期更新。
 #
 # 用法:
 #   .\log_analyzer\fetch_threat_intel.ps1
