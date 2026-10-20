@@ -245,6 +245,12 @@ function renderJuniperACL(aclList){
       const isAny=v=>!v||v==='-'||String(v).toLowerCase()==='any';
       if(!isAny(r.src))lines.push(`set firewall filter ${a.name} term ${term} from source-address ${r.src}`);
       if(!isAny(r.dst))lines.push(`set firewall filter ${a.name} term ${term} from destination-address ${r.dst}`);
+      // 協定與目的埠：未輸出時 term 只剩 then，會變成比對全部流量（例如「拒絕 UDP 53」
+      // 變成「拒絕全部」）。Junos 以 from protocol X／from destination-port N 表示；
+      // ip／any 代表不限協定，整行省略
+      const proto=String(r.protocol||'').toLowerCase();
+      if(proto&&proto!=='ip'&&proto!=='any'&&proto!=='-')lines.push(`set firewall filter ${a.name} term ${term} from protocol ${proto}`);
+      if(r.dstPort&&r.dstPort!=='-')lines.push(`set firewall filter ${a.name} term ${term} from destination-port ${r.dstPort}`);
       lines.push(`set firewall filter ${a.name} term ${term} then ${r.action==='permit'?'accept':'discard'}`);
     });
     (a.appliedOn||[]).forEach(ap=>{

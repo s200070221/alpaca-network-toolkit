@@ -77,7 +77,36 @@ function nxosSwitchportLines(iface){
   }
   return lines;
 }
-function renderNXOSInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vpc,ospf6List,qosApplyList){
+// IPv4 OSPF 逐介面指派：NX-OS 沒有 network 陳述式，area 只能在介面下以
+// `ip router ospf <tag> area <area>` 指定（parseNXOS() 的 parseOSPF() 以同一行讀回）。
+// OSPF 表單的 Network 欄位可填介面名稱（解析器讀回的形式），或填網段＋萬用遮罩，
+// 此時以介面 IP 是否落在該網段判斷
+function _nxosIpNum(ip){const p=String(ip||'').split('.').map(Number);return p.length===4&&p.every(n=>n>=0&&n<=255)?((p[0]<<24)>>>0)+(p[1]<<16)+(p[2]<<8)+p[3]:null;}
+function nxosOspfAreaLines(name,ip,ospfList){
+  const lines=[];
+  const addr=_nxosIpNum(String(ip||'').split('/')[0]);
+  (ospfList||[]).forEach(o=>{
+    const pid=o.pid||o.processId||1;
+    (o.areas||[]).forEach(a=>{
+      const hit=(a.networks||[]).some(n=>{
+        const net=String(n.network||'').trim();
+        if(!net)return false;
+        if(net.toLowerCase()===String(name).toLowerCase())return true;
+        const [nAddr,len]=net.split('/');
+        const nNum=_nxosIpNum(nAddr);
+        if(nNum===null||addr===null)return false;
+        let wild=_nxosIpNum(n.wildcard);
+        if(len!==undefined)wild=len==='0'?0xffffffff:(2**(32-Number(len))-1);
+        if(wild===null)wild=0;
+        const mask=(~wild)>>>0;
+        return ((addr&mask)>>>0)===((nNum&mask)>>>0);
+      });
+      if(hit&&!lines.includes(` ip router ospf ${pid} area ${a.area}`))lines.push(` ip router ospf ${pid} area ${a.area}`);
+    });
+  });
+  return lines;
+}
+function renderNXOSInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vpc,ospf6List,qosApplyList,ospfList){
   const lines=[`interface ${iface.name}`];
   if(iface.desc)lines.push(` description ${iface.desc}`);
   const lacpGroup=lacpList?.find(l=>l.members?.some(m=>m===iface.name));
@@ -95,6 +124,7 @@ function renderNXOSInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vp
     (iface.secondaryIps||[]).filter(s=>!s.includes(':')).forEach(s=>lines.push(` ip address ${s} secondary`));
   }
   if(iface.vrf)lines.push(` vrf member ${iface.vrf}`);
+  lines.push(...nxosOspfAreaLines(iface.name,iface.ip,ospfList));
   // OSPFv3（2026-08-23 新增）：真正的 area 關聯在各自 interface 區塊內用
   // "ipv6 router ospfv3 TAG area AREA" 逐一指派
   (ospf6List||[]).forEach(o=>{
@@ -156,7 +186,7 @@ function renderNXOSInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vp
   findQosApplications(qosApplyList,iface.name).forEach(ap=>lines.push(` service-policy type qos ${ap.direction} ${ap.policy}`));
   return lines.join('\n');
 }
-function renderNXOSInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,vpc,ospf6List,qosApplyList){return ifaces.map(i=>renderNXOSInterface(i,lacpList,dhcpList,aclList,securityList,stp,vpc,ospf6List,qosApplyList)).join('\n!\n');}
+function renderNXOSInterfaces(ifaces,lacpList,dhcpList,aclList,securityList,stp,vpc,ospf6List,qosApplyList,ospfList){return ifaces.map(i=>renderNXOSInterface(i,lacpList,dhcpList,aclList,securityList,stp,vpc,ospf6List,qosApplyList,ospfList)).join('\n!\n');}
 
 // class-map/match（2026-08-31 新增）：對外查證 Cisco Nexus QoS Configuration Guide＋Cisco
 // Community/NetCraftsmen 真實範例，見 switch-analyzer-parser-nxos.js 的 parseNxosClassMaps()
@@ -247,7 +277,8 @@ function renderNXOSBGPList(bgps){
 function renderNXOSOSPF(ospfs){
   if(!ospfs||!ospfs.length)return '';
   const blocks=ospfs.map(o=>{
-    const lines=[`router ospf ${o.processId||1}`];
+    // OSPF 表單欄位為 pid（processId 為舊欄位名稱，保留相容）；原本只讀 processId，永遠輸出 1
+    const lines=[`router ospf ${o.pid||o.processId||1}`];
     if(o.routerId)lines.push(` router-id ${o.routerId}`);
     return lines.join('\n');
   });
@@ -286,12 +317,14 @@ function renderNXOSBreakoutBlock(breakouts){
 // 子指令縮排務必比 "hsrp N" 這行本身更深一層——對應 switch_analyzer parseVRRP() 的
 // nxos 分支用縮排深度判斷子區塊邊界（非其他廠牌那種同層級的 "standby N ip X"）；
 // preempt 預設關閉，需顯式輸出 "preempt" 才代表開啟（比照傳統 Cisco HSRP，與 Arista 相反）
-function renderNXOSVRRPGroup(g){
+function renderNXOSVRRPGroup(g,ospfList){
   const lines=[`interface Vlan${g.vlanId}`];
   if(g.ip){
     const [ip,len]=g.ip.split('/');
     lines.push(`  ip address ${ip}/${len}`);
   }
+  // 有 VRRP 的 VLAN 不經 withSviInterfaces() 合成 SVI，OSPF 指派需在這裡輸出
+  lines.push(...nxosOspfAreaLines(`Vlan${g.vlanId}`,g.ip,ospfList));
   g.entries.forEach(v=>{
     lines.push(`  hsrp ${v.vrid}`);
     if(v.preempt)lines.push(`    preempt`);
@@ -303,7 +336,7 @@ function renderNXOSVRRPGroup(g){
   });
   return lines.join('\n');
 }
-function renderNXOSVRRP(list){return groupVrrpByVlan(list).map(renderNXOSVRRPGroup).join('\n!\n');}
+function renderNXOSVRRP(list,ospfList){return groupVrrpByVlan(list).map(g=>renderNXOSVRRPGroup(g,ospfList)).join('\n!\n');}
 
 // NX-OS VPC（Virtual Port Channel）：獨立頂層 "vpc domain N" 區塊，peer-link 則內嵌在
 // 對應 port-channel 自己的 interface 區塊（見 renderNXOSInterface 的 vpc 參數），已查證
@@ -330,9 +363,14 @@ function assembleNXOSConfig(model){
   // 需要先啟用這兩個 feature 才會被真機接受，否則會被拒絕
   const hasNxosVxlan=model.vxlan&&((model.vxlan.vnis&&model.vxlan.vnis.length)||model.vxlan.vtep);
   if(hasNxosVxlan){blocks.push('feature nv overlay');blocks.push('feature vn-segment-vlan-based');}
-  // VRRP 在 NX-OS 是掛在 "interface Vlan N" SVI 底下的 HSRP 區塊，真實設備上需要先啟用
-  // feature interface-vlan 才能建立 SVI，否則 interface Vlan 指令本身就會被拒絕
-  if(model.vrrp&&model.vrrp.length)blocks.push('feature interface-vlan');
+  // 任何 interface Vlan N（VLAN IP 合成的 SVI，或 VRRP 所在的 SVI）都需要先啟用
+  // feature interface-vlan，否則 interface Vlan 指令本身就會被拒絕（原本只看 VRRP）
+  const hasNxosSvi=(model.vrrp&&model.vrrp.length)||(model.interfaces||[]).some(i=>i.type==='svi'||/^vlan\s*\d+$/i.test(i.name||''));
+  if(hasNxosSvi)blocks.push('feature interface-vlan');
+  // channel-group N mode active|passive 需要 feature lacp（mode on 靜態聚合不需要）；
+  // VRRP 列在 NX-OS 以 HSRP 輸出（renderNXOSVRRPGroup() 的 hsrp N），需要 feature hsrp
+  if((model.lacp||[]).some(l=>l.mode==='active'||l.mode==='passive'))blocks.push('feature lacp');
+  if(model.vrrp&&model.vrrp.length)blocks.push('feature hsrp');
   // 2026-07-22 對外查證官方 NX-OS Security Configuration Guide 後新增：802.1X／
   // port-security 指令在 NX-OS 上同樣需要先啟用對應 feature，否則逐介面的
   // dot1x pae authenticator／switchport port-security 系列指令會被拒絕（IOS-XE 不需要
@@ -366,12 +404,12 @@ function assembleNXOSConfig(model){
   // Configuring vPCs 文件），結構與已修復的 Comware Bridge-Aggregation 問題相同
   const nxosVpcBlock=renderNXOSVpc(model.vpc);
   if(nxosVpcBlock)blocks.push(nxosVpcBlock);
-  if(model.interfaces&&model.interfaces.length)blocks.push(renderNXOSInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.vpc,model.ospf6,model.qosApply));
+  if(model.interfaces&&model.interfaces.length)blocks.push(renderNXOSInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.vpc,model.ospf6,model.qosApply,model.ospf));
   const nxosLacpExtra=renderNXOSLACPExtra(model.lacp,model.interfaces);
   if(nxosLacpExtra)blocks.push(nxosLacpExtra);
   const nxosVxlanBlock=renderNXOSVXLAN(model.vxlan);
   if(nxosVxlanBlock)blocks.push(nxosVxlanBlock);
-  if(model.vrrp&&model.vrrp.length)blocks.push(renderNXOSVRRP(model.vrrp));
+  if(model.vrrp&&model.vrrp.length)blocks.push(renderNXOSVRRP(model.vrrp,model.ospf));
   // STP 全域：直接重用 Cisco/Dell OS10 共用的 renderSpanningTreeGlobal（parseSTP 對 nxos
   // 走同一套 Cisco-style generic 分支，語法沿用即可）
   const stpBlockNx=renderSpanningTreeGlobal(model.stp);

@@ -302,7 +302,8 @@ function analyzeSwitchAudit(parsed){
     const memIfaces=memNames.map(n=>interfaces.find(i=>i.name===n)).filter(Boolean);
     if(memIfaces.length<2)return;
     const modes=new Set(memIfaces.map(i=>i.mode||''));
-    const accessVlans=new Set(memIfaces.filter(i=>i.mode==='access').map(i=>String(i.nativeVlan||'')));
+    // access 埠的 VLAN 放在 vlans（NX-OS 為 vlan），nativeVlan 是 trunk 用的欄位（2026-10-16）
+    const accessVlans=new Set(memIfaces.filter(i=>i.mode==='access').map(i=>String(i.vlans||i.vlan||'')));
     if(modes.size>1||accessVlans.size>1)lacpMismatch.push(l.name);
   });
   f('lacp-member-mismatch', tr('audit.check_lacp_member_mismatch'), lacpMismatch.length, 'medium',

@@ -203,7 +203,7 @@ function assembleRuijieConfig(model){
   // ACL：已查證與 Cisco IOS 語法相符，沿用既有慣例排在 blocks 陣列最後（區塊擷取正則只
   // 認得下一個同關鍵字區塊或字串結尾）。2026-09-21 修正：此組先前雖彼此相鄰，卻排在
   // Users/SNMP/Telnet 之前，同樣違反「放最後」規則，一併搬到組裝順序最末端
-  if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
+  if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl,{wildcard:true}));
   // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
   // 不能顛倒（2026-08-28（續4）新增，語法比照 Cisco 未查得落差佐證，同下方 QoS 註解理由）
   if(model.classMaps&&model.classMaps.length)blocks.push(renderClassMapQoS(model.classMaps));

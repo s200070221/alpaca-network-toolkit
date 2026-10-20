@@ -19,9 +19,13 @@ function parseRouterOSVLANs(cfg){
     idM[1].split(',').filter(Boolean).forEach(t=>{const r=t.split('-').map(Number);if(r.length===2&&r[0]<=r[1]&&r[1]-r[0]<4094){for(let i=r[0];i<=r[1];i++)ids.push(i);}else if(r[0])ids.push(r[0]);});
     const tagged=(l.match(/\btagged=([^\s]+)/)||[])[1]||'';
     const untagged=(l.match(/\buntagged=([^\s]+)/)||[])[1]||'';
+    // comment= 當作 VLAN 名稱（bridge VLAN 表沒有 name 屬性；switch_config_generator 以 comment 保存）
+    const cm=l.match(/\bcomment=(?:"((?:[^"\\]|\\.)*)"|(\S+))/);
+    const comment=cm?(cm[1]!==undefined?cm[1].replace(/\\(.)/g,'$1'):cm[2]):'';
     ids.forEach(id=>{
       if(!seen.has(id))seen.set(id,{id,name:`VLAN${id}`,ports:[],status:'active',tagged:[],untagged:[]});
       const v=seen.get(id);
+      if(comment&&ids.length===1)v.name=comment;
       if(tagged)v.tagged.push(...tagged.split(','));
       if(untagged)v.untagged.push(...untagged.split(','));
     });
@@ -45,6 +49,26 @@ function parseRouterOSInterfaces(cfg){
     if(type==='bridge'||type==='bonding'||type==='vlan')continue;
     const lines=m[2].split('\n');
     for(let i=0;i<lines.length;i++){
+      // 真實匯出檔的實體埠為 set [ find default-name=ether1 ] [name=新名稱] comment=... disabled=yes；
+      // 舊寫法 add name=X 仍相容
+      const setM=lines[i].match(/^\s*set\s+\[\s*find\s+default-name=([^\s\]]+)\s*\](.*)$/);
+      if(setM){
+        const rest=setM[2];
+        const name=(rest.match(/\bname=("[^"]*"|\S+)/)||[])[1]||setM[1];
+        const cm=rest.match(/\bcomment=(?:"((?:[^"\\]|\\.)*)"|(\S+))/);
+        const desc=cm?(cm[1]!==undefined?cm[1].replace(/\\(.)/g,'$1'):cm[2]):'';
+        const disabled=/\bdisabled=yes\b/.test(rest);
+        let speed='-',portType=type;
+        if(type==='sfp-sfpplus')portType='SFP+',speed='10G';
+        else if(type==='qsfp28')portType='QSFP28',speed='40G';
+        else if(type==='ethernet')portType='Ethernet',speed='1G';
+        const old=intfs.find(x=>x.name===name.replace(/^"|"$/g,''));
+        const rec=old||{name:name.replace(/^"|"$/g,''),status:'up',speed,portType,description:'',desc:'',type:'physical',member:'1',mode:'',vlans:''};
+        if(desc){rec.desc=desc;rec.description=desc;}
+        if(disabled){rec.status='down';rec.shutdown=true;}
+        if(!old)intfs.push(rec);
+        continue;
+      }
       const addM=lines[i].match(/add\s+name=([^\s]+)(?:.*?speed=(\d+(?:\w+)?)?)?/);
       if(addM){
         const name=addM[1];
@@ -480,8 +504,8 @@ function _parseVRRPRouterOS(cfg){
 // `/ip address`，才能讓這顆 VLAN 有可路由的閘道 IP。回傳形狀比照 parseRouterOSInterfaces()
 // 既有物件補齊 UI 表格會讀到的欄位，避免顯示 undefined
 function _parseRouterOSVlanInterfaces(cfg){
-  const block=cfg.match(/^\/interface\s+vlan\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
-  const vlanIfaces=(block?block[1].split('\n'):[]).filter(l=>/^\s*add\s/.test(l)).map(l=>({
+  // VRRP 綁定的 VLAN 介面可能在另一段 /interface vlan，收集全部同名區塊
+  const vlanIfaces=_routerOSCollectAddLines(cfg,'\\/interface\\s+vlan').map(l=>({
     name:(l.match(/\bname=(\S+)/)||[])[1]||'',
     vid:(l.match(/\bvlan-id=(\d+)/)||[])[1]||'',
   })).filter(v=>v.name);
@@ -497,11 +521,31 @@ function _parseRouterOSVlanInterfaces(cfg){
     mode:'',vlans:v.vid,type:'svi',ip:ipByIface[v.name],
   }));
 }
+// /interface bridge port（舊版範例誤寫的 /interface bridge member 仍相容）：真實匯出檔不會
+// 列出未改過設定的實體埠，埠只出現在這裡；pvid= 為未標記封包所屬 VLAN（RouterOS 會自動
+// 把 pvid 加為該埠的 untagged 成員），bridge VLAN 表沒有列到這個埠時以 pvid 判斷 access VLAN
+function _parseRouterOSBridgePorts(cfg){
+  return _routerOSCollectAddLines(cfg,'\\/interface\\s+bridge\\s+(?:port|member)').map(l=>({
+    iface:(l.match(/\binterface=(\S+)/)||[])[1]||'',
+    pvid:(l.match(/\bpvid=(\d+)/)||[])[1]||'',
+  })).filter(p=>p.iface);
+}
 function parseRouterOS(cfg){
   const sys=parseRouterOSSysInfo(cfg);
   const rosVlans=parseRouterOSVLANs(cfg), rosInterfaces=parseRouterOSInterfaces(cfg);
   const rosLacp=parseRouterOSLACP(cfg);
+  const bridgePorts=_parseRouterOSBridgePorts(cfg);
+  const lagNames=new Set(rosLacp.map(l=>l.name));
+  bridgePorts.forEach(bp=>{
+    if(lagNames.has(bp.iface)||rosInterfaces.some(i=>i.name===bp.iface))return;
+    rosInterfaces.push({name:bp.iface,status:'up',speed:'-',portType:'Ethernet',description:'',desc:'',type:'physical',member:'1',mode:'',vlans:''});
+  });
   applyRouterOSVlanMembership(rosVlans,rosInterfaces,rosLacp);
+  bridgePorts.forEach(bp=>{
+    if(!bp.pvid||bp.pvid==='1')return;
+    const targets=lagNames.has(bp.iface)?(rosLacp.find(l=>l.name===bp.iface).members||[]):[bp.iface];
+    targets.forEach(n=>{const i=rosInterfaces.find(x=>x.name===n); if(i&&!i.mode){i.mode='access';i.vlans=bp.pvid;}});
+  });
   return{
     sys,irf:null,stack:null,
     vlans:rosVlans,

@@ -54,6 +54,28 @@ const CiscoASAParser = (() => {
     return ifaces;
   }
 
+  // ASA 埠名稱（running-config 會把常見埠號寫成名稱，如 eq https、eq www）與 eq/gt/lt/neq/range 轉成埠範圍字串（2026-10-16）
+  const ASA_PORTS = { 'aol':5190, 'bgp':179, 'biff':512, 'bootpc':68, 'bootps':67, 'chargen':19, 'cifs':3020, 'citrix-ica':1494, 'cmd':514, 'ctiqbe':2748, 'daytime':13,
+    'discard':9, 'dnsix':195, 'domain':53, 'echo':7, 'exec':512, 'finger':79, 'ftp':21, 'ftp-data':20, 'gopher':70, 'h323':1720, 'hostname':101, 'http':80, 'https':443,
+    'ident':113, 'imap4':143, 'irc':194, 'isakmp':500, 'kerberos':750, 'klogin':543, 'kshell':544, 'ldap':389, 'ldaps':636, 'login':513, 'lotusnotes':1352, 'lpd':515,
+    'mobile-ip':434, 'nameserver':42, 'netbios-dgm':138, 'netbios-ns':137, 'netbios-ssn':139, 'nfs':2049, 'nntp':119, 'ntp':123, 'pcanywhere-data':5631,
+    'pcanywhere-status':5632, 'pim-auto-rp':496, 'pop2':109, 'pop3':110, 'pptp':1723, 'radius':1645, 'radius-acct':1646, 'rip':520, 'rsh':514, 'rtsp':554,
+    'secureid-udp':5510, 'sip':5060, 'smtp':25, 'snmp':161, 'snmptrap':162, 'sqlnet':1521, 'ssh':22, 'sunrpc':111, 'syslog':514, 'tacacs':49, 'talk':517,
+    'telnet':23, 'tftp':69, 'time':37, 'uucp':540, 'vxlan':4789, 'who':513, 'whois':43, 'www':80, 'xdmcp':177 };
+  const asaPort = v => (/^\d+$/.test(v) ? +v : ASA_PORTS[String(v).toLowerCase()]);
+  // 回傳埠範圍字串（逗號分隔），無法辨識的埠名回傳 null
+  function asaPortSpec(op, a, b) {
+    const x = asaPort(a), y = asaPort(b);
+    if (x === undefined) return null;
+    if (op === 'eq') return String(x);
+    if (op === 'range') return y === undefined ? null : `${x}-${y}`;
+    if (op === 'gt') return x >= 65535 ? null : `${x + 1}-65535`;
+    if (op === 'lt') return x <= 1 ? null : `1-${x - 1}`;
+    if (op === 'neq') return [x > 1 ? `1-${x - 1}` : '', x < 65535 ? `${x + 1}-65535` : ''].filter(Boolean).join(',');
+    return null;
+  }
+  const ASA_PORT_OPS = new Set(['eq', 'gt', 'lt', 'neq', 'range']);
+
   function parsePolicies(text, addrTypeMap) {
     const policies = [];
     let id = 1;
@@ -78,8 +100,10 @@ const CiscoASAParser = (() => {
       const [, aclName, rawAction, proto, rest] = m;
       if (cryptoAcls.has(aclName)) continue;
       const action = rawAction === 'permit' ? 'accept' : 'deny';
-      const parts = rest.trim().split(/\s+/);
+      let parts = rest.trim().split(/\s+/);
       let src='any', dst='any', svc=proto, i=0;
+      // 協定位置寫服務物件／群組（permit object-group SVC …、permit object SVC …）：名稱即服務
+      if ((proto === 'object' || proto === 'object-group') && parts.length) { svc = parts[0]; parts = parts.slice(1); }
       // parse source
       if (parts[i]==='any'||parts[i]==='any4'||parts[i]==='any6') { src='any'; i++; }
       else if (parts[i]==='host') { src=parts[i+1]||'any'; i+=2; }
@@ -94,8 +118,12 @@ const CiscoASAParser = (() => {
         else if (/^\d+\.\d+\.\d+\.\d+$/.test(parts[i])&&/^\d+\.\d+\.\d+\.\d+$/.test(parts[i+1]||'')) { dst=`${parts[i]} ${parts[i+1]}`; i+=2; }
         else { dst=parts[i]||'any'; i++; }
       }
-      if (parts[i]==='eq'&&parts[i+1]) svc=`${proto}/${parts[i+1]}`;
-      else if (parts[i]==='range'&&parts[i+1]&&parts[i+2]) svc=`${proto}/${parts[i+1]}-${parts[i+2]}`;
+      // 目的埠：eq／gt／lt／neq／range（埠名轉數字），或目的位址後接服務群組／物件（object-group SVC）
+      if (ASA_PORT_OPS.has(parts[i]) && parts[i+1]) {
+        const spec = asaPortSpec(parts[i], parts[i+1], parts[i+2]);
+        // 無法辨識的埠名保留原文（查詢時回傳無法判斷），不可當成不限埠號
+        svc = spec ? `${proto}/${spec}` : `${proto}/${parts[i+1]}`;
+      } else if ((parts[i]==='object-group'||parts[i]==='object') && parts[i+1] && (proto==='tcp'||proto==='udp'||proto==='tcp-udp')) svc = parts[i+1];
       const srcAddrSplit = _splitAddr(src, addrTypeMap);
       const dstAddrSplit = _splitAddr(dst, addrTypeMap);
       // ASA 原生支援的 ACE 修飾字：行尾 `inactive` 停用該筆規則（不刪除）；`log disable`
@@ -171,20 +199,44 @@ const CiscoASAParser = (() => {
 
   function parseServiceObjects(text) {
     const svcs = [];
-    for (const block of text.split(/^(?=object-group\s+service\s)/m)) {
-      const m = block.match(/^object-group\s+service\s+(\S+)(?:\s+(\S+))?/);
-      if (!m) continue;
-      const name=m[1], proto=m[2]||'';
-      const ports = [], refs = [];
-      for (const l of block.split('\n').slice(1)) {
-        const t = l.trim();
-        const mP = t.match(/^(?:port-object|service-object\s+\S+)\s+(?:eq\s+(\S+)|range\s+(\S+)\s+(\S+))/);
-        if (mP) ports.push(mP[1]||`${mP[2]}-${mP[3]}`);
-        // 引用其他物件／群組（group-object NAME、service-object object NAME），供未使用物件稽核展開
+    // 依協定累積埠範圍；tcp-udp 兩邊都加，icmp／ip 另記旗標（2026-10-16：原本只輸出 port，核心比對讀 tcpPorts／udpPorts，ASA 服務物件永遠比對不到）
+    const add = (acc, proto, spec) => {
+      const pr = String(proto || '').toLowerCase();
+      if (pr === 'ip') { acc.ip = true; return; }
+      if (pr === 'icmp' || pr === 'icmp6') { acc.icmp = true; return; }
+      if (!spec) { if (pr === 'tcp' || pr === 'tcp-udp') acc.tcp.push('1-65535'); if (pr === 'udp' || pr === 'tcp-udp') acc.udp.push('1-65535'); return; }
+      if (pr === 'tcp' || pr === 'tcp-udp') acc.tcp.push(spec);
+      if (pr === 'udp' || pr === 'tcp-udp') acc.udp.push(spec);
+    };
+    const build = (name, acc, refs, display, type) => {
+      const protos = [acc.tcp.length && 'TCP', acc.udp.length && 'UDP', acc.icmp && 'ICMP'].filter(Boolean);
+      return { name, proto: acc.ip ? 'IP' : protos.join('/'), port: display.join(',') || '-', tcpPorts: acc.tcp.join(',') || '-', udpPorts: acc.udp.join(',') || '-',
+        type, color: '0', members: refs.join(', ') || '-', refOnly: !acc.ip && !protos.length && refs.length > 0 };
+    };
+    for (const block of text.split(/^(?=object-group\s+service\s|object\s+service\s)/m)) {
+      const g = block.match(/^object-group\s+service\s+(\S+)(?:\s+(\S+))?/);
+      const o = !g && block.match(/^object\s+service\s+(\S+)/);
+      if (!g && !o) continue;
+      const acc = { tcp: [], udp: [], icmp: false, ip: false }, refs = [], display = [];
+      const lines = block.split('\n').slice(1).filter(l => /^\s/.test(l)).map(l => l.trim());
+      for (const t of lines) {
+        // port-object eq/range（群組本身的協定）
+        const mP = t.match(/^port-object\s+(eq|gt|lt|neq|range)\s+(\S+)(?:\s+(\S+))?/);
+        if (mP && g) { const spec = asaPortSpec(mP[1], mP[2], mP[3]); add(acc, g[2] || '', spec); display.push(mP[3] ? `${mP[2]}-${mP[3]}` : mP[2]); continue; }
+        // service-object PROTO [source …] [destination] OP 埠、或 object service 的 service PROTO … destination OP 埠
+        const mS = t.match(/^(?:service-object|service)\s+(tcp-udp|tcp|udp|icmp6?|ip|\d+)\b(.*)$/);
+        if (mS) {
+          const d = mS[2].match(/destination\s+(eq|gt|lt|neq|range)\s+(\S+)(?:\s+(\S+))?/) || mS[2].match(/^\s*(eq|gt|lt|neq|range)\s+(\S+)(?:\s+(\S+))?/);
+          const spec = d ? asaPortSpec(d[1], d[2], d[3]) : '';
+          if (spec !== null) add(acc, mS[1], spec); else refs.push(`${mS[1]}/${d[2]}`);
+          display.push(d ? `${mS[1]}/${d[3] ? d[2] + '-' + d[3] : d[2]}` : mS[1]);
+          continue;
+        }
+        // 引用其他物件／群組（group-object NAME、service-object object NAME），供未使用物件稽核與查詢展開
         const mR = t.match(/^(?:group-object|service-object\s+object)\s+(\S+)/);
         if (mR) refs.push(mR[1]);
       }
-      svcs.push({ name, proto, port:ports.join(',')||'-', type:'group', color:'0', members:refs.join(', ')||'-' });
+      svcs.push(build(g ? g[1] : o[1], acc, refs, display, g ? 'group' : 'object'));
     }
     return svcs;
   }
@@ -202,6 +254,17 @@ const CiscoASAParser = (() => {
       if (mOld) {
         nat.push({ id:id++, type:mOld[2]==='0'?'nonat':'dynamic', srcIf:mOld[1], dstIf:'outside', origSrc:`${mOld[3]}/${mOld[4]}`, transSrc:'interface' });
       }
+    }
+    // object NAT（auto NAT，2026-10-16）：object network X 底下縮排的
+    // `nat (實際介面,對外介面) static|dynamic 對外位址 [service tcp|udp 實際埠 對外埠]`，實際位址即該物件
+    for (const block of text.split(/^(?=object\s+network\s)/m)) {
+      const ob = block.match(/^object\s+network\s+(\S+)/);
+      if (!ob) continue;
+      const m = block.match(/^\s+nat\s+\(([^,]+),([^)]+)\)\s+(static|dynamic)\s+(\S+)(?:\s+service\s+(tcp|udp)\s+(\S+)\s+(\S+))?/m);
+      if (!m) continue;
+      const e = { id:id++, name:ob[1], type:m[3], srcIf:m[1].trim(), dstIf:m[2].trim(), origSrc:ob[1], transSrc:m[4] };
+      if (m[5]) { e.proto = m[5]; e.realPort = String(asaPort(m[6]) ?? m[6]); e.mappedPort = String(asaPort(m[7]) ?? m[7]); }
+      nat.push(e);
     }
     return nat;
   }

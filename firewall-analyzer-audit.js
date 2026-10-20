@@ -119,10 +119,19 @@
   }
   const _rangesCover = (E, L) => !!(E && L && L.length && L.every(l => E.some(e => e.f === l.f && e.lo <= l.lo && l.hi <= e.hi)));
   // addresses（選填）：提供時位址欄位另以範圍包含判斷涵蓋；未提供時維持原本只比對字串相同或 any
+  // 規則的額外限制（2026-10-16）：限定使用者／群組、應用程式（FortiGate appctrl、Palo Alto application）或非常態排程的規則
+  // 只對一部分流量生效，不可視為涵蓋後面的規則；只有限制完全相同時才比較其餘欄位
+  const _SHADOW_NOLIMIT = new Set(['', '-', 'any', 'all', 'always', 'none', 'disable']);
+  function _shadowRestrictKey(p) {
+    const v = x => _SHADOW_NOLIMIT.has(String(x == null ? '' : x).trim().toLowerCase()) ? '' : String(x).trim().toLowerCase();
+    const k = [v(p.users), v(p.groups), v(p.utm && p.utm.appctrl), v(p.application), v(p.schedule)];
+    return k.some(Boolean) ? k.join('|') : '';
+  }
+  const _shadowFamily = p => p._family || (/^v6\//.test(String(p.id)) ? 'v6' : '');
   function _shadowPrep(active, addresses) {
     return active.map(p => {
       const src = _shadowToSet(p.srcAddr), dst = _shadowToSet(p.dstAddr), svc = _shadowToSet(p.service);
-      return { src, dst, svc, srcW: _shadowIsWild(src), dstW: _shadowIsWild(dst), svcW: _shadowIsWild(svc),
+      return { src, dst, svc, rk: _shadowRestrictKey(p), fam: _shadowFamily(p), srcW: _shadowIsWild(src), dstW: _shadowIsWild(dst), svcW: _shadowIsWild(svc),
         si: _shadowIntfPrep(p.srcIntf), di: _shadowIntfPrep(p.dstIntf), srcA: [...src], dstA: [...dst], svcA: [...svc],
         srcR: _shadowAddrRanges(p.srcAddr, addresses, p._vdom), dstR: _shadowAddrRanges(p.dstAddr, addresses, p._vdom) };
     });
@@ -139,6 +148,8 @@
     return eW || (eA.length === lS.size && eA.every(v => lS.has(v))) || _rangesCover(eR, lR);
   }
   function _shadowPrepCovers(e, l) {
+    if (e.rk && e.rk !== l.rk) return false;
+    if (e.fam && l.fam && e.fam !== l.fam) return false;
     return _intfOk(e.si, l.si) && _intfOk(e.di, l.di) && _fieldOk(e.srcA, e.srcW, l.src, e.srcR, l.srcR) && _fieldOk(e.dstA, e.dstW, l.dst, e.dstR, l.dstR) && _fieldOk(e.svcA, e.svcW, l.svc);
   }
 
@@ -408,13 +419,16 @@
     function addRefs(str, target, vdom) {
       if (!str || str === '-') return;
       // 名稱可能含空白（如 "All Branches"）：以逗號切出的完整名稱與空白切開的片段都算引用
-      String(str).split(/\s*,\s*/).forEach(n => { const t = n.replace(/^"|"$/g, '').trim(); if (t) target.add(vk(vdom, t)); });
-      String(str).split(/[,"\s]+/).forEach(n => { const t = n.trim(); if (t) target.add(vk(vdom, t)); });
+      // MikroTik／nftables 的 `@清單`、取反的 `!` 前綴去掉後才是物件名稱（2026-10-16）
+      const clean = t => t.replace(/^!?@?/, '');
+      String(str).split(/\s*,\s*/).forEach(n => { const t = clean(n.replace(/^"|"$/g, '').trim()); if (t) target.add(vk(vdom, t)); });
+      String(str).split(/[,"\s]+/).forEach(n => { const t = clean(n.trim()); if (t) target.add(vk(vdom, t)); });
     }
 
     // 1. Firewall policies：位址與服務欄位的引用兩邊都算（EdgeRouter／VyOS 的 port-group 掛在位址欄位）
     for (const p of (parsed.policies || [])) {
-      [p.srcAddr, p.dstAddr, p.service].forEach(f => { addRefs(f, usedAddr, p._vdom); addRefs(f, usedSvc, p._vdom); });
+      // FortiGate srcaddr6／dstaddr6（2026-10-16）也是引用
+      [p.srcAddr, p.dstAddr, p.srcAddr6, p.dstAddr6, p.service].forEach(f => { addRefs(f, usedAddr, p._vdom); addRefs(f, usedSvc, p._vdom); });
     }
     // 2. NAT：VIP/ippool 名稱與 NAT 各欄位引用的物件（ASA 的 origSrc／transSrc、MikroTik 的位址清單等）
     for (const n of (parsed.nat || [])) {
@@ -892,7 +906,7 @@
     const anySrc = v => String(v || '').split(',').map(x => x.trim().toLowerCase()).some(x => ['all', 'any', '0.0.0.0/0', '::/0', 'internet', '0.0.0.0 0.0.0.0'].includes(x));
     const mgmtExposed = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && anySrc(p.srcAddr) &&
       !/^(all|any)$/i.test(String(p.service || 'ALL').trim()) &&
-      MGMT_PORTS.some(port => _policySvcMatches(p.service, 'TCP', port, parsed.services || [])));
+      MGMT_PORTS.some(port => _policySvcMatches(p.service, 'TCP', port, parsed.services || [], p._vdom) === true));
     f('mgmt-exposed', tr('audit.check_mgmt_exposed'), mgmtExposed.length, 'high',
       mgmtExposed.length ? tr('audit.id_prefix') + mgmtExposed.map(p => idLabel(p)).slice(0,10).join(', ') + (mgmtExposed.length > 10 ? '…' : '') : tr('audit.none'),
       ['PCI-DSS 4.0 1.3.1', 'NIST 800-53 SC-7', 'CIS v8 4.4'], polItems(mgmtExposed));

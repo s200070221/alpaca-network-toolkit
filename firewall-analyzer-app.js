@@ -1803,6 +1803,7 @@ function onParsed(){
     _expiryKwMem = v;
     try { localStorage.setItem(EXPIRY_KW_LS, v); } catch (e) { /* 不可用時由 _expiryKwMem 維持本次有效 */ }
     renderSection('audit');
+    renderNextBar();
   };
 
   // 健康度歷史（2026-09-24 新增）：比照 switch_analyzer 既有 switch_analyzer_health_history_v1，
@@ -1836,6 +1837,8 @@ function onParsed(){
 
   function _doHealthCheck(skipRecord) {
     if (!PARSED) return;
+    // 接受風險、到期關鍵字變更後重算時，結果提示列的分數一併更新
+    renderNextBar();
     const btn = document.getElementById('health-btn');
     if (btn) btn.textContent = tr('health.recheck');
     const accepted = _loadAcceptedRisks();

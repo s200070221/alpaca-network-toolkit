@@ -1,3 +1,6 @@
+// 介面區塊只到第一個不縮排的行為止（2026-10-16：最後一個介面原本延伸到後面的 lag 區塊，
+// lag 底下的 disable ethernet 1/1/5 被當成該介面停用）
+function brocadeIfBlocks(cfg,re){return cfg.split(re).map(b=>b.split(/\n(?=\S)/)[0]);}
 function parseBrocadeSysInfo(cfg){
   const hostname=
     (cfg.match(/^hostname\s+(\S+)/m)||
@@ -157,7 +160,7 @@ function parseBrocadeInterfaces(cfg){
   // Parse "interface ethernet N/N/N" or "interface ethe N/N/N" blocks
   // for desc, shutdown, dual-mode, lag membership
   const ifaceMap={};
-  const ifBlocks=cfg.split(/^(?=interface\s)/m);
+  const ifBlocks=brocadeIfBlocks(cfg,/^(?=interface\s)/m);
   for(const blk of ifBlocks){
     const im=blk.match(/^interface\s+(?:e(?:the(?:rnet)?)?\s+)?([\d][^\s]*)/i);
     if(!im)continue;
@@ -228,11 +231,11 @@ function parseBrocadeInterfaces(cfg){
   }
 
   // SVIs / ve interfaces  (Virtual Ethernet)
-  // 2026-07-14 修正：原本用 cfg.split(/^(?=interface\s+ve\s)/im) 只在下一個 "interface ve"
+  // 2026-07-14 修正：原本用 brocadeIfBlocks(cfg,/^(?=interface\s+ve\s)/im) 只在下一個 "interface ve"
   // 處切割，若檔案裡 ve 區塊後面接的是別種介面（ethernet/loopback）而非另一個 ve，該區塊
   // 會一路吃到檔案結尾，導致把後面不相干介面的 port-name 誤植成這個 ve 的 desc；改用跟
   // 上方實體埠解析一致的通用 "interface " 邊界切割，確保每個區塊只含自己的內容
-  const svBlocks=cfg.split(/^(?=interface\s)/m);
+  const svBlocks=brocadeIfBlocks(cfg,/^(?=interface\s)/m);
   for(const blk of svBlocks){
     const vm=blk.match(/^interface\s+ve\s+(\d+)/i);
     if(!vm)continue;
@@ -371,7 +374,7 @@ function parseBrocadeOSPF(cfg){
   // 原本要求 router ospf 區塊內須先有帶關鍵字的 area 宣告才繼續解析的 gate 邏輯是錯的
   // （且該邏輯的輸出從未被使用，只用來擋門檻），已移除，area 清單改為完全由下方
   // 逐介面掃描動態建立。
-  const ifBlocks=cfg.split(/^(?=interface\s)/m);
+  const ifBlocks=brocadeIfBlocks(cfg,/^(?=interface\s)/m);
   for(const blk of ifBlocks){
     const veM=blk.match(/^interface\s+ve\s+(\d+)/i);
     const loM=blk.match(/^interface\s+loopback\s+(\d+)/i);
@@ -399,7 +402,7 @@ function parseBrocadeOSPFv3(cfg){
   if(!/^ipv6 router ospf\b/m.test(cfg))return[];
   const rid=(cfg.match(/^ip router-id\s+([\d.]+)/m)||[])[1]||'';
   const areas={};
-  const ifBlocks=cfg.split(/^(?=interface\s)/m);
+  const ifBlocks=brocadeIfBlocks(cfg,/^(?=interface\s)/m);
   for(const blk of ifBlocks){
     const veM=blk.match(/^interface\s+ve\s+(\d+)/i);
     const loM=blk.match(/^interface\s+loopback\s+(\d+)/i);
@@ -426,7 +429,7 @@ function parseBrocadeOSPFv3(cfg){
 function parseBrocadeRIPng(cfg){
   if(!/^ipv6 router rip\b/m.test(cfg))return[];
   const ifaces=[];
-  const ifBlocks=cfg.split(/^(?=interface\s)/m);
+  const ifBlocks=brocadeIfBlocks(cfg,/^(?=interface\s)/m);
   for(const blk of ifBlocks){
     const veM=blk.match(/^interface\s+ve\s+(\d+)/i);
     const loM=blk.match(/^interface\s+loopback\s+(\d+)/i);
@@ -490,7 +493,7 @@ function parseBrocadeVRRP(cfg){
   const vip6PriorityByKey={};
   const vip6PreemptByKey={};
   // Split on "interface ve N" blocks to find VRRP-E per-SVI
-  const veBlocks=cfg.split(/^(?=interface\s+ve\s)/im);
+  const veBlocks=brocadeIfBlocks(cfg,/^(?=interface\s+ve\s)/im);
   for(const blk of veBlocks.slice(1)){
     const ifM=blk.match(/^interface\s+ve\s+(\d+)/i);
     if(!ifM)continue;
@@ -619,7 +622,7 @@ function parseBrocadeDHCP(cfg){
   // you enable DHCP snooping on a VLAN")；簡化為全域訊號判斷（snooping 已啟用且未被全域
   // `ip dhcp snooping relay information disable` 停用），不逐 VLAN/逐 interface 追蹤覆蓋範圍
   const option82=/^ip dhcp snooping vlan\s+/m.test(cfg)&&!/^ip dhcp snooping relay information disable\b/m.test(cfg);
-  const veBlocks=cfg.split(/^(?=interface\s+ve\s)/im);
+  const veBlocks=brocadeIfBlocks(cfg,/^(?=interface\s+ve\s)/im);
   for(const blk of veBlocks.slice(1)){
     const ifM=blk.match(/^interface\s+ve\s+(\d+)/i);
     if(!ifM)continue;
@@ -656,7 +659,7 @@ function parseBrocadeRIP(cfg){
   while((rm=rr.exec(body))!==null)redistribute.push(rm[1]+(rm[2]?' route-map '+rm[2]:''));
   // 逐介面：哪些 interface 有宣告 ip rip（含 ip rip v1-only／metric-offset 等變化）才是真正啟用 RIP
   const interfaces=[];
-  const ifBlocks=cfg.split(/^(?=interface\s)/m);
+  const ifBlocks=brocadeIfBlocks(cfg,/^(?=interface\s)/m);
   for(const blk of ifBlocks){
     const veM=blk.match(/^interface\s+ve\s+(\d+)/i);
     const ethM=blk.match(/^interface\s+(?:e(?:the(?:rnet)?)?\s+)?([\d][^\s]*)/i);
@@ -682,7 +685,7 @@ function parseBrocadeQoS(cfg){
   while((m=dmRe.exec(cfg))!==null) dscpMap.push({dscpValues:m[1].trim().replace(/\s+/g,' '),priority:m[2]});
 
   const ports=[];
-  const ifBlocks=cfg.split(/^(?=interface\s)/m);
+  const ifBlocks=brocadeIfBlocks(cfg,/^(?=interface\s)/m);
   for(const blk of ifBlocks){
     const veM=blk.match(/^interface\s+ve\s+(\d+)/i);
     const ethM=blk.match(/^interface\s+(?:e(?:the(?:rnet)?)?\s+)?([\d][^\s]*)/i);

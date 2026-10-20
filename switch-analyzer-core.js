@@ -1225,7 +1225,9 @@ function _parseACLArubaCX(cfg){
     let rm;
     while((rm=rRe.exec(body))!==null){
       const parts=rm[3].trim().split(/\s+/);
-      rules.push({seq:rm[1],action:rm[2],protocol:parts[0]||'any',src:parts[1]||'-',dst:parts[2]||'-',dstPort:'',remark:''});
+      // 目的埠：目的位址後的 eq PORT（行尾）
+      const dstPort=(rm[3].trim().match(/\beq\s+(\S+)$/)||[])[1]||'';
+      rules.push({seq:rm[1],action:rm[2],protocol:parts[0]||'any',src:parts[1]||'-',dst:parts[2]||'-',dstPort,remark:''});
     }
     acls.push({name,type:'extended',aclType,ipVersion,vendor:'aruba-cx',rules,appliedOn:[]});
   }
@@ -1285,7 +1287,10 @@ function _parseACLJuniper(cfg){
       const action=body.then.join(' ').includes('accept')?'permit':'deny';
       const src=(body.from.join(' ').match(/source-address\s+(\S+)/)||[])[1]||'-';
       const dst=(body.from.join(' ').match(/destination-address\s+(\S+)/)||[])[1]||'-';
-      rules.push({seq:term,action,protocol:'any',src,dst,dstPort:'',remark:''});
+      // 協定與目的埠（from protocol／from destination-port），未宣告時維持 any／空字串
+      const protocol=(body.from.join(' ').match(/\bprotocol\s+(\S+)/)||[])[1]||'any';
+      const dstPort=(body.from.join(' ').match(/destination-port\s+(\S+)/)||[])[1]||'';
+      rules.push({seq:term,action,protocol:protocol.replace(/;$/,''),src,dst,dstPort:dstPort.replace(/;$/,''),remark:''});
     }
     const famName=family.replace(/^family\s+/,'');
     const ipVersion=famName==='inet6'?'v6':famName==='inet'?'v4':'';
@@ -1330,7 +1335,25 @@ function _parseACLExtreme(cfg){
     const acl=acls.find(a=>a.name===m[1]);
     if(acl)acl.appliedOn.push({interface:m[2]?m[2]:(m[3]?'vlan '+m[3]:'any'),direction:m[4]==='egress'?'out':'in'});
   }
-  return acls;
+  // 「名稱_序號」合併：EXOS 一條 Dynamic ACL 規則一個名稱，switch_config_generator 多條規則
+  // 時命名為 名稱_序號；同一前綴有兩條以上才合併成一個 ACL（單獨一條維持原名，避免誤拆
+  // 使用者本身含底線數字的名稱），套用目標去重
+  const groups={};
+  acls.forEach(a=>{const gm=a.name.match(/^(.+)_(\d+)$/); if(gm)(groups[gm[1]]=groups[gm[1]]||[]).push({a,seq:gm[2]});});
+  const out=[]; const done={};
+  acls.forEach(a=>{
+    const gm=a.name.match(/^(.+)_(\d+)$/);
+    if(!gm||groups[gm[1]].length<2||acls.some(x=>x.name===gm[1])){out.push(a);return;}
+    if(done[gm[1]])return;
+    done[gm[1]]=1;
+    const merged={name:gm[1],type:'extended',vendor:'extreme',rules:[],appliedOn:[]};
+    groups[gm[1]].forEach(({a:x,seq})=>{
+      merged.rules.push(Object.assign({},x.rules[0],{seq}));
+      x.appliedOn.forEach(ap=>{if(!merged.appliedOn.some(y=>y.interface===ap.interface&&y.direction===ap.direction))merged.appliedOn.push(ap);});
+    });
+    out.push(merged);
+  });
+  return out;
 }
 
 function parseSecurity(cfg, vendor){
@@ -2199,7 +2222,8 @@ const LLDPParser = (() => {
 // ════════════════════════════════════════════════════
 function parseAny(cfg,forceVendor){
   // 統一在此正規化 CRLF，避免各廠牌逐行正則（如 stack unit 區塊）因 \r 悄悄比對失敗
-  cfg=cfg.replace(/\r\n/g,'\n');
+  // 行尾空白去掉（2026-10-16）：多個解析器以行尾錨點比對，貼上的設定常帶行尾空白，原本整段 VLAN／介面讀不到
+  cfg=cfg.replace(/\r\n/g,'\n').replace(/[ \t]+$/gm,'');
   // Junos display set 扁平格式先轉回括號格式（YJ，轉換器在 switch-analyzer-parser-juniper.js）
   if(typeof junosIsDisplaySet==='function'&&junosIsDisplaySet(cfg))cfg=junosSetToCurly(cfg);
   if(typeof junosApplyGroups==='function'&&/\bapply-groups\b/.test(cfg)&&/(?:^|\n)\s*groups\s*\{/.test(cfg))cfg=junosApplyGroups(cfg);

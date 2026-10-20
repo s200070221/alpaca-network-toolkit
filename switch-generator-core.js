@@ -303,10 +303,13 @@ const SVI_NAME_FORMATTERS = {
 // 完全獨立的路徑、彼此不知道對方存在。若同一顆 VLAN 兩邊都有值，會產生兩個重複的
 // `interface VlanN` 區塊（2026-09-08 瀏覽器手動驗證時發現）。既有 vrrp[].ip 語意上已涵蓋
 // 這顆 VLAN 的 IP，故此函式刻意跳過任何已有 VRRP 條目的 VLAN ID，避免重複輸出。
+// 只有 VRRP render 會輸出 vrrp[].ip（介面本身 IP）的廠牌才跳過該 VLAN；Juniper（不產生
+// VRRP）與 Alcatel（vrrp 指令不含介面 IP）若也跳過，VLAN IP 會完全消失
+const VRRP_EMITS_IFACE_IP=new Set(['comware','cisco','cisco_nxos','arista','ruijie','aruba','dell-os10','brocade','netgear','planet','fortiswitch','routeros']);
 function withSviInterfaces(model){
   const fmt=SVI_NAME_FORMATTERS[model&&model.vendor];
   if(!fmt)return model;
-  const vrrpVlanIds=new Set((model.vrrp||[]).map(v=>String(v.vlanId)));
+  const vrrpVlanIds=new Set(VRRP_EMITS_IFACE_IP.has(model.vendor)?(model.vrrp||[]).map(v=>String(v.vlanId)):[]);
   const svis=(model.vlans||[]).filter(v=>v.ip&&!vrrpVlanIds.has(String(v.id))).map(v=>({
     name:fmt(v.id), type:'svi', ip:v.ip, vlans:String(v.id),
   }));

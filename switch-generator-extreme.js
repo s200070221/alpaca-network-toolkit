@@ -310,19 +310,28 @@ function renderExtremeQoS(qos){
 // appliedOn.interface 慣例：以 "vlan " 開頭視為 VLAN 目標，空值/'any' 視為 any，其餘視為 port list
 function renderExtremeACLEntry(a){
   const lines=[];
-  (a.rules||[]).forEach(r=>{
+  // EXOS Dynamic ACL：一個 create access-list 只代表一條規則，同名重複建立會失敗。
+  // 多條規則時逐條命名為「名稱_序號」，解析端再依前綴合併回同一個 ACL；只有一條規則時
+  // 維持原名稱（與既有輸出相同）
+  const rules=a.rules||[];
+  const multi=rules.length>1;
+  const ruleNames=rules.map((r,idx)=>multi?`${a.name}_${r.seq||(idx+1)}`:a.name);
+  rules.forEach((r,idx)=>{
     const conds=[];
     if(r.protocol&&r.protocol!=='any'&&r.protocol!=='ip')conds.push(`protocol ${r.protocol}`);
     if(r.src&&r.src!=='any')conds.push(`source-address ${r.src}`);
     if(r.dst&&r.dst!=='any'&&r.dst!=='-')conds.push(`destination-address ${r.dst}`);
     if(r.dstPort)conds.push(`destination-port ${r.dstPort}`);
     const condStr=conds.length?conds.join(';')+';':'';
-    lines.push(`create access-list ${a.name} "${condStr}" "${r.action||'permit'}"`);
+    lines.push(`create access-list ${ruleNames[idx]} "${condStr}" "${r.action||'permit'}"`);
   });
   (a.appliedOn||[]).forEach(ap=>{
     const raw=(ap.interface||'').trim();
     const target=!raw||raw.toLowerCase()==='any'?'any':/^vlan\s+/i.test(raw)?raw:`ports ${raw}`;
-    lines.push(`configure access-list add ${a.name} first ${target} ${ap.direction==='out'?'egress':'ingress'}`);
+    // 位置固定 first：每條都插到最前面，故由最後一條往前套用，套用後順序才與規則順序一致
+    ruleNames.slice().reverse().forEach(n=>{
+      lines.push(`configure access-list add ${n} first ${target} ${ap.direction==='out'?'egress':'ingress'}`);
+    });
   });
   return lines.join('\n');
 }

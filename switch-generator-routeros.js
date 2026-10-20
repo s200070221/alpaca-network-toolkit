@@ -4,8 +4,14 @@ const ROUTEROS_BRIDGE='bridge1';
 // bridge port／VLAN filtering table，該由 bond 介面本身承載 VLAN tagging；比照 Cisco
 // renderCiscoLACPExtra() 用聚合群組第一個成員的設定當代表值（refIface）的既有慣例，
 // LACP 成員埠改用 bond${id} 名稱參與 tagged/untagged 清單，成員埠本身不再逐一列出
-function renderRouterOSVLANs(vlans,interfaces,lacpList){
+function renderRouterOSVLANs(vlans,interfaces,lacpList,vrrpList){
   const taggedMap={},untaggedMap={};
+  // 有 SVI（/interface vlan 掛在 bridge 上）的 VLAN，bridge 本身必須是 tagged 成員，否則開啟
+  // vlan-filtering 後路由介面收不到該 VLAN 的封包（官方 Bridge VLAN Filtering 範例皆為
+  // tagged=bridge1,...）。來源：VLAN IP 合成的 SVI 與以數字 VLAN 綁定的 VRRP
+  const sviVids=new Set((interfaces||[]).filter(i=>i.type==='svi'&&i.vlans).map(i=>String(i.vlans)));
+  (vrrpList||[]).forEach(v=>{if(/^\d+$/.test(String(v.vlanId||'')))sviVids.add(String(v.vlanId));});
+  sviVids.forEach(vid=>{taggedMap[vid]=[ROUTEROS_BRIDGE];});
   const memberNames=new Set();
   (lacpList||[]).forEach(l=>(l.members||[]).forEach(m=>memberNames.add(m)));
   const effective=(interfaces||[]).filter(iface=>iface.name&&!memberNames.has(iface.name));
@@ -32,6 +38,8 @@ function renderRouterOSVLANs(vlans,interfaces,lacpList){
     if(untagged.length)line+=` untagged=${untagged.join(',')}`;
     // 官方屬性名稱為 vlan-ids（2026-10-01，原本輸出 vlan-id）
     line+=` vlan-ids=${v.id}`;
+    // VLAN 名稱：bridge VLAN 表沒有 name 屬性，以每個項目都有的 comment= 保存
+    if(v.name)line+=` comment=${routerOSQuote(v.name)}`;
     lines.push(line);
   });
   return lines.length>1?lines.join('\n'):'';
@@ -56,11 +64,22 @@ function renderRouterOSVlanInterfaces(interfaces){
 // 介面物件會附加進 model.interfaces，但這裡是宣告「實體乙太埠」的區塊，SVI 是掛在 bridge
 // 之上的獨立虛擬介面（renderRouterOSVlanInterfaces() 已自己輸出 /interface vlan 建立它），
 // 不應該被誤當成 /interface ethernet 的一員重複宣告
+// 實體埠是裝置本來就有的介面，不能用 add 建立；真實匯出檔為
+// set [ find default-name=ether1 ] comment=... disabled=yes（描述與停用狀態寫在這裡）
+function routerOSQuote(v){
+  const t=String(v);
+  return /^[\w.\-\/:@]+$/.test(t)?t:'"'+t.replace(/\\/g,'\\\\').replace(/"/g,'\\"')+'"';
+}
 function renderRouterOSInterfaceDeclarations(ifaces){
-  const list=(ifaces||[]).filter(i=>i.type!=='svi');
+  const list=(ifaces||[]).filter(i=>i.type!=='svi'&&i.name);
   if(!list.length)return '';
   const lines=['/interface ethernet'];
-  list.forEach(i=>{ if(i.name)lines.push(`add name=${i.name}`); });
+  list.forEach(i=>{
+    let line=`set [ find default-name=${i.name} ]`;
+    if(i.desc)line+=` comment=${routerOSQuote(i.desc)}`;
+    line+=` disabled=${i.shutdown?'yes':'no'}`;
+    lines.push(line);
+  });
   return lines.join('\n');
 }
 
@@ -70,14 +89,23 @@ function renderRouterOSInterfaceDeclarations(ifaces){
 // 屬於任一 LACP 群組成員的實體介面，改為每個 LACP 群組輸出一行 bond 介面本身的 member。
 // type==='svi' 同樣排除（見 renderRouterOSInterfaceDeclarations() 註解）——VLAN 的 SVI 介面
 // 是掛載在 bridge 之上，不是 bridge 的 member port
+// 選單名稱為 /interface bridge port（RouterOS 沒有 /interface bridge member 選單）；access 埠
+// 以 pvid= 指定未標記封包所屬 VLAN，否則預設 pvid=1，開啟 vlan-filtering 後 access 埠不通
 function renderRouterOSBridgeMembers(ifaces,lacpList){
   const memberNames=new Set();
   (lacpList||[]).forEach(l=>(l.members||[]).forEach(m=>memberNames.add(m)));
-  const names=(ifaces||[]).filter(i=>i.type!=='svi'&&i.name&&!memberNames.has(i.name)).map(i=>i.name);
-  (lacpList||[]).forEach(l=>{ if((l.members||[]).length)names.push(`bond${l.id}`); });
-  if(!names.length)return '';
-  const lines=['/interface bridge member'];
-  names.forEach(n=>lines.push(`add bridge=${ROUTEROS_BRIDGE} interface=${n}`));
+  const ports=(ifaces||[]).filter(i=>i.type!=='svi'&&i.name&&!memberNames.has(i.name)).map(i=>({name:i.name,ref:i}));
+  (lacpList||[]).forEach(l=>{
+    if(!(l.members||[]).length)return;
+    const ref=l.members.map(m=>(ifaces||[]).find(i=>i.name===m)).find(Boolean);
+    ports.push({name:`bond${l.id}`,ref});
+  });
+  if(!ports.length)return '';
+  const lines=['/interface bridge port'];
+  ports.forEach(p=>{
+    const pvid=p.ref&&p.ref.mode==='access'&&/^\d+$/.test(String(p.ref.accessVlan||''))?` pvid=${p.ref.accessVlan}`:'';
+    lines.push(`add bridge=${ROUTEROS_BRIDGE} interface=${p.name}${pvid}`);
+  });
   return lines.join('\n');
 }
 
@@ -86,7 +114,8 @@ function renderRouterOSBridgeMembers(ifaces,lacpList){
 function renderRouterOSBridge(stp){
   const mode=stp&&stp.mode?stp.mode:'';
   const priority=stp&&stp.instances&&stp.instances[0]&&stp.instances[0].priority;
-  let line=`add name=${ROUTEROS_BRIDGE}`;
+  // vlan-filtering=yes：/interface bridge vlan 表格只有在 bridge 開啟 VLAN filtering 時才生效
+  let line=`add name=${ROUTEROS_BRIDGE} vlan-filtering=yes`;
   if(mode)line+=` protocol-mode=${mode}`;
   // priority=0 是合法值（且是最高優先權，常見於刻意指定 root bridge 的場景），先前用
   // if(priority) 判斷式把數字 0 當成 falsy 略過，整個 priority 參數消失（2026-09-02 審查發現）
@@ -130,7 +159,8 @@ function renderRouterOSRoutes(list){
   const v4=list.filter(r=>!r.dst.includes(':'));
   const v6=list.filter(r=>r.dst.includes(':'));
   const blocks=[];
-  if(v4.length)blocks.push(['/ip route',...v4.map(r=>`add destination=${r.dst} gateway=${r.gw}`)].join('\n'));
+  // /ip route 的目的網段屬性為 dst-address（與 /ipv6 route 相同；RouterOS 沒有 destination= 屬性）
+  if(v4.length)blocks.push(['/ip route',...v4.map(r=>`add dst-address=${r.dst} gateway=${r.gw}`)].join('\n'));
   if(v6.length)blocks.push(['/ipv6 route',...v6.map(r=>`add dst-address=${r.dst} gateway=${r.gw}`)].join('\n'));
   return blocks.join('\n');
 }
@@ -304,15 +334,28 @@ function renderRouterOSRIP(list){
 // （vip／vip6 互斥，非同一筆記錄合併兩者），介面命名靠「未顯式 name= 時的循序邏輯介面
 // 命名」（interface=vrrpN，N 為 add 行出現順序），render 端須維持與 parser 端一致的
 // forEach 順序（idx+1）才能正確 round-trip
-function renderRouterOSVRRP(vrrpList){
+// 數字 VLAN ID（表單其餘廠牌的寫法）對應到 bridge 上的 vlanN 介面（與 VLAN IP 的 SVI 同名）；
+// 該 VLAN 尚無 SVI 時在這裡建立 /interface vlan，並把 VRRP 列的介面 IP（vrrp.ip）寫進
+// /ip address——withSviInterfaces() 對有 VRRP 的 VLAN 不再合成 SVI，改由此處保留 IP
+function renderRouterOSVRRP(vrrpList,interfaces){
   const list=(vrrpList||[]).filter(v=>v.vlanId&&v.vrid&&(v.vip||v.vip6));
   if(!list.length)return '';
   const vrrpLines=['/interface vrrp'];
   const addrLines=[];
   const addr6Lines=[];
+  const vlanIfLines=[];
+  const ifAddrLines=[];
+  const existing=new Set((interfaces||[]).map(i=>i.name));
   list.forEach((v,idx)=>{
     const isV6=!!v.vip6&&!v.vip;
-    let line=`add interface=${v.vlanId} vrid=${v.vrid}`;
+    const numeric=/^\d+$/.test(String(v.vlanId));
+    const ifName=numeric?`vlan${v.vlanId}`:v.vlanId;
+    if(numeric&&!existing.has(ifName)){
+      existing.add(ifName);
+      vlanIfLines.push(`add interface=${ROUTEROS_BRIDGE} name=${ifName} vlan-id=${v.vlanId}`);
+    }
+    if(v.ip&&!v.ip.includes(':'))ifAddrLines.push(`add address=${v.ip} interface=${ifName}`);
+    let line=`add interface=${ifName} vrid=${v.vrid}`;
     if(isV6)line+=' v3-protocol=ipv6';
     if(v.priority)line+=` priority=${v.priority}`;
     if(v.preempt===false)line+=' preemption-mode=no';
@@ -320,7 +363,10 @@ function renderRouterOSVRRP(vrrpList){
     if(isV6){ if(v.vip6)addr6Lines.push(`add address=${v.vip6} interface=vrrp${idx+1}`); }
     else if(v.vip)addrLines.push(`add address=${v.vip} interface=vrrp${idx+1}`);
   });
-  const blocks=[vrrpLines.join('\n')];
+  const blocks=[];
+  if(vlanIfLines.length)blocks.push(['/interface vlan',...vlanIfLines].join('\n'));
+  if(ifAddrLines.length)blocks.push(['/ip address',...ifAddrLines].join('\n'));
+  blocks.push(vrrpLines.join('\n'));
   if(addrLines.length)blocks.push(['/ip address',...addrLines].join('\n'));
   if(addr6Lines.length)blocks.push(['/ipv6 address',...addr6Lines].join('\n'));
   return blocks.join('\n\n');
@@ -395,7 +441,7 @@ function assembleRouterOSConfig(model){
   blocks.push(renderRouterOSBridge(model.stp));
   const memberBlock=renderRouterOSBridgeMembers(model.interfaces,model.lacp);
   if(memberBlock)blocks.push(memberBlock);
-  const vlanBlock=renderRouterOSVLANs(model.vlans,model.interfaces,model.lacp);
+  const vlanBlock=renderRouterOSVLANs(model.vlans,model.interfaces,model.lacp,model.vrrp);
   if(vlanBlock)blocks.push(vlanBlock);
   const vlanIpBlock=renderRouterOSVlanInterfaces(model.interfaces);
   if(vlanIpBlock)blocks.push(vlanIpBlock);
@@ -407,7 +453,7 @@ function assembleRouterOSConfig(model){
   if(ospf6Block)blocks.push(ospf6Block);
   const ripBlock=renderRouterOSRIP(model.rip);
   if(ripBlock)blocks.push(ripBlock);
-  const vrrpBlock=renderRouterOSVRRP(model.vrrp);
+  const vrrpBlock=renderRouterOSVRRP(model.vrrp,model.interfaces);
   if(vrrpBlock)blocks.push(vrrpBlock);
   const bgpBlock=renderRouterOSBGP(model.bgp);
   if(bgpBlock)blocks.push(bgpBlock);
