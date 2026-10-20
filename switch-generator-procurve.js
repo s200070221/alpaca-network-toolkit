@@ -42,14 +42,15 @@ function renderProCurveVLANs(vlans,interfaces,ospf,dhcp,ospf6){
     // prefix，因 ProCurve CLI 本身就是雙 token dotted-mask 語法），直接還原成兩個 token 輸出）
     if(v.ip){
       const [vip,vmask]=v.ip.split('/');
-      if(vip&&vmask)lines.push(`   ip address ${vip} ${vmask}`);
+      // 表單是 CIDR（遮罩為長度），輸出 A/N；匯入的「位址/點分遮罩」輸出兩個 token（2026-10-16）
+      if(vip&&vmask)lines.push(/^\d+$/.test(vmask)?`   ip address ${vip}/${vmask}`:`   ip address ${vip} ${vmask}`);
     }
     // 次要IP（2026-08-23 陣列化）：ProCurve 無 secondary 關鍵字，同一 VLAN 底下再宣告一行
     // ip address（不同子網）即為次要位址；parser 端 2026-08-17 已從「僅取第一筆」擴充為
     // 完整陣列 secondaryIps（官方上限 7 筆）
     (v.secondaryIps||[]).forEach(s=>{
       const [sip,smask]=s.split('/');
-      if(sip&&smask)lines.push(`   ip address ${sip} ${smask}`);
+      if(sip&&smask)lines.push(/^\d+$/.test(smask)?`   ip address ${sip}/${smask}`:`   ip address ${sip} ${smask}`);
     });
     if(areaOfVlan[String(v.id)])lines.push(`   ip ospf area ${areaOfVlan[String(v.id)]}`);
     if(areaOfVlan6[String(v.id)])lines.push(`   ipv6 ospf3 area ${areaOfVlan6[String(v.id)]}`);

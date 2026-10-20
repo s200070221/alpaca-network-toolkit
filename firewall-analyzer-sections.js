@@ -737,7 +737,7 @@ function renderWifiSection(w) {
       ${s.warnIssues     ? `<div style="color:var(--yellow)">⚠ ${tr('wifi.warn_issues')}：${s.warnIssues}${tr('unit.count')}</div>` : ''}
       ${!s.criticalIssues && !s.warnIssues ? `<div style="color:var(--green)">${tr('wifi.no_issues')}</div>` : ''}
       ${s.wpa3Ssids ? `<div style="color:var(--green)">✅ ${s.wpa3Ssids} ${tr('wifi.ssid_use_wpa3')}</div>` : `<div style="color:var(--yellow)">${tr('wifi.no_wpa3')}</div>`}
-      <div style="color:var(--text-dim);margin-top:4px">${tr('wifi.hidden_ssid')}：${s.hiddenSsids}${tr('unit.count')} | ${tr('wifi.country_code')}：${s.country}</div>
+      <div style="color:var(--text-dim);margin-top:4px">${tr('wifi.hidden_ssid')}：${s.hiddenSsids}${tr('unit.count')} | ${tr('wifi.country_code')}：${esc(s.country)}</div>
     </div>
   </div>`;
 
@@ -790,8 +790,8 @@ function renderWifiSection(w) {
       <div><span class="wifi-badge ${gradeClass}">${esc(secLabel)}</span></div>
       <div><span class="wifi-badge ${gradeClass}">${v.secGrade}</span></div>
       <div>${v.captivePortal ? '✅' : '-'}</div>
-      <div>${v.vlanId !== '-' ? `<span style="color:var(--purple)">VLAN ${v.vlanId}</span>` : '-'}</div>
-      <div>${v.pmf !== '-' ? v.pmf : '<span style="color:var(--text-dim)">-</span>'}</div>
+      <div>${v.vlanId !== '-' ? `<span style="color:var(--purple)">VLAN ${esc(v.vlanId)}</span>` : '-'}</div>
+      <div>${v.pmf !== '-' ? esc(v.pmf) : '<span style="color:var(--text-dim)">-</span>'}</div>
       <div style="color:var(--accent)">${v.deployedOnAps > 0 ? v.deployedOnAps + ' ' + tr('wifi.unit_ap') : '<span style="color:var(--text-dim)">-</span>'}</div>
     </div>`;
     if (v.secIssues.length) {
@@ -967,7 +967,7 @@ function buildSdwanSectionHtml(sd, filterByVdom){
     const slaStr=svc.slaRefs.length?svc.slaRefs.map(r=>`${r.healthCheck}#${r.id}`).join(', '):'-';
     const target=svc.priorityZone!=='-'?svc.priorityZone:svc.priorityMembers!=='-'?svc.priorityMembers:'-';
     const proto=svc.protocol==='0'?'any':svc.protocol;
-    const port=svc.startPort!=='-'?`${svc.startPort}${svc.endPort!==svc.startPort?'-'+svc.endPort:''}`:'-';
+    const port=svc.startPort!=='-'?esc(`${svc.startPort}${svc.endPort!==svc.startPort?'-'+svc.endPort:''}`):'-';
     html+=`<tr>
       <td class="mono" style="color:var(--accent)">${esc(svc.id)}</td>
       <td style="font-weight:500">${esc(svc.name)}</td>

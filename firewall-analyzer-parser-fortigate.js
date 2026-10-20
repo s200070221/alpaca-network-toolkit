@@ -359,11 +359,19 @@ const FortigateParser = (() => {
         .map(k => gvs(t, `${pre}-${k}`)).filter(Boolean).join(', ').split(', ').filter(Boolean).map(n => `${n} (ISDB)`).join(', ');
       const dstIsdb = gv(t, 'internet-service') === 'enable' ? isdb('internet-service') : '';
       const srcIsdb = gv(t, 'internet-service-src') === 'enable' ? isdb('internet-service-src') : '';
-      const srcAddrStr = [gvs(t, 'srcaddr'), srcIsdb].filter(Boolean).join(', ') || (gv(t, 'internet-service-src') === 'enable' ? 'ISDB (ISDB)' : 'all');
-      const dstAddrStr = [gvs(t, 'dstaddr'), dstIsdb].filter(Boolean).join(', ') || (gv(t, 'internet-service') === 'enable' ? 'ISDB (ISDB)' : 'all');
-      const srcAddrSplit = _splitAddr(srcAddrStr, addrTypeMap);
-      const dstAddrSplit = _splitAddr(dstAddrStr, addrTypeMap);
+      // FortiOS 6.4 起合併的 IPv4／IPv6 規則（2026-10-16）：srcaddr6／dstaddr6 為 IPv6 位址。只有 IPv6 位址的規則
+      // 不可把未寫的 srcaddr 預設成 all（會變成 IPv4 全通），改以 IPv6 位址呈現並標 _family:'v6'
+      const src6 = gvs(t, 'srcaddr6'), dst6 = gvs(t, 'dstaddr6');
+      const v6Only = !gvs(t, 'srcaddr') && !gvs(t, 'dstaddr') && !srcIsdb && !dstIsdb && !!(src6 || dst6);
+      const srcAddrStr = v6Only ? (src6 || 'all') : ([gvs(t, 'srcaddr'), srcIsdb].filter(Boolean).join(', ') || (gv(t, 'internet-service-src') === 'enable' ? 'ISDB (ISDB)' : 'all'));
+      const dstAddrStr = v6Only ? (dst6 || 'all') : ([gvs(t, 'dstaddr'), dstIsdb].filter(Boolean).join(', ') || (gv(t, 'internet-service') === 'enable' ? 'ISDB (ISDB)' : 'all'));
+      const srcAddrSplit = v6Only ? { v4: '-', v6: srcAddrStr } : _splitAddr(srcAddrStr, addrTypeMap);
+      const dstAddrSplit = v6Only ? { v4: '-', v6: dstAddrStr } : _splitAddr(dstAddrStr, addrTypeMap);
+      // 同時有 IPv4 與 IPv6 位址時，IPv6 部分改用 srcaddr6／dstaddr6（未寫的一方視為 all）
+      const join6 = (a, b) => [...new Set([a, b].filter(x => x && x !== '-').join(', ').split(', ').filter(Boolean))].join(', ') || '-';
+      if (!v6Only && (src6 || dst6)) { srcAddrSplit.v6 = join6(srcAddrSplit.v6, src6 || 'all'); dstAddrSplit.v6 = join6(dstAddrSplit.v6, dst6 || 'all'); }
       return {
+        ...(v6Only ? { _family: 'v6' } : {}),
         id: e.name, name: gv(t, 'name') || `Policy-${e.name}`,
         srcIntf: gvs(t, 'srcintf') || '-', dstIntf: gvs(t, 'dstintf') || '-',
         srcAddr: srcAddrStr, dstAddr: dstAddrStr,
@@ -402,6 +410,8 @@ const FortigateParser = (() => {
       const srcAddrStr = gvs(t, 'srcaddr') || 'all';
       const dstAddrStr = gvs(t, 'dstaddr') || 'all';
       return {
+        // 整張表只適用 IPv6（2026-10-16）：標 _family，查詢與遮蔽分析不與 IPv4 規則互相比對
+        _family: 'v6',
         id: `v6/${e.name}`, name: gv(t, 'name') || `Policy6-${e.name}`,
         srcIntf: gvs(t, 'srcintf') || '-', dstIntf: gvs(t, 'dstintf') || '-',
         srcAddr: srcAddrStr, dstAddr: dstAddrStr,
@@ -462,6 +472,8 @@ const FortigateParser = (() => {
       svcs.push({ category: 'custom', name: e.name, proto: gv(t, 'protocol') || 'TCP/UDP',
         tcpPorts: gv(t, 'tcp-portrange') || '-', udpPorts: gv(t, 'udp-portrange') || '-',
         icmpType: gv(t, 'icmptype') || '-', icmpCode: gv(t, 'icmpcode') || '-',
+        // protocol IP 的協定號碼（2026-10-16）：0 或未設定代表所有協定，查詢依此判斷
+        protoNum: gv(t, 'protocol-number') || '0',
         comment: gv(t, 'comment') || '-', color: gv(t, 'color') || '0',
         category_name: gv(t, 'category') || '-', members: '-', _vdom: vdomName });
     });

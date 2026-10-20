@@ -268,7 +268,17 @@ function renderCiscoDHCP(list){return (list||[]).filter(d=>d.type==='server').ma
 // 或字串結尾當終止字元（不認得 "!"／"interface " 等其他分隔符），若後面還接其他區塊，
 // 會被整段吃進 ACL 的 body 裡，故比照 assembleXXXConfig 既有的 BGP「放最後」慣例，
 // ACL 一定要放在組裝順序的最後一項
-function renderCiscoACLEntry(a){
+// IOS／Ruijie 的 IPv4 ACL 位址不接受 CIDR（2026-10-16）：A/32 換成 host A，A/N 換成「A 萬用遮罩」；
+// Arista／Brocade 接受前綴寫法，維持原樣（只在 opts.wildcard 時轉換）
+function ciscoAclAddr(a,wildcard){
+  const m=wildcard&&String(a||'').match(/^(\d+\.\d+\.\d+\.\d+)\/(\d{1,2})$/);
+  if(!m)return a;
+  if(m[2]==='32')return `host ${m[1]}`;
+  const n=+m[2];
+  const w=n===0?0xffffffff:(0xffffffff>>>n)>>>0;
+  return `${m[1]} ${[24,16,8,0].map(s=>(w>>>s)&255).join('.')}`;
+}
+function renderCiscoACLEntry(a,wildcard){
   // IPv6 ACL（2026-09-03 新增，修復 switch_analyzer 早已支援解析、產生器端從未正確輸出的
   // round-trip 缺口）：官方語法是裸 "ipv6 access-list NAME"（不含 standard/extended 關鍵字，
   // 與 IPv4 版本不同），比對 switch-analyzer-core.js 的 _parseACLCisco() acl6Re 分支
@@ -276,14 +286,15 @@ function renderCiscoACLEntry(a){
   const lines=[isV6?`ipv6 access-list ${a.name}`:`ip access-list ${a.type||'extended'} ${a.name}`];
   (a.rules||[]).forEach(r=>{
     let line=` ${r.action||'permit'}`;
-    if(!isV6&&a.type==='standard')line+=` ${r.src||'any'}`;
-    else line+=` ${r.protocol||(isV6?'ipv6':'ip')} ${r.src||'any'} ${r.dst||'any'}${r.dstPort?' eq '+r.dstPort:''}`;
+    const wc=wildcard&&!isV6;
+    if(!isV6&&a.type==='standard')line+=` ${ciscoAclAddr(r.src||'any',wc)}`;
+    else line+=` ${r.protocol||(isV6?'ipv6':'ip')} ${ciscoAclAddr(r.src||'any',wc)} ${ciscoAclAddr(r.dst||'any',wc)}${r.dstPort?' eq '+r.dstPort:''}`;
     lines.push(line);
     if(r.remark)lines.push(` remark ${r.remark}`);
   });
   return lines.join('\n');
 }
-function renderCiscoACL(list){return (list||[]).map(renderCiscoACLEntry).join('\n!\n');}
+function renderCiscoACL(list,opts){return (list||[]).map(a=>renderCiscoACLEntry(a,!!(opts&&opts.wildcard))).join('\n!\n');}
 
 // Breakout：IOS-XE 兩種已查證模式——pattern A（9300X+NM-4C 模組換位編號）
 // `hw-module breakout module <slot> port <port> switch <num>`；pattern B（9500-32C 後綴編號）
@@ -361,7 +372,7 @@ function assembleCiscoConfig(model){
   if(model.aaaType==='tacacs'&&model.aaaServer)blocks.push(['aaa new-model','tacacs server TACACS-1',` address ipv4 ${model.aaaServer}`,` key ${model.aaaKey}`,'aaa authentication login default group tacacs+ local','aaa accounting exec default start-stop group tacacs+'].join('\n'));
   if(model.aaaType==='radius'&&model.aaaServer)blocks.push(['aaa new-model','radius server RADIUS-1',` address ipv4 ${model.aaaServer} auth-port 1812 acct-port 1813`,` key ${model.aaaKey}`,'aaa authentication login default group radius local'].join('\n'));
   if(model.mgmtTelnetDisable)blocks.push('line vty 0 4\n transport input ssh');
-  if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl));
+  if(model.acl&&model.acl.length)blocks.push(renderCiscoACL(model.acl,{wildcard:true}));
   // class-map 必須先於引用它的 policy-map 定義，且其收尾正則同時認 policy-map 邊界，順序
   // 不能顛倒（2026-08-28（續4）新增）
   if(model.classMaps&&model.classMaps.length)blocks.push(renderClassMapQoS(model.classMaps));

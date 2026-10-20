@@ -95,10 +95,22 @@ function _ipInRange(targetInt, startStr, endStr) {
 // MikroTik（`192.168.1.0/24`、`@清單名稱`、`!` 反向）、OpenWrt、pfSense 的規則欄位本來就是字面值，
 // 原本找不到同名物件一律回傳 null（無法判斷，被當成可能命中），查詢會停在第一條不相干的規則。
 // 先查物件（FortiGate 常把物件命名為 10.0.0.0/8 這種形狀），找不到才當字面值；回傳 undefined 表示不是字面值
-function _literalAddrMatch(raw, targetInt, addrList, seen) {
+// 依名稱找物件（2026-10-16）：多 VDOM／vsys 設定可能有同名物件，先找規則所在範圍（vdom）的物件，
+// 其次是共用範圍（無 _vdom、global、shared、predefined、default），最後才是第一個同名物件（比照稽核 _rangesOfName()）
+function _objByName(list, nm, vdom) {
+  let shared = null, first = null;
+  for (const o of list) {
+    if (String(o.name).toLowerCase() !== nm) continue;
+    if (vdom && o._vdom === vdom) return o;
+    if (!first) first = o;
+    if (!shared && (!o._vdom || /^(?:global|shared|predefined|default)$/i.test(o._vdom))) shared = o;
+  }
+  return shared || first;
+}
+function _literalAddrMatch(raw, targetInt, addrList, seen, vdom) {
   const t = raw.trim();
-  if (t.startsWith('!')) { const r = _addrMatchesIp(t.slice(1), targetInt, addrList, seen); return r === null ? null : !r; }
-  if (t.startsWith('@')) return _addrMatchesIp(t.slice(1), targetInt, addrList, seen);
+  if (t.startsWith('!')) { const r = _addrMatchesIp(t.slice(1), targetInt, addrList, seen, vdom); return r === null ? null : !r; }
+  if (t.startsWith('@')) return _addrMatchesIp(t.slice(1), targetInt, addrList, seen, vdom);
   const lc = t.toLowerCase();
   if (lc === 'any4') return typeof targetInt !== 'object';
   if (lc === 'any6') return typeof targetInt === 'object';
@@ -110,13 +122,13 @@ function _literalAddrMatch(raw, targetInt, addrList, seen) {
   if (/^[0-9a-f:]+(?:\/\d{1,3})?$/i.test(a) && a.includes(':') && _ipv6ToBig(a.split('/')[0]) !== null) return _ipInSubnet(targetInt, a);
   return undefined;
 }
-function _addrMatchesIp(name, targetInt, addrList, seen) {
+function _addrMatchesIp(name, targetInt, addrList, seen, vdom) {
   const nm = name.trim().toLowerCase();
   if (nm==='all'||nm==='any') return true;
   if (seen.has(nm)) return false;
   seen.add(nm);
-  const obj = addrList.find(a => a.name.toLowerCase()===nm);
-  if (!obj) { const lit = _literalAddrMatch(name, targetInt, addrList, seen); return lit === undefined ? null : lit; }
+  const obj = _objByName(addrList, nm, vdom);
+  if (!obj) { const lit = _literalAddrMatch(name, targetInt, addrList, seen, vdom); return lit === undefined ? null : lit; }
   if ((obj.type==='ipmask'||obj.type==='ipprefix') && obj.subnet && obj.subnet!=='-')
     return _ipInSubnet(targetInt, obj.subnet);
   if (obj.type==='iprange')
@@ -143,7 +155,7 @@ function _addrMatchesIp(name, targetInt, addrList, seen) {
     const mems = (obj.members||'').split(',').map(s=>s.trim()).filter(Boolean);
     let fqdn = false, hit = false;
     for (const m of mems) {
-      const r = _addrMatchesIp(m, targetInt, addrList, seen);
+      const r = _addrMatchesIp(m, targetInt, addrList, seen, vdom);
       if (r===true) { hit = true; break; }
       if (r===null) fqdn=true;
     }
@@ -151,7 +163,7 @@ function _addrMatchesIp(name, targetInt, addrList, seen) {
     if (hit && obj.excludeMembers && obj.excludeMembers !== '-') {
       let unsure = false;
       for (const x of obj.excludeMembers.split(',').map(s=>s.trim()).filter(Boolean)) {
-        const r = _addrMatchesIp(x, targetInt, addrList, new Set());
+        const r = _addrMatchesIp(x, targetInt, addrList, new Set(), vdom);
         if (r===true) return false;
         if (r===null) unsure = true;
       }
@@ -162,11 +174,11 @@ function _addrMatchesIp(name, targetInt, addrList, seen) {
   }
   return false;
 }
-function _policyAddrMatches(addrStr, targetInt, addrList) {
+function _policyAddrMatches(addrStr, targetInt, addrList, vdom) {
   const names = (addrStr||'').split(',').map(s=>s.trim()).filter(Boolean);
   let fqdn = false;
   for (const n of names) {
-    const r = _addrMatchesIp(n, targetInt, addrList, new Set());
+    const r = _addrMatchesIp(n, targetInt, addrList, new Set(), vdom);
     if (r===true) return true;
     if (r===null) fqdn=true;
   }
@@ -181,60 +193,107 @@ function _portInRange(port, rangeStr) {
     return port >= parseInt(p[0]) && port <= (p[1]?parseInt(p[1]):parseInt(p[0]));
   });
 }
-// 規則欄位直接寫服務（ASA／EdgeRouter／OpenWrt／MikroTik 的 `tcp/443`、`udp/68`、`tcp/80-90`、`ip`、
-// `icmp`、只寫埠號的 `443`）：原本找不到同名物件一律視為符合（2026-10-01）；其餘無法辨識的名稱維持視為符合
+// 常見內建服務名稱（2026-10-16）：設定檔不會列出這些預先定義的服務（Juniper junos-*、Palo Alto service-http(s)、
+// Check Point 的 http／https 等，以及各廠牌通用的 HTTP／HTTPS／SSH…），查不到物件時依此換成字面服務再比對；
+// 仍無法辨識的名稱回傳 null（無法判斷），不再一律視為符合
+const _BUILTIN_SVC = {
+  'junos-http': 'tcp/80', 'junos-https': 'tcp/443', 'junos-ssh': 'tcp/22', 'junos-telnet': 'tcp/23', 'junos-ftp': 'tcp/21',
+  'junos-smtp': 'tcp/25', 'junos-dns-udp': 'udp/53', 'junos-dns-tcp': 'tcp/53', 'junos-ntp': 'udp/123', 'junos-ldap': 'tcp/389',
+  'junos-imap': 'tcp/143', 'junos-imaps': 'tcp/993', 'junos-pop3': 'tcp/110', 'junos-tftp': 'udp/69', 'junos-bgp': 'tcp/179',
+  'junos-syslog': 'udp/514', 'junos-ike': 'udp/500', 'junos-dhcp-server': 'udp/67', 'junos-dhcp-client': 'udp/68',
+  'junos-ping': 'icmp', 'junos-icmp-all': 'icmp',
+  'service-http': 'tcp/80,8080', 'service-https': 'tcp/443',
+  'http': 'tcp/80', 'https': 'tcp/443', 'ssh': 'tcp/22', 'telnet': 'tcp/23', 'ftp': 'tcp/21', 'smtp': 'tcp/25',
+  'dns': 'tcp-udp/53', 'domain-udp': 'udp/53', 'domain-tcp': 'tcp/53', 'ntp-udp': 'udp/123', 'rdp': 'tcp/3389',
+  'pop3': 'tcp/110', 'pop-3': 'tcp/110', 'imap': 'tcp/143', 'ldap': 'tcp/389',
+  'ping': 'icmp', 'echo-request': 'icmp', 'all_icmp': 'icmp', 'all_tcp': 'tcp/1-65535', 'all_udp': 'udp/1-65535',
+};
+// tcp／udp／icmp 以外的 IP 協定名稱：只在「任意協定、不填埠號」的查詢下符合
+const _OTHER_IP_PROTOS = new Set(['gre', 'esp', 'ah', 'sctp', 'ospf', 'ospfigp', 'vrrp', 'carp', 'igmp', 'pim', 'l2tp', 'ipip', 'ipencap',
+  'ipv6', 'ipv6-encap', 'egp', 'rsvp', 'eigrp', 'pfsync', 'udplite', 'dccp', 'mh', 'ipv6-route', 'ipv6-frag', 'ipv6-nonxt', 'ipv6-opts', 'ipsec']);
+// 規則欄位直接寫服務（ASA／EdgeRouter／OpenWrt／MikroTik／netfilter 的 `tcp/443`、`udp/68`、`tcp/80-90`、`ip`、`icmp`、
+// 只寫埠號的 `443`、只寫協定的 `udp`／`gre`）。回傳 true／false／null（無法判斷）：
+// - 只寫 tcp／udp：協定相符即符合（不限埠號）；gre／esp 等其他協定不符合 TCP／UDP／ICMP 查詢，也不符合「任意協定＋埠號」
+// - 原本找不到同名物件的名稱一律視為符合（2026-10-01），現在先查內建服務對照，仍無法辨識時回傳 null（2026-10-16）
 function _literalSvcMatches(raw, proto, port) {
-  const t = raw.trim().toLowerCase();
-  if (t === 'ip') return true;
-  // 協定不限但有指定埠號（2026-10-02）：仍須埠號落在規則的 TCP 或 UDP 埠範圍內，原本完全不看埠號，
-  // 查 443 會命中只放行 udp/53 的規則
-  if (!proto || proto === 'any') {
-    if (!port) return true;
-    if (/^icmp(?:v?6)?(?:\/\d+)?$|^ipv6-icmp$|^proto-\d+$/.test(t)) return false;
-    const pm = t.match(/^(?:tcp|udp|tcp\/udp|tcp-udp)\/(\d+(?:-\d+)?(?:,\s*\d+(?:-\d+)?)*)$/) || t.match(/^(\d+(?:-\d+)?)$/);
-    return pm ? _portInRange(port, pm[1]) : true;
-  }
-  const q = proto.toUpperCase();
-  // icmp／icmp/類型／icmpv6 只對 ICMP 查詢；proto-N（tcp／udp／icmp 以外的協定號碼）不符合任何查詢協定
-  if (/^icmp(?:v?6)?(?:\/\d+)?$|^ipv6-icmp$/.test(t)) return q === 'ICMP';
-  if (/^proto-\d+$/.test(t)) return false;
-  let m = t.match(/^(tcp|udp|tcp\/udp|tcp-udp)\/(\d+(?:-\d+)?(?:,\s*\d+(?:-\d+)?)*)$/);
+  let t = raw.trim().toLowerCase();
+  // `!tcp`（netfilter -p ! tcp）：反向
+  if (t.startsWith('!')) { const r = _literalSvcMatches(t.slice(1), proto, port); return r === null ? null : !r; }
+  if (_BUILTIN_SVC[t]) t = _BUILTIN_SVC[t];
+  // MikroTik 只有連線狀態條件的規則（state:established…）不限協定
+  if (t === 'ip' || t === 'any' || t === 'all' || t === '*' || t.startsWith('state:')) return true;
+  const anyProto = !proto || proto === 'any';
+  const q = anyProto ? '' : proto.toUpperCase();
+  // icmp／icmp/類型／icmpv6 只對 ICMP 查詢（或任意協定且不填埠號）
+  if (/^icmp(?:v?6)?(?:\/\d+)?$|^ipv6-icmp$/.test(t)) return anyProto ? !port : q === 'ICMP';
+  // proto-N 與其他 IP 協定名稱：不符合 TCP／UDP／ICMP 查詢，任意協定時只在不填埠號下符合
+  if (/^proto-\d+$/.test(t) || _OTHER_IP_PROTOS.has(t)) return anyProto && !port;
+  const bare = { 'tcp': ['TCP'], 'udp': ['UDP'], 'tcp/udp': ['TCP', 'UDP'], 'tcp-udp': ['TCP', 'UDP'], 'tcp_udp': ['TCP', 'UDP'] }[t];
+  if (bare) return anyProto || q === 'TCP/UDP' || bare.includes(q);
+  // 埠號清單可用逗號或空白分隔（ASA neq 轉成「1-79 81-65535」）
+  const m = t.match(/^(tcp|udp|tcp\/udp|tcp-udp)\/(\d+(?:-\d+)?(?:[,\s]+\d+(?:-\d+)?)*)$/);
   if (m) {
+    if (anyProto) return !port || _portInRange(port, m[2]);
     const lp = m[1] === 'tcp' ? ['TCP'] : m[1] === 'udp' ? ['UDP'] : ['TCP', 'UDP'];
     const protoOk = q === 'TCP/UDP' ? true : lp.includes(q);
     return protoOk && (!port || _portInRange(port, m[2]));
   }
   if (/^\d+(?:-\d+)?$/.test(t)) return q !== 'ICMP' && (!port || _portInRange(port, t));
-  return true;
+  return null;
 }
-function _svcMatches(name, proto, port, svcList, seen) {
+// 三態合併：任一 true 為 true；否則任一 null 為 null；皆 false 為 false
+function _anyTri(list, fn) {
+  let unsure = false;
+  for (const x of list) { const r = fn(x); if (r === true) return true; if (r === null) unsure = true; }
+  return unsure ? null : false;
+}
+// FortiGate 自訂服務 protocol IP（2026-10-16）：protocol-number 0（或未設定）代表所有協定；6／17／1 對應 TCP／UDP／ICMP，
+// 其他協定號碼只在「任意協定、不填埠號」的查詢下符合
+function _ipProtoSvcMatches(num, proto, port) {
+  const n = parseInt(num, 10);
+  if (!n) return true;
+  const lit = n === 6 ? 'tcp' : n === 17 ? 'udp' : n === 1 ? 'icmp' : 'proto-' + n;
+  return _literalSvcMatches(lit, proto, port);
+}
+function _svcMatches(name, proto, port, svcList, seen, vdom) {
   const nm = name.trim().toUpperCase();
   if (nm==='ALL'||nm==='ANY') return true;
   if (seen.has(nm)) return false;
   seen.add(nm);
-  const obj = svcList.find(s=>s.name.toUpperCase()===nm);
+  const obj = _objByName(svcList, nm.toLowerCase(), vdom);
   if (!obj) return _literalSvcMatches(name, proto, port);
-  if (obj.category==='group') {
-    const mems = (obj.members||'').split(',').map(s=>s.trim()).filter(Boolean);
-    return mems.some(m=>_svcMatches(m, proto, port, svcList, seen));
-  }
+  const mems = (obj.members||'').split(',').map(s=>s.trim()).filter(m => m && m !== '-');
+  if (obj.category==='group') return _anyTri(mems, m => _svcMatches(m, proto, port, svcList, seen, vdom));
+  // 只有 group-object 引用、本身沒有埠的 ASA 群組（refOnly）：自身不符合，結果由成員決定
+  const own = obj.refOnly ? false : _svcObjMatches(obj, proto, port);
+  // Cisco ASA 服務群組可同時有埠清單與 group-object／service-object object 引用成員
+  if (own === true || !mems.length) return own;
+  const r = _anyTri(mems, m => _svcMatches(m, proto, port, svcList, seen, vdom));
+  return r === true ? true : (own === null || r === null ? null : false);
+}
+function _svcObjMatches(obj, proto, port) {
+  const op = String(obj.proto || '').toUpperCase();
+  if (op === 'IP' || op === 'ANY' || op === 'ALL') return _ipProtoSvcMatches(obj.protoNum, proto, port);
+  const toks = op.split('/');
+  const set = v => !!v && v !== '-';
+  let hasTcp = toks.includes('TCP'), hasUdp = toks.includes('UDP'), hasIcmp = toks.some(x => /^ICMP/.test(x));
+  // 未標協定（EdgeRouter／VyOS port-group 的 '-'）：依有填的埠欄位判斷，都沒有則無法判斷
+  if (op === '' || op === '-') { hasTcp = set(obj.tcpPorts); hasUdp = set(obj.udpPorts); if (!hasTcp && !hasUdp) return null; }
   if (!proto||proto==='any') {
     if (!port) return true;
-    if (obj.proto==='ICMP') return false;
-    const ranges=[obj.tcpPorts,obj.udpPorts].filter(r=>r&&r!=='-');
+    if (!hasTcp && !hasUdp) return false;
+    const ranges=[hasTcp?obj.tcpPorts:'',hasUdp?obj.udpPorts:''].filter(r=>r&&r!=='-');
     return !ranges.length||ranges.some(r=>_portInRange(port,r));
   }
   const p = proto.toUpperCase();
-  if (p==='ICMP'&&obj.proto==='ICMP') return true;
-  const tcpOk = (p==='TCP'||p==='TCP/UDP')&&(obj.proto==='TCP'||obj.proto==='TCP/UDP')
-    &&(!port||_portInRange(port,obj.tcpPorts));
-  const udpOk = (p==='UDP'||p==='TCP/UDP')&&(obj.proto==='UDP'||obj.proto==='TCP/UDP')
-    &&(!port||_portInRange(port,obj.udpPorts));
+  if (p==='ICMP') return hasIcmp;
+  const tcpOk = (p==='TCP'||p==='TCP/UDP')&&hasTcp&&(!port||_portInRange(port,obj.tcpPorts));
+  const udpOk = (p==='UDP'||p==='TCP/UDP')&&hasUdp&&(!port||_portInRange(port,obj.udpPorts));
   return tcpOk||udpOk;
 }
-function _policySvcMatches(svcStr, proto, port, svcList) {
+function _policySvcMatches(svcStr, proto, port, svcList, vdom) {
   const names = (svcStr||'ALL').split(',').map(s=>s.trim()).filter(Boolean);
-  return names.some(n=>_svcMatches(n, proto, port, svcList, new Set()));
+  return _anyTri(names, n => _svcMatches(n, proto, port, svcList, new Set(), vdom));
 }
 // 連線狀態條件（2026-10-01，YC）：EdgeRouter `state {…}`、MikroTik `connection-state=` 解析為 connState 陣列。
 // 「只看新連線」時，只比對既有連線（established／related／invalid／untracked）的規則不適用於新連線，略過；
@@ -340,15 +399,17 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
     const pSrc=addrField(p,'srcAddr'), pDst=addrField(p,'dstAddr');
     // 取反條件（srcNegate／dstNegate／svcNegate，第十七輪 QB）：比對結果反過來，無法判斷（FQDN）仍為無法判斷
     const neg = (v, on) => on === true && v !== null ? !v : v;
-    const sm=neg(_policyAddrMatches(pSrc,srcInt,addrs), p.srcNegate);
+    // 物件依規則所在 VDOM／vsys 查找（2026-10-16）
+    const sm=neg(_policyAddrMatches(pSrc,srcInt,addrs,p._vdom), p.srcNegate);
     if (sm===false) { trace.push({policy:p,result:'skip',reason:'src_addr'}); continue; }
-    const dm=neg(_policyAddrMatches(pDst,dstInt,addrs), p.dstNegate);
+    const dm=neg(_policyAddrMatches(pDst,dstInt,addrs,p._vdom), p.dstNegate);
     if (dm===false) { trace.push({policy:p,result:'skip',reason:'dst_addr'}); continue; }
-    const svm=neg(_policySvcMatches(p.service,proto,port?parseInt(port):null,svcs), p.svcNegate);
-    if (!svm) { trace.push({policy:p,result:'skip',reason:'service'}); continue; }
-    const resolvedSrc=_policyAddrResolve(pSrc,srcInt,addrs);
-    const resolvedDst=_policyAddrResolve(pDst,dstInt,addrs);
-    trace.push({policy:p,result:'match',hasFqdn:sm===null||dm===null,resolvedSrc,resolvedDst});
+    // 服務無法辨識（null）比照 FQDN 位址：視為可能命中並標示無法驗證（2026-10-16）
+    const svm=neg(_policySvcMatches(p.service,proto,port?parseInt(port):null,svcs,p._vdom), p.svcNegate);
+    if (svm===false) { trace.push({policy:p,result:'skip',reason:'service'}); continue; }
+    const resolvedSrc=_policyAddrResolve(pSrc,srcInt,addrs,p._vdom);
+    const resolvedDst=_policyAddrResolve(pDst,dstInt,addrs,p._vdom);
+    trace.push({policy:p,result:'match',hasFqdn:sm===null||dm===null||svm===null,svcUnknown:svm===null,resolvedSrc,resolvedDst});
     // GCP 防火牆政策的 goto_next（第二十二輪 HG）：本層不決定，交給下一層（VPC 防火牆規則或其他政策）
     return {matched:p,action:p.gotoNext?'goto_next':(p.action==='accept'?'accept':'deny'),trace};
   }
@@ -362,16 +423,16 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
   return PARSED.paDefault ? {matched:null,action:'implicit_deny',trace,paDefault:PARSED.paDefault} : {matched:null,action:'implicit_deny',trace};
 }
 
-function _addrResolvePath(name, targetInt, addrList, seen, pathPfx) {
+function _addrResolvePath(name, targetInt, addrList, seen, pathPfx, vdom) {
   const nm = name.trim().toLowerCase(), raw = name.trim();
   if (nm==='all'||nm==='any') return {match:true, display:raw, detail:'(any)'};
   if (seen.has(nm)) return {match:false};
   seen.add(nm);
   const path = pathPfx ? pathPfx + ' → ' + raw : raw;
-  const obj = addrList.find(a=>a.name.toLowerCase()===nm);
+  const obj = _objByName(addrList, nm, vdom);
   if (!obj) {
-    if (raw.startsWith('@')) return _addrResolvePath(raw.slice(1), targetInt, addrList, seen, pathPfx);
-    const lit = _literalAddrMatch(raw, targetInt, addrList, new Set(seen));
+    if (raw.startsWith('@')) return _addrResolvePath(raw.slice(1), targetInt, addrList, seen, pathPfx, vdom);
+    const lit = _literalAddrMatch(raw, targetInt, addrList, new Set(seen), vdom);
     if (lit === true) return {match:true, display:path, detail:'(literal)'};
     if (lit === false) return {match:false};
     return {match:null, display:path, detail:'(unresolved)'};
@@ -391,7 +452,7 @@ function _addrResolvePath(name, targetInt, addrList, seen, pathPfx) {
     const mems=(obj.members||'').split(',').map(s=>s.trim()).filter(Boolean);
     let fqdn=null;
     for(const m of mems){
-      const r=_addrResolvePath(m,targetInt,addrList,seen,path);
+      const r=_addrResolvePath(m,targetInt,addrList,seen,path,vdom);
       if(r.match===true) return r;
       if(r.match===null) fqdn=r;
     }
@@ -399,11 +460,11 @@ function _addrResolvePath(name, targetInt, addrList, seen, pathPfx) {
   }
   return {match:false};
 }
-function _policyAddrResolve(addrStr, targetInt, addrList) {
+function _policyAddrResolve(addrStr, targetInt, addrList, vdom) {
   const names=(addrStr||'').split(',').map(s=>s.trim()).filter(Boolean);
   let fqdn=null;
   for(const n of names){
-    const r=_addrResolvePath(n,targetInt,addrList,new Set(),'');
+    const r=_addrResolvePath(n,targetInt,addrList,new Set(),'',vdom);
     if(r.match===true) return r;
     if(r.match===null) fqdn=r;
   }
@@ -472,7 +533,12 @@ function _findDestNat(dstStr, proto, port, PARSED, opts) {
     if (n.type === 'static' && n.origSrc && n.transSrc) {
       // Cisco ASA twice NAT「source static 實際 對外」：連往對外位址時換回實際位址
       const ext = _natSingleIp(n.transSrc, addrs), real = _natSingleIp(n.origSrc, addrs);
-      if (ext && real && ext === dst && real !== dst) return { nat: n, name: `NAT #${n.id}`, toIp: real, toPort: port || '' };
+      // object NAT 帶 service tcp|udp 實際埠 對外埠：查詢的埠須是對外埠、協定相符，轉成實際埠（2026-10-16）
+      if (n.mappedPort) {
+        if (!port || String(port) !== String(n.mappedPort)) continue;
+        if (proto && proto !== 'any' && proto.toUpperCase() !== String(n.proto).toUpperCase()) continue;
+      }
+      if (ext && real && ext === dst && real !== dst) return { nat: n, name: n.name || `NAT #${n.id}`, toIp: real, toPort: n.mappedPort ? n.realPort : (port || '') };
       continue;
     }
     if (n.type !== 'vip') continue;
@@ -638,7 +704,7 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED, opts) {
       }
       const res = _runPolicyQuery(s, qd, r.proto, qp, vdomFilter, PARSED, qo) || { matched: null, action: 'implicit_deny', trace: [] };
       const mt = (res.trace || []).find(t => t.result === 'match');
-      results.push({ action: res.action, policy: res.matched, hasFqdn: !!(mt && mt.hasFqdn) });
+      results.push({ action: res.action, policy: res.matched, hasFqdn: !!(mt && mt.hasFqdn), svcUnknown: !!(mt && mt.svcUnknown) });
       if (dn && !nat) {
         nat = { name: dn.name, to: dn.toIp + (dn.toPort ? ':' + dn.toPort : ''), stage };
         if (stage === 'post' && dsts.length === 1) { qDst = qd; qPort = qp; }
@@ -657,7 +723,7 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED, opts) {
     const multiVdom = new Set(pols.map(p => p._vdom || '')).size > 1;
     const check = r.expect ? (r.expect === 'accept' ? acceptCount === results.length : acceptCount === 0) : null;
     return { ...r, action, policyId: single ? single.id : pols.map(p => (multiVdom && p._vdom ? p._vdom + '/' : '') + p.id).join(';'), policyName: single ? (single.name || '') : '',
-      hasFqdn: results.some(x => x.hasFqdn), combos: results.length, acceptCount, check, nat, policyRef: single, ...(qDst ? { qDst, qPort } : {}) };
+      hasFqdn: results.some(x => x.hasFqdn), svcUnknown: results.some(x => x.svcUnknown), combos: results.length, acceptCount, check, nat, policyRef: single, ...(qDst ? { qDst, qPort } : {}) };
   });
 }
 // 規則變更模擬（2026-10-06，第十二輪 MD）：在 parsed 的副本上套用變更，不動原物件。

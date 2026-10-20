@@ -2257,7 +2257,8 @@ function applyModelToForm(model){
   // Breakout enable 清單：模板儲存的是產生階段當下的最終狀態，回填後維持一致，
   // 之後使用者若再用「Split-out 輔助」小工具展開子埠會繼續累加
   _breakoutEnables=(model.breakouts||[]).slice();
-
+  // 草稿還原、模板載入後依新資料重算卡片收合
+  refreshCardFold();
 }
 
 // localStorage 儲存的模板庫：{ [模板名稱]: { savedAt, model } }。這是本檔案第一次把
@@ -2555,7 +2556,8 @@ const VENDOR_UNSUPPORTED={
   // （原本沿用 Cisco/Aruba 共用 policy-map/class 語法整個語法家族選錯，FortiOS 原生是
   // config/edit/set/next/end 區塊風格），但此清單當時漏同步更新，導致使用者填寫的 QoS
   // 資料靜默消失卻無任何警告（2026-09 全功能審查發現）
-  fortiswitch:['qos'],
+  // renderFortiSwitchACL() 不輸出（固定回傳空字串），列入才會在驗證時提示（2026-10-16）
+  fortiswitch:['qos','acl'],
   // qos：2026-07-22 對外查證官方 AOS-CX QoS 文件後 render 函式已移除（原本沿用 Cisco 式
   // policy-map 容器概念，真實模型是 qos queue-profile/qos schedule-profile），同上一併
   // 修正遺漏的旗標同步（2026-09 全功能審查發現）
@@ -3100,7 +3102,7 @@ function generate(fromImport=false,quiet=false){
   // 驗證表單
   const validation=validateForm();
   if(!quiet||!validation.valid)showValidationResults(validation,fromImport);
-  if(!validation.valid)return;
+  if(!validation.valid){_unfoldInvalid();return;}
 
   // withSviInterfaces()：13 家廠牌把 VLAN 的 L3 IP 建模成獨立 SVI 介面，這裡才依 vlans[].ip
   // 動態合成對應介面物件，不寫回 validation.model 本身（ephemeral，見 switch-generator-core.js）
@@ -3594,7 +3596,8 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   document.getElementById('ntp-servers').value=(parsed.mgmtSvc&&Array.isArray(parsed.mgmtSvc.ntp)?parsed.mgmtSvc.ntp:[]).join(', ');
 
   // VLAN 表格的 IP 欄位只收 IPv4 CIDR；IPv6 SVI 位址不填入（填入會被判為格式錯誤）
-  (parsed.vlans||[]).forEach(v=>addVlanRow(v.id,v.name,/:/.test(v.ip||'')?'':v.ip));
+  // 「位址/點分遮罩」（ProCurve 等解析器的寫法）轉成表單用的 CIDR，否則驗證會擋下產生（2026-10-16）
+  (parsed.vlans||[]).forEach(v=>addVlanRow(v.id,v.name,/:/.test(v.ip||'')?'':(/\/\d+\.\d+\.\d+\.\d+$/.test(v.ip||'')?dhcpNetworkToCidr(v.ip.replace('/',' ')):v.ip)));
 
   // VLAN IP 回填（2026-09-08 新增，withSviInterfaces()／switch-generator-core.js 的反向邏輯）：
   // switch_analyzer 的 parser 早就把這批介面解析成 type:'svi'，但下面 Interface 表格的回填
@@ -4431,7 +4434,8 @@ function processBulkCSV(){
         else if(model.vendor==='planet')cfg=assemblePlanetConfig(model);
         else cfg=assembleComwareConfig(model);
 
-        const fname=sanitizeZipEntryName(row.devicename)+'.cfg';
+        // SONiC 輸出為 config_db.json，比照單台下載的副檔名（2026-10-16）
+        const fname=sanitizeZipEntryName(row.devicename)+(model.vendor==='sonic'?'_config_db.json':'.cfg');
         window.bulkConfigs[fname]=cfg;
         let goldNote='',goldFail=0;
         if(goldRules.length){
@@ -5191,10 +5195,12 @@ window.loadExampleData=loadExampleData;
 // 用途範本依目前介面表格（先選常用機種）取代 VLAN、介面模式與 LACP／VRRP／OSPF／路由表格；
 // 廠牌不支援的功能（VENDOR_INCAPABLE 或卡片隱藏）不填。位址皆為私有網段範例
 function _cardUsable(id,key){
-  const card=document.getElementById(id);
+  const el=document.getElementById(id);
+  const card=el&&(el.closest('.card')||el);
   if(!card||getComputedStyle(card).display==='none')return false;
   return !key||!(VENDOR_INCAPABLE[currentVendor()]||[]).includes(key);
 }
+const OSPF_WILDCARD_VENDORS=['comware','cisco','arista','ruijie','netgear','planet'];
 function _unsupported(key){return (VENDOR_UNSUPPORTED[currentVendor()]||[]).includes(key);}
 function applyRolePreset(){
   const role=document.getElementById('role-preset').value;
@@ -5209,6 +5215,7 @@ function applyRolePreset(){
     r.querySelector('.i-desc').value=desc;
   };
   const upNames=up.map(r=>r.querySelector('.i-name').value.trim());
+  let ospfManual=false;
   // 換用途時先清掉其他範本填過的表格，避免殘留
   ['vlan-body','vrrp-body','area-body','route-body','lacp-body'].forEach(id=>{const b=document.getElementById(id);if(b)b.innerHTML='';});
   document.getElementById('ospf-pid').value='';document.getElementById('ospf-rid').value='';
@@ -5226,23 +5233,25 @@ function applyRolePreset(){
   }else{
     addVlanRow('99','Mgmt','192.168.99.1/24');addVlanRow('100','Core-Link','10.255.0.1/30');
     ports.forEach(r=>setIf(r,'trunk','99 100','Core'));
-    if(_cardUsable('ospf-card','ospf')&&!_unsupported('ospf')){
+    // Area 表格的 Network 欄位各廠牌語意不同（介面名稱、VLAN 名稱、CIDR），只在「網段＋萬用遮罩」的廠牌自動填入
+    if(OSPF_WILDCARD_VENDORS.includes(currentVendor())&&_cardUsable('ospf-card','ospf')&&!_unsupported('ospf')){
       document.getElementById('ospf-pid').value='1';document.getElementById('ospf-rid').value='10.255.255.1';
-      addAreaRow('0.0.0.0','10.255.0.0','0.0.255.255','normal');addAreaRow('0.0.0.0','192.168.99.0','0.0.0.255','normal');
-    }
+      addAreaRow('0.0.0.0','10.255.0.0','0.0.0.3','normal');addAreaRow('0.0.0.0','192.168.99.0','0.0.0.255','normal');
+    }else ospfManual=true;
   }
   // LACP 成員以空白分隔，埠名本身含空白的廠牌（如 Ruijie、Planet）不填
   if(_cardUsable('lacp-body')&&!_unsupported('lacp')&&upNames.every(n=>!/\s/.test(n)))addLacpRow('1','active',upNames.join(' '));
   updateIfaceTableDisplay();
   applyI18n(document.getElementById('lacp-body')||document);
   generate();
-  msg.textContent=tr('qs.applied');
+  msg.textContent=tr('qs.applied')+(ospfManual?' '+tr('qs.ospfManual'):'');
 }
 window.applyRolePreset=applyRolePreset;
 
 const FOLD_KEEP=['sec.import','sec.sys','sec.vlan','sec.iface','sec.auditPreview','sec.output'];
 function _cardHasData(card){
-  if([...card.querySelectorAll('tbody[id$="-body"]')].some(b=>b.children.length))return true;
+  // 清單容器（模板清單等）的空白提示列（class 以 -empty 結尾）不算資料
+  if([...card.querySelectorAll('tbody[id$="-body"],[id$="-list"]')].some(b=>[...b.children].some(c=>!/-empty\b/.test(c.className))))return true;
   return [...card.querySelectorAll('input,textarea')].some(el=>{
     if(el.type==='file'||el.type==='button')return false;
     if(el.type==='checkbox'||el.type==='radio')return el.checked!==el.defaultChecked;
@@ -5252,7 +5261,16 @@ function _cardHasData(card){
 function _toggleCard(card){
   const folded=card.classList.toggle('folded');
   card.dataset.userOpen=folded?'':'1';
+  card.dataset.userClosed=folded?'1':'';
   card.firstElementChild.setAttribute('aria-expanded',String(!folded));
+}
+// 驗證失敗時把含錯誤欄位的卡片展開，避免錯誤藏在收合的卡片裡
+function _unfoldInvalid(){
+  document.querySelectorAll('.card.folded .invalid').forEach(el=>{
+    const card=el.closest('.card');
+    card.classList.remove('folded');card.dataset.userOpen='1';card.dataset.userClosed='';
+    if(card.firstElementChild)card.firstElementChild.setAttribute('aria-expanded','true');
+  });
 }
 // 精簡模式：沒有資料、使用者也沒手動展開的功能卡片收合；點標題（或 Enter／空白鍵）展開
 function refreshCardFold(){
@@ -5266,7 +5284,7 @@ function refreshCardFold(){
       h.addEventListener('click',e=>{if(!e.target.closest('button,a,input,select,label'))_toggleCard(card);});
       h.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();_toggleCard(card);}});
     }
-    const fold=!!on&&!card.dataset.userOpen&&!_cardHasData(card);
+    const fold=!!on&&(!!card.dataset.userClosed||(!card.dataset.userOpen&&!_cardHasData(card)));
     card.classList.toggle('folded',fold);
     h.setAttribute('aria-expanded',String(!fold));
   });

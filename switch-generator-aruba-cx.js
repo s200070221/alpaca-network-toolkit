@@ -160,9 +160,14 @@ function renderArubaLACPExtra(lacpList,ifaces){
   return blocks.join('\n!\n');
 }
 
-function renderArubaVRRPGroup(g){
+function renderArubaVRRPGroup(g,ospf){
   const lines=[`interface vlan${g.vlanId}`];
   if(g.ip)lines.push(`    ip address ${g.ip}`);
+  // 有 VRRP 的 VLAN 不經 withSviInterfaces() 合成 SVI，OSPF area 指派需在這裡輸出（2026-10-16）
+  const name=`vlan${g.vlanId}`;
+  (ospf||[]).forEach(proc=>(proc.areas||[]).forEach(a=>{
+    if((a.networks||[]).some(n=>String(n.network||'').toLowerCase()===name))lines.push(`    ip ospf ${proc.pid} area ${a.area}`);
+  }));
   g.entries.forEach(v=>{
     if(v.vip)lines.push(`    vrrp ${v.vrid} vip ${v.vip}`);
     lines.push(`    vrrp ${v.vrid} priority ${v.priority}`);
@@ -170,7 +175,7 @@ function renderArubaVRRPGroup(g){
   });
   return lines.join('\n');
 }
-function renderArubaVRRP(list){return groupVrrpByVlan(list).map(renderArubaVRRPGroup).join('\n!\n');}
+function renderArubaVRRP(list,ospf){return groupVrrpByVlan(list).map(g=>renderArubaVRRPGroup(g,ospf)).join('\n!\n');}
 
 function renderArubaOSPFProcess(o){
   // 2026-07-27 對外查證官方 HPE Aruba Lab Guide＋真實 AOS-CX 生產設定檔後修正：
@@ -245,7 +250,8 @@ function renderArubaDHCP(list){return (list||[]).filter(d=>d.type==='server').ma
 // 區塊擷取正則以下一個 "access-list "/"interface " 判斷結尾，故需排在 interfaces 之前組裝
 function renderArubaACLEntry(a){
   const lines=[`access-list ip ${a.name}`];
-  (a.rules||[]).forEach(r=>lines.push(`    ${r.seq||0} ${r.action||'permit'} ${r.protocol||'any'} ${r.src||'any'} ${r.dst||'any'}`));
+  // 目的埠：AOS-CX ACE 在目的位址後接 eq PORT；未輸出時「允許 TCP 22」會變成允許全部 TCP
+  (a.rules||[]).forEach(r=>lines.push(`    ${r.seq||0} ${r.action||'permit'} ${r.protocol||'any'} ${r.src||'any'} ${r.dst||'any'}${r.dstPort&&r.dstPort!=='-'?' eq '+r.dstPort:''}`));
   return lines.join('\n');
 }
 function renderArubaACL(list){return (list||[]).map(renderArubaACLEntry).join('\n!\n');}
@@ -290,7 +296,7 @@ function assembleArubaConfig(model){
   if(arubaLacpExtra)blocks.push(arubaLacpExtra);
   const arSecBlock=renderArubaCXSecurity(model.security);
   if(arSecBlock)blocks.push(arSecBlock);
-  if(model.vrrp&&model.vrrp.length)blocks.push(renderArubaVRRP(model.vrrp));
+  if(model.vrrp&&model.vrrp.length)blocks.push(renderArubaVRRP(model.vrrp,model.ospf));
   if(model.dhcp&&model.dhcp.some(d=>d.type==='server'))blocks.push(renderArubaDHCP(model.dhcp));
   const arubaVxlan=renderArubaVXLAN(model.vxlan);
   if(arubaVxlan)blocks.push(arubaVxlan);

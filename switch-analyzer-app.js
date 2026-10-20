@@ -736,6 +736,7 @@ function resetAll(){
   if(exText===null||exText===rawCfgText){exText=null;exResult=null;}
   parsed=null;currentView='upload';
   renderSwqBar();
+  renderNextBar();
   document.getElementById('view-upload').classList.add('show');
   document.getElementById('view-result').style.display='none';
   document.getElementById('tb-actions').style.display='none';
@@ -2691,7 +2692,7 @@ ${(p.lacp&&p.lacp.length)?`<div class="card" id="sec-lacp">
       return`<tr>
       <td class="mono" style="font-weight:700">${esc(l.name)}</td>
       <td><span class="badge" style="background:#e0f2fe;color:#0369a1">${esc(l.mode)}</span></td>
-      <td class="mono">${memArr.map(m=>typeof m==='string'?m:m.name).join(', ')||'—'}</td>
+      <td class="mono">${esc(memArr.map(m=>typeof m==='string'?m:m.name).join(', '))||'—'}</td>
     </tr>`;}).join('')}
     </tbody>
   </table>

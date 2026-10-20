@@ -31,9 +31,18 @@ function parseNXOS(cfg) {
   }
   function parseInterfaces() {
     const ifaces=[];
-    for (const b of cfg.split(/^(?=interface\s)/m)) {
-      const mIf=b.match(/^interface\s+(.+)/);
+    // 介面區塊只到第一個不縮排的行為止（2026-10-16：最後一個介面原本延伸到檔尾，後面 router bgp 的
+    // shutdown／description 被當成介面設定）；同名區塊（同一介面分兩段設定）合併後再解析
+    const blocks=new Map();
+    for (const raw of cfg.split(/^(?=interface\s)/m)) {
+      const mIf=raw.match(/^interface\s+(.+)/);
       if (!mIf) continue;
+      const body=raw.split(/\n(?=\S)/)[0];
+      const key=mIf[1].trim();
+      blocks.set(key, blocks.has(key) ? blocks.get(key)+'\n'+body.split('\n').slice(1).join('\n') : body);
+    }
+    for (const b of blocks.values()) {
+      const mIf=b.match(/^interface\s+(.+)/);
       const name=mIf[1].trim();
       const desc=(b.match(/^\s+description\s+(.+)/m)||[])[1]?.trim()||'';
       const shut=/^\s+shutdown/m.test(b);
@@ -70,7 +79,7 @@ function parseNXOS(cfg) {
       // 而非這裡的 status 字串，原本沒有這個欄位導致該欄一律顯示成 enabled、down 篩選對 NX-OS 永遠篩不到
       const memberMatch=name.match(/^Ethernet(\d+)\//i);
       const member=memberMatch?memberMatch[1]:'1';
-      ifaces.push({ name, desc, status:shut?'disabled':'connected', shutdown:shut, member, mode:mMode?mMode[1]:'', ip, ip6, secondaryIps, vlan, nativeVlan:mNative?mNative[1]:'', vrf:mVrf?mVrf[1]:'', type, breakoutChild, breakoutParent, breakoutMode:'' });
+      ifaces.push({ name, desc, status:shut?'disabled':'connected', shutdown:shut, member, mode:mMode?mMode[1]:'', ip, ip6, secondaryIps, vlan, vlans:vlan, nativeVlan:mNative?mNative[1]:'', vrf:mVrf?mVrf[1]:'', type, breakoutChild, breakoutParent, breakoutMode:'' });
     }
     return ifaces;
   }

@@ -1065,7 +1065,13 @@ const Converter = (() => {
     if(parsed.schedules.length) { L.push('      <schedule>'); parsed.schedules.forEach(s=>{ L.push(`        <entry name="${esc(s.name)}"><recurring><weekly><monday><member>${esc(s.start||'08:00')}-${esc(s.end||'18:00')}</member></monday></weekly></recurring></entry>`); }); L.push('      </schedule>'); }
     // NAT
     const nats2=parsed.nat;
-    if(nats2.length) { L.push('      <nat><rules>'); nats2.filter(n=>n.type==='ippool').forEach(n=>{ L.push(`        <entry name="${esc(n.name)}"><from><member>trust</member></from><to><member>untrust</member></to><source><member>any</member></source><destination><member>any</member></destination><source-translation><dynamic-ip-and-port><translated-address><member>${esc(n.startIp||'-')}</member></translated-address></dynamic-ip-and-port></source-translation></entry>`); }); nats2.filter(n=>n.type==='vip').forEach(n=>{ L.push(`        <entry name="${esc(n.name)}"><from><member>untrust</member></from><to><member>untrust</member></to><source><member>any</member></source><destination><member>any</member></destination><destination-translation><translated-address>${esc(n.mapIp||'-')}</translated-address>${n.mapPort&&n.mapPort!=='-'?`<translated-port>${esc(n.mapPort)}</translated-port>`:''}</destination-translation></entry>`); }); L.push('      </rules></nat>'); }
+    if(nats2.length) { L.push('      <nat><rules>'); nats2.filter(n=>n.type==='ippool').forEach(n=>{ L.push(`        <entry name="${esc(n.name)}"><from><member>trust</member></from><to><member>untrust</member></to><source><member>any</member></source><destination><member>any</member></destination><source-translation><dynamic-ip-and-port><translated-address><member>${esc(n.startIp||'-')}</member></translated-address></dynamic-ip-and-port></source-translation></entry>`); }); nats2.filter(n=>n.type==='vip').forEach(n=>{
+      // 目的位址必須是對外位址（原本寫 any，等於所有進來的流量都轉到內部主機，2026-10-16）；對外埠需要服務物件，
+      // 轉換器沒有產生對應物件，有埠時輸出為停用並註明，請人工補上 service
+      const ext=n.extIp&&n.extIp!=='-'&&!/^0\.0\.0\.0/.test(n.extIp)?n.extIp:'';
+      const port=n.extPort&&n.extPort!=='-'?n.extPort:'';
+      const review=!ext||port;
+      L.push(`        <entry name="${esc(n.name)}"><from><member>untrust</member></from><to><member>untrust</member></to><source><member>any</member></source><destination><member>${esc(ext||'any')}</member></destination><service>any</service><destination-translation><translated-address>${esc(n.mapIp||'-')}</translated-address>${n.mapPort&&n.mapPort!=='-'?`<translated-port>${esc(n.mapPort)}</translated-port>`:''}</destination-translation>${review?`<disabled>yes</disabled><description>${esc(`REVIEW: ${!ext?'external address unknown':`external port ${port} needs a service object`} - rule disabled`)}</description>`:''}</entry>`); }); L.push('      </rules></nat>'); }
     // Users
     const ulist2=parsed.users.filter(u=>u.type==='admin'||u.type==='local');
     if(ulist2.length) { L.push('      <local-user-database><user>'); ulist2.forEach(u=>L.push(`        <entry name="${esc(u.name)}"><phash>PLACEHOLDER</phash></entry>`)); L.push('      </user></local-user-database>'); }
@@ -2640,7 +2646,31 @@ const Converter = (() => {
   // ══════════════════════════════════════════════════════════════════════════
   //  DISPATCHER — 10 廠牌互轉
   // ══════════════════════════════════════════════════════════════════════════
+  // 轉換器無法表達的規則條件（2026-10-16）：連線狀態（established／related）、位址或服務取反、限定使用者／群組。
+  // 各目標的 to*() 都不輸出這些條件，原本規則會靜默放寬（例如「允許既有連線」變成全部放行、只給管理員群組的規則變成給所有人），
+  // 改為停用並在備註註明需人工改寫，不產生比原規則更寬的規則
+  const _NOLIMIT = v => { const t = String(v == null ? '' : v).trim().toLowerCase(); return !t || t === '-' || t === 'any' || t === 'all' || t === 'none'; };
+  function _unconvertible(p) {
+    const why = [];
+    if (Array.isArray(p.connState) && p.connState.length) why.push('connection-state ' + p.connState.join('/'));
+    if (p.srcNegate === true || p.dstNegate === true || p.svcNegate === true) why.push('negate');
+    if (!_NOLIMIT(p.users) || !_NOLIMIT(p.groups)) why.push('users/groups');
+    return why;
+  }
+  function _guardPolicies(parsed) {
+    if (!parsed || !Array.isArray(parsed.policies)) return parsed;
+    let changed = false;
+    const policies = parsed.policies.map(p => {
+      const why = _unconvertible(p);
+      if (!why.length) return p;
+      changed = true;
+      const note = `REVIEW: ${why.join(', ')} not converted - rule disabled`;
+      return { ...p, status: 'disable', enabled: false, comments: p.comments && p.comments !== '-' ? `${note}; ${p.comments}` : note };
+    });
+    return changed ? { ...parsed, policies } : parsed;
+  }
   function convert(parsed, targetVendor) {
+    parsed = _guardPolicies(parsed);
     switch(targetVendor) {
       case 'fortigate':  return toFortigate(parsed);
       case 'sophos':     return toSophos(parsed);

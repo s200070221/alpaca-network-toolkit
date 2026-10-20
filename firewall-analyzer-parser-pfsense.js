@@ -249,16 +249,23 @@ const PfsenseParser = (() => {
           else if (addr && sub) dstAddr = `${addr}/${sub}`;
           else if (addr) dstAddr = addr;
         }
-        const dport = xv(dstXml,'port');
-        if (dport) dstAddr += `:${dport}`;
+        // 目的端的 <not/>（2026-10-16，原本只處理來源端，取反被拿掉、規則意思反過來）；目的埠改放服務欄，
+        // 位址不再帶 :埠（原本查詢無法解析位址而視為可能命中）
+        if (hasTag(dstXml,'not')) dstAddr = `!${dstAddr}`;
       }
 
       // Service/Protocol
       const proto  = xv(inner,'protocol') || 'any';
       const dport  = xv(inner,'destination') ? xv(xv(inner,'destination'),'port')||'' : '';
       const sport  = xv(inner,'source')      ? xv(xv(inner,'source'),'port')||'' : '';
+      // 服務以字面值 tcp/443、udp/1000-2000 表示（pfSense 埠範圍寫成 1000:2000），tcp/udp 拆成兩筆；
+      // 埠欄位是別名時以別名名稱表示（查詢依物件判斷，找不到即無法判斷）
       let service = proto !== 'any' ? proto.toUpperCase() : 'ANY';
-      if (dport) service += `:${dport}`;
+      if (dport) {
+        const spec = /^\d+(?::\d+)?$/.test(dport) ? dport.replace(':', '-') : null;
+        const protos = proto === 'tcp/udp' ? ['tcp', 'udp'] : (proto === 'tcp' || proto === 'udp') ? [proto] : [];
+        service = spec && protos.length ? protos.map(x => `${x}/${spec}`).join(',') : dport;
+      }
 
       const action = type === 'pass' ? 'accept' : 'deny';
       const log    = hasTag(inner,'log') ? 'enable' : 'disable';

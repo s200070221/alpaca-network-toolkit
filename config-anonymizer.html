@@ -1254,6 +1254,11 @@ const anonOutputIPs = new Set();
 // 原檔中出現過的 IPv4 字面值：逐一對應配發假位址時跳過這些值。原檔本身含 192.0.2／198.51.100／203.0.113
 // 位址時，原本另一個位址可能被配到同一個假值（兩台主機變成同一個位址，還原時也分不開）
 const srcIPv4 = new Set(), srcIPv6 = new Set();
+// 原檔中已出現的假名稱（xx-device-N、user-N）：配發主機名稱／帳號假值時跳過，避免對已去識別化過的檔案再處理一次時，
+// 新配發的假值與原檔既有的同名值撞在一起（比照 srcIPv4）
+const srcFakeNames = new Set();
+// 設備序號對照（原始序號 → SERIAL-X 加流水號）：同一序號在檔案內各處替換成同一個假值；序號不提供還原
+const serialMap = new Map();
 // 保留網段結構模式（2026-10-02，第十輪 ZN）的逐層對照：top＝原始 /16 → 假 /16，
 // oct3＝「假 /16|原始第三段」→ 假第三段；used 記錄已配發的假值，確保不同來源不會撞在一起
 const subnetMaps = { top: new Map(), topUsed: new Set(), oct3: new Map(), oct3Used: new Set() };
@@ -1289,7 +1294,8 @@ const VENDOR_SIGS = {
   aruba_cx:    { p:[/^!Version ArubaOS-CX\b/m, /vlan trunk (?:allowed|native)/m, /^vsf\s*$/m, /Aruba/i], min:2 },
   // 第 4 條：帶引號 hostname 之後出現以埠號開頭的 untagged／tagged（無 `; J9xxxA` 檔頭時，與 switch_analyzer 同步，2026-10-01）
   procurve:    { p:[/^;\s*(?:HP\s|Aruba\s|J\d{4}[A-Z])/m, /^oobm$/m, /^trunk\s+[\dA-Za-z,\/\-]+\s+[Tt]rk\d+/m, /^hostname\s+"[^"\n]*"\s*$[\s\S]*?^\s+(?:un)?tagged\s+[A-Z]?\d/m], min:1 },
-  dell_os10:   { p:[/^interface\s+ethernet\d+\/\d+\/\d+/m, /^vlt-domain\s+\d+/m, /Dell.*OS10/i], min:1 },
+  // Dell OS9（FTOS）沿用同一處理：`! Dell Networking OS` 檔頭、ManagementEthernet／fortyGigE 介面、stack-unit
+  dell_os10:   { p:[/^interface\s+ethernet\d+\/\d+\/\d+/m, /^vlt-domain\s+\d+/m, /Dell.*OS10/i, /^!\s*Dell Networking OS\b/m, /^interface\s+(?:ManagementEthernet|fortyGigE)\s+\d+\/\d+/m, /^stack-unit\s+\d+\b/m], min:1 },
   // ASA Version／NGFW Version banner、nameif、獨立一行 failover 皆為 ASA/FTD 專屬語法，
   // Cisco IOS 交換器不會出現；NGFW Version 讓沿用同一套 Lina CLI 語法的 FTD 也一併命中，
   // 比照 firewall_analyzer 的 CiscoFTDParser 委派 CiscoASAParser 慣例，不另開 ciscoftd 分支
@@ -1576,8 +1582,8 @@ function anonHostname(name, prefix, opts) {
   if (!name || !name.trim()) return name;
   const key = name.trim();
   if (mappings.hostname.has(key)) return mappings.hostname.get(key);
-  ctrs.dev++;
-  const mapped = `${prefix}-device-${String(ctrs.dev).padStart(3, '0')}`;
+  let mapped;
+  do { ctrs.dev++; mapped = `${prefix}-device-${String(ctrs.dev).padStart(3, '0')}`; } while (srcFakeNames.has(mapped));
   mappings.hostname.set(key, mapped);
   stats.hostname++;
   return mapped;
@@ -1587,8 +1593,8 @@ function anonUser(name) {
   if (!name || !name.trim()) return name;
   const key = name.trim();
   if (mappings.user.has(key)) return mappings.user.get(key);
-  ctrs.usr++;
-  const mapped = `user-${String(ctrs.usr).padStart(3, '0')}`;
+  let mapped;
+  do { ctrs.usr++; mapped = `user-${String(ctrs.usr).padStart(3, '0')}`; } while (srcFakeNames.has(mapped));
   mappings.user.set(key, mapped);
   stats.user++;
   return mapped;
@@ -1599,9 +1605,18 @@ function anonKnownUser(name) {
   return mappings.user.has(key) ? mappings.user.get(key) : name;
 }
 // 電子郵件：帳號部分沿用帳號對照、網域改為保留給文件用途的 example.com
+// 完整位址另記一筆帳號對照（假位址 → 原位址），還原時才能連網域一起換回；不同網域的同名帳號
+// （john@a.com、john@b.com）若會得到相同假位址，改配新的帳號序號，避免還原時分不開
 function anonEmail(addr) {
   const m = String(addr || '').match(/^([^@\s]+)@\S+$/);
-  return m ? anonUser(m[1]) + '@example.com' : addr;
+  if (!m) return addr;
+  const key = String(addr).trim();
+  if (mappings.user.has(key)) return mappings.user.get(key);
+  const used = new Set(mappings.user.values());
+  let fake = anonUser(m[1]) + '@example.com';
+  while (used.has(fake) || srcFakeNames.has(fake)) { ctrs.usr++; fake = `user-${String(ctrs.usr).padStart(3, '0')}@example.com`; }
+  mappings.user.set(key, fake);
+  return fake;
 }
 
 // 匯入既有對照表（跨工具聯動，見 log_analyzer 對應的 applyImportedMappings()，各自維護
@@ -1840,6 +1855,8 @@ function anonFortiGate(text, opts) {
       if (opts.user) {
         line = line.replace(/((?:^|:)user=)([^:\s]+)/, (m, p, n) => p + anonUser(n));
       }
+      // 多 VDOM 的 vd1=root:vd2=名稱：與 config vdom 內的 edit 使用同一 VDOM 對照
+      if (opts.vdom) line = line.replace(/(:vd\d+=)([^:\s]+)/g, (m, p, n) => p + anonVDOM(n));
       // 不做 IP 替換（版本號保留），直接推出
       out.push(line);
       continue;
@@ -2212,6 +2229,11 @@ function anonPaloAlto(text, opts) {
     if (comR !== line) line = comR;
     const secR = line.replace(/^(.+\s+secret\s+)(\S+)$/, '$1REDACTED_KEY');
     if (secR !== line) { stats.key++; line = secR; }
+    // BGP peer `connection-options authentication password "值"`（paloalto_complex_test.conf）
+    const bgpPwR = line.replace(/(\sauthentication\s+password\s+)("[^"]*"|\S+)/, (m, p, v) => (/REDACTED/.test(v) ? m : p + (v[0] === '"' ? '"REDACTED_PASSWORD"' : 'REDACTED_PASSWORD')));
+    if (bgpPwR !== line) { stats.password++; line = bgpPwR; }
+    // SNMPv3 trap 伺服器帳號 `… server NMS-V3 user 名稱`
+    if (opts.user) line = line.replace(/^(set\s+.*\bserver-profile\s+snmp-trap\s+.*\sserver\s+\S+\s+user\s+)(\S+)/, (m, p, u) => p + anonUser(u));
     // BGP peer 認證金鑰（`set network virtual-router <vr> protocol bgp auth-profile <name>
     // secret <value>`，官方 PAN-OS Ansible 模組 panos_bgp_auth 查證，中高信心度）已被上面這條
     // 通用 `... secret VALUE` 規則涵蓋，非缺口。OSPF 認證（OSPF Auth Profile 物件，PAN-OS
@@ -2232,7 +2254,7 @@ function anonPfSense(text, opts) {
   // `<password>` 標籤規則同名同格式，已天生涵蓋，非缺口，不需新增規則。
   const lines = text.split('\n');
   const out = [];
-  let inUser = false;
+  let inUser = false, inGroup = false; // <group> 區塊內的 <member> 為帳號名稱
   // shared_key／tls 跨行狀態（2026-08-08 查證修正）：對外查證 pfsensible/core GitHub
   // issue #132 確認 pfSense OpenVPN 的 <shared_key>／<tls> 欄位儲存的是保留原始換行的
   // PEM 格式文字（"-----BEGIN OpenVPN Static key V1-----" 區塊），不是像憑證管理員的
@@ -2259,6 +2281,7 @@ function anonPfSense(text, opts) {
 
     // 先開啟 context flag，再做所有替換，最後才關閉 flag（避免單行含 <user>…</user> 時 flag 被同一行清除）
     if (/<user>/.test(line)) inUser = true;
+    if (/<group>/.test(line)) inGroup = true;
 
     // Passwords
     const pR = line.replace(/(<(?:password|bcrypt-hash|md5-hash)>)([^<]*)(<\/[^>]+>)/, '$1REDACTED_HASH$3');
@@ -2306,7 +2329,11 @@ function anonPfSense(text, opts) {
     }
 
     // 替換完畢後才關閉 context flag（處理單行含 open+close tag 的情況）
+    // 群組成員（<group><member>帳號</member>）：成員可能出現在帳號定義之前，直接以帳號對照替換；
+    // 純數字為 uid，不處理
+    if (opts.user && inGroup) line = line.replace(/(<member>)([^<]+)(<\/member>)/g, (m, o, n, c) => (/^\d+$/.test(n) ? m : o + anonUser(n) + c));
     if (/<\/user>/.test(line)) inUser = false;
+    if (/<\/group>/.test(line)) inGroup = false;
     if (opts.ip) {
       // 單一 IP 值標籤：對外查證官方 pfSense/OPNsense config.xml 匯出結構＋真實 fixture
       // （firewall_analyzer/test_config/pfsense_complex_test.xml）後發現，原本只認 7 個標籤
@@ -3212,7 +3239,8 @@ function anonDellOS10(text, opts) {
       stats.key++;
     }
     line = replaceDescLine(line, opts);
-    if (opts.ip) line = replaceIPsInLine(line, opts);
+    // 檔頭 `! Dell Networking OS, Version 9.14.2.16`／`! Build: 9.14.2.16` 的版本號長得像 IPv4，維持原文
+    if (opts.ip && !/^!\s*(?:Dell\b.*\bVersion\b|Build\s*:)/i.test(line)) line = replaceIPsInLine(line, opts);
     if (opts.mac) line = replaceMACsInLine(line, opts);
     return line;
   }).join('\n');
@@ -3308,8 +3336,12 @@ function anonAlcatel(text, opts) {
     // SNMP community（含引號格式）
     // AOS Release 8 寫法 `snmp community-map "STR" user "U" {enable|disable}`（原本只認舊式 community map community-name）
     const comR = out.replace(/(snmp\s+community\s+map\s+community-name\s+)"?([^"\s]+)"?/, '$1"REDACTED_COMMUNITY"')
-                    .replace(/(snmp\s+community-map\s+)"?([^"\s]+)"?/, '$1"REDACTED_COMMUNITY"');
+                    .replace(/(snmp\s+community-map\s+)"?([^"\s]+)"?/, '$1"REDACTED_COMMUNITY"')
+                    // 陷阱接收端 `snmp trap receiver IP community "STR"`（alcatel_complex_test.cfg）
+                    .replace(/(snmp\s+trap\s+receiver\s+\S+\s+(?:.*\s)?community\s+)"?([^"\s]+)"?/, '$1"REDACTED_COMMUNITY"');
     if (comR !== out) { stats.community++; out = comR; }
+    // SNMPv3 帳號名稱（`snmp user 名稱 sha …`）比照本機帳號以同一對照替換
+    if (opts.user) out = out.replace(/^((?:->\s*)?snmp\s+user\s+)("[^"]+"|\S+)/, (m, p, n) => p + (n[0] === '"' ? '"' + anonUser(n.slice(1, -1)) + '"' : anonUser(n)));
     // SNMPv3 user: snmp user <name> <auth_type> "<auth_pass>" <priv_type> "<priv_pass>"
     if (/\bsnmp\s+user\b/.test(out)) {
       out = out.replace(/(\b(?:sha|md5|sha256)\s+)"([^"]+)"/, '$1"REDACTED_KEY"');
@@ -3544,6 +3576,8 @@ function anonRuijie(text, opts) {
       const uR = line.replace(/^(username\s+\S+\s+(?:privilege\s+\d+\s+)?(?:secret|password)\s+(?:\d+\s+)?)(\S+)/, '$1REDACTED_HASH');
       if (uR !== line) { stats.password++; line = uR; }
     }
+    // Web 管理帳號 `webmaster level N username 帳號 password [型別] 值`（ruijie_realistic_sample2.cfg）
+    line = line.replace(/^(\s*webmaster\s+level\s+\d+\s+username\s+)(\S+)(\s+password\s+(?:\d+\s+)?)(\S+)/, (m, p, n, mid) => { stats.password++; return p + (opts.user ? anonUser(n) : n) + mid + 'REDACTED_HASH'; });
     const comR = line.replace(/^(\s*snmp-server\s+community\s+)(\S+)/, '$1REDACTED_COMMUNITY');
     if (comR !== line) { stats.community++; line = comR; }
     const bgpR = line.replace(/^(\s+neighbor\s+\S+\s+password\s+(?:\d+\s+)?)(\S+)/, '$1REDACTED_PASSWORD');
@@ -4052,8 +4086,12 @@ function anonWlc(text, opts) {
       if (opts.hostname && (m = /^(organization\s+)(.+)$/.exec(line))) return m[1] + 'REDACTED_ORG';
       if (opts.hostname && (m = /^(\s*nas-identifier\s+)("?)([^"\s]+)("?)\s*$/.exec(line))) return m[1] + m[2] + anonHostname(m[3], 'wlc', opts) + m[4];
       if ((m = /^(\s*wlan\s+access-rule\s+)("[^"]*"|\S+)\s*$/.exec(line))) return m[1] + ss(m[2]);
-      // Instant 檔頭的 AP 清單（# 名稱  IP  型號 …）：AP 名稱可含空白，取到 IP 之前
-      if (opts.hostname && (m = /^(#\s+)(\S.*?)(\s+\d{1,3}(?:\.\d{1,3}){3}\*?\s.*)$/.exec(line))) return m[1] + anonHostname(m[2].trim(), 'ap', opts) + m[3];
+      // 管理帳號：Instant `hash-mgmt-user 名稱 password hash …`、控制器 `mgmt-user 名稱 角色 …`
+      if (opts.user && (m = /^(\s*(?:hash-)?mgmt-user\s+)(\S+)(\s.*)$/.exec(line))) line = m[1] + anonUser(m[2]) + m[3];
+      // Instant 檔頭的 AP 清單（# 名稱  IP  型號 …）：AP 名稱可含空白，取到 IP 之前。名稱不可含冒號或逗號，
+      // IP（可帶 *）之後須以兩個以上空白接下一欄，避免把 `# ROM: … Version CPBoot 1.2.9.0 (build …)`、
+      // `# ArubaOS (MODEL: …), Version 8.10.0.7 LSR` 這類版本行誤當成 AP 清單
+      if (opts.hostname && (m = /^(#\s+)([^\s:,][^:,]*?)(\s+\d{1,3}(?:\.\d{1,3}){3}\*?\s{2,}\S.*)$/.exec(line))) return m[1] + anonHostname(m[2].trim(), 'ap', opts) + m[3];
     } else if (kind === 'h3cwx') {
       if ((m = /^(\s*ssid\s+)(.+?)\s*$/.exec(line))) return m[1] + ss(m[2]);
       if ((m = /^(\s*preshared-key\s+(?:pass-phrase|raw-key)\s+(?:simple|cipher)\s+)\S+/.exec(line))) return m[1] + red('REDACTED_PSK', 'key');
@@ -4068,7 +4106,8 @@ function anonWlc(text, opts) {
   if (kind === 'aireos' && preLines.length === out.length) preLines.forEach((l, i) => { if (/^\s*(?:config\s+)?wlan\s+security\s/.test(l)) out[i] = l; });
   // 版本號（Aruba 的 version 8.10.0.0-8.10.0、ArubaOS … Version 8.10.0.6）長得像 IPv4，維持原文
   const orig = text.split('\n');
-  if (orig.length === out.length) orig.forEach((l, i) => { if (/\bversion\s+\d+\.\d+\.\d+\.\d+/i.test(l) && !/\b(?:host|server|ip)\b/i.test(l)) out[i] = l; });
+  // 控制器檔頭 `# ROM: System Bootstrap, Version CPBoot 1.2.9.0 (build …)` 的版本號前另有名稱，一併保留
+  if (orig.length === out.length) orig.forEach((l, i) => { if (/\bversion\s+(?:[A-Za-z]\S*\s+)?\d+\.\d+\.\d+\.\d+/i.test(l) && !/\b(?:host|server|ip)\b/i.test(l)) out[i] = l; });
   return out.join('\n');
 }
 
@@ -4131,13 +4170,102 @@ function anonymize(text, vendor, opts, keepState) {
     // mappings，否則每次執行去識別化都會把剛匯入的假值洗掉、改產生全新假值（見上方 IMPORTED_SEED
     // 宣告處的說明）。
     if (IMPORTED_SEED) seedLiveMappingsFromImported(IMPORTED_SEED);
-    srcIPv4.clear(); srcIPv6.clear();
+    srcIPv4.clear(); srcIPv6.clear(); srcFakeNames.clear(); serialMap.clear();
   }
   for (const m of text.matchAll(/(?<![\d.])\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?![\d])/g)) srcIPv4.add(m[0]);
   for (const m of text.matchAll(/(?<![0-9A-Fa-f:])2001:db8::[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])/gi)) srcIPv6.add(m[0].toLowerCase());
+  for (const m of text.matchAll(/(?<![\w.-])(?:[a-z]+-device-\d{3,}|user-\d{3,}(?:@example\.com)?)(?![\w-])/g)) srcFakeNames.add(m[0]);
 
   const fn = VENDOR_FNS[vendor] || anonGeneric;
-  return anonDomainNames(anonUrlCredentials(anonPemBlocks(anonContactInfo(anonCommentsFallback(fn(text, opts), opts, vendor))), opts), opts);
+  const res = anonDomainNames(anonUrlCredentials(anonPemBlocks(anonContactInfo(anonCommentsFallback(fn(text, opts), opts, vendor))), opts), opts);
+  return anonMappedHostnames(anonSerials(anonSnmpV3Users(res, opts), opts), opts);
+}
+// 目前所有對照的假值（各類別），最後補掃時不可再動到這些值
+function currentFakeValues() {
+  const set = new Set();
+  for (const cat of ['hostname', 'user', 'ssid', 'alias', 'vdom']) for (const v of mappings[cat].values()) set.add(v);
+  return set;
+}
+// 已有對照的原始主機名稱（4 字元以上、不等於任何假值）組成的比對正則；前後不可緊接英數字、底線、點或連字號
+function mappedHostnameRe() {
+  const fakes = currentFakeValues();
+  const keys = [...mappings.hostname.keys()].filter(k => k.length >= 4 && !k.includes('\n') && !fakes.has(k))
+    .sort((a, b) => b.length - a.length).map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return keys.length ? new RegExp(`(?<![A-Za-z0-9_.-])(?:${keys.join('|')})(?![A-Za-z0-9_.-])`, 'g') : null;
+}
+// 主機名稱補掃（不分廠牌）：主機名稱已有對照，但同一名稱還出現在其他地方（Cisco `! hostname X` 註解、
+// Junos `set snmp name "X"`、FTD `! ---[ X ]---`、FortiGate `# Hostname: X`、AOS-CX `! Hostname : X`），
+// 以同一假值替換（可還原）
+function anonMappedHostnames(text, opts) {
+  if (opts && opts.hostname === false) return text;
+  const re = mappedHostnameRe();
+  return re ? text.replace(re, m => mappings.hostname.get(m)) : text;
+}
+// SNMPv3 帳號名稱（不分廠牌，依各廠牌實際語法）：Cisco 家族／Brocade／Dell OS10 `snmp-server user 名稱`、
+// Comware `snmp-agent usm-user v3 名稱`、Extreme `configure snmpv3 add user 名稱`、Junos `set snmp v3 usm local-engine user 名稱`、
+// Sophos `set snmpv3 user 名稱`、Netgear Smart／Alcatel `snmp user 名稱`、FortiGate／FortiSwitch `config system snmp user` 內的 edit；
+// 已是假值（廠牌函式先處理過）者不再處理
+const SNMPV3_USER_RES = [
+  /^(\s*snmp-server\s+user\s+)("?)([^\s"]+)/,
+  /^(\s*snmp-agent\s+usm-user\s+v3\s+)("?)([^\s"]+)/,
+  /^(\s*configure\s+snmpv3\s+add\s+user\s+)("?)([^\s"]+)/,
+  /^(\s*set\s+snmp\s+v3\s+usm\s+(?:local-engine|remote-engine\s+\S+)\s+user\s+)("?)([^\s";]+)/,
+  /^(\s*set\s+snmpv3\s+user\s+)("?)([^\s"]+)/,
+  /^(\s*(?:->\s*)?snmp\s+user\s+)("?)([^\s"]+)/,
+];
+function anonSnmpV3Users(text, opts) {
+  if (!opts || !opts.user) return text;
+  const fakes = currentFakeValues();
+  let inFgSnmpUser = false, depth = 0;
+  return text.split('\n').map(line => {
+    const t = line.trim();
+    if (t === 'config system snmp user') { inFgSnmpUser = true; depth = 0; return line; }
+    if (inFgSnmpUser) {
+      if (/^config\s/.test(t)) depth++;
+      else if (t === 'end') { if (depth) depth--; else inFgSnmpUser = false; }
+      else if (!depth) return line.replace(/^(\s*edit\s+")([^"]+)(")/, (m, p, n, q) => (fakes.has(n) ? m : p + anonUser(n) + q));
+      return line;
+    }
+    for (const re of SNMPV3_USER_RES) {
+      const r = line.replace(re, (m, p, q, n) => (fakes.has(n) || /^REDACTED/.test(n) ? m : p + q + anonUser(n)));
+      if (r !== line) return r;
+    }
+    return line;
+  }).join('\n');
+}
+// 設備序號（不分廠牌，tip.serial 承諾序號會被替換）：`Serial Number／Nbr／No／#: 值`、`SN: 值`、`S/N: 值`、
+// FortiGate 受管 FortiSwitch `set sn "值"` 與以序號為名稱的 `edit "S124…"`、H3C `serial-id 值`、XML <SerialNumber>、
+// MikroTik `# serial number = 值`、Cisco `Processor (board) ID 值`。同一序號對應同一假值，並補換檔案內其他位置的同一序號
+// （AOS-CX 硬體表格）；AOS-CX `Base MAC Address : 34c515-000000` 以 MAC 對照替換。版本字串不在這些標籤後，不受影響
+const SERIAL_VAL = '([A-Za-z0-9][A-Za-z0-9._/-]{3,})';
+const SERIAL_LABEL_RES = [
+  new RegExp('(\\bSerial[- ]?(?:Number|Nbr|No\\.?|#)\\s*[:=]\\s*"?)' + SERIAL_VAL, 'gi'),
+  new RegExp('(\\bSN\\s*:\\s*)' + SERIAL_VAL, 'g'),
+  new RegExp('(\\bS\\/N\\s*[:=]?\\s*)' + SERIAL_VAL, 'g'),
+  new RegExp('(^\\s*set\\s+sn\\s+")' + SERIAL_VAL, 'g'),
+  new RegExp('(^\\s*serial-id\\s+)' + SERIAL_VAL, 'g'),
+  new RegExp('(<SerialNumber>)' + SERIAL_VAL, 'g'),
+  new RegExp('(\\bProcessor\\s+(?:board\\s+)?ID\\s*:?\\s*)' + SERIAL_VAL, 'g'),
+  /(^\s*edit\s+")(S\d{3}[A-Z0-9]{12})(?=")/g,
+];
+function fakeSerial(v) {
+  if (!serialMap.has(v)) serialMap.set(v, 'SERIAL-X' + String(serialMap.size + 1).padStart(4, '0'));
+  return serialMap.get(v);
+}
+function anonSerials(text, opts) {
+  let out = text.split('\n').map(line => {
+    for (const re of SERIAL_LABEL_RES) {
+      line = line.replace(re, (m, p, v) => (/^(?:SERIAL-X|REDACTED|N\/?A$)/i.test(v) ? m : p + fakeSerial(v)));
+    }
+    if (opts && opts.mac) line = line.replace(/(\bBase MAC Address\s*:\s*)([0-9A-Fa-f]{6})-([0-9A-Fa-f]{6})\b/, (m, p, a, b) => {
+      const hex = anonMAC((a + b).match(/.{2}/g).join(':'), opts).replace(/:/g, '');
+      return p + hex.slice(0, 6) + '-' + hex.slice(6);
+    });
+    return line;
+  }).join('\n');
+  const keys = [...serialMap.keys()].filter(k => k.length >= 6).map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (keys.length) out = out.replace(new RegExp(`(?<![A-Za-z0-9])(?:${keys.join('|')})(?![A-Za-z0-9])`, 'g'), m => serialMap.get(m));
+  return out;
 }
 // 網域名稱（第十八輪 TA）：各廠牌模式原本只遮主機名稱，`ip domain-name`、`domain-name`、FortiGate `set domain`／
 // FQDN 位址物件、VPN 對端 `fqdn`、NTP 伺服器主機名稱等內部網域原樣保留，可直接辨識公司。不分廠牌：含 domain／fqdn
@@ -4357,8 +4485,11 @@ function checkResidual(text) {
   // 純粹找得到就示警，比照既有 email 偵測同一設計精神
   const urlCredRe = /\b[a-z][a-z0-9+.-]*:\/\/[^\s\/@]+:[^\s\/@]+@[^\s\/]+/i;
 
+  // 已有對照的原始主機名稱仍出現在輸出中（含註解行）即示警
+  const hostRe = mappedHostnameRe();
   lines.forEach((line, i) => {
     const t = line.trim();
+    if (hostRe && t) { hostRe.lastIndex = 0; if (hostRe.test(t)) warnings.push({ line: i + 1, text: t }); }
     if (!t || t.startsWith('#') || t.startsWith('!') || t.startsWith('//')) return;
     // 注意：不可在此整行短路略過（同一行可能同時有「已正確遮罩的欄位」與「規則沒涵蓋到、
     // 仍是明碼的另一個欄位」，例如 `set psk REDACTED_PSK peer 10.20.30.40`）；REDACTED
@@ -5653,14 +5784,17 @@ document.addEventListener('DOMContentLoaded', () => {
   (function(){
     var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000, _netAnalyzer_swPortQuery:30000, _netAnalyzer_route:30000};
     var parsed = {};
+    // 隱私模式或封鎖網站資料時 localStorage 存取會拋例外，整段略過（不影響頁面其餘功能）
     Object.keys(TTL).forEach(function(k){
-      var raw = localStorage.getItem(k);
-      if (!raw) return;
       try {
-        var d = JSON.parse(raw);
-        if (Date.now() - d.ts > TTL[k]) { localStorage.removeItem(k); return; }
-        parsed[k] = d;
-      } catch(e) { localStorage.removeItem(k); }
+        var raw = localStorage.getItem(k);
+        if (!raw) return;
+        try {
+          var d = JSON.parse(raw);
+          if (Date.now() - d.ts > TTL[k]) { localStorage.removeItem(k); return; }
+          parsed[k] = d;
+        } catch(e) { localStorage.removeItem(k); }
+      } catch(e) {}
     });
     if (parsed['_netAnalyzer_pending']) {
       localStorage.removeItem('_netAnalyzer_pending');
@@ -6251,9 +6385,9 @@ document.addEventListener('click',function(e){
   }
 });
 
-function setTheme(t){document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';localStorage.setItem('cw_theme',t);}
+function setTheme(t){document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';try{localStorage.setItem('cw_theme',t);}catch(e){}}
 function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
-(function(){const s=localStorage.getItem('cw_theme');const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
+(function(){let s=null;try{s=localStorage.getItem('cw_theme');}catch(e){}const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
 
 </script>
 </body>

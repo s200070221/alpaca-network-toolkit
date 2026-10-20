@@ -522,7 +522,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       if(!sd||!sd.enabled) return '';
       const modeLabel={'source-ip-based':tr('sdwan.mode_src_ip'),'weight-based':tr('sdwan.mode_weight'),'usage-based':tr('sdwan.mode_usage'),'measured-volume-based':tr('sdwan.mode_volume'),'auto':tr('sdwan.mode_auto')};
       let h='<div class="section"><div class="section-title">🔀 SD-WAN</div>';
-      h+=`<p style="margin-bottom:12px;font-size:12px;color:#94a3b8">${tr('sdwan.lb_mode_label')}：${modeLabel[sd.lbMode]||sd.lbMode} | ${tr('sdwan.wan_links_label')}：${sd.members.length} | ${tr('sdwan.sla_probes_label')}：${sd.healthChecks.length} | ${tr('sdwan.rules_label')}：${sd.services.length}</p>`;
+      h+=`<p style="margin-bottom:12px;font-size:12px;color:#94a3b8">${tr('sdwan.lb_mode_label')}：${modeLabel[sd.lbMode]||esc(sd.lbMode)} | ${tr('sdwan.wan_links_label')}：${sd.members.length} | ${tr('sdwan.sla_probes_label')}：${sd.healthChecks.length} | ${tr('sdwan.rules_label')}：${sd.services.length}</p>`;
       // Members
       h+=`<div style="font-size:11px;font-weight:600;color:#7dd3fc;margin-bottom:6px">${tr('sdwan.members_title')}</div><div class="overflow"><table>`;
       h+=`<thead><tr><th>ID</th><th>${tr('col.intf')}</th><th>Zone</th><th>${tr('col.gateway')}</th><th>${tr('col.priority')}</th><th>${tr('sdwan.col_weight')}</th><th>Cost</th><th>${tr('col.status')}</th><th>${tr('col.comment')}</th></tr></thead><tbody>`;
