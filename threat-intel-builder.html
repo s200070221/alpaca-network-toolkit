@@ -2,6 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src data:; img-src 'self' data: blob:; connect-src https: http:; frame-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>情資清單整理</title>
 <style>
@@ -37,6 +38,7 @@ a{color:var(--accent)}
 @media (max-width:600px){main{padding:10px}.card{padding:12px}}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
+<script src="toolkit-version.js"></script>
 </head>
 <body>
 <header>
@@ -102,6 +104,7 @@ a{color:var(--accent)}
   </section>
 </main>
 <footer id="t-footer"></footer>
+<footer data-toolkit-version style="padding-top:0"></footer>
 
 <script>
 // ============================================================
@@ -383,6 +386,7 @@ function download(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 function applyLang() {
+  window.renderToolkitVersion&&renderToolkitVersion(curLang);
   document.documentElement.lang = curLang === 'zhTW' ? 'zh-Hant' : curLang === 'ja' ? 'ja' : 'en';
   document.title = tr('title');
   ['title', 'lang', 'back', 'notice', 'intro', 'src-title', 'src-hint', 'add-title', 'manual-title', 'manual-hint', 'manual-pick', 'out-title', 'out-hint', 'footer', 'import-src'].forEach(k => { const el = $('t-' + k); if (el) el.textContent = tr(k.replace(/-/g, '_')); });

@@ -2,6 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src data:; img-src 'self' data: blob:; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Log 分析與去識別化工具</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦙</text></svg>">
@@ -159,6 +160,7 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
 .tour-steps{margin:4px 0 8px;padding-left:22px}
 .tour-ok{font-size:12px;padding:3px 10px;border:1px solid var(--border);border-radius:5px;background:none;color:var(--text);cursor:pointer}
 </style>
+<script src="toolkit-version.js"></script>
 </head>
 <body data-theme="dark">
 <header id="topbar">
@@ -544,6 +546,7 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
   </section>
 
   <div style="text-align:center;font-size:11px;color:var(--text-muted);padding:10px 0" id="footer-note"></div>
+  <div style="text-align:center;font-size:11px;color:var(--text-muted);padding:0 0 10px" data-toolkit-version></div>
 </div>
 <div class="mini-alpaca" id="mini-alpaca" title="🦙×3">🦙</div>
 
@@ -10456,6 +10459,7 @@ function renderStatic() {
   document.getElementById('btn-html-report').textContent = tr('btn.html_report');
   document.getElementById('btn-print-report').textContent = tr('btn.print_full_report');
   document.getElementById('footer-note').textContent = tr('footer.note');
+  window.renderToolkitVersion&&renderToolkitVersion(currentLang);
   renderHealthStatic();
   renderBaselineStatic();
 }

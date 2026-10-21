@@ -2,6 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; font-src data:; img-src 'self' data: blob:; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
 <title id="h-title">交換器設定產生器 — Comware</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦙</text></svg>">
@@ -187,7 +188,8 @@ input.valid,select.valid{border-color:var(--green)!important}
 .qs-hint{font-size:12px;color:var(--text-mid);line-height:1.5}
 .qs-compact{display:inline-flex;align-items:center;gap:4px;font-size:12px;cursor:pointer}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/docx@8.10.16/build/index.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docx@8.6.0/build/index.umd.js" integrity="sha384-4SKfH1E/s1imU9AjjNoxcGV2w4NxAzi4HDrJD7MweJJY+LZrRYDhP05DALqhQ15G" crossorigin="anonymous"></script>
+<script src="toolkit-version.js"></script>
 </head>
 <body>
 
@@ -1347,6 +1349,7 @@ end</pre>
 
 </div>
 
+<div class="footer" data-toolkit-version></div>
 <div class="footer" data-i18n="footer">Switch Config Generator · Comware</div>
 
 <script src="switch-generator-core.js"></script>

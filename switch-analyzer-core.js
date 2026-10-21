@@ -48,6 +48,7 @@ function htmlLangFor(code) {
 function setLang(code) {
   _lang = code;
   saveLangPref(code);
+  window.renderToolkitVersion&&renderToolkitVersion(code);
   document.documentElement.lang = htmlLangFor(code);
   document.querySelectorAll('[data-i18n]').forEach(function(el) {
     var k = el.dataset.i18n;
