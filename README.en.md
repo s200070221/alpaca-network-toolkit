@@ -137,7 +137,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - Send an event to the Firewall Analyzer to find the matching rule; send an interface problem to the Switch Config Parser to view that port
 
 Two optional helpers prepare intel lists; the Log Analyzer itself stays offline:
-- `threat-intel-builder.html` (Threat-Intel List Builder): tick public intel sources to fetch in the browser, add your own sources, or drop in files you downloaded; it outputs IP/CIDR (including IPv6), domain, file hash and ASN files for import. Only sites that allow cross-origin reads can be fetched directly; download the others manually.
+- `threat-intel-builder.html` (Threat-Intel List Builder): tick public intel sources to fetch in the browser, add your own sources, or drop in files you downloaded; it builds IP/CIDR (including IPv6), domain, file hash and ASN lists that you can send straight to the Log Analyzer or download for import. Only sites that allow cross-origin reads can be fetched directly; download the others manually.
 - `fetch_threat_intel.ps1`: a PowerShell script suited to scheduled IP list updates on Windows.
 
 ## User guides
