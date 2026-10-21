@@ -62,7 +62,127 @@ function epCmdKind(cmd) {
   if (/^(sh|show) mac(-| )address-table\b/.test(c) || /^(dis|display) mac-address\b/.test(c)) return 'mac';
   if (/^(sh|show) (ip )?arp\b/.test(c) || /^(dis|display) arp\b/.test(c)) return 'arp';
   if (/^(sh|show) int(erfaces?)? status\b/.test(c) || /^(dis|display) int(erface)? brief\b/.test(c)) return 'status';
+  // 完整介面輸出（計數器）：show interfaces／show interface（NX-OS）／display interface，可接單一介面名稱；
+  // 接 trunk／description／transceiver 等其他子指令時不算
+  if (/^(sh|show) int(erfaces?)?( [a-z][a-z\-]*\d[\d\/:.]*)?$/.test(c) || /^(dis|display) int(erface)?( [a-z][a-z\-]*\d[\d\/:.]*)?$/.test(c)) return 'counters';
   return 'other';
+}
+
+// ── 介面錯誤計數器（2026-10-21，第三十三輪 XN4）────────────────────────────
+// 格式依 ntc-templates（Apache-2.0）測試資料中的真實輸出查證：
+//   Cisco IOS／IOS-XE、Arista EOS：「Gi1/0/1 is up, line protocol is up (connected)」開頭，計數器為
+//     「0 input errors, 0 CRC, 0 frame」「0 late collision」，另有「Total output drops: N」
+//   NX-OS：「Ethernet1/1 is up」開頭，RX／TX 區段內「0 runts  0 giants  0 CRC」，名稱可能是單數（input error）
+//   Comware：區塊第一行只有介面名稱、下一行「Current state:」，計數器「Input:  0 input errors, 0 runts」，
+//     不支援的項目顯示「-」（視為無資料，不當 0）
+// 計數器是「上次清除以來」的累計值，判斷只依錯誤類型、不設比例門檻；比例只供參考
+const EP_CNT_HEAD_RE = /^(\S+) is (administratively down|up|down|reset|deleted|testing|disabled)\b(.*)$/i;
+// Comware V5：「GigabitEthernet1/0/1 current state: UP」（可能有前導空白；「Line protocol current state」不會中）
+const EP_CNT_HEAD_V5_RE = /^\s*(\S+) current state:\s*(.+)$/i;
+const EP_CNT_FIELDS = [
+  ['lateColl', /^late collisions?$/], ['coll', /^collisions?$/], ['inErr', /^input errors?$/], ['outErr', /^output errors?$/],
+  ['crc', /^crc$/], ['runts', /^runts$/], ['giants', /^giants$/], ['frame', /^frame$/],
+  ['inDiscards', /^input discards?$/], ['outDiscards', /^output discards?$/],
+];
+const EP_CNT_TOKEN_RE = /(\d+|-)\s+(late collisions?|collisions?|input errors?|output errors?|CRC|runts|giants|frame|input discards?|output discards?)\b/gi;
+
+function epCounterStatus(s) {
+  const t = String(s || '').toLowerCase();
+  if (t.includes('administratively')) return 'admin-down';
+  if (/^up\b/.test(t)) return 'up';
+  return t ? 'down' : '';
+}
+function epParseCounterBlock(head, body) {
+  const c = { port: head.port, status: head.status, desc: '', duplex: '', speed: '', lastClear: '', inPkts: null, outDrops: null };
+  for (const [k] of EP_CNT_FIELDS) c[k] = null;
+  for (const line of body) {
+    const t = line.trim();
+    let m;
+    // Arista 描述前後帶雙引號
+    if ((m = t.match(/^Description:\s*(.*)$/))) { c.desc = m[1].trim().replace(/^"(.*)"$/, '$1'); continue; }
+    if ((m = t.match(/^Current state:\s*(.+)$/i))) { c.status = epCounterStatus(m[1]); continue; }
+    if ((m = t.match(/^Last clearing of (?:"show interface" )?counters:?\s*(.+)$/i))) { c.lastClear = m[1].trim(); continue; }
+    // 「Full-duplex」與 IOS 部分版本的「Full Duplex」兩種寫法
+    if (!c.duplex && (m = t.match(/\b(full|half|auto|unknown)[- ]duplex\b/i))) {
+      c.duplex = m[1].toLowerCase();
+      const sp = t.match(/(\d+(?:\.\d+)?\s*[MG]b(?:\/s|ps))/i) || t.match(/^(\S+)-speed mode/i);
+      if (sp) c.speed = sp[1].replace(/\s+/g, '');
+    }
+    if (c.inPkts === null && (m = t.match(/^(\d+) packets input\b|^(\d+) input packets\b|^Input(?: \(total\))?:\s+(\d+) packets\b/i))) c.inPkts = Number(m[1] || m[2] || m[3]);
+    if ((m = t.match(/Total output drops:\s*(\d+)/i))) c.outDrops = Number(m[1]);
+    for (const mm of t.matchAll(EP_CNT_TOKEN_RE)) {
+      const name = mm[2].toLowerCase();
+      const f = EP_CNT_FIELDS.find(([, re]) => re.test(name));
+      if (f && c[f[0]] === null && mm[1] !== '-') c[f[0]] = Number(mm[1]);
+    }
+  }
+  return c;
+}
+// lines：同一台裝置的計數器輸出行；回傳每個介面一筆
+function epParseCounters(lines) {
+  const out = [];
+  let head = null, body = [];
+  const flush = () => { if (head) out.push(epParseCounterBlock(head, body)); head = null; body = []; };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let m = line.match(EP_CNT_HEAD_RE);
+    if (m && EP_IFACE_TOKEN_RE.test(m[1])) { flush(); head = { port: m[1], status: epCounterStatus(m[2]) }; continue; }
+    m = line.match(EP_CNT_HEAD_V5_RE);
+    if (m && EP_IFACE_TOKEN_RE.test(m[1])) { flush(); head = { port: m[1], status: epCounterStatus(m[2]) }; continue; }
+    // Comware V7：介面名稱獨佔一行，下一個非空行是 Current state:
+    if (EP_IFACE_TOKEN_RE.test(line.trim()) && line.trim() === line.replace(/\s+$/, '') && /^\s*Current state:/i.test(lines[i + 1] || '')) {
+      flush(); head = { port: line.trim(), status: '' }; continue;
+    }
+    if (head) body.push(line);
+  }
+  flush();
+  return out;
+}
+
+// 實體層問題：只看實體埠（聚合介面的計數是成員加總，會重複）
+//   high：late collision、全雙工卻有 collision（雙工不一致的典型徵兆）
+//   medium：CRC、CRC 以外的 input errors（runts／giants／frame 等）、output errors、已連線但為半雙工
+//   low：只有 output drops／discards（多為壅塞）
+function epPhyIssues(model) {
+  const rows = [];
+  const rank = { high: 0, medium: 1, low: 2 };
+  for (const d of (model && model.devices) || []) {
+    for (const c of d.counters || []) {
+      if (!epIsPhysical(c.port)) continue;
+      const n = k => c[k] || 0;
+      const f = [];
+      if (n('lateColl')) f.push('lateColl');
+      if (n('coll') && c.duplex === 'full') f.push('collFull');
+      if (n('crc')) f.push('crc');
+      if (n('inErr') > n('crc')) f.push('inErr');
+      if (n('outErr')) f.push('outErr');
+      if (c.duplex === 'half' && c.status === 'up') f.push('half');
+      const drops = n('outDrops') + n('inDiscards') + n('outDiscards');
+      if (drops) f.push('drops');
+      if (!f.length) continue;
+      const severity = f.some(x => x === 'lateColl' || x === 'collFull') ? 'high' : f.some(x => x !== 'drops') ? 'medium' : 'low';
+      const errs = Math.max(n('inErr'), n('crc'));
+      rows.push({
+        device: d.name, port: c.port, desc: c.desc, status: c.status, duplex: c.duplex, speed: c.speed, findings: f, severity,
+        crc: c.crc, inErr: c.inErr, outErr: c.outErr, coll: c.coll, lateColl: c.lateColl, drops,
+        rate: c.inPkts ? errs / c.inPkts : null, lastClear: c.lastClear,
+      });
+    }
+  }
+  rows.sort((a, b) => (rank[a.severity] - rank[b.severity]) || (Math.max(b.crc || 0, b.inErr || 0, b.lateColl || 0) - Math.max(a.crc || 0, a.inErr || 0, a.lateColl || 0)));
+  return rows;
+}
+// 配線表／log 對照用的單埠摘要（計數器名稱本身是 CLI 術語，不翻譯）
+function epPhySummary(c) {
+  if (!c) return '';
+  const p = [];
+  if (c.crc) p.push('CRC ' + c.crc);
+  if ((c.inErr || 0) > (c.crc || 0)) p.push('input errors ' + c.inErr);
+  if (c.outErr) p.push('output errors ' + c.outErr);
+  if (c.lateColl) p.push('late collision ' + c.lateColl);
+  else if (c.coll && c.duplex === 'full') p.push('collisions ' + c.coll);
+  if (c.duplex === 'half' && c.status === 'up') p.push('half-duplex');
+  return p.join(' · ');
 }
 
 // Cisco show interfaces status 的 Status 欄位可能值（含被截斷的寫法）
@@ -121,16 +241,26 @@ function parseEndpointText(text) {
   const byName = {};
   const getDev = name => {
     const key = name.toLowerCase();
-    if (!byName[key]) { byName[key] = { name, macs: [], arps: [], ports: [] }; devices.push(byName[key]); }
+    if (!byName[key]) { byName[key] = { name, macs: [], arps: [], ports: [], counters: [], _cntLines: [] }; devices.push(byName[key]); }
     return byName[key];
   };
   let dev = null, kind = 'auto', inBridgeBrief = false;
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
     let pm = null;
     for (const re of EP_PROMPT_RES) { pm = line.match(re); if (pm) break; }
     if (pm) { dev = getDev(pm[1]); kind = epCmdKind(pm[2]); inBridgeBrief = false; continue; }
+    if (kind === 'counters') { (dev || getDev('device-1'))._cntLines.push(line); continue; }
     if (!line.trim()) continue;
     if (kind === 'other') continue;
+    // 沒有提示字元時，看到計數器區塊開頭就把之後的內容都當計數器輸出（避免「address is …」等行被誤判成 MAC 表）
+    if (kind === 'auto') {
+      const hm = line.match(EP_CNT_HEAD_RE);
+      const isHead = (hm && EP_IFACE_TOKEN_RE.test(hm[1]) && /line protocol|^\s*$|\(/.test(hm[3] + ' ')) ||
+        (EP_IFACE_TOKEN_RE.test(line.trim()) && /^\s*Current state:/i.test(lines[li + 1] || '')) ||
+        (() => { const v = line.match(EP_CNT_HEAD_V5_RE); return !!(v && EP_IFACE_TOKEN_RE.test(v[1])); })();
+      if (isHead) { kind = 'counters'; (dev || getDev('device-1'))._cntLines.push(line); continue; }
+    }
     // Comware display interface brief 先輸出 route mode 區段（Link/Protocol/IP），只取含 PVID 的 bridge mode 區段
     if (/\bPVID\b/.test(line) && /\bLink\b/.test(line)) { inBridgeBrief = true; continue; }
     if (/\bProtocol\b/.test(line) && /\bLink\b/.test(line)) { inBridgeBrief = false; continue; }
@@ -142,7 +272,8 @@ function parseEndpointText(text) {
       if (r && (!EP_COMWARE_BRIEF_RE.test(line) || inBridgeBrief || kind === 'auto')) d.ports.push(r);
     }
   }
-  return { devices: devices.filter(d => d.macs.length || d.arps.length || d.ports.length) };
+  for (const d of devices) { d.counters = epParseCounters(d._cntLines); delete d._cntLines; }
+  return { devices: devices.filter(d => d.macs.length || d.arps.length || d.ports.length || d.counters.length) };
 }
 
 // 每台裝置每個埠學到幾個不同 MAC（判斷上行／串接埠用）
@@ -286,9 +417,11 @@ function epBuildCablingSheet(parsed, epModel) {
       const st = dev ? epPortInfo(dev, i.name) : null;
       const macs = dev ? dev.macs.filter(m => epNormIface(m.port) === k) : [];
       const uplink = (macCnt[k] || 0) >= EP_UPLINK_MAC_MIN || epIsAggregate(i.name) || i.mode === 'trunk';
+      // 計數器（XN4）：同一台的 show interfaces 輸出中該埠的錯誤摘要；沒有 status 時以計數器的連線狀態補上
+      const cnt = dev ? (dev.counters || []).find(c => epNormIface(c.port) === k) : null;
       return {
         port: i.name, desc: i.desc || '', mode: i.mode || (i.ip ? 'routed' : ''), vlan,
-        shutdown: !!i.shutdown, link: st ? st.status : '',
+        shutdown: !!i.shutdown, link: st ? st.status : (cnt ? cnt.status : ''), phy: epPhySummary(cnt),
         neighbor: nb.join('; '),
         macCount: macCnt[k] || 0, uplink,
         endpoints: uplink ? [] : macs.map(m => ({ mac: m.mac, ip: ipByMac[m.mac] || '', vlan: m.vlan })),
