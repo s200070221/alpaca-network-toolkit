@@ -2,6 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src data:; img-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Network Analyzer Suite</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦙</text></svg>">
@@ -238,6 +239,7 @@ a{text-decoration:none;color:inherit}
   @page{margin:1.5cm}
 }
 </style>
+<script src="toolkit-version.js"></script>
 </head>
 <body>
 
@@ -370,7 +372,7 @@ a{text-decoration:none;color:inherit}
 </div>
 
 <div class="footer">
-  <span class="footer-note" id="h-footer">Pure JS Firewall / Switch / Config Anonymizer | Network Analyzer Suite</span>
+  <span class="footer-note" data-toolkit-version style="float:right"></span><span class="footer-note" id="h-footer">Pure JS Firewall / Switch / Config Anonymizer | Network Analyzer Suite</span>
   <span class="alpaca" id="alpaca-btn" title="">🦙</span>
 </div>
 
@@ -1045,6 +1047,7 @@ function setLang(lang) {
   _lang = lang;
   saveLangPref(lang);
   document.documentElement.lang = lang === 'zhTW' ? 'zh-TW' : lang;
+  window.renderToolkitVersion&&renderToolkitVersion(lang);
   document.querySelectorAll('.lang-btn[data-lang]').forEach(b => {
     b.classList.toggle('active', b.dataset.lang === lang);
   });

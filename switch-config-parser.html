@@ -2,6 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>交換器設定解析器</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦙</text></svg>">
@@ -541,6 +542,7 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
   @page{margin:1.5cm}
 }
 </style>
+<script src="toolkit-version.js"></script>
 </head>
 <body>
 <div id="app">
@@ -549,7 +551,7 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
 <div id="sidebar">
   <div class="sb-logo">
     <div class="sb-icon" id="logo-btn">🔀</div>
-    <div class="sb-titles"><h2>SW Analyzer</h2><p>v2.0 · 24-Vendor · No AI</p></div>
+    <div class="sb-titles"><h2>SW Analyzer</h2><p>24-Vendor · No AI</p><p data-toolkit-version></p></div>
     <button class="sb-toggle" id="sb-toggle" onclick="toggleSB()">‹</button>
   </div>
   <nav class="sb-nav">

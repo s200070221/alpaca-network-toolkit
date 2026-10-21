@@ -4819,8 +4819,9 @@ function generateDocumentationAsDocx(){
   // 建構 Word 文檔
   const doc=new docx.Document({sections:[{children}]});
 
-  // 使用 docx.Packer 生成 Uint8Array
-  docx.Packer.toBuffer(doc).then(buffer=>{
+  // 使用 docx.Packer 生成 Uint8Array（瀏覽器版 docx 不支援 toBuffer，會拋出 nodebuffer is not supported，改用 toBlob 再轉換）
+  docx.Packer.toBlob(doc).then(blob=>blob.arrayBuffer()).then(ab=>{
+    const buffer=new Uint8Array(ab);
     const timestamp=new Date().toISOString().replace(/[:\-]/g,'').slice(0,14);
     const filename=`${docData.device.hostname}_${tr('doc.title')}_${timestamp}.docx`;
     downloadFile(buffer,filename,'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -4920,6 +4921,7 @@ function saveLangPref(code) {
 function setLang(lang){
   _lang=lang;
   saveLangPref(lang);
+  window.renderToolkitVersion&&renderToolkitVersion(lang);
   document.documentElement.lang=lang==='zhTW'?'zh-TW':lang;
   document.querySelectorAll('.lang-btn[data-lang]').forEach(b=>b.classList.toggle('active',b.dataset.lang===lang));
   // 保存當前的設備模型選擇，以防語言切換過程中遺失
