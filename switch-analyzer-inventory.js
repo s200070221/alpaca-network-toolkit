@@ -348,3 +348,91 @@ function invAccounts(entries){
     defaults:rows.filter(r=>r.isDefault).length,shared:new Set(rows.filter(r=>r.deviceCount>1).map(r=>r.name.toLowerCase())).size};
   return {rows,summary};
 }
+
+// ── 韌體支援期限（2026-10-21，第三十三輪 XN6）──────────────────────────────
+// 不內建任何廠牌的 EoS／EoL 資料（容易過時，也無法逐一查證），由使用者匯入自備 CSV：
+//   vendor,model,version,end_of_sale,end_of_support,note
+//   vendor   選填，與清冊「廠牌」欄相同的代號（cisco、comware…），不分大小寫；空白＝不限
+//   model    必填，不分大小寫，可用 * 萬用字元（如 WS-C2960X-*）；只寫 * 時連讀不出型號的設備也會比對（依廠牌／版本）
+//   version  選填，可用 *；空白＝不限版本
+//   end_of_sale／end_of_support  YYYY-MM-DD，至少填一個
+// 第一行為表頭（欄位順序不限，未知欄位忽略）；# 開頭與空白行略過；值可用雙引號包住。
+// 一台設備符合多列時取最具體者：有版本 > 有廠牌 > 型號沒有萬用字元 > 型號字面較長
+const INV_EOL_SOON_DAYS = 180;
+function invCsvLine(line) {
+  const out = [];
+  let cur = '', q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) {
+      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '"') q = false;
+      else cur += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { out.push(cur.trim()); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur.trim());
+  return out;
+}
+function invEolDate(s) {
+  const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3] ? d : null;
+}
+// 回傳 {entries:[{line,vendor,model,version,endOfSale,endOfSupport,note}], errors:[{line,reason}]}
+// reason：header（缺 model 欄或兩個日期欄都沒有）／model／date（格式錯誤或兩個日期都空）
+function invParseEolCsv(text) {
+  const lines = String(text || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').split('\n');
+  const entries = [], errors = [];
+  let cols = null;
+  lines.forEach((raw, i) => {
+    const t = raw.trim();
+    if (!t || t.startsWith('#')) return;
+    const cells = invCsvLine(t);
+    if (!cols) {
+      cols = cells.map(c => c.toLowerCase().replace(/\s+/g, '_'));
+      if (!cols.includes('model') || (!cols.includes('end_of_sale') && !cols.includes('end_of_support'))) { errors.push({ line: i + 1, reason: 'header' }); cols = []; }
+      return;
+    }
+    if (!cols.length) return;
+    const v = k => { const j = cols.indexOf(k); return j < 0 ? '' : (cells[j] || ''); };
+    const model = v('model');
+    if (!model) { errors.push({ line: i + 1, reason: 'model' }); return; }
+    const sale = v('end_of_sale'), sup = v('end_of_support');
+    const endOfSale = sale ? invEolDate(sale) : null, endOfSupport = sup ? invEolDate(sup) : null;
+    if ((sale && !endOfSale) || (sup && !endOfSupport) || (!sale && !sup)) { errors.push({ line: i + 1, reason: 'date' }); return; }
+    entries.push({ line: i + 1, vendor: v('vendor'), model, version: v('version'), endOfSale, endOfSupport, note: v('note') });
+  });
+  return { entries, errors };
+}
+function invEolWild(pat, s) {
+  const re = new RegExp('^' + String(pat).replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$', 'i');
+  return re.test(String(s || ''));
+}
+function invEolBest(row, entries) {
+  const hit = entries.filter(e => (!e.vendor || e.vendor.toLowerCase() === String(row.vendor || '').toLowerCase()) &&
+    invEolWild(e.model, row.model) && (!e.version || invEolWild(e.version, row.version)));
+  const rank = e => [e.version ? 1 : 0, e.vendor ? 1 : 0, e.model.includes('*') ? 0 : 1, e.model.replace(/\*/g, '').length];
+  hit.sort((a, b) => { const x = rank(a), y = rank(b); for (let k = 0; k < x.length; k++) if (x[k] !== y[k]) return y[k] - x[k]; return a.line - b.line; });
+  return hit[0] || null;
+}
+// rows：invBuildRow() 的清冊列；now：Date（測試可固定）。
+// status：expired（支援已終止）／soon（INV_EOL_SOON_DAYS 天內終止）／eos（已停售、支援未終止或未填）／ok／nomatch／nomodel
+function invEolCheck(rows, entries, now) {
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const rank = { expired: 0, soon: 1, eos: 2, nomatch: 3, nomodel: 4, ok: 5 };
+  return (rows || []).map(r => {
+    const base = { hostname: r.hostname || '', file: r.file || '', vendor: r.vendor || '', model: r.model || '', version: r.version || '' };
+    // 讀不出型號的設備（Cisco running-config 多半沒有型號）仍可比對 model 為 * 的列（只依廠牌／版本）
+    const m = invEolBest(base, entries);
+    if (!m) return { ...base, status: base.model ? 'nomatch' : 'nomodel', match: null, daysLeft: null };
+    const daysLeft = m.endOfSupport ? Math.round((m.endOfSupport.getTime() - today) / 86400000) : null;
+    let status = 'ok';
+    if (daysLeft !== null && daysLeft < 0) status = 'expired';
+    else if (daysLeft !== null && daysLeft <= INV_EOL_SOON_DAYS) status = 'soon';
+    else if (m.endOfSale && m.endOfSale.getTime() <= today) status = 'eos';
+    return { ...base, status, match: m, daysLeft };
+  }).sort((a, b) => rank[a.status] - rank[b.status] || (a.daysLeft ?? 1e9) - (b.daysLeft ?? 1e9) || a.hostname.localeCompare(b.hostname));
+}

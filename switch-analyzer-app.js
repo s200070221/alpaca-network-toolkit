@@ -4043,7 +4043,61 @@ function renderInventoryCard(){
         <td>${r.score==null?'-':pill(gc,r.score+' '+r.grade)}</td><td style="font-size:11px">${esc(r.file)}</td>
         <td><button style="${btn2};padding:2px 10px" onclick="invOpen(${i})">${esc(tr('inv.open_btn'))}</button></td></tr>`;
     }).join('')+'</tbody></table></div>';
-  return h+renderConsistencyCard()+renderVlanMatrixCard()+renderAccountsCard()+renderGoldenCard()+'</div>';
+  return h+renderConsistencyCard()+renderVlanMatrixCard()+renderAccountsCard()+renderGoldenCard()+renderEolCard()+'</div>';
+}
+// 韌體支援期限（XN6）：invParseEolCsv()／invEolCheck() 在 switch-analyzer-inventory.js；清單存 localStorage（sw_eol_list，已在入口頁 WS_KEYS）
+let eolText=null;
+function eolLoadText(){
+  if(eolText!==null)return eolText;
+  try{eolText=localStorage.getItem('sw_eol_list')||'';}catch(e){eolText='';}
+  return eolText;
+}
+function eolSave(t){eolText=t;try{localStorage.setItem('sw_eol_list',t||'');}catch(e){}}
+const EOL_PILL={expired:'down',soon:'warn',eos:'warn',ok:'up',nomatch:'',nomodel:''};
+const _eolDate=d=>d?d.toISOString().slice(0,10):'';
+function renderEolCard(){
+  const btn='background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;cursor:pointer';
+  const btn2='background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer';
+  const text=eolLoadText();
+  let h=`<div id="eol-card" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:6px">${esc(tr('eol.title'))}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px;white-space:pre-line">${esc(tr('eol.hint'))}</div>
+    <textarea id="eol-text" spellcheck="false" placeholder="vendor,model,version,end_of_sale,end_of_support,note" style="width:100%;height:100px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${esc(text)}</textarea>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+      <button style="${btn}" onclick="eolSave(document.getElementById('eol-text').value);navGo('inventory')">${esc(tr('eol.run_btn'))}</button>
+      <label style="${btn2}">${esc(tr('eol.upload_btn'))}<input type="file" accept=".csv,.txt" style="display:none" onchange="eolReadFile(this)"></label>
+      <button style="${btn2}" onclick="eolDownloadSample()">${esc(tr('eol.sample_btn'))}</button>
+    </div>`;
+  if(!text.trim())return h+'</div>';
+  const p=invParseEolCsv(text);
+  if(p.errors.length)h+=`<div style="font-size:12px;color:var(--red);margin-bottom:6px">${p.errors.map(e=>esc(tr('eol.err_'+e.reason).replace('{n}',e.line))).join('<br>')}</div>`;
+  if(!p.entries.length)return h+`<div class="nodata">${esc(tr('eol.no_entries'))}</div></div>`;
+  const rows=invEolCheck(invRows,p.entries,new Date());
+  const cnt=s=>rows.filter(r=>r.status===s).length;
+  h+=`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;margin-bottom:8px">${esc(tr('eol.summary').replace('{n}',p.entries.length).replace('{expired}',cnt('expired')).replace('{soon}',cnt('soon')).replace('{eos}',cnt('eos')).replace('{nomatch}',cnt('nomatch')+cnt('nomodel')))}
+    <button style="${btn2};padding:4px 12px" onclick="eolExportCSV()">${esc(tr('eol.csv_btn'))}</button></div>`;
+  const st=r=>{const k=EOL_PILL[r.status];const t=tr('eol.st_'+r.status).replace('{d}',INV_EOL_SOON_DAYS);return k?pill(k,t):`<span style="color:var(--text-muted)">${esc(t)}</span>`;};
+  h+=`<div class="tbl-wrap" style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc(tr('inv.col_host'))}</th><th>${esc(tr('inv.col_vendor'))}</th><th>${esc(tr('inv.col_model'))}</th><th>${esc(tr('inv.col_version'))}</th><th>${esc(tr('eol.col_status'))}</th><th>${esc(tr('eol.col_sale'))}</th><th>${esc(tr('eol.col_support'))}</th><th>${esc(tr('eol.col_days'))}</th><th>${esc(tr('eol.col_match'))}</th><th>${esc(tr('eol.col_note'))}</th></tr></thead><tbody>`+
+    rows.map(r=>{const m=r.match;return `<tr><td><b>${esc(r.hostname||r.file)}</b></td><td>${esc(r.vendor)}</td><td>${esc(r.model||'-')}</td><td>${esc(r.version||'-')}</td><td>${st(r)}</td>
+      <td>${esc(m?_eolDate(m.endOfSale):'')}</td><td>${esc(m?_eolDate(m.endOfSupport):'')}</td><td class="mono">${r.daysLeft==null?'':esc(r.daysLeft)}</td>
+      <td style="font-size:11px">${m?esc(tr('eol.match_line').replace('{n}',m.line)+'：'+[m.vendor,m.model,m.version].filter(Boolean).join(' ')):''}</td><td style="font-size:11px">${esc(m?m.note:'')}</td></tr>`;}).join('')+'</tbody></table></div>';
+  return h+'</div>';
+}
+function eolReadFile(inp){
+  const f=inp.files&&inp.files[0];
+  if(!f)return;
+  swReadText(f).then(t=>{eolSave(t.replace(/^﻿/,''));navGo('inventory');});
+}
+function eolDownloadSample(){
+  const csv=tr('eol.sample_comment')+'\nvendor,model,version,end_of_sale,end_of_support,note\ncisco,EXAMPLE-SW-*,,2024-01-31,2029-01-31,example\ncomware,EXAMPLE-SW-48P,7.1.*,,2026-06-30,example\n';
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download='firmware_lifecycle_sample.csv';a.click();
+}
+function eolExportCSV(){
+  const p=invParseEolCsv(eolLoadText());
+  const rows=invEolCheck(invRows,p.entries,new Date()).map(r=>{const m=r.match;return [r.hostname,r.vendor,r.model,r.version,tr('eol.st_'+r.status).replace('{d}',INV_EOL_SOON_DAYS),
+    m?_eolDate(m.endOfSale):'',m?_eolDate(m.endOfSupport):'',r.daysLeft==null?'':r.daysLeft,m?m.line:'',m?m.note:'',r.file];});
+  dlCSV(rows,[tr('inv.col_host'),tr('inv.col_vendor'),tr('inv.col_model'),tr('inv.col_version'),tr('eol.col_status'),tr('eol.col_sale'),tr('eol.col_support'),tr('eol.col_days'),tr('eol.col_match'),tr('eol.col_note'),tr('inv.col_file')],'firmware_lifecycle.csv');
 }
 // 跨設備一致性（WH）：invConsistency() 在 switch-analyzer-inventory.js
 function renderConsistencyCard(){
