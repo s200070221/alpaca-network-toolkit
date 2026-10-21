@@ -328,7 +328,8 @@ function renderSwqBar(){
     const eps=x.port&&x.endpoints?_cablingEndpointsText(x):'';
     html+=`<table class="swq-table" style="border-collapse:collapse"><tbody>`+
       [[tr('cab.col_port'),x.port],[tr('cab.col_desc'),x.desc],[tr('cab.col_mode'),[x.mode,x.vlan].filter(Boolean).join(' ')],
-       [tr('cab.col_admin'),x.shutdown?tr('cab.admin_down'):tr('cab.admin_up')],[tr('cab.col_neighbor'),x.neighbor],[tr('cab.col_endpoints'),eps]]
+       [tr('cab.col_admin'),x.shutdown?tr('cab.admin_down'):tr('cab.admin_up')],[tr('cab.col_neighbor'),x.neighbor],[tr('cab.col_endpoints'),eps],
+       [tr('cab.col_phy'),x.phy]]
       .map(([k,v])=>`<tr><th style="text-align:left;padding:1px 12px 1px 0;font-weight:500;color:var(--text-dim)">${esc(k)}</th><td class="mono" style="padding:1px 0">${cell(v)}</td></tr>`).join('')+
       `</tbody></table>`;
   });
@@ -626,6 +627,7 @@ function renderLACP(){
 }
 // 配線表（XD）：epBuildCablingSheet() 在 switch-analyzer-endpoint.js；終端 MAC／IP 需先在「終端定位」頁
 // 貼上同一台（主機名稱相同）的 show 輸出，沒對上時只列設定與 LLDP 欄位
+function _cablingLinkText(r){return [r.link,r.phy].filter(Boolean).join(' · ');}
 function _cablingEndpointsText(r){
   if(r.uplink)return r.macCount?tr('cab.uplink_n').replace('{n}',r.macCount):tr('ep.uplink');
   return r.endpoints.map(e=>epFmtMac(e.mac)+(e.ip?' '+e.ip:'')).join('; ');
@@ -637,7 +639,9 @@ function renderCabling(){
     ep:_cablingEndpointsText(r),
     port_html:`<span class="mono" style="font-weight:700">${esc(r.port)}</span>`,
     admin_html:r.shutdown?pill('down',tr('cab.admin_down')):'<span style="color:var(--text-muted)">'+esc(tr('cab.admin_up'))+'</span>',
-    link_html:esc(r.link||'—'),
+    // 介面錯誤摘要（XN4，需在終端定位頁貼上同一台的 show interfaces）附在連線狀態下方
+    link:_cablingLinkText(r),
+    link_html:esc(r.link||'—')+(r.phy?'<br>'+pill('warn',r.phy):''),
     ep_html:r.uplink?pill('warn',_cablingEndpointsText(r)):`<span class="mono">${r.endpoints.map(e=>esc(epFmtMac(e.mac))+(e.ip?' <span style="color:var(--text-dim)">'+esc(e.ip)+'</span>':'')).join('<br>')}</span>`,
   }));
   const hdrs=[
@@ -658,7 +662,7 @@ function renderCabling(){
 function exportCablingCSV(){
   if(!parsed){alert(tr('msg.no_config'));return;}
   const sheet=epBuildCablingSheet(parsed,epModel);
-  dlCSV(sheet.rows.map(r=>[r.port,r.desc,r.mode,r.vlan,r.shutdown?tr('cab.admin_down'):tr('cab.admin_up'),r.link,r.neighbor,_cablingEndpointsText(r)]),
+  dlCSV(sheet.rows.map(r=>[r.port,r.desc,r.mode,r.vlan,r.shutdown?tr('cab.admin_down'):tr('cab.admin_up'),_cablingLinkText(r),r.neighbor,_cablingEndpointsText(r)]),
     [tr('cab.col_port'),tr('cab.col_desc'),tr('cab.col_mode'),'VLAN',tr('cab.col_admin'),tr('cab.col_link'),tr('cab.col_neighbor'),tr('cab.col_endpoints')],
     (parsed.sys.hostname||'switch')+'_cabling.csv');
 }
@@ -666,7 +670,7 @@ function exportCablingCSV(){
 function printCabling(){
   if(!parsed){alert(tr('msg.no_config'));return;}
   const sheet=epBuildCablingSheet(parsed,epModel);
-  const rows=sheet.rows.map(r=>({port:r.port,desc:r.desc,mode:r.mode,vlan:r.vlan,admin:r.shutdown?tr('cab.admin_down'):tr('cab.admin_up'),link:r.link,neighbor:r.neighbor,ep:_cablingEndpointsText(r)}));
+  const rows=sheet.rows.map(r=>({port:r.port,desc:r.desc,mode:r.mode,vlan:r.vlan,admin:r.shutdown?tr('cab.admin_down'):tr('cab.admin_up'),link:_cablingLinkText(r),neighbor:r.neighbor,ep:_cablingEndpointsText(r)}));
   const host=parsed.sys.hostname||'switch';
   const html=epBuildCablingPrintHtml(rows,{lang:_lang==='ja'?'ja':_lang==='en'?'en':'zh-Hant',
     title:tr('cab.title')+' — '+host,print:tr('cab.print_do'),
@@ -4200,7 +4204,7 @@ function invExportCSV(){
 // ── 終端定位與空 port 盤點（2026-09-29 新增，第六輪 WA/WB） ─────────────────
 // 解析與查詢邏輯在 switch-analyzer-endpoint.js（純函式），這裡只負責 UI；
 // 已載入設定檔且 hostname 與貼上輸出的裝置名稱相同時，用設定檔補介面描述與 trunk 判斷
-const EP_SAMPLE_TEXT = "CORE-SW#show ip arp\nProtocol  Address          Age (min)  Hardware Addr   Type   Interface\nInternet  192.0.2.1               -   a1b2.c3d4.0f01  ARPA   Vlan10\nInternet  192.0.2.21              3   a1b2.c3d4.0001  ARPA   Vlan10\nInternet  192.0.2.22              7   a1b2.c3d4.0002  ARPA   Vlan10\nInternet  198.51.100.5            1   0050.7966.0005  ARPA   Vlan20\nInternet  198.51.100.9            0   Incomplete      ARPA\nCORE-SW#show mac address-table\n          Mac Address Table\n-------------------------------------------\n\nVlan    Mac Address       Type        Ports\n----    -----------       --------    -----\n All    0100.0ccc.cccc    STATIC      CPU\n  10    a1b2.c3d4.0001    DYNAMIC     Gi1/0/24\n  10    a1b2.c3d4.0002    DYNAMIC     Gi1/0/24\n  20    0050.7966.0005    DYNAMIC     Gi1/0/23\nTotal Mac Addresses for this criterion: 4\nCORE-SW#show interfaces status\n\nPort      Name               Status       Vlan       Duplex  Speed Type\nGi1/0/23  TO-H3C-ACC         connected    trunk      a-full a-1000 10/100/1000BaseTX\nGi1/0/24  TO-ACC-SW1         connected    trunk      a-full a-1000 10/100/1000BaseTX\nVl10                         connected    routed       auto   auto\nACC-SW1#show mac address-table\n          Mac Address Table\n-------------------------------------------\n\nVlan    Mac Address       Type        Ports\n----    -----------       --------    -----\n  10    a1b2.c3d4.0001    DYNAMIC     Gi1/0/1\n  10    a1b2.c3d4.0002    DYNAMIC     Gi1/0/2\n  10    a1b2.c3d4.0f01    DYNAMIC     Gi1/0/48\n  10    a1b2.c3d4.0101    DYNAMIC     Gi1/0/48\n  10    a1b2.c3d4.0102    DYNAMIC     Gi1/0/48\n  20    0050.7966.0005    DYNAMIC     Gi1/0/48\n  20    0050.7966.0106    DYNAMIC     Gi1/0/48\nTotal Mac Addresses for this criterion: 7\nACC-SW1#show interfaces status\n\nPort      Name               Status       Vlan       Duplex  Speed Type\nGi1/0/1   PC-01              connected    10         a-full a-1000 10/100/1000BaseTX\nGi1/0/2   Backup up link     connected    10         a-full a-1000 10/100/1000BaseTX\nGi1/0/3                      notconnect   1            auto   auto 10/100/1000BaseTX\nGi1/0/4   Printer-3F         notconnect   10           auto   auto 10/100/1000BaseTX\nGi1/0/5                      disabled     1            auto   auto 10/100/1000BaseTX\nGi1/0/6   Cam-01             err-disabled 30           auto   auto 10/100/1000BaseTX\nGi1/0/48  UPLINK-CORE        connected    trunk      a-full a-1000 10/100/1000BaseTX\nPo1                          notconnect   unassigned   auto   auto\n<H3C-ACC>display mac-address\nMAC Address      VLAN ID  State            Port/NickName            Aging\n0050-7966-0005   20       Learned          GE1/0/5                  Y\na1b2-c3d4-0f01   20       Learned          XGE1/0/49                Y\n<H3C-ACC>display interface brief\nBrief information on interfaces in route mode:\nLink: ADM - administratively down; Stby - standby\nProtocol: (s) - spoofing\nInterface            Link Protocol Primary IP        Description\nVlan20               UP   UP       198.51.100.2      users\nBrief information on interfaces in bridge mode:\nLink: ADM - administratively down; Stby - standby\nSpeed: (a) - auto\nDuplex: (a)/A - auto; H - half; F - full\nType: A - access; T - trunk; H - hybrid\nInterface            Link Speed   Duplex Type PVID Description\nGE1/0/5              UP   1G(a)   F(a)   A    20   Desk-5F-12\nGE1/0/6              DOWN auto    A      A    1\nGE1/0/7              ADM  auto    A      A    20   Guest-Room\nXGE1/0/49            UP   10G(a)  F(a)   T    1    To-Core\n";
+const EP_SAMPLE_TEXT = "CORE-SW#show ip arp\nProtocol  Address          Age (min)  Hardware Addr   Type   Interface\nInternet  192.0.2.1               -   a1b2.c3d4.0f01  ARPA   Vlan10\nInternet  192.0.2.21              3   a1b2.c3d4.0001  ARPA   Vlan10\nInternet  192.0.2.22              7   a1b2.c3d4.0002  ARPA   Vlan10\nInternet  198.51.100.5            1   0050.7966.0005  ARPA   Vlan20\nInternet  198.51.100.9            0   Incomplete      ARPA\nCORE-SW#show mac address-table\n          Mac Address Table\n-------------------------------------------\n\nVlan    Mac Address       Type        Ports\n----    -----------       --------    -----\n All    0100.0ccc.cccc    STATIC      CPU\n  10    a1b2.c3d4.0001    DYNAMIC     Gi1/0/24\n  10    a1b2.c3d4.0002    DYNAMIC     Gi1/0/24\n  20    0050.7966.0005    DYNAMIC     Gi1/0/23\nTotal Mac Addresses for this criterion: 4\nCORE-SW#show interfaces status\n\nPort      Name               Status       Vlan       Duplex  Speed Type\nGi1/0/23  TO-H3C-ACC         connected    trunk      a-full a-1000 10/100/1000BaseTX\nGi1/0/24  TO-ACC-SW1         connected    trunk      a-full a-1000 10/100/1000BaseTX\nVl10                         connected    routed       auto   auto\nACC-SW1#show mac address-table\n          Mac Address Table\n-------------------------------------------\n\nVlan    Mac Address       Type        Ports\n----    -----------       --------    -----\n  10    a1b2.c3d4.0001    DYNAMIC     Gi1/0/1\n  10    a1b2.c3d4.0002    DYNAMIC     Gi1/0/2\n  10    a1b2.c3d4.0f01    DYNAMIC     Gi1/0/48\n  10    a1b2.c3d4.0101    DYNAMIC     Gi1/0/48\n  10    a1b2.c3d4.0102    DYNAMIC     Gi1/0/48\n  20    0050.7966.0005    DYNAMIC     Gi1/0/48\n  20    0050.7966.0106    DYNAMIC     Gi1/0/48\nTotal Mac Addresses for this criterion: 7\nACC-SW1#show interfaces status\n\nPort      Name               Status       Vlan       Duplex  Speed Type\nGi1/0/1   PC-01              connected    10         a-full a-1000 10/100/1000BaseTX\nGi1/0/2   Backup up link     connected    10         a-full a-1000 10/100/1000BaseTX\nGi1/0/3                      notconnect   1            auto   auto 10/100/1000BaseTX\nGi1/0/4   Printer-3F         notconnect   10           auto   auto 10/100/1000BaseTX\nGi1/0/5                      disabled     1            auto   auto 10/100/1000BaseTX\nGi1/0/6   Cam-01             err-disabled 30           auto   auto 10/100/1000BaseTX\nGi1/0/48  UPLINK-CORE        connected    trunk      a-full a-1000 10/100/1000BaseTX\nPo1                          notconnect   unassigned   auto   auto\n<H3C-ACC>display mac-address\nMAC Address      VLAN ID  State            Port/NickName            Aging\n0050-7966-0005   20       Learned          GE1/0/5                  Y\na1b2-c3d4-0f01   20       Learned          XGE1/0/49                Y\n<H3C-ACC>display interface brief\nBrief information on interfaces in route mode:\nLink: ADM - administratively down; Stby - standby\nProtocol: (s) - spoofing\nInterface            Link Protocol Primary IP        Description\nVlan20               UP   UP       198.51.100.2      users\nBrief information on interfaces in bridge mode:\nLink: ADM - administratively down; Stby - standby\nSpeed: (a) - auto\nDuplex: (a)/A - auto; H - half; F - full\nType: A - access; T - trunk; H - hybrid\nInterface            Link Speed   Duplex Type PVID Description\nGE1/0/5              UP   1G(a)   F(a)   A    20   Desk-5F-12\nGE1/0/6              DOWN auto    A      A    1\nGE1/0/7              ADM  auto    A      A    20   Guest-Room\nXGE1/0/49            UP   10G(a)  F(a)   T    1    To-Core\nACC-SW1#show interfaces\nGigabitEthernet1/0/1 is up, line protocol is up (connected)\n  Hardware is Gigabit Ethernet, address is a1b2.c3d4.1101 (bia a1b2.c3d4.1101)\n  Description: PC-01\n  Full-duplex, 1000Mb/s, media type is 10/100/1000BaseTX\n  Last clearing of \"show interface\" counters 2w3d\n  Input queue: 0/2000/0/0 (size/max/drops/flushes); Total output drops: 0\n     852341 packets input, 61234567 bytes, 0 no buffer\n     0 runts, 0 giants, 0 throttles\n     0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored\n     912345 packets output, 98765432 bytes, 0 underruns\n     0 output errors, 0 collisions, 1 interface resets\n     0 babbles, 0 late collision, 0 deferred\nGigabitEthernet1/0/2 is up, line protocol is up (connected)\n  Hardware is Gigabit Ethernet, address is a1b2.c3d4.1102 (bia a1b2.c3d4.1102)\n  Description: Backup up link\n  Full-duplex, 1000Mb/s, media type is 10/100/1000BaseTX\n  Last clearing of \"show interface\" counters 2w3d\n  Input queue: 0/2000/0/0 (size/max/drops/flushes); Total output drops: 0\n     1203344 packets input, 98877123 bytes, 0 no buffer\n     0 runts, 0 giants, 0 throttles\n     1487 input errors, 1462 CRC, 25 frame, 0 overrun, 0 ignored\n     1100223 packets output, 87654321 bytes, 0 underruns\n     0 output errors, 0 collisions, 3 interface resets\n     0 babbles, 0 late collision, 0 deferred\nGigabitEthernet1/0/7 is up, line protocol is up (connected)\n  Hardware is Gigabit Ethernet, address is a1b2.c3d4.1107 (bia a1b2.c3d4.1107)\n  Description: Old-Hub-2F\n  Half-duplex, 100Mb/s, media type is 10/100/1000BaseTX\n  Last clearing of \"show interface\" counters 2w3d\n  Input queue: 0/2000/0/0 (size/max/drops/flushes); Total output drops: 37\n     40211 packets input, 3812201 bytes, 0 no buffer\n     12 runts, 0 giants, 0 throttles\n     12 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored\n     38102 packets output, 4012233 bytes, 0 underruns\n     58 output errors, 412 collisions, 2 interface resets\n     0 babbles, 58 late collision, 0 deferred\n";
 function epCfgByDevice(){
   const h=parsed?.sys?.hostname;
   return h?{[h.toLowerCase()]:parsed.interfaces||[]}:null;
@@ -4270,8 +4274,36 @@ function renderEndpointCard(){
       <div id="ep-result">${renderEndpointResult()}</div>
     </div>`;
     h+=renderFreePorts();
+    h+=renderPhyIssues();
   }
   return h+'</div>';
+}
+// 實體層問題（XN4）：解析與判斷在 switch-analyzer-endpoint.js 的 epPhyIssues()
+const EP_PHY_SEV={high:['down','audit.risk_high'],medium:['warn','audit.risk_mid'],low:['up','audit.risk_low']};
+function _epPhyCounts(r){
+  return [['CRC',r.crc],['input errors',r.inErr],['output errors',r.outErr],['late collision',r.lateColl],['collisions',r.coll],['drops',r.drops]]
+    .filter(([,v])=>v).map(([k,v])=>k+' '+v).join(' · ');
+}
+function _epPhyRate(r){return r.rate==null?'':(r.rate*100).toFixed(r.rate>=0.001?2:4)+'%';}
+function renderPhyIssues(){
+  const total=epModel.devices.reduce((n,d)=>n+(d.counters||[]).length,0);
+  let h=`<div style="font-size:14px;font-weight:600;margin:18px 0 6px">${esc(tr('ep.phy_title'))}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('ep.phy_hint'))}</div>`;
+  if(!total)return h+`<div class="nodata">${esc(tr('ep.phy_no_data'))}</div>`;
+  const rows=epPhyIssues(epModel);
+  if(!rows.length)return h+`<div style="font-size:12px">${esc(tr('ep.phy_ok').replace('{n}',total))}</div>`;
+  h+=`<div style="display:flex;gap:8px;align-items:center;margin:4px 0 8px;font-size:12px">${esc(tr('ep.phy_stats').replace('{n}',total).replace('{m}',rows.length))}
+    <button style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer" onclick="epExportPhyCSV()">${esc(tr('ep.csv_btn'))}</button></div>`;
+  h+=`<table class="data-tbl"><thead><tr><th>${esc(tr('ep.col_device'))}</th><th>${esc(tr('ep.col_port'))}</th><th>${esc(tr('ep.col_desc'))}</th><th>${esc(tr('ep.col_severity'))}</th><th>${esc(tr('ep.col_findings'))}</th><th>${esc(tr('ep.col_counts'))}</th><th>${esc(tr('ep.col_rate'))}</th><th>${esc(tr('ep.col_status'))}</th><th>${esc(tr('ep.col_lastclear'))}</th></tr></thead><tbody>`+
+    rows.map(r=>{const s=EP_PHY_SEV[r.severity];return `<tr><td>${esc(r.device)}</td><td class="mono"><b>${esc(r.port)}</b></td><td>${esc(r.desc)}</td><td>${pill(s[0],tr(s[1]))}</td><td style="font-size:12px">${r.findings.map(f=>esc(tr('ep.phy_'+f))).join('<br>')}</td><td class="mono" style="font-size:11px">${esc(_epPhyCounts(r))}</td><td class="mono">${esc(_epPhyRate(r))}</td><td>${esc([r.status,r.duplex,r.speed].filter(Boolean).join(' '))}</td><td>${esc(r.lastClear)}</td></tr>`;}).join('')+'</tbody></table>';
+  return h;
+}
+function epExportPhyCSV(){
+  if(!epModel)return;
+  const rows=epPhyIssues(epModel).map(r=>[r.device,r.port,r.desc,tr(EP_PHY_SEV[r.severity][1]),r.findings.map(f=>tr('ep.phy_'+f)).join('; '),
+    r.crc??'',r.inErr??'',r.outErr??'',r.coll??'',r.lateColl??'',r.drops,_epPhyRate(r),r.status,r.duplex,r.speed,r.lastClear]);
+  dlCSV(rows,[tr('ep.col_device'),tr('ep.col_port'),tr('ep.col_desc'),tr('ep.col_severity'),tr('ep.col_findings'),'CRC','input errors','output errors','collisions','late collision','drops',
+    tr('ep.col_rate'),tr('ep.col_status'),'duplex','speed',tr('ep.col_lastclear')],'interface_errors.csv');
 }
 function renderEndpointResult(){
   const r=epResult;
