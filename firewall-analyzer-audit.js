@@ -2612,3 +2612,78 @@
     out.rows.sort((a, b) => rank[a.kind] - rank[b.kind] || (a.lastUsed || 0) - (b.lastUsed || 0));
     return out;
   }
+  // ── 規則安全重排建議（2026-10-22，第三十三輪 XN8）──────────────────────────
+  // 依匯入的命中數把高命中規則往前移。只跨越「確定不會比對到同一筆流量」的規則：位址家族不同，或來源／目的位址
+  // 範圍完全不重疊（沿用遮蔽分析的範圍展開，任一邊無法確定範圍就視為可能相交）；取反規則一律視為可能相交。
+  // 介面不當作不相交的依據（FortiGate 區域與成員介面名稱不同卻可能是同一個介面）。因此每次移動都不改變任何流量的
+  // 比對結果。停用規則不參與比對，可直接跨越。
+  // 同一評估序列（FortiGate／Palo Alto 為 VDOM、Juniper 為區域組合、ASA 為 ACL）內依命中數由高到低逐條處理，
+  // 在目前順序上往前找最前面一條「命中數較低且中間全部不相交」的規則，移到它之前；移動依序套用，後面的建議以
+  // 前面移動後的順序計算，指令照順序執行即可。Panorama 的規則跨 device-group 與 pre／post 層，不支援
+  function _reorderPrep(p, addresses) {
+    return { fam: _shadowFamily(p), neg: _hasNegate(p),
+      srcR: _shadowAddrRanges(p.srcAddr, addresses, p._vdom), dstR: _shadowAddrRanges(p.dstAddr, addresses, p._vdom) };
+  }
+  function _reorderDisjoint(a, b) {
+    if (a.neg || b.neg) return false;
+    if (a.fam && b.fam && a.fam !== b.fam) return true;
+    const apart = (X, Y) => !!(X && Y) && !X.some(x => Y.some(y => x.f === y.f && x.lo <= y.hi && y.lo <= x.hi));
+    return apart(a.srcR, b.srcR) || apart(a.dstR, b.dstR);
+  }
+  function _reorderSeqKey(parsed, p) {
+    if (parsed.vendor === 'Juniper') return [p._vdom || '', p.srcIntf, p.dstIntf].join('|');
+    if (parsed.vendor === 'Cisco ASA' || parsed.vendor === 'Cisco FTD') return p.name || '';
+    return (p._vdom || '') + '|' + (_shadowFamily(p) === 'v6' || /^v6\//.test(String(p.id)) ? 'v6' : 'v4');
+  }
+  // hitRes 為 analyzeRuleHitCounts() 結果；回傳 {supported, moves:[{pol, before, hits, beforeHits, crossed}]}
+  function analyzeHitReorder(parsed, hitRes) {
+    const vendors = ['FortiGate', 'PaloAlto', 'Juniper', 'Cisco ASA', 'Cisco FTD'];
+    if (!hitRes || !vendors.includes(parsed.vendor) || parsed._panorama) return { supported: false, moves: [] };
+    const hits = new Map(hitRes.rows.map(r => [r._pol, r.hits]));
+    const pols = (parsed.policies || []).filter(p => !p.platformRule && !p.defaultRule);
+    const seqs = new Map();
+    pols.forEach(p => { const k = _reorderSeqKey(parsed, p); if (!seqs.has(k)) seqs.set(k, []); seqs.get(k).push(p); });
+    const prep = new Map(pols.map(p => [p, _reorderPrep(p, parsed.addresses)]));
+    const moves = [];
+    seqs.forEach(seq => {
+      const order = seq.filter(p => hits.has(p) && !_isDisabledStatus(p)).sort((a, b) => hits.get(b) - hits.get(a));
+      order.forEach(r => {
+        const h = hits.get(r);
+        if (!(h > 0)) return;
+        const i = seq.indexOf(r);
+        let target = -1;
+        for (let k = i - 1; k >= 0; k--) {
+          const q = seq[k];
+          if (_isDisabledStatus(q)) continue;
+          if (!_reorderDisjoint(prep.get(r), prep.get(q))) break;
+          if (hits.has(q) && hits.get(q) < h) target = k;
+        }
+        if (target < 0) return;
+        const before = seq[target];
+        moves.push({ pol: r, before, hits: h, beforeHits: hits.get(before), crossed: i - target });
+        seq.splice(i, 1);
+        seq.splice(target, 0, r);
+      });
+    });
+    return { supported: true, moves };
+  }
+  // FortiGate 移動指令：`move <id> before <id>`，多 VDOM 時包 config vdom（判斷方式同 buildFortiGateCleanupScript）
+  function buildFortiGateReorderScript(parsed, moves) {
+    if (parsed.vendor !== 'FortiGate' || !moves.length) return '';
+    const multi = !!(parsed.deviceInfo && parsed.deviceInfo.isMultiVdom);
+    const byVdom = new Map();
+    moves.forEach(m => {
+      const vd = m.pol._vdom || 'root', v6 = /^v6\//.test(String(m.pol.id));
+      const k = vd + '|' + (v6 ? 'policy6' : 'policy');
+      if (!byVdom.has(k)) byVdom.set(k, { vd, table: v6 ? 'firewall policy6' : 'firewall policy', lines: [] });
+      byVdom.get(k).lines.push('    move ' + String(m.pol.id).replace(/^v6\//, '') + ' before ' + String(m.before.id).replace(/^v6\//, ''));
+    });
+    const body = [];
+    byVdom.forEach(b => {
+      const blk = ['config ' + b.table, ...b.lines, 'end'];
+      if (multi) body.push('edit ' + b.vd, ...blk, 'next'); else body.push(...blk);
+    });
+    if (multi) { body.unshift('config vdom'); body.push('end'); }
+    const head = String(tr('reorder.script_header')).split('\n').map(l => '# ' + l);
+    return [...head, '', ...body, ''].join('\n');
+  }
