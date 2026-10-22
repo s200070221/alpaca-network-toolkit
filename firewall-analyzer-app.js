@@ -224,13 +224,33 @@ const App = (() => {
     if (r.ambiguous.length) notes.push(tr('hit.ambiguous').replace('{list}', r.ambiguous.join(', ')));
     if (notes.length) h += `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${notes.map(esc).join('<br>')}</div>`;
     const list = r.rows.filter(x => x.kind !== 'ok');
-    if (!list.length) return h + `<div style="font-size:12px;color:var(--green)">${esc(tr('hit.none'))}</div>`;
+    if (!list.length) return h + `<div style="font-size:12px;color:var(--green)">${esc(tr('hit.none'))}</div>` + _fwReorderHtml();
     h += `<table class="data-tbl"><thead><tr><th>ID</th><th>${esc(tr('hit.col_name'))}</th>${PARSED._isMultiVdom ? '<th>VDOM</th>' : ''}<th>${esc(tr('hit.col_action'))}</th><th>${esc(tr('hit.col_hits'))}</th><th>${esc(tr('hit.col_last'))}</th><th>${esc(tr('hit.col_result'))}</th></tr></thead><tbody>` +
       list.map(x => `<tr><td>${esc(x.id)}</td><td>${esc(x.name)}</td>${PARSED._isMultiVdom ? `<td>${esc(x.vdom)}</td>` : ''}<td>${esc(x.action)}</td><td>${x.hits}</td><td>${esc(fmt(x.lastUsed))}</td><td>${pill(tr(x.kind === 'zero' ? 'hit.kind_zero' : 'hit.kind_stale').replace('{days}', _fwHit.days), x.kind === 'zero' ? 'p-warn' : 'p-info')}</td></tr>`).join('') +
       '</tbody></table>' +
       `<div style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="window._fwHitCsv()">${esc(tr('hit.csv_btn'))}</button></div>`;
+    return h + _fwReorderHtml();
+  }
+  // 規則安全重排建議（第三十三輪 XN8）：analyzeHitReorder()／buildFortiGateReorderScript() 在 audit.js
+  function _fwReorderHtml() {
+    const ro = _fwHit.res ? analyzeHitReorder(PARSED, _fwHit.res) : null;
+    if (!ro || !ro.supported) return '';
+    let h = `<div style="margin-top:14px;font-size:13px;font-weight:600">↕ ${esc(tr('reorder.title'))}</div>
+      <div style="font-size:11px;color:var(--text-dim);margin:4px 0 6px">${esc(tr('reorder.hint'))}</div>`;
+    if (!ro.moves.length) return h + `<div style="font-size:12px;color:var(--text-dim)">${esc(tr('reorder.none'))}</div>`;
+    const lbl = p => esc(String(p.id)) + (p.name && String(p.name) !== String(p.id) ? ' <span style="color:var(--text-dim)">' + esc(p.name) + '</span>' : '');
+    h += `<table class="data-tbl"><thead><tr><th>#</th><th>${esc(tr('reorder.col_rule'))}</th><th>${esc(tr('hit.col_hits'))}</th><th>${esc(tr('reorder.col_before'))}</th><th>${esc(tr('hit.col_hits'))}</th><th>${esc(tr('reorder.col_crossed'))}</th></tr></thead><tbody>` +
+      ro.moves.map((m, i) => `<tr><td>${i + 1}</td><td>${lbl(m.pol)}</td><td>${m.hits}</td><td>${lbl(m.before)}</td><td>${m.beforeHits}</td><td>${m.crossed}</td></tr>`).join('') + '</tbody></table>';
+    if (PARSED.vendor === 'FortiGate') h += `<div style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="window._fwReorderScript()">${esc(tr('reorder.script_btn'))}</button></div>`;
     return h;
   }
+  window._fwReorderScript = function() {
+    if (!_fwHit.res || !PARSED) return;
+    const text = buildFortiGateReorderScript(PARSED, analyzeHitReorder(PARSED, _fwHit.res).moves);
+    if (!text) return;
+    const host = (PARSED.deviceInfo && PARSED.deviceInfo.hostname && PARSED.deviceInfo.hostname !== '-') ? PARSED.deviceInfo.hostname : 'firewall';
+    Reporter.download(text, host.replace(/[^\w.\-]/g, '_') + '_policy_reorder.txt', 'text/plain');
+  };
   function _fwHitCardHtml() {
     return `<div id="hit-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
       <div style="font-size:13px;font-weight:600;margin-bottom:6px">📈 ${esc(_hitKey('title'))}</div>
