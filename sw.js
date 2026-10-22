@@ -44,6 +44,7 @@ const FILES = [
   'firewall-analyzer-parser-watchguard.js',
   'firewall-analyzer-parser-wlc.js',
   'firewall-analyzer-parser-zyxel.js',
+  'firewall-analyzer-pathchain.js',
   'firewall-analyzer-reporter.js',
   'firewall-analyzer-sections.js',
   'firewall-analyzer-wifi-parser.js',

@@ -307,11 +307,14 @@ function _ruleAppliesToNew(p) {
 }
 // 進入介面／區域條件（2026-10-01，YA）：只保留來源介面為該名稱、any／all 或未解析（-、空白）的規則；
 // MikroTik 沒有介面條件時 srcIntf 會回填 chain 名稱（forward／input），視同不限介面
-function _queryIntfMatch(p, name) {
+function _queryIntfMatch(p, name, side) {
   if (!name) return true;
-  const raw = (p._chain && p.srcIntf === p._chain) ? '-' : String(p.srcIntf || '-');
-  // FortiGate zone（第十八輪 TD）：srcIntfMembers 為規則來源 zone 的成員介面
-  const items = (raw + (p.srcIntfMembers ? ', ' + p.srcIntfMembers : '')).split(/\s*,\s*/).map(s => s.trim().toLowerCase());
+  // side 'dst'：比對出口介面（多台路徑查詢 XN7 才會帶）；預設比對進入介面
+  const dst = side === 'dst';
+  const raw = dst ? String(p.dstIntf || '-') : ((p._chain && p.srcIntf === p._chain) ? '-' : String(p.srcIntf || '-'));
+  const members = dst ? p.dstIntfMembers : p.srcIntfMembers;
+  // FortiGate zone（第十八輪 TD）：srcIntfMembers／dstIntfMembers 為規則 zone 的成員介面
+  const items = (raw + (members ? ', ' + members : '')).split(/\s*,\s*/).map(s => s.trim().toLowerCase());
   return items.some(s => s === 'any' || s === 'all' || s === '-' || s === '' || s === name.trim().toLowerCase());
 }
 // opts.newOnly：預設 true（查詢「新連線會不會被放行」）；false 時沿用舊行為，狀態規則一律視為可能符合
@@ -367,6 +370,8 @@ function _runAsaQuery(srcStr, dstStr, proto, port, PARSED, opts, srcInt, dstInt)
 function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) {
   const newOnly = !opts || opts.newOnly !== false;
   const qIntf = opts && opts.srcIntf ? String(opts.srcIntf).trim() : '';
+  // opts.dstIntf：選填，出口介面／區域名稱（多台路徑查詢 XN7 依路由查出的出口介面帶入）
+  const qOutIntf = opts && opts.dstIntf ? String(opts.dstIntf).trim() : '';
   if (!PARSED||!PARSED.policies) return null;
   const srcInt=_parseQueryIp(srcStr), dstInt=_parseQueryIp(dstStr);
   if (srcInt===null||dstInt===null) return {error:'invalid_ip'};
@@ -394,6 +399,7 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
     if (p.status==='disable') { trace.push({policy:p,result:'disabled'}); continue; }
     if (newOnly && !_ruleAppliesToNew(p)) { trace.push({policy:p,result:'skip',reason:'state'}); continue; }
     if (!_queryIntfMatch(p, qIntf)) { trace.push({policy:p,result:'skip',reason:'intf'}); continue; }
+    if (!_queryIntfMatch(p, qOutIntf, 'dst')) { trace.push({policy:p,result:'skip',reason:'intf'}); continue; }
     // 規則只適用單一位址家族（H3C security-policy ip／ipv6，2026-10-05）：家族不同直接略過，避免 ipv6 規則的 any 命中 IPv4 查詢
     if (p._family && p._family !== (isV6 ? 'v6' : 'v4')) { trace.push({policy:p,result:'skip',reason:'src_addr'}); continue; }
     const pSrc=addrField(p,'srcAddr'), pDst=addrField(p,'dstAddr');
