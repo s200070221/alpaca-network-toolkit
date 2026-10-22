@@ -3,8 +3,31 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.10.22';
+  const TOOLKIT_VERSION = '2026.10.22.1';
   const CHANGELOG = [
+    {
+      version: '2026.10.22.1',
+      items: {
+        zhTW: [
+          '防火牆分析：多台防火牆路徑查詢，另外上傳路徑上各台設定，逐台判斷目的 NAT、路由與規則，找出流量經過哪幾台、在哪條規則被擋（第一階段，附限制警語與各廠牌查路由表指令）',
+          '防火牆分析：匯入規則命中數後提出安全重排建議，只跨越確定不會比對到同一流量的規則；FortiGate 可下載 move 指令',
+          '交換器分析：終端定位頁可貼上光模組 DOM（show interfaces transceiver），依裝置自帶門檻與旗標找出光功率、溫度等異常',
+          '交換器產生器：產生結果可另存 Ansible playbook 或 Netmiko 腳本（不寫入帳密，Netmiko 預設只印出指令）',
+          'log 分析：調查案件包，勾選問題與行為者匯出自含 HTML（時間軸、MITRE、處理狀態與備註，可去識別化）交接給資安團隊',
+          'log 分析：辨識 OpenLDAP／389 DS／FreeRADIUS 服務本身的啟停、當機、資料庫與上游 RADIUS 異常，新增服務健康卡片與檢查指令，並依來源建議一併匯入的 log',
+          '網頁版開過一次後斷網也能使用，並可安裝成桌面 App',
+        ],
+        en: [
+          'Firewall analyzer: multi-firewall path query; upload every firewall on the path and each device is checked for destination NAT, route and rule to show which devices traffic crosses and where it is blocked (phase 1, with limitation warnings and per-vendor routing-table commands)',
+          'Firewall analyzer: safe rule reorder suggestions from imported hit counts, only moving past rules that can never match the same traffic; FortiGate move commands can be downloaded',
+          'Switch analyzer: paste transceiver DOM output (show interfaces transceiver) on the endpoint page to find optics out of range, judged by the device\'s own thresholds and flags',
+          'Switch generator: save the result as an Ansible playbook or a Netmiko script (no credentials stored; the Netmiko script only prints commands unless run with --apply)',
+          'Log analyzer: investigation case pack exporting selected issues and actors as a self-contained HTML file (timeline, MITRE, status and notes, optionally de-identified) for handover',
+          'Log analyzer: recognizes OpenLDAP / 389 DS / FreeRADIUS service start/stop, crashes, database and upstream RADIUS problems, with a service health card, check commands and suggestions for logs to import alongside',
+          'The web version keeps working offline after one visit and can be installed as a desktop app',
+        ],
+      },
+    },
     {
       version: '2026.10.22',
       items: {
