@@ -4329,6 +4329,7 @@ function renderEndpointCard(){
     </div>`;
     h+=renderFreePorts();
     h+=renderPhyIssues();
+    h+=renderOpticsIssues();
   }
   return h+'</div>';
 }
@@ -4358,6 +4359,34 @@ function epExportPhyCSV(){
     r.crc??'',r.inErr??'',r.outErr??'',r.coll??'',r.lateColl??'',r.drops,_epPhyRate(r),r.status,r.duplex,r.speed,r.lastClear]);
   dlCSV(rows,[tr('ep.col_device'),tr('ep.col_port'),tr('ep.col_desc'),tr('ep.col_severity'),tr('ep.col_findings'),'CRC','input errors','output errors','collisions','late collision','drops',
     tr('ep.col_rate'),tr('ep.col_status'),'duplex','speed',tr('ep.col_lastclear')],'interface_errors.csv');
+}
+// 光模組 DOM（XN5）：解析與判斷在 switch-analyzer-endpoint.js 的 epParseOptics()／epOpticsIssues()，只用裝置自帶的門檻與旗標
+const EP_OPT_SEV={high:['down','ep.opt_alarm'],medium:['warn','ep.opt_warn']};
+function _epOptFinding(f){
+  const th=f.dir==='high'?(f.level==='alarm'?f.ha:f.hw):(f.level==='alarm'?f.la:f.lw);
+  const lim=typeof th==='number'&&!isNaN(th)?` (${f.dir==='high'?'>':'<'} ${th} ${f.unit})`:(f.flag?` [${f.flag}]`:'');
+  return tr('ep.opt_m_'+f.metric)+' '+(f.v===null?'N/A':f.v+' '+f.unit)+lim+' · '+tr('ep.opt_'+f.level)+(f.dir==='high'?' ↑':' ↓');
+}
+function renderOpticsIssues(){
+  const total=epModel.devices.reduce((n,d)=>n+(d.optics||[]).length,0);
+  let h=`<div style="font-size:14px;font-weight:600;margin:18px 0 6px">${esc(tr('ep.opt_title'))}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('ep.opt_hint'))}</div>`;
+  if(!total)return h+`<div class="nodata">${esc(tr('ep.opt_no_data'))}</div>`;
+  const rows=epOpticsIssues(epModel);
+  if(!rows.length)return h+`<div style="font-size:12px">${esc(tr('ep.opt_ok').replace('{n}',total))}</div>`;
+  h+=`<div style="display:flex;gap:8px;align-items:center;margin:4px 0 8px;font-size:12px">${esc(tr('ep.opt_stats').replace('{n}',total).replace('{m}',rows.length))}
+    <button style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer" onclick="epExportOpticsCSV()">${esc(tr('ep.csv_btn'))}</button></div>`;
+  h+=`<table class="data-tbl"><thead><tr><th>${esc(tr('ep.col_device'))}</th><th>${esc(tr('ep.col_port'))}</th><th>${esc(tr('ep.col_severity'))}</th><th>${esc(tr('ep.col_findings'))}</th></tr></thead><tbody>`+
+    rows.map(r=>{const s=EP_OPT_SEV[r.severity];return `<tr><td>${esc(r.device)}</td><td class="mono"><b>${esc(r.port)}</b></td><td>${pill(s[0],tr(s[1]))}</td><td style="font-size:12px">${r.findings.map(f=>esc(_epOptFinding(f))).join('<br>')}</td></tr>`;}).join('')+'</tbody></table>';
+  return h;
+}
+function epExportOpticsCSV(){
+  if(!epModel)return;
+  const rows=[];
+  epOpticsIssues(epModel).forEach(r=>r.findings.forEach(f=>rows.push([r.device,r.port,tr(EP_OPT_SEV[r.severity][1]),tr('ep.opt_m_'+f.metric),f.v===null?'':f.v,f.unit,
+    tr('ep.opt_'+f.level),f.dir,f.flag||'',f.ha??'',f.hw??'',f.lw??'',f.la??''])));
+  dlCSV(rows,[tr('ep.col_device'),tr('ep.col_port'),tr('ep.col_severity'),tr('ep.opt_col_metric'),tr('ep.opt_col_value'),tr('ep.opt_col_unit'),tr('ep.opt_col_level'),'direction','flag',
+    'high alarm','high warning','low warning','low alarm'],'transceiver_dom.csv');
 }
 function renderEndpointResult(){
   const r=epResult;
