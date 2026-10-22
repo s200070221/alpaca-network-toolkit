@@ -481,3 +481,67 @@ function genGoldCheckRules(cfg,rules){
   const lines=String(cfg||'').replace(/\r\n/g,'\n').split('\n').map(l=>l.trim()).filter(Boolean);
   return rules.map(r=>{const hit=lines.find(l=>r.re.test(l))||'';return {ok:r.mode==='must'?!!hit:!hit,hit};});
 }
+
+// ── VLSM 子網規劃（2026-10-21，第三十三輪 XN12）──────────────────────────────
+// 需求每行「VLAN,名稱,主機數」（名稱可空，例：10,Users,200）；# 開頭與空白行略過。
+// 回傳 {reqs:[{vlan,name,hosts,line}], errors:[{line,reason}]}，reason：format／vlan／hosts／dup
+function parseVlsmReqs(text){
+  const reqs=[], errors=[], seen=new Set();
+  String(text||'').replace(/\r\n/g,'\n').split('\n').forEach((raw,i)=>{
+    const t=raw.trim();
+    if(!t||t.startsWith('#'))return;
+    const p=t.split(',').map(s=>s.trim());
+    if(p.length<2){errors.push({line:i+1,reason:'format'});return;}
+    const vlan=p[0], hosts=p.length>=3?p[2]:p[1], name=p.length>=3?p[1]:'';
+    if(!/^\d+$/.test(vlan)||+vlan<1||+vlan>4094){errors.push({line:i+1,reason:'vlan'});return;}
+    if(!/^\d+$/.test(hosts)||+hosts<1){errors.push({line:i+1,reason:'hosts'});return;}
+    if(seen.has(+vlan)){errors.push({line:i+1,reason:'dup'});return;}
+    seen.add(+vlan);
+    reqs.push({vlan:+vlan,name,hosts:+hosts,line:i+1});
+  });
+  return {reqs,errors};
+}
+function _vlsmIp(n){return [n>>>24,(n>>>16)&255,(n>>>8)&255,n&255].join('.');}
+// parent：母網段 CIDR（主機位元須為 0）；opts：
+//   vrrp     true 時每個網段保留 VIP、本機、對端共 3 個位址，否則只保留 1 個閘道
+//   gwPos    'first'（網段開頭，預設）或 'last'（網段結尾）放閘道
+//   dhcp     true 時算出 DHCP 範圍：扣掉閘道與 reserve 個保留位址（放在閘道同一側）後的其餘可用位址
+//   reserve  DHCP 保留給設備靜態位址的數量（只在 dhcp 時納入網段大小計算）
+// 依網段大小由大到小配置（每段自然對齊），回傳列依原輸入順序：
+// {rows:[{vlan,name,hosts,prefix,network,mask,svi,vip,peer,gateway,dhcpStart,dhcpEnd,broadcast,usable,spare}|{vlan,name,hosts,error:'space'}],
+//  error:'parent'|'parent_host'|'', used, total}
+function planVlsm(parent,reqs,opts){
+  const o=opts||{};
+  const m=String(parent||'').trim().match(/^(\S+)\/(\d{1,2})$/);
+  const base=m?ipv4ToInt(m[1]):null, plen=m?+m[2]:-1;
+  if(base===null||plen<0||plen>30)return {rows:[],error:'parent',used:0,total:0};
+  const total=2**(32-plen);
+  if(base%total!==0)return {rows:[],error:'parent_host',used:0,total};
+  const gw=o.vrrp?3:1, reserve=o.dhcp?Math.max(0,parseInt(o.reserve,10)||0):0;
+  const sized=(reqs||[]).map((r,i)=>{
+    const need=r.hosts+gw+reserve;
+    let size=4;
+    while(size-2<need)size*=2;
+    return {r,i,size};
+  });
+  const order=[...sized].sort((a,b)=>b.size-a.size||a.i-b.i);
+  const rows=new Array(sized.length);
+  let cur=base, used=0;
+  order.forEach(({r,i,size})=>{
+    if(cur+size>base+total){rows[i]={vlan:r.vlan,name:r.name,hosts:r.hosts,error:'space'};return;}
+    const net=cur, bc=net+size-1, first=net+1, last=bc-1, prefix=32-Math.log2(size);
+    cur+=size; used+=size;
+    const atEnd=o.gwPos==='last', step=atEnd?-1:1, g0=atEnd?last:first;
+    const vipN=o.vrrp?g0:null, sviN=o.vrrp?g0+step:g0, peerN=o.vrrp?g0+2*step:null;
+    let dhcpStart='', dhcpEnd='';
+    if(o.dhcp){
+      const s=atEnd?first:first+gw+reserve, e=atEnd?last-gw-reserve:last;
+      if(s<=e){dhcpStart=_vlsmIp(s);dhcpEnd=_vlsmIp(e);}
+    }
+    const maskN=(0xFFFFFFFF<<(32-prefix))>>>0;
+    rows[i]={vlan:r.vlan,name:r.name,hosts:r.hosts,prefix,network:_vlsmIp(net)+'/'+prefix,mask:_vlsmIp(maskN),
+      svi:_vlsmIp(sviN)+'/'+prefix,vip:vipN===null?'':_vlsmIp(vipN),peer:peerN===null?'':_vlsmIp(peerN),
+      gateway:_vlsmIp(vipN===null?sviN:vipN),dhcpStart,dhcpEnd,broadcast:_vlsmIp(bc),usable:size-2,spare:size-2-r.hosts-gw-reserve};
+  });
+  return {rows,error:'',used,total};
+}

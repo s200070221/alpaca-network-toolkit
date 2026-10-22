@@ -419,6 +419,26 @@ input.valid,select.valid{border-color:var(--green)!important}
       <button class="add-btn" data-i18n="btn.addVlanRange" onclick="addVlanRange()">+ 依範圍新增</button>
       <span id="vlan-range-msg" style="font-size:12px"></span>
     </div>
+    <details id="vlsm-box" style="margin-top:12px">
+      <summary data-i18n="vlsm.title" style="cursor:pointer;font-size:13px;font-weight:600">VLSM 子網規劃</summary>
+      <div class="hint" data-i18n="vlsm.hint" style="margin:6px 0;white-space:pre-line"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+        <span data-i18n="vlsm.parent">母網段</span>
+        <input id="vlsm-parent" placeholder="10.10.0.0/22" style="width:150px">
+        <select id="vlsm-gwpos"><option value="first" data-i18n="vlsm.gw_first">閘道放網段開頭</option><option value="last" data-i18n="vlsm.gw_last">閘道放網段結尾</option></select>
+        <label><input type="checkbox" id="vlsm-vrrp"> <span data-i18n="vlsm.vrrp">同時建立 VRRP</span></label>
+        <label><input type="checkbox" id="vlsm-dhcp"> <span data-i18n="vlsm.dhcp">同時建立 DHCP 位址池</span></label>
+        <span data-i18n="vlsm.reserve">保留位址數</span><input id="vlsm-reserve" value="10" style="width:50px">
+        <span>DNS</span><input id="vlsm-dns" placeholder="192.0.2.53" style="width:120px">
+      </div>
+      <textarea id="vlsm-reqs" data-i18n-ph="ph.vlsmReqs" placeholder="10,Users,200" style="width:100%;height:90px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:12px"></textarea>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+        <button class="add-btn" data-i18n="vlsm.from_vlan" onclick="vlsmFromVlanTable()">從 VLAN 表帶入</button>
+        <button class="add-btn" data-i18n="vlsm.calc" onclick="vlsmCalc()">計算</button>
+        <button class="add-btn" id="vlsm-apply" data-i18n="vlsm.apply" onclick="vlsmApply()" disabled>套用到表單</button>
+      </div>
+      <div id="vlsm-result" style="margin-top:8px;font-size:12px"></div>
+    </details>
   </div>
 
   <div class="card">
