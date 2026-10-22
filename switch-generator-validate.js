@@ -545,3 +545,83 @@ function planVlsm(parent,reqs,opts){
   });
   return {rows,error:'',used,total};
 }
+
+// ── 自動化工具輸出（2026-10-22，第三十三輪 XN13）────────────────────────────
+// Ansible：只列出有官方維護 collection、且 *_config 模組支援 src 參數的廠牌（模組與連線方式依各 collection 原始碼查證；
+//   community.network 的 icx_config／exos_config 已標示不再維護、6.0.0 移除，不採用）。Juniper 用 netconf＋src_format text。
+// Netmiko：device_type 依 netmiko ssh_dispatcher.py 查證；Juniper（大括號格式無法逐行送出）與 SONiC（JSON）不提供。
+// 兩者都不寫入帳號密碼：Ansible 由 inventory 提供，Netmiko 由環境變數或執行時輸入；Netmiko 預設只印出指令，加 --apply 才推送
+const GEN_ANSIBLE = {
+  cisco: { module: 'cisco.ios.ios_config', os: 'cisco.ios.ios', conn: 'ansible.netcommon.network_cli', collection: 'cisco.ios' },
+  cisco_nxos: { module: 'cisco.nxos.nxos_config', os: 'cisco.nxos.nxos', conn: 'ansible.netcommon.network_cli', collection: 'cisco.nxos' },
+  arista: { module: 'arista.eos.eos_config', os: 'arista.eos.eos', conn: 'ansible.netcommon.network_cli', collection: 'arista.eos' },
+  'dell-os10': { module: 'dellemc.os10.os10_config', os: 'dellemc.os10.os10', conn: 'ansible.netcommon.network_cli', collection: 'dellemc.os10' },
+  aruba: { module: 'arubanetworks.aoscx.aoscx_config', os: 'arubanetworks.aoscx.aoscx', conn: 'ansible.netcommon.network_cli', collection: 'arubanetworks.aoscx' },
+  juniper: { module: 'junipernetworks.junos.junos_config', os: 'junipernetworks.junos.junos', conn: 'ansible.netcommon.netconf', collection: 'junipernetworks.junos', srcFormat: 'text' },
+};
+const GEN_NETMIKO = { cisco: 'cisco_xe', cisco_nxos: 'cisco_nxos', arista: 'arista_eos', 'dell-os10': 'dell_os10', aruba: 'aruba_aoscx', comware: 'hp_comware',
+  brocade: 'ruckus_fastiron', alcatel: 'alcatel_aos', extreme: 'extreme_exos', procurve: 'aruba_osswitch', routeros: 'mikrotik_routeros', ruijie: 'ruijie_os', edgeswitch: 'ubiquiti_edgeswitch' };
+// 送出的指令行：去掉空行與註解行（! 或 # 開頭，含免責提示與 Comware 的 # 區段分隔）
+function genAutomationLines(configText) {
+  return String(configText || '').replace(/\r\n/g, '\n').split('\n').filter(l => l.trim() && !/^\s*[!#]/.test(l));
+}
+const _genYamlStr = s => JSON.stringify(String(s));
+// notes：已翻譯的說明行（各行加 # 前綴）；回傳 {playbook, inventory} 或 null（不支援的廠牌）
+function buildAnsiblePlaybook(vendor, hostname, cfgFile, notes) {
+  const a = GEN_ANSIBLE[vendor];
+  if (!a) return null;
+  const host = String(hostname || 'switch');
+  const head = (notes || []).map(l => '# ' + l);
+  const playbook = [...head,
+    `# ansible-galaxy collection install ${a.collection}`,
+    `# ansible-playbook -i inventory.ini ${'push_' + host + '.yml'} --check --diff`,
+    '---',
+    `- name: ${_genYamlStr('Push generated configuration to ' + host)}`,
+    `  hosts: ${_genYamlStr(host)}`,
+    '  gather_facts: false',
+    `  connection: ${a.conn}`,
+    '  vars:',
+    `    ansible_network_os: ${a.os}`,
+    '  tasks:',
+    `    - name: ${_genYamlStr('Apply ' + cfgFile)}`,
+    `      ${a.module}:`,
+    `        src: ${_genYamlStr(cfgFile)}`,
+    ...(a.srcFormat ? [`        src_format: ${a.srcFormat}`] : []),
+    ''].join('\n');
+  const inventory = [...head, '[switches]', `${host} ansible_host=192.0.2.10 ansible_user=admin`, ''].join('\n');
+  return { playbook, inventory };
+}
+// 回傳 Python 腳本文字或 null；指令行以 JSON 字串陣列內嵌（JSON 字串字面值也是合法的 Python 字串）
+function buildNetmikoScript(vendor, hostname, configText, notes) {
+  const dt = GEN_NETMIKO[vendor];
+  if (!dt) return null;
+  const lines = genAutomationLines(configText);
+  return ['#!/usr/bin/env python3', '# -*- coding: utf-8 -*-', ...(notes || []).map(l => '# ' + l),
+    `# python ${'push_' + String(hostname || 'switch') + '.py'} <host>            # print commands only`,
+    `# python ${'push_' + String(hostname || 'switch') + '.py'} <host> --apply    # push (NET_USER / NET_PASSWORD or prompt)`,
+    'import argparse, getpass, os, sys', '',
+    `DEVICE_TYPE = ${JSON.stringify(dt)}`,
+    'LINES = [', ...lines.map(l => '    ' + JSON.stringify(l) + ','), ']', '',
+    'def main():',
+    '    ap = argparse.ArgumentParser()',
+    "    ap.add_argument('host')",
+    "    ap.add_argument('-u', '--username', default=os.environ.get('NET_USER'))",
+    "    ap.add_argument('--apply', action='store_true')",
+    "    ap.add_argument('--no-save', action='store_true')",
+    '    args = ap.parse_args()',
+    '    if not args.apply:',
+    "        print('\\n'.join(LINES))",
+    "        print('# %d lines; add --apply to push' % len(LINES), file=sys.stderr)",
+    '        return',
+    '    from netmiko import ConnectHandler',
+    "    user = args.username or input('Username: ')",
+    "    pw = os.environ.get('NET_PASSWORD') or getpass.getpass('Password: ')",
+    '    with ConnectHandler(device_type=DEVICE_TYPE, host=args.host, username=user, password=pw) as conn:',
+    '        print(conn.send_config_set(LINES, read_timeout=120))',
+    '        if not args.no_save:',
+    '            try:',
+    '                print(conn.save_config())',
+    '            except NotImplementedError:',
+    "                print('# save_config() is not supported for this device type; save the configuration manually', file=sys.stderr)",
+    '', "if __name__ == '__main__':", '    main()', ''].join('\n');
+}

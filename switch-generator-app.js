@@ -1545,6 +1545,7 @@ const CLASSMAP_VENDOR_TYPES={
 const CLASSMAP_TYPE_I18N={'access-group':'opt.cmapAccessGroup',dscp:'opt.cmapDscp',protocol:'opt.cmapProtocol','ip-precedence':'opt.cmapIpPrecedence',cos:'opt.cmapCos',vlan:'opt.cmapVlan'};
 
 function updateModeOptions(){
+  refreshAutomationButtons();
   const vendor=currentVendor();
   // VLAN IP 欄位（withSviInterfaces()）：SONiC/EdgeSwitch/RouterOS 三家不支援，vendor 切換時
   // 重新評估全部既有 VLAN 列的停用狀態＋提示文字
@@ -4936,6 +4937,36 @@ window.addEventListener('load',function(){
   }
 });
 
+// 自動化工具輸出（第三十三輪 XN13）：buildAnsiblePlaybook()／buildNetmikoScript() 在 switch-generator-validate.js；
+// 不支援的廠牌隱藏按鈕（Ansible 只有官方維護 *_config 模組的廠牌、Netmiko 依 device_type）
+function refreshAutomationButtons(){
+  const v=currentVendor();
+  const a=document.getElementById('ansible-btn'),n=document.getElementById('netmiko-btn');
+  if(a)a.style.display=GEN_ANSIBLE[v]?'':'none';
+  if(n)n.style.display=GEN_NETMIKO[v]?'':'none';
+}
+function _autoNotes(){return [tr('auto.note_source'),tr('auto.note_check')];}
+function downloadAnsible(){
+  const t=document.getElementById('output').value;
+  if(!t)return;
+  const host=sanitizeZipEntryName(document.getElementById('hostname').value.trim()||'switch');
+  const cfgFile=host+'.cfg';
+  const r=buildAnsiblePlaybook(currentVendor(),host,cfgFile,_autoNotes());
+  if(!r)return;
+  const files={[cfgFile]:t,['push_'+host+'.yml']:r.playbook,'inventory.example.ini':r.inventory};
+  const manifest='file,description\n'+[[cfgFile,tr('auto.f_cfg')],['push_'+host+'.yml',tr('auto.f_playbook')],['inventory.example.ini',tr('auto.f_inventory')]]
+    .map(([f,d])=>csvCell(f)+','+csvCell(d)).join('\n')+'\n';
+  downloadFile(createZip(files,manifest),host+'_ansible.zip','application/zip');
+}
+function downloadNetmiko(){
+  const t=document.getElementById('output').value;
+  if(!t)return;
+  const host=sanitizeZipEntryName(document.getElementById('hostname').value.trim()||'switch');
+  const py=buildNetmikoScript(currentVendor(),host,t,_autoNotes());
+  if(!py)return;
+  const b=new Blob([py],{type:'text/x-python;charset=utf-8'}),url=URL.createObjectURL(b),a=document.createElement('a');
+  a.href=url;a.download='push_'+host+'.py';a.click();URL.revokeObjectURL(url);
+}
 function downloadOutput(){
   const t=document.getElementById('output').value;
   if(!t)return;
