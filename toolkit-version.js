@@ -119,4 +119,9 @@
     try { lang = localStorage.getItem('cw_lang') || ''; } catch (e) {}
     renderToolkitVersion(lang || 'zhTW');
   });
+  // 離線使用（第三十三輪 XN2）：只在 https 且非本機開發主機時註冊 sw.js（GitHub Pages 或自架 https 站）；
+  // file:// 與 localhost 不註冊，避免開發時讀到快取的舊模組。sw.js 不存在（工具各自的 result／dist 單檔）時註冊失敗、忽略
+  if ('serviceWorker' in navigator && location.protocol === 'https:' && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+    window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+  }
 })();
