@@ -224,14 +224,15 @@ const App = (() => {
     if (r.ambiguous.length) notes.push(tr('hit.ambiguous').replace('{list}', r.ambiguous.join(', ')));
     if (notes.length) h += `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${notes.map(esc).join('<br>')}</div>`;
     const list = r.rows.filter(x => x.kind !== 'ok');
-    if (!list.length) return h + `<div style="font-size:12px;color:var(--green)">${esc(tr('hit.none'))}</div>` + _fwReorderHtml();
+    if (!list.length) return h + `<div style="font-size:12px;color:var(--green)">${esc(tr('hit.none'))}</div>`;
     h += `<table class="data-tbl"><thead><tr><th>ID</th><th>${esc(tr('hit.col_name'))}</th>${PARSED._isMultiVdom ? '<th>VDOM</th>' : ''}<th>${esc(tr('hit.col_action'))}</th><th>${esc(tr('hit.col_hits'))}</th><th>${esc(tr('hit.col_last'))}</th><th>${esc(tr('hit.col_result'))}</th></tr></thead><tbody>` +
       list.map(x => `<tr><td>${esc(x.id)}</td><td>${esc(x.name)}</td>${PARSED._isMultiVdom ? `<td>${esc(x.vdom)}</td>` : ''}<td>${esc(x.action)}</td><td>${x.hits}</td><td>${esc(fmt(x.lastUsed))}</td><td>${pill(tr(x.kind === 'zero' ? 'hit.kind_zero' : 'hit.kind_stale').replace('{days}', _fwHit.days), x.kind === 'zero' ? 'p-warn' : 'p-info')}</td></tr>`).join('') +
       '</tbody></table>' +
       `<div style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="window._fwHitCsv()">${esc(tr('hit.csv_btn'))}</button></div>`;
-    return h + _fwReorderHtml();
+    return h;
   }
-  // 規則安全重排建議（第三十三輪 XN8）：analyzeHitReorder()／buildFortiGateReorderScript() 在 audit.js
+  // 規則安全重排建議（第三十三輪 XN8）：analyzeHitReorder()／buildFortiGateReorderScript() 在 audit.js；
+  // 放在獨立的 #reorder-result，不放進 #hit-result（smoke 以其 tbody 列數判斷命中數結果）
   function _fwReorderHtml() {
     const ro = _fwHit.res ? analyzeHitReorder(PARSED, _fwHit.res) : null;
     if (!ro || !ro.supported) return '';
@@ -261,6 +262,7 @@ const App = (() => {
         <button class="btn btn-ghost btn-sm" onclick="window._fwHitRun()">${esc(tr('hit.run_btn'))}</button>
       </div>
       <div id="hit-result">${_fwHitResultHtml()}</div>
+      <div id="reorder-result">${_fwReorderHtml()}</div>
     </div>`;
   }
   window._fwHitRun = function() {
@@ -271,6 +273,8 @@ const App = (() => {
     _fwHit.res = _fwHit.hc && _fwHit.hc.format ? analyzeRuleHitCounts(PARSED, _fwHit.hc, { days: _fwHit.days }) : null;
     const box = document.getElementById('hit-result');
     if (box) box.innerHTML = _fwHitResultHtml();
+    const ro = document.getElementById('reorder-result');
+    if (ro) ro.innerHTML = _fwReorderHtml();
   };
   window._fwHitCsv = function() {
     if (!_fwHit.res) return;
