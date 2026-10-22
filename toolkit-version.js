@@ -3,8 +3,25 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.10.21';
+  const TOOLKIT_VERSION = '2026.10.22';
   const CHANGELOG = [
+    {
+      version: '2026.10.22',
+      items: {
+        zhTW: [
+          '交換器分析：終端定位頁可貼上 show interfaces／display interface，找出 CRC、碰撞、半雙工等實體層問題',
+          '交換器分析：資產清冊可匯入自備的韌體支援期限（EoS／EoL）CSV，列出已過期或即將到期的設備',
+          'log 分析：自訂規則可匯出 Sigma YAML，IOC 可匯出 STIX 2.1 與 MISP 格式',
+          '交換器產生器：VLAN 卡片新增 VLSM 子網規劃，依主機數切子網並一鍵填入 VLAN、VRRP 與 DHCP',
+        ],
+        en: [
+          'Switch analyzer: paste show interfaces / display interface output on the endpoint page to find CRC, collision, half-duplex and other physical-layer problems',
+          'Switch analyzer: import your own firmware end-of-sale / end-of-support CSV on the inventory page to list expired or soon-to-expire devices',
+          'Log analyzer: export custom rules as Sigma YAML and IOCs as STIX 2.1 or MISP',
+          'Switch generator: VLSM subnet planner in the VLAN card carves subnets by host count and fills VLAN, VRRP and DHCP in one click',
+        ],
+      },
+    },
     {
       version: '2026.10.21',
       items: {
