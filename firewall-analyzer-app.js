@@ -1570,6 +1570,7 @@ function onParsed(){
           .map(s => s.trim()).filter(s => s && s !== '-' && !/^(any|all)$/i.test(s)))].sort();
         $('tbl-wrap').innerHTML = buildQuerySectionHtml(_qvdoms, PARSED.vendor === 'FortiGate', _qintfs, (PARSED.policies || []).map((p, i) => ({ idx: i, label: _wiRuleLabel(p) })));
         _wiRenderList();
+        _pcRenderDevices();
         $('tbl-section-label').textContent = tr('nav.query');
         if (_sv.src) { const _e=$('q-src'); if(_e) _e.value=_sv.src; }
         if (_sv.dst) { const _e=$('q-dst'); if(_e) _e.value=_sv.dst; }
@@ -2528,6 +2529,74 @@ function onParsed(){
   function _wiRuleLabel(p) {
     return `${p._vdom ? p._vdom + ' / ' : ''}#${p.id}${p.name && p.name !== '-' && String(p.name) !== String(p.id) ? ' ' + p.name : ''} (${p.action}${_isDisabledStatus(p) ? ', ' + tr('whatif.disabled') : ''})`;
   }
+  // ── 多台防火牆路徑查詢（2026-10-22，第三十三輪 XN7）：設備另外上傳、各自解析（FW_DIFF_PARSERS），只存在記憶體，
+  // 與主上傳區無關；路徑引擎 FwPath.trace()（pathchain.js），畫面組裝在 sections.js
+  const _pc = { devices: [], last: null };
+  function _pcParse(d) {
+    d.error = false; d.parsed = null;
+    if (!FW_DIFF_PARSERS[d.vendorKey]) return;
+    try { d.parsed = FW_DIFF_PARSERS[d.vendorKey](d.text); } catch (e) { d.error = true; }
+    const hn = d.parsed && d.parsed.deviceInfo && d.parsed.deviceInfo.hostname;
+    d.name = hn && hn !== '-' ? hn : d.fileName;
+  }
+  function _pcRenderDevices() {
+    const box = $('pc-devices'); if (!box) return;
+    box.innerHTML = buildPathChainDevicesHtml(_pc.devices, [{ key: '', label: tr('pc.pick_vendor') }].concat(FW_VENDOR_META));
+    const st = $('pc-start');
+    if (st) {
+      const cur = st.value;
+      st.innerHTML = `<option value="">${esc(tr('pc.start_auto'))}</option>` + _pc.devices.map((d, i) => `<option value="${i}">${esc(tr('pc.start_from').replace('{name}', d.name))}</option>`).join('');
+      if (cur !== '' && +cur < _pc.devices.length) st.value = cur;
+    }
+    if (_pc.last && $('pc-result')) $('pc-result').innerHTML = buildPathChainResultHtml(_pc.last.r);
+  }
+  window._pcAddFiles = async function(input) {
+    const files = [...(input.files || [])]; input.value = '';
+    for (const f of files) {
+      const text = (await readFile(f)).replace(/^﻿/, '').replace(/\r\n/g, '\n');
+      const det = detectFwVendor(text);
+      const d = { fileName: f.name, text, vendorKey: FW_DIFF_PARSERS[det] ? det : '', name: f.name };
+      _pcParse(d);
+      _pc.devices.push(d);
+    }
+    _pc.last = null; if ($('pc-result')) $('pc-result').innerHTML = '';
+    if ($('pc-msg')) $('pc-msg').textContent = tr('pc.loaded').replace('{n}', _pc.devices.length);
+    _pcRenderDevices();
+  };
+  window._pcSetVendor = function(i, key) { const d = _pc.devices[i]; if (!d) return; d.vendorKey = key; _pcParse(d); _pc.last = null; if ($('pc-result')) $('pc-result').innerHTML = ''; _pcRenderDevices(); };
+  window._pcRemove = function(i) { _pc.devices.splice(i, 1); _pc.last = null; if ($('pc-result')) $('pc-result').innerHTML = ''; _pcRenderDevices(); };
+  window._pcClear = function() { _pc.devices = []; _pc.last = null; if ($('pc-result')) $('pc-result').innerHTML = ''; if ($('pc-msg')) $('pc-msg').textContent = ''; _pcRenderDevices(); };
+  window._pcRun = function() {
+    const out = $('pc-result'); if (!out) return;
+    const devs = _pc.devices.filter(d => d.parsed).map(d => ({ name: d.name, parsed: d.parsed }));
+    if (!devs.length) { out.innerHTML = buildPathChainResultHtml({ error: 'no_devices' }); return; }
+    const sv = $('pc-start').value;
+    // 起點選單的索引是全部設備；未解析的設備不參與，換算成可用設備的索引
+    const startDev = sv === '' ? null : _pc.devices[+sv];
+    const start = startDev ? devs.findIndex(d => d.parsed === startDev.parsed) : null;
+    if (startDev && start < 0) { out.innerHTML = buildPathChainResultHtml({ error: 'start_unparsed' }); return; }
+    const q = { src: $('pc-src').value.trim(), dst: $('pc-dst').value.trim(), proto: $('pc-proto').value, port: $('pc-port').value.trim(), start };
+    const r = FwPath.trace(devs, q);
+    _pc.last = r.error ? null : { q, r };
+    out.innerHTML = buildPathChainResultHtml(r);
+  };
+  window._pcExport = function(fmt) {
+    if (!_pc.last) return;
+    const { q, r } = _pc.last;
+    const rule = x => x ? `#${x.id}${x.name && String(x.name) !== String(x.id) ? ' ' + x.name : ''}` : tr('pc.implicit_deny');
+    const rows = r.hops.map((h, i) => [i + 1, h.device, h.ingress || '-', h.dst, h.dnat ? h.dnat.toIp + (h.dnat.toPort ? ':' + h.dnat.toPort : '') : '',
+      h.action === 'noRoute' ? '-' : rule(h.rule), tr('pc.act_' + h.action), h.egress || '-',
+      h.nextDevice || (h.route ? (h.route.connected ? tr('pc.connected') : (h.route.gateway || '-')) : '-'), [h.snat ? tr('pc.note_snat') : '', h.uncertain ? tr('pc.note_uncertain') : ''].filter(Boolean).join('; ')]);
+    const head = ['#', tr('pc.col_device'), tr('pc.col_ingress'), tr('pc.col_dst'), 'DNAT', tr('pc.col_rule'), tr('pc.col_action'), tr('pc.col_egress'), tr('pc.col_next'), tr('pc.col_notes')];
+    const base = 'path_' + q.src.replace(/[^\w.]/g, '_') + '_to_' + q.dst.replace(/[^\w.]/g, '_');
+    if (fmt === 'csv') { Reporter.download(Reporter.toCSV(rows, head), base + '.csv', 'text/csv'); return; }
+    const md = s => String(s).replace(/\|/g, '\\|');
+    const L = [`# ${tr('pc.title')}`, '', `${q.src} → ${q.dst} ${q.proto}${q.port ? '/' + q.port : ''}`, '', `**${tr('pc.res_' + r.result.kind).replace('{device}', r.result.device || '').replace('{egress}', r.result.egress || '-')
+      .replace('{owner}', r.result.owner || '').replace('{nextHop}', r.result.nextHop || tr('pc.no_nexthop')).replace('{dst}', r.result.dst || '').replace('{rule}', rule(r.result.rule))}**`, '',
+      '| ' + head.join(' | ') + ' |', '|' + head.map(() => '---').join('|') + '|', ...rows.map(x => '| ' + x.map(md).join(' | ') + ' |'), '',
+      `> ${tr('pc.warn_route')}`, `> ${tr('pc.warn_snat')}`, `> ${tr('pc.warn_link')}`, `> ${tr('pc.warn_scope')}`, ''];
+    Reporter.download(L.join('\n'), base + '.md', 'text/markdown');
+  };
   function _wiRenderList() {
     const el = $('wi-list'); if (!el) return;
     const pols = (PARSED && PARSED.policies) || [];

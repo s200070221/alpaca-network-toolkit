@@ -291,6 +291,16 @@ const PaloAltoParser = (() => {
       });
     }
 
+    // 介面所屬區域（2026-10-22，XN7 多台路徑查詢）：vsys 的 <zone><entry name="區域"><network><layer3><member>介面</member>，
+    // 規則以區域名稱表示，路徑查詢需要知道進入／出口介面的區域
+    const zoneOf = {};
+    for (const zm of String(text).matchAll(/<zone>([\s\S]*?)<\/zone>/g)) {
+      xentriesTop(zm[1]).forEach(z => {
+        const l3 = (z._inner.match(/<layer3>([\s\S]*?)<\/layer3>/) || [])[1] || '';
+        for (const m of l3.matchAll(/<member>([^<]+)<\/member>/g)) zoneOf[m[1].trim()] = z._name;
+      });
+    }
+    ifaces.forEach(i => { if (zoneOf[i.name]) i.zone = zoneOf[i.name]; });
     return ifaces;
   }
 
