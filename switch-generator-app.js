@@ -134,6 +134,82 @@ function addVlanRange(){
   if(added)inp.value='';
 }
 
+// VLSM 子網規劃（2026-10-21，第三十三輪 XN12）：parseVlsmReqs()／planVlsm() 在 switch-generator-validate.js。
+// 套用時比照用途範本（applyRolePreset 的 agg）：有 VRRP 時 VLAN 表的 IP 留空、SVI IP 只寫在 VRRP 列，
+// VRID 用 VLAN ID（超過 255 時用 1）；同一 VLAN 已有的列直接更新，沒有才新增
+let _vlsmPlan=null;
+function _vlsmOpts(){
+  return {vrrp:document.getElementById('vlsm-vrrp').checked,dhcp:document.getElementById('vlsm-dhcp').checked,
+    reserve:document.getElementById('vlsm-reserve').value,gwPos:document.getElementById('vlsm-gwpos').value,
+    dns:document.getElementById('vlsm-dns').value.trim()};
+}
+function vlsmFromVlanTable(){
+  const lines=rowsOf('#vlan-body tr').map(r=>[val(r,'v-id'),val(r,'v-name')]).filter(([id])=>id).map(([id,name])=>`${id},${name},`);
+  if(lines.length)document.getElementById('vlsm-reqs').value=lines.join('\n');
+  document.getElementById('vlsm-result').textContent=lines.length?tr('vlsm.fill_hosts'):tr('vlsm.no_vlans');
+}
+function vlsmCalc(){
+  const out=document.getElementById('vlsm-result'), btn=document.getElementById('vlsm-apply');
+  const opts=_vlsmOpts();
+  const pr=parseVlsmReqs(document.getElementById('vlsm-reqs').value);
+  const plan=planVlsm(document.getElementById('vlsm-parent').value,pr.reqs,opts);
+  _vlsmPlan=null;btn.disabled=true;
+  let h=pr.errors.map(e=>`<div style="color:var(--red,#dc2626)">${esc(tr('vlsm.err_'+e.reason).replace('{n}',e.line))}</div>`).join('');
+  if(plan.error){out.innerHTML=h+`<div style="color:var(--red,#dc2626)">${esc(tr('vlsm.err_'+plan.error))}</div>`;return;}
+  if(!plan.rows.length){out.innerHTML=h+`<div>${esc(tr('vlsm.no_reqs'))}</div>`;return;}
+  const ok=plan.rows.filter(r=>!r.error);
+  h+=`<div style="margin:4px 0">${esc(tr('vlsm.summary').replace('{used}',plan.used).replace('{total}',plan.total).replace('{n}',ok.length))}</div>`;
+  h+=`<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>VLAN</th><th>${esc(tr('th.vlanName'))}</th><th>${esc(tr('vlsm.col_hosts'))}</th><th>${esc(tr('vlsm.col_network'))}</th><th>${esc(tr('vlsm.col_svi'))}</th>`+
+    (opts.vrrp?`<th>VIP</th><th>${esc(tr('vlsm.col_peer'))}</th>`:'')+(opts.dhcp?`<th>${esc(tr('vlsm.col_dhcp'))}</th>`:'')+`<th>${esc(tr('vlsm.col_spare'))}</th></tr></thead><tbody>`+
+    plan.rows.map(r=>r.error?`<tr><td>${esc(r.vlan)}</td><td>${esc(r.name)}</td><td>${esc(r.hosts)}</td><td colspan="9" style="color:var(--red,#dc2626)">${esc(tr('vlsm.err_space'))}</td></tr>`:
+      `<tr><td>${esc(r.vlan)}</td><td>${esc(r.name)}</td><td>${esc(r.hosts)}</td><td>${esc(r.network)}</td><td>${esc(r.svi)}</td>`+
+      (opts.vrrp?`<td>${esc(r.vip)}</td><td>${esc(r.peer)}</td>`:'')+(opts.dhcp?`<td>${esc(r.dhcpStart?r.dhcpStart+' - '+r.dhcpEnd:'-')}</td>`:'')+`<td>${esc(r.spare)}</td></tr>`).join('')+'</tbody></table></div>';
+  out.innerHTML=h;
+  if(ok.length&&!pr.errors.length){_vlsmPlan={rows:ok,opts};btn.disabled=false;}
+}
+function vlsmApply(){
+  if(!_vlsmPlan)return;
+  const {rows,opts}=_vlsmPlan;
+  const vrrpOn=opts.vrrp&&_cardUsable('vrrp-card','vrrp')&&!_unsupported('vrrp');
+  const dhcpOn=opts.dhcp&&_cardUsable('dhcp-server-card','dhcpServer')&&!_unsupported('dhcpServer');
+  const findRow=(sel,cls,v)=>rowsOf(sel).find(r=>val(r,cls)===String(v));
+  // 只剩一列空白預設列時先移除，避免留下空的 VLAN 列（比照 addVlanRange()）
+  const vrows=rowsOf('#vlan-body tr');
+  if(vrows.length===1&&['v-id','v-name','v-ip'].every(c=>!val(vrows[0],c)))vrows[0].remove();
+  let nv=0,nr=0,nd=0;
+  rows.forEach(p=>{
+    const ip=vrrpOn?'':p.svi;
+    const vr=findRow('#vlan-body tr','v-id',p.vlan);
+    if(vr){vr.querySelector('.v-ip').value=ip;if(p.name&&!val(vr,'v-name'))vr.querySelector('.v-name').value=p.name;updateVlanIpAvailability(vr);}
+    else addVlanRow(String(p.vlan),p.name,ip);
+    nv++;
+    if(vrrpOn){
+      const vrid=p.vlan<=255?String(p.vlan):'1';
+      const rr=findRow('#vrrp-body tr','vr-vlan',p.vlan);
+      if(rr){rr.querySelector('.vr-ip').value=p.svi;rr.querySelector('.vr-vip').value=p.vip;if(!val(rr,'vr-id'))rr.querySelector('.vr-id').value=vrid;}
+      else addVrrpRow(String(p.vlan),p.svi,vrid,p.vip);
+      nr++;
+    }
+    if(dhcpOn&&p.dhcpStart){
+      const name='VLAN'+p.vlan;
+      const dr=findRow('#dhcp-pool-body tr','dp-name',name)||findRow('#dhcp-pool-body tr','dp-network',p.network);
+      if(dr){
+        dr.querySelector('.dp-network').value=p.network;dr.querySelector('.dp-gateway').value=p.gateway;
+        dr.querySelector('.dp-range-start').value=p.dhcpStart;dr.querySelector('.dp-range-end').value=p.dhcpEnd;
+        if(opts.dns)dr.querySelector('.dp-dns').value=opts.dns;
+      }else addDhcpPoolRow(name,p.network,p.gateway,opts.dns,p.dhcpStart+'-'+p.dhcpEnd);
+      nd++;
+    }
+  });
+  let msg=tr('vlsm.applied').replace('{v}',nv).replace('{r}',nr).replace('{d}',nd);
+  if(opts.vrrp&&!vrrpOn)msg+=' '+tr('vlsm.vrrp_unsupported');
+  if(opts.dhcp&&!dhcpOn)msg+=' '+tr('vlsm.dhcp_unsupported');
+  const hint=SVI_UNSUPPORTED_HINT_KEY[currentVendor()];
+  if(hint&&!vrrpOn)msg+=' '+tr(hint);
+  document.getElementById('vlsm-result').insertAdjacentHTML('beforeend',`<div style="margin-top:6px;color:var(--green,#059669)">${esc(msg)}</div>`);
+  if(typeof refreshCardFold==='function')refreshCardFold();
+}
+
 // VLAN IP（withSviInterfaces()／switch-generator-core.js）不支援的 2 家廠牌：SONiC 已有自己
 // 專屬的「SONiC L3 介面 IP」卡片；EdgeSwitch 因裝置架構限制（VLAN Routing 邏輯介面 ID 由裝置
 // 動態配置產生，無法靜態預測，CLAUDE.md 已記載既有限制）。RouterOS 已於 2026-09-09 補上對應
