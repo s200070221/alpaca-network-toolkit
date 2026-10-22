@@ -62,6 +62,8 @@ function epCmdKind(cmd) {
   if (/^(sh|show) mac(-| )address-table\b/.test(c) || /^(dis|display) mac-address\b/.test(c)) return 'mac';
   if (/^(sh|show) (ip )?arp\b/.test(c) || /^(dis|display) arp\b/.test(c)) return 'arp';
   if (/^(sh|show) int(erfaces?)? status\b/.test(c) || /^(dis|display) int(erface)? brief\b/.test(c)) return 'status';
+  // 光模組 DOM（XN5）：show interfaces transceiver [detail]（Cisco IOS／Arista）／show interface transceiver details（NX-OS）
+  if (/^(sh|show) int(erfaces?)? transceiver( det(ails?)?)?$/.test(c)) return 'optics';
   // 完整介面輸出（計數器）：show interfaces／show interface（NX-OS）／display interface，可接單一介面名稱；
   // 接 trunk／description／transceiver 等其他子指令時不算
   if (/^(sh|show) int(erfaces?)?( [a-z][a-z\-]*\d[\d\/:.]*)?$/.test(c) || /^(dis|display) int(erface)?( [a-z][a-z\-]*\d[\d\/:.]*)?$/.test(c)) return 'counters';
@@ -185,6 +187,92 @@ function epPhySummary(c) {
   return p.join(' · ');
 }
 
+// ── 光模組 DOM（2026-10-22，第三十三輪 XN5）──────────────────────────────────
+// 格式依 ntc-templates（Apache-2.0）測試資料中的真實輸出查證（副本 test_config/ntc_*transceiver*.txt）：
+//   Cisco IOS／IOS-XE `show interfaces transceiver`：單一表格（Temperature／Voltage／[Current]／Tx／Rx），沒有門檻值，
+//     超出時裝置在數值後加 ++（高告警）／+（高警告）／-（低警告）／--（低告警）
+//   NX-OS `show interface transceiver details`：每埠一段（介面名稱獨占一行），每項一列「目前值 [旗標] 高告警 低告警 高警告 低警告」，
+//     多通道模組另有 Lane Number
+//   Arista `show interfaces transceiver detail`：每個項目一張表，欄位為「目前值 高告警 高警告 低告警 低警告」（順序與 NX-OS 不同）
+// 判斷只用裝置自帶的門檻與旗標，不內建任何數值；超出告警門檻或旗標 ++／-- 為 alarm，超出警告門檻或 +／- 為 warn
+const EP_OPT_METRICS = { temperature: 'temp', voltage: 'volt', current: 'curr', 'tx power': 'tx', 'rx power': 'rx' };
+const EP_OPT_UNITS = { temp: '°C', volt: 'V', curr: 'mA', tx: 'dBm', rx: 'dBm' };
+const EP_OPT_FLAG = { '++': ['alarm', 'high'], '+': ['warn', 'high'], '--': ['alarm', 'low'], '-': ['warn', 'low'] };
+function _epOptNum(s) { return /^-?\d+(\.\d+)?$/.test(s) ? Number(s) : null; }
+function epParseOptics(lines) {
+  const byPort = new Map(), out = [];
+  const get = port => { if (!byPort.has(port)) { const o = { port }; byPort.set(port, o); out.push(o); } return byPort.get(port); };
+  let iosCols = null, nxPort = null, nxLane = '', aristaMetric = null;
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, '');
+    if (!line.trim()) continue;
+    let m;
+    // Cisco IOS：欄位標題列決定有沒有 Current 欄
+    if (/^\s*Temperature\s+Voltage\b/i.test(line)) { iosCols = /Current/i.test(line) ? ['temp', 'volt', 'curr', 'tx', 'rx'] : ['temp', 'volt', 'tx', 'rx']; continue; }
+    // Arista：每張表第二列標題「<項目> Threshold Threshold…」
+    if ((m = line.match(/^\s+(Temperature|Voltage|Current|Tx Power|Rx Power)\s+Threshold\b/i))) { aristaMetric = EP_OPT_METRICS[m[1].toLowerCase()]; iosCols = null; continue; }
+    // NX-OS：介面名稱獨占一行（不縮排）開始新的一段
+    if ((m = line.match(/^(Ethernet\S+|Eth\S+)$/))) { nxPort = m[1]; nxLane = ''; iosCols = null; aristaMetric = null; continue; }
+    if (nxPort && (m = line.match(/Lane Number:\s*(\d+)/i))) { nxLane = m[1]; continue; }
+    if (nxPort && (m = line.match(/^\s+(Temperature|Voltage|Current|Tx Power|Rx Power)\s+(N\/?A|-?\d+(?:\.\d+)?)\s*(?:C|V|mA|dBm)?\s*(\+\+|--|\+|-)?\s+(-?\d+(?:\.\d+)?)\s*\S*\s+(-?\d+(?:\.\d+)?)\s*\S*\s+(-?\d+(?:\.\d+)?)\s*\S*\s+(-?\d+(?:\.\d+)?)/i))) {
+      const o = get(nxLane ? `${nxPort} (lane ${nxLane})` : nxPort);
+      o[EP_OPT_METRICS[m[1].toLowerCase()]] = { v: _epOptNum(m[2]), flag: m[3] || '', ha: +m[4], la: +m[5], hw: +m[6], lw: +m[7] };
+      continue;
+    }
+    if (/^-+(\s+-+)*$/.test(line.trim()) || /^\s*Port\b/i.test(line)) continue;
+    const toks = line.trim().split(/\s+/);
+    if (!EP_IFACE_TOKEN_RE.test(toks[0])) continue;
+    if (aristaMetric) {
+      // 目前值後面可能有括號內的 A2D 讀值，略過
+      const rest = toks.slice(1).filter(t => !/^\(.*\)$/.test(t));
+      if (rest.length >= 5) get(toks[0])[aristaMetric] = { v: _epOptNum(rest[0]), flag: '', ha: +rest[1], hw: +rest[2], la: +rest[3], lw: +rest[4] };
+      continue;
+    }
+    if (iosCols) {
+      // 數值後的旗標可能是獨立欄位（-3.0 --）或緊接數值（-40.0--）
+      const vals = [];
+      for (const t of toks.slice(1)) {
+        if (EP_OPT_FLAG[t] && vals.length) { vals[vals.length - 1].flag = t; continue; }
+        const x = t.match(/^(N\/?A|-?\d+(?:\.\d+)?)(\+\+|--|\+|-)?$/i);
+        if (x) vals.push({ v: _epOptNum(x[1]), flag: x[2] || '' });
+      }
+      if (vals.length !== iosCols.length) continue;
+      const o = get(toks[0]);
+      iosCols.forEach((k, i) => { o[k] = { v: vals[i].v, flag: vals[i].flag, ha: null, la: null, hw: null, lw: null }; });
+    }
+  }
+  return out;
+}
+// 單一項目判斷：回傳 {level:'alarm'|'warn', dir:'high'|'low'} 或 null；門檻缺漏（null／NaN）時只看旗標
+function epOptLevel(x) {
+  if (!x) return null;
+  const ok = n => typeof n === 'number' && !isNaN(n);
+  let res = null;
+  const set = (level, dir) => { if (!res || (level === 'alarm' && res.level === 'warn')) res = { level, dir }; };
+  if (EP_OPT_FLAG[x.flag]) set(...EP_OPT_FLAG[x.flag]);
+  if (x.v !== null && x.v !== undefined) {
+    if (ok(x.ha) && x.v > x.ha) set('alarm', 'high'); else if (ok(x.la) && x.v < x.la) set('alarm', 'low');
+    else if (ok(x.hw) && x.v > x.hw) set('warn', 'high'); else if (ok(x.lw) && x.v < x.lw) set('warn', 'low');
+  }
+  return res;
+}
+// 有告警的埠為 high、只有警告為 medium；回傳 [{device, port, severity, findings:[{metric, level, dir, v, unit, ha, la, hw, lw}]}]
+function epOpticsIssues(model) {
+  const rows = [];
+  for (const d of (model && model.devices) || []) {
+    for (const o of d.optics || []) {
+      const findings = [];
+      for (const k of ['rx', 'tx', 'temp', 'volt', 'curr']) {
+        const lv = epOptLevel(o[k]);
+        if (lv) findings.push(Object.assign({ metric: k, unit: EP_OPT_UNITS[k] }, lv, o[k]));
+      }
+      if (findings.length) rows.push({ device: d.name, port: o.port, severity: findings.some(f => f.level === 'alarm') ? 'high' : 'medium', findings });
+    }
+  }
+  rows.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'high' ? -1 : 1));
+  return rows;
+}
+
 // Cisco show interfaces status 的 Status 欄位可能值（含被截斷的寫法）
 // Name 欄位用貪婪比對，取「最後一個」狀態關鍵字，避免描述文字內剛好含 up／down 被誤判
 const EP_CISCO_STATUS_RE = /^(\S+)\s+(?:(.*\S)\s+)?(connected|notconnect|notconnec|disabled|err-disabled|err-disable|inactive|monitoring|suspended|sfpAbsent|xcvrAbsen|xcvrAbsent|noOperMem|linkFlapE|channelDo|down|up)\s+(\S+)\s+(\S+)\s+(\S+)\s*(.*)$/;
@@ -241,7 +329,7 @@ function parseEndpointText(text) {
   const byName = {};
   const getDev = name => {
     const key = name.toLowerCase();
-    if (!byName[key]) { byName[key] = { name, macs: [], arps: [], ports: [], counters: [], _cntLines: [] }; devices.push(byName[key]); }
+    if (!byName[key]) { byName[key] = { name, macs: [], arps: [], ports: [], counters: [], optics: [], _cntLines: [], _optLines: [] }; devices.push(byName[key]); }
     return byName[key];
   };
   let dev = null, kind = 'auto', inBridgeBrief = false;
@@ -251,10 +339,16 @@ function parseEndpointText(text) {
     for (const re of EP_PROMPT_RES) { pm = line.match(re); if (pm) break; }
     if (pm) { dev = getDev(pm[1]); kind = epCmdKind(pm[2]); inBridgeBrief = false; continue; }
     if (kind === 'counters') { (dev || getDev('device-1'))._cntLines.push(line); continue; }
+    if (kind === 'optics') { (dev || getDev('device-1'))._optLines.push(line); continue; }
     if (!line.trim()) continue;
     if (kind === 'other') continue;
     // 沒有提示字元時，看到計數器區塊開頭就把之後的內容都當計數器輸出（避免「address is …」等行被誤判成 MAC 表）
     if (kind === 'auto') {
+      // 沒有提示字元時以光模組輸出的特徵行判斷（IOS 旗標說明、NX-OS transceiver is present、Arista 門檻表頭）
+      if (/^\+\+ : high alarm/.test(line.trim()) || /^\s*transceiver is present/i.test(line) || /High Alarm\s+High Warn/i.test(line) ||
+        (/^(Ethernet|Eth)\S+$/.test(line) && /transceiver is/i.test(lines[li + 1] || ''))) {
+        kind = 'optics'; (dev || getDev('device-1'))._optLines.push(line); continue;
+      }
       const hm = line.match(EP_CNT_HEAD_RE);
       const isHead = (hm && EP_IFACE_TOKEN_RE.test(hm[1]) && /line protocol|^\s*$|\(/.test(hm[3] + ' ')) ||
         (EP_IFACE_TOKEN_RE.test(line.trim()) && /^\s*Current state:/i.test(lines[li + 1] || '')) ||
@@ -272,8 +366,8 @@ function parseEndpointText(text) {
       if (r && (!EP_COMWARE_BRIEF_RE.test(line) || inBridgeBrief || kind === 'auto')) d.ports.push(r);
     }
   }
-  for (const d of devices) { d.counters = epParseCounters(d._cntLines); delete d._cntLines; }
-  return { devices: devices.filter(d => d.macs.length || d.arps.length || d.ports.length || d.counters.length) };
+  for (const d of devices) { d.counters = epParseCounters(d._cntLines); d.optics = epParseOptics(d._optLines); delete d._cntLines; delete d._optLines; }
+  return { devices: devices.filter(d => d.macs.length || d.arps.length || d.ports.length || d.counters.length || d.optics.length) };
 }
 
 // 每台裝置每個埠學到幾個不同 MAC（判斷上行／串接埠用）
