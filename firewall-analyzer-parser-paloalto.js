@@ -300,6 +300,10 @@ const PaloAltoParser = (() => {
         for (const m of l3.matchAll(/<member>([^<]+)<\/member>/g)) zoneOf[m[1].trim()] = z._name;
       });
     }
+    // set 格式：set [vsys vsys1] zone 區域 network layer3 [ 介面 介面 ]（可分多行逐一加入）
+    for (const zm of String(text).matchAll(/^set\s+(?:vsys\s+\S+\s+)?zone\s+("[^"]+"|\S+)\s+network\s+layer3\s+(.+)$/gm)) {
+      zm[2].replace(/[\[\]]/g, ' ').trim().split(/\s+/).filter(Boolean).forEach(m => { zoneOf[m.replace(/"/g, '')] = zm[1].replace(/"/g, ''); });
+    }
     ifaces.forEach(i => { if (zoneOf[i.name]) i.zone = zoneOf[i.name]; });
     return ifaces;
   }

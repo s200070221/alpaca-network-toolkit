@@ -514,6 +514,8 @@ const MikrotikParser = (() => {
         extIp, mapIp,
         extIntf: p['in-interface'] || p['out-interface'] || '-',
         srcIntf: p['in-interface'] || '-',
+        // 來源 NAT 比對條件（XN7 多台路徑查詢）：out-interface 與 dst-address
+        outIntf: p['out-interface'] || '-', matchDst: chain === 'dstnat' ? '-' : (p['dst-address'] || '-'),
         startIp: '-', endIp: '-',
         portFwd: mapPort !== '-' ? 'enable' : 'disable',
         extPort, mapPort,

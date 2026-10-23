@@ -10125,6 +10125,17 @@ function buildCaseTimeline(issues, actors, events) {
   return { events: out.slice(0, CASE_MAX_EVENTS), total: out.length };
 }
 // pairs：[原值, 假值]；長的先換，原值前後不可緊接英數字、點或冒號（避免 10.0.0.1 誤換 10.0.0.12 的前段）
+// MAC 對照（mappings.mac：鍵為去掉分隔符號的 12 位十六進位，值為 {hex}）→ 案件包替換用的 [原值, 假值]：
+// 摘要與備註可能寫成冒號、連字號、點或不分隔，各種寫法都對應到同格式的假值
+function caseMacPairs(macMap) {
+  const out = [];
+  for (const [n, v] of macMap || []) {
+    const o = String(n).match(/.{2}/g), f = String((v && v.hex) || v).match(/.{2}/g);
+    if (!o || !f || o.length !== 6 || f.length !== 6) continue;
+    out.push([o.join(':'), f.join(':')], [o.join('-'), f.join('-')], [o.join('').match(/.{4}/g).join('.'), f.join('').match(/.{4}/g).join('.')], [o.join(''), f.join('')]);
+  }
+  return out;
+}
 function caseReplaceMapped(text, pairs) {
   let s = String(text == null ? '' : text);
   if (!pairs || !pairs.length) return s;
@@ -10191,16 +10202,26 @@ const COMPANION_SOURCES = [
   ['netdev', e => ['ciscoios', 'comware'].includes(e.format), ['aaa', 'dhcp', 'monitoring']],
 ];
 // 建議項目 → 已匯入時視為已涵蓋的來源
-const COMPANION_COVERS = { dhcp: ['dhcp'], dns: ['dns'], firewall: ['firewall'], ids: ['ids'], edr: ['edr'], winevent: ['winevent'], dcLogs: ['winevent'], sysmon: ['winevent'],
+const COMPANION_COVERS = { dhcp: ['dhcp'], dns: ['dns'], firewall: ['firewall'], ids: ['ids'], edr: ['edr'], winevent: ['winevent'], dcLogs: ['dcLogs'], sysmon: ['sysmon'],
   aaa: ['radius', 'ise', 'vpn'], ldapServer: ['ldap'], peerLdap: [], homeServer: [], nas: ['netdev'], flowlog: ['flowlog'], cloudAudit: ['cloud'] };
 function companionSourcesOf(events) {
   const found = new Set();
   for (const e of events) for (const [id, test] of COMPANION_SOURCES) if (!found.has(id) && test(e)) found.add(id);
   return COMPANION_SOURCES.map(s => s[0]).filter(id => found.has(id));
 }
-// 回傳 [{source, recs:[未涵蓋的建議]}]
-function companionRecsFor(sources) {
-  const have = new Set(sources);
+// Windows 事件裡已經有網域控制站或 Sysmon 的事件時，對應建議視為已涵蓋（只看 DC 才會記錄的 Kerberos 4768／4769／4771）
+const COMPANION_EXTRA_COVERS = [
+  ['dcLogs', e => e.format === 'winevent' && !!e.fields && ['4768', '4769', '4771'].includes(e.fields.EventID)],
+  ['sysmon', e => e.format === 'winevent' && !!e.fields && e.fields.Channel === SYSMON_CHANNEL],
+];
+function companionCoveredOf(events) {
+  const found = new Set();
+  for (const e of events) for (const [id, test] of COMPANION_EXTRA_COVERS) if (!found.has(id) && test(e)) found.add(id);
+  return [...found];
+}
+// 回傳 [{source, recs:[未涵蓋的建議]}]；covered（選填）為 companionCoveredOf() 的結果
+function companionRecsFor(sources, covered) {
+  const have = new Set(sources.concat(covered || []));
   return sources.map(id => {
     const recs = (COMPANION_SOURCES.find(s => s[0] === id) || [, , []])[2].filter(r => !(COMPANION_COVERS[r] || []).some(src => have.has(src)));
     return { source: id, recs };
@@ -11622,6 +11643,7 @@ function doExportCasePack() {
     const idx = new Map(EVENTS.map((e, i) => [e, i]));
     evs = tl.events.map(e => ANON_EVENTS[idx.get(e)] || e);
     pairs = [...mappings.ip, ...mappings.hostname, ...mappings.user].map(([o, f]) => [String(o), String(f)]);
+    pairs.push(...caseMacPairs(mappings.mac));
   }
   const R = s => deid ? caseReplaceMapped(s, pairs) : String(s == null ? '' : s);
   const model = {
@@ -11641,7 +11663,8 @@ function doExportCasePack() {
         first: fmtTime(issueTime(is, 'first')), last: fmtTime(issueTime(is, 'last')) };
     }),
     actors: actors.map(a => { const p = buildActorProfile(a, EVENTS, [], []); return { actor: R(a), events: p.events.length, first: fmtTime(p.firstSeen), last: fmtTime(p.lastSeen) }; }),
-    events: evs.map(e => ({ time: fmtTime(effectiveTime(e)), host: e.host || '', cat: tr(CAT_KEY_MAP[e.category] || 'cat.other'), msg: String(e.raw || eventDisplayMsg(e) || '').slice(0, 2000) }))
+    // 沒有時間戳的事件 effectiveTime() 以行號排序，顯示時不可當成時間（會變成 1970 年）
+    events: evs.map(e => ({ time: e.timestamp ? fmtTime(e.timestamp.getTime()) : '-', host: e.host || '', cat: tr(CAT_KEY_MAP[e.category] || 'cat.other'), msg: String(e.raw || eventDisplayMsg(e) || '').slice(0, 2000) }))
   };
   const blob = new Blob([buildCasePackHtml(model)], { type: 'text/html;charset=utf-8' });
   const url = URL.createObjectURL(blob), a = document.createElement('a');
@@ -11762,7 +11785,7 @@ function renderCompanions() {
   const card = document.getElementById('companion-card');
   card.style.display = EVENTS.length ? '' : 'none';
   if (!EVENTS.length) return;
-  const srcs = companionSourcesOf(EVENTS), recs = companionRecsFor(srcs);
+  const srcs = companionSourcesOf(EVENTS), recs = companionRecsFor(srcs, companionCoveredOf(EVENTS));
   const srcLabel = id => tr('compsrc.' + id);
   let h = `<div style="font-size:12px;margin-bottom:6px">${esc(tr('companion.detected'))}${esc(srcs.length ? srcs.map(srcLabel).join('、') : '-')}</div>`;
   h += recs.length ? '<ul style="font-size:12px;margin:4px 0 0 18px">' + recs.map(r => `<li><b>${esc(srcLabel(r.source))}</b><ul style="margin:2px 0 6px 16px">${r.recs.map(c => `<li>${esc(tr('comp.' + c))}</li>`).join('')}</ul></li>`).join('') + '</ul>'

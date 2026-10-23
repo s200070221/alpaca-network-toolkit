@@ -2531,23 +2531,30 @@ function onParsed(){
   }
   // ── 多台防火牆路徑查詢（2026-10-22，第三十三輪 XN7）：設備另外上傳、各自解析（FW_DIFF_PARSERS），只存在記憶體，
   // 與主上傳區無關；路徑引擎 FwPath.trace()（pathchain.js），畫面組裝在 sections.js
-  const _pc = { devices: [], last: null };
+  // 第二階段（2026-10-23）：每台可貼上路由表（routeText／routeInfo）、手動串接對應表（#pc-links）、起點記設備物件（startDev）
+  const _pc = { devices: [], last: null, startDev: null };
   function _pcParse(d) {
     d.error = false; d.parsed = null;
     if (!FW_DIFF_PARSERS[d.vendorKey]) return;
     try { d.parsed = FW_DIFF_PARSERS[d.vendorKey](d.text); } catch (e) { d.error = true; }
     const hn = d.parsed && d.parsed.deviceInfo && d.parsed.deviceInfo.hostname;
     d.name = hn && hn !== '-' ? hn : d.fileName;
+    // 路由表的 ASA 物件名稱依設定檔解析，換廠牌重新解析設定後一併重算
+    d.routeInfo = d.routeText && d.routeText.trim() ? FwPath.parseRouteTable(d.routeText, d.parsed) : null;
   }
+  function _pcResetResult() { _pc.last = null; if ($('pc-result')) $('pc-result').innerHTML = ''; }
   function _pcRenderDevices() {
     const box = $('pc-devices'); if (!box) return;
     box.innerHTML = buildPathChainDevicesHtml(_pc.devices, [{ key: '', label: tr('pc.pick_vendor') }].concat(FW_VENDOR_META));
     const st = $('pc-start');
     if (st) {
-      const cur = st.value;
       st.innerHTML = `<option value="">${esc(tr('pc.start_auto'))}</option>` + _pc.devices.map((d, i) => `<option value="${i}">${esc(tr('pc.start_from').replace('{name}', d.name))}</option>`).join('');
-      if (cur !== '' && +cur < _pc.devices.length) st.value = cur;
+      // 起點記的是設備本身：移除其他設備後索引改變也不會指到別台，起點設備被移除則回到自動
+      const idx = _pc.devices.indexOf(_pc.startDev);
+      if (idx < 0) _pc.startDev = null;
+      st.value = idx >= 0 ? String(idx) : '';
     }
+    _pcLinksChanged(true);
     if (_pc.last && $('pc-result')) $('pc-result').innerHTML = buildPathChainResultHtml(_pc.last.r);
   }
   window._pcAddFiles = async function(input) {
@@ -2559,35 +2566,66 @@ function onParsed(){
       _pcParse(d);
       _pc.devices.push(d);
     }
-    _pc.last = null; if ($('pc-result')) $('pc-result').innerHTML = '';
+    _pcResetResult();
     if ($('pc-msg')) $('pc-msg').textContent = tr('pc.loaded').replace('{n}', _pc.devices.length);
     _pcRenderDevices();
   };
-  window._pcSetVendor = function(i, key) { const d = _pc.devices[i]; if (!d) return; d.vendorKey = key; _pcParse(d); _pc.last = null; if ($('pc-result')) $('pc-result').innerHTML = ''; _pcRenderDevices(); };
-  window._pcRemove = function(i) { _pc.devices.splice(i, 1); _pc.last = null; if ($('pc-result')) $('pc-result').innerHTML = ''; _pcRenderDevices(); };
-  window._pcClear = function() { _pc.devices = []; _pc.last = null; if ($('pc-result')) $('pc-result').innerHTML = ''; if ($('pc-msg')) $('pc-msg').textContent = ''; _pcRenderDevices(); };
+  window._pcSetVendor = function(i, key) { const d = _pc.devices[i]; if (!d) return; d.vendorKey = key; _pcParse(d); _pcResetResult(); _pcRenderDevices(); };
+  window._pcRemove = function(i) { _pc.devices.splice(i, 1); _pcResetResult(); _pcRenderDevices(); };
+  window._pcClear = function() { _pc.devices = []; _pc.startDev = null; _pcResetResult(); if ($('pc-msg')) $('pc-msg').textContent = ''; _pcRenderDevices(); };
+  window._pcSetStart = function(v) { _pc.startDev = v === '' ? null : (_pc.devices[+v] || null); };
+  window._pcToggleRoutes = function(i) { const d = _pc.devices[i]; if (!d) return; d.showRoutes = !d.showRoutes; _pcRenderDevices(); };
+  window._pcSetRoutes = function(i, text) {
+    const d = _pc.devices[i]; if (!d) return;
+    d.routeText = text;
+    d.routeInfo = text.trim() ? FwPath.parseRouteTable(text, d.parsed) : null;
+    _pcResetResult(); _pcRenderDevices();
+  };
+  // 手動串接對應表：設備名稱與 #序號依設備清單；回傳以「可查詢設備（已解析）」索引表示的 links
+  function _pcLinks(devs) {
+    const ta = $('pc-links');
+    const res = FwPath.parseLinkMap(ta ? ta.value : '', _pc.devices.map(d => d.name));
+    const links = [];
+    res.links.forEach(l => {
+      const from = devs.findIndex(x => x.dev === _pc.devices[l.from]), to = devs.findIndex(x => x.dev === _pc.devices[l.to]);
+      if (from < 0 || to < 0) res.errors.push({ line: l.line, reason: 'unparsed' });
+      else links.push(Object.assign({}, l, { from, to }));
+    });
+    return { links, errors: res.errors.sort((a, b) => a.line - b.line) };
+  }
+  function _pcDevs() { return _pc.devices.filter(d => d.parsed).map(d => ({ name: d.name, parsed: d.parsed, routes: d.routeInfo && d.routeInfo.routes.length ? d.routeInfo.routes : undefined, dev: d })); }
+  window._pcLinksChanged = function(keepResult) {
+    const msg = $('pc-links-msg'), ta = $('pc-links');
+    if (!keepResult) _pcResetResult();
+    if (!msg || !ta) return;
+    if (!ta.value.trim()) { msg.innerHTML = ''; return; }
+    const r = _pcLinks(_pcDevs());
+    msg.innerHTML = `<span style="color:var(--text-dim)">${esc(tr('pc.links_ok').replace('{n}', r.links.length))}</span>` +
+      r.errors.map(e => `<div style="color:var(--orange,#f59e0b)">${esc(tr('pc.links_err').replace('{line}', e.line).replace('{reason}', tr('pc.lerr_' + e.reason)))}</div>`).join('');
+  };
   window._pcRun = function() {
     const out = $('pc-result'); if (!out) return;
-    const devs = _pc.devices.filter(d => d.parsed).map(d => ({ name: d.name, parsed: d.parsed }));
+    const devs = _pcDevs();
     if (!devs.length) { out.innerHTML = buildPathChainResultHtml({ error: 'no_devices' }); return; }
-    const sv = $('pc-start').value;
-    // 起點選單的索引是全部設備；未解析的設備不參與，換算成可用設備的索引
-    const startDev = sv === '' ? null : _pc.devices[+sv];
-    const start = startDev ? devs.findIndex(d => d.parsed === startDev.parsed) : null;
-    if (startDev && start < 0) { out.innerHTML = buildPathChainResultHtml({ error: 'start_unparsed' }); return; }
+    // 起點設備未解析時不參與查詢
+    const start = _pc.startDev ? devs.findIndex(d => d.dev === _pc.startDev) : null;
+    if (_pc.startDev && start < 0) { out.innerHTML = buildPathChainResultHtml({ error: 'start_unparsed' }); return; }
     const q = { src: $('pc-src').value.trim(), dst: $('pc-dst').value.trim(), proto: $('pc-proto').value, port: $('pc-port').value.trim(), start };
-    const r = FwPath.trace(devs, q);
+    const r = FwPath.trace(devs, q, { links: _pcLinks(devs).links });
     _pc.last = r.error ? null : { q, r };
     out.innerHTML = buildPathChainResultHtml(r);
+    // 彩蛋：繞圈與走滿 16 跳
+    if (!r.error && r.result.kind === 'loop') showEggToast(r.hops.length >= FwPath.MAX_HOPS ? tr('egg.pc_ttl') : tr('egg.pc_loop').replace('{n}', r.hops.length));
   };
   window._pcExport = function(fmt) {
     if (!_pc.last) return;
     const { q, r } = _pc.last;
     const rule = x => x ? `#${x.id}${x.name && String(x.name) !== String(x.id) ? ' ' + x.name : ''}` : tr('pc.implicit_deny');
-    const rows = r.hops.map((h, i) => [i + 1, h.device, h.ingress || '-', h.dst, h.dnat ? h.dnat.toIp + (h.dnat.toPort ? ':' + h.dnat.toPort : '') : '',
-      h.action === 'noRoute' ? '-' : rule(h.rule), tr('pc.act_' + h.action), h.egress || '-',
-      h.nextDevice || (h.route ? (h.route.connected ? tr('pc.connected') : (h.route.gateway || '-')) : '-'), [h.snat ? tr('pc.note_snat') : '', h.uncertain ? tr('pc.note_uncertain') : ''].filter(Boolean).join('; ')]);
-    const head = ['#', tr('pc.col_device'), tr('pc.col_ingress'), tr('pc.col_dst'), 'DNAT', tr('pc.col_rule'), tr('pc.col_action'), tr('pc.col_egress'), tr('pc.col_next'), tr('pc.col_notes')];
+    const stop = a => a === 'noRoute' || a === 'blackhole';
+    const rows = r.hops.map((h, i) => [i + 1, h.device, h.ingress || '-', h.src || '-', h.dst, h.dnat ? h.dnat.toIp + (h.dnat.toPort ? ':' + h.dnat.toPort : '') : '', h.snatTo || '',
+      stop(h.action) ? '-' : rule(h.rule), tr('pc.act_' + h.action), h.egress || '-',
+      h.nextDevice || (h.route ? (h.route.connected ? tr('pc.connected') : (h.route.gateway || '-')) : '-'), pathChainHopNotes(h).join('; ')]);
+    const head = ['#', tr('pc.col_device'), tr('pc.col_ingress'), tr('pc.col_src'), tr('pc.col_dst'), 'DNAT', 'SNAT', tr('pc.col_rule'), tr('pc.col_action'), tr('pc.col_egress'), tr('pc.col_next'), tr('pc.col_notes')];
     const base = 'path_' + q.src.replace(/[^\w.]/g, '_') + '_to_' + q.dst.replace(/[^\w.]/g, '_');
     if (fmt === 'csv') { Reporter.download(Reporter.toCSV(rows, head), base + '.csv', 'text/csv'); return; }
     const md = s => String(s).replace(/\|/g, '\\|');
