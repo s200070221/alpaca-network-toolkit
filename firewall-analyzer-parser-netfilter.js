@@ -181,7 +181,7 @@ const NetfilterParser = (() => {
     }
     if (tg === 'SNAT' || tg === 'MASQUERADE') {
       return { type: 'ippool', name: `SNAT-${i + 1}`, vipType: 'overload', poolType: tg === 'MASQUERADE' ? 'masquerade' : 'source', extIp: r.src || '-',
-        mapIp: tg === 'MASQUERADE' ? 'masquerade' : (r.toSrc || '-'), extIntf: r.outIf || '-', srcIntf: r.outIf || '-', startIp: '-', endIp: '-',
+        mapIp: tg === 'MASQUERADE' ? 'masquerade' : (r.toSrc || '-'), extIntf: r.outIf || '-', srcIntf: r.outIf || '-', matchDst: r.dst || '-', startIp: '-', endIp: '-',
         portFwd: 'disable', extPort: '-', mapPort: '-', proto, status, comment };
     }
     return null;

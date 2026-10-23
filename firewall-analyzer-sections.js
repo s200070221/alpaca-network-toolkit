@@ -609,22 +609,23 @@ function buildQuerySectionHtml(qvdoms, isFortiGate, qintfs, wiRules){
 }
 // ── 多台防火牆路徑查詢（2026-10-22，第三十三輪 XN7）：路徑引擎在 firewall-analyzer-pathchain.js 的 FwPath，
 // 上傳、解析與執行在 app.js 的 _pc*()；設備清單由 _pcRenderDevices() 填入 #pc-devices
-// 各廠牌查看路由表與動態路由鄰居的指令（設定檔不含動態路由學到的路由，供使用者自行確認）
+// 各廠牌查看路由表與動態路由鄰居的指令（設定檔不含動態路由學到的路由，供使用者自行確認）；
+// 第 5 欄：路由表輸出可直接貼回設備清單（FwPath.parseRouteTable() 支援的格式，依 ntc-templates 真實輸出查證）
 const PC_ROUTE_CMDS = [
-  ['FortiGate', 'get router info routing-table all', 'get router info ospf neighbor', 'get router info bgp summary'],
-  ['Palo Alto', 'show routing route（Advanced Routing：show advanced-routing route）', 'show routing protocol ospf neighbor', 'show routing protocol bgp summary'],
-  ['Juniper SRX', 'show route', 'show ospf neighbor', 'show bgp summary'],
-  ['Cisco ASA／FTD', 'show route', 'show ospf neighbor', 'show bgp summary'],
-  ['Check Point（Gaia clish）', 'show route', 'show ospf neighbors', 'show bgp peers'],
-  ['H3C SecPath', 'display ip routing-table', 'display ospf peer', 'display bgp peer ipv4'],
-  ['MikroTik RouterOS v7', '/ip route print', '/routing ospf neighbor print', '/routing bgp session print'],
-  ['VyOS／EdgeRouter', 'show ip route', 'show ip ospf neighbor', 'show ip bgp summary'],
-  ['pfSense／OPNsense', 'netstat -rn（Diagnostics → Routes）', 'vtysh -c "show ip ospf neighbor"（FRR 套件）', 'vtysh -c "show ip bgp summary"（FRR 套件）'],
-  ['Linux（netfilter）', 'ip route', 'vtysh -c "show ip ospf neighbor"（FRR）', 'vtysh -c "show ip bgp summary"（FRR）'],
+  ['FortiGate', 'get router info routing-table all', 'get router info ospf neighbor', 'get router info bgp summary', true],
+  ['Palo Alto', 'show routing route（Advanced Routing：show advanced-routing route）', 'show routing protocol ospf neighbor', 'show routing protocol bgp summary', true],
+  ['Juniper SRX', 'show route', 'show ospf neighbor', 'show bgp summary', false],
+  ['Cisco ASA／FTD', 'show route', 'show ospf neighbor', 'show bgp summary', true],
+  ['Check Point（Gaia clish）', 'show route', 'show ospf neighbors', 'show bgp peers', true],
+  ['H3C SecPath', 'display ip routing-table', 'display ospf peer', 'display bgp peer ipv4', true],
+  ['MikroTik RouterOS', '/ip route print detail', '/routing ospf neighbor print', '/routing bgp session print', true],
+  ['VyOS／EdgeRouter', 'show ip route', 'show ip ospf neighbor', 'show ip bgp summary', true],
+  ['pfSense／OPNsense', 'netstat -rn（Diagnostics → Routes）', 'vtysh -c "show ip ospf neighbor"（FRR 套件）', 'vtysh -c "show ip bgp summary"（FRR 套件）', false],
+  ['Linux（netfilter）', 'ip route', 'vtysh -c "show ip ospf neighbor"（FRR）', 'vtysh -c "show ip bgp summary"（FRR）', true],
 ];
 function buildPathChainHtml(){
   const inp='padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:12px';
-  const cmds=PC_ROUTE_CMDS.map(r=>`<tr><td>${esc(r[0])}</td><td class="mono">${esc(r[1])}</td><td class="mono">${esc(r[2])}</td><td class="mono">${esc(r[3])}</td></tr>`).join('');
+  const cmds=PC_ROUTE_CMDS.map(r=>`<tr><td>${esc(r[0])}</td><td class="mono">${esc(r[1])}</td><td class="mono">${esc(r[2])}</td><td class="mono">${esc(r[3])}</td><td>${r[4]?'✓':'-'}</td></tr>`).join('');
   return `<div id="pc-section" style="margin-top:28px;padding-top:20px;border-top:1px solid var(--border)">
         <h2 style="margin:0 0 6px;font-size:16px">${tr('pc.title')}</h2>
         <p style="color:var(--text-dim);margin:0 0 8px;font-size:12px">${tr('pc.hint')}</p>
@@ -633,7 +634,7 @@ function buildPathChainHtml(){
         </div>
         <details style="margin-bottom:10px;font-size:12px"><summary style="cursor:pointer">${tr('pc.cmds_title')}</summary>
           <div style="font-size:11px;color:var(--text-dim);margin:6px 0">${tr('pc.cmds_hint')}</div>
-          <div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${tr('pc.col_vendor')}</th><th>${tr('pc.cmds_route')}</th><th>OSPF</th><th>BGP</th></tr></thead><tbody>${cmds}</tbody></table></div>
+          <div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${tr('pc.col_vendor')}</th><th>${tr('pc.cmds_route')}</th><th>OSPF</th><th>BGP</th><th>${tr('pc.col_paste')}</th></tr></thead><tbody>${cmds}</tbody></table></div>
         </details>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('pc-files').click()">📂 ${tr('pc.add_files')}</button>
@@ -642,26 +643,51 @@ function buildPathChainHtml(){
           <span id="pc-msg" style="font-size:12px;color:var(--text-dim)"></span>
         </div>
         <div id="pc-devices" style="margin-top:8px"></div>
+        <details id="pc-links-box" style="margin-top:10px;font-size:12px"><summary style="cursor:pointer">${tr('pc.links_title')}</summary>
+          <div style="font-size:11px;color:var(--text-dim);margin:6px 0">${tr('pc.links_hint')}</div>
+          <textarea id="pc-links" rows="3" placeholder="${esc(tr('pc.links_ph'))}" style="${inp};width:100%;box-sizing:border-box;font-family:monospace" onchange="_pcLinksChanged()"></textarea>
+          <div id="pc-links-msg" style="font-size:11px;margin-top:4px"></div>
+        </details>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">
           <input id="pc-src" placeholder="${tr('pc.src_ph')}" style="${inp};width:150px">
           <input id="pc-dst" placeholder="${tr('pc.dst_ph')}" style="${inp};width:150px">
           <select id="pc-proto" style="${inp}"><option value="any">any</option><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option></select>
           <input id="pc-port" placeholder="${tr('pc.port_ph')}" style="${inp};width:80px">
-          <select id="pc-start" style="${inp}"></select>
+          <select id="pc-start" style="${inp}" onchange="_pcSetStart(this.value)"></select>
           <button type="button" onclick="_pcRun()" style="padding:7px 20px;border-radius:6px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600;font-size:13px">▶ ${tr('pc.run')}</button>
         </div>
         <div id="pc-result" style="margin-top:14px"></div>
       </div>`;
 }
-// 設備清單：devices 為 [{name, vendorKey, parsed, error}]，vendors 為 FW_VENDOR_META
+// 設備清單：devices 為 [{name, vendorKey, parsed, error, routeText, routeInfo, showRoutes}]，vendors 為 FW_VENDOR_META
 function buildPathChainDevicesHtml(devices, vendors){
   if(!devices.length) return `<div class="nodata" style="font-size:12px">${tr('pc.no_devices')}</div>`;
   const sel='padding:3px 6px;border-radius:4px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:12px';
-  return `<table class="data-tbl"><thead><tr><th>#</th><th>${tr('pc.col_device')}</th><th>${tr('pc.col_vendor')}</th><th>${tr('pc.col_ifaces')}</th><th>${tr('pc.col_routes')}</th><th>${tr('pc.col_rules')}</th><th></th></tr></thead><tbody>`+
+  const rtStatus=d=>!d.routeInfo?'':(d.routeInfo.routes.length?tr('pc.routes_ok').replace('{n}',d.routeInfo.routes.length).replace('{fmt}',d.routeInfo.format).replace('{skip}',d.routeInfo.skipped):tr('pc.routes_none'));
+  return `<table class="data-tbl"><thead><tr><th>#</th><th>${tr('pc.col_device')}</th><th>${tr('pc.col_vendor')}</th><th>${tr('pc.col_ifaces')}</th><th>${tr('pc.col_routes')}</th><th>${tr('pc.col_rules')}</th><th>${tr('pc.routes_btn')}</th><th></th></tr></thead><tbody>`+
     devices.map((d,i)=>`<tr><td>${i+1}</td><td>${esc(d.name)}${d.error?` <span style="color:var(--red)">${esc(tr('pc.parse_error'))}</span>`:''}</td>
       <td><select style="${sel}" onchange="_pcSetVendor(${i},this.value)">${vendors.map(v=>`<option value="${esc(v.key)}"${v.key===d.vendorKey?' selected':''}>${esc(v.label)}</option>`).join('')}</select></td>
       <td>${d.parsed?(d.parsed.interfaces||[]).filter(x=>x.ip&&x.ip!=='-').length:'-'}</td><td>${d.parsed?(d.parsed.routes||[]).length:'-'}</td><td>${d.parsed?(d.parsed.policies||[]).length:'-'}</td>
-      <td><button type="button" class="btn btn-ghost btn-sm" onclick="_pcRemove(${i})">✕</button></td></tr>`).join('')+'</tbody></table>';
+      <td><button type="button" class="btn btn-ghost btn-sm" onclick="_pcToggleRoutes(${i})">📋 ${esc(tr('pc.routes_btn'))}</button>${d.routeInfo&&d.routeInfo.routes.length?` <span style="font-size:11px;color:var(--green)">${esc(tr('pc.routes_badge').replace('{n}',d.routeInfo.routes.length))}</span>`:''}</td>
+      <td><button type="button" class="btn btn-ghost btn-sm" onclick="_pcRemove(${i})">✕</button></td></tr>`+
+      (d.showRoutes?`<tr><td></td><td colspan="7"><div style="font-size:11px;color:var(--text-dim);margin-bottom:4px">${esc(tr('pc.routes_hint'))}</div>
+        <textarea rows="6" placeholder="${esc(tr('pc.routes_ph'))}" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px" onchange="_pcSetRoutes(${i},this.value)">${esc(d.routeText||'')}</textarea>
+        <div style="font-size:11px;margin-top:2px;color:${d.routeInfo&&!d.routeInfo.routes.length?'var(--orange,#f59e0b)':'var(--text-dim)'}">${esc(rtStatus(d))}</div></td></tr>`:'')).join('')+'</tbody></table>';
+}
+// 逐跳說明（畫面與 CSV／Markdown 匯出共用）
+function pathChainHopNotes(x){
+  const notes=[];
+  if(x.dnat) notes.push(tr('pc.note_dnat').replace('{from}',x.dst).replace('{to}',x.dnat.toIp+(x.dnat.toPort?':'+x.dnat.toPort:'')));
+  if(x.snat&&x.snatTo){
+    const how=x.snatHow==='iface'?tr('pc.snat_iface'):x.snatHow==='ippool'?tr('pc.snat_ippool').replace('{name}',x.snatName||''):x.snatHow==='masquerade'?tr('pc.snat_masquerade'):tr('pc.snat_nat').replace('{name}',x.snatName||'');
+    notes.push(tr('pc.note_snat_to').replace('{from}',x.src).replace('{to}',x.snatTo).replace('{how}',how)+(x.snatNote==='range'?'；'+tr('pc.note_snat_range'):''));
+  } else if(x.snat&&x.snatNote==='cond') notes.push(tr('pc.note_snat_cond').replace('{name}',x.snatName||''));
+  else if(x.snat&&x.snatHow) notes.push(tr('pc.note_snat_noip'));
+  else if(x.snat) notes.push(tr('pc.note_snat'));
+  if(x.route&&x.route.pasted) notes.push(tr('pc.note_pasted'));
+  if(x.link==='manual') notes.push(tr('pc.note_link'));
+  if(x.uncertain) notes.push(tr('pc.note_uncertain'));
+  return notes;
 }
 // 查詢結果：r 為 FwPath.trace() 回傳值
 function buildPathChainResultHtml(r){
@@ -669,29 +695,27 @@ function buildPathChainResultHtml(r){
   const R=r.result, ruleTxt=x=>x?`#${x.id}${x.name&&String(x.name)!==String(x.id)?' '+x.name:''}`:tr('pc.implicit_deny');
   const msg=tr('pc.res_'+R.kind).replace('{device}',R.device||'').replace('{egress}',R.egress||'-').replace('{owner}',R.owner||'')
     .replace('{nextHop}',R.nextHop||tr('pc.no_nexthop')).replace('{dst}',R.dst||'').replace('{rule}',ruleTxt(R.rule));
-  const ok=R.kind==='reached'||R.kind==='reachedDevice', color=ok?'var(--green)':(R.kind==='denied'?'var(--red)':'var(--orange,#f59e0b)');
-  const uncertain=r.hops.some(h=>h.uncertain||h.snat);
-  let h=`<div style="font-size:14px;font-weight:600;color:${color};margin-bottom:6px">${ok?'✅':(R.kind==='denied'?'⛔':'⚠')} ${esc(msg)}</div>`;
+  const ok=R.kind==='reached'||R.kind==='reachedDevice', bad=R.kind==='denied'||R.kind==='blackhole', color=ok?'var(--green)':(bad?'var(--red)':'var(--orange,#f59e0b)');
+  const uncertain=r.hops.some(h=>h.uncertain||(h.snat&&!h.snatTo));
+  let h=`<div style="font-size:14px;font-weight:600;color:${color};margin-bottom:6px">${ok?'✅':(bad?'⛔':'⚠')} ${esc(msg)}</div>`;
   if(uncertain) h+=`<div style="font-size:12px;color:var(--orange,#f59e0b);margin-bottom:6px">${esc(tr('pc.res_uncertain'))}</div>`;
   if(R.kind==='noRoute') h+=`<div style="font-size:12px;color:var(--text-dim);margin-bottom:6px">${esc(tr('pc.noroute_hint'))}</div>`;
   if(R.kind==='left') h+=`<div style="font-size:12px;color:var(--text-dim);margin-bottom:6px">${esc(tr('pc.left_hint'))}</div>`;
   const box=(t,sub,c)=>`<div style="background:var(--surface2);border:1px solid ${c};border-radius:8px;padding:6px 10px;font-size:12px;text-align:center;min-width:90px"><b>${esc(t)}</b><div style="font-size:10px;color:var(--text-dim)">${esc(sub)}</div></div>`;
   const arrow='<div style="align-self:center;color:var(--text-dim)">➜</div>';
-  h+=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px">`+r.hops.map(x=>box(x.device,x.action==='accept'?ruleTxt(x.rule):(x.action==='noRoute'?tr('pc.act_noRoute'):ruleTxt(x.rule)),
-    x.action==='accept'?'var(--green)':(x.action==='deny'?'var(--red)':'var(--orange,#f59e0b)'))).join(arrow)+'</div>';
-  h+=`<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>#</th><th>${tr('pc.col_device')}</th><th>${tr('pc.col_ingress')}</th><th>${tr('pc.col_dst')}</th><th>${tr('pc.col_rule')}</th><th>${tr('pc.col_action')}</th><th>${tr('pc.col_egress')}</th><th>${tr('pc.col_next')}</th><th>${tr('pc.col_notes')}</th></tr></thead><tbody>`+
+  const stop=a=>a==='noRoute'||a==='blackhole';
+  h+=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px">`+r.hops.map(x=>box(x.device,stop(x.action)?tr('pc.act_'+x.action):ruleTxt(x.rule),
+    x.action==='accept'?'var(--green)':(x.action==='deny'||x.action==='blackhole'?'var(--red)':'var(--orange,#f59e0b)'))).join(arrow)+'</div>';
+  h+=`<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>#</th><th>${tr('pc.col_device')}</th><th>${tr('pc.col_ingress')}</th><th>${tr('pc.col_src')}</th><th>${tr('pc.col_dst')}</th><th>${tr('pc.col_rule')}</th><th>${tr('pc.col_action')}</th><th>${tr('pc.col_egress')}</th><th>${tr('pc.col_next')}</th><th>${tr('pc.col_notes')}</th></tr></thead><tbody>`+
     r.hops.map((x,i)=>{
-      const notes=[];
-      if(x.dnat) notes.push(tr('pc.note_dnat').replace('{from}',x.dst).replace('{to}',x.dnat.toIp+(x.dnat.toPort?':'+x.dnat.toPort:'')));
-      if(x.snat) notes.push(tr('pc.note_snat'));
-      if(x.uncertain) notes.push(tr('pc.note_uncertain'));
       const next=x.nextDevice||(x.route?(x.route.connected?tr('pc.connected'):(x.route.gateway||'-')):'-');
-      return `<tr><td>${i+1}</td><td>${esc(x.device)}</td><td class="mono">${esc(x.ingress||'-')}</td><td class="mono">${esc(x.dst)}</td><td>${esc(x.action==='noRoute'?'-':ruleTxt(x.rule))}</td>
-        <td>${esc(tr('pc.act_'+x.action))}</td><td class="mono">${esc(x.egress||'-')}</td><td class="mono">${esc(next)}</td><td style="font-size:11px">${notes.map(esc).join('<br>')}</td></tr>`;
+      return `<tr><td>${i+1}</td><td>${esc(x.device)}</td><td class="mono">${esc(x.ingress||'-')}</td><td class="mono">${esc(x.src||'-')}</td><td class="mono">${esc(x.dst)}</td><td>${esc(stop(x.action)?'-':ruleTxt(x.rule))}</td>
+        <td>${esc(tr('pc.act_'+x.action))}</td><td class="mono">${esc(x.egress||'-')}</td><td class="mono">${esc(next)}</td><td style="font-size:11px">${pathChainHopNotes(x).map(esc).join('<br>')}</td></tr>`;
     }).join('')+'</tbody></table></div>';
   h+=`<div style="margin-top:8px;display:flex;gap:8px"><button type="button" class="btn btn-ghost btn-sm" onclick="_pcExport('csv')">⬇ CSV</button><button type="button" class="btn btn-ghost btn-sm" onclick="_pcExport('md')">⬇ Markdown</button></div>`;
   return h;
 }
+window.pathChainHopNotes=pathChainHopNotes;
 window.buildPathChainDevicesHtml=buildPathChainDevicesHtml;
 window.buildPathChainResultHtml=buildPathChainResultHtml;
 // 規則變更模擬（2026-10-06，第十二輪 MD）：rules 為 [{idx,label}]（idx＝原始規則陣列索引）；變更清單與執行由 app.js 的 _wi*() 負責

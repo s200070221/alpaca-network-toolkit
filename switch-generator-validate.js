@@ -574,7 +574,7 @@ function buildAnsiblePlaybook(vendor, hostname, cfgFile, notes) {
   const head = (notes || []).map(l => '# ' + l);
   const playbook = [...head,
     `# ansible-galaxy collection install ${a.collection}`,
-    `# ansible-playbook -i inventory.ini ${'push_' + host + '.yml'} --check --diff`,
+    `# ansible-playbook -i inventory.example.ini ${'push_' + host + '.yml'} --check --diff`,
     '---',
     `- name: ${_genYamlStr('Push generated configuration to ' + host)}`,
     `  hosts: ${_genYamlStr(host)}`,

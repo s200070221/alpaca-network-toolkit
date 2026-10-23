@@ -247,7 +247,8 @@ const CiscoASAParser = (() => {
     for (const line of text.split('\n')) {
       const mNew = line.match(/^nat\s+\(([^,]+),([^)]+)\)\s+(?:\d+\s+)?source\s+(static|dynamic)\s+(\S+)\s+(\S+)/);
       if (mNew) {
-        nat.push({ id:id++, type:mNew[3], srcIf:mNew[1].trim(), dstIf:mNew[2].trim(), origSrc:mNew[4], transSrc:mNew[5] });
+        // twiceDst：twice NAT 另帶 destination 條件（只對特定目的轉換），多台路徑查詢的來源 NAT 視為無法確定
+        nat.push({ id:id++, type:mNew[3], srcIf:mNew[1].trim(), dstIf:mNew[2].trim(), origSrc:mNew[4], transSrc:mNew[5], twiceDst:/\sdestination\s+static\s/.test(line) });
         continue;
       }
       const mOld = line.match(/^nat\s+\((\S+)\)\s+(\d+)\s+(\S+)\s+(\S+)/);

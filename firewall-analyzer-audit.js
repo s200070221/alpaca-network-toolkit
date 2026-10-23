@@ -2620,15 +2620,22 @@
   // 同一評估序列（FortiGate／Palo Alto 為 VDOM、Juniper 為區域組合、ASA 為 ACL）內依命中數由高到低逐條處理，
   // 在目前順序上往前找最前面一條「命中數較低且中間全部不相交」的規則，移到它之前；移動依序套用，後面的建議以
   // 前面移動後的順序計算，指令照順序執行即可。Panorama 的規則跨 device-group 與 pre／post 層，不支援
+  // 位址組：FortiGate 6.4 起的雙堆疊規則 IPv4 用 srcAddr／dstAddr、IPv6 用 srcAddr6／dstAddr6，兩組分開比對；
+  // 只有 IPv6 的規則（_family v6）只有 v6 組；其他規則維持單一組（'*'，位址範圍本身帶家族）
   function _reorderPrep(p, addresses) {
-    return { fam: _shadowFamily(p), neg: _hasNegate(p),
-      srcR: _shadowAddrRanges(p.srcAddr, addresses, p._vdom), dstR: _shadowAddrRanges(p.dstAddr, addresses, p._vdom) };
+    const R = (s, d) => ({ srcR: _shadowAddrRanges(s, addresses, p._vdom), dstR: _shadowAddrRanges(d, addresses, p._vdom) });
+    const fam = _shadowFamily(p), has6 = v => v && v !== '-';
+    let sets;
+    if (fam === 'v6') sets = [Object.assign({ fam: 'v6' }, R(p.srcAddr, p.dstAddr))];
+    else if (has6(p.srcAddr6) || has6(p.dstAddr6)) sets = [Object.assign({ fam: 'v4' }, R(p.srcAddr, p.dstAddr)), Object.assign({ fam: 'v6' }, R(has6(p.srcAddr6) ? p.srcAddr6 : 'all', has6(p.dstAddr6) ? p.dstAddr6 : 'all'))];
+    else sets = [Object.assign({ fam: fam || '*' }, R(p.srcAddr, p.dstAddr))];
+    return { neg: _hasNegate(p), sets };
   }
+  // 兩條規則在每個可能同時涵蓋的位址家族上，來源或目的都必須不重疊才算不相交
   function _reorderDisjoint(a, b) {
     if (a.neg || b.neg) return false;
-    if (a.fam && b.fam && a.fam !== b.fam) return true;
     const apart = (X, Y) => !!(X && Y) && !X.some(x => Y.some(y => x.f === y.f && x.lo <= y.hi && y.lo <= x.hi));
-    return apart(a.srcR, b.srcR) || apart(a.dstR, b.dstR);
+    return a.sets.every(x => b.sets.every(y => !(x.fam === '*' || y.fam === '*' || x.fam === y.fam) || apart(x.srcR, y.srcR) || apart(x.dstR, y.dstR)));
   }
   function _reorderSeqKey(parsed, p) {
     if (parsed.vendor === 'Juniper') return [p._vdom || '', p.srcIntf, p.dstIntf].join('|');

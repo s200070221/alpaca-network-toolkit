@@ -179,6 +179,8 @@ function vlsmApply(){
   let nv=0,nr=0,nd=0;
   rows.forEach(p=>{
     const ip=vrrpOn?'':p.svi;
+    // 規劃時勾選 VRRP 但這個廠牌無法套用時，DHCP 閘道改用 SVI 位址（VIP 不會設定在任何介面上）
+    const gw=opts.vrrp&&!vrrpOn?String(p.svi).split('/')[0]:p.gateway;
     const vr=findRow('#vlan-body tr','v-id',p.vlan);
     if(vr){vr.querySelector('.v-ip').value=ip;if(p.name&&!val(vr,'v-name'))vr.querySelector('.v-name').value=p.name;updateVlanIpAvailability(vr);}
     else addVlanRow(String(p.vlan),p.name,ip);
@@ -194,10 +196,10 @@ function vlsmApply(){
       const name='VLAN'+p.vlan;
       const dr=findRow('#dhcp-pool-body tr','dp-name',name)||findRow('#dhcp-pool-body tr','dp-network',p.network);
       if(dr){
-        dr.querySelector('.dp-network').value=p.network;dr.querySelector('.dp-gateway').value=p.gateway;
+        dr.querySelector('.dp-network').value=p.network;dr.querySelector('.dp-gateway').value=gw;
         dr.querySelector('.dp-range-start').value=p.dhcpStart;dr.querySelector('.dp-range-end').value=p.dhcpEnd;
         if(opts.dns)dr.querySelector('.dp-dns').value=opts.dns;
-      }else addDhcpPoolRow(name,p.network,p.gateway,opts.dns,p.dhcpStart+'-'+p.dhcpEnd);
+      }else addDhcpPoolRow(name,p.network,gw,opts.dns,p.dhcpStart+'-'+p.dhcpEnd);
       nd++;
     }
   });
