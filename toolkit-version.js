@@ -3,31 +3,8 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.10.24';
+  const TOOLKIT_VERSION = '2026.10.22.1';
   const CHANGELOG = [
-    {
-      version: '2026.10.24',
-      items: {
-        zhTW: [
-          '防火牆分析：多台路徑查詢第二階段，可貼上各台路由表（9 種輸出格式）與手動串接對應表，並換算 FortiGate／ASA／FTD／netfilter／MikroTik 的來源 NAT',
-          '防火牆分析：高風險曝險服務稽核，找出開在外部介面的 FortiGate／Palo Alto／ASA／FTD／Juniper 管理介面與 VPN 入口並附 CISA KEV 範例 CVE；FortiGate 依管理者 trusthost 判斷是否已限制來源',
-          '交換器分析：Cisco Smart Install 與 IOS-XE Web UI 對外曝險檢查',
-          '防火牆／交換器分析：韌體版本比對已知漏洞，內建近年 CISA KEV 起始清單並標示情資截止日（只標受影響、不標安全），也可匯入自備 CSV',
-          'log 分析：偵測 web 存取紀錄中的已知漏洞利用嘗試（20 種，CVE 皆在 CISA KEV），IDS 告警的 CVE 顯示在依據欄',
-          '安全強化：修正多處原型污染、去識別化跨頁訊息限定同源、產生器上傳程式顯示 SHA-256 與警語、CI 供應鏈強化',
-          '彩蛋：設定檔裡藏了注入測試字串時，羊駝會出來吐槽一下（不影響分析結果）',
-        ],
-        en: [
-          'Firewall analyzer: multi-firewall path query phase 2 accepts pasted routing tables (9 output formats) and a manual link map, and translates source NAT for FortiGate / ASA / FTD / netfilter / MikroTik',
-          'Firewall analyzer: exposed high-risk services audit flags FortiGate / Palo Alto / ASA / FTD / Juniper management and VPN portals on external interfaces, with example CISA KEV CVEs; FortiGate admin trusthost is taken into account',
-          'Switch analyzer: exposure checks for Cisco Smart Install and IOS-XE Web UI',
-          'Firewall / switch analyzer: firmware version check against known vulnerabilities, with a built-in starter list of recent CISA KEV entries and its intel date (flags affected only, never safe), plus your own CSV',
-          'Log analyzer: detects known exploit attempts in web access logs (20 patterns, all CVEs in CISA KEV); CVEs in IDS alerts are shown in the basis column',
-          'Hardening: prototype-pollution fixes, same-origin-only postMessage for anonymizer checks, SHA-256 and a warning for generator uploads, CI supply-chain hardening',
-          'Easter egg: if a config hides injection test strings, the alpaca has a word with you (analysis is unaffected)',
-        ],
-      },
-    },
     {
       version: '2026.10.22.1',
       items: {
