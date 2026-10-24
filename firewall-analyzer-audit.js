@@ -798,7 +798,18 @@
     const mk = len === 0 ? 0 : (0xFFFFFFFF << (32 - len)) >>> 0;
     return ((n(a) & mk) >>> 0) === ((n(b) & mk) >>> 0);
   }
-  // 回傳 {supported, items:[{svc, iface, ext, basis, zone, cves, risk}]}；items 含對內的服務（ext false）供畫面完整列出
+  // FortiGate 管理者 trusthost（IPv4）：all＝每個可登入的管理者都只允許特定來源、partial＝部分、none＝都沒限制、''＝沒有管理者資料。
+  // Fortinet 公告（FG-IR-24-535）：trusthost 要「所有」GUI 管理者都設定，才與 local-in-policy 限制來源等效，因此只有 all 才視為已緩解。
+  // 0.0.0.0 0.0.0.0（或 /0）＝任何來源；IPv6（ip6-trusthost）與 local-in-policy 不評估
+  const _FG_ANY_HOST = /^0\.0\.0\.0(\s+0\.0\.0\.0|\/0)?$/;
+  function _fgTrustState(parsed) {
+    const admins = (parsed.users || []).filter(u => u.type === 'admin' && u.status !== 'disable');
+    if (!admins.length) return '';
+    const ok = admins.filter(a => (a.trusthosts || []).length && a.trusthosts.every(h => !_FG_ANY_HOST.test(String(h).trim())));
+    return ok.length === admins.length ? 'all' : ok.length ? 'partial' : 'none';
+  }
+  // 回傳 {supported, items:[{svc, iface, ext, basis, zone, cves, risk, trust}]}；items 含對內的服務（ext false）供畫面完整列出
+  // trust（只有 FortiGate 管理介面 fg-admin／admin-ssh）：見 _fgTrustState()；all 時不計入 exposed-svc 稽核
   function analyzeExposedServices(parsed) {
     const vendor = String((parsed && parsed.vendor) || '');
     if (!parsed || !EXPOSE_VENDORS.test(vendor)) return { supported: false, items: [] };
@@ -811,10 +822,11 @@
     };
     const toks = v => String(v || '').toLowerCase().split(/[\s,]+/).filter(Boolean);
     if (vendor === 'FortiGate') {
+      const trust = _fgTrustState(parsed), tx = trust ? { trust } : {};
       (parsed.interfaces || []).forEach(i => { const a = toks(i.allowaccess);
-        if (a.includes('https') || a.includes('http')) add('fg-admin', i.name);
+        if (a.includes('https') || a.includes('http')) add('fg-admin', i.name, tx);
         if (a.includes('fgfm')) add('fg-fgfm', i.name);
-        if (a.includes('ssh')) add('admin-ssh', i.name);
+        if (a.includes('ssh')) add('admin-ssh', i.name, tx);
         if (a.includes('telnet')) add('admin-telnet', i.name); });
       (parsed.vpn || []).filter(v => v.type === 'ssl-vpn' && v.status !== 'disable').forEach(v => {
         const ifs = String(v.iface || '').replace(/"/g, '').split(/[\s,]+/).filter(x => x && x !== '-');
@@ -856,12 +868,14 @@
     h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + esc(tr('expose.col_svc')) + '</th><th>' + esc(tr('expose.col_iface')) + '</th><th>' + esc(tr('expose.col_ext')) +
       '</th><th>' + esc(tr('expose.col_cve')) + '</th><th>' + esc(tr('expose.col_action')) + '</th></tr></thead><tbody>';
     res.items.slice().sort((a, b) => order(a) - order(b)).forEach(x => {
-      const ext = x.ext === true ? pill(tr('expose.ext_yes') + (x.basis ? ' · ' + tr('expose.basis_' + x.basis) : ''), x.risk === 'high' ? 'p-deny' : 'p-warn')
-        : x.ext === null ? pill(tr('expose.ext_unknown'), 'p-warn') : pill(tr('expose.ext_no'), 'p-accept');
+      const ext = (x.ext === true ? pill(tr('expose.ext_yes') + (x.basis ? ' · ' + tr('expose.basis_' + x.basis) : ''), x.risk === 'high' && x.trust !== 'all' ? 'p-deny' : 'p-warn')
+        : x.ext === null ? pill(tr('expose.ext_unknown'), 'p-warn') : pill(tr('expose.ext_no'), 'p-accept')) +
+        (x.trust ? ' ' + pill(tr('expose.trust_' + x.trust), x.trust === 'all' ? 'p-accept' : 'p-warn') : '');
       h += `<tr><td>${esc(tr('expose.svc_' + x.svc))}${x.name ? ' <span style="color:var(--text-dim)">(' + esc(x.name) + ')</span>' : ''}</td><td class="mono">${esc(x.iface)}${x.zone ? ' <span style="color:var(--text-dim)">[' + esc(x.zone) + ']</span>' : ''}</td><td>${ext}</td>` +
         `<td class="mono" style="font-size:11px">${x.cves.length ? x.cves.map(esc).join('<br>') : '-'}</td><td style="font-size:11px">${esc(tr('expose.act_' + x.svc))}</td></tr>`;
     });
-    return h + '</tbody></table></div><div style="font-size:11px;color:var(--text-dim);margin-top:6px">' + esc(tr('expose.note')) + '</div></div>';
+    const tnote = res.items.some(x => x.trust) ? ' ' + tr('expose.trust_note') : '';
+    return h + '</tbody></table></div><div style="font-size:11px;color:var(--text-dim);margin-top:6px">' + esc(tr('expose.note') + tnote) + '</div></div>';
   }
 
   // ── 韌體版本比對已知漏洞（2026-10-24，XN19）：比對邏輯在共用模組 vuln-check.js（VulnCheck），這裡只組畫面 ──
@@ -982,7 +996,7 @@
       riskyIntf.length ? riskyIntf.map(i => `${i.name}(${i.allowaccess})`).join(', ') : tr('audit.normal'),
       ['ISO27001 A.5.15', 'PCI-DSS 4.0 2.2.7', 'NIST 800-53 AC-17', 'CIS v8 12.3'], riskyIntf.map(i => ({ kind: 'iface', name: i.name, vdom: i._vdom })));
     // 6b. 高風險曝險服務（2026-10-24，XN18）：歷來被大量利用的管理介面／VPN 入口開在外部介面
-    const expSvc = analyzeExposedServices(parsed).items.filter(x => x.ext === true && x.cves.length);
+    const expSvc = analyzeExposedServices(parsed).items.filter(x => x.ext === true && x.cves.length && x.trust !== 'all');
     f('exposed-svc', tr('audit.check_exposed_svc'), expSvc.length, 'high',
       expSvc.length ? expSvc.map(x => `${tr('expose.svc_' + x.svc)}@${x.iface}`).slice(0, 8).join(', ') + (expSvc.length > 8 ? '…' : '') + tr('audit.rec_exposed_svc') : tr('audit.none'),
       ['CISA KEV', 'NIST 800-53 SC-7', 'CIS v8 12.2'], expSvc.map(x => ({ kind: 'iface', name: x.iface })));
