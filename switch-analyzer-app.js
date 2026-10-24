@@ -4121,22 +4121,22 @@ function renderVulnCard(){
   let h=`<div id="vuln-card" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px">
     <div style="font-size:14px;font-weight:600;margin-bottom:6px">${esc(tr('vuln.title'))}</div>
     <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('vuln.hint'))}</div>
+    ${VulnCheck.BUILTIN_ASOF?`<div style="font-size:11px;padding:6px 10px;margin-bottom:8px;background:var(--surface);border-left:3px solid var(--orange,#f59e0b);border-radius:4px">${esc(tr('vuln.builtin_asof').replace('{date}',VulnCheck.BUILTIN_ASOF).replace('{n}',(VulnCheck.BUILTIN||[]).length))}</div>`:''}
     <textarea id="vuln-text" spellcheck="false" placeholder="${esc(VulnCheck.CSV_HEADER)}" style="width:100%;height:100px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${esc(text)}</textarea>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
       <button style="${btn}" onclick="vulnApply()">${esc(tr('vuln.apply'))}</button>
       <label style="${btn2}">${esc(tr('vuln.upload'))}<input type="file" accept=".csv,.txt" style="display:none" onchange="vulnReadFile(this)"></label>
       <button style="${btn2}" onclick="vulnDownloadSample()">${esc(tr('vuln.sample'))}</button>
     </div>`;
-  if(!text.trim())return h+'</div>';
+  if(!invRows.length)return h+`<div class="nodata">${esc(tr('vuln.no_entries'))}</div></div>`;
   const p=VulnCheck.parseCsv(text);
   if(p.errors.length)h+=`<div style="font-size:12px;color:var(--red);margin-bottom:6px">${p.errors.map(e=>esc(tr('vuln.err_'+e.reason).replace('{n}',e.line))).join('<br>')}</div>`;
-  if(!p.entries.length)return h+`<div class="nodata">${esc(tr('vuln.no_entries'))}</div></div>`;
-  const devs=vulnDevices(), res=VulnCheck.check(devs,p.entries);
+  const devs=vulnDevices(), res=VulnCheck.check(devs,VulnCheck.withBuiltin(p.entries));
   const st=r=>{const k=VULN_PILL[r.status];const t=tr('vuln.st_'+r.status);return k?pill(k,t):`<span style="color:var(--text-muted)">${esc(t)}</span>`;};
   h+=`<div class="tbl-wrap" style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc(tr('vuln.col_device'))}</th><th>${esc(tr('inv.col_vendor'))}</th><th>${esc(tr('vuln.version'))}</th><th>${esc(tr('vuln.col_result'))}</th><th>${esc(tr('vuln.col_cve'))}</th><th>${esc(tr('vuln.col_fixed'))}</th></tr></thead><tbody>`+
     res.map((r,i)=>{const sch=VulnCheck.deviceScheme(r.vendor,r.version)||VulnCheck.deviceScheme(r.vendor,'0');
       const ver=`<input class="mono" data-vuln-file="${esc(devs[i].file)}" value="${esc(r.version)}" placeholder="${esc(sch?tr('vuln.version_ph_'+sch):'')}" style="width:130px;font-size:11px;padding:2px 4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px">`;
-      const cves=r.hits.map(e=>`<span class="mono">${esc(e.cve)}</span>${e.kev?' <b style="color:var(--red)">KEV</b>':''}${e.severity?' <span style="color:var(--text-dim)">'+esc(e.severity)+'</span>':''}`).concat(r.unknown.map(e=>`<span class="mono" style="color:var(--text-dim)">${esc(e.cve)}?</span>`)).join('<br>');
+      const cves=r.hits.map(e=>`<span class="mono">${esc(e.cve)}</span>${e.kev?' <b style="color:var(--red)">KEV</b>':''}${e.builtin?' <span style="color:var(--text-dim)">'+esc(tr('vuln.src_builtin'))+'</span>':''}`).concat(r.unknown.map(e=>`<span class="mono" style="color:var(--text-dim)">${esc(e.cve)}?</span>`)).join('<br>');
       return `<tr><td><b>${esc(r.name)}</b></td><td>${esc(r.vendor)}</td><td>${ver}</td><td>${st(r)}</td><td style="font-size:11px">${cves||'-'}</td><td class="mono" style="font-size:11px">${esc([...new Set(r.hits.map(e=>e.fixed).filter(Boolean))].join('; ')||'-')}</td></tr>`;}).join('')+'</tbody></table></div>';
   return h+`<div style="font-size:11px;color:var(--text-dim);margin-top:6px">${esc(tr('vuln.disclaimer'))}</div></div>`;
 }

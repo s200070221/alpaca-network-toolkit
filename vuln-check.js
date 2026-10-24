@@ -144,5 +144,16 @@ const VulnCheck = (function () {
     });
   }
   const CSV_HEADER = 'vendor,product,affected,fixed,cve,severity,kev,note';
-  return { scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, SCHEMES, CSV_HEADER };
+  // 內建起始清單（vuln-seed.js 載入後掛上 BUILTIN／BUILTIN_ASOF）與使用者 CSV 合併：
+  // 內建在前、使用者在後；同一 cve＋scheme 以使用者的為準（可覆蓋或停用內建判斷）。
+  // 內建資料會過期，呼叫端須顯示 BUILTIN_ASOF 並提醒自行更新；「未落在範圍」永遠不等於安全。
+  function withBuiltin(userEntries) {
+    const user = userEntries || [];
+    const seen = new Set(user.map(e => (e.cve || '').toUpperCase() + '|' + e.scheme));
+    const builtin = (API.BUILTIN || []).filter(e => !seen.has((e.cve || '').toUpperCase() + '|' + e.scheme))
+      .map(e => Object.assign({}, e, { builtin: true }));
+    return builtin.concat(user);
+  }
+  const API = { scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, withBuiltin, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
+  return API;
 })();
