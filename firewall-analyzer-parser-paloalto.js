@@ -89,6 +89,32 @@ const PaloAltoParser = (() => {
     return { intrazone: act('intrazone'), interzone: act('interzone') };
   }
 
+  // 管理面與 GlobalProtect 入口（2026-10-24，XN18 高風險曝險服務）：
+  // 介面管理設定檔（/network/profiles/interface-management-profile，https／http／ssh／telnet 為 yes/no，依 pan-os-python
+  // ManagementProfile）與 GlobalProtect portal／gateway 的 local-address interface。XML 與 set 兩種格式。
+  // 回傳 {profiles:{名稱:{https,http,ssh,telnet}}, gp:[{kind:'portal'|'gateway', name, iface}]}
+  function parseMgmtPlane(text) {
+    const profiles = Object.create(null), gp = [];
+    const unq = v => String(v || '').replace(/^"|"$/g, '');
+    xva(text, 'interface-management-profile').filter(b => /<entry\s/.test(b)).forEach(b => xentriesTop(b).forEach(e => {
+      profiles[e._name] = { https: /<https>yes<\/https>/.test(e._inner), http: /<http>yes<\/http>/.test(e._inner), ssh: /<ssh>yes<\/ssh>/.test(e._inner), telnet: /<telnet>yes<\/telnet>/.test(e._inner) };
+    }));
+    for (const m of text.matchAll(/^set\s+(?:template\s+\S+\s+config\s+)?network\s+profiles\s+interface-management-profile\s+("[^"]+"|\S+)\s+(https|http|ssh|telnet)\s+yes\b/gm)) {
+      const n = unq(m[1]);
+      profiles[n] = profiles[n] || { https: false, http: false, ssh: false, telnet: false };
+      profiles[n][m[2]] = true;
+    }
+    ['portal', 'gateway'].forEach(kind => {
+      xva(text, 'global-protect-' + kind).forEach(b => xentriesTop(b).forEach(e => {
+        const iface = xv(xv(e._inner, 'local-address'), 'interface');
+        if (iface) gp.push({ kind, name: e._name, iface });
+      }));
+      const re = new RegExp('^set\\s+(?:vsys\\s+\\S+\\s+)?global-protect\\s+global-protect-' + kind + '\\s+("[^"]+"|\\S+)\\s+(?:portal-config\\s+)?local-address\\s+interface\\s+(\\S+)', 'gm');
+      for (const m of text.matchAll(re)) gp.push({ kind, name: unq(m[1]), iface: unq(m[2]) });
+    });
+    return { profiles, gp };
+  }
+
   // ─── Set-format helpers ───────────────────────────────────────────────────
   function setVal(text, key) {
     const re = new RegExp(`^set\\s+${key.replace(/\s+/g,'\\s+')}\\s+(.+)$`, 'im');
@@ -285,7 +311,7 @@ const PaloAltoParser = (() => {
           mtu: setVal(text, `${prefix} mtu`) || '1500',
           macaddr:'-', mode:'static', gwdetect:'-',
           desc: setVal(text, `${prefix} comment`) || '-',
-          allowaccess: setVal(text, `${prefix} interface-management-profile`) || '-',
+          allowaccess: setVal(text, `${prefix} layer3 interface-management-profile`) || setVal(text, `${prefix} interface-management-profile`) || '-',
           interface:'-', gateway:'-',
         });
       });
@@ -1304,6 +1330,7 @@ const PaloAltoParser = (() => {
 
     return {
       vendor:       'PaloAlto',
+      mgmtPlane:    parseMgmtPlane(text),
       deviceInfo,
       interfaces,
       policies,

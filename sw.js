@@ -104,6 +104,7 @@ const FILES = [
   'switch-generator-validate.js',
   'switch-generator-zip.js',
   'toolkit-version.js',
+  'vuln-check.js',
   'https://cdn.jsdelivr.net/npm/docx@8.6.0/build/index.umd.js',
 ];
 const EXTERNAL = new Set(FILES.filter(f => /^https:/.test(f)));

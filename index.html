@@ -2132,10 +2132,11 @@ function clearHealthSummary() {
 const WS_FORMAT = 'alpaca-workspace';
 const WS_KEYS = [
   { key: 'cw_lang', tool: 'common', group: 'settings' }, { key: 'cw_theme', tool: 'common', group: 'settings' }, { key: 'cw_sb', tool: 'common', group: 'settings' },
-  { key: 'sw_golden_rules', tool: 'switch_analyzer', group: 'settings' }, { key: 'sw_eol_list', tool: 'switch_analyzer', group: 'settings' },
+  { key: 'sw_golden_rules', tool: 'switch_analyzer', group: 'settings' }, { key: 'sw_eol_list', tool: 'switch_analyzer', group: 'settings' }, { key: 'sw_vuln_list', tool: 'switch_analyzer', group: 'settings' },
   { key: 'sw_audit_marks', tool: 'switch_analyzer', group: 'settings', json: true }, { key: 'sw_audit_reviewer', tool: 'switch_analyzer', group: 'settings' },
   { key: 'fw_accepted_risks', tool: 'firewall_analyzer', group: 'settings', json: true }, { key: 'fw_naming_rules', tool: 'firewall_analyzer', group: 'settings', json: true },
   { key: 'fw_expiry_keywords', tool: 'firewall_analyzer', group: 'settings' },
+  { key: 'fw_vuln_list', tool: 'firewall_analyzer', group: 'settings' },
   { key: 'fw_log_retention_days', tool: 'firewall_analyzer', group: 'settings' },
   { key: 'fw_audit_marks', tool: 'firewall_analyzer', group: 'settings', json: true }, { key: 'fw_audit_reviewer', tool: 'firewall_analyzer', group: 'settings' },
   { key: 'log_analyzer_settings_v1', tool: 'log_analyzer', group: 'settings', json: true },

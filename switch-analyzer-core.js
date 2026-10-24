@@ -1441,7 +1441,8 @@ function parseSecurity(cfg, vendor){
 // 參數風格（精確巢狀寫法未能取得完整官方逐字範例，已知限制）；guest-vlan 查無對應
 // AOS-CX 語法，固定回傳 '-'（已知限制）
 function _parseSecurityArubaCX(cfg){
-  const result={};
+  // 以介面名稱為鍵：不繼承 Object.prototype，介面名稱為 __proto__ 時才不會寫進原型
+  const result=Object.create(null);
   const get=port=>{if(!result[port])result[port]={port,dot1x:'-',portSec:false,maxMac:'-',violation:'-',guestVlan:'-'};return result[port];};
   let m;
   const dotRe=/^aaa authentication port-access dot1x authenticator enable interface\s+(\S+)/gim;

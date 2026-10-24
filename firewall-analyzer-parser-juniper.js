@@ -1197,6 +1197,25 @@ const JuniperParser = (() => {
     return out.join('\n') + '\n';
   }
 
+  // 管理面（2026-10-24，XN18 高風險曝險服務）：J-Web（system services web-management http／https）與各區域、
+  // 區域內介面的 host-inbound-traffic system-services（http／https／ssh／telnet／all…）。
+  // 回傳 {jweb:{http,https}|null, inbound:[{zone, iface（區域層級為空字串）, services:[…]}]}
+  function parseMgmtPlane(tree) {
+    const wm = path(tree, ['system', 'services', 'web-management']);
+    const has = (n, k) => !!(n && (n._children[k] || n._values.some(v => v === k || v.startsWith(k + ' '))));
+    const jweb = wm ? { http: has(wm, 'http'), https: has(wm, 'https') } : null;
+    const svcOf = n => { const ss = path(n, ['host-inbound-traffic', 'system-services']); return ss ? [...ss._values, ...Object.keys(ss._children)].map(v => v.split(/\s+/)[0]) : []; };
+    const inbound = [];
+    Object.entries((path(tree, ['security', 'zones']) || { _children: {} })._children).forEach(([zk, zn]) => {
+      if (!/^security-zone\s/.test(zk)) return;
+      const zone = zk.replace(/^security-zone\s+/, '');
+      const zs = svcOf(zn);
+      if (zs.length) inbound.push({ zone, iface: '', services: zs });
+      Object.entries((path(zn, ['interfaces']) || { _children: {} })._children).forEach(([ik, inode]) => { const is = svcOf(inode); if (is.length) inbound.push({ zone, iface: ik, services: is }); });
+    });
+    return { jweb, inbound };
+  }
+
   function parse(text) {
     if (junosIsDisplaySet(text)) text = junosSetToCurly(text);
     text = junosApplyGroups(text);
@@ -1226,6 +1245,7 @@ const JuniperParser = (() => {
       dns:        parseDns(text, tree),
       snmp:       parseSnmp(text, tree),
       logservers: parseLogServers(text, tree),
+      mgmtPlane:  parseMgmtPlane(tree),
       _tree:      tree,
       _vdomNames: [],
       _isMultiVdom: false,

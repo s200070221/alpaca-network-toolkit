@@ -357,7 +357,7 @@ const CiscoASAParser = (() => {
     }
 
     // Parse tunnel-groups: peer → {hasPsk, type, defaultGroupPolicy}
-    const tunnelGroups = {};
+    const tunnelGroups = Object.create(null);
     let inTG = false, curTG = '';
     for (const line of lines) {
       const mTG = line.match(/^tunnel-group\s+(\S+)\s+type\s+(\S+)/);
@@ -384,14 +384,14 @@ const CiscoASAParser = (() => {
 
     // Build standardAclMap：ACL 名稱 → CIDR 清單，來自 "access-list NAME standard permit NETWORK MASK"
     // （split-tunnel-network-list 參照的是 standard ACL，跟既有 aclMap 認得的 "permit ip SRC MASK DST MASK" 兩段式語法不同，必須是 standard，extended 會被 ASA 靜默 fallback 成 tunnelall）
-    const standardAclMap = {};
+    const standardAclMap = Object.create(null);
     for (const line of lines) {
       const mSA = line.match(/^access-list\s+(\S+)\s+standard\s+permit\s+(\S+)\s+(\S+)/);
       if (mSA) { (standardAclMap[mSA[1]] = standardAclMap[mSA[1]] || []).push(`${mSA[2]}/${mSA[3]}`); }
     }
 
     // Parse group-policy ... attributes：名稱 → {splitTunnelPolicy, aclName}
-    const groupPolicies = {};
+    const groupPolicies = Object.create(null);
     let inGP = false, curGP = '';
     for (const line of lines) {
       const mGP = line.match(/^group-policy\s+(\S+)\s+attributes/);
@@ -404,7 +404,7 @@ const CiscoASAParser = (() => {
     }
 
     // Build VPN entries — collect unique peers from mapEntries + tunnelGroups
-    const peerMap = {}; // peer → best mapEntry
+    const peerMap = Object.create(null); // peer → best mapEntry
     for (const me of Object.values(mapEntries)) {
       if (me.peer && !peerMap[me.peer]) peerMap[me.peer] = me;
     }
@@ -561,6 +561,10 @@ const CiscoASAParser = (() => {
       policies:    parsePolicies(text, addrTypeMap),
       // same-security-traffic permit inter-interface|intra-interface（第十八輪 TF，查詢的 security-level 判斷用）
       sameSecurity: { inter: /^same-security-traffic\s+permit\s+inter-interface/m.test(text), intra: /^same-security-traffic\s+permit\s+intra-interface/m.test(text) },
+      // 管理面與 VPN 入口（2026-10-24，XN18 高風險曝險服務）：http server enable（ASDM／HTTPS 管理，允許的介面在
+      // interfaces 的 allowaccess 'http'）、webvpn 區塊的 enable <nameif>（AnyConnect／無用戶端 SSL VPN 入口）
+      mgmtPlane: { httpServer: /^http\s+server\s+enable\b/m.test(text),
+        webvpnIfs: ((text.match(/^webvpn\s*\n((?:[ \t]+.*\n?)*)/m) || [])[1] || '').split('\n').map(l => (l.match(/^\s+enable\s+(\S+)/) || [])[1]).filter(Boolean) },
       addresses,
       services:    parseServiceObjects(text),
       nat:         parseNAT(text),

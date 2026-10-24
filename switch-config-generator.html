@@ -270,6 +270,8 @@ input.valid,select.valid{border-color:var(--green)!important}
           <span class="file-input-name" id="import-parser-file-name" data-i18n="btn.noFileSelected">未選擇任何檔案</span>
         </div>
       </div>
+      <div style="font-size:11px;color:var(--orange,#f59e0b);margin-top:6px" data-i18n="lbl.parserFileWarn">⚠ 上傳的檔案會在本頁執行其中的程式，只上傳從本工具官方 GitHub Release 下載、未經他人修改的檔案；可用下方顯示的 SHA-256 與 Release 的 SHA256SUMS.txt 比對。</div>
+      <div id="import-parser-sha" class="mono" style="font-size:11px;color:var(--text-dim);margin-top:4px;word-break:break-all"></div>
     </details>
     <div class="row">
       <button class="gen-btn" data-i18n="btn.parseImport" onclick="parseAndImport()">解析並帶入表單</button>
