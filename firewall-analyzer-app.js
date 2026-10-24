@@ -633,6 +633,8 @@ const App = (() => {
       const FW_SLOT_VENDOR={f:'fortigate',s:'sophos',c:'checkpoint',p:'paloalto',j:'juniper',x:'pfsense',w:'sonicwall',m:'mikrotik',a:'ciscoasa',t:'ciscoasa',z:'zyxel',r:'edgerouter',u:'openwrt',g:'watchguard',v:'vyos',n:'netfilter',k:'cloudsg',h:'h3c',e:'tnsr',l:'wlc'};
       const FW_SLOT_LABEL={f:'FortiGate',s:'Sophos XG/XGS',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense/OPNsense',w:'SonicWall',m:'MikroTik RouterOS',a:'Cisco ASA',t:'Cisco Firepower/FTD',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',u:'OpenWrt (UCI)',g:'WatchGuard Firebox',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure / GCP / Meraki',h:'H3C SecPath',e:'Netgate TNSR',l:'Wireless LAN Controller'};
       const FW_DETECTED_LABEL={fortigate:'FortiGate',paloalto:'Palo Alto',juniper:'Juniper',checkpoint:'Check Point',pfsense:'pfSense/OPNsense',sonicwall:'SonicWall',mikrotik:'MikroTik RouterOS',ciscoasa:'Cisco ASA/FTD',sophos:'Sophos XG',zyxel:'Zyxel USG/ATP',edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',watchguard:'WatchGuard Firebox',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',h3c:'H3C SecPath',tnsr:'Netgate TNSR',wlc:'Wireless LAN Controller'};
+      // 可疑注入字串彩蛋（XN20，payload-sniff.js）：只提示，不影響分析
+      if (typeof PayloadSniff !== 'undefined') PayloadSniff.notify(Object.values(ST.raw).join('\n'), _lang, m => showEggToast(m, 7000));
       REPORT_UNKNOWN_SLOTS = []; REPORT_FIRST_SLOT_VENDOR = '';
       ['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','l'].forEach(v=>{
         if(!ST.raw[v])return;

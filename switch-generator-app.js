@@ -3565,6 +3565,8 @@ async function parseAndImport(){
   // 統一在此正規化 CRLF，避免匯入的 CRLF 設定檔在後續逐行正則悄悄比對失敗
   const text=document.getElementById('import-text').value.replace(/\r\n/g,'\n').trim();
   if(!text){showImportMsg(tr('msg.importEmpty'),true);return;}
+  // 可疑注入字串彩蛋（XN20，payload-sniff.js）：只提示，不影響分析
+  if(typeof PayloadSniff!=='undefined')PayloadSniff.notify(text,_lang,m=>showEggToast(m,7000));
 
   let fns=null;
   try{
