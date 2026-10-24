@@ -714,7 +714,9 @@ const FortigateParser = (() => {
         ldapServer: '-', radiusServer: '-', comment: gv(t, 'comments') || '-', members: '-',
         vdom: vdomAccess,
         permissions: profiles[prof] || [{ resource: 'All', access: 'read-write' }],
-        roles: [prof], accessLevel: mapLevel(prof), _vdom: vdomName });
+        roles: [prof], accessLevel: mapLevel(prof), _vdom: vdomName,
+        // 管理者可登入的來源（trusthost1～10，IPv4）；未設定代表任何來源（0.0.0.0/0），供曝險服務判斷
+        trusthosts: Array.from({ length: 10 }, (_, k) => gv(t, 'trusthost' + (k + 1))).filter(Boolean) });
     });
 
     // Local users
