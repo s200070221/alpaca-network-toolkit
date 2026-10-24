@@ -161,6 +161,7 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
 .tour-ok{font-size:12px;padding:3px 10px;border:1px solid var(--border);border-radius:5px;background:none;color:var(--text);cursor:pointer}
 </style>
 <script src="toolkit-version.js"></script>
+<script src="payload-sniff.js"></script>
 </head>
 <body data-theme="dark">
 <header id="topbar">
@@ -12244,6 +12245,8 @@ async function doAnalyze() {
     if (myGen !== _analyzeGen) return;
     const { indexes, opts } = collectAnalyzeOpts();
     ISSUES = buildIssueList(EVENTS, indexes, opts);
+    // 漏洞利用嘗試彩蛋（XN20，payload-sniff.js）：log 裡出現攻擊字串是正常內容，只與偵測結果連動
+    if (typeof PayloadSniff !== 'undefined') { const xm = PayloadSniff.logMessage(ISSUES, currentLang); if (xm) showEggToast(xm, 7000); }
     ANON_EVENTS = null;
     showProgress('import.progress_correlating');
     await yieldToUI();

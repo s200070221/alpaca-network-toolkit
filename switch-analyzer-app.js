@@ -278,6 +278,8 @@ function doAnalyze(){
   // 設定檔說明頁若沿用上一份載入內容（未自行貼上其他文字），換檔時一併重置，避免顯示舊設定的逐行說明
   if(exText===null||exText===rawCfgText){exText=null;exResult=null;}
   rawCfgText=cfg;
+  // 可疑注入字串彩蛋（XN20，payload-sniff.js）：只提示，不影響分析
+  if(typeof PayloadSniff!=='undefined')PayloadSniff.notify(cfg,_lang,m=>showEggToast(m,7000));
   parsed=parseAny(cfg,forceVendor);
   const lldpText=(document.getElementById('lldp-area')?.value||'').trim();
   parsed.lldp=lldpText?LLDPParser.parse(lldpText,parsed.vendor):[];

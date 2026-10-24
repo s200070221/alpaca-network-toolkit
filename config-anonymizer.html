@@ -315,6 +315,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
 .tour-ok{font-size:12px;padding:3px 10px;border:1px solid var(--border);border-radius:5px;background:none;color:var(--text);cursor:pointer}
 </style>
 <script src="toolkit-version.js"></script>
+<script src="payload-sniff.js"></script>
 </head>
 <body>
 <div id="app">
@@ -5294,6 +5295,8 @@ function runAnonymize() {
   const text = document.getElementById('paste-input').value.trim();
   if (!text) return;
   STATE.original = text;
+  // 可疑注入字串彩蛋（XN20，payload-sniff.js）：只提示，不影響分析
+  if (typeof PayloadSniff !== 'undefined') PayloadSniff.notify(text, _lang, m => showEggToast(m, 7000));
   const opts = getOpts();
 
   // Vendor detection
