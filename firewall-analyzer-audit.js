@@ -873,6 +873,7 @@
     const inp = 'padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface2);color:var(--text)';
     let h = '<div id="vuln-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('vuln.title')) + '</div>';
     h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('vuln.hint')) + '</div>';
+    if (V && V.BUILTIN_ASOF) h += `<div style="font-size:11px;padding:6px 10px;margin-bottom:8px;background:var(--bg2);border-left:3px solid var(--orange,#f59e0b);border-radius:4px">${esc(tr('vuln.builtin_asof').replace('{date}', V.BUILTIN_ASOF).replace('{n}', (V.BUILTIN || []).length))}</div>`;
     if (!V || !sch) return h + '<div class="nodata" style="padding:14px 0">' + esc(tr('vuln.unsupported')) + '</div></div>';
     h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px"><label style="display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--text-dim)">${esc(tr('vuln.version'))}` +
       `<input id="vuln-version" class="mono" value="${esc(ver)}" placeholder="${esc(tr('vuln.version_ph_' + sch))}" style="width:200px;${inp}"></label>` +
@@ -881,18 +882,17 @@
       `<button class="btn btn-ghost btn-sm" onclick="window._fwVulnSample()">${esc(tr('vuln.sample'))}</button></div>`;
     if (!V.parse(sch, ver)) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-bottom:6px">${esc(tr(sch === 'fortios' && /^\d+\.\d{2}\b/.test(fw) ? 'vuln.version_fortios_short' : 'vuln.version_missing'))}</div>`;
     h += `<textarea id="vuln-text" spellcheck="false" placeholder="${esc(V.CSV_HEADER)}" style="width:100%;height:90px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;${inp}">${esc(st.text || '')}</textarea>`;
-    if (!String(st.text || '').trim()) return h + '</div>';
     const pc = V.parseCsv(st.text);
     if (pc.errors.length) h += `<div style="font-size:12px;color:var(--red);margin:6px 0">${pc.errors.map(e => esc(tr('vuln.err_' + e.reason).replace('{n}', e.line))).join('<br>')}</div>`;
-    if (!pc.entries.length) return h + `<div class="nodata" style="padding:10px 0">${esc(tr('vuln.no_entries'))}</div></div>`;
-    const r = V.check([{ name: (p.deviceInfo && p.deviceInfo.hostname) || '', vendor: p.vendor, version: ver }], pc.entries)[0];
+    const entries = V.withBuiltin(pc.entries);  // 內建起始清單＋使用者 CSV
+    const r = V.check([{ name: (p.deviceInfo && p.deviceInfo.hostname) || '', vendor: p.vendor, version: ver }], entries)[0];
     const pillCls = { affected: 'p-deny', ok: 'p-accept', unknown: 'p-warn', noVersion: 'p-warn', noRules: '', unsupported: '' }[r.status] || '';
-    h += `<div style="margin:8px 0;font-size:12px">${pillCls ? pill(tr('vuln.st_' + r.status), pillCls) : esc(tr('vuln.st_' + r.status))} ${esc(tr('vuln.summary').replace('{n}', pc.entries.filter(e => e.scheme === sch).length).replace('{hit}', r.hits.length))}</div>`;
+    h += `<div style="margin:8px 0;font-size:12px">${pillCls ? pill(tr('vuln.st_' + r.status), pillCls) : esc(tr('vuln.st_' + r.status))} ${esc(tr('vuln.summary').replace('{n}', entries.filter(e => e.scheme === sch).length).replace('{hit}', r.hits.length))}</div>`;
     const rows = r.hits.map(e => ['hit', e]).concat(r.unknown.map(e => ['unknown', e]));
     if (rows.length) {
-      h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + ['vuln.col_cve', 'vuln.col_result', 'vuln.col_severity', 'vuln.col_kev', 'vuln.col_affected', 'vuln.col_fixed', 'vuln.col_note'].map(k => esc(tr(k))).join('</th><th>') + '</th></tr></thead><tbody>';
+      h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + ['vuln.col_cve', 'vuln.col_result', 'vuln.col_severity', 'vuln.col_kev', 'vuln.col_affected', 'vuln.col_fixed', 'vuln.col_src', 'vuln.col_note'].map(k => esc(tr(k))).join('</th><th>') + '</th></tr></thead><tbody>';
       rows.forEach(([k, e]) => { h += `<tr><td class="mono">${esc(e.cve)}</td><td>${k === 'hit' ? pill(tr('vuln.res_hit'), 'p-deny') : pill(tr('vuln.res_unknown'), 'p-warn')}</td><td>${esc(e.severity || '-')}</td><td>${e.kev ? 'KEV' : '-'}</td>` +
-        `<td class="mono" style="font-size:11px">${esc(e.affected)}</td><td class="mono" style="font-size:11px">${esc(e.fixed || '-')}</td><td style="font-size:11px">${esc([e.product, e.note].filter(Boolean).join(' — ') || '-')} <span style="color:var(--text-dim)">(#${e.line})</span></td></tr>`; });
+        `<td class="mono" style="font-size:11px">${esc(e.affected)}</td><td class="mono" style="font-size:11px">${esc(e.fixed || '-')}</td><td style="font-size:11px">${esc(tr(e.builtin ? 'vuln.src_builtin' : 'vuln.src_user'))}</td><td style="font-size:11px">${esc([e.product, e.note].filter(Boolean).join(' — ') || '-')}${e.line ? ' <span style="color:var(--text-dim)">(#' + e.line + ')</span>' : ''}</td></tr>`; });
       h += '</tbody></table></div>';
     }
     return h + '<div style="font-size:11px;color:var(--text-dim);margin-top:6px">' + esc(tr('vuln.disclaimer')) + '</div></div>';

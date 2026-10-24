@@ -105,6 +105,7 @@ const FILES = [
   'switch-generator-zip.js',
   'toolkit-version.js',
   'vuln-check.js',
+  'vuln-seed.js',
   'payload-sniff.js',
   'https://cdn.jsdelivr.net/npm/docx@8.6.0/build/index.umd.js',
 ];
