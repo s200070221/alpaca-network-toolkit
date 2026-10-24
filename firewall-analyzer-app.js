@@ -1535,7 +1535,7 @@ function onParsed(){
           const _zTgl=`<div style="display:flex;gap:5px;margin-bottom:8px"><button onclick="window._fwZoneView='table';renderSection('audit')" style="${_zbs(!window._fwZoneView||window._fwZoneView==='table')}">${tr('routing.view_table')}</button><button onclick="window._fwZoneView='topo';renderSection('audit')" style="${_zbs(window._fwZoneView==='topo')}">${tr('routing.view_topo')}</button></div>`;
           _zoneHtml = _zTgl + (window._fwZoneView==='topo' ? buildZoneTopoHtml(PARSED.policies) : _zoneHtml);
         }
-        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildDuplicateObjectsHtml(_do) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules()) + buildExpiredRulesHtml(analyzeExpiredRules(PARSED, { keywords: _loadExpiryKeywords() }), _loadExpiryKeywords())
+        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildDuplicateObjectsHtml(_do) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildExposedServicesHtml(analyzeExposedServices(PARSED)) + buildVulnCheckHtml({ text: _fwVulnText(), version: _fwVulnVer[_acceptedRiskHost()] || '', parsed: PARSED }) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules()) + buildExpiredRulesHtml(analyzeExpiredRules(PARSED, { keywords: _loadExpiryKeywords() }), _loadExpiryKeywords())
           + (PARSED.vendor === 'FortiGate' ? _fwCleanupCardHtml() : '')
           + (_HIT_VENDOR_SUFFIX[PARSED.vendor] !== undefined ? _fwHitCardHtml() : '')
           + _fwRecertCardHtml()
@@ -1781,7 +1781,8 @@ function onParsed(){
   // key 為 computeFirewallHealth() issues[].key。依裝置 hostname 分開保存，換分析另一台裝置不會
   // 套用到別台的決定；純本機偏好，localStorage 不可用時退回空清單（等同全部未接受）
   const ACCEPTED_RISKS_LS = 'fw_accepted_risks';
-  function _acceptedRiskHost() { return (PARSED && PARSED.deviceInfo && PARSED.deviceInfo.hostname) || '-'; }
+  // 主機名稱當作 localStorage 物件的鍵：__proto__／constructor／prototype 會取到原型，加前綴避開（原型污染）
+  function _acceptedRiskHost() { const h = (PARSED && PARSED.deviceInfo && PARSED.deviceInfo.hostname) || '-'; return /^(__proto__|constructor|prototype)$/.test(h) ? '#' + h : h; }
   function _loadAcceptedRisks() {
     try { const all = JSON.parse(localStorage.getItem(ACCEPTED_RISKS_LS) || '{}'); return Array.isArray(all[_acceptedRiskHost()]) ? all[_acceptedRiskHost()] : []; }
     catch (e) { return []; }
@@ -1813,6 +1814,33 @@ function onParsed(){
     _namingRulesMem = rules;
     try { localStorage.setItem(NAMING_RULES_LS, JSON.stringify(rules)); } catch (e) { /* 不可用時由 _namingRulesMem 維持本次有效 */ }
     renderSection('audit');
+  };
+
+  // 韌體版本比對（XN19）：漏洞清單 CSV 存 localStorage 'fw_vuln_list'（不分裝置，已加入入口頁 WS_KEYS）；
+  // 使用者填的版本只存記憶體（依主機名稱），設定檔版本不完整（FortiGate 只有 7.04＋build）時使用
+  const FW_VULN_LS = 'fw_vuln_list';
+  let _fwVulnMem = null;
+  const _fwVulnVer = Object.create(null);
+  function _fwVulnText() {
+    try { const v = localStorage.getItem(FW_VULN_LS); if (v !== null) return v; } catch (e) { /* 落到記憶體備援 */ }
+    return _fwVulnMem || '';
+  }
+  function _fwVulnSave(t) { _fwVulnMem = t; try { localStorage.setItem(FW_VULN_LS, t); } catch (e) { /* 不可用時由 _fwVulnMem 維持本次有效 */ } }
+  window._fwVulnApply = function() {
+    const t = document.getElementById('vuln-text'), v = document.getElementById('vuln-version');
+    if (t) _fwVulnSave(t.value);
+    if (v) _fwVulnVer[_acceptedRiskHost()] = v.value.trim();
+    renderSection('audit');
+    const c = document.getElementById('vuln-card'); if (c) c.scrollIntoView({ block: 'nearest' });
+  };
+  window._fwVulnFile = async function(input) {
+    const f = input.files && input.files[0]; input.value = '';
+    if (!f) return;
+    _fwVulnSave((await readFile(f)).replace(/^\uFEFF/, ''));
+    renderSection('audit');
+  };
+  window._fwVulnSample = function() {
+    Reporter.download(tr('vuln.sample_comment') + '\n' + VulnCheck.CSV_HEADER + '\nfortios,FortiOS SSL-VPN,7.2.0-7.2.6;7.4.0-7.4.2,7.2.7;7.4.3,CVE-0000-00000,critical,no,example only\n', 'firmware_vulnerability_sample.csv', 'text/csv');
   };
 
   // 到期關鍵字（第十二輪 MF）：localStorage 'fw_expiry_keywords'，比照命名規範不分裝置；空字串用預設

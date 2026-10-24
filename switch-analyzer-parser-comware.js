@@ -647,7 +647,7 @@ function parseMgmtServices(cfg, vendor, brand){
   const all=(re)=>{const out=[];let m;const r=new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g');while((m=r.exec(cfg))!==null)out.push(m[1]);return out;};
   const has=re=>re.test(cfg);
   const jb=n=>typeof junosBlock==='function'?junosBlock(cfg,n):'';
-  let ntp=[], aaa=[], banner=null, httpPlain=null, sshV1=null, idleOff=null, syslogExtra=[];
+  let ntp=[], aaa=[], banner=null, httpPlain=null, sshV1=null, idleOff=null, syslogExtra=[], smartInstall=null, webUi=null;
   // EFOS（第十二輪 MM）：只有 ntp server 依真實錄製確認，其餘項目語法未查證不評估
   // Netgear Smart Managed Pro（第十三輪 NC）：只有 sntp N host 依真實錄製確認，其餘未查證不評估
   if(vendor==='netgearsmart')return {ntp:[...new Set(all(/^sntp\s+\d+\s+host\s+(\S+)/m))], aaa:null, banner:null, httpPlain:null, sshV1:null, idleOff:null, syslogExtra:[], sshV2Only:null, syslogEval:false};
@@ -684,6 +684,11 @@ function parseMgmtServices(cfg, vendor, brand){
     banner=has(/^\s*banner\s+(?:motd|login|exec)\b/m);
     if(vendor==='cisco'){
       httpPlain=has(/^ip\s+http\s+server\s*$/m);
+      // 已知遭利用漏洞相關（2026-10-24，XN18）：Smart Install 在未修補 CSCvd36820 的 IOS 交換器上預設啟用，設定檔沒有
+      // no vstack 即可能啟用（CVE-2018-0171）；IOS-XE（version 16 起）的 Web UI 由 ip http server／secure-server 開啟
+      // （CVE-2023-20198／20273），傳統 IOS 不受影響不評估
+      smartInstall=!has(/^no\s+vstack\b/m);
+      webUi=has(/^version\s+1[6-9]\./m)||/\bIOS[- ]XE\b/i.test(cfg)?has(/^ip\s+http\s+(?:server|secure-server)\s*$/m):null;
       sshV1=null; // 由 parseAny() 依 mgmtAccess.ssh 判斷（未限定 ip ssh version 2 時 IOS 預設 1.99 相容 v1）
       // 舊式 `logging 10.1.1.1`（無 host 關鍵字）也是遠端 syslog
       syslogExtra=all(/^logging\s+(\d+\.\d+\.\d+\.\d+)\s*$/m);
@@ -699,7 +704,7 @@ function parseMgmtServices(cfg, vendor, brand){
       idleOff=all(/^(\s*exec-timeout\s+0(?:\s+0)?\s*)$/m).map(x=>x.trim());
   }
   return {ntp:[...new Set(ntp)], aaa:[...new Set(aaa)], banner, httpPlain, sshV1, idleOff, syslogExtra:[...new Set(syslogExtra)],
-    sshV2Only:vendor==='cisco'?has(/^\s*ip\s+ssh\s+version\s+2\b/m):null};
+    sshV2Only:vendor==='cisco'?has(/^\s*ip\s+ssh\s+version\s+2\b/m):null, smartInstall, webUi};
 }
 
 // L2 防護（2026-10-06，第十二輪 MB）：DHCP snooping、DAI（Comware 稱 ARP detection）、IP Source Guard

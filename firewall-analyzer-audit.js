@@ -757,6 +757,147 @@
     const n = parseInt(v, 10);
     return n > 0 ? n : LOG_RETENTION_DEFAULT;
   }
+  // ── 高風險曝險服務（2026-10-24，XN18）───────────────────────────────────
+  // 歷來被大量利用的管理介面與 VPN 入口是否開在外部介面。不看版本（版本比對見 XN19），只提醒「這類服務對外開放、
+  // 請確認已修補並限制來源」。範例 CVE 皆在 CISA KEV（已知遭利用漏洞）清單中（2026-10-23 版核對）。
+  // 服務來源：FortiGate 介面 allowaccess 與 vpn ssl settings；Palo Alto mgmtPlane（介面管理設定檔、GlobalProtect）；
+  // Cisco ASA／FTD mgmtPlane（http server enable＋http 允許的介面、webvpn enable）；Juniper mgmtPlane（J-Web＋host-inbound-traffic）
+  const EXPOSE_SVCS = {
+    'fg-admin':   { cves: ['CVE-2022-40684', 'CVE-2024-55591'], risk: 'high' },
+    'fg-fgfm':    { cves: ['CVE-2024-23113'], risk: 'high' },
+    'fg-sslvpn':  { cves: ['CVE-2018-13379', 'CVE-2022-42475', 'CVE-2023-27997', 'CVE-2024-21762'], risk: 'high' },
+    'pa-admin':   { cves: ['CVE-2024-0012', 'CVE-2024-9474', 'CVE-2025-0108'], risk: 'high' },
+    'pa-gp':      { cves: ['CVE-2024-3400'], risk: 'high' },
+    'asa-http':   { cves: ['CVE-2024-20353'], risk: 'high' },
+    'asa-webvpn': { cves: ['CVE-2020-3452', 'CVE-2023-20269', 'CVE-2025-20333', 'CVE-2025-20362'], risk: 'high' },
+    'jn-jweb':    { cves: ['CVE-2023-36844', 'CVE-2023-36845', 'CVE-2023-36846', 'CVE-2023-36847', 'CVE-2023-36851'], risk: 'high' },
+    'admin-telnet': { cves: [], risk: 'high' },
+    'admin-ssh':  { cves: [], risk: 'medium' },
+  };
+  const EXPOSE_VENDORS = /^(FortiGate|PaloAlto|Cisco ASA|Cisco FTD|Juniper)$/;
+  const _EXT_ZONE_RE = /^(untrust|outside|internet|wan|external|public|isp)/i;
+  // 介面是否對外：介面角色（FortiGate WAN、ASA security-level 0）、所屬區域名稱、或預設路由的出口。
+  // 回傳 {ext:true|false|null, basis}；找不到介面為 null
+  function _exposeExternal(parsed, name) {
+    const ifs = parsed.interfaces || [], n = String(name || '').toLowerCase();
+    const i = ifs.find(x => String(x.name || '').toLowerCase() === n || String(x.nameif || '').toLowerCase() === n);
+    if (!i) return { ext: null, basis: '' };
+    if (i.role === 'WAN' || i.role === 'external') return { ext: true, basis: 'role' };
+    const zone = i.zone || i._zone || (/juniper/i.test(parsed.vendor || '') ? i._vdom : '');
+    if (zone && _EXT_ZONE_RE.test(zone)) return { ext: true, basis: 'zone', zone };
+    const def = (parsed.routes || []).find(r => /^0\.0\.0\.0(\/0| 0\.0\.0\.0)$/.test(String(r.dst || '').trim()) && r.status !== 'disable' &&
+      ((r.device && [i.name, i.nameif].filter(Boolean).some(x => String(x).toLowerCase() === String(r.device).toLowerCase())) ||
+       (r.gateway && i.ip && i.mask && _exposeSameNet(r.gateway, i.ip, i.mask))));
+    if (def) return { ext: true, basis: 'defaultRoute' };
+    return { ext: false, basis: '' };
+  }
+  function _exposeSameNet(a, b, mask) {
+    const n = s => { const m = String(s || '').match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/); return m ? ((+m[1] << 24) >>> 0) + (+m[2] << 16) + (+m[3] << 8) + +m[4] : null; };
+    const len = /^\d+$/.test(String(mask)) ? +mask : (n(mask) === null ? null : n(mask).toString(2).replace(/0+$/, '').length);
+    if (n(a) === null || n(b) === null || len === null) return false;
+    const mk = len === 0 ? 0 : (0xFFFFFFFF << (32 - len)) >>> 0;
+    return ((n(a) & mk) >>> 0) === ((n(b) & mk) >>> 0);
+  }
+  // 回傳 {supported, items:[{svc, iface, ext, basis, zone, cves, risk}]}；items 含對內的服務（ext false）供畫面完整列出
+  function analyzeExposedServices(parsed) {
+    const vendor = String((parsed && parsed.vendor) || '');
+    if (!parsed || !EXPOSE_VENDORS.test(vendor)) return { supported: false, items: [] };
+    const out = [], seen = new Set(), mp = parsed.mgmtPlane || {};
+    const add = (svc, iface, extra) => {
+      const key = svc + '|' + iface;
+      if (!iface || seen.has(key)) return;
+      seen.add(key);
+      out.push(Object.assign({ svc, iface, cves: EXPOSE_SVCS[svc].cves, risk: EXPOSE_SVCS[svc].risk }, _exposeExternal(parsed, iface), extra || {}));
+    };
+    const toks = v => String(v || '').toLowerCase().split(/[\s,]+/).filter(Boolean);
+    if (vendor === 'FortiGate') {
+      (parsed.interfaces || []).forEach(i => { const a = toks(i.allowaccess);
+        if (a.includes('https') || a.includes('http')) add('fg-admin', i.name);
+        if (a.includes('fgfm')) add('fg-fgfm', i.name);
+        if (a.includes('ssh')) add('admin-ssh', i.name);
+        if (a.includes('telnet')) add('admin-telnet', i.name); });
+      (parsed.vpn || []).filter(v => v.type === 'ssl-vpn' && v.status !== 'disable').forEach(v => {
+        const ifs = String(v.iface || '').replace(/"/g, '').split(/[\s,]+/).filter(x => x && x !== '-');
+        ifs.forEach(n => n.toLowerCase() === 'any' ? (parsed.interfaces || []).forEach(i => add('fg-sslvpn', i.name)) : add('fg-sslvpn', n));
+      });
+    } else if (vendor === 'PaloAlto') {
+      const prof = mp.profiles || {};
+      (parsed.interfaces || []).forEach(i => { const p = i.allowaccess && Object.prototype.hasOwnProperty.call(prof, i.allowaccess) ? prof[i.allowaccess] : null;
+        if (!p) return;
+        if (p.https || p.http) add('pa-admin', i.name);
+        if (p.ssh) add('admin-ssh', i.name);
+        if (p.telnet) add('admin-telnet', i.name); });
+      (mp.gp || []).forEach(g => add('pa-gp', g.iface, { name: g.name, kind: g.kind }));
+    } else if (/^Cisco (ASA|FTD)$/.test(vendor)) {
+      (parsed.interfaces || []).forEach(i => { const a = toks(i.allowaccess), n = i.nameif || i.name;
+        if (mp.httpServer && a.includes('http')) add('asa-http', n);
+        if (a.includes('telnet')) add('admin-telnet', n); });
+      (mp.webvpnIfs || []).forEach(n => add('asa-webvpn', n));
+    } else if (vendor === 'Juniper') {
+      const jweb = mp.jweb && (mp.jweb.http || mp.jweb.https);
+      (mp.inbound || []).forEach(b => {
+        const targets = b.iface ? [b.iface] : (parsed.interfaces || []).filter(i => i._vdom === b.zone).map(i => i.name);
+        const sv = new Set(b.services), all = sv.has('all');
+        targets.forEach(n => {
+          if (jweb && (all || sv.has('http') || sv.has('https'))) add('jn-jweb', n, { zone: b.zone });
+          if (all || sv.has('ssh')) add('admin-ssh', n, { zone: b.zone });
+          if (all || sv.has('telnet')) add('admin-telnet', n, { zone: b.zone });
+        });
+      });
+    }
+    return { supported: true, items: out };
+  }
+  function buildExposedServicesHtml(res) {
+    let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('expose.title')) + '</div>';
+    h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('expose.hint')) + '</div>';
+    if (!res.supported) return h + '<div class="nodata" style="padding:14px 0">' + esc(tr('expose.unsupported')) + '</div></div>';
+    if (!res.items.length) return h + '<div class="nodata" style="padding:14px 0;color:var(--green)">' + esc(tr('expose.none')) + '</div></div>';
+    const order = x => x.ext === true ? 0 : x.ext === null ? 1 : 2;
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + esc(tr('expose.col_svc')) + '</th><th>' + esc(tr('expose.col_iface')) + '</th><th>' + esc(tr('expose.col_ext')) +
+      '</th><th>' + esc(tr('expose.col_cve')) + '</th><th>' + esc(tr('expose.col_action')) + '</th></tr></thead><tbody>';
+    res.items.slice().sort((a, b) => order(a) - order(b)).forEach(x => {
+      const ext = x.ext === true ? pill(tr('expose.ext_yes') + (x.basis ? ' · ' + tr('expose.basis_' + x.basis) : ''), x.risk === 'high' ? 'p-deny' : 'p-warn')
+        : x.ext === null ? pill(tr('expose.ext_unknown'), 'p-warn') : pill(tr('expose.ext_no'), 'p-accept');
+      h += `<tr><td>${esc(tr('expose.svc_' + x.svc))}${x.name ? ' <span style="color:var(--text-dim)">(' + esc(x.name) + ')</span>' : ''}</td><td class="mono">${esc(x.iface)}${x.zone ? ' <span style="color:var(--text-dim)">[' + esc(x.zone) + ']</span>' : ''}</td><td>${ext}</td>` +
+        `<td class="mono" style="font-size:11px">${x.cves.length ? x.cves.map(esc).join('<br>') : '-'}</td><td style="font-size:11px">${esc(tr('expose.act_' + x.svc))}</td></tr>`;
+    });
+    return h + '</tbody></table></div><div style="font-size:11px;color:var(--text-dim);margin-top:6px">' + esc(tr('expose.note')) + '</div></div>';
+  }
+
+  // ── 韌體版本比對已知漏洞（2026-10-24，XN19）：比對邏輯在共用模組 vuln-check.js（VulnCheck），這裡只組畫面 ──
+  // st：{text（使用者 CSV）, version（使用者填的版本，空字串用設定檔的 firmware）, parsed}
+  function buildVulnCheckHtml(st) {
+    const V = typeof VulnCheck !== 'undefined' ? VulnCheck : null;
+    const p = st.parsed || {}, fw = String((p.deviceInfo && p.deviceInfo.firmware) || '').replace(/^-$/, '');
+    const ver = st.version || fw, sch = V ? V.deviceScheme(p.vendor, ver) || V.deviceScheme(p.vendor, '0') : '';
+    const inp = 'padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface2);color:var(--text)';
+    let h = '<div id="vuln-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('vuln.title')) + '</div>';
+    h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('vuln.hint')) + '</div>';
+    if (!V || !sch) return h + '<div class="nodata" style="padding:14px 0">' + esc(tr('vuln.unsupported')) + '</div></div>';
+    h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px"><label style="display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--text-dim)">${esc(tr('vuln.version'))}` +
+      `<input id="vuln-version" class="mono" value="${esc(ver)}" placeholder="${esc(tr('vuln.version_ph_' + sch))}" style="width:200px;${inp}"></label>` +
+      `<button class="btn btn-ghost btn-sm" onclick="window._fwVulnApply()">${esc(tr('vuln.apply'))}</button>` +
+      `<label class="btn btn-ghost btn-sm" style="cursor:pointer">${esc(tr('vuln.upload'))}<input type="file" accept=".csv,.txt" style="display:none" onchange="window._fwVulnFile(this)"></label>` +
+      `<button class="btn btn-ghost btn-sm" onclick="window._fwVulnSample()">${esc(tr('vuln.sample'))}</button></div>`;
+    if (!V.parse(sch, ver)) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-bottom:6px">${esc(tr(sch === 'fortios' && /^\d+\.\d{2}\b/.test(fw) ? 'vuln.version_fortios_short' : 'vuln.version_missing'))}</div>`;
+    h += `<textarea id="vuln-text" spellcheck="false" placeholder="${esc(V.CSV_HEADER)}" style="width:100%;height:90px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;${inp}">${esc(st.text || '')}</textarea>`;
+    if (!String(st.text || '').trim()) return h + '</div>';
+    const pc = V.parseCsv(st.text);
+    if (pc.errors.length) h += `<div style="font-size:12px;color:var(--red);margin:6px 0">${pc.errors.map(e => esc(tr('vuln.err_' + e.reason).replace('{n}', e.line))).join('<br>')}</div>`;
+    if (!pc.entries.length) return h + `<div class="nodata" style="padding:10px 0">${esc(tr('vuln.no_entries'))}</div></div>`;
+    const r = V.check([{ name: (p.deviceInfo && p.deviceInfo.hostname) || '', vendor: p.vendor, version: ver }], pc.entries)[0];
+    const pillCls = { affected: 'p-deny', ok: 'p-accept', unknown: 'p-warn', noVersion: 'p-warn', noRules: '', unsupported: '' }[r.status] || '';
+    h += `<div style="margin:8px 0;font-size:12px">${pillCls ? pill(tr('vuln.st_' + r.status), pillCls) : esc(tr('vuln.st_' + r.status))} ${esc(tr('vuln.summary').replace('{n}', pc.entries.filter(e => e.scheme === sch).length).replace('{hit}', r.hits.length))}</div>`;
+    const rows = r.hits.map(e => ['hit', e]).concat(r.unknown.map(e => ['unknown', e]));
+    if (rows.length) {
+      h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + ['vuln.col_cve', 'vuln.col_result', 'vuln.col_severity', 'vuln.col_kev', 'vuln.col_affected', 'vuln.col_fixed', 'vuln.col_note'].map(k => esc(tr(k))).join('</th><th>') + '</th></tr></thead><tbody>';
+      rows.forEach(([k, e]) => { h += `<tr><td class="mono">${esc(e.cve)}</td><td>${k === 'hit' ? pill(tr('vuln.res_hit'), 'p-deny') : pill(tr('vuln.res_unknown'), 'p-warn')}</td><td>${esc(e.severity || '-')}</td><td>${e.kev ? 'KEV' : '-'}</td>` +
+        `<td class="mono" style="font-size:11px">${esc(e.affected)}</td><td class="mono" style="font-size:11px">${esc(e.fixed || '-')}</td><td style="font-size:11px">${esc([e.product, e.note].filter(Boolean).join(' — ') || '-')} <span style="color:var(--text-dim)">(#${e.line})</span></td></tr>`; });
+      h += '</tbody></table></div>';
+    }
+    return h + '<div style="font-size:11px;color:var(--text-dim);margin-top:6px">' + esc(tr('vuln.disclaimer')) + '</div></div>';
+  }
+
   function analyzeCompliance(parsed, opts) {
     const findings = [];
     // standards：僅供參考的常見資安標準關聯條號（業界廣泛公開引用的控制編號與主題，
@@ -833,11 +974,18 @@
       const isExt = i.role === 'WAN' || i.role === 'external' ||
         (i.name || '').toLowerCase().match(/^(wan|ext|outside|untrust)/) ||
         (i.nameif || '').toLowerCase().match(/^(wan|ext|outside|untrust)/);
-      return isExt && dangerAcc.some(d => acc.includes(d));
+      // 逐項比對（2026-10-24 修正）：原本 acc.includes('http') 會把 https 也算成明文 HTTP；HTTPS 管理介面對外改由 exposed-svc 檢查
+      const accToks = acc.split(/[\s,]+/);
+      return isExt && dangerAcc.some(d => accToks.includes(d));
     });
     f('http-mgmt', tr('audit.check_http_mgmt'), riskyIntf.length, 'high',
       riskyIntf.length ? riskyIntf.map(i => `${i.name}(${i.allowaccess})`).join(', ') : tr('audit.normal'),
       ['ISO27001 A.5.15', 'PCI-DSS 4.0 2.2.7', 'NIST 800-53 AC-17', 'CIS v8 12.3'], riskyIntf.map(i => ({ kind: 'iface', name: i.name, vdom: i._vdom })));
+    // 6b. 高風險曝險服務（2026-10-24，XN18）：歷來被大量利用的管理介面／VPN 入口開在外部介面
+    const expSvc = analyzeExposedServices(parsed).items.filter(x => x.ext === true && x.cves.length);
+    f('exposed-svc', tr('audit.check_exposed_svc'), expSvc.length, 'high',
+      expSvc.length ? expSvc.map(x => `${tr('expose.svc_' + x.svc)}@${x.iface}`).slice(0, 8).join(', ') + (expSvc.length > 8 ? '…' : '') + tr('audit.rec_exposed_svc') : tr('audit.none'),
+      ['CISA KEV', 'NIST 800-53 SC-7', 'CIS v8 12.2'], expSvc.map(x => ({ kind: 'iface', name: x.iface })));
     // 7. VPN 弱加密
     const WEAK = /\b(des\b|3des|md5|rc4|null)/i;
     const weakVpn = (parsed.vpn || []).filter(v => WEAK.test((v.proposal || '') + ' ' + (v.dhgrp || '')));
@@ -1562,6 +1710,7 @@
       ['snmpv3-weak', 'health.snmpv3_weak'],
       ['ipv6-any-open', 'health.ipv6_any_open'],
       ['ipv6-unfiltered', 'health.ipv6_unfiltered'],
+      ['exposed-svc', 'health.exposed_svc'],
     ];
     HEALTH_EXTRA_CHECKS.forEach(([id, labelKey]) => {
       const found = complianceFindings.find(f => f.id === id);
@@ -2198,6 +2347,7 @@
     'no-2fa': /two-factor|2fa|otp|accprofile|trusthost/i,
     'default-admin-name': /accprofile|profile|level|user-type/i,
     'http-mgmt': /allowaccess|manage|http|telnet/i,
+    'exposed-svc': /allowaccess|source-interface|webvpn|http server|enable|interface-management-profile|local-address|web-management|system-services/i,
     'weak-vpn': /proposal|dhgrp|encrypt|hash|dh-group|authentication/i,
     'vpn-no-pfs': /pfs|dhgrp|dh-group/i,
     'snmpv3-weak': /auth|priv/i,

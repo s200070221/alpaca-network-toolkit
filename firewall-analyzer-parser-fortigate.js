@@ -599,7 +599,7 @@ const FortigateParser = (() => {
         algorithm: gv(t, 'algorithm') || 'high', dtls: gv(t, 'dtls-tunnel') || 'enable',
         authTimeout: gv(t, 'auth-timeout') || '28800',
         ikeVer: '-', authMethod: 'ssl', proposal: gv(t, 'algorithm') || 'high',
-        dhgrp: '-', phase2: [], status: 'enable', _vdom: vdomName });
+        dhgrp: '-', phase2: [], status: gv(t, 'status') === 'disable' ? 'disable' : 'enable', _vdom: vdomName });
     }
     const { sectionLines: portalL } = extractSection(lines, 'vpn ssl web portal');
     parseEdits(portalL).forEach(e => {

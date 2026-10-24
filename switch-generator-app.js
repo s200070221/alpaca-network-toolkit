@@ -3407,6 +3407,14 @@ function handleParserFileUpload(e){
     return;
   }
   document.getElementById('import-parser-file-name').textContent=f.name;
+  // 上傳的程式會以 new Function() 執行：顯示 SHA-256 供使用者與 Release 的 SHA256SUMS.txt 比對（不支援 crypto.subtle 時不顯示）
+  const shaEl=document.getElementById('import-parser-sha');
+  if(shaEl){
+    shaEl.textContent='';
+    if(window.crypto&&crypto.subtle)f.arrayBuffer().then(b=>crypto.subtle.digest('SHA-256',b)).then(h=>{
+      shaEl.textContent=tr('lbl.parserSha').replace('{hash}',[...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,'0')).join(''));
+    }).catch(()=>{});
+  }
   const reader=new FileReader();
   reader.onload=evt=>{window._parserHTML=evt.target.result;};
   reader.readAsText(f);

@@ -178,12 +178,13 @@ function invDeviceAddrs(parsed) {
 function invConsistency(entries) {
   const res = { vlanNames: [], dupIps: [], overlaps: [], versions: [] };
   // VLAN 名稱
-  const byId = {};
+  // 以 VLAN ID／名稱為鍵：不繼承 Object.prototype，名稱為 __proto__ 等時才不會取到原型
+  const byId = Object.create(null);
   entries.forEach(e => (e.parsed.vlans || []).forEach(v => {
     const name = String(v.name || '').trim();
     if (!name) return;
     const id = String(v.id);
-    (byId[id] = byId[id] || {});
+    (byId[id] = byId[id] || Object.create(null));
     const k = name.toLowerCase();
     (byId[id][k] = byId[id][k] || { name, hosts: [] });
     if (!byId[id][k].hosts.includes(e.hostname)) byId[id][k].hosts.push(e.hostname);

@@ -373,6 +373,11 @@ function analyzeSwitchAudit(parsed){
       ms.banner?none:tr('audit.no_banner_detail'), ['NIST 800-53 AC-8'], ms.banner?[]:['banner']);
     if(ms.httpPlain!==null&&ms.httpPlain!==undefined)f('http-mgmt', tr('audit.check_http_mgmt'), ms.httpPlain?1:0, 'medium',
       ms.httpPlain?tr('audit.http_mgmt_detail'):none, ['ISO27001 A.8.21','NIST 800-53 SC-8','CIS v8 3.10'], ms.httpPlain?['http']:[]);
+    // 已知遭利用漏洞相關（2026-10-24，XN18，Cisco IOS／IOS-XE）：Smart Install 可能啟用、IOS-XE Web UI 開啟
+    if(ms.smartInstall!==null&&ms.smartInstall!==undefined)f('smart-install', tr('audit.check_smart_install'), ms.smartInstall?1:0, 'medium',
+      ms.smartInstall?tr('audit.smart_install_detail'):none, ['CISA KEV','NIST 800-53 CM-7','CIS v8 4.8'], ms.smartInstall?['vstack']:[]);
+    if(ms.webUi!==null&&ms.webUi!==undefined)f('iosxe-webui', tr('audit.check_iosxe_webui'), ms.webUi?1:0, 'high',
+      ms.webUi?tr('audit.iosxe_webui_detail'):none, ['CISA KEV','NIST 800-53 SC-7','CIS v8 4.8'], ms.webUi?['http']:[]);
     if(ms.sshV1!==null&&ms.sshV1!==undefined)f('ssh-v1', tr('audit.check_ssh_v1'), ms.sshV1?1:0, 'high',
       ms.sshV1?tr('audit.ssh_v1_detail'):none, ['ISO27001 A.8.24','NIST 800-53 SC-8','CIS v8 3.10'], ms.sshV1?['ssh']:[]);
     if(Array.isArray(ms.idleOff))f('idle-timeout-off', tr('audit.check_idle_timeout_off'), ms.idleOff.length, 'low',
@@ -695,6 +700,7 @@ const EVIDENCE_KIND={
   'snmp-weak':'snmp','snmp-default-name':'snmp','telnet-mgmt':'telnet','routing-no-auth':'routing',
   'acl-any-any':'acl','acl-shadowed':'acl','acl-exact-duplicate':'acl','unused-vlan-trunk':'vlan',
   'http-mgmt':'line','ssh-v1':'line','idle-timeout-off':'line',
+  'smart-install':'line','iosxe-webui':'line',
   'dhcp-snooping-off':'line','dai-off':'line','ipsg-off':'iface','storm-control-off':'iface',
 };
 // 關鍵字型證據行（第十二輪 MA）：命中這些設定行即列出；ntp／syslog／aaa／banner 是「缺少設定」，沒有對應行
@@ -702,6 +708,8 @@ const EVIDENCE_LINE_RE={
   'http-mgmt':/^\s*(ip\s+http\s+server\s*$|ip\s+http\s+enable\b|nxapi\s+http\b|protocol\s+http\b(?!s)|http\s*[;{])/i,
   'ssh-v1':/^\s*(ip\s+ssh\b|ssh\s+server\s+compatible-ssh1x\b|line\s+vty\b|\s*transport\s+input\b)/i,
   'idle-timeout-off':/^\s*(exec-timeout|idle-timeout)\s+0(\s+0)?\s*$/i,
+  'smart-install':/^\s*(no\s+)?vstack\b/i,
+  'iosxe-webui':/^\s*ip\s+http\s+(server|secure-server|access-class|authentication)\b/i,
   // L2 防護（第十二輪 MB）：列出已有的 DHCP snooping／DAI 設定行（部分 VLAN 已涵蓋時看得出缺哪些）
   'dhcp-snooping-off':/^\s*(ip\s+dhcp\s+snooping|dhcp\s+snooping\s+enable|dhcp-snooping|dhcpv4-snooping)\b/i,
   'dai-off':/^\s*(ip\s+arp\s+inspection\s+vlan|arp\s+detection\s+enable|arp\s+inspection\s*$)/i,
@@ -841,6 +849,8 @@ const SW_FIX_CMDS={
     'no-banner':()=>['banner login ^C','Authorized access only. Activity is logged.','^C'],
     'http-mgmt':()=>['no ip http server','ip http secure-server'],
     'ssh-v1':()=>['ip ssh version 2'],
+    'smart-install':()=>['no vstack'],
+    'iosxe-webui':()=>['no ip http server','no ip http secure-server'],
     'idle-timeout-off':()=>['line con 0',' exec-timeout 10 0','line vty 0 15',' exec-timeout 10 0'],
     'dhcp-snooping-off':it=>['ip dhcp snooping',`ip dhcp snooping vlan ${(it||[]).slice(0,FIX_MAX_ITEMS).join(',')}`,'interface <uplink-to-dhcp-server>',' ip dhcp snooping trust'],
     'dai-off':it=>[`ip arp inspection vlan ${(it||[]).slice(0,FIX_MAX_ITEMS).join(',')}`,'interface <uplink-to-dhcp-server>',' ip arp inspection trust'],

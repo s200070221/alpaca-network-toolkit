@@ -2048,7 +2048,8 @@ function renderFixDetails(f,vendor){
 // 不可用時只在本次工作階段有效）；審查者姓名跨主機共用
 const SW_AUDIT_MARKS_LS='sw_audit_marks', SW_AUDIT_REVIEWER_LS='sw_audit_reviewer';
 let _swMarksMem={}, _swReviewerMem='';
-function _swMarkHost(){return (parsed&&parsed.sys&&parsed.sys.hostname)||'-';}
+// 主機名稱當作 localStorage 物件的鍵：__proto__／constructor／prototype 會取到原型，加前綴避開（原型污染）
+function _swMarkHost(){const h=(parsed&&parsed.sys&&parsed.sys.hostname)||'-';return /^(__proto__|constructor|prototype)$/.test(h)?'#'+h:h;}
 function swAuditMarks(){
   try{const all=JSON.parse(localStorage.getItem(SW_AUDIT_MARKS_LS)||'{}');return all[_swMarkHost()]||{};}catch(e){return _swMarksMem[_swMarkHost()]||{};}
 }
@@ -4043,7 +4044,7 @@ function renderInventoryCard(){
         <td>${r.score==null?'-':pill(gc,r.score+' '+r.grade)}</td><td style="font-size:11px">${esc(r.file)}</td>
         <td><button style="${btn2};padding:2px 10px" onclick="invOpen(${i})">${esc(tr('inv.open_btn'))}</button></td></tr>`;
     }).join('')+'</tbody></table></div>';
-  return h+renderConsistencyCard()+renderVlanMatrixCard()+renderAccountsCard()+renderGoldenCard()+renderEolCard()+'</div>';
+  return h+renderConsistencyCard()+renderVlanMatrixCard()+renderAccountsCard()+renderGoldenCard()+renderEolCard()+renderVulnCard()+'</div>';
 }
 // 韌體支援期限（XN6）：invParseEolCsv()／invEolCheck() 在 switch-analyzer-inventory.js；清單存 localStorage（sw_eol_list，已在入口頁 WS_KEYS）
 let eolText=null;
@@ -4098,6 +4099,60 @@ function eolExportCSV(){
   const rows=invEolCheck(invRows,p.entries,new Date()).map(r=>{const m=r.match;return [r.hostname,r.vendor,r.model,r.version,tr('eol.st_'+r.status).replace('{d}',INV_EOL_SOON_DAYS),
     m?_eolDate(m.endOfSale):'',m?_eolDate(m.endOfSupport):'',r.daysLeft==null?'':r.daysLeft,m?m.line:'',m?m.note:'',r.file];});
   dlCSV(rows,[tr('inv.col_host'),tr('inv.col_vendor'),tr('inv.col_model'),tr('inv.col_version'),tr('eol.col_status'),tr('eol.col_sale'),tr('eol.col_support'),tr('eol.col_days'),tr('eol.col_match'),tr('eol.col_note'),tr('inv.col_file')],'firmware_lifecycle.csv');
+}
+// 韌體版本比對已知漏洞（XN19）：比對在共用模組 vuln-check.js（VulnCheck）；清單存 localStorage（sw_vuln_list，已在入口頁 WS_KEYS），
+// 使用者補填的版本只存記憶體（依清冊列的檔名）
+let vulnText=null;
+const vulnVerOverride=Object.create(null);
+function vulnLoadText(){
+  if(vulnText!==null)return vulnText;
+  try{vulnText=localStorage.getItem('sw_vuln_list')||'';}catch(e){vulnText='';}
+  return vulnText;
+}
+function vulnSave(t){vulnText=t;try{localStorage.setItem('sw_vuln_list',t||'');}catch(e){}}
+function vulnDevices(){return invRows.map(r=>({name:r.hostname||r.file,vendor:r.vendor,version:vulnVerOverride[r.file]||r.version||'',file:r.file}));}
+const VULN_PILL={affected:'down',ok:'up',unknown:'warn',noVersion:'warn',noRules:'',unsupported:''};
+function renderVulnCard(){
+  const btn='background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;cursor:pointer';
+  const btn2='background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer';
+  const text=vulnLoadText();
+  let h=`<div id="vuln-card" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:6px">${esc(tr('vuln.title'))}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('vuln.hint'))}</div>
+    <textarea id="vuln-text" spellcheck="false" placeholder="${esc(VulnCheck.CSV_HEADER)}" style="width:100%;height:100px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${esc(text)}</textarea>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+      <button style="${btn}" onclick="vulnApply()">${esc(tr('vuln.apply'))}</button>
+      <label style="${btn2}">${esc(tr('vuln.upload'))}<input type="file" accept=".csv,.txt" style="display:none" onchange="vulnReadFile(this)"></label>
+      <button style="${btn2}" onclick="vulnDownloadSample()">${esc(tr('vuln.sample'))}</button>
+    </div>`;
+  if(!text.trim())return h+'</div>';
+  const p=VulnCheck.parseCsv(text);
+  if(p.errors.length)h+=`<div style="font-size:12px;color:var(--red);margin-bottom:6px">${p.errors.map(e=>esc(tr('vuln.err_'+e.reason).replace('{n}',e.line))).join('<br>')}</div>`;
+  if(!p.entries.length)return h+`<div class="nodata">${esc(tr('vuln.no_entries'))}</div></div>`;
+  const devs=vulnDevices(), res=VulnCheck.check(devs,p.entries);
+  const st=r=>{const k=VULN_PILL[r.status];const t=tr('vuln.st_'+r.status);return k?pill(k,t):`<span style="color:var(--text-muted)">${esc(t)}</span>`;};
+  h+=`<div class="tbl-wrap" style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc(tr('vuln.col_device'))}</th><th>${esc(tr('inv.col_vendor'))}</th><th>${esc(tr('vuln.version'))}</th><th>${esc(tr('vuln.col_result'))}</th><th>${esc(tr('vuln.col_cve'))}</th><th>${esc(tr('vuln.col_fixed'))}</th></tr></thead><tbody>`+
+    res.map((r,i)=>{const sch=VulnCheck.deviceScheme(r.vendor,r.version)||VulnCheck.deviceScheme(r.vendor,'0');
+      const ver=`<input class="mono" data-vuln-file="${esc(devs[i].file)}" value="${esc(r.version)}" placeholder="${esc(sch?tr('vuln.version_ph_'+sch):'')}" style="width:130px;font-size:11px;padding:2px 4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px">`;
+      const cves=r.hits.map(e=>`<span class="mono">${esc(e.cve)}</span>${e.kev?' <b style="color:var(--red)">KEV</b>':''}${e.severity?' <span style="color:var(--text-dim)">'+esc(e.severity)+'</span>':''}`).concat(r.unknown.map(e=>`<span class="mono" style="color:var(--text-dim)">${esc(e.cve)}?</span>`)).join('<br>');
+      return `<tr><td><b>${esc(r.name)}</b></td><td>${esc(r.vendor)}</td><td>${ver}</td><td>${st(r)}</td><td style="font-size:11px">${cves||'-'}</td><td class="mono" style="font-size:11px">${esc([...new Set(r.hits.map(e=>e.fixed).filter(Boolean))].join('; ')||'-')}</td></tr>`;}).join('')+'</tbody></table></div>';
+  return h+`<div style="font-size:11px;color:var(--text-dim);margin-top:6px">${esc(tr('vuln.disclaimer'))}</div></div>`;
+}
+function vulnApply(){
+  const t=document.getElementById('vuln-text');
+  if(t)vulnSave(t.value);
+  document.querySelectorAll('#vuln-card input[data-vuln-file]').forEach(el=>{vulnVerOverride[el.dataset.vulnFile]=el.value.trim();});
+  navGo('inventory');
+}
+function vulnReadFile(inp){
+  const f=inp.files&&inp.files[0];
+  if(!f)return;
+  swReadText(f).then(t=>{vulnSave(t.replace(/^﻿/,''));navGo('inventory');});
+}
+function vulnDownloadSample(){
+  const csv=tr('vuln.sample_comment')+'\n'+VulnCheck.CSV_HEADER+'\niosxe,IOS XE Web UI,17.9.1-17.9.4,17.9.4a,CVE-0000-00000,critical,no,example only\n';
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download='firmware_vulnerability_sample.csv';a.click();
 }
 // 跨設備一致性（WH）：invConsistency() 在 switch-analyzer-inventory.js
 function renderConsistencyCard(){

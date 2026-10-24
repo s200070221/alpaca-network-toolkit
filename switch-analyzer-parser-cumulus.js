@@ -12,9 +12,11 @@
 // 因此 `access: 310` 與 `nv set … access 310` 結果相同。未涵蓋：舊版 /etc/network/interfaces（ifupdown2）與 frr.conf
 const CumulusNVUE = (() => {
   const unq = s => String(s).trim().replace(/^'(.*)'$/, '$1').replace(/^"(.*)"$/, '$1');
+  // 設定檔提供的鍵不可是物件原型相關名稱，否則 obj[k] 取到 Object.prototype 後再寫入會污染整頁（原型污染）
+  const BAD_KEY = k => k === '__proto__' || k === 'constructor' || k === 'prototype';
   function setPath(root, path) {
     let n = root;
-    for (const k of path) { if (!n[k] || typeof n[k] !== 'object') n[k] = {}; n = n[k]; }
+    for (const k of path) { if (BAD_KEY(k)) return {}; if (!n[k] || typeof n[k] !== 'object') n[k] = {}; n = n[k]; }
     return n;
   }
   // YAML（NVUE 輸出用到的子集）：區塊對應、`key: {}`、`key: 純值`、`key: |` 區塊字串（略過內容）、引號鍵與值
@@ -37,6 +39,8 @@ const CumulusNVUE = (() => {
       const parent = stack[stack.length - 1].node;
       const key = unq(m[2]);
       const val = m[3] === undefined ? '' : m[3].trim();
+      // 原型相關名稱：底下的子鍵改掛到丟棄用的物件
+      if (BAD_KEY(key)) { if (val === '') stack.push({ indent, node: {} }); continue; }
       if (val === '' ) { const child = parent[key] && typeof parent[key] === 'object' ? parent[key] : (parent[key] = {}); stack.push({ indent, node: child }); }
       else if (val === '{}') { if (!parent[key] || typeof parent[key] !== 'object') parent[key] = {}; }
       else if (/^[|>][-+]?$/.test(val)) { parent[key] = ''; skipIndent = indent; }
@@ -69,6 +73,7 @@ const CumulusNVUE = (() => {
   }
   function deepMerge(a, b) {
     for (const k of Object.keys(b)) {
+      if (BAD_KEY(k)) continue;
       if (b[k] && typeof b[k] === 'object' && a[k] && typeof a[k] === 'object') deepMerge(a[k], b[k]);
       else if (b[k] && typeof b[k] === 'object') a[k] = deepMerge({}, b[k]);
       else a[k] = b[k];

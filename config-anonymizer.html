@@ -1641,12 +1641,14 @@ function applyImportedMappings(parsed) {
     return { applied: { ip: 0, hostname: 0, user: 0, mac: 0, ssid: 0, alias: 0, vdom: 0 }, skipped: 0 };
   }
   if (!IMPORTED_SEED) IMPORTED_SEED = { mappings: {} };
+  // 對照表檔案可能來自他人：__proto__／constructor／prototype 鍵會取到原型再寫入（原型污染），一律略過
+  const badKey = k => k === '__proto__' || k === 'constructor' || k === 'prototype';
   for (const cat of Object.keys(parsed.mappings)) {
     const src = parsed.mappings[cat];
-    if (!src || typeof src !== 'object') continue;
+    if (badKey(cat) || !src || typeof src !== 'object') continue;
     if (!IMPORTED_SEED.mappings[cat]) IMPORTED_SEED.mappings[cat] = {};
     const dst = IMPORTED_SEED.mappings[cat];
-    for (const k of Object.keys(src)) { if (!(k in dst)) dst[k] = src[k]; }
+    for (const k of Object.keys(src)) { if (!badKey(k) && !Object.prototype.hasOwnProperty.call(dst, k)) dst[k] = src[k]; }
   }
   // 套用進 live mappings 時只處理「這次呼叫帶進來的」parsed.mappings，不是累加後的完整
   // IMPORTED_SEED——single-file 模式下 live mappings 本來就不會被清空，之前呼叫已經套用過的
@@ -1664,7 +1666,7 @@ function seedLiveMappingsFromImported(seed) {
     return { applied, skipped };
   }
   for (const cat of Object.keys(seed.mappings)) {
-    if (!mappings[cat]) continue; // 本工具不認得的類別，靜默略過
+    if (!Object.prototype.hasOwnProperty.call(mappings, cat) || !(mappings[cat] instanceof Map)) continue; // 本工具不認得的類別，靜默略過
     const entries = seed.mappings[cat];
     if (!entries || typeof entries !== 'object') continue;
     for (const original of Object.keys(entries)) {
@@ -5451,7 +5453,8 @@ function runStructCheck() {
   function onMsg(e) {
     if (e.source !== ifr.contentWindow || !e.data) return;
     if (e.data.type === '_naStructReady') {
-      ifr.contentWindow.postMessage({ type: '_naStructCheck', id, texts: [STATE.original, STATE.anonymized] }, '*');
+      // 內容含原始設定檔：http(s) 下限定同源頁面才收得到；file:// 的 origin 是 'null'，只能用 '*'
+      ifr.contentWindow.postMessage({ type: '_naStructCheck', id, texts: [STATE.original, STATE.anonymized] }, location.origin === 'null' ? '*' : location.origin);
       return;
     }
     if (e.data.type !== '_naStructResult' || e.data.id !== id) return;
