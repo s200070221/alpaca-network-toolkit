@@ -1,0 +1,83 @@
+# 推送 v* tag 時自動發版：檢查版號一致 → build-standalone.ps1 產生單檔 → SHA256SUMS（LF）→ 建立 GitHub Release
+# 發版前先在 toolkit-version.js 改 TOOLKIT_VERSION、CHANGELOG 第一筆、sw.js 的 CACHE（三者與 tag 相同），推上 main 後再推 tag。
+# 手動執行（workflow_dispatch）為試跑：只檢查版號、打包、驗證雜湊，不建立 Release。
+# 只用 actions/checkout（已釘 commit SHA）；在 Windows runner 以 Windows PowerShell 5.1 執行，產物格式與本機發版相同。
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '試跑用的版號 tag（例如 v2026.10.22.1，須與 toolkit-version.js 一致）'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 's200070221/alpaca-network-toolkit'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: 檢查版號一致並產生 Release 說明
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          cat > "$RUNNER_TEMP/notes.js" <<'EOF'
+          const fs = require('fs');
+          const tag = process.env.TAG, ver = tag.replace(/^v/, '');
+          const src = fs.readFileSync('toolkit-version.js', 'utf8').replace(/\r\n/g, '\n');
+          const sw = fs.readFileSync('sw.js', 'utf8');
+          const tv = (src.match(/const TOOLKIT_VERSION = '([^']+)'/) || [])[1];
+          const first = (src.match(/const CHANGELOG = \[\s*\{\s*version: '([^']+)'/) || [])[1];
+          const cache = (sw.match(/const CACHE = 'alpaca-toolkit-([^']+)'/) || [])[1];
+          const bad = [['TOOLKIT_VERSION', tv], ['CHANGELOG 第一筆', first], ['sw.js CACHE', cache]].filter(([, v]) => v !== ver);
+          if (bad.length) { console.error(`tag ${tag} 與 ${bad.map(([k, v]) => k + '=' + v).join('、')} 不一致`); process.exit(1); }
+          const start = src.indexOf(`version: '${ver}'`), next = src.indexOf("version: '", start + 10);
+          const block = src.slice(start, next < 0 ? undefined : next);
+          const items = lang => { const m = block.match(new RegExp(lang + ':\\s*\\[([\\s\\S]*?)\\]')); return m ? [...m[1].matchAll(/'((?:[^'\\]|\\.)*)'/g)].map(x => x[1].replace(/\\'/g, "'")) : []; };
+          const zh = items('zhTW'), en = items('en');
+          if (!zh.length || !en.length) { console.error('CHANGELOG 第一筆缺少 zhTW 或 en 條目'); process.exit(1); }
+          const notes = '下載下方任一 `.html` 單檔即可離線使用（已把所有 `.js` 合併進單一檔案），或直接使用 [GitHub Pages](https://s200070221.github.io/alpaca-network-toolkit/)（開過一次後斷網也能使用，並可安裝成桌面 App）。\n\n' +
+            '## 本版新增\n' + zh.map(x => '- ' + x).join('\n') + '\n\n## What\'s new\n' + en.map(x => '- ' + x).join('\n') + '\n';
+          fs.writeFileSync(process.env.RUNNER_TEMP + '/notes.md', notes);
+          console.log(notes);
+          EOF
+          node "$RUNNER_TEMP/notes.js"
+
+      - name: 產生單檔（build-standalone.ps1）
+        shell: pwsh
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-standalone.ps1
+
+      - name: 計算 SHA256（LF 換行、不含 index.html）並驗證
+        run: |
+          cd dist
+          rm -f index.html
+          ls *.html
+          sha256sum *.html | sed 's/ \*/  /' > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          if grep -q $'\r' SHA256SUMS.txt; then echo 'SHA256SUMS.txt 含 CR'; exit 1; fi
+          { cat "$RUNNER_TEMP/notes.md"
+            printf '\n## SHA256\n驗證方式（PowerShell）：`Get-FileHash 檔名 -Algorithm SHA256`；Linux／macOS：`sha256sum -c SHA256SUMS.txt`\n\n```\n'
+            cat SHA256SUMS.txt
+            printf '```\n'; } > "$RUNNER_TEMP/body.md"
+
+      - name: 建立 Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/*.html dist/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file "$RUNNER_TEMP/body.md" --verify-tag
