@@ -5,7 +5,7 @@
 // CACHE 含版本號：發版改 TOOLKIT_VERSION 時一併改這裡（qa/test_config/test_pwa.mjs 檢查兩者一致），
 // sw.js 內容改變會讓瀏覽器安裝新版並重新快取整套檔案，舊快取在 activate 時刪除。
 // FILES 須涵蓋 7 個頁面以 <script src> 載入的全部檔案（test_pwa.mjs 檢查）。
-const CACHE = 'alpaca-toolkit-2026.10.22.1';
+const CACHE = 'alpaca-toolkit-2026.10.25';
 const FILES = [
   './',
   'index.html',
