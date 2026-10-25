@@ -2019,7 +2019,7 @@ function renderAudit(){
     +`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px"><button class="btn btn-ghost btn-sm" onclick="exportAuditSARIF()">🧾 ${esc(tr('audit.export_sarif'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditMarkdown()">📝 ${esc(tr('audit.export_md'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditWorkpaper()">📋 ${esc(tr('wp.export_btn'))}</button><button class="btn btn-ghost btn-sm" onclick="saveSwitchAuditBaseline()">💾 ${esc(tr('swbase.save_btn'))}</button><label class="btn btn-ghost btn-sm" style="cursor:pointer">📂 ${esc(tr('swbase.compare_btn'))}<input type="file" accept=".json" onchange="compareSwitchAuditBaseline(this)"></label><input id="sw-audit-reviewer" value="${esc(swAuditReviewer())}" placeholder="${esc(tr('wp.reviewer_ph'))}" aria-label="${esc(tr('wp.col_reviewer'))}" onchange="swSetAuditReviewer(this.value)" style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);width:140px"></div><div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">${esc(tr('wp.hint'))}</div>`
     +`<div id="sw-baseline-result"></div></div>`
     +`<div style="overflow-x:auto"><div class="tbl-wrap">${html}</div></div>`
-    +`<div style="padding:0 18px">`+buildShutdownConfiguredCard(analyzeShutdownConfigured(parsed))+`</div>`
+    +`<div style="padding:0 18px">`+buildShutdownConfiguredCard(analyzeShutdownConfigured(parsed))+renderAuditVulnCard()+`</div>`
     +`<div id="sw-health-section" style="margin-top:18px;padding:14px 18px 12px;border-top:1px solid var(--border)">
         <button id="sw-health-btn" onclick="_doSwitchHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
         <div id="sw-health-result" style="margin-top:12px"></div>
@@ -4114,31 +4114,54 @@ function vulnLoadText(){
 function vulnSave(t){vulnText=t;try{localStorage.setItem('sw_vuln_list',t||'');}catch(e){}}
 function vulnDevices(){return invRows.map(r=>({name:r.hostname||r.file,vendor:r.vendor,version:vulnVerOverride[r.file]||r.version||'',file:r.file}));}
 const VULN_PILL={affected:'down',ok:'up',unknown:'warn',noVersion:'warn',noRules:'',unsupported:''};
-function renderVulnCard(){
+// 韌體漏洞比對卡片：資產清冊（多台）與安全稽核頁（目前分析的這台）共用標頭與結果表格
+// 標頭：標題、說明、內建清單情資截止日、清單編輯區；cardId／textId 讓兩頁的元素 id 不衝突，applyFn 為「比對」按鈕呼叫的函式名稱
+function vulnCardHead(cardId,textId,applyFn){
   const btn='background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;cursor:pointer';
   const btn2='background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer';
-  const text=vulnLoadText();
-  let h=`<div id="vuln-card" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px">
+  return `<div id="${cardId}" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px">
     <div style="font-size:14px;font-weight:600;margin-bottom:6px">${esc(tr('vuln.title'))}</div>
     <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('vuln.hint'))}</div>
     ${VulnCheck.BUILTIN_ASOF?`<div style="font-size:11px;padding:6px 10px;margin-bottom:8px;background:var(--surface);border-left:3px solid var(--orange,#f59e0b);border-radius:4px">${esc(tr('vuln.builtin_asof').replace('{date}',VulnCheck.BUILTIN_ASOF).replace('{n}',(VulnCheck.BUILTIN||[]).length))}</div>`:''}
-    <textarea id="vuln-text" spellcheck="false" placeholder="${esc(VulnCheck.CSV_HEADER)}" style="width:100%;height:100px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${esc(text)}</textarea>
+    <textarea id="${textId}" spellcheck="false" placeholder="${esc(VulnCheck.CSV_HEADER)}" style="width:100%;height:100px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${esc(vulnLoadText())}</textarea>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
-      <button style="${btn}" onclick="vulnApply()">${esc(tr('vuln.apply'))}</button>
+      <button style="${btn}" onclick="${applyFn}()">${esc(tr('vuln.apply'))}</button>
       <label style="${btn2}">${esc(tr('vuln.upload'))}<input type="file" accept=".csv,.txt" style="display:none" onchange="vulnReadFile(this)"></label>
       <button style="${btn2}" onclick="vulnDownloadSample()">${esc(tr('vuln.sample'))}</button>
     </div>`;
-  if(!invRows.length)return h+`<div class="nodata">${esc(tr('vuln.no_entries'))}</div></div>`;
-  const p=VulnCheck.parseCsv(text);
-  if(p.errors.length)h+=`<div style="font-size:12px;color:var(--red);margin-bottom:6px">${p.errors.map(e=>esc(tr('vuln.err_'+e.reason).replace('{n}',e.line))).join('<br>')}</div>`;
-  const devs=vulnDevices(), res=VulnCheck.check(devs,VulnCheck.withBuiltin(p.entries));
+}
+// 結果表格：devs 為 [{name,vendor,version,file}]，版本欄是可補填的輸入框（data-vuln-file 對應補填版本的鍵）
+function vulnResultTable(devs){
+  const p=VulnCheck.parseCsv(vulnLoadText());
+  let h=p.errors.length?`<div style="font-size:12px;color:var(--red);margin-bottom:6px">${p.errors.map(e=>esc(tr('vuln.err_'+e.reason).replace('{n}',e.line))).join('<br>')}</div>`:'';
+  const res=VulnCheck.check(devs,VulnCheck.withBuiltin(p.entries));
   const st=r=>{const k=VULN_PILL[r.status];const t=tr('vuln.st_'+r.status);return k?pill(k,t):`<span style="color:var(--text-muted)">${esc(t)}</span>`;};
   h+=`<div class="tbl-wrap" style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc(tr('vuln.col_device'))}</th><th>${esc(tr('inv.col_vendor'))}</th><th>${esc(tr('vuln.version'))}</th><th>${esc(tr('vuln.col_result'))}</th><th>${esc(tr('vuln.col_cve'))}</th><th>${esc(tr('vuln.col_fixed'))}</th></tr></thead><tbody>`+
     res.map((r,i)=>{const sch=VulnCheck.deviceScheme(r.vendor,r.version)||VulnCheck.deviceScheme(r.vendor,'0');
       const ver=`<input class="mono" data-vuln-file="${esc(devs[i].file)}" value="${esc(r.version)}" placeholder="${esc(sch?tr('vuln.version_ph_'+sch):'')}" style="width:130px;font-size:11px;padding:2px 4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px">`;
       const cves=r.hits.map(e=>`<span class="mono">${esc(e.cve)}</span>${e.kev?' <b style="color:var(--red)">KEV</b>':''}${e.builtin?' <span style="color:var(--text-dim)">'+esc(tr('vuln.src_builtin'))+'</span>':''}`).concat(r.unknown.map(e=>`<span class="mono" style="color:var(--text-dim)">${esc(e.cve)}?</span>`)).join('<br>');
       return `<tr><td><b>${esc(r.name)}</b></td><td>${esc(r.vendor)}</td><td>${ver}</td><td>${st(r)}</td><td style="font-size:11px">${cves||'-'}</td><td class="mono" style="font-size:11px">${esc([...new Set(r.hits.map(e=>e.fixed).filter(Boolean))].join('; ')||'-')}</td></tr>`;}).join('')+'</tbody></table></div>';
-  return h+`<div style="font-size:11px;color:var(--text-dim);margin-top:6px">${esc(tr('vuln.disclaimer'))}</div></div>`;
+  return h+`<div style="font-size:11px;color:var(--text-dim);margin-top:6px">${esc(tr('vuln.disclaimer'))}</div>`;
+}
+function renderVulnCard(){
+  const h=vulnCardHead('vuln-card','vuln-text','vulnApply');
+  if(!invRows.length)return h+`<div class="nodata">${esc(tr('vuln.no_entries'))}</div></div>`;
+  return h+vulnResultTable(vulnDevices())+'</div>';
+}
+// 安全稽核頁：比對目前分析的這台；補填的版本以 parsed 物件為鍵只存記憶體（重新分析或換檔即重置）
+const vulnAuditVer=new WeakMap();
+function renderAuditVulnCard(){
+  if(!parsed)return '';
+  const s=parsed.sys||{}, v=String(s.version||'').trim();
+  const dev={name:s.hostname||'-',vendor:parsed.vendor||'',version:vulnAuditVer.get(parsed)||(v==='-'||v==='all'?'':v),file:'audit'};
+  return vulnCardHead('vuln-audit-card','vuln-audit-text','vulnAuditApply')+vulnResultTable([dev])+'</div>';
+}
+function vulnAuditApply(){
+  const t=document.getElementById('vuln-audit-text');
+  if(t)vulnSave(t.value);
+  const el=document.querySelector('#vuln-audit-card input[data-vuln-file]');
+  if(el&&parsed){if(el.value.trim())vulnAuditVer.set(parsed,el.value.trim());else vulnAuditVer.delete(parsed);}
+  navGo('audit');
 }
 function vulnApply(){
   const t=document.getElementById('vuln-text');
@@ -4149,7 +4172,7 @@ function vulnApply(){
 function vulnReadFile(inp){
   const f=inp.files&&inp.files[0];
   if(!f)return;
-  swReadText(f).then(t=>{vulnSave(t.replace(/^﻿/,''));navGo('inventory');});
+  swReadText(f).then(t=>{vulnSave(t.replace(/^﻿/,''));navGo(currentView==='audit'?'audit':'inventory');});
 }
 function vulnDownloadSample(){
   const csv=tr('vuln.sample_comment')+'\n'+VulnCheck.CSV_HEADER+'\niosxe,IOS XE Web UI,17.9.1-17.9.4,17.9.4a,CVE-0000-00000,critical,no,example only\n';
