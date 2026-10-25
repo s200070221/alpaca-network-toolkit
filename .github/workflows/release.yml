@@ -1,6 +1,7 @@
 # 推送 v* tag 時自動發版：檢查版號一致 → build-standalone.ps1 產生單檔 → SHA256SUMS（LF）→ 建立 GitHub Release
 # 發版前先在 toolkit-version.js 改 TOOLKIT_VERSION、CHANGELOG 第一筆、sw.js 的 CACHE（三者與 tag 相同），推上 main 後再推 tag。
-# 手動執行（workflow_dispatch）為試跑：只檢查版號、打包、驗證雜湊，不建立 Release。
+# 手動執行（workflow_dispatch）預設為試跑：只檢查版號、打包、驗證雜湊，不建立 Release；勾選 publish 時由 workflow 在該 commit 建立 tag 與 Release
+# （雲端工作階段不能推 tag 也不能呼叫建立 Release 的 API，改用這個方式發版）。
 # 只用 actions/checkout（已釘 commit SHA）；在 Windows runner 以 Windows PowerShell 5.1 執行，產物格式與本機發版相同。
 name: release
 
@@ -12,6 +13,10 @@ on:
       tag:
         description: '試跑用的版號 tag（例如 v2026.10.22.1，須與 toolkit-version.js 一致）'
         required: true
+      publish:
+        description: '正式發布（建立 tag 與 Release）；不勾為試跑'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -76,8 +81,11 @@ jobs:
             printf '```\n'; } > "$RUNNER_TEMP/body.md"
 
       - name: 建立 Release
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" dist/*.html dist/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file "$RUNNER_TEMP/body.md" --verify-tag
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          # 推 tag 觸發時 tag 已存在；手動發布時在這次執行的 commit 建立 tag
+          if [ "$GITHUB_EVENT_NAME" = push ]; then opt=--verify-tag; else opt="--target $GITHUB_SHA"; fi
+          gh release create "$TAG" dist/*.html dist/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file "$RUNNER_TEMP/body.md" $opt
