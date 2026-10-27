@@ -382,6 +382,14 @@ function analyzeSwitchAudit(parsed){
       ms.sshV1?tr('audit.ssh_v1_detail'):none, ['ISO27001 A.8.24','NIST 800-53 SC-8','CIS v8 3.10'], ms.sshV1?['ssh']:[]);
     if(Array.isArray(ms.idleOff))f('idle-timeout-off', tr('audit.check_idle_timeout_off'), ms.idleOff.length, 'low',
       ms.idleOff.length?ms.idleOff.slice(0,8).join(', '):none, ['ISO27001 A.8.5','NIST 800-53 AC-12','CIS v8 4.3'], ms.idleOff.slice());
+    // 管理平面與稽核紀錄（2026-10-27，XN24）：vtyOpen／cmdAcct／cfgLog 由 parseMgmtPlane() 產生，null＝未查證不評估。
+    // 指令記帳只在已設定集中認證伺服器時評估（沒有伺服器已由 aaa-local-only 列出）
+    if(Array.isArray(ms.vtyOpen))f('vty-no-acl', tr('audit.check_vty_no_acl'), ms.vtyOpen.length, 'medium',
+      ms.vtyOpen.length?ms.vtyOpen.slice(0,8).join(', '):none, ['NIST 800-53 AC-17','CIS v8 12.3'], ms.vtyOpen.slice());
+    if(typeof ms.cmdAcct==='boolean'&&Array.isArray(ms.aaa)&&ms.aaa.length)f('aaa-no-cmd-accounting', tr('audit.check_aaa_no_cmd_accounting'), ms.cmdAcct?0:1, 'low',
+      ms.cmdAcct?none:tr('audit.aaa_no_cmd_accounting_detail'), ['NIST 800-53 AU-12','CIS v8 8.5'], ms.cmdAcct?[]:['aaa']);
+    if(typeof ms.cfgLog==='boolean')f('config-change-log', tr('audit.check_config_change_log'), ms.cfgLog?0:1, 'low',
+      ms.cfgLog?none:tr('audit.config_change_log_detail'), ['NIST 800-53 CM-3','DISA STIG V-220613','CIS v8 8.5'], ms.cfgLog?[]:['archive']);
   }
   // L2 防護（2026-10-06，第十二輪 MB）：parsed.l2Protect 由 parseL2Protect() 產生；只看啟用中的 access 埠
   // （使用者端），沒有 access 埠或整組／單一功能為 null（未查證）時不列。DAI 與 IP Source Guard 依賴 DHCP
@@ -701,6 +709,7 @@ const EVIDENCE_KIND={
   'acl-any-any':'acl','acl-shadowed':'acl','acl-exact-duplicate':'acl','unused-vlan-trunk':'vlan',
   'http-mgmt':'line','ssh-v1':'line','idle-timeout-off':'line',
   'smart-install':'line','iosxe-webui':'line',
+  'vty-no-acl':'line','aaa-no-cmd-accounting':'line','config-change-log':'line',
   'dhcp-snooping-off':'line','dai-off':'line','ipsg-off':'iface','storm-control-off':'iface',
 };
 // 關鍵字型證據行（第十二輪 MA）：命中這些設定行即列出；ntp／syslog／aaa／banner 是「缺少設定」，沒有對應行
@@ -710,6 +719,10 @@ const EVIDENCE_LINE_RE={
   'idle-timeout-off':/^\s*(exec-timeout|idle-timeout)\s+0(\s+0)?\s*$/i,
   'smart-install':/^\s*(no\s+)?vstack\b/i,
   'iosxe-webui':/^\s*ip\s+http\s+(server|secure-server|access-class|authentication)\b/i,
+  // XN24：列出管理連線區塊與既有的記帳／archive 設定行（看得出哪些區塊沒有來源限制、記帳只設了哪幾種）
+  'vty-no-acl':/^\s*(line\s+vty\b|user-interface\s+vty\b|management\s+ssh\s*$|transport\s+input\b|(ipv6\s+)?access-class\b|(ssh|telnet)\s+server\s+(ipv6\s+)?acl\b)/i,
+  'aaa-no-cmd-accounting':/^\s*aaa\s+accounting\b/i,
+  'config-change-log':/^\s*(archive\s*$|log\s+config\s*$|logging\s+enable\s*$|hidekeys\s*$|notify\s+syslog\b)/i,
   // L2 防護（第十二輪 MB）：列出已有的 DHCP snooping／DAI 設定行（部分 VLAN 已涵蓋時看得出缺哪些）
   'dhcp-snooping-off':/^\s*(ip\s+dhcp\s+snooping|dhcp\s+snooping\s+enable|dhcp-snooping|dhcpv4-snooping)\b/i,
   'dai-off':/^\s*(ip\s+arp\s+inspection\s+vlan|arp\s+detection\s+enable|arp\s+inspection\s*$)/i,
@@ -851,6 +864,9 @@ const SW_FIX_CMDS={
     'ssh-v1':()=>['ip ssh version 2'],
     'smart-install':()=>['no vstack'],
     'iosxe-webui':()=>['no ip http server','no ip http secure-server'],
+    'vty-no-acl':it=>['ip access-list standard MGMT-ONLY',' permit <mgmt-subnet> <wildcard>',' deny any log',...(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(b=>[b,' access-class MGMT-ONLY in'])],
+    'aaa-no-cmd-accounting':()=>['aaa accounting commands 1 default start-stop group tacacs+','aaa accounting commands 15 default start-stop group tacacs+'],
+    'config-change-log':()=>['archive',' log config','  logging enable','  notify syslog contenttype plaintext','  hidekeys'],
     'idle-timeout-off':()=>['line con 0',' exec-timeout 10 0','line vty 0 15',' exec-timeout 10 0'],
     'dhcp-snooping-off':it=>['ip dhcp snooping',`ip dhcp snooping vlan ${(it||[]).slice(0,FIX_MAX_ITEMS).join(',')}`,'interface <uplink-to-dhcp-server>',' ip dhcp snooping trust'],
     'dai-off':it=>[`ip arp inspection vlan ${(it||[]).slice(0,FIX_MAX_ITEMS).join(',')}`,'interface <uplink-to-dhcp-server>',' ip arp inspection trust'],
@@ -880,6 +896,7 @@ const SW_FIX_CMDS={
     'http-mgmt':()=>['undo ip http enable','ip https enable'],
     'ssh-v1':()=>['undo ssh server compatible-ssh1x enable'],
     'idle-timeout-off':()=>['line vty 0 63',' idle-timeout 10 0'],
+    'vty-no-acl':it=>['acl number 2000',' rule permit source <mgmt-subnet> <wildcard>',...(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(b=>[b,' acl 2000 inbound'])],
     'dhcp-snooping-off':()=>['dhcp snooping enable','interface <uplink-to-dhcp-server>',' dhcp snooping trust'],
     'dai-off':it=>[...(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(v=>[`vlan ${v}`,' arp detection enable']),'interface <uplink-to-dhcp-server>',' arp detection trust'],
     'storm-control-off':it=>_fixIfaces(it,['broadcast-suppression 1']),
