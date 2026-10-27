@@ -299,6 +299,11 @@ const FortigateParser = (() => {
     const hname = text.match(/^\s*set\s+hostname\s+"?([^"\r\n]+)"?/im);
     if (hname) info.hostname = hname[1].trim();
 
+    // 設定檔機密的加密金鑰（XN34）：未啟用 private-data-encryption 時以系統預設金鑰加密，CVE-2019-6693（KEV）
+    // 已知該金鑰可解出使用者密碼、私鑰密碼、HA 密碼；沒有 config system global 區塊（片段）時為 null 不評估
+    const glob = text.match(/^\s*config system global\s*\n([\s\S]*?)^\s*end\b/m);
+    info.privateDataEnc = glob ? /^\s*set\s+private-data-encryption\s+enable\b/m.test(glob[1]) : null;
+
     info.vdomNames = vdomNames || [];
     info.vdom = vdomNames || [];
     return info;

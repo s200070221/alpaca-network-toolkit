@@ -1035,6 +1035,13 @@
         legacy.length ? legacy.map(u => u.name).slice(0,8).join(', ') + (legacy.length > 8 ? '…' : '') : tr('audit.none'),
         ['NIST 800-53 IA-5(1)', 'CISA FortiBleed'], legacy.map(u => ({ kind: 'user', name: u.name, vdom: u._vdom })));
     }
+    // 9c. FortiGate 未啟用 private-data-encryption（2026-10-27，XN34）：設定檔中的機密以系統預設金鑰加密，
+    // CVE-2019-6693（KEV）已知金鑰；Group-IB 2026 k0t 報告中攻擊者下載設定檔後即以此解出機密。片段沒有 system global 時不評估
+    const pde = parsed.vendor === 'FortiGate' && parsed.deviceInfo ? parsed.deviceInfo.privateDataEnc : null;
+    if (pde === true || pde === false) {
+      f('fg-private-data-enc', tr('audit.check_fg_private_data_enc'), pde ? 0 : 1, 'medium',
+        pde ? tr('audit.normal') : tr('audit.fg_pde_off'), ['NIST 800-53 SC-28', 'CVE-2019-6693 (CISA KEV)'], []);
+    }
     // 10. SNMPv3 認證/加密強度不足（僅涵蓋有實際解析出 v3users 的 6 家：FortiGate/Juniper/PaloAlto/
     // Sophos/CheckPoint/MikroTik；CiscoASA/pfSense/SonicWall 固定空陣列、EdgeRouter/OpenWrt/Zyxel
     // 無 snmp 物件，皆非本檢查涵蓋範圍，非「查無弱設定」）
@@ -1733,6 +1740,7 @@
       ['vpn-no-pfs', 'health.vpn_no_pfs'],
       ['default-admin-name', 'health.default_admin'],
       ['admin-legacy-hash', 'health.admin_legacy_hash'],
+      ['fg-private-data-enc', 'health.fg_private_data_enc'],
       ['snmpv3-weak', 'health.snmpv3_weak'],
       ['ipv6-any-open', 'health.ipv6_any_open'],
       ['ipv6-unfiltered', 'health.ipv6_unfiltered'],
@@ -2487,6 +2495,7 @@
     'vpn-no-pfs': () => ['config vpn ipsec phase2-interface', '    edit "<phase2-name>"', '        set pfs enable', '        set dhgrp 14', '    next', 'end'],
     'default-admin-name': it => ['config system admin', '    edit "<new-admin-name>"', '        set accprofile "super_admin"', '        set password <new-password>', '    next', ...(it || []).slice(0, FW_FIX_MAX).map(x => `    delete ${_fgQuote(x.name)}`), 'end'],
     'admin-legacy-hash': it => _fgEdit('system admin', it, ['set password <new-password>']),
+    'fg-private-data-enc': () => ['config system global', '    set private-data-encryption enable', 'end'],
     'snmpv3-weak': it => ['config system snmp user', ...(it || []).slice(0, FW_FIX_MAX).flatMap(x => [`    edit ${_fgQuote(x.name)}`, '        set auth-proto sha256', '        set priv-proto aes256', '    next']), 'end'],
     'broad-network': it => _fgPol(it, ['set srcaddr "<narrower-source>"', 'set dstaddr "<narrower-destination>"']),
     'overly-permissive-svc': it => _fgEdit('firewall service custom', it, ['set tcp-portrange <specific-ports>']),
