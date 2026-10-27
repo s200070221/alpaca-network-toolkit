@@ -888,6 +888,8 @@
     let h = '<div id="vuln-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('vuln.title')) + '</div>';
     h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('vuln.hint')) + '</div>';
     if (V && V.BUILTIN_ASOF) h += `<div style="font-size:11px;padding:6px 10px;margin-bottom:8px;background:var(--bg2);border-left:3px solid var(--orange,#f59e0b);border-radius:4px">${esc(tr('vuln.builtin_asof').replace('{date}', V.BUILTIN_ASOF).replace('{n}', (V.BUILTIN || []).length))}</div>`;
+    // pfSense／OPNsense 的網頁管理介面為 PHP，設定檔沒有韌體版本，只提示 PHP2Shell 修補（XN32）
+    if (/^(pfsense|opnsense)$/i.test(p.vendor || '')) h += `<div style="font-size:12px;padding:8px 10px;margin-bottom:8px;background:var(--bg2);border-left:3px solid var(--red,#ef4444);border-radius:4px">${esc(tr('vuln.php2shell_note'))}</div>`;
     if (!V || !sch) return h + '<div class="nodata" style="padding:14px 0">' + esc(tr('vuln.unsupported')) + '</div></div>';
     h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px"><label style="display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--text-dim)">${esc(tr('vuln.version'))}` +
       `<input id="vuln-version" class="mono" value="${esc(ver)}" placeholder="${esc(tr('vuln.version_ph_' + sch))}" style="width:200px;${inp}"></label>` +
@@ -906,7 +908,7 @@
     if (rows.length) {
       h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + ['vuln.col_cve', 'vuln.col_result', 'vuln.col_severity', 'vuln.col_kev', 'vuln.col_affected', 'vuln.col_fixed', 'vuln.col_src', 'vuln.col_note'].map(k => esc(tr(k))).join('</th><th>') + '</th></tr></thead><tbody>';
       rows.forEach(([k, e]) => { h += `<tr><td class="mono">${esc(e.cve)}</td><td>${k === 'hit' ? pill(tr('vuln.res_hit'), 'p-deny') : pill(tr('vuln.res_unknown'), 'p-warn')}</td><td>${esc(e.severity || '-')}</td><td>${e.kev ? 'KEV' : '-'}</td>` +
-        `<td class="mono" style="font-size:11px">${esc(e.affected)}</td><td class="mono" style="font-size:11px">${esc(e.fixed || '-')}</td><td style="font-size:11px">${esc(tr(e.builtin ? 'vuln.src_builtin' : 'vuln.src_user'))}</td><td style="font-size:11px">${esc([e.product, e.note].filter(Boolean).join(' — ') || '-')}${e.line ? ' <span style="color:var(--text-dim)">(#' + e.line + ')</span>' : ''}</td></tr>`; });
+        `<td class="mono" style="font-size:11px">${esc(e.affected)}</td><td class="mono" style="font-size:11px">${esc(e.fixed || '-')}</td><td style="font-size:11px">${esc(tr(!e.builtin ? 'vuln.src_user' : e.advisory ? 'vuln.src_advisory' : 'vuln.src_builtin'))}</td><td style="font-size:11px">${esc([e.product, e.note].filter(Boolean).join(' — ') || '-')}${e.line ? ' <span style="color:var(--text-dim)">(#' + e.line + ')</span>' : ''}</td></tr>`; });
       h += '</tbody></table></div>';
     }
     return h + '<div style="font-size:11px;color:var(--text-dim);margin-top:6px">' + esc(tr('vuln.disclaimer')) + '</div></div>';

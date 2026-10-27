@@ -4,7 +4,8 @@
 // 讀出設定檔的韌體版本、依各廠牌版本格式比較是否落在 affected 範圍。純函式、不碰 DOM，以單一全域物件 VulnCheck 對外。
 // 版本格式（各取第一個符合的片段，比對時缺少的段視為 0）：
 //   fortios 7.2.5（build 不比）、panos 10.2.9-h1、asa 9.18(4)22、ftd 7.2.5.1、junos 21.4R3-S5.3、
-//   ios 15.2(7)E8（train 字母不同視為無法比較）、iosxe 17.9.4a、nxos 9.3(10)／10.2(5)M、eos 4.30.2F（train 字母不比）、aoscx 10.11.1020
+//   ios 15.2(7)E8（train 字母不同視為無法比較）、iosxe 17.9.4a、nxos 9.3(10)／10.2(5)M、eos 4.30.2F（train 字母不比）、aoscx 10.11.1020、
+//   routeros 7.23.3（beta／rc 視為無法比較）、os10 10.5.6.13（Dell SmartFabric OS10）
 // affected：以 ; 或 | 分隔多段，任一段符合即受影響。每段可寫
 //   「7.2.0-7.2.6」（含頭尾；右側須以數字開頭，因此 10.2.9-h1、21.4R3-S5 不會被當成範圍）、
 //   「<7.4.3」「<=7.0.13」「>=7.4.0 <7.4.3」（空白分隔的條件須同時成立）、「7.2.*」（前綴）或單一版本（相等）
@@ -15,8 +16,9 @@ const VulnCheck = (function () {
     [/^(cisco )?asa$/, 'asa'], [/^(cisco )?(ftd|firepower|fmc ?ftd|secure firewall threat defense)$/, 'ftd'],
     [/^(junos|juniper|srx|junos os)$/, 'junos'], [/^(cisco )?ios$/, 'ios'], [/^(cisco )?ios[- ]?xe$/, 'iosxe'],
     [/^(cisco )?nx-?os$/, 'nxos'], [/^(arista|eos|arista eos)$/, 'eos'], [/^(aruba ?cx|aos-?cx|arubaos-?cx)$/, 'aoscx'],
+    [/^(mikrotik|routeros|mikrotik routeros)$/, 'routeros'], [/^(dell ?os10|os10|dell-os10|smartfabric os10)$/, 'os10'],
   ];
-  const SCHEMES = ['fortios', 'panos', 'asa', 'ftd', 'junos', 'ios', 'iosxe', 'nxos', 'eos', 'aoscx'];
+  const SCHEMES = ['fortios', 'panos', 'asa', 'ftd', 'junos', 'ios', 'iosxe', 'nxos', 'eos', 'aoscx', 'routeros', 'os10'];
   function scheme(v) {
     const s = String(v || '').trim().toLowerCase();
     if (SCHEMES.includes(s)) return s;
@@ -27,7 +29,7 @@ const VulnCheck = (function () {
   function deviceScheme(vendor, version) {
     const v = String(vendor || '').trim();
     const map = { FortiGate: 'fortios', PaloAlto: 'panos', 'Cisco ASA': 'asa', 'Cisco FTD': 'ftd', Juniper: 'junos', juniper: 'junos',
-      nxos: 'nxos', arista: 'eos', aruba: 'aoscx' };
+      nxos: 'nxos', arista: 'eos', aruba: 'aoscx', MikroTik: 'routeros', routeros: 'routeros', 'dell-os10': 'os10' };
     if (map[v]) return map[v];
     if (v === 'cisco') {
       const s = String(version || '');
@@ -50,7 +52,8 @@ const VulnCheck = (function () {
       case 'ios': m = s.match(/(\d+)\.(\d+)\((\d+)\)([A-Z]+)?(\d+)?([a-z])?/); return m ? { nums: [+m[1], +m[2], +m[3], +(m[5] || 0), lc(m[6])], train: m[4] || '' } : null;
       case 'iosxe': m = s.match(/(\d+)\.(\d+)\.(\d+)([a-z])?/); return m ? { nums: [+m[1], +m[2], +m[3], lc(m[4])] } : null;
       case 'nxos': m = s.match(/(\d+)\.(\d+)\((\d+)([a-z])?\)/); return m ? { nums: [+m[1], +m[2], +m[3], lc(m[4])] } : null;
-      case 'ftd': case 'eos': case 'aoscx': m = s.match(/\d+(?:\.\d+)+/); return m ? { nums: m[0].split('.').map(Number) } : null;
+      case 'routeros': m = s.match(/(\d+)\.(\d+)(?:\.(\d+))?(?![\d.]|beta|rc)/i); return m ? { nums: [+m[1], +m[2], +(m[3] || 0)] } : null;
+      case 'ftd': case 'eos': case 'aoscx': case 'os10': m = s.match(/\d+(?:\.\d+)+/); return m ? { nums: m[0].split('.').map(Number) } : null;
       default: return null;
     }
   }
