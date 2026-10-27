@@ -744,6 +744,74 @@ function parseMgmtPlane(cfg, vendor){
   return {vtyOpen, cmdAcct, cfgLog};
 }
 
+// eBGP 鄰居進出過濾（2026-10-27，第三十五輪 XN28）：RFC 8212 要求沒有政策的 eBGP 預設不收不送；Job Snijders 的
+// RFC 8212 相容性追蹤（GitHub bgp/RFC8212）列出 Cisco IOS／IOS-XE、NX-OS、Arista EOS 預設不相容（照收照送），
+// IOS-XE 17.2.1 起可用 bgp safe-ebgp-policy 模擬（有設定時整台不評估）。逐一檢查 eBGP 鄰居兩個方向有無
+// route-map／prefix-list／filter-list／distribute-list（含 peer-group）；用 inherit 範本的鄰居無法完整展開，略過。
+// 回傳 null＝廠牌未查證或沒有 eBGP 鄰居；否則 {peers:[{ip, missing:['in'|'out']}]}（只列有缺的）。
+// Ruijie 語法未查證、Cisco Business／AlliedWare Plus／FS 語法不同，皆不評估
+const BGP_POLICY_RE = /^(route-map|prefix-list|filter-list|distribute-list)\s+\S+\s+(in|out)\b/;
+function parseBgpPolicy(cfg, vendor, brand){
+  if(!['cisco','arista','nxos'].includes(vendor)||brand==='ciscobiz'||brand==='awplus'||brand==='fs')return null;
+  if(/^\s*bgp\s+safe-ebgp-policy\b/m.test(cfg))return null;
+  const head=cfg.match(/^router bgp\s+(\d+)[^\n]*\n/m);
+  if(!head)return null;
+  const local=head[1];
+  const lines=[];
+  for(const l of cfg.slice(head.index+head[0].length).split('\n')){
+    if(l&&!/^\s/.test(l)&&!/^!\s*$/.test(l))break;
+    lines.push(l);
+  }
+  const isAddr=s=>/[.:]/.test(s);
+  // 同一聯盟（bgp confederation peers）內的成員 AS 不算對外 eBGP
+  const confed=new Set(lines.flatMap(l=>{const m=l.match(/^\s*bgp\s+confederation\s+peers\s+(.+)$/);return m?m[1].trim().split(/\s+/):[];}));
+  const nb=Object.create(null);
+  const get=n=>nb[n]||(nb[n]={as:null,group:null,dirs:new Set(),inherit:false});
+  if(vendor==='nxos'){
+    // NX-OS：neighbor X 為子區塊，remote-as、inherit peer、address-family 下的 route-map … in|out 都在較深縮排
+    const ind=l=>(l.match(/^\s*/)||[''])[0].length;
+    for(let i=0;i<lines.length;i++){
+      const m=lines[i].match(/^\s+neighbor\s+(\S+)(?:\s+remote-as\s+(\d+))?\s*$/);
+      if(!m)continue;
+      const n=get(m[1]);
+      if(m[2])n.as=m[2];
+      const base=ind(lines[i]);
+      for(let k=i+1;k<lines.length&&(!lines[k].trim()||ind(lines[k])>base);k++){
+        const t=lines[k].trim();
+        let r;
+        if((r=t.match(/^remote-as\s+(\d+)/)))n.as=r[1];
+        else if(/^inherit\s+peer\b/.test(t))n.inherit=true;
+        else if((r=t.match(BGP_POLICY_RE)))n.dirs.add(r[2]);
+      }
+    }
+  }else{
+    // Cisco IOS／IOS-XE、Arista：neighbor <鄰居或 peer-group> … 單行指令，可在 address-family 內
+    lines.forEach(l=>{
+      const m=l.trim().match(/^neighbor\s+(\S+)\s+(.*)$/);
+      if(!m)return;
+      const n=get(m[1]), rest=m[2];
+      let r;
+      if((r=rest.match(/^remote-as\s+(\d+)/)))n.as=r[1];
+      else if((r=rest.match(/^peer[- ]group\s+(\S+)/)))n.group=r[1];
+      else if(/^inherit\s+peer-(?:policy|session)\b/.test(rest))n.inherit=true;
+      else if((r=rest.match(BGP_POLICY_RE)))n.dirs.add(r[2]);
+    });
+  }
+  const peers=[];
+  let ebgp=0;
+  Object.keys(nb).filter(isAddr).forEach(ip=>{
+    const n=nb[ip], g=n.group&&nb[n.group];
+    const as=n.as||(g&&g.as);
+    if(!as||as===local||confed.has(as))return;
+    ebgp++;
+    if(n.inherit||(g&&g.inherit))return;
+    const dirs=new Set([...n.dirs,...(g?g.dirs:[])]);
+    const missing=['in','out'].filter(d=>!dirs.has(d));
+    if(missing.length)peers.push({ip,missing});
+  });
+  return ebgp?{peers}:null;
+}
+
 // L2 防護（2026-10-06，第十二輪 MB）：DHCP snooping、DAI（Comware 稱 ARP detection）、IP Source Guard
 // （Aruba CX 稱 source-lockdown）、broadcast storm control。回傳 null 代表該廠牌不評估，單一欄位 null
 // 代表該功能語法未查證不評估。語法依官方文件與 DISA STIG 稽核項目的搜尋摘要（cisco.com、h3c.com、
