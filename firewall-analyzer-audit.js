@@ -1024,6 +1024,15 @@
     f('default-admin-name', tr('audit.check_default_admin'), defaultAdmins.length, 'medium',
       defaultAdmins.length ? defaultAdmins.map(u => u.name).slice(0,8).join(', ') + (defaultAdmins.length > 8 ? '…' : '') : tr('audit.none'),
       ['ISO27001 A.5.16', 'PCI-DSS 4.0 2.2.2/8.2.2'], defaultAdmins.map(u => ({ kind: 'user', name: u.name, vdom: u._vdom })));
+    // 9b. FortiGate 管理者密碼仍為 SHA256 舊雜湊（2026-10-27，XN27）：依 CISA FortiBleed 警示（2026-06-18）要求確認
+    // 管理者雜湊為 PBKDF2；parser 的 pwHash 只有 FortiGate 認得 SH2／PB2，沒有任何管理者有 pwHash 時不列此項
+    const hashKnown = (parsed.users || []).filter(u => u.type === 'admin' && u.pwHash);
+    if (hashKnown.length) {
+      const legacy = hashKnown.filter(u => u.status !== 'disable' && u.pwHash === 'SH2');
+      f('admin-legacy-hash', tr('audit.check_admin_legacy_hash'), legacy.length, 'medium',
+        legacy.length ? legacy.map(u => u.name).slice(0,8).join(', ') + (legacy.length > 8 ? '…' : '') : tr('audit.none'),
+        ['NIST 800-53 IA-5(1)', 'CISA FortiBleed'], legacy.map(u => ({ kind: 'user', name: u.name, vdom: u._vdom })));
+    }
     // 10. SNMPv3 認證/加密強度不足（僅涵蓋有實際解析出 v3users 的 6 家：FortiGate/Juniper/PaloAlto/
     // Sophos/CheckPoint/MikroTik；CiscoASA/pfSense/SonicWall 固定空陣列、EdgeRouter/OpenWrt/Zyxel
     // 無 snmp 物件，皆非本檢查涵蓋範圍，非「查無弱設定」）
@@ -1721,6 +1730,7 @@
       ['weak-vpn', 'health.weak_vpn'],
       ['vpn-no-pfs', 'health.vpn_no_pfs'],
       ['default-admin-name', 'health.default_admin'],
+      ['admin-legacy-hash', 'health.admin_legacy_hash'],
       ['snmpv3-weak', 'health.snmpv3_weak'],
       ['ipv6-any-open', 'health.ipv6_any_open'],
       ['ipv6-unfiltered', 'health.ipv6_unfiltered'],
@@ -2360,6 +2370,7 @@
     'disabled-pol': /status|disable/i,
     'no-2fa': /two-factor|2fa|otp|accprofile|trusthost/i,
     'default-admin-name': /accprofile|profile|level|user-type/i,
+    'admin-legacy-hash': /password|accprofile/i,
     'http-mgmt': /allowaccess|manage|http|telnet/i,
     'exposed-svc': /allowaccess|source-interface|webvpn|http server|enable|interface-management-profile|local-address|web-management|system-services/i,
     'weak-vpn': /proposal|dhgrp|encrypt|hash|dh-group|authentication/i,
@@ -2382,7 +2393,8 @@
     return out;
   }
   function _fwEvMask(l) {
-    return l.replace(/\b(password|passwd|phash|secret|psksecret|pre-shared-key|pre-shared-secret|keystring|auth-pwd|priv-pwd|key)(\s+ENC)?(\s+)("?)[^\s"<]+\4/gi, (m, kw, enc, sp, q) => `${kw}${enc || ''}${sp}${q}****${q}`)
+    // FortiGate 的 ENC SH2／PB2 保留雜湊類型（XN27 稽核要看得出是哪一種），其餘值整段遮蔽
+    return l.replace(/\b(password|passwd|phash|secret|psksecret|pre-shared-key|pre-shared-secret|keystring|auth-pwd|priv-pwd|key)(\s+ENC)?(\s+)("?)([^\s"<]+)\4/gi, (m, kw, enc, sp, q, v) => `${kw}${enc || ''}${sp}${q}${enc && /^(SH2|PB2)/.test(v) ? v.slice(0, 3) : ''}****${q}`)
       .replace(/<(password|phash|psk|pre-shared-key|secret|key)>[^<]*<\//gi, '<$1>****</');
   }
   // FortiGate：每個 config firewall policy(6) 區段的起訖行與所屬 VDOM
@@ -2472,6 +2484,7 @@
     'weak-vpn': it => _fgEdit('vpn ipsec phase1-interface', it, ['set proposal aes256-sha256', 'set dhgrp 14']),
     'vpn-no-pfs': () => ['config vpn ipsec phase2-interface', '    edit "<phase2-name>"', '        set pfs enable', '        set dhgrp 14', '    next', 'end'],
     'default-admin-name': it => ['config system admin', '    edit "<new-admin-name>"', '        set accprofile "super_admin"', '        set password <new-password>', '    next', ...(it || []).slice(0, FW_FIX_MAX).map(x => `    delete ${_fgQuote(x.name)}`), 'end'],
+    'admin-legacy-hash': it => _fgEdit('system admin', it, ['set password <new-password>']),
     'snmpv3-weak': it => ['config system snmp user', ...(it || []).slice(0, FW_FIX_MAX).flatMap(x => [`    edit ${_fgQuote(x.name)}`, '        set auth-proto sha256', '        set priv-proto aes256', '    next']), 'end'],
     'broad-network': it => _fgPol(it, ['set srcaddr "<narrower-source>"', 'set dstaddr "<narrower-destination>"']),
     'overly-permissive-svc': it => _fgEdit('firewall service custom', it, ['set tcp-portrange <specific-ports>']),
