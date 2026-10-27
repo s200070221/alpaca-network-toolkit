@@ -80,8 +80,9 @@ function parseProCurve(cfg) {
   function expandPortList(rangeStr) {
     const ports=[];
     for (const part of (rangeStr||'').split(',').map(s=>s.trim()).filter(Boolean)) {
-      const m=part.match(/^([A-Za-z]*)(\d+)-(?:[A-Za-z]*)(\d+)$/);
-      if (m) { const prefix=m[1]; for (let i=+m[2]; i<=+m[3]; i++) ports.push(prefix+i); }
+      // 堆疊機型（2930F／3810M）埠名為「成員/埠」，範圍寫成 1/1-1/24：前綴（含斜線）須相同
+      const m=part.match(/^([A-Za-z]*|\d+\/[A-Za-z]*)(\d+)-([A-Za-z]*|\d+\/[A-Za-z]*)(\d+)$/);
+      if (m && (!m[3] || m[3]===m[1])) { const prefix=m[1]; for (let i=+m[2]; i<=+m[4]; i++) ports.push(prefix+i); }
       else ports.push(part);
     }
     return ports;
