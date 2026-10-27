@@ -716,7 +716,10 @@ const FortigateParser = (() => {
         permissions: profiles[prof] || [{ resource: 'All', access: 'read-write' }],
         roles: [prof], accessLevel: mapLevel(prof), _vdom: vdomName,
         // 管理者可登入的來源（trusthost1～10，IPv4）；未設定代表任何來源（0.0.0.0/0），供曝險服務判斷
-        trusthosts: Array.from({ length: 10 }, (_, k) => gv(t, 'trusthost' + (k + 1))).filter(Boolean) });
+        trusthosts: Array.from({ length: 10 }, (_, k) => gv(t, 'trusthost' + (k + 1))).filter(Boolean),
+        // 密碼雜湊類型（XN27）：Fortinet 技術文件，ENC SH2＝SHA256、ENC PB2＝PBKDF2（7.2.11／7.4.8／7.6.1 起，
+        // 舊雜湊要該管理者登入一次才轉換）；其他格式不判斷
+        pwHash: ((/^ENC\s+(SH2|PB2)/.exec(gv(t, 'password') || '')) || [])[1] || null });
     });
 
     // Local users
