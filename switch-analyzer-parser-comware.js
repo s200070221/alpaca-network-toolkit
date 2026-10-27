@@ -680,7 +680,9 @@ function parseMgmtServices(cfg, vendor, brand){
     // cisco／ruijie／nxos／arista／aruba：ntp server [vrf X] 主機
     ntp=all(/^\s*ntp\s+server\s+(?:vrf\s+\S+\s+)?(?!vrf\b)(\S+)/m);
     aaa=[...all(/^\s*(?:tacacs-server|radius-server)\s+host\s+(\S+)/m),
-         ...all(/^\s*(?:tacacs|radius)\s+server\s+(\S+)\s*$/m)];
+         ...all(/^\s*(?:tacacs|radius)\s+server\s+(\S+)\s*$/m),
+         // aaa group server 內直接寫位址的 server-private（XN24 以 Oxidized ASR920 真實錄製發現原本漏判為只有本機帳號）
+         ...(vendor==='cisco'?all(/^\s+server-private\s+(\S+)/m):[])];
     banner=has(/^\s*banner\s+(?:motd|login|exec)\b/m);
     if(vendor==='cisco'){
       httpPlain=has(/^ip\s+http\s+server\s*$/m);
@@ -703,8 +705,43 @@ function parseMgmtServices(cfg, vendor, brand){
     if(vendor==='cisco'||vendor==='ruijie'||vendor==='nxos')
       idleOff=all(/^(\s*exec-timeout\s+0(?:\s+0)?\s*)$/m).map(x=>x.trim());
   }
+  const mp=parseMgmtPlane(cfg, vendor);
   return {ntp:[...new Set(ntp)], aaa:[...new Set(aaa)], banner, httpPlain, sshV1, idleOff, syslogExtra:[...new Set(syslogExtra)],
-    sshV2Only:vendor==='cisco'?has(/^\s*ip\s+ssh\s+version\s+2\b/m):null, smartInstall, webUi};
+    sshV2Only:vendor==='cisco'?has(/^\s*ip\s+ssh\s+version\s+2\b/m):null, smartInstall, webUi,
+    vtyOpen:mp.vtyOpen, cmdAcct:mp.cmdAcct, cfgLog:mp.cfgLog};
+}
+
+// 管理平面與稽核紀錄（2026-10-27，第三十四輪 XN24）：依 CISA 2025-02 邊界設備指引與 AA25-239A（搭配 AAA 指令記帳，
+// 不只靠 syslog）。回傳 null 代表該廠牌語法未查證不評估。語法依據：
+//   vtyOpen（未限制來源的管理連線區塊標題）：
+//     Cisco IOS／IOS-XE：line vty 區塊 access-class … in（transport input none 的區塊不開放登入，略過）
+//     NX-OS：line vty 區塊 access-class X in（Oxidized N5548 真實錄製）
+//     Arista：management ssh 區塊 ip access-group X in（DISA Arista NDM STIG V-255948）；沒有此區塊時 SSH 仍為預設開啟
+//     Comware：line vty／user-interface vty 區塊 acl [ipv6] N inbound（H3C Fundamentals Command Reference，預設不限制；MAC ACL 不限制 IP 來源不算）；
+//       全域 ssh server acl／telnet server acl 也視為已限制
+//   cmdAcct（有無指令記帳）：Cisco aaa accounting commands <等級>（單行與 IOS-XE 多行 action-type 寫法，Oxidized ASR920）、
+//     NX-OS aaa accounting default group（NX-OS NDM STIG 範例）、Arista aaa accounting commands … default start-stop|stop-only
+//     group|logging（Arista NDM STIG AMLS-NM-000430 範例）；Comware 指令記帳語法未查證
+//   cfgLog（設定變更內容紀錄）：只有 Cisco IOS／IOS-XE 的 archive → log config → logging enable（DISA Cisco IOS Switch NDM STIG V-220613）
+function parseMgmtPlane(cfg, vendor){
+  const blocks=re=>{const out=[];let m;const r=new RegExp(re.source+'[^\\n]*\\n((?:[ \\t]+[^\\n]*(?:\\n|$))*)','gm');
+    while((m=r.exec(cfg))!==null)out.push({head:m[0].split('\n')[0].trim(),body:m[1]});return out;};
+  let vtyOpen=null, cmdAcct=null, cfgLog=null;
+  if(vendor==='cisco'||vendor==='nxos'){
+    const vty=blocks(/^line\s+vty\b/);
+    if(vty.length)vtyOpen=vty.filter(b=>!/^\s*transport\s+input\s+none\s*$/m.test(b.body)&&!/^\s*(?:ipv6\s+)?access-class\s+\S+\s+in\b/m.test(b.body)).map(b=>b.head);
+    cmdAcct=vendor==='cisco'?/^aaa\s+accounting\s+commands\s+\d+\s/m.test(cfg):/^aaa\s+accounting\s+default\s+group\s/m.test(cfg);
+    if(vendor==='cisco')cfgLog=blocks(/^archive\s*$/).some(b=>/^\s+log\s+config\s*$/m.test(b.body)&&/^\s+logging\s+enable\s*$/m.test(b.body));
+  }else if(vendor==='arista'){
+    const ms=blocks(/^management\s+ssh\s*$/);
+    vtyOpen=ms.some(b=>/^\s*ip\s+access-group\s+\S+(?:\s+vrf\s+\S+)?\s+in\b/m.test(b.body))?[]:['management ssh'];
+    cmdAcct=/^aaa\s+accounting\s+commands\s+\S+\s+default\s+(?:start-stop|stop-only)\s+(?:group|logging)\b/m.test(cfg);
+  }else if(vendor==='comware'){
+    const vty=blocks(/^(?:line|user-interface)\s+vty\b/);
+    const globalAcl=/^\s*(?:ssh|telnet)\s+server\s+(?:ipv6\s+)?acl\s+\S+/m.test(cfg);
+    if(vty.length)vtyOpen=globalAcl?[]:vty.filter(b=>!/^\s*acl\s+(?!mac\b)[^\n]*\binbound\b/m.test(b.body)).map(b=>b.head);
+  }
+  return {vtyOpen, cmdAcct, cfgLog};
 }
 
 // L2 防護（2026-10-06，第十二輪 MB）：DHCP snooping、DAI（Comware 稱 ARP detection）、IP Source Guard
