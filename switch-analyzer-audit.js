@@ -259,6 +259,12 @@ function analyzeSwitchAudit(parsed){
   f('routing-no-auth', tr('audit.check_routing_no_auth'), noRoutingAuth.length, 'medium',
     (noRoutingAuth.length?noRoutingAuth.join(', '):tr('audit.none'))+' '+tr('audit.routing_auth_coverage_note'),
     ['ISO27001 A.8.20','NIST 800-53 IA-3','CIS v8 4.4'],noRoutingAuth);
+  // 7b. eBGP 鄰居未設定進出過濾（2026-10-27，XN28）：parsed.bgpPolicy 由 parseBgpPolicy() 產生，null＝未查證或沒有 eBGP 鄰居
+  if(parsed.bgpPolicy){
+    const bp=parsed.bgpPolicy.peers.map(p=>`${p.ip} (${p.missing.join('/')})`);
+    f('bgp-ebgp-no-policy', tr('audit.check_bgp_ebgp_no_policy'), bp.length, 'medium',
+      bp.length?bp.slice(0,8).join(', ')+(bp.length>8?'…':''):tr('audit.none'), ['RFC 8212','NIST 800-53 SC-7'], parsed.bgpPolicy.peers.map(p=>p.ip));
+  }
   // 8. ACL 存在允許 any-to-any 的規則（2026-09 新增）。多數廠牌的 ACL rules[] 都是巢狀在
   // acls[].rules[] 底下（Cisco/NXOS/Comware/Aruba CX/Extreme/FortiSwitch/Netgear/Planet
   // 皆為此形狀，src/dst 皆可能是字面 'any'）；RouterOS 是扁平陣列（parsed.acls 本身就是
@@ -709,7 +715,7 @@ const EVIDENCE_KIND={
   'acl-any-any':'acl','acl-shadowed':'acl','acl-exact-duplicate':'acl','unused-vlan-trunk':'vlan',
   'http-mgmt':'line','ssh-v1':'line','idle-timeout-off':'line',
   'smart-install':'line','iosxe-webui':'line',
-  'vty-no-acl':'line','aaa-no-cmd-accounting':'line','config-change-log':'line',
+  'vty-no-acl':'line','aaa-no-cmd-accounting':'line','config-change-log':'line','bgp-ebgp-no-policy':'line',
   'dhcp-snooping-off':'line','dai-off':'line','ipsg-off':'iface','storm-control-off':'iface',
 };
 // 關鍵字型證據行（第十二輪 MA）：命中這些設定行即列出；ntp／syslog／aaa／banner 是「缺少設定」，沒有對應行
@@ -722,6 +728,8 @@ const EVIDENCE_LINE_RE={
   // XN24：列出管理連線區塊與既有的記帳／archive 設定行（看得出哪些區塊沒有來源限制、記帳只設了哪幾種）
   'vty-no-acl':/^\s*(line\s+vty\b|user-interface\s+vty\b|management\s+ssh\s*$|transport\s+input\b|(ipv6\s+)?access-class\b|(ssh|telnet)\s+server\s+(ipv6\s+)?acl\b)/i,
   'aaa-no-cmd-accounting':/^\s*aaa\s+accounting\b/i,
+  // XN28：列出 router bgp 與鄰居宣告、既有的過濾設定行（看得出哪個方向沒設）
+  'bgp-ebgp-no-policy':/^\s*(router\s+bgp\b|neighbor\s+\S+(\s+remote-as\b|\s+peer[- ]group\b|\s*$)|(neighbor\s+\S+\s+)?(route-map|prefix-list|filter-list|distribute-list)\s+\S+\s+(in|out)\b)/i,
   'config-change-log':/^\s*(archive\s*$|log\s+config\s*$|logging\s+enable\s*$|hidekeys\s*$|notify\s+syslog\b)/i,
   // L2 防護（第十二輪 MB）：列出已有的 DHCP snooping／DAI 設定行（部分 VLAN 已涵蓋時看得出缺哪些）
   'dhcp-snooping-off':/^\s*(ip\s+dhcp\s+snooping|dhcp\s+snooping\s+enable|dhcp-snooping|dhcpv4-snooping)\b/i,
@@ -867,6 +875,7 @@ const SW_FIX_CMDS={
     'vty-no-acl':it=>['ip access-list standard MGMT-ONLY',' permit <mgmt-subnet> <wildcard>',' deny any log',...(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(b=>[b,' access-class MGMT-ONLY in'])],
     'aaa-no-cmd-accounting':()=>['aaa accounting commands 1 default start-stop group tacacs+','aaa accounting commands 15 default start-stop group tacacs+'],
     'config-change-log':()=>['archive',' log config','  logging enable','  notify syslog contenttype plaintext','  hidekeys'],
+    'bgp-ebgp-no-policy':it=>['router bgp <asn>',...(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(ip=>[` neighbor ${ip} route-map <IN-POLICY> in`,` neighbor ${ip} route-map <OUT-POLICY> out`])],
     'idle-timeout-off':()=>['line con 0',' exec-timeout 10 0','line vty 0 15',' exec-timeout 10 0'],
     'dhcp-snooping-off':it=>['ip dhcp snooping',`ip dhcp snooping vlan ${(it||[]).slice(0,FIX_MAX_ITEMS).join(',')}`,'interface <uplink-to-dhcp-server>',' ip dhcp snooping trust'],
     'dai-off':it=>[`ip arp inspection vlan ${(it||[]).slice(0,FIX_MAX_ITEMS).join(',')}`,'interface <uplink-to-dhcp-server>',' ip arp inspection trust'],
