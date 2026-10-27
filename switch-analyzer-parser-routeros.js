@@ -1,7 +1,9 @@
 function parseRouterOSSysInfo(cfg){
   const model=(cfg.match(/^\/system identity[\s\S]*?name=([^\n]+)/m)||[])[1]||'RouterOS';
   const isCCR=/CCR\d+/i.test(model);
-  return{hostname:model,version:'',isCCR};
+  // 匯出檔頭「# 2024-01-01 10:00:00 by RouterOS 7.12.1」或「# RouterOS 7.12.1」
+  const version=(cfg.match(/^#[^\n]*\bRouterOS\s+(\d+\.\d+(?:\.\d+)?(?:beta\d+|rc\d+)?)/m)||[])[1]||'';
+  return{hostname:model,version,isCCR};
 }
 // 修正：原正則要求 "tagged=" 一定要在 "vlan-id=" 之前且必填，真實匯出設定檔常見「只有
 // untagged= 沒有 tagged=」的純 access port VLAN 宣告（如既有 routeros_basic.rsc 第 10 行
