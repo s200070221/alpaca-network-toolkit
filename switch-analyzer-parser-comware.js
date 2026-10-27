@@ -823,7 +823,33 @@ function parseBgpPolicy(cfg, vendor, brand){
 //     介面 broadcast-suppression 或 storm-constrain broadcast（IP Source Guard 未查證）
 //   Aruba CX：全域 dhcpv4-snooping＋vlan 內 dhcpv4-snooping、vlan 內 arp inspection、介面 ipv4 source-lockdown
 //     （storm control 未查證）
-const L2_PROTECT_VENDORS=['cisco','nxos','arista','comware','aruba','brocade'];
+// 存取埠迴圈偵測 loop（2026-10-27，XN29；傻瓜交換器打迴圈不送 BPDU，BPDU guard 擋不住）：
+//   Comware 7：全域 loopback-detection global enable vlan {清單|all}（範圍寫成 1 to 4094）；
+//     Comware 5：全域 loopback-detection enable＋介面 loopback-detection enable（埠層級需先有全域才生效）
+//   ArubaOS-Switch（procurve）：全域 loop-protect <埠清單>；mode vlan 時 loop-protect vlan <清單>（loopVlans）
+//   Aruba CX：介面 loop-protect　　Ruijie：全域 rldp enable＋介面 rldp port loop-detect <動作>
+//   Cisco IOS／NX-OS、Arista 沒有對應功能，Brocade 等未查證：loop 為 null
+const L2_PROTECT_VENDORS=['cisco','nxos','arista','comware','aruba','brocade','procurve','ruijie'];
+// Comware VLAN 清單（「10 20 to 30」）
+function expandComwareVlanList(str){
+  const out=new Set(), t=String(str||'').trim().split(/\s+/);
+  for(let i=0;i<t.length;i++){
+    if(!/^\d+$/.test(t[i]))continue;
+    if(t[i+1]==='to'&&/^\d+$/.test(t[i+2]||'')){for(let v=+t[i];v<=Math.min(+t[i+2],+t[i]+4094);v++)out.add(String(v));i+=2;}
+    else out.add(t[i]);
+  }
+  return out;
+}
+// ProCurve 埠清單（「1-24,A1-A4,1/1-1/24」），規則同 parseProCurve() 的 expandPortList()，另支援 1/1-1/24
+function expandProCurvePorts(str){
+  const out=[];
+  String(str||'').split(',').map(x=>x.trim()).filter(Boolean).forEach(part=>{
+    const m=part.match(/^(.*?)(\d+)-(.*?)(\d+)$/);
+    if(m&&m[1]===m[3]){for(let i=+m[2];i<=+m[4]&&i-m[2]<1000;i++)out.push(m[1]+i);}
+    else out.push(part);
+  });
+  return out;
+}
 function expandL2VlanList(str){
   const out=new Set();
   String(str||'').split(',').forEach(t=>{
@@ -844,7 +870,7 @@ function parseL2Protect(cfg, vendor, brand){
   };
   const ifs=blocks('interface');
   const ifHas=re=>Object.keys(ifs).filter(n=>re.test(ifs[n]));
-  let snoop=null, dai=null, ipsg=null, storm=null;
+  let snoop=null, dai=null, ipsg=null, storm=null, loop=null, loopVlans=null;
   if(vendor==='cisco'||vendor==='nxos'){
     const on=/^ip\s+dhcp\s+snooping\s*$/m.test(cfg);
     const v=new Set();(cfg.match(/^ip\s+dhcp\s+snooping\s+vlan\s+(\S+)/gm)||[]).forEach(l=>expandL2VlanList(l.split(/\s+/)[4]).forEach(x=>v.add(x)));
@@ -860,11 +886,31 @@ function parseL2Protect(cfg, vendor, brand){
     const vl=blocks('vlan');
     dai=Object.keys(vl).filter(v=>/^\s*arp\s+detection\s+enable\b/m.test(vl[v]));
     storm=ifHas(/^\s*(?:broadcast-suppression|storm-constrain\s+broadcast)\b/m);
+    if(/^loopback-detection\s+(?:global\s+)?enable\b/m.test(cfg)){
+      const gv=(cfg.match(/^loopback-detection\s+global\s+enable\s+vlan\s+([^\n]+)/m)||[])[1];
+      loopVlans=gv?(/^\s*all\b/.test(gv)?['all']:[...expandComwareVlanList(gv)]):[];
+      loop=ifHas(/^\s*loopback-detection\s+enable\b/m);
+    }else{loop=[];loopVlans=[];}
   }else if(vendor==='aruba'){
     const vl=blocks('vlan');
     snoop=/^dhcpv4-snooping\s*$/m.test(cfg)?Object.keys(vl).filter(v=>/^\s*dhcpv4-snooping\s*$/m.test(vl[v])):[];
     dai=Object.keys(vl).filter(v=>/^\s*arp\s+inspection\s*$/m.test(vl[v]));
     ipsg=ifHas(/^\s*ipv4\s+source-lockdown\b/m);
+    loop=ifHas(/^\s*loop-protect\b/m);
+  }else if(vendor==='procurve'){
+    loop=[];loopVlans=[];
+    (cfg.match(/^loop-protect\s+([^\n]+)/gm)||[]).forEach(l=>{
+      const arg=l.replace(/^loop-protect\s+/,'').trim();
+      if(/^vlan\s+/.test(arg)){if(/^loop-protect\s+mode\s+vlan\b/m.test(cfg))expandL2VlanList(arg.split(/\s+/)[1]).forEach(v=>loopVlans.push(v));return;}
+      if(/^(?:mode|disable-timer|trap|transmit-interval)\b/.test(arg))return;
+      expandProCurvePorts(arg.split(/\s+/)[0]).forEach(pt=>loop.push(pt));
+    });
+  }else if(vendor==='ruijie'){
+    loop=[];
+    if(/^rldp\s+enable\s*$/m.test(cfg)){
+      let m;const re=/^interface\s+([^\n]+)\n((?:[ \t]+[^\n]*(?:\n|$))*)/gm;
+      while((m=re.exec(cfg))!==null)if(/^\s*rldp\s+port\s+loop-detect\b/m.test(m[2]))loop.push(m[1].trim());
+    }
   }else if(vendor==='brocade'){
     // Ruckus／Brocade ICX（第十三輪 NB）：全域 ip dhcp snooping vlan／ip arp inspection vlan（可用「A to B」範圍，
     // 依 Ruckus FastIron DHCP 指南與 DISA RUCKUS ICX L2 STIG 搜尋摘要）、介面 source-guard enable、介面 broadcast limit。
@@ -880,7 +926,7 @@ function parseL2Protect(cfg, vendor, brand){
     ipsg=bHas(/^\s*source-guard\s+enable\b/m);
     storm=bHas(/^\s*broadcast\s+limit\b/m);
   }
-  return {snoop, dai, ipsg, storm};
+  return {snoop, dai, ipsg, storm, loop, loopVlans};
 }
 
 // OSPF/BGP/RIP 路由通訊協定認證解析（2026-07-22 新增，13 廠牌逐一對外查證官方 CLI 文件後

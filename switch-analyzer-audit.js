@@ -432,6 +432,12 @@ function analyzeSwitchAudit(parsed){
       f('storm-control-off', tr('audit.check_storm_control_off'), noStorm.length, 'low', lst(names(noStorm)),
         ['ISO27001 A.8.20','NIST 800-53 SC-5'], names(noStorm));
     }
+    // 存取埠迴圈偵測（XN29）：傻瓜交換器打迴圈不送 BPDU，只靠 BPDU guard 擋不住；loopVlans 為以 VLAN 啟用的廠牌（Comware 全域、ProCurve mode vlan）
+    if(Array.isArray(l2.loop)){
+      const noLoop=accessPorts.filter(i=>!l2.loop.includes(i.name)&&!covered(l2.loopVlans,i));
+      f('loop-protect-off', tr('audit.check_loop_protect_off'), noLoop.length, 'low', lst(names(noLoop)),
+        ['ISO27001 A.8.20','NIST 800-53 SC-5'], names(noLoop));
+    }
   }
   return findings;
 }
@@ -716,7 +722,7 @@ const EVIDENCE_KIND={
   'http-mgmt':'line','ssh-v1':'line','idle-timeout-off':'line',
   'smart-install':'line','iosxe-webui':'line',
   'vty-no-acl':'line','aaa-no-cmd-accounting':'line','config-change-log':'line','bgp-ebgp-no-policy':'line',
-  'dhcp-snooping-off':'line','dai-off':'line','ipsg-off':'iface','storm-control-off':'iface',
+  'dhcp-snooping-off':'line','dai-off':'line','ipsg-off':'iface','storm-control-off':'iface','loop-protect-off':'iface',
 };
 // 關鍵字型證據行（第十二輪 MA）：命中這些設定行即列出；ntp／syslog／aaa／banner 是「缺少設定」，沒有對應行
 const EVIDENCE_LINE_RE={
@@ -746,6 +752,7 @@ const EVIDENCE_SUB={
   'weak-pwd':/password|secret|cipher|hash/i,'weak-pwd-legacy-hash':/password|secret|cipher|hash/i,
   'ipsg-off':/switchport|port (link-type|access)|verify source|source-lockdown|vlan access/i,
   'storm-control-off':/switchport|port (link-type|access)|storm|suppression|vlan access/i,
+  'loop-protect-off':/switchport|port (link-type|access)|loop|rldp|vlan access/i,
 };
 const EVIDENCE_MAX_LINES=30;
 function _evEsc(s){return String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
@@ -909,6 +916,7 @@ const SW_FIX_CMDS={
     'dhcp-snooping-off':()=>['dhcp snooping enable','interface <uplink-to-dhcp-server>',' dhcp snooping trust'],
     'dai-off':it=>[...(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(v=>[`vlan ${v}`,' arp detection enable']),'interface <uplink-to-dhcp-server>',' arp detection trust'],
     'storm-control-off':it=>_fixIfaces(it,['broadcast-suppression 1']),
+    'loop-protect-off':()=>['loopback-detection global enable vlan all','loopback-detection global action shutdown'],
   },
 };
 // 回傳修正指令文字（沒有範例時為空字串）；nxos／arista 等語法相近但不完全相同的廠牌刻意不套用 Cisco 範例
