@@ -2019,6 +2019,7 @@ function onParsed(){
         setTimeout(() => filterConvMatrix(CONV_SRC_VENDOR), 50);
       }
     }
+    _wzRender();
   }
   window.updateConvButtons=updateConvButtons;
 
@@ -2072,6 +2073,7 @@ function onParsed(){
   function doConvert(srcVendor, targetVendor){
     if(!PARSED){showErr(tr('err.upload_first'));return;}
     CONV_TARGET=targetVendor;
+    if(_wz.target!==targetVendor){ _wz.target=targetVendor; _wz.model=''; }
     try{
       const rawMap=_convRawMap();
       let srcParsed=_resolveSrcParsed(srcVendor);
@@ -2141,7 +2143,83 @@ function onParsed(){
   // _pm：src／target／vdom（目前的轉換路徑）、parsed（VDOM 篩選後、套用對應前的來源）、model、map（畫面上的對應）、applied（已套用的對應）
   const _pm = { src: '', target: '', vdom: '', parsed: null, model: '', map: null, applied: null, appliedModel: '' };
   const _CONV_NAMES = {fortigate:'FortiGate',sophos:'Sophos',checkpoint:'Check Point',paloalto:'Palo Alto',juniper:'Juniper SRX',pfsense:'pfSense',sonicwall:'SonicWall',mikrotik:'MikroTik',ciscoasa:'Cisco ASA',ciscoftd:'Cisco FTD',zyxel:'Zyxel',edgerouter:'EdgeRouter',openwrt:'OpenWrt'};
-  function _pmRender(target){
+  // ── 轉換精靈（XN47）：來源 → 目標廠牌與型號 → 埠對應 → 驗證 → 下載；矩陣保留在「進階」 ──────────
+  // _wz：精靈選單目前的選擇（只存記憶體）；轉換後的狀態一律讀 _pm／CONV_RESULT
+  const _wz = { target: '', model: '' };
+  function _wzSrc(){ return PARSED && CONV_SRC_VENDOR && _convRawMap()[CONV_SRC_VENDOR] ? CONV_SRC_VENDOR : ''; }
+  function _wzState(){
+    const src=_wzSrc(), sel=$('conv-vdom-sel');
+    const vdomNeeded=!!(PARSED&&PARSED._isMultiVdom&&(PARSED._vdomNames||[]).length>1);
+    const converted=!!(src&&CONV_RESULT&&_wz.target&&CONV_TARGET===_wz.target&&_pm.src===src&&_pm.target===_wz.target);
+    return { src, srcOk:!!src, vdomNeeded, vdomPicked:!!(sel&&sel.value), converted,
+      modelChosen:converted&&!!_pm.model, applied:converted&&!!_pm.applied, verify:converted?(_pm.verify||null):null };
+  }
+  function _wzRender(){
+    const stepsEl=$('conv-wz-steps');
+    if(!stepsEl||typeof convWizardSteps==='undefined')return;
+    const st=_wzState(), steps=convWizardSteps(st);
+    stepsEl.innerHTML=buildConvWizardStepsHtml(steps);
+    // 來源
+    let srcTxt='';
+    if(!PARSED) srcTxt=tr('msg.no_data_yet');
+    else if(!st.srcOk) srcTxt=tr('wz.src_unsupported').replace('{vendor}',esc(PARSED.vendor||CONV_SRC_VENDOR||''));
+    else {
+      const sm=FwPortMap.detectSourceModel(PARSED);
+      srcTxt=tr('wz.src').replace('{vendor}',esc(_CONV_NAMES[st.src]||st.src))+(sm?' · '+esc((FwPortMap.getModel(sm.vendor,sm.id)||{}).label||sm.id):'');
+    }
+    $('conv-wz-src').innerHTML=srcTxt;
+    // 目標廠牌：轉換器支援的 13 家，扣掉來源
+    const tSel=$('conv-wz-target');
+    if(_wz.target===st.src)_wz.target='';
+    tSel.innerHTML=`<option value="">—</option>`+Object.keys(_CONV_NAMES).filter(v=>v!==st.src).map(v=>`<option value="${v}"${v===_wz.target?' selected':''}>${esc(_CONV_NAMES[v])}</option>`).join('');
+    tSel.disabled=!st.srcOk;
+    // 目標型號（選填）：轉換後與埠對應卡片的選擇同步
+    const models=_wz.target?FwPortMap.modelsOf(_wz.target):[];
+    const cur=st.converted?_pm.model:_wz.model;
+    const mSel=$('conv-wz-model');
+    mSel.innerHTML=`<option value="">${tr('wz.model_none')}</option>`+models.map(m=>`<option value="${esc(m.id)}"${m.id===cur?' selected':''}>${esc(m.label)}</option>`).join('');
+    mSel.style.display=$('conv-wz-model-lbl').style.display=models.length?'':'none';
+    $('conv-wz-go').disabled=!st.srcOk||!_wz.target;
+    $('conv-wz-dl').style.display=st.converted?'inline-flex':'none';
+    // 下一步提示：第一個尚未完成的步驟
+    const next=steps.find(x=>x.status!=='done'&&x.status!=='skip');
+    const hintKey={blocked:'wz.hint_blocked'}[next&&next.status]||(next?{source:'wz.hint_vdom',target:'wz.hint_target',portmap:'wz.hint_portmap',verify:'wz.hint_verify',download:'wz.hint_download'}[next.key]:'');
+    $('conv-wz-hint').innerHTML=hintKey?`<span style="color:${next.status==='warn'||next.status==='blocked'?'var(--orange)':'var(--text-dim)'}">${tr(hintKey)}</span>`:'';
+  }
+  window._wzRender=_wzRender;
+  _wzRender();
+  function _wzStart(){
+    const src=_wzSrc(), target=_wz.target;
+    if(!src||!target)return;
+    doConvert(src,target);
+    if(!CONV_RESULT||CONV_TARGET!==target)return;
+    if(_wz.model&&FwPortMap.getModel(target,_wz.model)){
+      if(_pm.model!==_wz.model){ _pm.model=_wz.model; _pm.map=null; _pm.csvMsg=''; }
+      _pmRender(target);
+      const card=$('conv-portmap-card'); if(card&&card.scrollIntoView)card.scrollIntoView({block:'start'});
+    }
+  }
+  document.addEventListener('change',e=>{
+    const k=e.target&&e.target.getAttribute&&e.target.getAttribute('data-wz');
+    if(!k||!e.target.closest('#conv-wizard'))return;
+    if(k==='target'){ _wz.target=e.target.value; _wz.model=''; }
+    else if(k==='model'){
+      _wz.model=e.target.value;
+      // 已轉換：直接帶到埠對應卡片（等同在卡片選型號）
+      if(_wzState().converted&&_pm.model!==_wz.model){ _pm.model=_wz.model; _pm.map=null; _pm.csvMsg=''; _pmRender(_pm.target); return; }
+    }
+    _wzRender();
+  });
+  document.addEventListener('click',e=>{
+    const b=e.target&&e.target.closest?e.target.closest('#conv-wizard button[data-wz]'):null;
+    if(!b)return;
+    const k=b.getAttribute('data-wz');
+    if(k==='go')_wzStart();
+    else if(k==='dl-conf')downloadConv();
+    else if(k==='dl-report')downloadConvReport();
+  });
+  function _pmRender(target){ _pmRender0(target); _wzRender(); }
+  function _pmRender0(target){
     const el=$('conv-portmap-card');
     if(!el)return;
     if(!target||!_pm.parsed||typeof FwPortMap==='undefined'){ el.innerHTML=''; return; }
@@ -2161,7 +2239,8 @@ function onParsed(){
   }
   const _fwAuditOf=p=>{ const h=computeFirewallHealth(p); return { health:{score:h.score,grade:h.grade},
     findings:analyzeCompliance(p).map(f=>({id:f.id,label:f.check,risk:f.risk,value:f.value})) }; };
-  function _vfRender(srcForVerify, target){
+  function _vfRender(srcForVerify, target){ _vfRender0(srcForVerify, target); _wzRender(); }
+  function _vfRender0(srcForVerify, target){
     const el=$('conv-verify-card');
     if(!el)return;
     if(!srcForVerify||!CONV_RESULT||typeof FwPortMap==='undefined'){ el.innerHTML=''; return; }

@@ -859,6 +859,7 @@ function _onLangChange() {
   var si = document.getElementById('search-inp');
   if (si) si.placeholder = tr('search.placeholder');
   if (typeof window._fwRenderNextBar === 'function') window._fwRenderNextBar();
+  if (typeof window._wzRender === 'function') window._wzRender();
 }
 
 // 位址物件名稱 → v4/v6 反查表：規則的 srcaddr/dstaddr 多數廠牌存的是物件名稱（不含冒號），

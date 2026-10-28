@@ -170,6 +170,22 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 .conv-header h2{font-size:14px;font-weight:700}
 #conv-status{font-size:12px;font-family:'JetBrains Mono',monospace;color:var(--text-dim)}
 .conv-matrix-wrap{padding:14px 24px;border-bottom:1px solid var(--border);background:var(--surface2);flex-shrink:0;}
+.conv-wizard{padding:14px 24px;border-bottom:1px solid var(--border);background:var(--surface2);flex-shrink:0;}
+.conv-wz-steps{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;}
+.conv-wz-step{display:flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--border);border-radius:16px;font-size:12px;color:var(--text-dim);background:var(--surface);}
+.conv-wz-step .wz-n{font-family:'JetBrains Mono',monospace;font-weight:700}
+.conv-wz-step .wz-st{font-size:11px;opacity:.85}
+.conv-wz-step.wz-done{color:var(--green);border-color:var(--green)}
+.conv-wz-step.wz-current{color:var(--text);border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.conv-wz-step.wz-warn{color:var(--orange);border-color:var(--orange)}
+.conv-wz-step.wz-blocked{color:var(--red);border-color:var(--red)}
+.conv-wz-step.wz-todo,.conv-wz-step.wz-skip{opacity:.6}
+.conv-wz-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
+.conv-wz-row select{padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:12px;max-width:260px}
+.conv-wz-src{font-size:12px;font-weight:600;margin-right:8px}
+.conv-wz-lbl{font-size:12px;color:var(--text-dim)}
+.conv-wz-hint{font-size:12px;margin-top:8px;min-height:1em}
+.conv-adv-sum{cursor:pointer;font-size:12px;color:var(--text-dim);}
 .conv-matrix-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;font-family:'JetBrains Mono',monospace;margin-bottom:10px;}
 #conv-matrix{display:flex;flex-wrap:wrap;gap:8px;}
 .conv-btn{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:8px 14px;cursor:pointer;transition:all .2s;font-family:'IBM Plex Sans TC',sans-serif;font-size:12px;}
@@ -715,22 +731,40 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
     <div id="view-convert">
       <div class="conv-header">
         <h2>🔄 <span data-i18n="conv.title">設定檔轉換</span></h2>
-        <select id="conv-src-filter" onchange="filterConvMatrix(this.value)"><option value="" data-i18n="conv.filter_all">顯示全部轉換路徑</option><option value="fortigate" data-i18n="conv.filter_forti">僅 FortiGate 出發</option><option value="sophos" data-i18n="conv.filter_sophos">僅 Sophos 出發</option><option value="checkpoint" data-i18n="conv.filter_cp">僅 Check Point 出發</option><option value="paloalto" data-i18n="conv.filter_pa">僅 Palo Alto 出發</option><option value="juniper" data-i18n="conv.filter_juniper">僅 Juniper 出發</option><option value="pfsense" data-i18n="conv.filter_pfsense">僅 pfSense 出發</option></select>
-        <select id="conv-vdom-sel" style="display:none" title="選擇要轉換的 VDOM"></select>
         <div id="conv-status" style="font-size:12px;color:var(--text-dim);font-family:'JetBrains Mono',monospace"></div>
         <div style="margin-left:auto;display:flex;gap:8px">
           <button class="btn btn-ghost btn-sm" onclick="downloadConv()">⬇ <span data-i18n="btn.download_conv">下載轉換結果</span></button>
         </div>
       </div>
-      <div class="conv-matrix-wrap">
+      <!-- 轉換精靈（XN47）：來源 → 目標廠牌與型號 → 埠對應 → 驗證 → 下載；步驟列與選單由 _wzRender() 填入 -->
+      <div class="conv-wizard" id="conv-wizard">
+        <div id="conv-wz-steps" class="conv-wz-steps"></div>
+        <div class="conv-wz-row">
+          <span id="conv-wz-src" class="conv-wz-src"></span>
+          <select id="conv-vdom-sel" style="display:none" title="VDOM" data-wz="vdom"></select>
+          <label class="conv-wz-lbl" for="conv-wz-target" data-i18n="wz.target_label">目標廠牌</label>
+          <select id="conv-wz-target" data-wz="target"></select>
+          <label class="conv-wz-lbl" for="conv-wz-model" id="conv-wz-model-lbl" data-i18n="wz.model_label">目標型號</label>
+          <select id="conv-wz-model" data-wz="model"></select>
+          <button type="button" class="btn btn-sm" id="conv-wz-go" data-wz="go" data-i18n="wz.go">開始轉換</button>
+          <span id="conv-wz-dl" style="display:none;gap:8px">
+            <button type="button" class="btn btn-ghost btn-sm" data-wz="dl-conf">⬇ <span data-i18n="btn.download_conv">下載轉換結果</span></button>
+            <button type="button" class="btn btn-ghost btn-sm" data-wz="dl-report">📄 <span data-i18n="crpt.download">下載轉換報告</span></button>
+          </span>
+        </div>
+        <div id="conv-wz-hint" class="conv-wz-hint"></div>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:6px" data-i18n="conv.approx_note">⚠ 轉換結果為近似對應，請人工複核後再匯入正式環境</div>
+      </div>
+      <details class="conv-matrix-wrap" id="conv-adv">
+        <summary class="conv-adv-sum" data-i18n="wz.adv">進階：直接選擇轉換路徑</summary>
+        <div style="margin:10px 0 8px"><select id="conv-src-filter" onchange="filterConvMatrix(this.value)"><option value="" data-i18n="conv.filter_all">顯示全部轉換路徑</option><option value="fortigate" data-i18n="conv.filter_forti">僅 FortiGate 出發</option><option value="sophos" data-i18n="conv.filter_sophos">僅 Sophos 出發</option><option value="checkpoint" data-i18n="conv.filter_cp">僅 Check Point 出發</option><option value="paloalto" data-i18n="conv.filter_pa">僅 Palo Alto 出發</option><option value="juniper" data-i18n="conv.filter_juniper">僅 Juniper 出發</option><option value="pfsense" data-i18n="conv.filter_pfsense">僅 pfSense 出發</option></select></div>
         <div class="conv-matrix-label" data-i18n="conv.label">選擇轉換路徑（點擊執行）</div>
-        <div style="font-size:11px;color:var(--text-dim);margin:-4px 0 10px" data-i18n="conv.approx_note">⚠ 轉換結果為近似對應，請人工複核後再匯入正式環境</div>
         <div id="conv-matrix">
           <div style="color:var(--text-muted);font-size:12px;font-family:'JetBrains Mono',monospace" data-i18n="msg.no_data_yet">請先上傳並分析設定檔</div>
         </div>
         <!-- 轉換預覽放在按鈕下方：放在上方標題列時，預覽文字讓標題列變高、按鈕被推離滑鼠，觸發移出又清空，形成每一幀循環（閃爍、點不到） -->
         <div id="conv-preview-status" style="font-size:11px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;font-style:italic;margin-top:8px;min-height:1.2em"></div>
-      </div>
+      </details>
       <div id="conv-portmap-card"></div>
       <div class="conv-panels">
         <div class="conv-panel">
