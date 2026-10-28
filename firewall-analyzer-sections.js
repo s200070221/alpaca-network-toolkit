@@ -1161,6 +1161,27 @@ function pmWarnText(w){
     .replace('{from}',esc(w.from||'')).replace('{to}',esc(w.to||'')).replace('{other}',esc(w.other||'')).replace('{kind}',esc(w.kind||''));
 }
 // o：{targetName, models:[{id,label}], modelId, srcModel, sug:{model,ports,map,warnings}|null, applied}
+// 轉換精靈（XN47）：依目前狀態判定 5 個步驟（source／target／portmap／verify／download）
+// st：{srcOk, vdomNeeded, vdomPicked, converted, modelChosen, applied, verify:verifyConversion() 結果或 {error}|null}
+// status：done／current／warn／skip／blocked／todo
+function convWizardSteps(st){
+  st=st||{};
+  const srcDone=!!st.srcOk&&(!st.vdomNeeded||!!st.vdomPicked);
+  const v=st.verify;
+  const verifyWarn=!!v&&(!!v.error||(v.diffs||[]).length>0);
+  return [
+    {key:'source', status:!st.srcOk?'blocked':srcDone?'done':'current'},
+    {key:'target', status:st.converted?'done':srcDone?'current':'todo'},
+    {key:'portmap', status:!st.converted?'todo':!st.modelChosen?'skip':st.applied?'done':'current'},
+    {key:'verify', status:!st.converted?'todo':verifyWarn?'warn':v?'done':'todo'},
+    {key:'download', status:st.converted?'current':'todo'},
+  ];
+}
+function buildConvWizardStepsHtml(steps){
+  const icon={done:'✓',warn:'⚠',blocked:'✕'};
+  return steps.map((s,i)=>`<div class="conv-wz-step wz-${s.status}" data-wz-step="${s.key}" data-wz-status="${s.status}"><span class="wz-n">${icon[s.status]||(i+1)}</span><span>${tr('wz.step_'+s.key)}</span><span class="wz-st">${tr('wz.st_'+s.status)}</span></div>`).join('');
+}
+window.convWizardSteps=convWizardSteps; window.buildConvWizardStepsHtml=buildConvWizardStepsHtml;
 // 埠用途（XN46）：位址／別名／區域與參照數的純文字（畫面、CSV、報告共用，畫面另行跳脫）
 function pmAddrText(u){
   if(!u)return '';
