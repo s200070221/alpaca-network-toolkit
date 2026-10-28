@@ -1172,9 +1172,13 @@ function buildConvPortMapHtml(o){
     <select data-pm="model" style="${sel}"><option value="">${tr('pm.model_none')}</option>${o.models.map(m=>`<option value="${esc(m.id)}"${m.id===o.modelId?' selected':''}>${esc(m.label)}</option>`).join('')}</select>`;
   if(o.sug) h+=`<button type="button" class="btn btn-sm" data-pm="apply">${tr('pm.apply')}</button>
     <button type="button" class="btn btn-ghost btn-sm" data-pm="reset">${tr('pm.reset')}</button>
-    <button type="button" class="btn btn-ghost btn-sm" data-pm="clear">${tr('pm.clear')}</button>`;
+    <button type="button" class="btn btn-ghost btn-sm" data-pm="clear">${tr('pm.clear')}</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-pm="csvexport">⬇ ${tr('pm.csv_export')}</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-pm="csvimport">⬆ ${tr('pm.csv_import')}</button>
+    <input type="file" accept=".csv,text/csv" data-pm="csvfile" style="display:none">`;
   if(o.applied) h+=`<span style="font-size:12px;color:var(--green)">${tr('pm.applied').replace('{n}',o.appliedCount)}</span>`;
   h+='</div>';
+  if(o.csvMsg) h+=`<div style="font-size:12px;margin-bottom:8px">${esc(o.csvMsg)}</div>`;
   if(!o.sug) return h+'</div>';
   const m=o.sug.model, res=o.reserved||{};
   const tag=p=>p.mgmt?' [mgmt]':p.ha?' [HA]':res[p.name]==='fortilink'?' [FortiLink]':/^hwswitch:/.test(res[p.name]||'')?` [${res[p.name].slice(9)}]`:'';
@@ -1213,6 +1217,39 @@ function buildConvVerifyHtml(v){
     +'</tbody></table></div>';
   return h+'</div>';
 }
+// 轉換報告（XN44）：單一 HTML，不含 script，CSP 只允許內嵌樣式；所有值經 esc()。
+// info：{srcVendor, srcModel, dstVendor, dstModel, vdom, time, rows:[{source,usage,target,spec,notes:[文字]}], extraNotes:[文字],
+//        loss:[欄位], caveats:[文字], review:[{line,text}], reviewTotal, verify:verifyConversion() 結果或 {error,…}}
+function buildConvReportHtml(info){
+  const e=v=>esc(v==null?'':String(v));
+  const sec=(title,body)=>`<h2>${e(title)}</h2>${body}`;
+  const list=a=>a&&a.length?`<ul>${a.map(x=>`<li>${e(x)}</li>`).join('')}</ul>`:`<p class="dim">${e(tr('crpt.none'))}</p>`;
+  const meta=[[tr('crpt.src'),info.srcVendor+(info.srcModel?' / '+info.srcModel:'')],[tr('crpt.dst'),info.dstVendor+(info.dstModel?' / '+info.dstModel:'')],
+    ...(info.vdom?[[tr('crpt.vdom'),info.vdom]]:[]),[tr('crpt.time'),info.time]];
+  let h=`<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>${e(tr('crpt.title'))}</title><style>
+:root{--text:#1f2937;--text-dim:#6b7280;--border:#d1d5db;--surface2:#f9fafb;--green:#15803d;--orange:#b45309;--red:#b91c1c}
+body{font-family:system-ui,'Noto Sans TC',sans-serif;color:var(--text);margin:24px;font-size:13px;line-height:1.5}
+h1{font-size:20px}h2{font-size:15px;margin-top:22px;border-bottom:1px solid var(--border);padding-bottom:4px}
+table,.data-tbl{border-collapse:collapse;margin:6px 0}th,td{border:1px solid var(--border);padding:4px 8px;text-align:left;vertical-align:top}
+th{background:var(--surface2)}.mono,code{font-family:Consolas,monospace;font-size:12px}.dim{color:var(--text-dim)}.warn{color:var(--orange)}
+</style></head><body><h1>${e(tr('crpt.title'))}</h1><p class="dim">${e(tr('crpt.disclaimer'))}</p>
+<table>${meta.map(([k,v])=>`<tr><th>${e(k)}</th><td>${e(v)}</td></tr>`).join('')}</table>`;
+  h+=sec(tr('pm.title'),info.rows&&info.rows.length
+    ?`<table><tr><th>${e(tr('pm.col_src'))}</th><th>${e(tr('pm.col_use'))}</th><th>${e(tr('pm.col_dst'))}</th><th>${e(tr('pm.col_warn'))}</th></tr>`
+      +info.rows.map(r=>`<tr><td class="mono">${e(r.source)}</td><td>${e(r.usage||'-')}</td><td class="mono">${e(r.target||tr('pm.unmapped_opt'))}${r.spec?' <span class="dim">('+e(r.spec)+')</span>':''}</td><td class="warn">${(r.notes||[]).map(e).join('<br>')||'-'}</td></tr>`).join('')+'</table>'
+      +((info.extraNotes||[]).length?list(info.extraNotes):'')
+    :`<p class="dim">${e(tr('crpt.no_map'))}</p>`);
+  h+=sec(tr('crpt.loss_title'),list(info.loss));
+  h+=sec(tr('crpt.caveat_title'),list(info.caveats));
+  h+=sec(tr('crpt.review_title'),info.review&&info.review.length
+    ?`<table><tr><th>#</th><th>${e(tr('crpt.review_line'))}</th></tr>${info.review.map(r=>`<tr><td class="mono">${r.line}</td><td class="mono">${e(r.text)}</td></tr>`).join('')}</table>`
+      +(info.reviewTotal>info.review.length?`<p class="dim">${e(tr('crpt.review_more').replace('{n}',info.reviewTotal))}</p>`:'')
+    :`<p class="dim">${e(tr('crpt.review_none'))}</p>`);
+  if(info.verify)h+=buildConvVerifyHtml(info.verify);
+  return h+'</body></html>';
+}
+window.buildConvReportHtml=buildConvReportHtml;
 window.buildConvPortMapHtml=buildConvPortMapHtml;
 window.buildConvVerifyHtml=buildConvVerifyHtml;
 })();

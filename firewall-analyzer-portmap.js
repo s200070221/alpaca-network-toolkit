@@ -304,7 +304,79 @@
     return { counts, total: queries.length, same, unsure, diffs, skipped, truncated: queries.length >= max };
   }
 
-  const api = { vendorKey, modelsOf, getModel, sourcePorts, detectSourceModel, reservedOf, suggestMap, portMapWarnings, applyMap, verifyConversion, sampleIp, sampleSvc, VERIFY_MAX };
+  // ── 埠對應表 CSV（XN44）：匯出給現場接線、同型號換多台時匯入重用 ─────────────────────────
+  // 第一行為 `# target_vendor=…,target_model=…` 註解；值以 =+-@ 開頭時前綴單引號（防公式注入），匯入時去掉
+  const MAP_SRC_HEADS = ['source_port', 'source', 'old_port', '來源埠', '舊埠'];
+  const MAP_DST_HEADS = ['target_port', 'target', 'new_port', '目標埠', '新埠'];
+  const csvQ = v => {
+    let s = String(v == null ? '' : v);
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return /[",\r\n]/.test(s) || s !== s.trim() ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  // meta：{target_vendor, target_model, …}；cols：欄位名稱；rows：以欄位名稱為鍵的物件
+  function buildMapCsv(meta, cols, rows) {
+    const head = '# ' + Object.keys(meta || {}).map(k => k + '=' + String(meta[k] == null ? '' : meta[k]).replace(/[,\r\n]/g, ' ')).join(',');
+    return [head, cols.join(','), ...(rows || []).map(r => cols.map(c => csvQ(r[c])).join(','))].join('\r\n') + '\r\n';
+  }
+  // 引號內可含逗號與換行，故整段解析不逐行切；回傳 [{line, cells}]
+  function csvRecords(text) {
+    const out = []; let row = [], cur = '', q = false, line = 1, start = 1;
+    const push = () => { row.push(cur); if (row.some(x => x.trim())) out.push({ line: start, cells: row }); row = []; cur = ''; };
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) {
+        if (c === '"' && text[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') q = false;
+        else { if (c === '\n') line++; cur += c; }
+      } else if (c === '"') q = true;
+      else if (c === ',') { row.push(cur); cur = ''; }
+      else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; push(); line++; start = line; }
+      else cur += c;
+    }
+    if (cur || row.length) push();
+    return out;
+  }
+  const unq = s => String(s == null ? '' : s).trim().replace(/^'(?=[=+\-@\t\r])/, '');
+  // 回傳 {meta, rows:[{line, source, target}], errors:[{code, line}]}
+  function parseMapCsv(text) {
+    const meta = Object.create(null), errors = [];
+    const t = String(text || '').replace(/^﻿/, '');
+    const body = t.split(/\r?\n/).map(l => {
+      const m = l.match(/^\s*#(.*)$/);
+      if (!m) return l;
+      m[1].split(',').forEach(kv => { const i = kv.indexOf('='); if (i > 0) { const k = kv.slice(0, i).trim(); if (k && k !== '__proto__') meta[k] = kv.slice(i + 1).trim(); } });
+      return '';  // 保留空行讓行號對得上
+    }).join('\n');
+    const recs = csvRecords(body);
+    if (!recs.length) return { meta, rows: [], errors: [{ code: 'empty', line: 0 }] };
+    const head = recs[0].cells.map(h => unq(h).toLowerCase().replace(/\s+/g, '_'));
+    const si = head.findIndex(h => MAP_SRC_HEADS.includes(h)), di = head.findIndex(h => MAP_DST_HEADS.includes(h));
+    if (si < 0 || di < 0) return { meta, rows: [], errors: [{ code: 'noHeader', line: recs[0].line }] };
+    const rows = recs.slice(1).map(r => ({ line: r.line, source: unq(r.cells[si]), target: unq(r.cells[di]) }));
+    return { meta, rows, errors };
+  }
+  // 只套用來源埠存在、目標埠屬於目前型號（或留空＝不對應）的列；回傳 {map, applied, skipped:[{line, port, code}]}
+  function applyMapRows(rows, sourceNames, targetNames) {
+    const src = new Set(sourceNames || []), dst = new Set(targetNames || []);
+    const map = Object.create(null), usedDst = Object.create(null), seen = Object.create(null), skipped = [];
+    let applied = 0;
+    (rows || []).forEach(r => {
+      const s = r.source, d = r.target;
+      const skip = code => skipped.push({ line: r.line, port: s || d || '', code });
+      if (!s) return skip('noSource');
+      if (s === '__proto__' || s === 'constructor' || s === 'prototype' || !src.has(s)) return skip('unknownSource');
+      if (seen[s]) return skip('dupSource');
+      if (d && !dst.has(d)) return skip('unknownTarget');
+      if (d && usedDst[d]) return skip('dupTarget');
+      seen[s] = true;
+      if (d) usedDst[d] = s;
+      map[s] = d;
+      applied++;
+    });
+    return { map, applied, skipped };
+  }
+
+  const api = { vendorKey, modelsOf, getModel, sourcePorts, detectSourceModel, reservedOf, suggestMap, portMapWarnings, applyMap, verifyConversion, sampleIp, sampleSvc, VERIFY_MAX, buildMapCsv, parseMapCsv, applyMapRows };
   if (typeof window !== 'undefined') window.FwPortMap = api;
   return api;
 })();

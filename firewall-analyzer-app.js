@@ -2108,7 +2108,7 @@ function onParsed(){
         }
       }
       // 目標型號埠對應（XN38）：來源或目標換了就重設；對應只存記憶體
-      if (_pm.src !== srcVendor || _pm.target !== targetVendor || _pm.vdom !== convVdom) Object.assign(_pm, { src: srcVendor, target: targetVendor, vdom: convVdom, model: '', map: null, applied: null, appliedModel: '' });
+      if (_pm.src !== srcVendor || _pm.target !== targetVendor || _pm.vdom !== convVdom) Object.assign(_pm, { src: srcVendor, target: targetVendor, vdom: convVdom, model: '', map: null, applied: null, appliedModel: '', csvMsg: '', verify: null });
       _pm.parsed = srcParsed;
       const convInput = _pm.applied ? FwPortMap.applyMap(srcParsed, _pm.applied, targetVendor) : srcParsed;
       CONV_RESULT=Converter.convert(convInput,targetVendor);
@@ -2117,7 +2117,8 @@ function onParsed(){
       $('conv-dst-label').textContent=`${vendorNames[targetVendor]||targetVendor} ${tr('conv.dst_suffix')}`;
       $('conv-src').value=rawMap[srcVendor]||JSON.stringify(srcParsed,null,2);
       $('conv-dst').value=CONV_RESULT;
-      let convStatusHtml=`<span style="color:var(--green)">${tr('conv.done')}</span> — ${CONV_RESULT.split('\n').length} ${tr('conv.lines_unit')}  |  ${(CONV_RESULT.length/1024).toFixed(1)} KB`;
+      let convStatusHtml=`<span style="color:var(--green)">${tr('conv.done')}</span> — ${CONV_RESULT.split('\n').length} ${tr('conv.lines_unit')}  |  ${(CONV_RESULT.length/1024).toFixed(1)} KB`
+        +` <button type="button" class="btn btn-ghost btn-sm" data-conv-report style="margin-left:8px">📄 ${tr('crpt.download')}</button>`;
       const warnHtml=buildConversionWarningsHtml(srcParsed, targetVendor, _pm.applied ? { portModel: _pm.appliedModel } : null);
       if(warnHtml)convStatusHtml+='<br>'+warnHtml;
       if(convVdom)convStatusHtml+=`<br><span style="color:var(--text-dim);font-size:12px">⚠️ ${tr('conv.vdom_warn').replace('{vdom}',esc(convVdom))}</span>`;
@@ -2156,7 +2157,7 @@ function onParsed(){
       }
     }
     el.innerHTML=buildConvPortMapHtml({ targetName:_CONV_NAMES[target]||target, models, modelId:_pm.model, srcModel: sm ? (FwPortMap.getModel(sm.vendor,sm.id)||{}).label || sm.id : '', sug, reserved,
-      applied:!!_pm.applied, appliedCount:_pm.applied?Object.keys(_pm.applied).filter(k=>_pm.applied[k]).length:0 });
+      applied:!!_pm.applied, appliedCount:_pm.applied?Object.keys(_pm.applied).filter(k=>_pm.applied[k]).length:0, csvMsg:_pm.csvMsg||'' });
   }
   function _vfRender(srcForVerify, target){
     const el=$('conv-verify-card');
@@ -2169,6 +2170,7 @@ function onParsed(){
       try { v=FwPortMap.verifyConversion(srcForVerify, fn(CONV_RESULT)); }
       catch(e){ v={ error:'reparse', vendor:_CONV_NAMES[target]||target, message:e.message }; }
     }
+    _pm.verify=v;
     el.innerHTML=buildConvVerifyHtml(v);
   }
   // 事件代理（data-pm）：選型號、改單一埠、套用／依建議重設／清除
@@ -2176,7 +2178,8 @@ function onParsed(){
     const t=e.target;
     if(!t||!t.closest||!t.closest('#conv-portmap-card'))return;
     const k=t.getAttribute('data-pm');
-    if(k==='model'){ _pm.model=t.value; _pm.map=null; _pmRender(_pm.target); }
+    if(k==='model'){ _pm.model=t.value; _pm.map=null; _pm.csvMsg=''; _pmRender(_pm.target); }
+    else if(k==='csvfile'&&t.files&&t.files[0]){ const f=t.files[0]; t.value=''; f.text().then(_pmImportCsv); }
     else if(k==='port'&&_pm.map){ const src=t.getAttribute('data-src'); if(src&&src!=='__proto__') _pm.map[src]=t.value; _pmRender(_pm.target); }
   });
   document.addEventListener('click',e=>{
@@ -2186,7 +2189,66 @@ function onParsed(){
     if(k==='apply'&&_pm.map){ _pm.applied=Object.assign(Object.create(null), _pm.map); _pm.appliedModel=_pm.model; doConvert(_pm.src,_pm.target); }
     else if(k==='reset'){ _pm.map=null; _pmRender(_pm.target); }
     else if(k==='clear'){ _pm.applied=null; _pm.map=null; _pm.model=''; doConvert(_pm.src,_pm.target); }
+    else if(k==='csvexport')_pmExportCsv();
+    else if(k==='csvimport'){ const f=$('conv-portmap-card').querySelector('input[data-pm="csvfile"]'); if(f)f.click(); }
   });
+  document.addEventListener('click',e=>{ if(e.target&&e.target.closest&&e.target.closest('[data-conv-report]'))downloadConvReport(); });
+
+  // ── 埠對應表 CSV 與轉換報告（XN44）────────────────────────────────────────────
+  // 警示純文字（CSV／報告用，報告另行跳脫）
+  const _pmWarnPlain=w=>tr('pm.w_'+w.code).replace('{port}',w.port||'').replace('{dst}',w.dst||'').replace('{sw}',w.sw||'')
+    .replace('{from}',w.from||'').replace('{to}',w.to||'').replace('{other}',w.other||'').replace('{kind}',w.kind||'');
+  // 依對應表組成逐埠資料列：{source,usage,target,spec,sourceSpec,notes}，另回傳不屬於單一埠的提示
+  function _pmRowsFor(map, modelId){
+    const model=modelId?FwPortMap.getModel(_pm.target,modelId):null;
+    if(!model||!map||!_pm.parsed)return null;
+    const ports=FwPortMap.sourcePorts(_pm.parsed);
+    const ws=FwPortMap.portMapWarnings(_pm.parsed,_pm.target,model,map);
+    const sm=FwPortMap.detectSourceModel(_pm.parsed), smo=sm?FwPortMap.getModel(sm.vendor,sm.id):null;
+    const names=new Set(ports.map(p=>p.name));
+    const rows=ports.map(sp=>{
+      const d=map[sp.name]||'', tp=model.ports.find(p=>p.name===d), sp2=smo&&smo.ports.find(p=>p.name===sp.name);
+      return { source:sp.name, target:d,
+        usage:[sp.role?tr('pm.role_'+sp.role):'', sp.fortilink?tr('pm.fortilink_tag'):'', sp.group?tr('pm.group_tag').replace('{name}',sp.group):'', sp.ifaces.filter(n=>n!==sp.name).join(' ')].filter(Boolean).join('; '),
+        spec:tp?tp.speed+' '+tp.media:'', sourceSpec:sp2?sp2.speed+' '+sp2.media:'',
+        notes:ws.filter(w=>w.port===sp.name).map(_pmWarnPlain) };
+    });
+    return { model, rows, extraNotes:ws.filter(w=>!w.port||!names.has(w.port)).map(_pmWarnPlain) };
+  }
+  function _pmExportCsv(){
+    const r=_pmRowsFor(_pm.map,_pm.model); if(!r)return;
+    const csv=FwPortMap.buildMapCsv({target_vendor:_pm.target,target_model:_pm.model,source_vendor:_pm.src},
+      ['source_port','target_port','usage','source_speed','target_speed','notes'],
+      r.rows.map(x=>({source_port:x.source,target_port:x.target,usage:x.usage,source_speed:x.sourceSpec,target_speed:x.spec,notes:x.notes.join(' / ')})));
+    Reporter.download(csv,`fw_portmap_${_pm.target}_${_pm.model}_${dateStr()}.csv`,'text/csv');
+  }
+  function _pmImportCsv(text){
+    const model=FwPortMap.getModel(_pm.target,_pm.model); if(!model||!_pm.parsed)return;
+    const pr=FwPortMap.parseMapCsv(text);
+    if(pr.errors.length){ _pm.csvMsg=tr(pr.errors[0].code==='empty'?'pm.csv_err_empty':'pm.csv_err_header'); _pmRender(_pm.target); return; }
+    const res=FwPortMap.applyMapRows(pr.rows,FwPortMap.sourcePorts(_pm.parsed).map(p=>p.name),model.ports.map(p=>p.name));
+    // 匯入的列覆蓋目前對應，檔案沒列到的埠維持原樣
+    _pm.map=Object.assign(Object.create(null),_pm.map||{},res.map);
+    const parts=[tr('pm.csv_done').replace('{n}',res.applied)];
+    if(pr.meta.target_model&&pr.meta.target_model!==_pm.model)parts.push(tr('pm.csv_model_diff').replace('{model}',pr.meta.target_model));
+    if(res.skipped.length)parts.push(tr('pm.csv_skipped').replace('{n}',res.skipped.length)+' '+res.skipped.slice(0,8).map(x=>`#${x.line} ${x.port}（${tr('pm.csv_skip_'+x.code)}）`).join('、'));
+    _pm.csvMsg=parts.join(' ');
+    _pmRender(_pm.target);
+  }
+  function downloadConvReport(){
+    if(!CONV_RESULT||!_pm.parsed){showErr(tr('conv.no_result'));return;}
+    const r=_pm.applied?_pmRowsFor(_pm.applied,_pm.appliedModel):null;
+    const sm=FwPortMap.detectSourceModel(_pm.parsed);
+    const review=[];
+    CONV_RESULT.split('\n').forEach((l,i)=>{ if(/REVIEW|UNRESOLVED/.test(l))review.push({line:i+1,text:l.trim()}); });
+    const html=buildConvReportHtml({ srcVendor:_CONV_NAMES[_pm.src]||_pm.src, srcModel:sm?((FwPortMap.getModel(sm.vendor,sm.id)||{}).label||sm.id):'',
+      dstVendor:_CONV_NAMES[_pm.target]||_pm.target, dstModel:r?r.model.label:'', vdom:_pm.vdom, time:new Date().toLocaleString(),
+      rows:r?r.rows:[], extraNotes:r?r.extraNotes:[],
+      loss:Converter.getConversionLoss(_pm.parsed,_pm.target), caveats:Converter.getConversionCaveats(_pm.parsed,_pm.target,_pm.applied?{portModel:_pm.appliedModel}:null),
+      review:review.slice(0,500), reviewTotal:review.length, verify:_pm.verify||null });
+    Reporter.download(html,`fw_conversion_report_${_pm.target}_${dateStr()}.html`,'text/html');
+  }
+  window.downloadConvReport=downloadConvReport;
 
   function downloadConv(){
     if(!CONV_RESULT){showErr(tr('conv.no_result'));return;}
