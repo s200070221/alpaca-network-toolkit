@@ -5622,7 +5622,7 @@ window.addEventListener('load', function () { if (/[?&]demo=1(?:&|$)/.test(locat
 
 // ── 跨廠牌轉換（XN39）：目標型號埠對應＋轉換摘要（XN40 交換器部分）──────────────────────
 // 純函式在 switch-generator-portmap.js（SwPortMap）；本段只處理畫面。對應與轉換前的 model 只存記憶體 _swc
-const _swc={target:'',model:'',map:null,undo:null,summary:null};
+const _swc={target:'',model:'',map:null,undo:null,summary:null,rtSeq:0};
 const SWC_PARSERS={comware:'parseComware',cisco:'parseCisco',aruba:'parseAruba',fortiswitch:'parseFortiSwitch',juniper:'parseJuniper',cisco_nxos:'parseNXOS',
   arista:'parseArista',ruijie:'parseRuijie',netgear:'parseNetgear',edgeswitch:'parseEdgeSwitch','dell-os10':'parseDellOS10',brocade:'parseBrocade',
   alcatel:'parseAlcatel',extreme:'parseExtremeXOS',procurve:'parseProCurve',routeros:'parseRouterOS',sonic:'parseSONiC',planet:'parsePlanet'};
@@ -5644,7 +5644,7 @@ function swcSummaryHtml(s){
     h+=`<div style="font-size:12px;margin-top:6px;color:${ok?'var(--green)':'var(--orange)'}">${esc(tr(ok?'swpm.rt_ok':'swpm.rt_diff').replace('{n}',s.rt.checked))}</div>`;
     if(!ok)h+=`<div class="mono" style="font-size:11px">${s.rt.missingVlans.map(v=>'VLAN '+esc(v)).concat(s.rt.ifaceDiffs.map(d=>esc(d.port)+' '+esc(d.why)+(d.want?' '+esc(d.want)+'→'+esc(d.got):''))).slice(0,30).join('<br>')}</div>`;
   }else if(s.rtError)h+=`<div style="font-size:12px;color:var(--orange);margin-top:6px">${esc(tr('swpm.rt_fail'))} ${esc(s.rtError)}</div>`;
-  else h+=`<div style="font-size:11px;color:var(--text-dim);margin-top:6px">${esc(tr('swpm.rt_hint'))}</div>`;
+  else if(s.rtRunning)h+=`<div style="font-size:12px;color:var(--text-dim);margin-top:6px">${esc(tr('swpm.rt_running'))}</div>`;
   return h+'</div>';
 }
 function swcRender(){
@@ -5704,16 +5704,49 @@ function swcApply(){
   if(dmSel&&_swc.model){dmSel.value=_swc.model;updateAppliedModelNotice();}
   const summary=SwPortMap.conversionSummary(before,ad.model,VENDOR_UNSUPPORTED[tv],VENDOR_INCAPABLE[tv]);
   summary.notes=ad.notes;
-  // round-trip：使用者已上傳合併版交換器分析頁（_parserFnsCache）時，產生目標文字再讀回比對
-  if(_parserFnsCache&&SWC_PARSERS[tv]&&_parserFnsCache[SWC_PARSERS[tv]]){
-    try{
-      generate(false,true);
-      const txt=(document.getElementById('output').value||'').replace(/\r\n/g,'\n');
-      summary.rt=SwPortMap.roundTripCheck(collectModel(),_parserFnsCache[SWC_PARSERS[tv]](txt));
-    }catch(e){summary.rtError=e.message;}
+  // 讀回驗證（XN43）：產生目標文字後以交換器分析 parser 讀回比對。已上傳合併版分析頁（_parserFnsCache）時直接解析，
+  // 否則以隱藏 iframe 開交換器分析頁（swcReadback），結果非同步更新摘要
+  const seq=++_swc.rtSeq;
+  let txt='';
+  if(!validateForm().valid)summary.rtError=tr('swpm.rt_invalid');
+  else{
+    try{ generate(false,true); txt=(document.getElementById('output').value||'').replace(/\r\n/g,'\n'); }catch(e){summary.rtError=e.message;}
+  }
+  if(txt&&_parserFnsCache&&SWC_PARSERS[tv]&&_parserFnsCache[SWC_PARSERS[tv]]){
+    try{ summary.rt=SwPortMap.roundTripCheck(collectModel(),_parserFnsCache[SWC_PARSERS[tv]](txt)); }catch(e){summary.rtError=e.message;}
+  }else if(txt){
+    summary.rtRunning=true;
+    const after=collectModel();
+    swcReadback(txt).then(r=>{
+      if(seq!==_swc.rtSeq||_swc.summary!==summary)return;  // 之後又轉換或復原，結果作廢
+      summary.rtRunning=false;
+      if(r.error)summary.rtError=r.error; else summary.rt=SwPortMap.roundTripCheck(after,r);
+      swcRender();
+    });
   }
   _swc.summary=summary; _swc.map=null; _swc.target=''; _swc.model='';
   swcRender();
+}
+// 以隱藏 iframe 開交換器分析頁（?structcheck=1，該頁不碰交接 key）讀回產生結果；不直接呼叫 iframe 內函式，離線 file:// 也能運作。
+// 回傳 Promise：成功為 {vendor,vlans,interfaces,health,audit}，失敗或逾時為 {error}
+function swcReadback(text){
+  return new Promise(resolve=>{
+    const ifr=document.createElement('iframe');
+    ifr.style.display='none';
+    const id='rb'+Date.now()+'_'+Math.random().toString(36).slice(2);
+    let timer=null;
+    const done=r=>{ window.removeEventListener('message',onMsg); clearTimeout(timer); ifr.remove(); resolve(r); };
+    function onMsg(e){
+      if(e.source!==ifr.contentWindow||!e.data)return;
+      // 內容是產生的設定檔：http(s) 下只送給同源頁面；file:// 的 origin 不透明（Chrome 回報 'file://' 或 'null'），只能用 '*'
+      if(e.data.type==='_naStructReady'){ ifr.contentWindow.postMessage({type:'_naSwReadback',id,text},(location.protocol==='file:'||location.origin==='null')?'*':location.origin); return; }
+      if(e.data.type==='_naSwReadbackResult'&&e.data.id===id)done(e.data);
+    }
+    window.addEventListener('message',onMsg);
+    timer=setTimeout(()=>done({error:tr('swpm.rt_unavailable')}),20000);
+    ifr.src='switch-config-parser.html?structcheck=1';
+    document.body.appendChild(ifr);
+  });
 }
 document.addEventListener('change',e=>{
   const t=e.target;

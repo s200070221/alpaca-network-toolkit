@@ -510,7 +510,7 @@ $('btn-dl-all').onclick = () => KINDS.filter(k => MERGED[k] && MERGED[k].size).f
   setTimeout(() => download(OUTPUT_FILES[k], buildOutput(MERGED, k), k === 'hash' ? 'text/plain;charset=utf-8' : 'application/x-ndjson'), i * 400));
 // 送到 log 分析工具：先問開啟本頁的分頁是不是 log 分析工具（回覆 _naIntelReady 才送），沒有回覆就另開一個；
 // 用 postMessage 直接傳清單內容，不經 localStorage（清單合計可達數 MB）
-const MSG_ORIGIN = location.origin === 'null' ? '*' : location.origin;
+const MSG_ORIGIN = (location.protocol === 'file:' || location.origin === 'null') ? '*' : location.origin;
 let SEND = null;
 function intelPayload() { return { type: '_naIntelLists', files: KINDS.filter(k => MERGED[k] && MERGED[k].size).map(k => ({ kind: k, name: OUTPUT_FILES[k], text: buildOutput(MERGED, k) })) }; }
 $('btn-send-log').onclick = () => {

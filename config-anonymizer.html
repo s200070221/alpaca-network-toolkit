@@ -5586,7 +5586,7 @@ function runStructCheck() {
     if (e.source !== ifr.contentWindow || !e.data) return;
     if (e.data.type === '_naStructReady') {
       // 內容含原始設定檔：http(s) 下限定同源頁面才收得到；file:// 的 origin 是 'null'，只能用 '*'
-      ifr.contentWindow.postMessage({ type: '_naStructCheck', id, texts: [STATE.original, STATE.anonymized] }, location.origin === 'null' ? '*' : location.origin);
+      ifr.contentWindow.postMessage({ type: '_naStructCheck', id, texts: [STATE.original, STATE.anonymized] }, (location.protocol === 'file:' || location.origin === 'null') ? '*' : location.origin);
       return;
     }
     if (e.data.type !== '_naStructResult' || e.data.id !== id) return;

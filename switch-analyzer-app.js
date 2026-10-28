@@ -3758,6 +3758,23 @@ if (/[?&]structcheck=1(?:&|$)/.test(location.search) && window.parent !== window
     });
     window.parent.postMessage({ type: '_naStructResult', id: e.data.id, tool: 'switch', results: results }, '*');
   });
+  // 產生器跨廠牌轉換的讀回驗證（XN43）：送來產生結果，回傳 VLAN 編號與介面名稱／模式（比對用）及健康度與稽核結論，
+  // 不回傳設定原文；介面名稱屬設定內容，http(s) 下只送給同源父頁，file:// 的 origin 不透明（Chrome 回報 'file://' 或 'null'）只能用 '*'
+  window.addEventListener('message', function(e){
+    if (e.source !== window.parent || !e.data || e.data.type !== '_naSwReadback') return;
+    var res;
+    try {
+      var p = parseAny(String(e.data.text || '').replace(/^﻿/, '').replace(/\r\n/g, '\n'));
+      var h = computeSwitchHealth(p), audit = {};
+      analyzeSwitchAudit(p).filter(function(f){ return f.value > 0; }).forEach(function(f){ audit[f.id] = { v: f.value, label: f.check }; });
+      res = { vendor: p.vendor || '',
+        vlans: (p.vlans || []).map(function(v){ return { id: String(v.id) }; }),
+        interfaces: (p.interfaces || []).map(function(i){ return { name: String(i.name || ''), mode: i.mode || '' }; }),
+        health: { score: h.score, grade: h.grade }, audit: audit };
+    } catch (err) { res = { error: String(err && err.message || err) }; }
+    res.type = '_naSwReadbackResult'; res.id = e.data.id;
+    window.parent.postMessage(res, (location.protocol === 'file:' || location.origin === 'null') ? '*' : location.origin);
+  });
   window.parent.postMessage({ type: '_naStructReady' }, '*');
 }
 

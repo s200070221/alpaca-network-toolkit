@@ -13575,7 +13575,7 @@ const INTEL_BUILDER_WINS = new Set();
   const a = document.getElementById(id);
   if (a) a.onclick = ev => { ev.preventDefault(); const w = window.open(a.getAttribute('href')); if (w) INTEL_BUILDER_WINS.add(w); else location.href = a.getAttribute('href'); };
 });
-const INTEL_MSG_ORIGIN = location.origin === 'null' ? '*' : location.origin;
+const INTEL_MSG_ORIGIN = (location.protocol === 'file:' || location.origin === 'null') ? '*' : location.origin;
 if (window.opener) { try { window.opener.postMessage({ type: '_naIntelReady' }, INTEL_MSG_ORIGIN); } catch (e) { /* 開啟者已關閉 */ } }
 window.addEventListener('message', e => {
   const d = e.data;
