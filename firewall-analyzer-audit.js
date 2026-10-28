@@ -1042,6 +1042,18 @@
       f('fg-private-data-enc', tr('audit.check_fg_private_data_enc'), pde ? 0 : 1, 'medium',
         pde ? tr('audit.normal') : tr('audit.fg_pde_off'), ['NIST 800-53 SC-28', 'CVE-2019-6693 (CISA KEV)'], []);
     }
+    // 9d. eBGP 鄰居未設定進出過濾（2026-10-28，XN41＝XN28 第二階段，交換器分析已有同名項目）：RFC 8212 要求
+    // 沒有政策的 eBGP 預設不收不送；Juniper 文件明載預設照收照送，FortiOS 社群範例同樣以 route-map／prefix-list
+    // 限制。只評估 parser 有提供 filterIn／filterOut 的鄰居（FortiGate、Juniper SRX），沒有 eBGP 鄰居時不列
+    const ebgp = (parsed.routes || []).filter(r => r.type === 'bgp').flatMap(r => (r.neighbors || []).map(n => ({ ...n, _vdom: r._vdom })))
+      .filter(n => n.type === 'eBGP' && typeof n.filterIn === 'boolean' && typeof n.filterOut === 'boolean');
+    if (ebgp.length) {
+      const noPol = ebgp.filter(n => !n.filterIn || !n.filterOut)
+        .map(n => ({ kind: 'bgp', name: n.ip, vdom: n._vdom, missing: [n.filterIn ? '' : 'in', n.filterOut ? '' : 'out'].filter(Boolean) }));
+      const det = noPol.map(n => `${n.name} (${n.missing.join('/')})`);
+      f('bgp-ebgp-no-policy', tr('audit.check_bgp_ebgp_no_policy'), noPol.length, 'medium',
+        det.length ? det.slice(0, 8).join(', ') + (det.length > 8 ? '…' : '') : tr('audit.none'), ['RFC 8212', 'NIST 800-53 SC-7'], noPol);
+    }
     // 10. SNMPv3 認證/加密強度不足（僅涵蓋有實際解析出 v3users 的 6 家：FortiGate/Juniper/PaloAlto/
     // Sophos/CheckPoint/MikroTik；CiscoASA/pfSense/SonicWall 固定空陣列、EdgeRouter/OpenWrt/Zyxel
     // 無 snmp 物件，皆非本檢查涵蓋範圍，非「查無弱設定」）
@@ -1741,6 +1753,7 @@
       ['default-admin-name', 'health.default_admin'],
       ['admin-legacy-hash', 'health.admin_legacy_hash'],
       ['fg-private-data-enc', 'health.fg_private_data_enc'],
+      ['bgp-ebgp-no-policy', 'health.bgp_ebgp_no_policy'],
       ['snmpv3-weak', 'health.snmpv3_weak'],
       ['ipv6-any-open', 'health.ipv6_any_open'],
       ['ipv6-unfiltered', 'health.ipv6_unfiltered'],
@@ -2496,6 +2509,8 @@
     'default-admin-name': it => ['config system admin', '    edit "<new-admin-name>"', '        set accprofile "super_admin"', '        set password <new-password>', '    next', ...(it || []).slice(0, FW_FIX_MAX).map(x => `    delete ${_fgQuote(x.name)}`), 'end'],
     'admin-legacy-hash': it => _fgEdit('system admin', it, ['set password <new-password>']),
     'fg-private-data-enc': () => ['config system global', '    set private-data-encryption enable', 'end'],
+    'bgp-ebgp-no-policy': it => ['config router bgp', '    config neighbor', ...(it || []).slice(0, FW_FIX_MAX).flatMap(x => [`        edit ${_fgQuote(x.name)}`,
+      ...((x.missing || ['in', 'out']).includes('in') ? ['            set route-map-in "<IN-POLICY>"'] : []), ...((x.missing || ['in', 'out']).includes('out') ? ['            set route-map-out "<OUT-POLICY>"'] : []), '        next']), '    end', 'end'],
     'snmpv3-weak': it => ['config system snmp user', ...(it || []).slice(0, FW_FIX_MAX).flatMap(x => [`    edit ${_fgQuote(x.name)}`, '        set auth-proto sha256', '        set priv-proto aes256', '    next']), 'end'],
     'broad-network': it => _fgPol(it, ['set srcaddr "<narrower-source>"', 'set dstaddr "<narrower-destination>"']),
     'overly-permissive-svc': it => _fgEdit('firewall service custom', it, ['set tcp-portrange <specific-ports>']),

@@ -556,12 +556,27 @@ const FortigateParser = (() => {
       const bgpText = bgpL.join('\n');
       const localAs = gv(bgpText, 'as') || '-';
       const bgpNbrs = [];
-      const nbrRe = /neighbor\s+(\S+)\s+remote-as\s+(\d+)/g;
-      let nm;
-      while ((nm = nbrRe.exec(bgpText)) !== null) {
-        const ip = nm[1], peerAs = nm[2];
-        const descM = bgpText.match(new RegExp('neighbor\\s+' + ip.replace(/\./g,'\\.') + '\\s+description\\s+(.+)'));
-        bgpNbrs.push({ ip, as: peerAs, desc: descM ? descM[1].trim() : '-', type: peerAs === localAs ? 'iBGP' : 'eBGP' });
+      // FortiOS 鄰居在 config neighbor／config neighbor-group 的 edit 區塊（2026-10-28 XN41 修正：原本只認
+      // Cisco 式「neighbor X remote-as N」，真實 FortiOS 設定一律解析成 0 個鄰居）。進出過濾（XN41＝XN28 第二階段）：
+      // route-map／prefix-list／distribute-list／filter-list 的 -in／-out（含 -in6、-in-vpnv4 等變體），值為 "" 不算
+      const fgFilt = (t, dir) => new RegExp(`^\\s*set\\s+(?:route-map|prefix-list|distribute-list|filter-list)-${dir}\\S*\\s+(?!""\\s*$)\\S`, 'm').test(t);
+      [['neighbor', false], ['neighbor-group', true]].forEach(([sec, isGroup]) => {
+        parseEdits(extractSection(bgpL, sec).sectionLines).forEach(e => {
+          const peerAs = gv(e.text, 'remote-as') || '-';
+          bgpNbrs.push({ ip: e.name, as: peerAs, desc: gv(e.text, 'description') || '-', group: isGroup,
+            type: !/^\d+$/.test(peerAs) ? '-' : peerAs === localAs ? 'iBGP' : 'eBGP',
+            filterIn: fgFilt(e.text, 'in'), filterOut: fgFilt(e.text, 'out') });
+        });
+      });
+      // 舊式單行寫法（非 FortiOS 匯出格式）保留為備援
+      if (!bgpNbrs.length) {
+        const nbrRe = /neighbor\s+(\S+)\s+remote-as\s+(\d+)/g;
+        let nm;
+        while ((nm = nbrRe.exec(bgpText)) !== null) {
+          const ip = nm[1], peerAs = nm[2];
+          const descM = bgpText.match(new RegExp('neighbor\\s+' + ip.replace(/\./g,'\\.') + '\\s+description\\s+(.+)'));
+          bgpNbrs.push({ ip, as: peerAs, desc: descM ? descM[1].trim() : '-', type: peerAs === localAs ? 'iBGP' : 'eBGP' });
+        }
       }
       routes.push({ type: 'bgp', id: 'bgp', dst: 'dynamic', gateway: '-', device: '-',
         as: localAs, routerId: gv(bgpText, 'router-id') || '-',

@@ -567,7 +567,8 @@ const JuniperParser = (() => {
         routerId: val(bgpNode,'router-id') || '-',
         distance: val(bgpNode,'preference')||'170', priority:'-', weight:'-',
         comment:'BGP', status:'enable', blackhole:'disable', vrf:'0',
-        protocol_detail:`AS: ${val(rtNode,'autonomous-system')||'-'}` });
+        protocol_detail:`AS: ${val(rtNode,'autonomous-system')||'-'}`,
+        neighbors: junosBgpNeighbors(bgpNode, (val(rtNode,'autonomous-system').match(/^\d+/)||[''])[0]) });
     }
 
     // RIP
@@ -578,6 +579,32 @@ const JuniperParser = (() => {
     }
 
     return routes;
+  }
+
+  // BGP 鄰居與進出政策（2026-10-28，XN41＝XN28 第二階段）：Juniper BGP 指南——RFC 8212 預設不實作，
+  // eBGP 沒有政策時照收照送；import／export 可設在 protocols bgp、group、neighbor 三層（Batfish
+  // FlatJuniper_bgp.g4），任一層有即算有。eBGP＝group type external，或未寫 type 時對端 AS 與本機 AS 不同。
+  // 只看主設定的 protocols bgp（routing-instances 不評估）；inactive: 的 group／敘述不算
+  function junosBgpNeighbors(bgp, localAs) {
+    const nbrs = [];
+    if (!bgp) return nbrs;
+    const asOf = v => (String(v || '').match(/^\d+/) || [''])[0];
+    const pIn = !!val(bgp, 'import'), pOut = !!val(bgp, 'export'), pLocal = asOf(val(bgp, 'local-as')) || localAs;
+    Object.keys(bgp._children).forEach(gk => {
+      if (!/^group\s/.test(gk)) return;
+      const g = bgp._children[gk];
+      const gType = val(g, 'type'), gAs = asOf(val(g, 'peer-as')), gLocal = asOf(val(g, 'local-as')) || pLocal;
+      const gIn = pIn || !!val(g, 'import'), gOut = pOut || !!val(g, 'export');
+      const list = Object.keys(g._children).filter(k => /^neighbor\s/.test(k)).map(k => ({ ip: k.split(/\s+/)[1], n: g._children[k] }));
+      g._values.filter(v => /^neighbor\s+\S+$/.test(v)).forEach(v => { const ip = v.split(/\s+/)[1]; if (!list.some(x => x.ip === ip)) list.push({ ip, n: null }); });
+      list.forEach(({ ip, n }) => {
+        const peerAs = asOf(n && val(n, 'peer-as')) || gAs, loc = asOf(n && val(n, 'local-as')) || gLocal;
+        const type = gType === 'external' ? 'eBGP' : gType === 'internal' ? 'iBGP' : (peerAs && loc ? (peerAs === loc ? 'iBGP' : 'eBGP') : '-');
+        nbrs.push({ ip, as: peerAs || '-', group: gk.replace(/^group\s+/, ''), desc: (n && val(n, 'description').replace(/^"|"$/g, '')) || '-', type,
+          filterIn: gIn || !!(n && val(n, 'import')), filterOut: gOut || !!(n && val(n, 'export')) });
+      });
+    });
+    return nbrs;
   }
 
   // ── VPN ───────────────────────────────────────────────────────────────────

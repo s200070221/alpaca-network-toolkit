@@ -600,6 +600,64 @@ function parseJuniperBGP(cfg){
   return peers.length?[{asn:localAS,routerId:rid,peers,networks:[]}]:[];
 }
 
+// ── eBGP 鄰居進出過濾（2026-10-28，XN41＝XN28 第二階段）──────────────────────
+// Juniper BGP 指南：RFC 8212 預設不實作，eBGP 沒有政策時照收照送；import／export 可設在 protocols bgp、
+// group、neighbor 三層（Batfish FlatJuniper_bgp.g4），任一層有設定即視為該方向有政策。
+// eBGP＝group type external，或未寫 type 時對端 AS（neighbor 優先於 group）與本機 AS（routing-options
+// autonomous-system，bgp／group／neighbor 的 local-as 可覆蓋）不同；主設定與 routing-instances 各自評估。
+// inactive: 的區塊與敘述不算。回傳 null＝沒有 eBGP 鄰居；否則 {peers:[{ip, missing:['in'|'out']}]}
+function junosOwnStmts(body){
+  // 只取本層的敘述（不含子區塊內容），子區塊標頭留下名稱
+  let d=0,out='';
+  for(const c of String(body).replace(/\/\*[\s\S]*?\*\//g,'').replace(/^\s*#.*$/gm,'')){
+    if(c==='{'){d++;continue;}
+    if(c==='}'){d--;if(d===0)out+=';';continue;}
+    if(d===0)out+=c;
+  }
+  return out.split(';').map(x=>x.trim()).filter(x=>x&&!/^inactive:/.test(x));
+}
+function parseJunosBgpPolicy(cfg){
+  const val=(st,k)=>{const x=st.find(y=>y.startsWith(k+' '));return x?x.slice(k.length+1).trim():'';};
+  const has=(st,k)=>st.some(y=>y===k||y.startsWith(k+' '));
+  const asOf=v=>(String(v).match(/^\d+/)||[''])[0];
+  const sub=(body,re)=>junosSubBlocks(body).filter(b=>re.test(b.name));
+  const res={peers:[],ebgp:0};
+  const evalBgp=(bgpBody,localAs)=>{
+    const top=junosOwnStmts(bgpBody);
+    const pIn=has(top,'import'), pOut=has(top,'export'), pLocal=asOf(val(top,'local-as'))||localAs;
+    for(const g of sub(bgpBody,/^group\s/)){
+      const gs=junosOwnStmts(g.content);
+      const gType=val(gs,'type'), gAs=asOf(val(gs,'peer-as')), gLocal=asOf(val(gs,'local-as'))||pLocal;
+      const gIn=pIn||has(gs,'import'), gOut=pOut||has(gs,'export');
+      const nbs=sub(g.content,/^neighbor\s/).map(n=>({ip:n.name.split(/\s+/)[1],st:junosOwnStmts(n.content)}));
+      // 單行 neighbor（沒有子區塊）；子區塊標頭也會出現在本層敘述，已列過的略過
+      gs.filter(x=>/^neighbor\s+\S+$/.test(x)).forEach(x=>{const ip=x.split(/\s+/)[1];if(!nbs.some(n=>n.ip===ip))nbs.push({ip,st:[]});});
+      nbs.forEach(n=>{
+        const peerAs=asOf(val(n.st,'peer-as'))||gAs, loc=asOf(val(n.st,'local-as'))||gLocal;
+        if(!(gType==='external'||(gType!=='internal'&&peerAs&&loc&&peerAs!==loc)))return;
+        res.ebgp++;
+        const missing=[];
+        if(!(gIn||has(n.st,'import')))missing.push('in');
+        if(!(gOut||has(n.st,'export')))missing.push('out');
+        if(missing.length)res.peers.push({ip:n.ip,missing});
+      });
+    }
+  };
+  // 只看最上層區塊，避免把 routing-instances 內的 protocols 當成主設定
+  const top=junosSubBlocks(cfg);
+  const blk=(list,name)=>(list.find(b=>b.name===name)||{}).content||'';
+  const asIn=body=>(junosOwnStmts(blk(junosSubBlocks(body),'routing-options')).find(x=>/^autonomous-system\s/.test(x))||'').replace(/^autonomous-system\s+/,'').match(/^\d*/)[0];
+  const mainAs=(junosOwnStmts(blk(top,'routing-options')).find(x=>/^autonomous-system\s/.test(x))||'').replace(/^autonomous-system\s+/,'').match(/^\d*/)[0];
+  const mainBgp=blk(junosSubBlocks(blk(top,'protocols')),'bgp');
+  if(mainBgp)evalBgp(mainBgp,mainAs);
+  junosSubBlocks(blk(top,'routing-instances')).forEach(ri=>{
+    if(/^inactive:/.test(ri.name))return;
+    const b=blk(junosSubBlocks(blk(junosSubBlocks(ri.content),'protocols')),'bgp');
+    if(b)evalBgp(b,asIn(ri.content)||mainAs);
+  });
+  return res.ebgp?{peers:res.peers}:null;
+}
+
 // ── Users ─────────────────────────────────────────────────
 function parseJuniperUsers(cfg){
   const sysBlock=junosBlock(cfg,'system');

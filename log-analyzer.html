@@ -1710,6 +1710,12 @@ function parsePaloAltoCSV(csv) {
   if (f[3] === 'CONFIG' && f.length >= 14) {
     const g = { logtype: 'CONFIG', vsys: f[8], cmd: f[9], client: f[11], result: f[12], cfgpath: String(f[13] || '').trim() };
     if (f[7]) g.srcip = f[7];
+    // 14 變更前、15 變更後（XN41）：只留「變更前為空」與變更後內容中的管理角色，不保留設定內容本身
+    if (f.length >= 16) {
+      g.cfgnew = String(f[14] || '').trim() ? 'no' : 'yes';
+      const rm = String(f[15] || '').match(/\b(superuser|superreader|deviceadmin|devicereader|vsysadmin|vsysreader)\b/);
+      if (rm) g.cfgrole = rm[1];
+    }
     if (f[10]) g.user = f[10];
     return g;
   }
@@ -2154,7 +2160,10 @@ function detectNetOpsIssues(events) {
 //   SSO 管理者第一次登入也會產生同樣紀錄，需人工確認
 // - Cisco ASA／FTD：502101 New user added to local dbase、502103 User priv level changed（只列權限提高）
 // - Cisco IOS／IOS-XE：archive log config notify syslog 的 PARSER-5-CFGLOG_LOGGEDCMD「username … privilege 15」
-// PAN-OS、Juniper、MikroTik、Comware 未查證訊息格式，不評估
+// - Palo Alto PAN-OS（XN41）：CONFIG log 路徑含 mgt-config users <帳號>、結果 Succeeded，指令為 add／clone，
+//   或 set 且變更前為空（CLI 新增）；edit（改密碼等）不列。CSV 欄位依 Elastic panw 測試範例，管理者以
+//   set mgt-config users 建立依 Palo Alto KB；未取得新增管理者的實際 log 行，路徑格式由一般 CONFIG 範例推得
+// Juniper（UI_CFG_AUDIT_SET）、MikroTik、Comware 查無可引用的新增帳號樣本，不評估
 function netAdminChangeOf(evt) {
   if (!evt) return null;
   const f = evt.fields || {}, t = evt.msg || '';
@@ -2172,6 +2181,13 @@ function netAdminChangeOf(evt) {
       return { acct: m[1], priv: `${m[2]}→${m[3]}`, by: '', srcip: '', kind: 'priv' };
     }
     return null;
+  }
+  if (evt.netVendor === 'paloalto' && f.logtype === 'CONFIG') {
+    m = String(f.cfgpath || '').match(/(?:^|\s)mgt-config\s+users\s+(\S+)/);
+    if (!m || !/^succeeded$/i.test(f.result || '')) return null;
+    const cmd = String(f.cmd || '').toLowerCase();
+    if (!(cmd === 'add' || cmd === 'clone' || (cmd === 'set' && f.cfgnew === 'yes'))) return null;
+    return { acct: m[1].replace(/^['"]|['"]$/g, ''), priv: f.cfgrole || '', by: f.user || '', srcip: f.srcip || '', kind: 'add' };
   }
   if ((m = t.match(/User:(.*?)\s+logged command:(?:!config:\s*)?username\s+(\S+)\b.*\bprivilege\s+15\b/))) {
     if (evt.format === 'ciscoios' ? evt.msgid !== 'CFGLOG_LOGGEDCMD' : !/%PARSER-\d-CFGLOG_LOGGEDCMD\b/.test(evt.raw || '')) return null;
@@ -9891,6 +9907,13 @@ function anonymizeNetFields(clone, opts, ipsDone) {
     const lt = cols[3], hip = /^HIP-?MATCH$/.test(lt || '');
     const userCols = lt === 'USERID' ? [9] : (lt === 'GLOBALPROTECT' ? [12] : (hip ? [7] : (lt === 'CONFIG' ? [10] : [12, 13])));
     userCols.forEach(i => { if (cols[i]) cols[i] = anonUser(cols[i]); });
+    // CONFIG 路徑為管理者帳號（mgt-config users <帳號>，XN41）：路徑、變更前後內容中的帳號一併替換
+    const pm = lt === 'CONFIG' && String(cols[13] || '').match(/(?:^|\s)mgt-config\s+users\s+(\S+)/);
+    if (pm) {
+      const o = pm[1], a = anonUser(o), re = new RegExp('(^|[^\\w.-])' + o.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w-])', 'g');
+      [13, 14, 15].forEach(i => { if (cols[i]) cols[i] = cols[i].replace(re, '$1' + a); });
+      if (f.cfgpath) f.cfgpath = String(f.cfgpath).replace(re, '$1' + a);
+    }
     // 電腦名稱與設備名稱欄（Beats 欄位對照：TRAFFIC 52、THREAT 59、GLOBALPROTECT 14／33、USERID 25、HIPMATCH 9／24）
     const machineCol = lt === 'GLOBALPROTECT' ? 14 : (hip ? 9 : -1);
     if (machineCol >= 0 && cols[machineCol]) { cols[machineCol] = anonHostname(cols[machineCol]); if (f.machine) f.machine = cols[machineCol]; }
