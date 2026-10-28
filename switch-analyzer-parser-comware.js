@@ -749,9 +749,11 @@ function parseMgmtPlane(cfg, vendor){
 // IOS-XE 17.2.1 起可用 bgp safe-ebgp-policy 模擬（有設定時整台不評估）。逐一檢查 eBGP 鄰居兩個方向有無
 // route-map／prefix-list／filter-list／distribute-list（含 peer-group）；用 inherit 範本的鄰居無法完整展開，略過。
 // 回傳 null＝廠牌未查證或沒有 eBGP 鄰居；否則 {peers:[{ip, missing:['in'|'out']}]}（只列有缺的）。
-// Ruijie 語法未查證、Cisco Business／AlliedWare Plus／FS 語法不同，皆不評估
+// Juniper 見 parseJunosBgpPolicy()；Ruijie 語法未查證、Cisco Business／AlliedWare Plus／FS 語法不同，皆不評估
 const BGP_POLICY_RE = /^(route-map|prefix-list|filter-list|distribute-list)\s+\S+\s+(in|out)\b/;
 function parseBgpPolicy(cfg, vendor, brand){
+  // Juniper（EX／QFX，XN41）：cfg 已由 parseAny() 轉成大括號格式，邏輯在 parser-juniper.js
+  if(vendor==='juniper')return typeof parseJunosBgpPolicy==='function'?parseJunosBgpPolicy(cfg):null;
   if(!['cisco','arista','nxos'].includes(vendor)||brand==='ciscobiz'||brand==='awplus'||brand==='fs')return null;
   if(/^\s*bgp\s+safe-ebgp-policy\b/m.test(cfg))return null;
   const head=cfg.match(/^router bgp\s+(\d+)[^\n]*\n/m);

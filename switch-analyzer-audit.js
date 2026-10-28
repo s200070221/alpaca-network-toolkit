@@ -735,7 +735,8 @@ const EVIDENCE_LINE_RE={
   'vty-no-acl':/^\s*(line\s+vty\b|user-interface\s+vty\b|management\s+ssh\s*$|transport\s+input\b|(ipv6\s+)?access-class\b|(ssh|telnet)\s+server\s+(ipv6\s+)?acl\b)/i,
   'aaa-no-cmd-accounting':/^\s*aaa\s+accounting\b/i,
   // XN28：列出 router bgp 與鄰居宣告、既有的過濾設定行（看得出哪個方向沒設）
-  'bgp-ebgp-no-policy':/^\s*(router\s+bgp\b|neighbor\s+\S+(\s+remote-as\b|\s+peer[- ]group\b|\s*$)|(neighbor\s+\S+\s+)?(route-map|prefix-list|filter-list|distribute-list)\s+\S+\s+(in|out)\b)/i,
+  // XN41 Juniper：bgp／group／neighbor 區塊、type external、peer-as、import／export
+  'bgp-ebgp-no-policy':/^\s*(router\s+bgp\b|neighbor\s+\S+(\s+remote-as\b|\s+peer[- ]group\b|\s*$|\s*[{;])|(neighbor\s+\S+\s+)?(route-map|prefix-list|filter-list|distribute-list)\s+\S+\s+(in|out)\b|bgp\s*\{|group\s+\S+\s*\{|type\s+external;|peer-as\s+\d+;|(import|export)\s+\S)/i,
   'config-change-log':/^\s*(archive\s*$|log\s+config\s*$|logging\s+enable\s*$|hidekeys\s*$|notify\s+syslog\b)/i,
   // L2 防護（第十二輪 MB）：列出已有的 DHCP snooping／DAI 設定行（部分 VLAN 已涵蓋時看得出缺哪些）
   'dhcp-snooping-off':/^\s*(ip\s+dhcp\s+snooping|dhcp\s+snooping\s+enable|dhcp-snooping|dhcpv4-snooping)\b/i,
@@ -888,6 +889,10 @@ const SW_FIX_CMDS={
     'dai-off':it=>[`ip arp inspection vlan ${(it||[]).slice(0,FIX_MAX_ITEMS).join(',')}`,'interface <uplink-to-dhcp-server>',' ip arp inspection trust'],
     'ipsg-off':it=>_fixIfaces(it,['ip verify source']),
     'storm-control-off':it=>_fixIfaces(it,['storm-control broadcast level 1.00']),
+  },
+  // Juniper（XN41）：只提供 eBGP 過濾範例；<GROUP> 為該鄰居所在的 group
+  juniper:{
+    'bgp-ebgp-no-policy':it=>(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(ip=>[`set protocols bgp group <GROUP> neighbor ${ip} import <IN-POLICY>`,`set protocols bgp group <GROUP> neighbor ${ip} export <OUT-POLICY>`]),
   },
   comware:{
     'weak-pwd':it=>(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(u=>[`local-user ${u} class manage`,' password simple <new-password>']),
