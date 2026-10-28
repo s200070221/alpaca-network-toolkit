@@ -311,7 +311,39 @@
     return { health: { before: before && before.health || null, after: after && after.health || null }, rows, same };
   }
 
-  const api = { speedFromName, memberOf, withMember, sourcePortsOf, targetPortsFor, suggestSwitchMap, switchMapWarnings, renameSwitchModel, adaptModelForVendor, conversionSummary, roundTripCheck, HYBRID_VENDORS, VENDOR_ONLY, buildMapCsv, parseMapCsv, applyMapRows, compareAudit };
+  // ── LLDP／CDP 鄰居（XN46）────────────────────────────────────────────────────
+  // lldp：交換器分析 LLDPParser 的結果 [{localPort, neighbor, remotePort, ip, platform, protocol}]；portNames：產生器的介面名稱
+  // 比對順序：名稱相同（不分大小寫）→ 字母前綴前 2 碼＋數字部分相同（Gi1/0/1 ↔ GigabitEthernet1/0/1）→ 數字部分在所有埠中唯一（GE1/0/1）
+  const nbNum = n => { const m = String(n).match(/(\d[\d/:.]*)$/); return m ? m[1] : ''; };
+  const nbKey = n => String(n).replace(/[\d/:.]+$/, '').replace(/[^a-z]/gi, '').slice(0, 2).toLowerCase() + nbNum(n);
+  function neighborMap(lldp, portNames) {
+    const out = Object.create(null);
+    const names = (portNames || []).filter(n => n && n !== '__proto__' && n !== 'constructor' && n !== 'prototype');
+    const lower = Object.create(null), key = Object.create(null), num = Object.create(null);
+    names.forEach(n => {
+      lower[n.toLowerCase()] = n;
+      const k = nbKey(n); key[k] = key[k] === undefined ? n : null;
+      const d = nbNum(n); if (d) num[d] = num[d] === undefined ? n : null;
+    });
+    (lldp || []).forEach(e => {
+      if (!e || !e.localPort) return;
+      const lp = String(e.localPort).trim();
+      const port = lower[lp.toLowerCase()] || key[nbKey(lp)] || (nbNum(lp) && num[nbNum(lp)]) || null;
+      if (!port) return;
+      (out[port] = out[port] || []).push({ neighbor: String(e.neighbor || ''), remotePort: String(e.remotePort || ''), ip: String(e.ip || ''), platform: String(e.platform || ''), protocol: String(e.protocol || '') });
+    });
+    return out;
+  }
+  // 鄰居純文字：switch01 (Gi1/0/48, LLDP)；多個鄰居以 / 分隔
+  const neighborText = list => (list || []).map(n => (n.neighbor || n.ip || '?') + (n.remotePort || n.protocol ? ' (' + [n.remotePort, n.protocol].filter(Boolean).join(', ') + ')' : '')).join(' / ');
+  // 套用對應後把鄰居的鍵換成新埠名（沒有對應的埠保留原名）
+  function renameNeighbors(nb, map) {
+    const out = Object.create(null);
+    Object.keys(nb || {}).forEach(k => { const d = (map && map[k]) || k; out[d] = (out[d] || []).concat(nb[k]); });
+    return out;
+  }
+
+  const api = { neighborMap, neighborText, renameNeighbors, speedFromName, memberOf, withMember, sourcePortsOf, targetPortsFor, suggestSwitchMap, switchMapWarnings, renameSwitchModel, adaptModelForVendor, conversionSummary, roundTripCheck, HYBRID_VENDORS, VENDOR_ONLY, buildMapCsv, parseMapCsv, applyMapRows, compareAudit };
   if (typeof window !== 'undefined') window.SwPortMap = api;
   return api;
 })();

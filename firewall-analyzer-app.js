@@ -2152,7 +2152,7 @@ function onParsed(){
       const model=FwPortMap.getModel(target,_pm.model);
       if(model){
         if(!_pm.map) _pm.map=Object.assign(Object.create(null), FwPortMap.suggestMap(_pm.parsed,target,_pm.model).map);
-        sug={ model, ports:FwPortMap.sourcePorts(_pm.parsed), map:_pm.map, warnings:FwPortMap.portMapWarnings(_pm.parsed,target,model,_pm.map) };
+        sug={ model, ports:FwPortMap.sourcePorts(_pm.parsed), usage:FwPortMap.portUsage(_pm.parsed), map:_pm.map, warnings:FwPortMap.portMapWarnings(_pm.parsed,target,model,_pm.map) };
         reserved=FwPortMap.reservedOf(model);
       }
     }
@@ -2210,11 +2210,12 @@ function onParsed(){
     const ports=FwPortMap.sourcePorts(_pm.parsed);
     const ws=FwPortMap.portMapWarnings(_pm.parsed,_pm.target,model,map);
     const sm=FwPortMap.detectSourceModel(_pm.parsed), smo=sm?FwPortMap.getModel(sm.vendor,sm.id):null;
-    const names=new Set(ports.map(p=>p.name));
+    const names=new Set(ports.map(p=>p.name)), usage=FwPortMap.portUsage(_pm.parsed);
     const rows=ports.map(sp=>{
-      const d=map[sp.name]||'', tp=model.ports.find(p=>p.name===d), sp2=smo&&smo.ports.find(p=>p.name===sp.name);
-      return { source:sp.name, target:d,
-        usage:[sp.role?tr('pm.role_'+sp.role):'', sp.fortilink?tr('pm.fortilink_tag'):'', sp.group?tr('pm.group_tag').replace('{name}',sp.group):'', sp.ifaces.filter(n=>n!==sp.name).join(' ')].filter(Boolean).join('; '),
+      const d=map[sp.name]||'', tp=model.ports.find(p=>p.name===d), sp2=smo&&smo.ports.find(p=>p.name===sp.name), u=usage[sp.name];
+      return { source:sp.name, target:d, addr:pmAddrText(u), refs:pmRefsText(u),
+        ip:u?u.ips.join(' '):'', alias:u?u.alias:'', zone:u?u.zones.join(' '):'',
+        usage:[u&&!u.used?tr('pm.unused_tag'):'', sp.role?tr('pm.role_'+sp.role):'', sp.fortilink?tr('pm.fortilink_tag'):'', sp.group?tr('pm.group_tag').replace('{name}',sp.group):'', sp.ifaces.filter(n=>n!==sp.name).join(' ')].filter(Boolean).join('; '),
         spec:tp?tp.speed+' '+tp.media:'', sourceSpec:sp2?sp2.speed+' '+sp2.media:'',
         notes:ws.filter(w=>w.port===sp.name).map(_pmWarnPlain) };
     });
@@ -2223,8 +2224,8 @@ function onParsed(){
   function _pmExportCsv(){
     const r=_pmRowsFor(_pm.map,_pm.model); if(!r)return;
     const csv=FwPortMap.buildMapCsv({target_vendor:_pm.target,target_model:_pm.model,source_vendor:_pm.src},
-      ['source_port','target_port','usage','source_speed','target_speed','notes'],
-      r.rows.map(x=>({source_port:x.source,target_port:x.target,usage:x.usage,source_speed:x.sourceSpec,target_speed:x.spec,notes:x.notes.join(' / ')})));
+      ['source_port','target_port','usage','ip','alias','zone','refs','source_speed','target_speed','notes'],
+      r.rows.map(x=>({source_port:x.source,target_port:x.target,usage:x.usage,ip:x.ip,alias:x.alias,zone:x.zone,refs:x.refs,source_speed:x.sourceSpec,target_speed:x.spec,notes:x.notes.join(' / ')})));
     Reporter.download(csv,`fw_portmap_${_pm.target}_${_pm.model}_${dateStr()}.csv`,'text/csv');
   }
   function _pmImportCsv(text){

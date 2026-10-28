@@ -1161,6 +1161,16 @@ function pmWarnText(w){
     .replace('{from}',esc(w.from||'')).replace('{to}',esc(w.to||'')).replace('{other}',esc(w.other||'')).replace('{kind}',esc(w.kind||''));
 }
 // o：{targetName, models:[{id,label}], modelId, srcModel, sug:{model,ports,map,warnings}|null, applied}
+// 埠用途（XN46）：位址／別名／區域與參照數的純文字（畫面、CSV、報告共用，畫面另行跳脫）
+function pmAddrText(u){
+  if(!u)return '';
+  return [u.ips.join(', '), u.alias, u.zones.length?tr('pm.zone_tag').replace('{name}',u.zones.join(', ')):''].filter(Boolean).join('; ');
+}
+function pmRefsText(u){
+  if(!u)return '';
+  return ['policy','nat','route','vpn'].filter(k=>u.refs[k]).map(k=>tr('pm.ref_'+k).replace('{n}',u.refs[k])).join(' · ');
+}
+window.pmAddrText=pmAddrText; window.pmRefsText=pmRefsText;
 function buildConvPortMapHtml(o){
   const sel='padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:12px';
   let h=`<div style="margin:14px 0;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2)">
@@ -1184,13 +1194,15 @@ function buildConvPortMapHtml(o){
   const tag=p=>p.mgmt?' [mgmt]':p.ha?' [HA]':res[p.name]==='fortilink'?' [FortiLink]':/^hwswitch:/.test(res[p.name]||'')?` [${res[p.name].slice(9)}]`:'';
   const byPort={};
   (o.sug.warnings||[]).forEach(w=>{ if(w.port) (byPort[w.port]=byPort[w.port]||[]).push(w); });
-  h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>${tr('pm.col_src')}</th><th>${tr('pm.col_use')}</th><th>${tr('pm.col_dst')}</th><th>${tr('pm.col_warn')}</th></tr></thead><tbody>`;
+  const usage=o.sug.usage||{};
+  h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>${tr('pm.col_src')}</th><th>${tr('pm.col_use')}</th><th>${tr('pm.col_addr')}</th><th>${tr('pm.col_refs')}</th><th>${tr('pm.col_dst')}</th><th>${tr('pm.col_warn')}</th></tr></thead><tbody>`;
   o.sug.ports.forEach(sp=>{
-    const use=[sp.role?tr('pm.role_'+sp.role):'', sp.fortilink?tr('pm.fortilink_tag'):'', sp.group?tr('pm.group_tag').replace('{name}',esc(sp.group)):'', sp.ifaces.filter(n=>n!==sp.name).map(esc).join(', ')].filter(Boolean).join('；');
+    const u=usage[sp.name], unused=u&&!u.used;
+    const use=[unused?`<span style="color:var(--text-dim);font-weight:600">${tr('pm.unused_tag')}</span>`:'', sp.role?tr('pm.role_'+sp.role):'', sp.fortilink?tr('pm.fortilink_tag'):'', sp.group?tr('pm.group_tag').replace('{name}',esc(sp.group)):'', sp.ifaces.filter(n=>n!==sp.name).map(esc).join(', ')].filter(Boolean).join('；');
     const cur=o.sug.map[sp.name]||'';
     const opts=`<option value="">${tr('pm.unmapped_opt')}</option>`+m.ports.map(p=>`<option value="${esc(p.name)}"${p.name===cur?' selected':''}>${esc(p.name)} (${esc(p.speed)} ${esc(p.media)})${esc(tag(p))}</option>`).join('');
     const ws=(byPort[sp.name]||[]).map(w=>`<div style="color:var(--orange)">⚠ ${pmWarnText(w)}</div>`).join('');
-    h+=`<tr><td class="mono">${esc(sp.name)}</td><td style="font-size:11px">${use||'-'}</td><td><select data-pm="port" data-src="${esc(sp.name)}" style="${sel}">${opts}</select></td><td style="font-size:11px">${ws||'-'}</td></tr>`;
+    h+=`<tr${unused?' data-pm-unused style="opacity:.6"':''}><td class="mono">${esc(sp.name)}</td><td style="font-size:11px">${use||'-'}</td><td class="mono" style="font-size:11px;white-space:normal;max-width:260px">${esc(pmAddrText(u))||'-'}</td><td style="font-size:11px">${esc(pmRefsText(u))||'-'}</td><td><select data-pm="port" data-src="${esc(sp.name)}" style="${sel}">${opts}</select></td><td style="font-size:11px">${ws||'-'}</td></tr>`;
   });
   h+='</tbody></table></div>';
   const srcNames=new Set(o.sug.ports.map(p=>p.name));
@@ -1236,8 +1248,8 @@ th{background:var(--surface2)}.mono,code{font-family:Consolas,monospace;font-siz
 </style></head><body><h1>${e(tr('crpt.title'))}</h1><p class="dim">${e(tr('crpt.disclaimer'))}</p>
 <table>${meta.map(([k,v])=>`<tr><th>${e(k)}</th><td>${e(v)}</td></tr>`).join('')}</table>`;
   h+=sec(tr('pm.title'),info.rows&&info.rows.length
-    ?`<table><tr><th>${e(tr('pm.col_src'))}</th><th>${e(tr('pm.col_use'))}</th><th>${e(tr('pm.col_dst'))}</th><th>${e(tr('pm.col_warn'))}</th></tr>`
-      +info.rows.map(r=>`<tr><td class="mono">${e(r.source)}</td><td>${e(r.usage||'-')}</td><td class="mono">${e(r.target||tr('pm.unmapped_opt'))}${r.spec?' <span class="dim">('+e(r.spec)+')</span>':''}</td><td class="warn">${(r.notes||[]).map(e).join('<br>')||'-'}</td></tr>`).join('')+'</table>'
+    ?`<table><tr><th>${e(tr('pm.col_src'))}</th><th>${e(tr('pm.col_use'))}</th><th>${e(tr('pm.col_addr'))}</th><th>${e(tr('pm.col_refs'))}</th><th>${e(tr('pm.col_dst'))}</th><th>${e(tr('pm.col_warn'))}</th></tr>`
+      +info.rows.map(r=>`<tr><td class="mono">${e(r.source)}</td><td>${e(r.usage||'-')}</td><td class="mono">${e(r.addr||'-')}</td><td>${e(r.refs||'-')}</td><td class="mono">${e(r.target||tr('pm.unmapped_opt'))}${r.spec?' <span class="dim">('+e(r.spec)+')</span>':''}</td><td class="warn">${(r.notes||[]).map(e).join('<br>')||'-'}</td></tr>`).join('')+'</table>'
       +((info.extraNotes||[]).length?list(info.extraNotes):'')
     :`<p class="dim">${e(tr('crpt.no_map'))}</p>`);
   h+=sec(tr('crpt.loss_title'),list(info.loss));
