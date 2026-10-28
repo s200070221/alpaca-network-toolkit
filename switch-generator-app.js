@@ -5622,7 +5622,7 @@ window.addEventListener('load', function () { if (/[?&]demo=1(?:&|$)/.test(locat
 
 // ── 跨廠牌轉換（XN39）：目標型號埠對應＋轉換摘要（XN40 交換器部分）──────────────────────
 // 純函式在 switch-generator-portmap.js（SwPortMap）；本段只處理畫面。對應與轉換前的 model 只存記憶體 _swc
-const _swc={target:'',model:'',map:null,undo:null,summary:null,rtSeq:0};
+const _swc={target:'',model:'',map:null,undo:null,summary:null,rtSeq:0,last:null,csvMsg:''};
 const SWC_PARSERS={comware:'parseComware',cisco:'parseCisco',aruba:'parseAruba',fortiswitch:'parseFortiSwitch',juniper:'parseJuniper',cisco_nxos:'parseNXOS',
   arista:'parseArista',ruijie:'parseRuijie',netgear:'parseNetgear',edgeswitch:'parseEdgeSwitch','dell-os10':'parseDellOS10',brocade:'parseBrocade',
   alcatel:'parseAlcatel',extreme:'parseExtremeXOS',procurve:'parseProCurve',routeros:'parseRouterOS',sonic:'parseSONiC',planet:'parsePlanet'};
@@ -5634,6 +5634,8 @@ function swcWarnText(w){
 function swcSummaryHtml(s){
   if(!s)return'';
   let h=`<div style="margin-top:12px"><div style="font-weight:600;font-size:13px;margin-bottom:4px">🧪 ${esc(tr('swpm.sum_title'))}</div>`;
+  if(_swc.last&&_swc.last.summary===s)h+=`<div style="margin-bottom:6px"><button type="button" class="act-btn" data-swpm="report">📄 ${esc(tr('swpm.report'))}</button>`
+    +(_swc.last.rows?`<button type="button" class="act-btn" data-swpm="cabling">⬇ ${esc(tr('swpm.cabling'))}</button>`:'')+'</div>';
   h+=`<table class="tbl" style="max-width:560px"><thead><tr><th>${esc(tr('swpm.sum_item'))}</th><th>${esc(tr('swpm.sum_before'))}</th><th>${esc(tr('swpm.sum_after'))}</th><th></th></tr></thead><tbody>`
     +s.rows.map(r=>`<tr><td>${esc(tr('swpm.k_'+r.key))}</td><td>${r.before}</td><td style="${r.before!==r.after?'color:var(--orange);font-weight:600':''}">${r.after}</td><td style="color:var(--red)">${r.dropped?esc(tr('swpm.sum_dropped')):''}</td></tr>`).join('')
     +'</tbody></table>';
@@ -5674,9 +5676,12 @@ function swcRender(){
     sug=SwPortMap.suggestSwitchMap(model,expandDeviceModelPorts(dm));
     if(!_swc.map)_swc.map=Object.assign(Object.create(null),sug.map);
     sug.warnings=SwPortMap.switchMapWarnings(model,sug.targets,_swc.map,sug.info);
-    h+=`<button type="button" class="act-btn" data-swpm="reset">${esc(tr('swpm.reset'))}</button><button type="button" class="gen-btn" data-swpm="apply" style="padding:6px 14px">${esc(tr('swpm.apply'))}</button>`;
+    h+=`<button type="button" class="act-btn" data-swpm="reset">${esc(tr('swpm.reset'))}</button><button type="button" class="gen-btn" data-swpm="apply" style="padding:6px 14px">${esc(tr('swpm.apply'))}</button>`
+      +`<button type="button" class="act-btn" data-swpm="csvexport">⬇ ${esc(tr('swpm.csv_export'))}</button><button type="button" class="act-btn" data-swpm="csvimport">⬆ ${esc(tr('swpm.csv_import'))}</button>`
+      +`<input type="file" accept=".csv,text/csv" data-swpm="csvfile" style="display:none">`;
   }else if(tv)h+=`<button type="button" class="gen-btn" data-swpm="apply" style="padding:6px 14px">${esc(tr('swpm.apply_nomodel'))}</button>`;
   h+='</div>';
+  if(_swc.csvMsg)h+=`<div style="font-size:12px;margin-bottom:8px">${esc(_swc.csvMsg)}</div>`;
   if(sug){
     const byPort={};
     sug.warnings.forEach(w=>{ if(w.port)(byPort[w.port]=byPort[w.port]||[]).push(w); });
@@ -5724,8 +5729,91 @@ function swcApply(){
       swcRender();
     });
   }
-  _swc.summary=summary; _swc.map=null; _swc.target=''; _swc.model='';
+  // 轉換報告與現場接線用埠對應表（XN44）：保存這次的對應、來源埠資料與目標埠
+  const dm=_swc.model?findDeviceModel(tv,_swc.model):null;
+  const sg=dm?SwPortMap.suggestSwitchMap(before,expandDeviceModelPorts(dm)):null;
+  const map=Object.assign(Object.create(null),_swc.map||{});
+  _swc.last={ srcVendor:_swcVendorLabel(before.brand==='h3c'?'h3c':before.vendor), dstVendor:_swcVendorLabel(target), modelId:_swc.model, modelLabel:dm?dm.label:'',
+    rows:sg?_swcRows(before,map,sg.targets,SwPortMap.switchMapWarnings(before,sg.targets,map,sg.info)):null, summary, time:new Date().toLocaleString(), target };
+  _swc.summary=summary; _swc.map=null; _swc.target=''; _swc.model=''; _swc.csvMsg='';
   swcRender();
+}
+// ── 埠對應表 CSV 與轉換報告（XN44）──────────────────────────────────────────────
+const _swcVendorLabel=v=>{const o=document.querySelector('#vendor option[value="'+v+'"]');return o?o.textContent:v;};
+const swcWarnPlain=w=>tr('swpm.w_'+w.code).replace('{port}',w.port||'').replace('{dst}',w.dst||'').replace('{other}',w.other||'')
+  .replace('{from}',w.from||'').replace('{to}',w.to||'').replace('{n}',w.n==null?'':w.n).replace('{pvid}',w.pvid||'');
+// 逐埠資料列：{rows:[{source,target,usage,description,sourceSpeed,targetSpeed,notes}], extraNotes}
+function _swcRows(model,map,targets,warnings){
+  const desc=Object.create(null);
+  (model.interfaces||[]).forEach(i=>{desc[i.name]=i.desc||'';});
+  const tBy=Object.create(null); targets.forEach(t=>{tBy[t.name]=t;});
+  const ports=SwPortMap.sourcePortsOf(model), names=new Set(ports.map(p=>p.name));
+  return { rows:ports.map(p=>{const d=map[p.name]||'';return {source:p.name,target:d,usage:p.use||'',description:desc[p.name]||'',sourceSpeed:p.speed,targetSpeed:tBy[d]?tBy[d].speed+(tBy[d].mgmt?' mgmt':''):'',
+      notes:warnings.filter(w=>w.port===p.name).map(swcWarnPlain)};}),
+    extraNotes:warnings.filter(w=>!w.port||!names.has(w.port)).map(swcWarnPlain) };
+}
+function swcMapCsv(r,meta){
+  return '\uFEFF'+SwPortMap.buildMapCsv(meta,['source_port','target_port','usage','description','source_speed','target_speed','notes'],
+    r.rows.map(x=>({source_port:x.source,target_port:x.target,usage:x.usage,description:x.description,source_speed:x.sourceSpeed,target_speed:x.targetSpeed,notes:x.notes.join(' / ')})));
+}
+// 套用前：目前畫面上的對應
+function swcExportCurrentCsv(){
+  const tv=_swcVendor(_swc.target), dm=tv&&_swc.model?findDeviceModel(tv,_swc.model):null;
+  if(!dm||!_swc.map)return;
+  const model=collectModel(), sg=SwPortMap.suggestSwitchMap(model,expandDeviceModelPorts(dm));
+  const r=_swcRows(model,_swc.map,sg.targets,SwPortMap.switchMapWarnings(model,sg.targets,_swc.map,sg.info));
+  downloadFile(swcMapCsv(r,{target_vendor:_swc.target,target_model:_swc.model,source_vendor:document.getElementById('vendor').value}),`sw_portmap_${_swc.target}_${_swc.model.replace(/^nb:/,'')}.csv`,'text/csv');
+}
+function swcImportCsv(text){
+  const tv=_swcVendor(_swc.target), dm=tv&&_swc.model?findDeviceModel(tv,_swc.model):null;
+  if(!dm)return;
+  const model=collectModel(), sg=SwPortMap.suggestSwitchMap(model,expandDeviceModelPorts(dm));
+  const pr=SwPortMap.parseMapCsv(text);
+  if(pr.errors.length){_swc.csvMsg=tr(pr.errors[0].code==='empty'?'swpm.csv_err_empty':'swpm.csv_err_header');swcRender();return;}
+  const res=SwPortMap.applyMapRows(pr.rows,sg.ports.map(p=>p.name),sg.targets.map(t=>t.name));
+  // 匯入的列覆蓋目前對應，檔案沒列到的埠維持原樣
+  _swc.map=Object.assign(Object.create(null),_swc.map||sg.map,res.map);
+  const parts=[tr('swpm.csv_done').replace('{n}',res.applied)];
+  if(pr.meta.target_model&&pr.meta.target_model!==_swc.model)parts.push(tr('swpm.csv_model_diff').replace('{model}',pr.meta.target_model));
+  if(res.skipped.length)parts.push(tr('swpm.csv_skipped').replace('{n}',res.skipped.length)+' '+res.skipped.slice(0,8).map(x=>`#${x.line} ${x.port}（${tr('swpm.csv_skip_'+x.code)}）`).join('、'));
+  _swc.csvMsg=parts.join(' ');
+  swcRender();
+}
+// 套用後：這次轉換用的對應（現場接線用）
+function swcExportLastCsv(){
+  const L=_swc.last; if(!L||!L.rows)return;
+  downloadFile(swcMapCsv(L.rows,{target_vendor:L.target,target_model:L.modelId}),`sw_portmap_${L.target}_${String(L.modelId).replace(/^nb:/,'')}.csv`,'text/csv');
+}
+// 轉換報告：單一 HTML，不含 script，CSP 只允許內嵌樣式；所有值經 esc()
+function swcReportHtml(L){
+  const e=v=>esc(v==null?'':String(v)), s=L.summary||{rows:[],vendorOnly:[],notes:[]};
+  const list=a=>a&&a.length?`<ul>${a.map(x=>`<li>${e(x)}</li>`).join('')}</ul>`:`<p class="dim">${e(tr('swrpt.none'))}</p>`;
+  let h=`<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>${e(tr('swrpt.title'))}</title><style>
+body{font-family:system-ui,'Noto Sans TC',sans-serif;color:#1f2937;margin:24px;font-size:13px;line-height:1.5}h1{font-size:20px}
+h2{font-size:15px;margin-top:22px;border-bottom:1px solid #d1d5db;padding-bottom:4px}table{border-collapse:collapse;margin:6px 0}
+th,td{border:1px solid #d1d5db;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f9fafb}.mono{font-family:Consolas,monospace;font-size:12px}
+.dim{color:#6b7280}.warn{color:#b45309}.ok{color:#15803d}
+</style></head><body><h1>${e(tr('swrpt.title'))}</h1><p class="dim">${e(tr('swrpt.disclaimer'))}</p>
+<table><tr><th>${e(tr('swrpt.src'))}</th><td>${e(L.srcVendor)}</td></tr><tr><th>${e(tr('swrpt.dst'))}</th><td>${e(L.dstVendor)}${L.modelLabel?' / '+e(L.modelLabel):''}</td></tr><tr><th>${e(tr('swrpt.time'))}</th><td>${e(L.time)}</td></tr></table>`;
+  h+=`<h2>${e(tr('swpm.title'))}</h2>`+(L.rows
+    ?`<table><tr><th>${e(tr('swpm.col_src'))}</th><th>${e(tr('swpm.col_speed'))}</th><th>${e(tr('swpm.col_use'))}</th><th>${e(tr('swrpt.col_desc'))}</th><th>${e(tr('swpm.col_dst'))}</th><th>${e(tr('swpm.col_warn'))}</th></tr>`
+      +L.rows.rows.map(r=>`<tr><td class="mono">${e(r.source)}</td><td>${e(r.sourceSpeed)}</td><td>${e(r.usage||'-')}</td><td>${e(r.description||'-')}</td><td class="mono">${e(r.target||tr('swpm.unmapped_opt'))}${r.targetSpeed?' <span class="dim">('+e(r.targetSpeed)+')</span>':''}</td><td class="warn">${r.notes.map(e).join('<br>')||'-'}</td></tr>`).join('')
+      +'</table>'+(L.rows.extraNotes.length?list(L.rows.extraNotes):'')
+    :`<p class="dim">${e(tr('swrpt.no_map'))}</p>`);
+  h+=`<h2>${e(tr('swpm.sum_title'))}</h2><table><tr><th>${e(tr('swpm.sum_item'))}</th><th>${e(tr('swpm.sum_before'))}</th><th>${e(tr('swpm.sum_after'))}</th><th></th></tr>`
+    +s.rows.map(r=>`<tr><td>${e(tr('swpm.k_'+r.key))}</td><td>${r.before}</td><td>${r.after}</td><td class="warn">${r.dropped?e(tr('swpm.sum_dropped')):''}</td></tr>`).join('')+'</table>';
+  const adj=(s.notes||[]).map(swcWarnPlain).concat(s.vendorOnly.length?[tr('swpm.sum_vendor_only')+' '+s.vendorOnly.map(x=>x.key+' ('+x.vendor+')').join(', ')]:[]);
+  h+=`<h2>${e(tr('swrpt.adjust_title'))}</h2>`+list(adj);
+  h+=`<h2>${e(tr('swrpt.rt_title'))}</h2>`;
+  if(s.rt){const ok=!s.rt.missingVlans.length&&!s.rt.ifaceDiffs.length;
+    h+=`<p class="${ok?'ok':'warn'}">${e(tr(ok?'swpm.rt_ok':'swpm.rt_diff').replace('{n}',s.rt.checked))}</p>`+(ok?'':list(s.rt.missingVlans.map(v=>'VLAN '+v).concat(s.rt.ifaceDiffs.map(d=>d.port+' '+d.why+(d.want?' '+d.want+'→'+d.got:'')))));}
+  else h+=`<p class="dim">${e(s.rtError?tr('swpm.rt_fail')+' '+s.rtError:tr(s.rtRunning?'swpm.rt_running':'swrpt.none'))}</p>`;
+  return h+'</body></html>';
+}
+function swcDownloadReport(){
+  const L=_swc.last; if(!L)return;
+  downloadFile(swcReportHtml(L),`sw_conversion_report_${L.target}_${new Date().toISOString().slice(0,10)}.html`,'text/html');
 }
 // 以隱藏 iframe 開交換器分析頁（?structcheck=1，該頁不碰交接 key）讀回產生結果；不直接呼叫 iframe 內函式，離線 file:// 也能運作。
 // 回傳 Promise：成功為 {vendor,vlans,interfaces,health,audit}，失敗或逾時為 {error}
@@ -5752,9 +5840,10 @@ document.addEventListener('change',e=>{
   const t=e.target;
   if(!t||!t.closest||!t.closest('#swconv-card'))return;
   const k=t.getAttribute('data-swpm');
-  if(k==='vendor'){_swc.target=t.value;_swc.model='';_swc.map=null;swcRender();}
-  else if(k==='model'){_swc.model=t.value;_swc.map=null;swcRender();}
+  if(k==='vendor'){_swc.target=t.value;_swc.model='';_swc.map=null;_swc.csvMsg='';swcRender();}
+  else if(k==='model'){_swc.model=t.value;_swc.map=null;_swc.csvMsg='';swcRender();}
   else if(k==='port'&&_swc.map){const s=t.getAttribute('data-src');if(s&&s!=='__proto__')_swc.map[s]=t.value;swcRender();}
+  else if(k==='csvfile'&&t.files&&t.files[0]){const f=t.files[0];t.value='';f.text().then(swcImportCsv);}
 });
 document.addEventListener('click',e=>{
   const b=e.target&&e.target.closest?e.target.closest('#swconv-card button[data-swpm]'):null;
@@ -5762,8 +5851,13 @@ document.addEventListener('click',e=>{
   const k=b.getAttribute('data-swpm');
   if(k==='reset'){_swc.map=null;swcRender();}
   else if(k==='apply')swcApply();
-  else if(k==='undo'&&_swc.undo){applyModelToForm(_swc.undo);updateDeviceModelOptions();_swc.undo=null;_swc.summary=null;swcRender();}
+  else if(k==='undo'&&_swc.undo){applyModelToForm(_swc.undo);updateDeviceModelOptions();_swc.undo=null;_swc.summary=null;_swc.last=null;swcRender();}
+  else if(k==='csvexport')swcExportCurrentCsv();
+  else if(k==='csvimport'){const f=document.querySelector('#swconv-card input[data-swpm="csvfile"]');if(f)f.click();}
+  else if(k==='report')swcDownloadReport();
+  else if(k==='cabling')swcExportLastCsv();
 });
 // 卡片展開時才計算（表單內容可能在其他卡片被修改）
 document.addEventListener('toggle',e=>{ if(e.target&&e.target.id==='swconv-details'&&e.target.open)swcRender(); },true);
 window.swcRender=swcRender;
+window.swcReportHtml=swcReportHtml;
