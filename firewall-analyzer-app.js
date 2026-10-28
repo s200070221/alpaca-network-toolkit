@@ -1981,7 +1981,8 @@ function onParsed(){
     }
     sel.style.display = '';
     // 2026-09 資安審查修復：VDOM 名稱未跳脫即塞進 <option value="...">，見 buildVdomBar() 同批修復
-    sel.innerHTML = `<option value="__all__">${tr('conv.all_vdom_merge')}</option>`
+    // 多 VDOM 必須逐一轉換（XN38）：各 VDOM 的網段與路由表可能重疊，合併成一台會衝突
+    sel.innerHTML = `<option value="">${tr('conv.vdom_pick')}</option>`
       + names.map(n=>`<option value="${esc(n)}">${tr('conv.single_vdom_prefix')}${esc(n)}</option>`).join('');
   }
 
@@ -2036,13 +2037,13 @@ function onParsed(){
   }
   // 轉換警語 HTML（資料遺失欄位 + 轉換注意事項，2026-09-14 抽成共用 helper）：doConvert() 實際
   // 轉換後與 previewConversionLoss()（滑鼠移入轉換按鈕時的預覽）共用同一份判斷邏輯
-  function buildConversionWarningsHtml(srcParsed, targetVendor){
+  function buildConversionWarningsHtml(srcParsed, targetVendor, opts){
     let html='';
     const lossFields=Converter.getConversionLoss(srcParsed,targetVendor);
     if(lossFields.length){
       html+=`<span style="color:var(--orange)">${tr('conv.data_loss_warning').replace('{list}',lossFields.join(', '))}</span>`;
     }
-    const caveats=Converter.getConversionCaveats(srcParsed, targetVendor);
+    const caveats=Converter.getConversionCaveats(srcParsed, targetVendor, opts);
     if(caveats.length){
       html+=(html?'<br>':'')+`<span style="color:var(--text-dim);font-size:12px">⚠️ ${caveats.map(esc).join('<br>⚠️ ')}</span>`;
     }
@@ -2074,9 +2075,18 @@ function onParsed(){
     try{
       const rawMap=_convRawMap();
       let srcParsed=_resolveSrcParsed(srcVendor);
-      // Apply VDOM filter if selected
-      const convVdom = $('conv-vdom-sel')?.value || '__all__';
-      if (convVdom !== '__all__' && srcParsed._perVdom) {
+      // 多 VDOM 來源必須先選一個 VDOM（XN38），轉成任何廠牌（含 FortiGate）都一樣
+      const convVdom = $('conv-vdom-sel')?.value || '';
+      const multiVdom = !!(srcParsed._isMultiVdom && (srcParsed._vdomNames || []).length > 1);
+      if (multiVdom && !convVdom) {
+        CONV_RESULT = '';
+        $('conv-dst').value = '';
+        $('conv-status').innerHTML = `<span style="color:var(--orange)">${tr('conv.vdom_required')}</span>`;
+        $('conv-vdom-sel')?.focus();
+        _pmRender(null); _vfRender(null);
+        return;
+      }
+      if (convVdom && srcParsed._perVdom) {
         const vd = srcParsed._perVdom.find(v=>v.name===convVdom);
         if (vd) {
           srcParsed = {
@@ -2092,19 +2102,28 @@ function onParsed(){
             schedules: vd.schedules,
             users:     vd.users,
             interfaces: srcParsed.interfaces.filter(i => i._vdom===convVdom || i.vdom===convVdom),
+            switchGroups: (srcParsed.switchGroups || []).filter(g => g.vdom===convVdom),
+            _perVdom: undefined, _isMultiVdom: false, _vdomNames: [],
           };
         }
       }
-      CONV_RESULT=Converter.convert(srcParsed,targetVendor);
+      // 目標型號埠對應（XN38）：來源或目標換了就重設；對應只存記憶體
+      if (_pm.src !== srcVendor || _pm.target !== targetVendor || _pm.vdom !== convVdom) Object.assign(_pm, { src: srcVendor, target: targetVendor, vdom: convVdom, model: '', map: null, applied: null, appliedModel: '' });
+      _pm.parsed = srcParsed;
+      const convInput = _pm.applied ? FwPortMap.applyMap(srcParsed, _pm.applied, targetVendor) : srcParsed;
+      CONV_RESULT=Converter.convert(convInput,targetVendor);
       const vendorNames={fortigate:'FortiGate 7.4',sophos:'Sophos XGS XML',checkpoint:'Check Point Gaia',paloalto:'Palo Alto XML',juniper:'Juniper SRX Junos',pfsense:'pfSense config.xml',sonicwall:'SonicOS <6.2 XML',mikrotik:'RouterOS script',ciscoasa:'Cisco ASA CLI',ciscoftd:'Cisco FTD CLI'};
       $('conv-src-label').textContent=`${vendorNames[srcVendor]||srcVendor} ${tr('conv.src_suffix')}`;
       $('conv-dst-label').textContent=`${vendorNames[targetVendor]||targetVendor} ${tr('conv.dst_suffix')}`;
       $('conv-src').value=rawMap[srcVendor]||JSON.stringify(srcParsed,null,2);
       $('conv-dst').value=CONV_RESULT;
       let convStatusHtml=`<span style="color:var(--green)">${tr('conv.done')}</span> — ${CONV_RESULT.split('\n').length} ${tr('conv.lines_unit')}  |  ${(CONV_RESULT.length/1024).toFixed(1)} KB`;
-      const warnHtml=buildConversionWarningsHtml(srcParsed, targetVendor);
+      const warnHtml=buildConversionWarningsHtml(srcParsed, targetVendor, _pm.applied ? { portModel: _pm.appliedModel } : null);
       if(warnHtml)convStatusHtml+='<br>'+warnHtml;
+      if(convVdom)convStatusHtml+=`<br><span style="color:var(--text-dim);font-size:12px">⚠️ ${tr('conv.vdom_warn').replace('{vdom}',esc(convVdom))}</span>`;
       $('conv-status').innerHTML=convStatusHtml;
+      _pmRender(targetVendor);
+      _vfRender(convInput, targetVendor);
       clearConversionPreview();
       // Highlight active button
       document.querySelectorAll('.conv-btn').forEach(b=>b.classList.remove('conv-btn-running'));
@@ -2116,6 +2135,58 @@ function onParsed(){
     }
   }
   window.doConvert=doConvert;
+
+  // ── 目標型號埠對應（XN38）與轉換驗證（XN40）────────────────────────────────────
+  // _pm：src／target／vdom（目前的轉換路徑）、parsed（VDOM 篩選後、套用對應前的來源）、model、map（畫面上的對應）、applied（已套用的對應）
+  const _pm = { src: '', target: '', vdom: '', parsed: null, model: '', map: null, applied: null, appliedModel: '' };
+  const _CONV_NAMES = {fortigate:'FortiGate',sophos:'Sophos',checkpoint:'Check Point',paloalto:'Palo Alto',juniper:'Juniper SRX',pfsense:'pfSense',sonicwall:'SonicWall',mikrotik:'MikroTik',ciscoasa:'Cisco ASA',ciscoftd:'Cisco FTD',zyxel:'Zyxel',edgerouter:'EdgeRouter',openwrt:'OpenWrt'};
+  function _pmRender(target){
+    const el=$('conv-portmap-card');
+    if(!el)return;
+    if(!target||!_pm.parsed||typeof FwPortMap==='undefined'){ el.innerHTML=''; return; }
+    const models=FwPortMap.modelsOf(target);
+    const sm=FwPortMap.detectSourceModel(_pm.parsed);
+    let sug=null, reserved={};
+    if(_pm.model){
+      const model=FwPortMap.getModel(target,_pm.model);
+      if(model){
+        if(!_pm.map) _pm.map=Object.assign(Object.create(null), FwPortMap.suggestMap(_pm.parsed,target,_pm.model).map);
+        sug={ model, ports:FwPortMap.sourcePorts(_pm.parsed), map:_pm.map, warnings:FwPortMap.portMapWarnings(_pm.parsed,target,model,_pm.map) };
+        reserved=FwPortMap.reservedOf(model);
+      }
+    }
+    el.innerHTML=buildConvPortMapHtml({ targetName:_CONV_NAMES[target]||target, models, modelId:_pm.model, srcModel: sm ? (FwPortMap.getModel(sm.vendor,sm.id)||{}).label || sm.id : '', sug, reserved,
+      applied:!!_pm.applied, appliedCount:_pm.applied?Object.keys(_pm.applied).filter(k=>_pm.applied[k]).length:0 });
+  }
+  function _vfRender(srcForVerify, target){
+    const el=$('conv-verify-card');
+    if(!el)return;
+    if(!srcForVerify||!CONV_RESULT||typeof FwPortMap==='undefined'){ el.innerHTML=''; return; }
+    const fn=FW_DIFF_PARSERS[target];
+    let v;
+    if(!fn) v={ error:'noparser', vendor:_CONV_NAMES[target]||target };
+    else {
+      try { v=FwPortMap.verifyConversion(srcForVerify, fn(CONV_RESULT)); }
+      catch(e){ v={ error:'reparse', vendor:_CONV_NAMES[target]||target, message:e.message }; }
+    }
+    el.innerHTML=buildConvVerifyHtml(v);
+  }
+  // 事件代理（data-pm）：選型號、改單一埠、套用／依建議重設／清除
+  document.addEventListener('change',e=>{
+    const t=e.target;
+    if(!t||!t.closest||!t.closest('#conv-portmap-card'))return;
+    const k=t.getAttribute('data-pm');
+    if(k==='model'){ _pm.model=t.value; _pm.map=null; _pmRender(_pm.target); }
+    else if(k==='port'&&_pm.map){ const src=t.getAttribute('data-src'); if(src&&src!=='__proto__') _pm.map[src]=t.value; _pmRender(_pm.target); }
+  });
+  document.addEventListener('click',e=>{
+    const b=e.target&&e.target.closest?e.target.closest('#conv-portmap-card [data-pm]'):null;
+    if(!b||b.tagName!=='BUTTON')return;
+    const k=b.getAttribute('data-pm');
+    if(k==='apply'&&_pm.map){ _pm.applied=Object.assign(Object.create(null), _pm.map); _pm.appliedModel=_pm.model; doConvert(_pm.src,_pm.target); }
+    else if(k==='reset'){ _pm.map=null; _pmRender(_pm.target); }
+    else if(k==='clear'){ _pm.applied=null; _pm.map=null; _pm.model=''; doConvert(_pm.src,_pm.target); }
+  });
 
   function downloadConv(){
     if(!CONV_RESULT){showErr(tr('conv.no_result'));return;}

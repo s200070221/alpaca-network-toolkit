@@ -1153,4 +1153,66 @@ function buildBatchDiffResultHtml(results, errors, o){
 window.buildBatchDiffResultHtml=buildBatchDiffResultHtml;
 window.renderWifiSection=renderWifiSection;
 window.buildSdwanSectionHtml=buildSdwanSectionHtml;
+
+// ── 設定檔轉換：目標型號埠對應與轉換驗證（XN38／XN40）────────────────────────────
+// 埠對應警示文字：w 為 FwPortMap.portMapWarnings() 的 {code, port, dst, …}
+function pmWarnText(w){
+  return tr('pm.w_'+w.code).replace('{port}',esc(w.port||'')).replace('{dst}',esc(w.dst||'')).replace('{sw}',esc(w.sw||''))
+    .replace('{from}',esc(w.from||'')).replace('{to}',esc(w.to||'')).replace('{other}',esc(w.other||'')).replace('{kind}',esc(w.kind||''));
+}
+// o：{targetName, models:[{id,label}], modelId, srcModel, sug:{model,ports,map,warnings}|null, applied}
+function buildConvPortMapHtml(o){
+  const sel='padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:12px';
+  let h=`<div style="margin:14px 0;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2)">
+    <div style="font-weight:700;font-size:13px;margin-bottom:6px">🔌 ${tr('pm.title')}</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">${tr('pm.note')}</div>`;
+  if(o.srcModel) h+=`<div style="font-size:12px;margin-bottom:6px">${tr('pm.src_model').replace('{model}',esc(o.srcModel))}</div>`;
+  if(!o.models.length) return h+`<div style="font-size:12px;color:var(--text-dim)">${tr('pm.no_models').replace('{vendor}',esc(o.targetName))}</div></div>`;
+  h+=`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px"><label style="font-size:12px">${tr('pm.model_label')}</label>
+    <select data-pm="model" style="${sel}"><option value="">${tr('pm.model_none')}</option>${o.models.map(m=>`<option value="${esc(m.id)}"${m.id===o.modelId?' selected':''}>${esc(m.label)}</option>`).join('')}</select>`;
+  if(o.sug) h+=`<button type="button" class="btn btn-sm" data-pm="apply">${tr('pm.apply')}</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-pm="reset">${tr('pm.reset')}</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-pm="clear">${tr('pm.clear')}</button>`;
+  if(o.applied) h+=`<span style="font-size:12px;color:var(--green)">${tr('pm.applied').replace('{n}',o.appliedCount)}</span>`;
+  h+='</div>';
+  if(!o.sug) return h+'</div>';
+  const m=o.sug.model, res=o.reserved||{};
+  const tag=p=>p.mgmt?' [mgmt]':p.ha?' [HA]':res[p.name]==='fortilink'?' [FortiLink]':/^hwswitch:/.test(res[p.name]||'')?` [${res[p.name].slice(9)}]`:'';
+  const byPort={};
+  (o.sug.warnings||[]).forEach(w=>{ if(w.port) (byPort[w.port]=byPort[w.port]||[]).push(w); });
+  h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>${tr('pm.col_src')}</th><th>${tr('pm.col_use')}</th><th>${tr('pm.col_dst')}</th><th>${tr('pm.col_warn')}</th></tr></thead><tbody>`;
+  o.sug.ports.forEach(sp=>{
+    const use=[sp.role?tr('pm.role_'+sp.role):'', sp.fortilink?tr('pm.fortilink_tag'):'', sp.group?tr('pm.group_tag').replace('{name}',esc(sp.group)):'', sp.ifaces.filter(n=>n!==sp.name).map(esc).join(', ')].filter(Boolean).join('；');
+    const cur=o.sug.map[sp.name]||'';
+    const opts=`<option value="">${tr('pm.unmapped_opt')}</option>`+m.ports.map(p=>`<option value="${esc(p.name)}"${p.name===cur?' selected':''}>${esc(p.name)} (${esc(p.speed)} ${esc(p.media)})${esc(tag(p))}</option>`).join('');
+    const ws=(byPort[sp.name]||[]).map(w=>`<div style="color:var(--orange)">⚠ ${pmWarnText(w)}</div>`).join('');
+    h+=`<tr><td class="mono">${esc(sp.name)}</td><td style="font-size:11px">${use||'-'}</td><td><select data-pm="port" data-src="${esc(sp.name)}" style="${sel}">${opts}</select></td><td style="font-size:11px">${ws||'-'}</td></tr>`;
+  });
+  h+='</tbody></table></div>';
+  const srcNames=new Set(o.sug.ports.map(p=>p.name));
+  const other=(o.sug.warnings||[]).filter(w=>!w.port||!srcNames.has(w.port));
+  if(other.length) h+=`<div style="font-size:11px;margin-top:8px;line-height:1.7">${other.map(w=>`<div style="color:var(--orange)">⚠ ${pmWarnText(w)}</div>`).join('')}</div>`;
+  return h+'</div>';
+}
+// v：FwPortMap.verifyConversion() 結果或 {error, vendor}
+function buildConvVerifyHtml(v){
+  let h=`<div style="margin:14px 0;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2)">
+    <div style="font-weight:700;font-size:13px;margin-bottom:6px">🧪 ${tr('vf.title')}</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">${tr('vf.note')}</div>`;
+  if(v.error) return h+`<div style="font-size:12px;color:var(--orange)">${tr(v.error==='noparser'?'vf.no_parser':'vf.reparse_fail').replace('{vendor}',esc(v.vendor||'')).replace('{err}',esc(v.message||''))}</div></div>`;
+  h+=`<div class="tbl-wrap"><table class="data-tbl" style="max-width:520px"><thead><tr><th>${tr('vf.col_item')}</th><th>${tr('vf.col_src')}</th><th>${tr('vf.col_dst')}</th></tr></thead><tbody>`
+    +v.counts.map(c=>`<tr><td>${tr('vf.k_'+c.key)}</td><td class="mono">${c.src}</td><td class="mono" style="${c.src!==c.dst?'color:var(--orange);font-weight:600':''}">${c.dst}</td></tr>`).join('')+'</tbody></table></div>';
+  h+=`<div style="font-size:12px;margin-top:8px">${tr('vf.queries').replace('{total}',v.total).replace('{same}',v.same)}`
+    +(v.unsure?' · '+tr('vf.unsure').replace('{n}',v.unsure):'')+(v.skipped.length?' · '+tr('vf.skipped').replace('{n}',v.skipped.length):'')
+    +(v.truncated?' · '+tr('vf.truncated').replace('{max}',FwPortMap.VERIFY_MAX):'')+'</div>';
+  if(!v.diffs.length) return h+(v.total?`<div style="font-size:12px;color:var(--green);margin-top:4px">✓ ${tr('vf.all_same')}</div>`:'')+'</div>';
+  const res=r=>`${esc(r.action)}${r.rule?`<br><span class="mono" style="font-size:11px;color:var(--text-dim)">${esc(String(r.rule))}</span>`:''}`;
+  h+=`<div style="font-weight:600;font-size:12px;margin:10px 0 4px;color:var(--red)">${tr('vf.diff_title').replace('{n}',v.diffs.length)}</div>
+    <div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>${tr('vf.col_rule')}</th><th>${tr('vf.col_query')}</th><th>${tr('vf.col_src')}</th><th>${tr('vf.col_dst')}</th></tr></thead><tbody>`
+    +v.diffs.map(d=>`<tr><td class="mono">${esc(String(d.q.policy.name||d.q.policy.id))}</td><td class="mono" style="font-size:11px">${esc(d.q.src)} → ${esc(d.q.dst)} ${esc(d.q.proto)}${d.q.port?'/'+esc(d.q.port):''}</td><td>${res(d.src)}</td><td>${res(d.dst)}</td></tr>`).join('')
+    +'</tbody></table></div>';
+  return h+'</div>';
+}
+window.buildConvPortMapHtml=buildConvPortMapHtml;
+window.buildConvVerifyHtml=buildConvVerifyHtml;
 })();

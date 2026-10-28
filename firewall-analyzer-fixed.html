@@ -727,6 +727,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
           <div style="color:var(--text-muted);font-size:12px;font-family:'JetBrains Mono',monospace" data-i18n="msg.no_data_yet">請先上傳並分析設定檔</div>
         </div>
       </div>
+      <div id="conv-portmap-card"></div>
       <div class="conv-panels">
         <div class="conv-panel">
           <div class="conv-panel-hdr"><span id="conv-src-label" data-i18n="conv.src_label">原始設定</span><span style="font-size:10px;color:var(--text-muted)" data-i18n="conv.input_label">輸入</span></div>
@@ -737,6 +738,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
           <textarea class="conv-textarea" id="conv-dst" placeholder="選擇上方轉換路徑後結果顯示於此..." readonly></textarea>
         </div>
       </div>
+      <div id="conv-verify-card"></div>
     </div>
 
     <!-- Export -->
@@ -907,6 +909,8 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 <script src="firewall-analyzer-parser-cloud.js"></script>
 <script src="firewall-analyzer-parser-cisco-asa.js"></script>
 <script src="firewall-analyzer-converter.js"></script>
+<script src="firewall-analyzer-models.js"></script>
+<script src="firewall-analyzer-portmap.js"></script>
 <script src="firewall-analyzer-reporter.js"></script>
 <script src="firewall-analyzer-pathchain.js"></script>
 <script src="vuln-check.js"></script>

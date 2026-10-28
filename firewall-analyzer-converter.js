@@ -2725,8 +2725,11 @@ const Converter = (() => {
   // 全部直接沿用來源介面名稱，不做（也不應該做）猜測性的命名轉換。比起假裝能自動判斷正確，
   // 統一在此集中偵測並誠實告知使用者需要人工核對的項目，與 getConversionLoss()（資料真的
   // 被拿掉）區分開來——這裡回報的是「資料還在，但正確性需要人工複核」
-  function getConversionCaveats(parsed, targetVendor){
-    const notes=['介面實體名稱／埠位對應皆直接沿用來源設定，未轉換為目標設備慣用命名，請依目標設備實際型號與埠數量人工核對介面清單'];
+  // opts.portModel：已套用目標型號埠對應（XN38）時的型號名稱，第一則改為說明已對應
+  function getConversionCaveats(parsed, targetVendor, opts){
+    const notes=[opts&&opts.portModel
+      ? `介面名稱已依目標型號 ${opts.portModel} 對應（未對應的埠保留原名），請依實際接線、速度與模組人工複核`
+      : '介面實體名稱／埠位對應皆直接沿用來源設定，未轉換為目標設備慣用命名，請依目標設備實際型號與埠數量人工核對介面清單'];
     const ifs=parsed.interfaces||[];
     // 2026-09-22 新增：跨 VDOM 同名具名物件警語。toZyxel()/toEdgeRouter() 的具名物件查找已
     // 直接修復為 VDOM 感知（見各自函式內 _vdom 比對邏輯）；toMikrotik()/toOpenWrt() 的具名

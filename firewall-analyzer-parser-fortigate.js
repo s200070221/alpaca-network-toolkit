@@ -340,9 +340,27 @@ const FortigateParser = (() => {
         allowaccess: gv(t, 'allowaccess') || '-',
         interface: gv(t, 'interface') || '-',
         gateway: '-',
+        // FortiLink（XN38）：出廠為聚合介面 fortilink（set member "a" "b"、set fortilink enable），
+        // 成員埠是交換器管理專用；members 另收聚合／重複介面的成員，供轉換時對應實體埠
+        fortilink: gv(t, 'fortilink') === 'enable',
+        members: (gvs(t, 'member') || '').split(', ').filter(Boolean),
         _vdom: explicitVdom,
       };
     });
+  }
+
+  // 硬體／軟體交換器（XN38）：硬體 config system virtual-switch → edit 名稱 → config port → edit 成員；
+  // 軟體 config system switch-interface → set member。交換器本身是有 IP 的邏輯介面，成員才是實體埠
+  function parseSwitchGroups(lines, vdomName) {
+    const hw = parseEdits(extractSection(lines, 'system virtual-switch').sectionLines).map(e => {
+      const pm = e.text.match(/config port\s*\n([\s\S]*?)^\s*end\b/m);
+      return { name: e.name, kind: 'hardware',
+        members: pm ? [...pm[1].matchAll(/^\s*edit\s+"?([^"\n]+?)"?\s*$/gm)].map(m => m[1]) : [], vdom: vdomName };
+    });
+    const sw = parseEdits(extractSection(lines, 'system switch-interface').sectionLines).map(e => ({
+      name: e.name, kind: 'software', members: (gvs(e.text, 'member') || '').split(', ').filter(Boolean),
+      vdom: gv(e.text, 'vdom') || vdomName }));
+    return [...hw, ...sw];
   }
 
   // 介面區域（第十八輪 TD）：config system zone → {名稱:{interfaces, intrazone}}；規則的 srcintf／dstintf
@@ -1400,6 +1418,8 @@ const FortigateParser = (() => {
       vendor:     'FortiGate',
       deviceInfo: parseDeviceInfo(text, isMultiVdom, vdomNames),
       interfaces,
+      switchGroups: [...parseSwitchGroups(globalLineArr, isMultiVdom ? 'global' : 'root'),
+        ...(isMultiVdom ? vdomBlocks.flatMap(vb => parseSwitchGroups(vb.lines, vb.name)) : [])],
       ...all,
       // VDOM metadata for UI filtering
       _vdomNames: vdomNames,
