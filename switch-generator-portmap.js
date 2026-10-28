@@ -285,7 +285,33 @@
     return { map, applied, skipped };
   }
 
-  const api = { speedFromName, memberOf, withMember, sourcePortsOf, targetPortsFor, suggestSwitchMap, switchMapWarnings, renameSwitchModel, adaptModelForVendor, conversionSummary, roundTripCheck, HYBRID_VENDORS, VENDOR_ONLY, buildMapCsv, parseMapCsv, applyMapRows };
+  // ── 轉換前後安全稽核比對（XN45）────────────────────────────────────────────────
+  // before／after：{health:{score,grade}, findings:[{id,label,risk,value}]}；findings 只含該廠牌評估過的項目（不評估的不出現）。
+  // 只列有變化的項目；減少或消失常是轉換器沒帶過該設定（管理介面、帳號等），狀態標 less／gone，畫面不可說成改善
+  const AUDIT_RISK_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  const AUDIT_STATUS_ORDER = { new: 0, worse: 1, noeval: 2, less: 3, gone: 4 };
+  function compareAudit(before, after) {
+    const idx = list => { const m = Object.create(null); (list || []).forEach(f => { if (f && f.id && f.id !== '__proto__') m[f.id] = f; }); return m; };
+    const b = idx(before && before.findings), a = idx(after && after.findings);
+    const rows = []; let same = 0;
+    [...new Set([...Object.keys(b), ...Object.keys(a)])].forEach(id => {
+      const x = b[id], y = a[id];
+      const bv = x ? +x.value || 0 : 0, av = y ? +y.value || 0 : 0;
+      if (!bv && !av) return;
+      let status;
+      if (!y) status = 'noeval';
+      else if (!bv) status = 'new';
+      else if (av > bv) status = 'worse';
+      else if (!av) status = 'gone';
+      else if (av < bv) status = 'less';
+      else { same++; return; }
+      rows.push({ id, label: (y && y.label) || (x && x.label) || id, risk: (y && y.risk) || (x && x.risk) || '', before: x ? bv : null, after: y ? av : null, status });
+    });
+    rows.sort((p, q) => AUDIT_STATUS_ORDER[p.status] - AUDIT_STATUS_ORDER[q.status] || (AUDIT_RISK_ORDER[p.risk] ?? 9) - (AUDIT_RISK_ORDER[q.risk] ?? 9) || p.id.localeCompare(q.id));
+    return { health: { before: before && before.health || null, after: after && after.health || null }, rows, same };
+  }
+
+  const api = { speedFromName, memberOf, withMember, sourcePortsOf, targetPortsFor, suggestSwitchMap, switchMapWarnings, renameSwitchModel, adaptModelForVendor, conversionSummary, roundTripCheck, HYBRID_VENDORS, VENDOR_ONLY, buildMapCsv, parseMapCsv, applyMapRows, compareAudit };
   if (typeof window !== 'undefined') window.SwPortMap = api;
   return api;
 })();

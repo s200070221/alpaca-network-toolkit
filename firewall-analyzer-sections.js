@@ -1247,8 +1247,29 @@ th{background:var(--surface2)}.mono,code{font-family:Consolas,monospace;font-siz
       +(info.reviewTotal>info.review.length?`<p class="dim">${e(tr('crpt.review_more').replace('{n}',info.reviewTotal))}</p>`:'')
     :`<p class="dim">${e(tr('crpt.review_none'))}</p>`);
   if(info.verify)h+=buildConvVerifyHtml(info.verify);
+  if(info.auditCmp)h+=buildAuditCompareHtml(info.auditCmp);
   return h+'</body></html>';
 }
+// 轉換前後安全稽核比對（XN45）：cmp 為 FwPortMap.compareAudit() 結果。減少／消失的項目常是轉換器沒帶過該設定，文字不說成改善
+const AC_STATUS_COLOR={new:'var(--red)',worse:'var(--red)',noeval:'var(--text-dim)',less:'var(--orange)',gone:'var(--orange)'};
+function buildAuditCompareHtml(cmp){
+  const hb=cmp.health.before, ha=cmp.health.after;
+  const hs=h=>h?`${esc(String(h.score))}（${esc(String(h.grade))}）`:'-';
+  let h=`<div style="margin:14px 0;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2)">
+    <div style="font-weight:700;font-size:13px;margin-bottom:6px">🛡 ${tr('ac.title')}</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">${tr('ac.note')}</div>
+    <div style="font-size:13px;margin-bottom:8px">${tr('ac.health')}：${hs(hb)} → ${hs(ha)}</div>`;
+  // 目標不評估的項目不計入轉換後健康度，分數變高可能只是少檢查幾項
+  const ne=cmp.rows.filter(r=>r.status==='noeval').length;
+  if(ne)h+=`<div style="font-size:11px;color:var(--orange);margin:-4px 0 8px">⚠ ${tr('ac.health_noeval').replace('{n}',ne)}</div>`;
+  if(!cmp.rows.length) return h+`<div style="font-size:12px;color:var(--green)">✓ ${tr('ac.none')}${cmp.same?' '+tr('ac.same').replace('{n}',cmp.same):''}</div></div>`;
+  h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>${tr('ac.col_item')}</th><th>${tr('ac.col_risk')}</th><th>${tr('ac.col_before')}</th><th>${tr('ac.col_after')}</th><th>${tr('ac.col_status')}</th></tr></thead><tbody>`
+    +cmp.rows.map(r=>`<tr><td>${esc(r.label)}<br><span class="mono" style="font-size:11px;color:var(--text-dim)">${esc(r.id)}</span></td><td>${esc(r.risk||'-')}</td><td class="mono">${r.before==null?'-':r.before}</td><td class="mono">${r.after==null?'-':r.after}</td><td style="color:${AC_STATUS_COLOR[r.status]};font-weight:600">${tr('ac.st_'+r.status)}</td></tr>`).join('')
+    +'</tbody></table></div>';
+  if(cmp.same)h+=`<div style="font-size:11px;color:var(--text-dim);margin-top:4px">${tr('ac.same').replace('{n}',cmp.same)}</div>`;
+  return h+'</div>';
+}
+window.buildAuditCompareHtml=buildAuditCompareHtml;
 window.buildConvReportHtml=buildConvReportHtml;
 window.buildConvPortMapHtml=buildConvPortMapHtml;
 window.buildConvVerifyHtml=buildConvVerifyHtml;
