@@ -164,7 +164,7 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 .err-bar{display:none;background:rgba(239,68,68,.08);border-bottom:1px solid rgba(239,68,68,.25);padding:9px 18px;font-size:12px;color:var(--red);align-items:center;gap:8px;}
 .err-bar.show{display:flex}
 /* Converter view */
-#view-convert{flex:1;display:none;flex-direction:column;padding:0;overflow:hidden;}
+#view-convert{flex:1;display:none;flex-direction:column;padding:0;overflow-x:hidden;overflow-y:auto;}
 #view-convert.show{display:flex}
 .conv-header{padding:16px 24px;border-bottom:1px solid var(--border);background:var(--surface);display:flex;align-items:center;gap:16px;flex-shrink:0;}
 .conv-header h2{font-size:14px;font-weight:700}
@@ -182,7 +182,9 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 .conv-vendor.conv-checkpoint{color:var(--checkpoint)}.conv-vendor.conv-paloalto{color:var(--paloalto)}
 .conv-vendor.conv-juniper{color:var(--juniper)}.conv-vendor.conv-pfsense{color:#888}
 .conv-arrow{color:var(--text-muted);font-size:14px}
-.conv-panels{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:0;overflow:hidden;}
+/* 轉換頁可捲動，原始／轉換結果兩欄至少保留 480px：埠對應與驗證卡片（XN38／XN40）變高時，原本 flex:1 分到的剩餘高度會變成 0、兩欄消失 */
+.conv-panels{flex:1 0 auto;min-height:480px;display:grid;grid-template-columns:1fr 1fr;gap:0;overflow:hidden;}
+#conv-portmap-card,#conv-verify-card{flex-shrink:0;padding:0 24px}
 .conv-panel{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--border);}
 .conv-panel:last-child{border-right:none}
 .conv-panel-hdr{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:600;background:var(--surface);flex-shrink:0;}
@@ -716,7 +718,6 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
         <select id="conv-src-filter" onchange="filterConvMatrix(this.value)"><option value="" data-i18n="conv.filter_all">顯示全部轉換路徑</option><option value="fortigate" data-i18n="conv.filter_forti">僅 FortiGate 出發</option><option value="sophos" data-i18n="conv.filter_sophos">僅 Sophos 出發</option><option value="checkpoint" data-i18n="conv.filter_cp">僅 Check Point 出發</option><option value="paloalto" data-i18n="conv.filter_pa">僅 Palo Alto 出發</option><option value="juniper" data-i18n="conv.filter_juniper">僅 Juniper 出發</option><option value="pfsense" data-i18n="conv.filter_pfsense">僅 pfSense 出發</option></select>
         <select id="conv-vdom-sel" style="display:none" title="選擇要轉換的 VDOM"></select>
         <div id="conv-status" style="font-size:12px;color:var(--text-dim);font-family:'JetBrains Mono',monospace"></div>
-        <div id="conv-preview-status" style="font-size:11px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;font-style:italic"></div>
         <div style="margin-left:auto;display:flex;gap:8px">
           <button class="btn btn-ghost btn-sm" onclick="downloadConv()">⬇ <span data-i18n="btn.download_conv">下載轉換結果</span></button>
         </div>
@@ -727,6 +728,8 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
         <div id="conv-matrix">
           <div style="color:var(--text-muted);font-size:12px;font-family:'JetBrains Mono',monospace" data-i18n="msg.no_data_yet">請先上傳並分析設定檔</div>
         </div>
+        <!-- 轉換預覽放在按鈕下方：放在上方標題列時，預覽文字讓標題列變高、按鈕被推離滑鼠，觸發移出又清空，形成每一幀循環（閃爍、點不到） -->
+        <div id="conv-preview-status" style="font-size:11px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;font-style:italic;margin-top:8px;min-height:1.2em"></div>
       </div>
       <div id="conv-portmap-card"></div>
       <div class="conv-panels">
