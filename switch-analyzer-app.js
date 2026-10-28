@@ -3765,9 +3765,10 @@ if (/[?&]structcheck=1(?:&|$)/.test(location.search) && window.parent !== window
     var res;
     try {
       var p = parseAny(String(e.data.text || '').replace(/^﻿/, '').replace(/\r\n/g, '\n'));
-      var h = computeSwitchHealth(p), audit = {};
-      analyzeSwitchAudit(p).filter(function(f){ return f.value > 0; }).forEach(function(f){ audit[f.id] = { v: f.value, label: f.check }; });
-      res = { vendor: p.vendor || '',
+      // 稽核（XN45 轉換前後比對）：evaluated 為該廠牌評估過的項目 id（不評估的不出現），audit 只放數值大於 0 的項目
+      var h = computeSwitchHealth(p), audit = {}, all = analyzeSwitchAudit(p);
+      all.filter(function(f){ return f.value > 0; }).forEach(function(f){ audit[f.id] = { v: f.value, label: f.check, risk: f.risk }; });
+      res = { vendor: p.vendor || '', evaluated: all.map(function(f){ return f.id; }),
         vlans: (p.vlans || []).map(function(v){ return { id: String(v.id) }; }),
         interfaces: (p.interfaces || []).map(function(i){ return { name: String(i.name || ''), mode: i.mode || '' }; }),
         health: { score: h.score, grade: h.grade }, audit: audit };

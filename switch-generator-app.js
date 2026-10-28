@@ -3182,6 +3182,9 @@ function _tourSeen(){try{return JSON.parse(localStorage.getItem('_netAnalyzer_to
 function tourInit(){const el=document.getElementById('tour');if(el&&!_tourSeen()['gen'])el.hidden=false;}
 function tourDone(){const el=document.getElementById('tour');if(el)el.hidden=true;try{const s=_tourSeen();if(s['gen'])return;s['gen']=1;localStorage.setItem('_netAnalyzer_tourSeen',JSON.stringify(s));}catch(e){}}
 if(typeof document!=='undefined'){if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',tourInit);else tourInit();}
+// 依廠牌組出設定文字（generate()、批次產生、跨廠牌轉換讀回共用；model 需先經 withSviInterfaces()）
+const ASSEMBLE_BY_VENDOR={'fortiswitch':assembleFortiSwitchConfig,'aruba':assembleArubaConfig,'cisco':assembleCiscoConfig,'cisco_nxos':assembleNXOSConfig,'juniper':assembleJuniperConfig,'dell-os10':assembleDellOS10Config,'arista':assembleAristaConfig,'brocade':assembleBrocadeConfig,'alcatel':assembleAlcatelConfig,'extreme':assembleExtremeConfig,'procurve':assembleProCurveConfig,'routeros':assembleRouterOSConfig,'ruijie':assembleRuijieConfig,'netgear':assembleNetgearConfig,'edgeswitch':assembleEdgeSwitchConfig,'sonic':assembleSONiCConfig,'planet':assemblePlanetConfig};
+function assembleConfigFor(model){ return (ASSEMBLE_BY_VENDOR[model.vendor]||assembleComwareConfig)(model); }
 function generate(fromImport=false,quiet=false){
   // 驗證表單
   const validation=validateForm();
@@ -3191,25 +3194,7 @@ function generate(fromImport=false,quiet=false){
   // withSviInterfaces()：13 家廠牌把 VLAN 的 L3 IP 建模成獨立 SVI 介面，這裡才依 vlans[].ip
   // 動態合成對應介面物件，不寫回 validation.model 本身（ephemeral，見 switch-generator-core.js）
   const model=withSviInterfaces(validation.model);
-  let cfg;
-  if(model.vendor==='fortiswitch')cfg=assembleFortiSwitchConfig(model);
-  else if(model.vendor==='aruba')cfg=assembleArubaConfig(model);
-  else if(model.vendor==='cisco')cfg=assembleCiscoConfig(model);
-  else if(model.vendor==='cisco_nxos')cfg=assembleNXOSConfig(model);
-  else if(model.vendor==='juniper')cfg=assembleJuniperConfig(model);
-  else if(model.vendor==='dell-os10')cfg=assembleDellOS10Config(model);
-  else if(model.vendor==='arista')cfg=assembleAristaConfig(model);
-  else if(model.vendor==='brocade')cfg=assembleBrocadeConfig(model);
-  else if(model.vendor==='alcatel')cfg=assembleAlcatelConfig(model);
-  else if(model.vendor==='extreme')cfg=assembleExtremeConfig(model);
-  else if(model.vendor==='procurve')cfg=assembleProCurveConfig(model);
-  else if(model.vendor==='routeros')cfg=assembleRouterOSConfig(model);
-  else if(model.vendor==='ruijie')cfg=assembleRuijieConfig(model);
-  else if(model.vendor==='netgear')cfg=assembleNetgearConfig(model);
-  else if(model.vendor==='edgeswitch')cfg=assembleEdgeSwitchConfig(model);
-  else if(model.vendor==='sonic')cfg=assembleSONiCConfig(model);
-  else if(model.vendor==='planet')cfg=assemblePlanetConfig(model);
-  else cfg=assembleComwareConfig(model);
+  const cfg=assembleConfigFor(model);
   document.getElementById('output').value=cfg;
   // 頁面載入時的靜默產生不算使用者已上手
   if(!quiet)tourDone();
@@ -4508,25 +4493,7 @@ function processBulkCSV(){
           const t=sectionTemplatesForBulk[row.securitytemplate];
           if(t&&t.kind==='security')model.security=t.data;
         }
-        let cfg;
-        if(model.vendor==='fortiswitch')cfg=assembleFortiSwitchConfig(model);
-        else if(model.vendor==='aruba')cfg=assembleArubaConfig(model);
-        else if(model.vendor==='cisco')cfg=assembleCiscoConfig(model);
-        else if(model.vendor==='juniper')cfg=assembleJuniperConfig(model);
-        else if(model.vendor==='dell-os10')cfg=assembleDellOS10Config(model);
-        else if(model.vendor==='cisco_nxos')cfg=assembleNXOSConfig(model);
-        else if(model.vendor==='arista')cfg=assembleAristaConfig(model);
-        else if(model.vendor==='brocade')cfg=assembleBrocadeConfig(model);
-        else if(model.vendor==='alcatel')cfg=assembleAlcatelConfig(model);
-        else if(model.vendor==='extreme')cfg=assembleExtremeConfig(model);
-        else if(model.vendor==='procurve')cfg=assembleProCurveConfig(model);
-        else if(model.vendor==='routeros')cfg=assembleRouterOSConfig(model);
-        else if(model.vendor==='ruijie')cfg=assembleRuijieConfig(model);
-  else if(model.vendor==='netgear')cfg=assembleNetgearConfig(model);
-  else if(model.vendor==='edgeswitch')cfg=assembleEdgeSwitchConfig(model);
-        else if(model.vendor==='sonic')cfg=assembleSONiCConfig(model);
-        else if(model.vendor==='planet')cfg=assemblePlanetConfig(model);
-        else cfg=assembleComwareConfig(model);
+        const cfg=assembleConfigFor(model);
 
         // SONiC 輸出為 config_db.json，比照單台下載的副檔名（2026-10-16）
         const fname=sanitizeZipEntryName(row.devicename)+(model.vendor==='sonic'?'_config_db.json':'.cfg');
@@ -5631,6 +5598,24 @@ function swcWarnText(w){
   return tr('swpm.w_'+w.code).replace('{port}',esc(w.port||'')).replace('{dst}',esc(w.dst||'')).replace('{other}',esc(w.other||''))
     .replace('{from}',esc(w.from||'')).replace('{to}',esc(w.to||'')).replace('{n}',esc(w.n==null?'':w.n)).replace('{pvid}',esc(w.pvid||''));
 }
+// 轉換前後安全稽核比對（XN45）：減少／消失常是轉換時該設定沒帶過去，不說成改善
+const SWAC_COLOR={new:'var(--red)',worse:'var(--red)',noeval:'var(--text-dim)',less:'var(--orange)',gone:'var(--orange)'};
+function swcAuditHtml(s,plain){
+  const c=plain?{new:'#b91c1c',worse:'#b91c1c',noeval:'#6b7280',less:'#b45309',gone:'#b45309'}:SWAC_COLOR;
+  let h=`<div style="margin-top:12px"><div style="font-weight:600;font-size:13px;margin-bottom:4px">🛡 ${esc(tr('swac.title'))}</div>`;
+  if(s.auditRunning)return h+`<div style="font-size:12px;opacity:.7">${esc(tr('swac.running'))}</div></div>`;
+  if(!s.audit)return h+`<div style="font-size:12px;opacity:.7">${esc(tr('swac.unavailable'))}${s.auditError?' '+esc(s.auditError):''}</div></div>`;
+  const a=s.audit, hs=x=>x?`${esc(String(x.score))}（${esc(String(x.grade))}）`:'-';
+  h+=`<div style="font-size:11px;opacity:.75;margin-bottom:6px">${esc(tr('swac.note'))}</div><div style="font-size:13px;margin-bottom:6px">${esc(tr('swac.health'))}：${hs(a.health.before)} → ${hs(a.health.after)}</div>`;
+  // 目標不評估的項目不計入轉換後健康度，分數變高可能只是少檢查幾項
+  const ne=a.rows.filter(r=>r.status==='noeval').length;
+  if(ne)h+=`<div style="font-size:11px;color:${plain?'#b45309':'var(--orange)'};margin-bottom:6px">⚠ ${esc(tr('swac.health_noeval').replace('{n}',ne))}</div>`;
+  if(!a.rows.length)return h+`<div style="font-size:12px;color:${plain?'#15803d':'var(--green)'}">✓ ${esc(tr('swac.none'))}${a.same?' '+esc(tr('swac.same').replace('{n}',a.same)):''}</div></div>`;
+  h+=`<table class="tbl"><thead><tr><th>${esc(tr('swac.col_item'))}</th><th>${esc(tr('swac.col_risk'))}</th><th>${esc(tr('swac.col_before'))}</th><th>${esc(tr('swac.col_after'))}</th><th>${esc(tr('swac.col_status'))}</th></tr></thead><tbody>`
+    +a.rows.map(r=>`<tr><td>${esc(r.label)} <span style="font-size:11px;opacity:.7">${esc(r.id)}</span></td><td>${esc(r.risk||'-')}</td><td>${r.before==null?'-':r.before}</td><td>${r.after==null?'-':r.after}</td><td style="color:${c[r.status]};font-weight:600">${esc(tr('swac.st_'+r.status))}</td></tr>`).join('')+'</tbody></table>';
+  if(a.same)h+=`<div style="font-size:11px;opacity:.7;margin-top:4px">${esc(tr('swac.same').replace('{n}',a.same))}</div>`;
+  return h+'</div>';
+}
 function swcSummaryHtml(s){
   if(!s)return'';
   let h=`<div style="margin-top:12px"><div style="font-weight:600;font-size:13px;margin-bottom:4px">🧪 ${esc(tr('swpm.sum_title'))}</div>`;
@@ -5647,6 +5632,7 @@ function swcSummaryHtml(s){
     if(!ok)h+=`<div class="mono" style="font-size:11px">${s.rt.missingVlans.map(v=>'VLAN '+esc(v)).concat(s.rt.ifaceDiffs.map(d=>esc(d.port)+' '+esc(d.why)+(d.want?' '+esc(d.want)+'→'+esc(d.got):''))).slice(0,30).join('<br>')}</div>`;
   }else if(s.rtError)h+=`<div style="font-size:12px;color:var(--orange);margin-top:6px">${esc(tr('swpm.rt_fail'))} ${esc(s.rtError)}</div>`;
   else if(s.rtRunning)h+=`<div style="font-size:12px;color:var(--text-dim);margin-top:6px">${esc(tr('swpm.rt_running'))}</div>`;
+  h+=swcAuditHtml(s);
   return h+'</div>';
 }
 function swcRender(){
@@ -5719,13 +5705,23 @@ function swcApply(){
   }
   if(txt&&_parserFnsCache&&SWC_PARSERS[tv]&&_parserFnsCache[SWC_PARSERS[tv]]){
     try{ summary.rt=SwPortMap.roundTripCheck(collectModel(),_parserFnsCache[SWC_PARSERS[tv]](txt)); }catch(e){summary.rtError=e.message;}
-  }else if(txt){
-    summary.rtRunning=true;
+  }
+  // 讀回（未上傳解析器時的一致性比對）與轉換前後安全稽核比對（XN45）共用同一個 iframe：
+  // 來源廠牌文字以套用前的 model 產生（與轉換後同一條產生路徑，比對的是轉換造成的差異）
+  if(txt){
+    const needRt=!summary.rt&&!summary.rtError;
+    if(needRt)summary.rtRunning=true;
+    summary.auditRunning=true;
     const after=collectModel();
-    swcReadback(txt).then(r=>{
+    let srcTxt='';
+    try{ srcTxt=assembleConfigFor(withSviInterfaces(before)).replace(/\r\n/g,'\n'); }catch(e){ /* 來源無法產生時只做讀回 */ }
+    swcReadbackMany(srcTxt?[txt,srcTxt]:[txt]).then(rs=>{
       if(seq!==_swc.rtSeq||_swc.summary!==summary)return;  // 之後又轉換或復原，結果作廢
-      summary.rtRunning=false;
-      if(r.error)summary.rtError=r.error; else summary.rt=SwPortMap.roundTripCheck(after,r);
+      const [ra,rb]=rs;
+      if(needRt){ summary.rtRunning=false; if(ra.error)summary.rtError=ra.error; else summary.rt=SwPortMap.roundTripCheck(after,ra); }
+      summary.auditRunning=false;
+      if(ra&&!ra.error&&rb&&!rb.error)summary.audit=SwPortMap.compareAudit(_swAuditOf(rb),_swAuditOf(ra));
+      else summary.auditError=(rb&&rb.error)||(ra&&ra.error)||'';
       swcRender();
     });
   }
@@ -5809,6 +5805,7 @@ th,td{border:1px solid #d1d5db;padding:4px 8px;text-align:left;vertical-align:to
   if(s.rt){const ok=!s.rt.missingVlans.length&&!s.rt.ifaceDiffs.length;
     h+=`<p class="${ok?'ok':'warn'}">${e(tr(ok?'swpm.rt_ok':'swpm.rt_diff').replace('{n}',s.rt.checked))}</p>`+(ok?'':list(s.rt.missingVlans.map(v=>'VLAN '+v).concat(s.rt.ifaceDiffs.map(d=>d.port+' '+d.why+(d.want?' '+d.want+'→'+d.got:'')))));}
   else h+=`<p class="dim">${e(s.rtError?tr('swpm.rt_fail')+' '+s.rtError:tr(s.rtRunning?'swpm.rt_running':'swrpt.none'))}</p>`;
+  h+=swcAuditHtml(s,true);
   return h+'</body></html>';
 }
 function swcDownloadReport(){
@@ -5817,25 +5814,33 @@ function swcDownloadReport(){
 }
 // 以隱藏 iframe 開交換器分析頁（?structcheck=1，該頁不碰交接 key）讀回產生結果；不直接呼叫 iframe 內函式，離線 file:// 也能運作。
 // 回傳 Promise：成功為 {vendor,vlans,interfaces,health,audit}，失敗或逾時為 {error}
-function swcReadback(text){
+// 一次讀回多份（同一個 iframe），回傳與 texts 同順序的結果陣列
+function swcReadbackMany(texts){
   return new Promise(resolve=>{
     const ifr=document.createElement('iframe');
     ifr.style.display='none';
-    const id='rb'+Date.now()+'_'+Math.random().toString(36).slice(2);
+    const base='rb'+Date.now()+'_'+Math.random().toString(36).slice(2)+'_';
+    const out=texts.map(()=>null);
     let timer=null;
-    const done=r=>{ window.removeEventListener('message',onMsg); clearTimeout(timer); ifr.remove(); resolve(r); };
+    const done=()=>{ window.removeEventListener('message',onMsg); clearTimeout(timer); ifr.remove(); resolve(out.map(r=>r||{error:tr('swpm.rt_unavailable')})); };
     function onMsg(e){
       if(e.source!==ifr.contentWindow||!e.data)return;
       // 內容是產生的設定檔：http(s) 下只送給同源頁面；file:// 的 origin 不透明（Chrome 回報 'file://' 或 'null'），只能用 '*'
-      if(e.data.type==='_naStructReady'){ ifr.contentWindow.postMessage({type:'_naSwReadback',id,text},(location.protocol==='file:'||location.origin==='null')?'*':location.origin); return; }
-      if(e.data.type==='_naSwReadbackResult'&&e.data.id===id)done(e.data);
+      if(e.data.type==='_naStructReady'){ const to=(location.protocol==='file:'||location.origin==='null')?'*':location.origin; texts.forEach((text,i)=>ifr.contentWindow.postMessage({type:'_naSwReadback',id:base+i,text},to)); return; }
+      if(e.data.type!=='_naSwReadbackResult'||typeof e.data.id!=='string'||!e.data.id.startsWith(base))return;
+      const i=+e.data.id.slice(base.length);
+      if(i>=0&&i<out.length&&!out[i])out[i]=e.data;
+      if(out.every(Boolean))done();
     }
     window.addEventListener('message',onMsg);
-    timer=setTimeout(()=>done({error:tr('swpm.rt_unavailable')}),20000);
+    timer=setTimeout(done,20000);
     ifr.src='switch-config-parser.html?structcheck=1';
     document.body.appendChild(ifr);
   });
 }
+function swcReadback(text){ return swcReadbackMany([text]).then(r=>r[0]); }
+// 讀回結果轉成 compareAudit() 的輸入：evaluated 為評估過的項目，audit 只含數值大於 0 者
+const _swAuditOf=r=>({ health:r.health||null, findings:(r.evaluated||Object.keys(r.audit||{})).map(id=>{const f=(r.audit||{})[id];return {id,label:f?f.label:id,risk:f?f.risk:'',value:f?f.v:0};}) });
 document.addEventListener('change',e=>{
   const t=e.target;
   if(!t||!t.closest||!t.closest('#swconv-card'))return;

@@ -2108,7 +2108,7 @@ function onParsed(){
         }
       }
       // 目標型號埠對應（XN38）：來源或目標換了就重設；對應只存記憶體
-      if (_pm.src !== srcVendor || _pm.target !== targetVendor || _pm.vdom !== convVdom) Object.assign(_pm, { src: srcVendor, target: targetVendor, vdom: convVdom, model: '', map: null, applied: null, appliedModel: '', csvMsg: '', verify: null });
+      if (_pm.src !== srcVendor || _pm.target !== targetVendor || _pm.vdom !== convVdom) Object.assign(_pm, { src: srcVendor, target: targetVendor, vdom: convVdom, model: '', map: null, applied: null, appliedModel: '', csvMsg: '', verify: null, auditCmp: null });
       _pm.parsed = srcParsed;
       const convInput = _pm.applied ? FwPortMap.applyMap(srcParsed, _pm.applied, targetVendor) : srcParsed;
       CONV_RESULT=Converter.convert(convInput,targetVendor);
@@ -2159,19 +2159,24 @@ function onParsed(){
     el.innerHTML=buildConvPortMapHtml({ targetName:_CONV_NAMES[target]||target, models, modelId:_pm.model, srcModel: sm ? (FwPortMap.getModel(sm.vendor,sm.id)||{}).label || sm.id : '', sug, reserved,
       applied:!!_pm.applied, appliedCount:_pm.applied?Object.keys(_pm.applied).filter(k=>_pm.applied[k]).length:0, csvMsg:_pm.csvMsg||'' });
   }
+  const _fwAuditOf=p=>{ const h=computeFirewallHealth(p); return { health:{score:h.score,grade:h.grade},
+    findings:analyzeCompliance(p).map(f=>({id:f.id,label:f.check,risk:f.risk,value:f.value})) }; };
   function _vfRender(srcForVerify, target){
     const el=$('conv-verify-card');
     if(!el)return;
     if(!srcForVerify||!CONV_RESULT||typeof FwPortMap==='undefined'){ el.innerHTML=''; return; }
     const fn=FW_DIFF_PARSERS[target];
-    let v;
+    let v, dst=null;
     if(!fn) v={ error:'noparser', vendor:_CONV_NAMES[target]||target };
     else {
-      try { v=FwPortMap.verifyConversion(srcForVerify, fn(CONV_RESULT)); }
+      try { dst=fn(CONV_RESULT); v=FwPortMap.verifyConversion(srcForVerify, dst); }
       catch(e){ v={ error:'reparse', vendor:_CONV_NAMES[target]||target, message:e.message }; }
     }
     _pm.verify=v;
-    el.innerHTML=buildConvVerifyHtml(v);
+    // 轉換前後安全稽核比對（XN45）：來源與讀回結果各跑一次既有稽核
+    _pm.auditCmp=null;
+    if(dst){ try{ _pm.auditCmp=FwPortMap.compareAudit(_fwAuditOf(srcForVerify),_fwAuditOf(dst)); }catch(e){ console.error(e); } }
+    el.innerHTML=buildConvVerifyHtml(v)+(_pm.auditCmp?buildAuditCompareHtml(_pm.auditCmp):'');
   }
   // 事件代理（data-pm）：選型號、改單一埠、套用／依建議重設／清除
   document.addEventListener('change',e=>{
@@ -2245,7 +2250,7 @@ function onParsed(){
       dstVendor:_CONV_NAMES[_pm.target]||_pm.target, dstModel:r?r.model.label:'', vdom:_pm.vdom, time:new Date().toLocaleString(),
       rows:r?r.rows:[], extraNotes:r?r.extraNotes:[],
       loss:Converter.getConversionLoss(_pm.parsed,_pm.target), caveats:Converter.getConversionCaveats(_pm.parsed,_pm.target,_pm.applied?{portModel:_pm.appliedModel}:null),
-      review:review.slice(0,500), reviewTotal:review.length, verify:_pm.verify||null });
+      review:review.slice(0,500), reviewTotal:review.length, verify:_pm.verify||null, auditCmp:_pm.auditCmp||null });
     Reporter.download(html,`fw_conversion_report_${_pm.target}_${dateStr()}.html`,'text/html');
   }
   window.downloadConvReport=downloadConvReport;
