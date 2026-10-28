@@ -69,6 +69,50 @@
     return out;
   }
 
+  // 各實體埠的用途（XN46）：{埠: {ips, alias, zones, refs:{policy,nat,route,vpn}, used}}
+  // 只靠名稱推得的 WAN 角色（如 wan2）不算使用中；DHCP／PPPoE 取得位址的介面視為有位址
+  // 名稱標籤＝埠上各介面（含 VLAN 子介面）的名稱／nameif／區域（Juniper 以 _vdom 為區域）＋所屬群組，
+  // 規則／NAT／路由／VPN 的介面欄位以 token 不分大小寫比對標籤
+  const REF_KEYS = {
+    policy: ['srcIntf', 'dstIntf', 'srcIntfMembers', 'dstIntfMembers'],
+    nat: ['extIntf', 'srcIntf', 'dstIntf', 'outIntf', 'inIntf', 'srcIf', 'dstIf'],
+    route: ['device', 'iface', 'interface'],
+    vpn: ['iface'],
+  };
+  const tokensOf = v => (Array.isArray(v) ? v : String(v == null ? '' : v).split(/[\s,]+/)).map(s => String(s).trim().toLowerCase()).filter(s => s && s !== '-');
+  function portUsage(parsed) {
+    const ifs = (parsed && parsed.interfaces) || [];
+    const juniper = /juniper/i.test((parsed && parsed.vendor) || '');
+    const ifByName = Object.create(null);
+    ifs.forEach(i => { if (i && i.name && i.name !== '__proto__') ifByName[i.name] = i; });
+    const out = Object.create(null);
+    sourcePorts(parsed).forEach(sp => {
+      const labels = new Set(), ips = [], zones = [], alias = [];
+      const addZone = z => { if (!dash(z) && !zones.includes(String(z))) zones.push(String(z)); };
+      new Set([sp.name].concat(sp.ifaces)).forEach(n => {
+        labels.add(String(n).toLowerCase());
+        const i = ifByName[n];
+        if (!i) return;
+        [i.nameif, i.zone, i._zone].forEach(x => { if (!dash(x)) labels.add(String(x).toLowerCase()); });
+        addZone(i.zone); addZone(i._zone); addZone(i.nameif);
+        if (juniper && !dash(i._vdom)) { labels.add(String(i._vdom).toLowerCase()); addZone(i._vdom); }
+        if (!dash(i.ip) && i.ip !== '0.0.0.0') ips.push(i.ip + (dash(i.mask) ? '' : '/' + i.mask));
+        else if (/^(dhcp|pppoe)$/i.test(i.mode || '')) ips.push(String(i.mode).toUpperCase());
+        const a = !dash(i.alias) && i.alias !== i.name ? i.alias : !dash(i.desc) ? i.desc : '';
+        if (a && !alias.includes(a)) alias.push(String(a));
+      });
+      if (sp.group) labels.add(sp.group.toLowerCase());
+      const refs = {};
+      Object.keys(REF_KEYS).forEach(k => {
+        const arr = k === 'policy' ? parsed.policies : k === 'route' ? parsed.routes : parsed[k];
+        refs[k] = (arr || []).filter(o => o && REF_KEYS[k].some(f => tokensOf(o[f]).some(t => labels.has(t)))).length;
+      });
+      const used = ips.length > 0 || refs.policy + refs.nat + refs.route + refs.vpn > 0 || !!sp.group || sp.fortilink || sp.role === 'mgmt' || sp.role === 'ha';
+      out[sp.name] = { ips, alias: alias.join(' / '), zones, refs, used };
+    });
+    return out;
+  }
+
   // 來源型號：deviceInfo.model 與型號資料比對（FGT100F → FG-100F；完全相同優先，其次唯一的前綴相符）
   const norm = s => String(s || '').toUpperCase().replace(/^FORTIGATE/, 'FG').replace(/^FGT/, 'FG').replace(/[^A-Z0-9]/g, '');
   function detectSourceModel(parsed) {
@@ -99,7 +143,9 @@
   function suggestMap(parsed, target, modelId) {
     const model = getModel(target, modelId);
     if (!model) return null;
-    const src = sourcePorts(parsed);
+    // 設定中沒有 IP、也沒有任何參照的埠（XN46）不自動對應，使用者仍可手動選
+    const usage = portUsage(parsed);
+    const src = sourcePorts(parsed).filter(s => !usage[s.name] || usage[s.name].used);
     const srcModel = detectSourceModel(parsed);
     const srcModelObj = srcModel ? getModel(srcModel.vendor, srcModel.id) : null;
     const srcMedia = n => { const p = srcModelObj && srcModelObj.ports.find(x => x.name === n); return p ? p.media : ''; };
@@ -134,7 +180,7 @@
     });
     // HA 埠只對到目標 HA 埠
     src.filter(s => s.role === 'ha').forEach(s => { const t = free(p => p.ha && !p.mgmt); if (t) map[s.name] = take(t); });
-    return { model, ports: src, map, warnings: portMapWarnings(parsed, target, model, map) };
+    return { model, ports: sourcePorts(parsed), usage, map, warnings: portMapWarnings(parsed, target, model, map) };
   }
 
   const mbps = s => { const m = String(s || '').match(/^([\d.]+)([GM])$/); return m ? parseFloat(m[1]) * (m[2] === 'G' ? 1000 : 1) : 0; };
@@ -145,12 +191,13 @@
     const tPort = n => model && model.ports.find(p => p.name === n);
     const srcModel = detectSourceModel(parsed);
     const srcModelObj = srcModel ? getModel(srcModel.vendor, srcModel.id) : null;
+    const usage = portUsage(parsed);
     const W = [];
     const seen = Object.create(null);
     src.forEach(s => {
       const d = map[s.name];
       if (s.fortilink && !d) { W.push({ code: 'fortilinkSrc', port: s.name }); return; }
-      if (!d) { W.push({ code: 'unmapped', port: s.name }); return; }
+      if (!d) { W.push({ code: usage[s.name] && !usage[s.name].used ? 'unusedSrc' : 'unmapped', port: s.name }); return; }
       if (seen[d]) W.push({ code: 'dupTarget', port: s.name, dst: d, other: seen[d] }); else seen[d] = s.name;
       const r = res[d];
       if (r === 'fortilink' && !s.fortilink) W.push({ code: 'fortilinkDst', port: s.name, dst: d });
@@ -402,7 +449,7 @@
     return { health: { before: before && before.health || null, after: after && after.health || null }, rows, same };
   }
 
-  const api = { vendorKey, modelsOf, getModel, sourcePorts, detectSourceModel, reservedOf, suggestMap, portMapWarnings, applyMap, verifyConversion, sampleIp, sampleSvc, VERIFY_MAX, buildMapCsv, parseMapCsv, applyMapRows, compareAudit };
+  const api = { vendorKey, modelsOf, getModel, sourcePorts, portUsage, detectSourceModel, reservedOf, suggestMap, portMapWarnings, applyMap, verifyConversion, sampleIp, sampleSvc, VERIFY_MAX, buildMapCsv, parseMapCsv, applyMapRows, compareAudit };
   if (typeof window !== 'undefined') window.FwPortMap = api;
   return api;
 })();

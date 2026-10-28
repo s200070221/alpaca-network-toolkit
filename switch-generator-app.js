@@ -3552,6 +3552,7 @@ function showImportMsg(text,isError){
 }
 
 async function parseAndImport(){
+  window._swcNb=null;  // 另行匯入的設定檔沒有 LLDP／CDP 鄰居資料（XN46）
   // 統一在此正規化 CRLF，避免匯入的 CRLF 設定檔在後續逐行正則悄悄比對失敗
   const text=document.getElementById('import-text').value.replace(/\r\n/g,'\n').trim();
   if(!text){showImportMsg(tr('msg.importEmpty'),true);return;}
@@ -5479,6 +5480,8 @@ function _focusRemediationField(findingId){
     window._cwHandoffImported = true;
     applyParsedConfigToForm(p, buildAnalyzerFnsAdapter(p), '', v, gv);
     snapshotImportedModel();
+    // LLDP／CDP 鄰居（XN46，交換器分析頁貼上的鄰居表）：只存記憶體，轉換卡片第一次顯示時才對到介面名稱
+    window._swcNb = Array.isArray(p.lldp) && p.lldp.length ? { lldp: p.lldp } : null;
     if (swModel.focusFindingId) _focusRemediationField(swModel.focusFindingId);
     // 跨廠牌轉換（XN39）：展開轉換卡片
     if (swModel.convert) setTimeout(function () { var d = document.getElementById('swconv-details'); if (d) { d.open = true; swcRender(); d.scrollIntoView({ block: 'start' }); } }, 0);
@@ -5671,11 +5674,13 @@ function swcRender(){
   if(sug){
     const byPort={};
     sug.warnings.forEach(w=>{ if(w.port)(byPort[w.port]=byPort[w.port]||[]).push(w); });
-    h+=`<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>${esc(tr('swpm.col_src'))}</th><th>${esc(tr('swpm.col_speed'))}</th><th>${esc(tr('swpm.col_use'))}</th><th>${esc(tr('swpm.col_dst'))}</th><th>${esc(tr('swpm.col_warn'))}</th></tr></thead><tbody>`;
+    const nb=_swcNeighbors(model), nbCol=!!(nb&&Object.keys(nb).length);
+    if(!nbCol)h+=`<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${esc(tr('swpm.lldp_hint'))}</div>`;
+    h+=`<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>${esc(tr('swpm.col_src'))}</th><th>${esc(tr('swpm.col_speed'))}</th><th>${esc(tr('swpm.col_use'))}</th>${nbCol?`<th>${esc(tr('swpm.col_neighbor'))}</th>`:''}<th>${esc(tr('swpm.col_dst'))}</th><th>${esc(tr('swpm.col_warn'))}</th></tr></thead><tbody>`;
     sug.ports.forEach(p=>{
       const cur=_swc.map[p.name]||'';
       const opts=`<option value="">${esc(tr('swpm.unmapped_opt'))}</option>`+sug.targets.map(t=>`<option value="${esc(t.name)}"${t.name===cur?' selected':''}>${esc(t.name)} (${esc(t.speed)}${t.mgmt?' mgmt':''})</option>`).join('');
-      h+=`<tr><td class="mono">${esc(p.name)}</td><td>${esc(p.speed)}</td><td style="font-size:11px">${esc(p.use||'-')}</td><td><select data-swpm="port" data-src="${esc(p.name)}" style="${sel}">${opts}</select></td><td style="font-size:11px">${(byPort[p.name]||[]).map(w=>`<div style="color:var(--orange)">⚠ ${swcWarnText(w)}</div>`).join('')||'-'}</td></tr>`;
+      h+=`<tr><td class="mono">${esc(p.name)}</td><td>${esc(p.speed)}</td><td style="font-size:11px">${esc(p.use||'-')}</td>${nbCol?`<td style="font-size:11px" data-swpm-nb>${esc(SwPortMap.neighborText(nb[p.name]))||'-'}</td>`:''}<td><select data-swpm="port" data-src="${esc(p.name)}" style="${sel}">${opts}</select></td><td style="font-size:11px">${(byPort[p.name]||[]).map(w=>`<div style="color:var(--orange)">⚠ ${swcWarnText(w)}</div>`).join('')||'-'}</td></tr>`;
     });
     h+='</tbody></table></div>';
     sug.warnings.filter(w=>!w.port).forEach(w=>{h+=`<div style="font-size:12px;color:var(--orange)">⚠ ${swcWarnText(w)}</div>`;});
@@ -5686,6 +5691,7 @@ function swcApply(){
   const target=_swc.target; if(!target)return;
   const tv=_swcVendor(target);
   const before=collectModel();
+  const nbBefore=_swcNeighbors(before);
   const renamed=_swc.map?SwPortMap.renameSwitchModel(before,_swc.map):before;
   const ad=SwPortMap.adaptModelForVendor(renamed,target);
   _swc.undo=before;
@@ -5731,6 +5737,8 @@ function swcApply(){
   const map=Object.assign(Object.create(null),_swc.map||{});
   _swc.last={ srcVendor:_swcVendorLabel(before.brand==='h3c'?'h3c':before.vendor), dstVendor:_swcVendorLabel(target), modelId:_swc.model, modelLabel:dm?dm.label:'',
     rows:sg?_swcRows(before,map,sg.targets,SwPortMap.switchMapWarnings(before,sg.targets,map,sg.info)):null, summary, time:new Date().toLocaleString(), target };
+  // 鄰居跟著埠改名，復原時還原
+  if(nbBefore&&_swc.map)window._swcNb={map:SwPortMap.renameNeighbors(nbBefore,_swc.map),prev:window._swcNb};
   _swc.summary=summary; _swc.map=null; _swc.target=''; _swc.model=''; _swc.csvMsg='';
   swcRender();
 }
@@ -5739,18 +5747,26 @@ const _swcVendorLabel=v=>{const o=document.querySelector('#vendor option[value="
 const swcWarnPlain=w=>tr('swpm.w_'+w.code).replace('{port}',w.port||'').replace('{dst}',w.dst||'').replace('{other}',w.other||'')
   .replace('{from}',w.from||'').replace('{to}',w.to||'').replace('{n}',w.n==null?'':w.n).replace('{pvid}',w.pvid||'');
 // 逐埠資料列：{rows:[{source,target,usage,description,sourceSpeed,targetSpeed,notes}], extraNotes}
+// 鄰居對應表（XN46）：{埠: [鄰居]}，沒有鄰居資料時回傳 null
+function _swcNeighbors(model){
+  const s=window._swcNb;
+  if(!s)return null;
+  if(!s.map)s.map=SwPortMap.neighborMap(s.lldp,(model.interfaces||[]).map(i=>i.name));
+  return s.map;
+}
 function _swcRows(model,map,targets,warnings){
+  const nb=_swcNeighbors(model);
   const desc=Object.create(null);
   (model.interfaces||[]).forEach(i=>{desc[i.name]=i.desc||'';});
   const tBy=Object.create(null); targets.forEach(t=>{tBy[t.name]=t;});
   const ports=SwPortMap.sourcePortsOf(model), names=new Set(ports.map(p=>p.name));
-  return { rows:ports.map(p=>{const d=map[p.name]||'';return {source:p.name,target:d,usage:p.use||'',description:desc[p.name]||'',sourceSpeed:p.speed,targetSpeed:tBy[d]?tBy[d].speed+(tBy[d].mgmt?' mgmt':''):'',
+  return { rows:ports.map(p=>{const d=map[p.name]||'';return {source:p.name,target:d,usage:p.use||'',description:desc[p.name]||'',neighbor:SwPortMap.neighborText(nb&&nb[p.name]),sourceSpeed:p.speed,targetSpeed:tBy[d]?tBy[d].speed+(tBy[d].mgmt?' mgmt':''):'',
       notes:warnings.filter(w=>w.port===p.name).map(swcWarnPlain)};}),
     extraNotes:warnings.filter(w=>!w.port||!names.has(w.port)).map(swcWarnPlain) };
 }
 function swcMapCsv(r,meta){
-  return '\uFEFF'+SwPortMap.buildMapCsv(meta,['source_port','target_port','usage','description','source_speed','target_speed','notes'],
-    r.rows.map(x=>({source_port:x.source,target_port:x.target,usage:x.usage,description:x.description,source_speed:x.sourceSpeed,target_speed:x.targetSpeed,notes:x.notes.join(' / ')})));
+  return '\uFEFF'+SwPortMap.buildMapCsv(meta,['source_port','target_port','usage','description','neighbor','source_speed','target_speed','notes'],
+    r.rows.map(x=>({source_port:x.source,target_port:x.target,usage:x.usage,description:x.description,neighbor:x.neighbor,source_speed:x.sourceSpeed,target_speed:x.targetSpeed,notes:x.notes.join(' / ')})));
 }
 // 套用前：目前畫面上的對應
 function swcExportCurrentCsv(){
@@ -5792,9 +5808,10 @@ th,td{border:1px solid #d1d5db;padding:4px 8px;text-align:left;vertical-align:to
 .dim{color:#6b7280}.warn{color:#b45309}.ok{color:#15803d}
 </style></head><body><h1>${e(tr('swrpt.title'))}</h1><p class="dim">${e(tr('swrpt.disclaimer'))}</p>
 <table><tr><th>${e(tr('swrpt.src'))}</th><td>${e(L.srcVendor)}</td></tr><tr><th>${e(tr('swrpt.dst'))}</th><td>${e(L.dstVendor)}${L.modelLabel?' / '+e(L.modelLabel):''}</td></tr><tr><th>${e(tr('swrpt.time'))}</th><td>${e(L.time)}</td></tr></table>`;
+  const nbCol=!!(L.rows&&L.rows.rows.some(r=>r.neighbor));
   h+=`<h2>${e(tr('swpm.title'))}</h2>`+(L.rows
-    ?`<table><tr><th>${e(tr('swpm.col_src'))}</th><th>${e(tr('swpm.col_speed'))}</th><th>${e(tr('swpm.col_use'))}</th><th>${e(tr('swrpt.col_desc'))}</th><th>${e(tr('swpm.col_dst'))}</th><th>${e(tr('swpm.col_warn'))}</th></tr>`
-      +L.rows.rows.map(r=>`<tr><td class="mono">${e(r.source)}</td><td>${e(r.sourceSpeed)}</td><td>${e(r.usage||'-')}</td><td>${e(r.description||'-')}</td><td class="mono">${e(r.target||tr('swpm.unmapped_opt'))}${r.targetSpeed?' <span class="dim">('+e(r.targetSpeed)+')</span>':''}</td><td class="warn">${r.notes.map(e).join('<br>')||'-'}</td></tr>`).join('')
+    ?`<table><tr><th>${e(tr('swpm.col_src'))}</th><th>${e(tr('swpm.col_speed'))}</th><th>${e(tr('swpm.col_use'))}</th><th>${e(tr('swrpt.col_desc'))}</th>${nbCol?`<th>${e(tr('swpm.col_neighbor'))}</th>`:''}<th>${e(tr('swpm.col_dst'))}</th><th>${e(tr('swpm.col_warn'))}</th></tr>`
+      +L.rows.rows.map(r=>`<tr><td class="mono">${e(r.source)}</td><td>${e(r.sourceSpeed)}</td><td>${e(r.usage||'-')}</td><td>${e(r.description||'-')}</td>${nbCol?`<td>${e(r.neighbor||'-')}</td>`:''}<td class="mono">${e(r.target||tr('swpm.unmapped_opt'))}${r.targetSpeed?' <span class="dim">('+e(r.targetSpeed)+')</span>':''}</td><td class="warn">${r.notes.map(e).join('<br>')||'-'}</td></tr>`).join('')
       +'</table>'+(L.rows.extraNotes.length?list(L.rows.extraNotes):'')
     :`<p class="dim">${e(tr('swrpt.no_map'))}</p>`);
   h+=`<h2>${e(tr('swpm.sum_title'))}</h2><table><tr><th>${e(tr('swpm.sum_item'))}</th><th>${e(tr('swpm.sum_before'))}</th><th>${e(tr('swpm.sum_after'))}</th><th></th></tr>`
@@ -5856,7 +5873,7 @@ document.addEventListener('click',e=>{
   const k=b.getAttribute('data-swpm');
   if(k==='reset'){_swc.map=null;swcRender();}
   else if(k==='apply')swcApply();
-  else if(k==='undo'&&_swc.undo){applyModelToForm(_swc.undo);updateDeviceModelOptions();_swc.undo=null;_swc.summary=null;_swc.last=null;swcRender();}
+  else if(k==='undo'&&_swc.undo){if(window._swcNb&&window._swcNb.prev)window._swcNb=window._swcNb.prev;applyModelToForm(_swc.undo);updateDeviceModelOptions();_swc.undo=null;_swc.summary=null;_swc.last=null;swcRender();}
   else if(k==='csvexport')swcExportCurrentCsv();
   else if(k==='csvimport'){const f=document.querySelector('#swconv-card input[data-swpm="csvfile"]');if(f)f.click();}
   else if(k==='report')swcDownloadReport();
