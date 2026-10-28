@@ -919,8 +919,16 @@ function updateDeviceModelOptions(){
       sel.appendChild(opt);
     });
   }
+  // NetBox 型號（XN39）：另列一組，標籤沿用 NetBox 型號名稱不翻譯
+  const nbModels=netboxModelsFor(vendor);
+  if(nbModels.length){
+    const grp=document.createElement('optgroup');
+    grp.label=(typeof tr==='function'?tr('swpm.netbox_group'):'NetBox').replace('{n}',nbModels.length);
+    nbModels.forEach(m=>{ const opt=document.createElement('option'); opt.value=m.value; opt.textContent=m.label; grp.appendChild(opt); });
+    sel.appendChild(grp);
+  }
   // 如果當前值仍在新的選項中，保留選擇
-  if(currentValue && models.some(m=>m.value===currentValue)){
+  if(currentValue && (models.some(m=>m.value===currentValue)||nbModels.some(m=>m.value===currentValue))){
     sel.value=currentValue;
   }
 }
@@ -930,13 +938,10 @@ function applyDeviceModel(){
   const deviceModelSel=document.getElementById('device-model');
   const modelValue=deviceModelSel.value;
   if(!modelValue)return;
-  const model=(DEVICE_MODELS[vendor]||[]).find(m=>m.value===modelValue);
+  const model=findDeviceModel(vendor,modelValue);
   if(!model)return;
   document.getElementById('iface-body').innerHTML='';
-  model.ports.forEach(p=>{
-    if(p.name)addIfaceRow(p.name,'access',p.speed||'1G');
-    else for(let n=p.from;n<=p.to;n++)addIfaceRow(p.prefix+n,'access',p.speed||'1G');
-  });
+  expandDeviceModelPorts(model).forEach(p=>addIfaceRow(p.name,'access',p.speed));
   // 保留選擇的值，以防後續代碼重新生成下拉選單
   deviceModelSel.value=modelValue;
   updateIfaceTableDisplay();
@@ -958,7 +963,7 @@ function updateAppliedModelNotice(){
   const notice=document.getElementById('applied-model-notice');
   if(!notice)return;
   if(modelValue){
-    const model=(DEVICE_MODELS[vendor]||[]).find(m=>m.value===modelValue);
+    const model=findDeviceModel(vendor,modelValue);
     if(model){
       const vendorLabel=document.querySelector('#vendor option[value="'+vendor+'"]')?.textContent||vendor;
       const template=tr('msg.appliedModel')||'✓ 目前套用 {vendor} 的 {model} 之預設設定';
@@ -5508,6 +5513,8 @@ function _focusRemediationField(findingId){
     applyParsedConfigToForm(p, buildAnalyzerFnsAdapter(p), '', v, gv);
     snapshotImportedModel();
     if (swModel.focusFindingId) _focusRemediationField(swModel.focusFindingId);
+    // 跨廠牌轉換（XN39）：展開轉換卡片
+    if (swModel.convert) setTimeout(function () { var d = document.getElementById('swconv-details'); if (d) { d.open = true; swcRender(); d.scrollIntoView({ block: 'start' }); } }, 0);
     return;
   }
 
@@ -5612,3 +5619,118 @@ function discardDraft(){try{localStorage.removeItem(DRAFT_KEY);}catch(e){}_close
 
 // 入口頁「看範例」（第二十九輪 NU4）：網址帶 ?demo=1 時開頁即載入範例並分析
 window.addEventListener('load', function () { if (/[?&]demo=1(?:&|$)/.test(location.search)) setTimeout(function () { loadExampleData(); if (typeof generate === 'function') generate(); }, 0); });
+
+// ── 跨廠牌轉換（XN39）：目標型號埠對應＋轉換摘要（XN40 交換器部分）──────────────────────
+// 純函式在 switch-generator-portmap.js（SwPortMap）；本段只處理畫面。對應與轉換前的 model 只存記憶體 _swc
+const _swc={target:'',model:'',map:null,undo:null,summary:null};
+const SWC_PARSERS={comware:'parseComware',cisco:'parseCisco',aruba:'parseAruba',fortiswitch:'parseFortiSwitch',juniper:'parseJuniper',cisco_nxos:'parseNXOS',
+  arista:'parseArista',ruijie:'parseRuijie',netgear:'parseNetgear',edgeswitch:'parseEdgeSwitch','dell-os10':'parseDellOS10',brocade:'parseBrocade',
+  alcatel:'parseAlcatel',extreme:'parseExtremeXOS',procurve:'parseProCurve',routeros:'parseRouterOS',sonic:'parseSONiC',planet:'parsePlanet'};
+const _swcVendor=v=>v==='h3c'?'comware':v;
+function swcWarnText(w){
+  return tr('swpm.w_'+w.code).replace('{port}',esc(w.port||'')).replace('{dst}',esc(w.dst||'')).replace('{other}',esc(w.other||''))
+    .replace('{from}',esc(w.from||'')).replace('{to}',esc(w.to||'')).replace('{n}',esc(w.n==null?'':w.n)).replace('{pvid}',esc(w.pvid||''));
+}
+function swcSummaryHtml(s){
+  if(!s)return'';
+  let h=`<div style="margin-top:12px"><div style="font-weight:600;font-size:13px;margin-bottom:4px">🧪 ${esc(tr('swpm.sum_title'))}</div>`;
+  h+=`<table class="tbl" style="max-width:560px"><thead><tr><th>${esc(tr('swpm.sum_item'))}</th><th>${esc(tr('swpm.sum_before'))}</th><th>${esc(tr('swpm.sum_after'))}</th><th></th></tr></thead><tbody>`
+    +s.rows.map(r=>`<tr><td>${esc(tr('swpm.k_'+r.key))}</td><td>${r.before}</td><td style="${r.before!==r.after?'color:var(--orange);font-weight:600':''}">${r.after}</td><td style="color:var(--red)">${r.dropped?esc(tr('swpm.sum_dropped')):''}</td></tr>`).join('')
+    +'</tbody></table>';
+  if(s.vendorOnly.length)h+=`<div style="font-size:12px;color:var(--orange);margin-top:6px">⚠ ${esc(tr('swpm.sum_vendor_only'))} ${s.vendorOnly.map(x=>esc(x.key)+' ('+esc(x.vendor)+')').join(', ')}</div>`;
+  (s.notes||[]).forEach(n=>{h+=`<div style="font-size:12px;color:var(--orange)">⚠ ${swcWarnText(n)}</div>`;});
+  if(s.rt){
+    const ok=!s.rt.missingVlans.length&&!s.rt.ifaceDiffs.length;
+    h+=`<div style="font-size:12px;margin-top:6px;color:${ok?'var(--green)':'var(--orange)'}">${esc(tr(ok?'swpm.rt_ok':'swpm.rt_diff').replace('{n}',s.rt.checked))}</div>`;
+    if(!ok)h+=`<div class="mono" style="font-size:11px">${s.rt.missingVlans.map(v=>'VLAN '+esc(v)).concat(s.rt.ifaceDiffs.map(d=>esc(d.port)+' '+esc(d.why)+(d.want?' '+esc(d.want)+'→'+esc(d.got):''))).slice(0,30).join('<br>')}</div>`;
+  }else if(s.rtError)h+=`<div style="font-size:12px;color:var(--orange);margin-top:6px">${esc(tr('swpm.rt_fail'))} ${esc(s.rtError)}</div>`;
+  else h+=`<div style="font-size:11px;color:var(--text-dim);margin-top:6px">${esc(tr('swpm.rt_hint'))}</div>`;
+  return h+'</div>';
+}
+function swcRender(){
+  const body=document.getElementById('swconv-body');
+  if(!body)return;
+  const sel='padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px';
+  const model=collectModel();
+  const srcVendor=document.getElementById('vendor').value;
+  const vendors=[...document.querySelectorAll('#vendor option')].filter(o=>o.value!==srcVendor);
+  if(!_swc.target||_swc.target===srcVendor)_swc.target='';
+  let h=`<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">${esc(tr('swpm.note'))}</div>`;
+  if(_swc.undo)h+=`<div style="margin-bottom:8px"><button type="button" class="act-btn" data-swpm="undo">${esc(tr('swpm.undo'))}</button></div>`;
+  if(!(model.interfaces||[]).length){ body.innerHTML=h+`<div style="font-size:12px;color:var(--text-dim)">${esc(tr('swpm.empty'))}</div>`+swcSummaryHtml(_swc.summary); return; }
+  h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+    <label style="font-size:12px">${esc(tr('swpm.target_vendor'))}</label>
+    <select data-swpm="vendor" style="${sel}"><option value="">—</option>${vendors.map(o=>`<option value="${esc(o.value)}"${o.value===_swc.target?' selected':''}>${esc(o.textContent)}</option>`).join('')}</select>`;
+  const tv=_swcVendor(_swc.target);
+  if(tv){
+    const cur=DEVICE_MODELS[tv]||[], nb=netboxModelsFor(tv);
+    h+=`<label style="font-size:12px">${esc(tr('swpm.target_model'))}</label><select data-swpm="model" style="${sel};max-width:340px"><option value="">${esc(tr('swpm.model_none'))}</option>`
+      +cur.map(m=>`<option value="${esc(m.value)}"${m.value===_swc.model?' selected':''}>${esc(m.label)}</option>`).join('')
+      +(nb.length?`<optgroup label="${esc(tr('swpm.netbox_group').replace('{n}',nb.length))}">${nb.map(m=>`<option value="${esc(m.value)}"${m.value===_swc.model?' selected':''}>${esc(m.label)}</option>`).join('')}</optgroup>`:'')+'</select>';
+  }
+  const dm=tv&&_swc.model?findDeviceModel(tv,_swc.model):null;
+  let sug=null;
+  if(dm){
+    sug=SwPortMap.suggestSwitchMap(model,expandDeviceModelPorts(dm));
+    if(!_swc.map)_swc.map=Object.assign(Object.create(null),sug.map);
+    sug.warnings=SwPortMap.switchMapWarnings(model,sug.targets,_swc.map,sug.info);
+    h+=`<button type="button" class="act-btn" data-swpm="reset">${esc(tr('swpm.reset'))}</button><button type="button" class="gen-btn" data-swpm="apply" style="padding:6px 14px">${esc(tr('swpm.apply'))}</button>`;
+  }else if(tv)h+=`<button type="button" class="gen-btn" data-swpm="apply" style="padding:6px 14px">${esc(tr('swpm.apply_nomodel'))}</button>`;
+  h+='</div>';
+  if(sug){
+    const byPort={};
+    sug.warnings.forEach(w=>{ if(w.port)(byPort[w.port]=byPort[w.port]||[]).push(w); });
+    h+=`<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>${esc(tr('swpm.col_src'))}</th><th>${esc(tr('swpm.col_speed'))}</th><th>${esc(tr('swpm.col_use'))}</th><th>${esc(tr('swpm.col_dst'))}</th><th>${esc(tr('swpm.col_warn'))}</th></tr></thead><tbody>`;
+    sug.ports.forEach(p=>{
+      const cur=_swc.map[p.name]||'';
+      const opts=`<option value="">${esc(tr('swpm.unmapped_opt'))}</option>`+sug.targets.map(t=>`<option value="${esc(t.name)}"${t.name===cur?' selected':''}>${esc(t.name)} (${esc(t.speed)}${t.mgmt?' mgmt':''})</option>`).join('');
+      h+=`<tr><td class="mono">${esc(p.name)}</td><td>${esc(p.speed)}</td><td style="font-size:11px">${esc(p.use||'-')}</td><td><select data-swpm="port" data-src="${esc(p.name)}" style="${sel}">${opts}</select></td><td style="font-size:11px">${(byPort[p.name]||[]).map(w=>`<div style="color:var(--orange)">⚠ ${swcWarnText(w)}</div>`).join('')||'-'}</td></tr>`;
+    });
+    h+='</tbody></table></div>';
+    sug.warnings.filter(w=>!w.port).forEach(w=>{h+=`<div style="font-size:12px;color:var(--orange)">⚠ ${swcWarnText(w)}</div>`;});
+  }
+  body.innerHTML=h+swcSummaryHtml(_swc.summary);
+}
+function swcApply(){
+  const target=_swc.target; if(!target)return;
+  const tv=_swcVendor(target);
+  const before=collectModel();
+  const renamed=_swc.map?SwPortMap.renameSwitchModel(before,_swc.map):before;
+  const ad=SwPortMap.adaptModelForVendor(renamed,target);
+  _swc.undo=before;
+  applyModelToForm(ad.model);
+  updateDeviceModelOptions();
+  const dmSel=document.getElementById('device-model');
+  if(dmSel&&_swc.model){dmSel.value=_swc.model;updateAppliedModelNotice();}
+  const summary=SwPortMap.conversionSummary(before,ad.model,VENDOR_UNSUPPORTED[tv],VENDOR_INCAPABLE[tv]);
+  summary.notes=ad.notes;
+  // round-trip：使用者已上傳合併版交換器分析頁（_parserFnsCache）時，產生目標文字再讀回比對
+  if(_parserFnsCache&&SWC_PARSERS[tv]&&_parserFnsCache[SWC_PARSERS[tv]]){
+    try{
+      generate(false,true);
+      const txt=(document.getElementById('output').value||'').replace(/\r\n/g,'\n');
+      summary.rt=SwPortMap.roundTripCheck(collectModel(),_parserFnsCache[SWC_PARSERS[tv]](txt));
+    }catch(e){summary.rtError=e.message;}
+  }
+  _swc.summary=summary; _swc.map=null; _swc.target=''; _swc.model='';
+  swcRender();
+}
+document.addEventListener('change',e=>{
+  const t=e.target;
+  if(!t||!t.closest||!t.closest('#swconv-card'))return;
+  const k=t.getAttribute('data-swpm');
+  if(k==='vendor'){_swc.target=t.value;_swc.model='';_swc.map=null;swcRender();}
+  else if(k==='model'){_swc.model=t.value;_swc.map=null;swcRender();}
+  else if(k==='port'&&_swc.map){const s=t.getAttribute('data-src');if(s&&s!=='__proto__')_swc.map[s]=t.value;swcRender();}
+});
+document.addEventListener('click',e=>{
+  const b=e.target&&e.target.closest?e.target.closest('#swconv-card button[data-swpm]'):null;
+  if(!b)return;
+  const k=b.getAttribute('data-swpm');
+  if(k==='reset'){_swc.map=null;swcRender();}
+  else if(k==='apply')swcApply();
+  else if(k==='undo'&&_swc.undo){applyModelToForm(_swc.undo);updateDeviceModelOptions();_swc.undo=null;_swc.summary=null;swcRender();}
+});
+// 卡片展開時才計算（表單內容可能在其他卡片被修改）
+document.addEventListener('toggle',e=>{ if(e.target&&e.target.id==='swconv-details'&&e.target.open)swcRender(); },true);
+window.swcRender=swcRender;

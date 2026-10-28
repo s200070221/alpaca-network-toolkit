@@ -3766,13 +3766,14 @@ if (/[?&]structcheck=1(?:&|$)/.test(location.search) && window.parent !== window
 // BasicParser，僅涵蓋 4 廠牌 VLAN/Interface access/trunk）。寫入/彈窗攔截偵測比照既有
 // config_anonymizer 的 `_sendToAnalysisTool()`／network_analyzer 的 `_dispatchWithPending()`
 // 同款寫法
-function _sendToGenerator(focusFindingId){
+// convert：跨廠牌轉換（XN39），產生器匯入後直接展開「跨廠牌轉換」卡片
+function _sendToGenerator(focusFindingId, convert){
   if(!parsed)return;
   let wrote=false;
   try{
     localStorage.setItem('_netAnalyzer_swParsedModel', JSON.stringify({
       name: (document.getElementById('fname')||{}).textContent||'', vendor: parsed.vendor, parsed: parsed, ts: Date.now(),
-      focusFindingId: focusFindingId||null,
+      focusFindingId: focusFindingId||null, convert: !!convert,
     }));
     wrote=true;
   }catch(e){ alert(tr('err.send_fail')); }

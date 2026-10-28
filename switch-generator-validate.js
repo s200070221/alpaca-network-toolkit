@@ -46,16 +46,36 @@ function isValidIPv6CIDR(s){
   return !!m && isValidIPv6(m[1]) && parseInt(m[2],10)>=0 && parseInt(m[2],10)<=128;
 }
 
-function getModelPortSet(vendor,modelValue){
+// NetBox 型號（XN39，switch-generator-models.js 的 NETBOX_SW_MODELS，scripts/build_sw_models.py 產生）：
+// 排在人工整理的 DEVICE_MODELS 之後；標籤去掉廠牌字樣與括號說明後與既有型號相同者略過
+function _modelKey(label){
+  return String(label||'').replace(/\(.*$/,'').toUpperCase().replace(/[^A-Z0-9]/g,'')
+    .replace(/^(CISCO|CATALYST|ARISTA|DCS|JUNIPER|ARUBACX|ARUBA|HPE|FLEXNETWORK|FLEXFABRIC|FORTISWITCH|EXTREMESWITCHING|EXTREME|SUMMIT|NETGEAR)+/,'');
+}
+function netboxModelsFor(vendor){
+  const nb=(typeof NETBOX_SW_MODELS!=='undefined'&&NETBOX_SW_MODELS[vendor])||[];
+  const cur=new Set((DEVICE_MODELS[vendor]||[]).map(m=>_modelKey(m.label)));
+  return nb.filter(m=>!cur.has(_modelKey(m.label)));
+}
+// 型號查找（既有型號優先，其次 NetBox 型號）
+function findDeviceModel(vendor,modelValue){
   if(!modelValue)return null;
-  const model=(DEVICE_MODELS[vendor]||[]).find(m=>m.value===modelValue);
-  if(!model)return null;
-  const set=new Set();
-  model.ports.forEach(p=>{
-    if(p.name)set.add(p.name);
-    else for(let n=p.from;n<=p.to;n++)set.add(p.prefix+n);
+  return (DEVICE_MODELS[vendor]||[]).find(m=>m.value===modelValue)||netboxModelsFor(vendor).find(m=>m.value===modelValue)||null;
+}
+// 型號埠清單展開成 [{name,speed,mgmt}]；{prefix,from,to,suffix?} 展開成 prefix+N+suffix
+function expandDeviceModelPorts(model){
+  const out=[];
+  (model&&model.ports||[]).forEach(p=>{
+    if(p.name)out.push({name:p.name,speed:p.speed||'1G',mgmt:!!p.mgmt});
+    else for(let n=p.from;n<=p.to;n++)out.push({name:p.prefix+n+(p.suffix||''),speed:p.speed||'1G',mgmt:false});
   });
-  return set;
+  return out;
+}
+
+function getModelPortSet(vendor,modelValue){
+  const model=findDeviceModel(vendor,modelValue);
+  if(!model)return null;
+  return new Set(expandDeviceModelPorts(model).map(p=>p.name));
 }
 
 function isKnownModelPort(name,portSet){
