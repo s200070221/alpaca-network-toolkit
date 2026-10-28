@@ -3,8 +3,33 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.10.25';
+  const TOOLKIT_VERSION = '2026.10.28';
   const CHANGELOG = [
+    {
+      version: '2026.10.28',
+      items: {
+        zhTW: [
+          '韌體漏洞比對：內建清單改為 CISA KEV＋重大廠商公告，補上 FortiOS 2026-10-22 修補版、PAN-OS PHP2Shell、Juniper／NX-OS／Arista／Aruba CX／Dell OS10 近期公告與 Cisco ASA 項目，並新增 MikroTik RouterOS 與 Dell OS10 版本比對',
+          '交換器分析：安全稽核頁也能比對韌體漏洞；新增管理連線未限制來源、未記錄指令與設定變更、eBGP 鄰居未設定進出過濾、存取埠未啟用迴圈偵測等稽核項目',
+          '防火牆分析：新增 FortiGate 管理者密碼仍為 SHA256 舊雜湊、未啟用 private-data-encryption 稽核；pfSense／OPNsense 漏洞卡片提醒 PHP2Shell 修補',
+          'log 分析：新增分散式密碼噴灑、MFA 推播疲勞、網路設備新增管理者帳號等偵測，並補上相關紀錄的去識別化',
+          'log 分析：VPN 成功登入來自代管業者網段或商用 VPN 位址時列出；DNS／proxy 紀錄出現遠端管理工具（RMM）網域時提示，可設允許清單',
+          '情資整理頁：新增代管業者 ASN、商用 VPN 位址（X4BNet、Mullvad）與 LOLRMM 遠端管理工具網域來源',
+          '去識別化工具：新增設定檔外洩影響盤點，依類別列出被遮蔽的機密並提供處置清單',
+          '修正 ProCurve 堆疊機型 1/1-1/24 埠範圍解析，並強化測試框架',
+        ],
+        en: [
+          'Firmware vulnerability check: the built-in list now combines CISA KEV with critical vendor advisories, adding the FortiOS 2026-10-22 fixes, PAN-OS PHP2Shell, recent Juniper / NX-OS / Arista / Aruba CX / Dell OS10 advisories and Cisco ASA entries, plus MikroTik RouterOS and Dell OS10 version checks',
+          'Switch analyzer: the security audit page also checks firmware vulnerabilities; new checks for unrestricted management access, missing command and change logging, eBGP neighbors without route filtering, and access ports without loop detection',
+          'Firewall analyzer: new checks for FortiGate admin passwords still using the legacy SHA256 hash and for private-data-encryption not enabled; pfSense / OPNsense cards remind about the PHP2Shell fix',
+          'Log analyzer: new detections for distributed password spraying, MFA push fatigue and admin accounts added on network devices, with matching anonymization fixes',
+          'Log analyzer: flags successful VPN logins from hosting provider networks or commercial VPN addresses, and DNS / proxy records hitting remote management (RMM) tool domains with an allow list',
+          'Threat intel builder: new sources for hosting provider ASNs, commercial VPN addresses (X4BNet, Mullvad) and LOLRMM remote management tool domains',
+          'Config anonymizer: new leak impact inventory that lists masked secrets by category with an action checklist',
+          'Fixed ProCurve stacked port ranges such as 1/1-1/24 and hardened the test harnesses',
+        ],
+      },
+    },
     {
       version: '2026.10.25',
       items: {
