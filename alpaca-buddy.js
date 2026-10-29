@@ -47,7 +47,7 @@
     return 'zhTW';
   };
   const pocket = [];
-  let lastAct = 0, unread = 0, duty = null, dutyShownKey = '', hideTimer = null;
+  let lastAct = 0, unread = 0, duty = null, dutyShownKey = '', hideTimer = null, ready = false, pendingBubble = null;
   const hasDoc = typeof document !== 'undefined';
   const loud = () => { try { return localStorage.getItem('_netAnalyzer_eggLoud') === '1'; } catch (e) { return false; } };
   const setLoud = v => { try { if (v) localStorage.setItem('_netAnalyzer_eggLoud', '1'); else localStorage.removeItem('_netAnalyzer_eggLoud'); } catch (e) { /* 無法儲存時只影響這次 */ } };
@@ -59,7 +59,10 @@
   function mascot() {
     for (const id of ['mini-alpaca', 'alpaca-corner']) {
       const el = $(id);
-      if (el && getComputedStyle(el).position === 'fixed' && el.offsetWidth) return el;
+      if (el && getComputedStyle(el).position === 'fixed' && el.offsetWidth) {
+        const own = $('alpaca-buddy-mascot'); if (own) own.remove();  // 頁面羊駝較晚出現時，自建的那隻收掉，避免右下角兩隻
+        return el;
+      }
     }
     let el = $('alpaca-buddy-mascot');
     if (!el) {
@@ -182,17 +185,19 @@
       pocket.unshift({ text: String(msg), ts: Date.now() });
       if (pocket.length > POCKET_MAX) pocket.length = POCKET_MAX;
       unread++;
-      if (!hasDoc) return;
+      if (!hasDoc || !ready) return;
       pocketBtn();
       if ($('alpaca-panel') && $('alpaca-panel').style.display !== 'none') renderPanel();
       if (!loud() || duty) return;
     }
-    if (hasDoc) bubble(String(msg), Math.max(dur || 0, 4000));
+    if (!hasDoc) return;
+    if (!ready) { pendingBubble = [String(msg), Math.max(dur || 0, 4000)]; return; }
+    bubble(String(msg), Math.max(dur || 0, 4000));
   }
   // 值勤模式：info＝{n, top, go}；null 解除。同一組 n＋top 只主動跳一次泡泡
   function setDuty(info) {
     duty = info && info.n > 0 ? { n: info.n, top: info.top || '', go: info.go || null } : null;
-    if (!hasDoc) return;
+    if (!hasDoc || !ready) return;  // 載入完成前只記狀態，start() 再補畫
     helmet(); pocketBtn();
     const key = duty ? duty.n + '|' + duty.top : '';
     if (duty && key !== dutyShownKey) { dutyShownKey = key; bubble(dutyText(duty.n, duty.top, curLang()), 9000, duty.go); }
@@ -201,7 +206,7 @@
   }
   // 切換語言或視窗大小改變時重畫位置與文字
   function refresh() {
-    if (!hasDoc || !document.body) return;
+    if (!hasDoc || !ready || !document.body) return;
     pocketBtn(); helmet();
     if ($('alpaca-panel') && $('alpaca-panel').style.display !== 'none') renderPanel();
   }
@@ -220,14 +225,21 @@
       buf = (buf + e.key.toLowerCase()).slice(-7);
       if (/(?:sparrow|llama)$/.test(buf)) { buf = ''; say(t('llama', curLang()), 7000); }
     });
-    const start = () => { adoptLangEggs(); pocketBtn(); };
+    // 頁面載入完成前不建立任何畫面元素（交換器分析的羊駝寫在最後一個 script 之後，?demo=1 會先觸發彩蛋），
+    // 載入後才找頁面羊駝定位，再補畫值勤與待顯示的泡泡
+    const start = () => {
+      ready = true; adoptLangEggs(); pocketBtn();
+      if (duty) setDuty(duty);
+      else if (pendingBubble) bubble(pendingBubble[0], pendingBubble[1]);
+      pendingBubble = null;
+    };
     // 防火牆、去識別化的角落羊駝由程式在載入後建立，稍等再定位
     if (document.readyState === 'complete') setTimeout(start, 300);
     else window.addEventListener('load', () => setTimeout(start, 300));
     window.addEventListener('resize', refresh);
   }
   const api = { say, setDuty, refresh, togglePanel, pocket: () => pocket.map(x => x.text), classify, dutyText, TEXT, LANGS, POCKET_MAX, ACTIVE_MS,
-    _reset() { pocket.length = 0; unread = 0; duty = null; dutyShownKey = ''; lastAct = 0; } };
+    _reset() { pendingBubble = null; pocket.length = 0; unread = 0; duty = null; dutyShownKey = ''; lastAct = 0; } };
   if (typeof window !== 'undefined') window.AlpacaBuddy = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })();
