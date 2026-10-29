@@ -860,7 +860,7 @@
     return { supported: true, items: out };
   }
   function buildExposedServicesHtml(res) {
-    let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('expose.title')) + '</div>';
+    let h = '<div id="expose-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('expose.title')) + '</div>';
     h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('expose.hint')) + '</div>';
     if (!res.supported) return h + '<div class="nodata" style="padding:14px 0">' + esc(tr('expose.unsupported')) + '</div></div>';
     if (!res.items.length) return h + '<div class="nodata" style="padding:14px 0;color:var(--green)">' + esc(tr('expose.none')) + '</div></div>';
@@ -879,6 +879,19 @@
   }
 
   // ── 韌體版本比對已知漏洞（2026-10-24，XN19）：比對邏輯在共用模組 vuln-check.js（VulnCheck），這裡只組畫面 ──
+  // 韌體比對結果（XN50）：健康度、優先處理、主管摘要與韌體卡片共用。opts：{vulnText（使用者 CSV）, vulnVersion（使用者補填的版本）, skipVuln}
+  // 沒有 VulnCheck（Node 單元測試沙箱）、不支援的廠牌或 skipVuln 時回傳 null
+  function fwVulnStatus(parsed, opts) {
+    const V = typeof VulnCheck !== 'undefined' ? VulnCheck : null;
+    if (!V || (opts && opts.skipVuln)) return null;
+    const p = parsed || {}, fw = String((p.deviceInfo && p.deviceInfo.firmware) || '').replace(/^-$/, '');
+    const ver = (opts && opts.vulnVersion) || fw, sch = V.deviceScheme(p.vendor, ver) || V.deviceScheme(p.vendor, '0');
+    if (!sch) return null;
+    const pc = V.parseCsv((opts && opts.vulnText) || '');
+    const entries = V.withBuiltin(pc.entries);  // 內建起始清單＋使用者 CSV
+    const r = V.check([{ name: (p.deviceInfo && p.deviceInfo.hostname) || '', vendor: p.vendor, version: ver }], entries)[0];
+    return { scheme: sch, version: ver, firmware: fw, entries, errors: pc.errors, r, kev: r.hits.filter(e => e.kev), other: r.hits.filter(e => !e.kev) };
+  }
   // st：{text（使用者 CSV）, version（使用者填的版本，空字串用設定檔的 firmware）, parsed}
   function buildVulnCheckHtml(st) {
     const V = typeof VulnCheck !== 'undefined' ? VulnCheck : null;
@@ -898,10 +911,9 @@
       `<button class="btn btn-ghost btn-sm" onclick="window._fwVulnSample()">${esc(tr('vuln.sample'))}</button></div>`;
     if (!V.parse(sch, ver)) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-bottom:6px">${esc(tr(sch === 'fortios' && /^\d+\.\d{2}\b/.test(fw) ? 'vuln.version_fortios_short' : 'vuln.version_missing'))}</div>`;
     h += `<textarea id="vuln-text" spellcheck="false" placeholder="${esc(V.CSV_HEADER)}" style="width:100%;height:90px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;${inp}">${esc(st.text || '')}</textarea>`;
-    const pc = V.parseCsv(st.text);
-    if (pc.errors.length) h += `<div style="font-size:12px;color:var(--red);margin:6px 0">${pc.errors.map(e => esc(tr('vuln.err_' + e.reason).replace('{n}', e.line))).join('<br>')}</div>`;
-    const entries = V.withBuiltin(pc.entries);  // 內建起始清單＋使用者 CSV
-    const r = V.check([{ name: (p.deviceInfo && p.deviceInfo.hostname) || '', vendor: p.vendor, version: ver }], entries)[0];
+    const vs = fwVulnStatus(p, { vulnText: st.text, vulnVersion: st.version });
+    if (vs.errors.length) h += `<div style="font-size:12px;color:var(--red);margin:6px 0">${vs.errors.map(e => esc(tr('vuln.err_' + e.reason).replace('{n}', e.line))).join('<br>')}</div>`;
+    const entries = vs.entries, r = vs.r;
     const pillCls = { affected: 'p-deny', ok: 'p-accept', unknown: 'p-warn', noVersion: 'p-warn', noRules: '', unsupported: '' }[r.status] || '';
     h += `<div style="margin:8px 0;font-size:12px">${pillCls ? pill(tr('vuln.st_' + r.status), pillCls) : esc(tr('vuln.st_' + r.status))} ${esc(tr('vuln.summary').replace('{n}', entries.filter(e => e.scheme === sch).length).replace('{hit}', r.hits.length))}</div>`;
     const rows = r.hits.map(e => ['hit', e]).concat(r.unknown.map(e => ['unknown', e]));
@@ -1582,7 +1594,7 @@
   }
   function buildComplianceHtml(findings, evidence, vendor, marks, reviewer) {
     const rp = r => r === 'high' ? pill(tr('audit.risk_high'),'p-deny') : r === 'medium' ? pill(tr('audit.risk_mid'),'p-warn') : pill(tr('audit.risk_low'),'p-allow');
-    let h = '<div style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--purple);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + tip('tip.compliance', tr('audit.compliance_title')) + '</div>';
+    let h = '<div id="compliance-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--purple);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + tip('tip.compliance', tr('audit.compliance_title')) + '</div>';
     h += `<div style="color:var(--text-dim);font-size:11px;margin-bottom:8px">${esc(tr('audit.standards_disclaimer'))}</div>`;
     if (marks) h += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px"><button class="btn btn-ghost btn-sm" onclick="window._fwExportWorkpaper()">📋 ${esc(tr('wp.export_btn'))}</button><input id="fw-audit-reviewer" value="${esc(reviewer || '')}" placeholder="${esc(tr('wp.reviewer_ph'))}" aria-label="${esc(tr('wp.col_reviewer'))}" onchange="window._fwSetAuditReviewer(this.value)" style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg2);color:var(--text);width:140px"><span style="font-size:11px;color:var(--text-muted)">${esc(tr('wp.hint'))}</span></div>`;
     h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_check') + '</th><th>' + tr('audit.col_result') + '</th><th>' + tr('audit.col_risk') + '</th><th>' + tr('audit.col_detail') + '</th><th>' + tr('audit.col_standards') + '</th>' + (marks ? '<th>' + tr('wp.col_status') + '</th>' : '') + '</tr></thead><tbody>';
@@ -1793,6 +1805,14 @@
     if (expComment) deduct('health.rule_expired', 'warn', expComment, expComment * HEALTH_WEIGHT.medium, HEALTH_WEIGHT.medium);
     const expSched = expired.filter(r => r.source === 'schedule').length;
     if (expSched) deduct('health.schedule_expired', 'info', expSched, expSched * HEALTH_WEIGHT.low, HEALTH_WEIGHT.low);
+    // T19：韌體版本落在已知漏洞範圍（XN50）——已遭利用（CISA KEV）為 crit，其餘（廠商公告、使用者清單）為 warn；
+    // 版本不完整（FortiGate 只有主次版本）時無法比對，不扣分
+    const vs = fwVulnStatus(parsed, opts);
+    if (vs) [['firmware_kev', 'crit', vs.kev, HEALTH_WEIGHT.high], ['firmware_vuln', 'warn', vs.other, HEALTH_WEIGHT.medium]].forEach(([k, sev, list, w]) => {
+      if (!list.length) return;
+      deduct('health.' + k, sev, list.length, list.length * w, w);
+      Object.assign(issues[issues.length - 1], { cves: list.map(e => e.cve).filter(Boolean).slice(0, 5), version: vs.version });
+    });
     score = Math.max(0, Math.min(100, score));
     rawScore = Math.max(0, Math.min(100, rawScore));
     const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
@@ -2006,6 +2026,38 @@
   // 即時計算（比照 buildSarifAuditReport() 慣例，不依賴稽核分頁渲染快取）；各區塊命中數與稽核頁
   // 摘要卡片同一組函式，合規檢查與健康度問題另列明細表
   function _mdCell(v) { return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' '); }
+  // 優先處理清單（XN50）：結果列、稽核頁、主管摘要、羊駝值勤共用同一份排序。
+  // 韌體已遭利用 → 高風險服務對外 → 明文管理 → any-any → 其他高風險（依數量）→ 中風險；
+  // 韌體已遭利用且管理介面／VPN 開在外部時合併為第一項（兩者相加才是實際被入侵的路徑）
+  const FW_PRIO_FIRST = ['firmware_kev', 'exposed_svc', 'http_mgmt', 'any_any'];
+  const FW_PRIO_TARGET = { firmware_kev: 'vuln-card', firmware_vuln: 'vuln-card', exposed_svc: 'expose-card', http_mgmt: 'compliance-card' };
+  function fwPriorityItems(health) {
+    const RANK = { crit: 0, warn: 1, info: 2 };
+    const act = ((health && health.issues) || []).filter(i => !i.accepted && i.sev !== 'info');
+    const pos = i => { const k = FW_PRIO_FIRST.indexOf(i.key); return k < 0 ? FW_PRIO_FIRST.length : k; };
+    const list = act.slice().sort((a, b) => (RANK[a.sev] ?? 3) - (RANK[b.sev] ?? 3) || pos(a) - pos(b) || b.count - a.count)
+      .map(i => ({ key: i.key, sev: i.sev, label: i.label, count: i.count, cves: i.cves || null, version: i.version || '', target: FW_PRIO_TARGET[i.key] || 'compliance-card' }));
+    const kev = list.find(i => i.key === 'firmware_kev'), exp = list.filter(i => i.key === 'exposed_svc' || i.key === 'http_mgmt');
+    if (kev && exp.length) {
+      const merged = { key: 'kev_exposed', sev: 'crit', label: tr('prio.kev_exposed'), count: kev.count, cves: kev.cves, version: kev.version, target: 'vuln-card', parts: [kev].concat(exp) };
+      return [merged].concat(list.filter(i => i !== kev && exp.indexOf(i) < 0));
+    }
+    return list;
+  }
+  function buildPriorityHtml(items) {
+    if (!items || !items.length) return '';
+    let h = '<div id="prio-card" style="margin-bottom:20px;padding:12px 14px;border:1px solid var(--red);border-left:4px solid var(--red);border-radius:8px;background:var(--surface2)">' +
+      '<div style="font-size:13px;font-weight:700;margin-bottom:4px">' + esc(tr('prio.title')) + '</div><div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('prio.hint')) + '</div><ol style="margin:0;padding-left:20px">';
+    items.slice(0, 5).forEach(i => {
+      const sevPill = pill(tr(i.sev === 'crit' ? 'audit.risk_high' : 'audit.risk_mid'), i.sev === 'crit' ? 'p-deny' : 'p-warn');
+      const sub = i.parts ? i.parts.map(x => x.label).join(' ＋ ') : '';
+      const cve = i.cves && i.cves.length ? ' <span class="mono" style="font-size:11px;color:var(--text-dim)">' + i.cves.map(esc).join(', ') + '</span>' : '';
+      h += `<li data-prio-key="${esc(i.key)}" style="margin:4px 0;font-size:12px">${sevPill} ${esc(i.label)}${i.parts ? '' : ' <span style="color:var(--text-dim)">(' + esc(String(i.count)) + ')</span>'}${cve}` +
+        (sub ? `<div style="font-size:11px;color:var(--text-dim)">${esc(sub)}</div>` : '') +
+        ` <button class="btn btn-ghost btn-sm" data-prio-go="${esc(i.target)}" style="margin-left:6px">${esc(tr('prio.go'))}</button></li>`;
+    });
+    return h + '</ol></div>';
+  }
   function buildFirewallExecSummary(host,health){
     // 主管摘要（2026-09-30 新增，第八輪 XG）：報表開頭一段白話文字，給不看細節的主管或客戶。
     // 只用 computeFirewallHealth() 已算好的結果（等級、各項扣分），不另外計算；已標記接受風險者不列入待改善，另行註明
@@ -2016,8 +2068,11 @@
     if(!active.length)lines.push(tr('exec.none'));
     else{
       lines.push(tr('exec.found').replace('{n}',active.length).replace('{crit}',active.filter(i=>i.sev==='crit').length).replace('{warn}',active.filter(i=>i.sev==='warn').length));
-      const top=active.slice().sort((a,b)=>(RANK[a.sev]??3)-(RANK[b.sev]??3)||b.count-a.count).slice(0,3);
-      lines.push(tr('exec.top').replace('{list}',top.map(i=>tr('exec.item').replace('{label}',i.label).replace('{count}',i.count)).join(tr('exec.sep'))));
+      const kev=active.find(i=>i.key==='firmware_kev');
+      if(kev)lines.push(tr('exec.kev').replace('{ver}',kev.version||'-').replace('{n}',kev.count).replace('{cves}',(kev.cves||[]).join(', ')));
+      const prio=fwPriorityItems(health);
+      const top=(prio.length?prio:active.slice().sort((a,b)=>(RANK[a.sev]??3)-(RANK[b.sev]??3)||b.count-a.count)).slice(0,3);
+      lines.push(tr('exec.top').replace('{list}',top.map(i=>i.parts?i.label:tr('exec.item').replace('{label}',i.label).replace('{count}',i.count)).join(tr('exec.sep'))));
     }
     if(accepted)lines.push(tr('exec.accepted').replace('{n}',accepted));
     return lines;

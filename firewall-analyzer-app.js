@@ -792,7 +792,7 @@ const App = (() => {
   // 供 network_analyzer hub 彙整成綜合健檢報告。只存等級、分數、風險數與前三項問題名稱，不存設定原文
   function recordFirewallSummary(p){
     try{
-      const h=computeFirewallHealth(p,{acceptedRisks:_loadAcceptedRisks(),expiryKeywords:_loadExpiryKeywords()});
+      const h=computeFirewallHealth(p,_fwHealthOpts());
       const RANK={crit:0,warn:1,info:2};
       const act=h.issues.filter(i=>!i.accepted);
       const host=p&&p.deviceInfo&&p.deviceInfo.hostname;
@@ -1513,8 +1513,11 @@ function onParsed(){
         const _mc  = analyzeMissingComments(PARSED);
         const _og  = analyzeOversizedGroups(PARSED);
         const _do  = analyzeDuplicateObjects(PARSED);
-        const _hi  = _co.filter(f => f.risk === 'high'  ).length;
-        const _med = _co.filter(f => f.risk === 'medium').length;
+        // 高／中風險數與結果列、主管摘要同一來源：健康度未接受的高風險／中風險類數（XN50；原本是固定的檢查項數，數量 0 也算）
+        let _hl = null; try { _hl = computeFirewallHealth(PARSED, _fwHealthOpts()); } catch (e) { _hl = null; }
+        const _act = _hl ? _hl.issues.filter(i => !i.accepted) : [];
+        const _hi  = _act.filter(i => i.sev === 'crit').length;
+        const _med = _act.filter(i => i.sev === 'warn').length;
         $('sum-wrap').innerHTML = sumC([
           { l:tr('audit.sum_shadow'),      v: _sh.length,              c: _sh.length  ? 'var(--red)'    : 'var(--green)' },
           { l:tr('audit.sum_deny_block'),  v: _db.length,               c: _db.length  ? 'var(--red)'    : 'var(--green)' },
@@ -1537,7 +1540,7 @@ function onParsed(){
           const _zTgl=`<div style="display:flex;gap:5px;margin-bottom:8px"><button onclick="window._fwZoneView='table';renderSection('audit')" style="${_zbs(!window._fwZoneView||window._fwZoneView==='table')}">${tr('routing.view_table')}</button><button onclick="window._fwZoneView='topo';renderSection('audit')" style="${_zbs(window._fwZoneView==='topo')}">${tr('routing.view_topo')}</button></div>`;
           _zoneHtml = _zTgl + (window._fwZoneView==='topo' ? buildZoneTopoHtml(PARSED.policies) : _zoneHtml);
         }
-        $('tbl-wrap').innerHTML = _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildDuplicateObjectsHtml(_do) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildExposedServicesHtml(analyzeExposedServices(PARSED)) + buildVulnCheckHtml({ text: _fwVulnText(), version: _fwVulnVer[_acceptedRiskHost()] || '', parsed: PARSED }) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules()) + buildExpiredRulesHtml(analyzeExpiredRules(PARSED, { keywords: _loadExpiryKeywords() }), _loadExpiryKeywords())
+        $('tbl-wrap').innerHTML = buildPriorityHtml(_hl ? fwPriorityItems(_hl) : []) + _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildDuplicateObjectsHtml(_do) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildExposedServicesHtml(analyzeExposedServices(PARSED)) + buildVulnCheckHtml({ text: _fwVulnText(), version: _fwVulnVer[_acceptedRiskHost()] || '', parsed: PARSED }) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules()) + buildExpiredRulesHtml(analyzeExpiredRules(PARSED, { keywords: _loadExpiryKeywords() }), _loadExpiryKeywords())
           + (PARSED.vendor === 'FortiGate' ? _fwCleanupCardHtml() : '')
           + (_HIT_VENDOR_SUFFIX[PARSED.vendor] !== undefined ? _fwHitCardHtml() : '')
           + _fwRecertCardHtml()
@@ -1828,18 +1831,22 @@ function onParsed(){
     return _fwVulnMem || '';
   }
   function _fwVulnSave(t) { _fwVulnMem = t; try { localStorage.setItem(FW_VULN_LS, t); } catch (e) { /* 不可用時由 _fwVulnMem 維持本次有效 */ } }
+  // 健康度與優先處理共用的選項（XN50）：接受風險、到期關鍵字、韌體漏洞清單與補填版本，結果列、稽核頁、報告一致
+  function _fwHealthOpts() {
+    return { acceptedRisks: _loadAcceptedRisks(), expiryKeywords: _loadExpiryKeywords(), vulnText: _fwVulnText(), vulnVersion: _fwVulnVer[_acceptedRiskHost()] || '' };
+  }
   window._fwVulnApply = function() {
     const t = document.getElementById('vuln-text'), v = document.getElementById('vuln-version');
     if (t) _fwVulnSave(t.value);
     if (v) _fwVulnVer[_acceptedRiskHost()] = v.value.trim();
-    renderSection('audit');
+    renderSection('audit'); renderNextBar();
     const c = document.getElementById('vuln-card'); if (c) c.scrollIntoView({ block: 'nearest' });
   };
   window._fwVulnFile = async function(input) {
     const f = input.files && input.files[0]; input.value = '';
     if (!f) return;
     _fwVulnSave((await readFile(f)).replace(/^\uFEFF/, ''));
-    renderSection('audit');
+    renderSection('audit'); renderNextBar();
   };
   window._fwVulnSample = function() {
     Reporter.download(tr('vuln.sample_comment') + '\n' + VulnCheck.CSV_HEADER + '\nfortios,FortiOS SSL-VPN,7.2.0-7.2.6;7.4.0-7.4.2,7.2.7;7.4.3,CVE-0000-00000,critical,no,example only\n', 'firmware_vulnerability_sample.csv', 'text/csv');
@@ -1897,7 +1904,7 @@ function onParsed(){
     const btn = document.getElementById('health-btn');
     if (btn) btn.textContent = tr('health.recheck');
     const accepted = _loadAcceptedRisks();
-    const res = computeFirewallHealth(PARSED, { acceptedRisks: accepted, expiryKeywords: _loadExpiryKeywords() });
+    const res = computeFirewallHealth(PARSED, Object.assign(_fwHealthOpts(), { acceptedRisks: accepted }));
     const rawScore = res.rawScore;
     // onclick="_doHealthCheck()" 傳入的是 undefined，事件物件不會傳進來，故以 !== true 判斷
     if (skipRecord !== true) _saveFwHealthHistory(res.score, res.grade);
@@ -2237,7 +2244,8 @@ function onParsed(){
     el.innerHTML=buildConvPortMapHtml({ targetName:_CONV_NAMES[target]||target, models, modelId:_pm.model, srcModel: sm ? (FwPortMap.getModel(sm.vendor,sm.id)||{}).label || sm.id : '', sug, reserved,
       applied:!!_pm.applied, appliedCount:_pm.applied?Object.keys(_pm.applied).filter(k=>_pm.applied[k]).length:0, csvMsg:_pm.csvMsg||'' });
   }
-  const _fwAuditOf=p=>{ const h=computeFirewallHealth(p); return { health:{score:h.score,grade:h.grade},
+  // 轉換結果沒有韌體版本，比對時不評估韌體（否則會被當成「韌體問題消失」，XN50）
+  const _fwAuditOf=p=>{ const h=computeFirewallHealth(p,{skipVuln:true}); return { health:{score:h.score,grade:h.grade},
     findings:analyzeCompliance(p).map(f=>({id:f.id,label:f.check,risk:f.risk,value:f.value})) }; };
   function _vfRender(srcForVerify, target){ _vfRender0(srcForVerify, target); _wzRender(); }
   function _vfRender0(srcForVerify, target){
@@ -2440,7 +2448,7 @@ function onParsed(){
       // 內部 DOM 結構安全，不依賴卡片的巢狀標籤結構
       document.body.style.cursor='wait';
       try{
-        const html=await Reporter.exportHTML(d, WIFI_DATA, { acceptedRisks: _loadAcceptedRisks() });
+        const html=await Reporter.exportHTML(d, WIFI_DATA, _fwHealthOpts());
         Reporter.download(html,`fw_report_${hn}_${ds}.html`,'text/html');
       } finally {
         document.body.style.cursor='';
@@ -2451,7 +2459,7 @@ function onParsed(){
       // 使用者可在瀏覽器列印對話框選「另存為 PDF」；零外部依賴、離線可用
       const printWin=window.open('','_blank');
       if(!printWin){alert(tr('err.popup_blocked'));return;}
-      const html=await Reporter.exportHTML(d, WIFI_DATA, { acceptedRisks: _loadAcceptedRisks() });
+      const html=await Reporter.exportHTML(d, WIFI_DATA, _fwHealthOpts());
       printWin.document.open();printWin.document.write(html);printWin.document.close();
       printWin.onload=()=>{printWin.focus();printWin.print();};
     }
@@ -2489,7 +2497,7 @@ function onParsed(){
     }
     else if(type==='md-audit'){
       // 稽核結果 Markdown 匯出（2026-09-24 新增），內容由 -audit.js buildFirewallAuditMarkdown() 即時計算
-      Reporter.download(buildFirewallAuditMarkdown(d, { acceptedRisks: _loadAcceptedRisks(), sources: _fwEvidenceSources() }),`fw_audit_${hn}_${ds}.md`,'text/markdown');
+      Reporter.download(buildFirewallAuditMarkdown(d, Object.assign(_fwHealthOpts(), { sources: _fwEvidenceSources() })),`fw_audit_${hn}_${ds}.md`,'text/markdown');
     }
     else if(type==='csv-tighten'){
       const content=Reporter.exportTightenCSV(LAST_TIGHTEN);
@@ -3825,15 +3833,28 @@ function startMatrixRain(){
     }
     if (typeof tourDone === 'function') tourDone();
     let h = null;
-    try { h = computeFirewallHealth(PARSED, { acceptedRisks: _loadAcceptedRisks(), expiryKeywords: _loadExpiryKeywords() }); } catch (e) { h = null; }
+    try { h = computeFirewallHealth(PARSED, _fwHealthOpts()); } catch (e) { h = null; }
     const critList = h ? h.issues.filter(i => i.sev === 'crit' && !i.accepted) : [];
     const crit = critList.length;
-    // 羊駝值勤模式（XN49）：有嚴重項目時戴安全帽，泡泡只說先看哪一項
-    if (window.AlpacaBuddy) window.AlpacaBuddy.setDuty(crit ? { n: crit, top: critList[0].label, go: () => showSection('audit') } : null);
-    const head = h ? `<span style="font-weight:600">${esc(tr('next.health').replace('{grade}', h.grade).replace('{score}', h.score))}${crit ? ` · <span style="color:var(--red)">${esc(tr('next.crit').replace('{n}', crit))}</span>` : ''}</span>` : '';
+    const prio = h ? fwPriorityItems(h) : [];
+    const kev = critList.find(i => i.key === 'firmware_kev');
+    // 羊駝值勤模式（XN49）：有嚴重項目時戴安全帽，泡泡只說先看哪一項（與稽核頁優先處理同一排序，XN50）
+    if (window.AlpacaBuddy) window.AlpacaBuddy.setDuty(crit ? { n: crit, top: (prio[0] || critList[0]).label, go: () => window._fwGoAudit(prio[0] ? prio[0].target : '') } : null);
+    const head = h ? `<span style="font-weight:600">${esc(tr('next.health').replace('{grade}', h.grade).replace('{score}', h.score))}${crit ? ` · <span style="color:var(--red)">${esc(tr('next.crit').replace('{n}', crit))}</span>` : ''}</span>` +
+      (kev ? `<button class="btn btn-ghost btn-sm" data-next-kev style="color:var(--red);border-color:var(--red)" onclick="window._fwGoAudit('vuln-card')">⚠ ${esc(tr('next.kev').replace('{n}', kev.count))}</button>` : '') : '';
     b.innerHTML = head + `<button class="btn btn-ghost btn-sm" onclick="showSection('audit')">${esc(tr('next.audit'))}</button><button class="btn btn-ghost btn-sm" onclick="doExport('html-report')">${esc(tr('next.report'))}</button><button class="btn btn-ghost btn-sm" onclick="window._sendToAnonymizer()">${esc(tr('next.share'))}</button>`;
   }
   window._fwRenderNextBar = renderNextBar;
+  // 切到稽核頁並捲到指定區塊（結果列韌體提示、優先處理「前往」、羊駝值勤共用；id 只接受常數清單）
+  window._fwGoAudit = function (id) {
+    showSection('audit');
+    if (!/^(vuln-card|expose-card|compliance-card|health-section|prio-card)$/.test(id || '')) return;
+    setTimeout(() => { const el = document.getElementById(id); if (el) el.scrollIntoView({ block: 'start' }); }, 50);
+  };
+  document.addEventListener('click', e => {
+    const b = e.target && e.target.closest ? e.target.closest('[data-prio-go]') : null;
+    if (b) window._fwGoAudit(b.getAttribute('data-prio-go'));
+  });
   window._fwRouteToHub = function () {
     const texts = _fwRawTexts();
     if (!texts.length) return;
