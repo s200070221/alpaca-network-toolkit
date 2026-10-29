@@ -985,8 +985,8 @@ ${(parsed.schedules&&parsed.schedules.length)?`<div class="section" id="sec-sche
     </tr>`).join('')}</tbody>
   </table></div>
 </div>`:''}
-<div style="text-align:center;color:#e2e8f0;font-size:11px;margin-top:40px;font-family:monospace">
-  FW-Analyzer — Pure JS Firewall Configuration Analyzer | ${now}
+<div style="text-align:center;color:#64748b;font-size:11px;margin-top:40px">
+  ${esc(tr('rpt.generated_by'))} | ${now}
 </div>
 
 <!-- 羊駝改為報告頁尾印章（XN49）：不固定定位、不遮內容，列印時也在頁尾 -->

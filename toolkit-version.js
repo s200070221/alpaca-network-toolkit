@@ -3,8 +3,33 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.10.28';
+  const TOOLKIT_VERSION = '2026.10.29';
   const CHANGELOG = [
+    {
+      version: '2026.10.29',
+      items: {
+        zhTW: [
+          '入口頁改以任務引導：先選「檢查設定、看 log、換設備、交給廠商前遮蔽」，並列出各廠牌怎麼從設備取得檔案；放錯檔案（PDF、Office、圖片、.evtx、封包檔、加密壓縮檔）時直接說明原因',
+          '防火牆與交換器分析：分析完先看結論（健康度、先處理 3 件、下一步），稽核頁只先列有發現的項目，各處高風險數字統一',
+          '防火牆分析：韌體落在已遭利用（CISA KEV）漏洞範圍時計入健康度、在結果列提示並列出 CVE；新增「優先處理」清單',
+          '報告可直接交給主管：防火牆報告改淺色可列印、風險等級在地化，三個工具的報告都有「建議立即處理」',
+          '設定轉換：防火牆轉換精靈（依目標型號對應埠、顯示每個埠的用途、轉換後驗證規則行為與安全稽核比對、下載轉換報告與埠對應表）；交換器可從分析頁直接轉成其他廠牌並帶入 LLDP／CDP 鄰居',
+          'log 分析：新增管理介面從外部位址登入偵測（FortiGate、Cisco ASA）與 PAN-OS 新增管理者偵測；0 個問題時提示不代表安全',
+          'eBGP 鄰居未設定進出過濾的稽核支援 FortiGate 與 Juniper（並修正 FortiGate BGP 鄰居解析）',
+          '彩蛋改由右下角羊駝呈現，不再遮住畫面；副標改為白話說明；去識別化工具接到其他工具送來的內容時可直接執行',
+        ],
+        en: [
+          'Home page now starts from tasks (check configs, check logs, migrate devices, mask before sharing) and shows how to get the file from each device; wrong files (PDF, Office, images, .evtx, packet captures, encrypted archives) get a clear explanation',
+          'Firewall and switch analyzers: results open on a summary (health, top 3 fixes, next steps), audit pages list findings first, and high-risk counts now match everywhere',
+          'Firewall analyzer: firmware in range of known exploited (CISA KEV) vulnerabilities now counts toward health, is flagged in the result bar with CVEs, and leads a new "Fix first" list',
+          'Reports ready for managers: the firewall report is now light and printable with localized risk levels, and all three tools\' reports include "Recommended for immediate action"',
+          'Config conversion: firewall conversion wizard (port mapping by target model, port usage, rule-behavior and security-audit comparison after conversion, conversion report and port map download); switches can be converted to another vendor straight from the analyzer with LLDP/CDP neighbors',
+          'Log analyzer: new detection of management logins from external addresses (FortiGate, Cisco ASA) and of new PAN-OS admins; zero findings now notes that this does not mean safe',
+          'The eBGP neighbor filtering check now covers FortiGate and Juniper (and FortiGate BGP neighbor parsing is fixed)',
+          'Easter eggs now come from the alpaca in the corner instead of covering the page; subtitles use plain language; the anonymizer can run right away on content handed over from other tools',
+        ],
+      },
+    },
     {
       version: '2026.10.28',
       items: {
