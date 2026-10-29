@@ -179,6 +179,8 @@ function clearFile(){
   document.getElementById('paste-area').value='';
 }
 function showEggToast(msg, duration=3500) {
+  // 彩蛋改由右下角羊駝呈現（XN49，alpaca-buddy.js）：主動彩蛋出泡泡、被動彩蛋收進口袋
+  if (window.AlpacaBuddy) return window.AlpacaBuddy.say(msg, duration);
   const t = document.createElement('div');
   t.className = 'egg-toast';
   t.textContent = msg;
@@ -3856,14 +3858,17 @@ function copyHowto(i,btn){
 // 提示交給入口頁判斷該用哪個工具（一次性交接 key `_netAnalyzer_route`）
 function renderNextBar(){
   const b=document.getElementById('next-bar');if(!b)return;
-  if(!parsed){b.style.display='none';b.innerHTML='';return;}
+  if(!parsed){b.style.display='none';b.innerHTML='';if(window.AlpacaBuddy)window.AlpacaBuddy.setDuty(null);return;}
   b.style.display='flex';
   if(!(parsed.interfaces||[]).length&&!(parsed.vlans||[]).length){
     b.innerHTML=`<span>⚠ ${esc(tr('next.empty'))}</span><button class="btn btn-ghost btn-sm" onclick="_routeToHub()">${esc(tr('next.route'))}</button>`;return;
   }
   tourDone();
   let h=null;try{h=computeSwitchHealth(parsed);}catch(e){h=null;}
-  const crit=h?h.issues.filter(i=>i.sev==='crit').length:0;
+  const critList=h?h.issues.filter(i=>i.sev==='crit'):[];
+  const crit=critList.length;
+  // 羊駝值勤模式（XN49）：有嚴重項目時戴安全帽，泡泡只說先看哪一項
+  if(window.AlpacaBuddy)window.AlpacaBuddy.setDuty(crit?{n:crit,top:critList[0].label,go:()=>navGo('audit')}:null);
   const head=h?`<span style="font-weight:600">${esc(tr('next.health').replace('{grade}',h.grade).replace('{score}',h.score))}${crit?` · <span style="color:var(--red)">${esc(tr('next.crit').replace('{n}',crit))}</span>`:''}</span>`:'';
   b.innerHTML=head+`<button class="btn btn-ghost btn-sm" onclick="navGo('audit')">${esc(tr('next.audit'))}</button><button class="btn btn-ghost btn-sm" onclick="exportHTMLReport()">${esc(tr('next.report'))}</button><button class="btn btn-ghost btn-sm" onclick="_sendToAnonymizer()">${esc(tr('next.share'))}</button>`;
 }
@@ -3972,6 +3977,7 @@ console.log('%c 彩蛋提示 → Logo ×5 | Konami Code ↑↑↓↓←→←→
 
 // ── 搜尋彩蛋 ───────────────────────────────────────────────
 function _showSwitchToast(msg, duration=3500) {
+  if (window.AlpacaBuddy) return window.AlpacaBuddy.say(msg, duration);
   let t=document.getElementById('sw-egg-toast');
   if(!t){t=document.createElement('div');t.id='sw-egg-toast';
     Object.assign(t.style,{position:'fixed',bottom:'28px',left:'50%',transform:'translateX(-50%)',

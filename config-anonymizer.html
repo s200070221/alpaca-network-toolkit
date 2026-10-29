@@ -317,6 +317,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
 </style>
 <script src="toolkit-version.js"></script>
 <script src="payload-sniff.js"></script>
+<script src="alpaca-buddy.js"></script>
 </head>
 <body>
 <div id="app">
@@ -6072,6 +6073,8 @@ document.addEventListener('DOMContentLoaded', () => {
 })();
 
 function showEggToast(msg, duration=3500) {
+  // 彩蛋改由右下角羊駝呈現（XN49，alpaca-buddy.js）：主動彩蛋出泡泡、被動彩蛋收進口袋
+  if (window.AlpacaBuddy) return window.AlpacaBuddy.say(msg, duration);
   const t = document.createElement('div');
   t.className = 'egg-toast';
   t.textContent = msg;

@@ -871,59 +871,7 @@ ${wwanSection}
 
 ${wlanSection}
 
-<div style="text-align:center;color:#334155;font-size:11px;margin-top:40px;font-family:monospace">
-  FW-Analyzer — Pure JS Firewall Configuration Analyzer | ${now}
-</div>
 
-<div id="alpaca-corner" style="position:fixed;bottom:16px;right:16px;z-index:999;opacity:.85;transition:opacity .2s;cursor:default" title="${tr('egg.alpaca_title').split('\n')[0]}" onmouseenter="this.style.opacity='1'" onmouseleave="this.style.opacity='.85'">
-  <svg width="48" height="56" viewBox="0 0 48 56" xmlns="http://www.w3.org/2000/svg">
-    <!-- body -->
-    <ellipse cx="24" cy="38" rx="14" ry="12" fill="#c8b89a"/>
-    <!-- neck -->
-    <rect x="18" y="20" width="8" height="16" rx="4" fill="#c8b89a"/>
-    <!-- head -->
-    <ellipse cx="22" cy="16" rx="9" ry="8" fill="#d4c4a0"/>
-    <!-- ears -->
-    <ellipse cx="15" cy="10" rx="3" ry="5" fill="#c8b89a"/>
-    <ellipse cx="29" cy="10" rx="3" ry="5" fill="#c8b89a"/>
-    <ellipse cx="15" cy="10" rx="1.5" ry="3" fill="#e8b4b8"/>
-    <ellipse cx="29" cy="10" rx="1.5" ry="3" fill="#e8b4b8"/>
-    <!-- eyes -->
-    <circle cx="18" cy="15" r="2" fill="#4a3728"/>
-    <circle cx="26" cy="15" r="2" fill="#4a3728"/>
-    <circle cx="18.7" cy="14.3" r=".6" fill="#fff"/>
-    <circle cx="26.7" cy="14.3" r=".6" fill="#fff"/>
-    <!-- nose -->
-    <ellipse cx="22" cy="20" rx="3" ry="2" fill="#b09070"/>
-    <circle cx="20.5" cy="20" r=".8" fill="#7a5a40"/>
-    <circle cx="23.5" cy="20" r=".8" fill="#7a5a40"/>
-    <!-- fluffy top -->
-    <ellipse cx="22" cy="9" rx="7" ry="4" fill="#e8dcc8"/>
-    <ellipse cx="18" cy="8" rx="4" ry="3" fill="#e8dcc8"/>
-    <ellipse cx="26" cy="8" rx="4" ry="3" fill="#e8dcc8"/>
-    <!-- legs -->
-    <rect x="13" y="47" width="5" height="8" rx="2.5" fill="#b09070"/>
-    <rect x="20" y="47" width="5" height="8" rx="2.5" fill="#b09070"/>
-    <rect x="28" y="47" width="5" height="8" rx="2.5" fill="#b09070"/>
-    <!-- tail -->
-    <ellipse cx="37" cy="36" rx="4" ry="3" fill="#d4c4a0"/>
-  </svg>
-</div>
-
-<div style="position:fixed;bottom:16px;right:16px;opacity:.75;z-index:99" title="🦙 FW Analyzer">
-  <svg width="44" height="52" viewBox="0 0 48 56" xmlns="http://www.w3.org/2000/svg">
-    <ellipse cx="24" cy="38" rx="14" ry="12" fill="#c8b89a"/><rect x="18" y="20" width="8" height="16" rx="4" fill="#c8b89a"/>
-    <ellipse cx="22" cy="16" rx="9" ry="8" fill="#d4c4a0"/>
-    <ellipse cx="15" cy="10" rx="3" ry="5" fill="#c8b89a"/><ellipse cx="29" cy="10" rx="3" ry="5" fill="#c8b89a"/>
-    <ellipse cx="15" cy="10" rx="1.5" ry="3" fill="#e8b4b8"/><ellipse cx="29" cy="10" rx="1.5" ry="3" fill="#e8b4b8"/>
-    <circle cx="18" cy="15" r="2" fill="#4a3728"/><circle cx="26" cy="15" r="2" fill="#4a3728"/>
-    <circle cx="18.7" cy="14.3" r=".6" fill="#fff"/><circle cx="26.7" cy="14.3" r=".6" fill="#fff"/>
-    <ellipse cx="22" cy="20" rx="3" ry="2" fill="#b09070"/><circle cx="20.5" cy="20" r=".8" fill="#7a5a40"/><circle cx="23.5" cy="20" r=".8" fill="#7a5a40"/>
-    <ellipse cx="22" cy="9" rx="7" ry="4" fill="#e8dcc8"/><ellipse cx="18" cy="8" rx="4" ry="3" fill="#e8dcc8"/><ellipse cx="26" cy="8" rx="4" ry="3" fill="#e8dcc8"/>
-    <rect x="13" y="47" width="5" height="8" rx="2.5" fill="#b09070"/><rect x="20" y="47" width="5" height="8" rx="2.5" fill="#b09070"/><rect x="28" y="47" width="5" height="8" rx="2.5" fill="#b09070"/>
-    <ellipse cx="37" cy="36" rx="4" ry="3" fill="#d4c4a0"/>
-  </svg>
-</div>
 
 ${(parsed.nat&&parsed.nat.length)?`<div class="section" id="sec-nat">
   <div class="section-title">&#x1F504; ${tr('rpt.sec_nat')} (${parsed.nat.length})</div>
@@ -1024,6 +972,45 @@ ${(parsed.schedules&&parsed.schedules.length)?`<div class="section" id="sec-sche
     </tr>`).join('')}</tbody>
   </table></div>
 </div>`:''}
+<div style="text-align:center;color:#334155;font-size:11px;margin-top:40px;font-family:monospace">
+  FW-Analyzer — Pure JS Firewall Configuration Analyzer | ${now}
+</div>
+
+<!-- 羊駝改為報告頁尾印章（XN49）：不固定定位、不遮內容，列印時也在頁尾 -->
+<div id="alpaca-stamp" style="text-align:center;margin:6px 0 24px;opacity:.85;cursor:default" title="${tr('egg.alpaca_title').split('\n')[0]}" onmouseenter="this.style.opacity='1'" onmouseleave="this.style.opacity='.85'">
+  <svg width="48" height="56" viewBox="0 0 48 56" xmlns="http://www.w3.org/2000/svg">
+    <!-- body -->
+    <ellipse cx="24" cy="38" rx="14" ry="12" fill="#c8b89a"/>
+    <!-- neck -->
+    <rect x="18" y="20" width="8" height="16" rx="4" fill="#c8b89a"/>
+    <!-- head -->
+    <ellipse cx="22" cy="16" rx="9" ry="8" fill="#d4c4a0"/>
+    <!-- ears -->
+    <ellipse cx="15" cy="10" rx="3" ry="5" fill="#c8b89a"/>
+    <ellipse cx="29" cy="10" rx="3" ry="5" fill="#c8b89a"/>
+    <ellipse cx="15" cy="10" rx="1.5" ry="3" fill="#e8b4b8"/>
+    <ellipse cx="29" cy="10" rx="1.5" ry="3" fill="#e8b4b8"/>
+    <!-- eyes -->
+    <circle cx="18" cy="15" r="2" fill="#4a3728"/>
+    <circle cx="26" cy="15" r="2" fill="#4a3728"/>
+    <circle cx="18.7" cy="14.3" r=".6" fill="#fff"/>
+    <circle cx="26.7" cy="14.3" r=".6" fill="#fff"/>
+    <!-- nose -->
+    <ellipse cx="22" cy="20" rx="3" ry="2" fill="#b09070"/>
+    <circle cx="20.5" cy="20" r=".8" fill="#7a5a40"/>
+    <circle cx="23.5" cy="20" r=".8" fill="#7a5a40"/>
+    <!-- fluffy top -->
+    <ellipse cx="22" cy="9" rx="7" ry="4" fill="#e8dcc8"/>
+    <ellipse cx="18" cy="8" rx="4" ry="3" fill="#e8dcc8"/>
+    <ellipse cx="26" cy="8" rx="4" ry="3" fill="#e8dcc8"/>
+    <!-- legs -->
+    <rect x="13" y="47" width="5" height="8" rx="2.5" fill="#b09070"/>
+    <rect x="20" y="47" width="5" height="8" rx="2.5" fill="#b09070"/>
+    <rect x="28" y="47" width="5" height="8" rx="2.5" fill="#b09070"/>
+    <!-- tail -->
+    <ellipse cx="37" cy="36" rx="4" ry="3" fill="#d4c4a0"/>
+  </svg>
+</div>
 </body>
 </html>`;
   }
