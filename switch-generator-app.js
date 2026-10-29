@@ -5099,6 +5099,8 @@ window.addEventListener('afterprint',function(){
 })();
 
 function showEggToast(msg, duration=3500){
+  // 彩蛋改由右下角羊駝呈現（XN49，alpaca-buddy.js）：主動彩蛋出泡泡、被動彩蛋收進口袋
+  if (window.AlpacaBuddy) return window.AlpacaBuddy.say(msg, duration);
   const t=document.createElement('div');
   t.className='egg-toast';
   t.textContent=msg;

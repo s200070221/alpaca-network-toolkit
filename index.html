@@ -242,6 +242,7 @@ a{text-decoration:none;color:inherit}
 }
 </style>
 <script src="toolkit-version.js"></script>
+<script src="alpaca-buddy.js"></script>
 </head>
 <body>
 
@@ -1164,6 +1165,8 @@ async function checkFiles() {
 
 // ── showEggToast（共用）────────────────────────────────────────────
 function showEggToast(msg) {
+  // 彩蛋改由右下角羊駝呈現（XN49，alpaca-buddy.js）：主動彩蛋出泡泡、被動彩蛋收進口袋
+  if (window.AlpacaBuddy) return window.AlpacaBuddy.say(msg, undefined);
   const t = document.createElement('div');
   t.className = 'qapla-toast';
   t.textContent = msg;
@@ -2131,7 +2134,7 @@ function clearHealthSummary() {
 // 還原時只寫入白名單內、格式正確的值；附加檔案只提供下載，由使用者到對應工具匯入。
 const WS_FORMAT = 'alpaca-workspace';
 const WS_KEYS = [
-  { key: 'cw_lang', tool: 'common', group: 'settings' }, { key: 'cw_theme', tool: 'common', group: 'settings' }, { key: 'cw_sb', tool: 'common', group: 'settings' },
+  { key: 'cw_lang', tool: 'common', group: 'settings' }, { key: '_netAnalyzer_eggLoud', tool: 'common', group: 'settings' }, { key: 'cw_theme', tool: 'common', group: 'settings' }, { key: 'cw_sb', tool: 'common', group: 'settings' },
   { key: 'sw_golden_rules', tool: 'switch_analyzer', group: 'settings' }, { key: 'sw_eol_list', tool: 'switch_analyzer', group: 'settings' }, { key: 'sw_vuln_list', tool: 'switch_analyzer', group: 'settings' },
   { key: 'sw_audit_marks', tool: 'switch_analyzer', group: 'settings', json: true }, { key: 'sw_audit_reviewer', tool: 'switch_analyzer', group: 'settings' },
   { key: 'fw_accepted_risks', tool: 'firewall_analyzer', group: 'settings', json: true }, { key: 'fw_naming_rules', tool: 'firewall_analyzer', group: 'settings', json: true },
