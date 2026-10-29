@@ -17,8 +17,9 @@ const VulnCheck = (function () {
     [/^(junos|juniper|srx|junos os)$/, 'junos'], [/^(cisco )?ios$/, 'ios'], [/^(cisco )?ios[- ]?xe$/, 'iosxe'],
     [/^(cisco )?nx-?os$/, 'nxos'], [/^(arista|eos|arista eos)$/, 'eos'], [/^(aruba ?cx|aos-?cx|arubaos-?cx)$/, 'aoscx'],
     [/^(mikrotik|routeros|mikrotik routeros)$/, 'routeros'], [/^(dell ?os10|os10|dell-os10|smartfabric os10)$/, 'os10'],
+    [/^(check ?point|gaia|check ?point gaia)$/, 'gaia'],
   ];
-  const SCHEMES = ['fortios', 'panos', 'asa', 'ftd', 'junos', 'ios', 'iosxe', 'nxos', 'eos', 'aoscx', 'routeros', 'os10'];
+  const SCHEMES = ['fortios', 'panos', 'asa', 'ftd', 'junos', 'ios', 'iosxe', 'nxos', 'eos', 'aoscx', 'routeros', 'os10', 'gaia'];
   function scheme(v) {
     const s = String(v || '').trim().toLowerCase();
     if (SCHEMES.includes(s)) return s;
@@ -29,7 +30,7 @@ const VulnCheck = (function () {
   function deviceScheme(vendor, version) {
     const v = String(vendor || '').trim();
     const map = { FortiGate: 'fortios', PaloAlto: 'panos', 'Cisco ASA': 'asa', 'Cisco FTD': 'ftd', Juniper: 'junos', juniper: 'junos',
-      nxos: 'nxos', arista: 'eos', aruba: 'aoscx', MikroTik: 'routeros', routeros: 'routeros', 'dell-os10': 'os10' };
+      nxos: 'nxos', arista: 'eos', aruba: 'aoscx', MikroTik: 'routeros', routeros: 'routeros', 'dell-os10': 'os10', CheckPoint: 'gaia' };
     if (map[v]) return map[v];
     if (v === 'cisco') {
       const s = String(version || '');
@@ -54,6 +55,10 @@ const VulnCheck = (function () {
       case 'nxos': m = s.match(/(\d+)\.(\d+)\((\d+)([a-z])?\)/); return m ? { nums: [+m[1], +m[2], +m[3], lc(m[4])] } : null;
       case 'routeros': m = s.match(/(\d+)\.(\d+)(?:\.(\d+))?(?![\d.]|beta|rc)/i); return m ? { nums: [+m[1], +m[2], +(m[3] || 0)] } : null;
       case 'ftd': case 'eos': case 'aoscx': case 'os10': m = s.match(/\d+(?:\.\d+)+/); return m ? { nums: m[0].split('.').map(Number) } : null;
+      // Check Point Gaia（XN42）：train（R81.20）＋選填 Jumbo Hotfix Take；設定檔只有 train，Take 需使用者補填（cpinfo -y all）
+      case 'gaia': m = s.match(/^R?(\d+)(?:\.(\d+))?(?:\s*(?:with\s+)?(?:jumbo\s*(?:hotfix)?|jhf|hf)?\s*(?:take|t)?\s*(\d+))?\s*$/i);
+        if (!m || (m[3] != null && !/take|jhf|jumbo|\bt\s*\d|hf/i.test(s))) return null;
+        return { nums: [+m[1], +(m[2] || 0)], take: m[3] != null ? +m[3] : null };
       default: return null;
     }
   }
@@ -69,6 +74,14 @@ const VulnCheck = (function () {
   function inPart(sch, v, part) {
     const p = part.trim();
     if (!p) return null;
+    // gaia：「R81.10」整個 train 受影響；「R81.20 take<=158」同 train 且 Take 已知才比較，Take 未知回 null
+    if (sch === 'gaia') {
+      const g = p.match(/^R?(\d+)(?:\.(\d+))?(?:\s+take\s*<=\s*(\d+))?$/i);
+      if (!g) return null;
+      if (v.nums[0] !== +g[1] || v.nums[1] !== +(g[2] || 0)) return false;
+      if (g[3] == null) return true;
+      return v.take == null ? null : v.take <= +g[3];
+    }
     const star = p.match(/^([\d.]+)\.\*$/);
     if (star) { const pre = star[1].split('.').map(Number); return pre.every((x, i) => v.nums[i] === x); }
     const rg = p.match(/^(.+?)\s*-\s*(\d.*)$/);
