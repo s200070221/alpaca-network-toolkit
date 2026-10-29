@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════════════════════
-// file-howto.js — 怎麼從設備取得檔案（2026-10-29，XN52；主控在 network_analyzer/result，同步到防火牆、log 工具 result 與 public）
+// file-howto.js — 怎麼從設備取得檔案（2026-10-29，XN52）與錯誤檔案判斷（XN53）；主控在 network_analyzer/result，同步到防火牆、交換器分析、log 工具 result 與 public
 // 入口頁任務卡、防火牆上傳頁、log 上傳區共用的「取得設定檔／log 的指令與 GUI 路徑」表。只收能確定的指令與選單路徑，
 // 查不到可靠來源的廠牌不列；交換器的指令與交換器分析的 swExportCmds() 相同（qa test_hub_tasks 比對）。
 // 介面文字比照 payload-sniff.js 自帶 12 語言；GUI 路徑只寫 zhTW／en／ja，中文系彩蛋語言用 zhTW、其餘用 en。全域物件 FileHowto
@@ -80,6 +80,58 @@ const FileHowto = (function () {
         + (r.cli ? '<div><code style="font-size:11px;word-break:break-all">' + esc(r.cli) + '</code> <button type="button" class="howto-copy" data-howto-copy="' + esc(r.cli) + '" style="font-size:11px;cursor:pointer">' + esc(L.copy) + '</button></div>' : '')
         + (r.gui ? '<div style="opacity:.85">' + esc(L.gui) + '：' + esc(r.gui[gl] || r.gui.en) + '</div>' : '') + '</li>').join('') + '</ul>';
   }
+  // ── 錯誤檔案判斷（XN53）：說出「這是什麼檔、為什麼不能用、該改拿什麼」──
+  // f：{name, head（檔頭 Uint8Array，可省略）, text（已解碼文字）, error（讀 zip 的錯誤訊息，可省略）}
+  const MAGIC = [
+    ['pdf', [0x25, 0x50, 0x44, 0x46, 0x2d]], ['image', [0x89, 0x50, 0x4e, 0x47]], ['image', [0xff, 0xd8, 0xff]], ['image', [0x47, 0x49, 0x46, 0x38]],
+    ['evtx', [0x45, 0x6c, 0x66, 0x46, 0x69, 0x6c, 0x65]], ['pcap', [0xd4, 0xc3, 0xb2, 0xa1]], ['pcap', [0xa1, 0xb2, 0xc3, 0xd4]], ['pcap', [0x0a, 0x0d, 0x0d, 0x0a]],
+    ['archive', [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]], ['archive', [0x52, 0x61, 0x72, 0x21]], ['archive', [0x42, 0x5a, 0x68]], ['office', [0xd0, 0xcf, 0x11, 0xe0]],
+  ];
+  const EXT = [['pdf', /\.pdf$/i], ['office', /\.(docx?|xlsx?|pptx?|odt|ods)$/i], ['image', /\.(png|jpe?g|gif|bmp|webp|heic)$/i], ['evtx', /\.evtx$/i],
+    ['pcap', /\.(pcap|pcapng|cap)$/i], ['archive', /\.(7z|rar|tar|tgz|bz2|xz)$/i]];
+  function classify(f) {
+    const name = String((f && f.name) || ''), head = f && f.head, text = String((f && f.text) || '');
+    if (f && f.error === 'zipEncrypted') return 'zipEncrypted';
+    if (f && f.error === 'zip64') return 'zip64';
+    if (head && head.length) for (const [k, m] of MAGIC) if (m.every((b, i) => head[i] === b)) return k;
+    for (const [k, re] of EXT) if (re.test(name)) return k;
+    if (/^%PDF-/.test(text)) return 'pdf';
+    if (/^ElfFile/.test(text)) return 'evtx';
+    if (/\[Content_Types\]\.xml/.test(text.slice(0, 4096))) return 'office';
+    if (!text.trim()) return 'empty';
+    const s = text.slice(0, 4096);
+    let bad = 0;
+    for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c === 0 || c === 0xfffd) bad++; }
+    return bad / s.length > 0.01 ? 'binary' : 'text';
+  }
+  const EX = {
+    zhTW: { empty: '檔案是空的，或讀不到內容。', pdf: '這是 PDF 文件，不是設定檔或 log。請從設備匯出文字格式的設定或 log。',
+      office: '這是 Office 文件（Word／Excel／PowerPoint）。請上傳設備匯出的原始文字檔，不要貼到文件裡再存檔。', image: '這是圖片，工具讀不了截圖。請從設備匯出文字格式的設定或 log。',
+      evtx: '這是 Windows 二進位事件檔（.evtx），目前不支援。請用事件檢視器「另存所有事件」為 CSV，或用 wevtutil 匯出 XML。', pcap: '這是封包擷取檔（pcap），不是設定檔或 log。若要分析流量，請改用防火牆或 IDS 的 log。',
+      archive: '這是 7z／rar／tar 等壓縮檔，請先解壓再上傳（.zip 與 .gz 可以直接上傳）。', zipEncrypted: '這個 zip 有密碼保護，請先解壓再上傳。', zip64: '這個 zip 太大（zip64 格式），請先解壓再上傳。',
+      binary: '這個檔案不是文字檔（可能是備份檔或加密匯出），工具只讀得懂文字格式的設定與 log。', text: '看不出這是哪種設定檔或 log。請確認是完整的設定匯出，或手動選擇工具試試。' },
+    en: { empty: 'The file is empty or could not be read.', pdf: 'This is a PDF document, not a config or log. Export the config or log from the device as text.',
+      office: 'This is an Office document (Word/Excel/PowerPoint). Upload the raw text file exported from the device instead of pasting it into a document.', image: 'This is an image; screenshots cannot be read. Export the config or log from the device as text.',
+      evtx: 'This is a binary Windows event file (.evtx), which is not supported. Use Event Viewer "Save All Events As" CSV, or export XML with wevtutil.', pcap: 'This is a packet capture (pcap), not a config or log. To analyze traffic, use firewall or IDS logs instead.',
+      archive: 'This is a 7z/rar/tar archive. Extract it first (.zip and .gz can be uploaded directly).', zipEncrypted: 'This zip is password-protected. Extract it first.', zip64: 'This zip is too large (zip64). Extract it first.',
+      binary: 'This is not a text file (it may be a backup or encrypted export). The tools only read text configs and logs.', text: 'Could not tell which config or log this is. Make sure it is a full config export, or pick a tool manually.' },
+    ja: { empty: 'ファイルが空か、内容を読み取れません。', pdf: 'これは PDF 文書で、設定ファイルやログではありません。機器から設定やログをテキスト形式でエクスポートしてください。',
+      office: 'これは Office 文書（Word／Excel／PowerPoint）です。文書に貼り付けず、機器からエクスポートしたテキストファイルをそのままアップロードしてください。', image: 'これは画像で、スクリーンショットは読み取れません。機器から設定やログをテキスト形式でエクスポートしてください。',
+      evtx: 'これは Windows のバイナリイベントファイル（.evtx）で、対応していません。イベント ビューアーで CSV として保存するか、wevtutil で XML をエクスポートしてください。', pcap: 'これはパケットキャプチャ（pcap）で、設定やログではありません。通信を分析するにはファイアウォールや IDS のログを使ってください。',
+      archive: 'これは 7z／rar／tar などの圧縮ファイルです。先に展開してください（.zip と .gz はそのままアップロード可）。', zipEncrypted: 'この zip はパスワード保護されています。先に展開してください。', zip64: 'この zip は大きすぎます（zip64）。先に展開してください。',
+      binary: 'テキストファイルではありません（バックアップや暗号化エクスポートの可能性）。ツールはテキスト形式の設定とログのみ読み取れます。', text: 'どの設定ファイルやログか判別できません。設定全体のエクスポートか確認するか、ツールを手動で選んでください。' },
+  };
+  function explain(kind, lang) { const L = EX[guiLang(lang)] || EX.en; return L[kind] || L.text; }
+  // 該看哪一種取得方式
+  function howtoKinds(kind) { return kind === 'evtx' ? ['log'] : ['fw', 'sw', 'log']; }
+  // 展開頁面上的取得檔案說明並捲過去（工具頁「解析不出內容」時的連結）；sel 預設第一個 details[data-file-howto]
+  function open(sel) {
+    if (typeof document === 'undefined') return;
+    const el = document.querySelector(sel || 'details[data-file-howto]');
+    if (!el) return;
+    if (el.tagName === 'DETAILS') el.open = true;
+    setTimeout(() => el.scrollIntoView({ block: 'start' }), 50);
+  }
   function title(lang) { return t(lang).title; }
   // 工具頁：<details data-file-howto="fw,sw"> 由各頁 setLang() 呼叫 FileHowto.render(語言) 填入（保留展開狀態）
   function render(lang) {
@@ -98,6 +150,6 @@ const FileHowto = (function () {
       try { navigator.clipboard.writeText(txt).then(done, () => {}); } catch (err) { /* 不支援剪貼簿時使用者可自行選取 */ }
     });
   }
-  return { rows, tableHtml, listHtml, title, render, T, KINDS: Object.keys(KINDS) };
+  return { rows, tableHtml, listHtml, title, render, open, classify, explain, howtoKinds, T, EX, KINDS: Object.keys(KINDS) };
 })();
 if (typeof window !== 'undefined') window.FileHowto = FileHowto;

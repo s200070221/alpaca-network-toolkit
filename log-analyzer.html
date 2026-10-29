@@ -12958,7 +12958,10 @@ function renderNextBar() {
   if (!text.trim()) { b.style.display = 'none'; b.innerHTML = ''; if (window.AlpacaBuddy) window.AlpacaBuddy.setDuty(null); return; }
   b.style.display = 'flex';
   if (!EVENTS.length) {
-    b.innerHTML = `<span>⚠ ${esc(tr('nextbar.empty'))}</span><button class="btn" onclick="routeToHub()">${esc(tr('nextbar.route'))}</button>`;
+    // 解析不出事件時說出原因並連到取得檔案說明（XN53，file-howto.js）
+    const fh = window.FileHowto, k = fh ? fh.classify({ text }) : 'text';
+    b.innerHTML = `<span>⚠ ${esc(tr('nextbar.empty'))}${fh ? ' ' + esc(fh.explain(k, currentLang)) : ''}</span><button class="btn" onclick="routeToHub()">${esc(tr('nextbar.route'))}</button>`
+      + (fh ? `<button class="btn" data-empty-howto onclick="FileHowto.open()">${esc(fh.title(currentLang))}</button>` : '');
     if (window.AlpacaBuddy) window.AlpacaBuddy.setDuty(null);
     return;
   }

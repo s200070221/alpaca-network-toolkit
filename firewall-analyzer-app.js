@@ -3845,7 +3845,10 @@ function startMatrixRain(){
     if (!PARSED) { b.style.display = 'none'; b.innerHTML = ''; if (window.AlpacaBuddy) window.AlpacaBuddy.setDuty(null); return; }
     b.style.display = 'flex';
     if (!(PARSED.policies || []).length && !(PARSED.interfaces || []).length && !(PARSED.addresses || []).length && !_onlyWlcUpload()) {
-      b.innerHTML = `<span>⚠ ${esc(tr('next.empty'))}</span><button class="btn btn-ghost btn-sm" onclick="window._fwRouteToHub()">${esc(tr('next.route'))}</button>`;
+      // 解析不出內容時說出原因並連到取得檔案說明（XN53，file-howto.js）
+      const _fh = window.FileHowto, _k = _fh ? _fh.classify({ text: _fwRawTexts().join('\n') }) : 'text';
+      b.innerHTML = `<span>⚠ ${esc(tr('next.empty'))}${_fh ? ' ' + esc(_fh.explain(_k, _lang)) : ''}</span><button class="btn btn-ghost btn-sm" onclick="window._fwRouteToHub()">${esc(tr('next.route'))}</button>`
+        + (_fh ? `<button class="btn btn-ghost btn-sm" data-empty-howto onclick="showView('upload');FileHowto.open()">${esc(_fh.title(_lang))}</button>` : '');
       return;
     }
     if (typeof tourDone === 'function') tourDone();
