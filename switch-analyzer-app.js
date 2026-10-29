@@ -803,6 +803,24 @@ function renderView(view){
     case'audit':    tc.innerHTML=renderAudit();break;
   }
 }
+// 總覽頂端結論卡（XN51）：健康度、先處理的 3 項、下一步；按鈕只呼叫既有函式，不帶設定檔內容
+function renderOverviewVerdict(){
+  let h=null;try{h=computeSwitchHealth(parsed);}catch(e){h=null;}
+  if(!h)return'';
+  const top=swPriorityItems(h).slice(0,3);
+  const box='margin:12px 18px 0;padding:12px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface2)';
+  let o=`<div id="ov-verdict" style="${box}"><div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">`
+    +`<div style="font-size:36px;font-weight:800;color:${h.gradeColor};line-height:1">${esc(h.grade)}</div>`
+    +`<div><div style="font-size:14px;font-weight:700">${esc(tr('ov.verdict_health').replace('{score}',h.score))}</div><div style="font-size:12px;color:var(--text-dim)">${esc(tr('exec.grade_'+h.grade))}</div></div></div>`;
+  if(top.length){
+    o+=`<div style="font-weight:600;font-size:12px;margin:10px 0 4px">${esc(tr('ov.verdict_top3'))}</div><ol style="margin:0;padding-left:20px">`
+      +top.map(i=>`<li data-ov-key="${esc(i.id||'')}" style="margin:3px 0;font-size:12px">${i.sev==='crit'?pill('down',tr('audit.risk_high')):pill('warn',tr('audit.risk_mid'))} ${esc(i.label)} <span style="color:var(--text-dim)">(${esc(String(i.count))})</span></li>`).join('')+'</ol>';
+  }else o+=`<div style="margin-top:8px;font-size:12px;color:var(--green)">✓ ${esc(tr('ov.verdict_zero'))}</div>`;
+  const btn=(fn,k)=>`<button class="btn btn-ghost btn-sm" onclick="${fn}">${esc(tr(k))}</button>`;
+  o+=`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">`+btn("navGo('audit')",'ov.verdict_audit')+btn('exportHTMLReport()','ov.verdict_report')
+    +btn('_sendToGenerator(null, true)','ov.verdict_convert')+btn('_sendToAnonymizer()','ov.verdict_share')+'</div></div>';
+  return o;
+}
 function renderOverview(){
   const p=parsed,irf=p.irf,stack=p.stack;
   const ph=p.interfaces.filter(i=>i.type==='physical'||i.type==='stack');
@@ -880,7 +898,7 @@ function renderOverview(){
       <div class="ov-row" style="flex-wrap:wrap;gap:3px">${p.vxlan.vnis.slice(0,8).map(v=>`${pill('p-vlan','VNI '+v.vni+(v.vlan?' →V'+v.vlan:'')+(v.name?' '+v.name.substring(0,10):''))}`).join(' ')}</div>
     </div>`;
   }
-  return `<div class="ov-grid">${ovCards}</div>`;
+  return renderOverviewVerdict()+`<div class="ov-grid">${ovCards}</div>`;
 }
 function renderBrocadeStack(){
   const stk=parsed.stack;
@@ -1985,10 +2003,12 @@ function _initParseCoverageMatrix(){
 const REMEDIABLE_FINDING_IDS=new Set(['weak-pwd','stp-no-bpduguard','stp-portfast-trunk','stp-uplink-no-rootguard','vlan1-inuse','security-off','acl-any-any','unused-vlan-trunk','lacp-member-mismatch','if-no-desc','snmp-default-name','telnet-mgmt']);
 function renderAudit(){
   const findings=analyzeSwitchAudit(parsed);
-  const hi=findings.filter(f=>f.risk==='high').length;
-  const med=findings.filter(f=>f.risk==='medium').length;
+  // 卡片只計數量 > 0 的檢查（XN51：原本是檢查項目數，數量 0 也算），與結果列「高風險 N 類」同口徑
+  const hits=findings.filter(f=>f.value>0);
+  const hi=hits.filter(f=>f.risk==='high').length;
+  const med=hits.filter(f=>f.risk==='medium').length;
   const cards=`<div class="sum-cards">
-    <div class="sum-card"><div class="sv">${findings.length}</div><div class="sl">${tr('audit.sum_total')}</div></div>
+    <div class="sum-card"><div class="sv">${hits.length}</div><div class="sl">${tr('audit.sum_total')}</div></div>
     <div class="sum-card"><div class="sv" style="color:var(--red)">${hi}</div><div class="sl">${tr('audit.sum_high')}</div></div>
     <div class="sum-card"><div class="sv" style="color:var(--orange)">${med}</div><div class="sl">${tr('audit.sum_medium')}</div></div>
   </div>`;
@@ -2014,13 +2034,17 @@ function renderAudit(){
   }));
   fmtRows.forEach(r=>{r.check_html=esc(r.check);r.value_html=r.value;r.risk_html=r.risk;r.detail_html=r.detail;r.standards_html=r.standards;r.action_html=r.action;r.status_html=r.status;});
   tableData=findings; tableKeys=['check','value','risk','detail','standards','action','status'];
-  const {html}=renderTable(hdrs,fmtRows,null);
+  // 有發現的列在主表；數量 0 的收進下方折疊（XN51），CSV 匯出仍是全部 findings
+  const hitRows=fmtRows.filter((r,i)=>findings[i].value>0);
+  const html=hitRows.length?renderTable(hdrs,hitRows,null).html:`<div class="nodata" style="color:var(--green)">${esc(tr('audit.no_hits'))}</div>`;
+  const passedRows=fmtRows.filter((r,i)=>findings[i].value===0);
+  const passedHtml=passedRows.length?`<details id="sw-audit-clean" style="margin:6px 18px 0"><summary style="cursor:pointer;font-size:12px;color:var(--text-dim)">${esc(tr('audit.passed_title').replace('{n}',passedRows.length))}</summary><div class="tbl-wrap">${renderTable(hdrs,passedRows,null).html}</div></details>`:'';
   // 表格以外的區塊比照其他頁面加上左右內距（原本標題、卡片、說明與按鈕列貼齊左邊界）
   return `<div style="padding:12px 18px 0"><div style="font-size:13px;font-weight:600;color:var(--purple);margin-bottom:6px">${tr('audit.sw_title')}</div>`
     +cards+disclaimer
     +`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px"><button class="btn btn-ghost btn-sm" onclick="exportAuditSARIF()">🧾 ${esc(tr('audit.export_sarif'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditMarkdown()">📝 ${esc(tr('audit.export_md'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditWorkpaper()">📋 ${esc(tr('wp.export_btn'))}</button><button class="btn btn-ghost btn-sm" onclick="saveSwitchAuditBaseline()">💾 ${esc(tr('swbase.save_btn'))}</button><label class="btn btn-ghost btn-sm" style="cursor:pointer">📂 ${esc(tr('swbase.compare_btn'))}<input type="file" accept=".json" onchange="compareSwitchAuditBaseline(this)"></label><input id="sw-audit-reviewer" value="${esc(swAuditReviewer())}" placeholder="${esc(tr('wp.reviewer_ph'))}" aria-label="${esc(tr('wp.col_reviewer'))}" onchange="swSetAuditReviewer(this.value)" style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);width:140px"></div><div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">${esc(tr('wp.hint'))}</div>`
     +`<div id="sw-baseline-result"></div></div>`
-    +`<div style="overflow-x:auto"><div class="tbl-wrap">${html}</div></div>`
+    +`<div style="overflow-x:auto"><div class="tbl-wrap">${html}</div></div>`+passedHtml
     +`<div style="padding:0 18px">`+buildShutdownConfiguredCard(analyzeShutdownConfigured(parsed))+renderAuditVulnCard()+`</div>`
     +`<div id="sw-health-section" style="margin-top:18px;padding:14px 18px 12px;border-top:1px solid var(--border)">
         <button id="sw-health-btn" onclick="_doSwitchHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
@@ -3868,7 +3892,7 @@ function renderNextBar(){
   const critList=h?h.issues.filter(i=>i.sev==='crit'):[];
   const crit=critList.length;
   // 羊駝值勤模式（XN49）：有嚴重項目時戴安全帽，泡泡只說先看哪一項
-  if(window.AlpacaBuddy)window.AlpacaBuddy.setDuty(crit?{n:crit,top:critList[0].label,go:()=>navGo('audit')}:null);
+  if(window.AlpacaBuddy)window.AlpacaBuddy.setDuty(crit?{n:crit,top:swPriorityItems(h)[0].label,go:()=>navGo('audit')}:null);
   const head=h?`<span style="font-weight:600">${esc(tr('next.health').replace('{grade}',h.grade).replace('{score}',h.score))}${crit?` · <span style="color:var(--red)">${esc(tr('next.crit').replace('{n}',crit))}</span>`:''}</span>`:'';
   b.innerHTML=head+`<button class="btn btn-ghost btn-sm" onclick="navGo('audit')">${esc(tr('next.audit'))}</button><button class="btn btn-ghost btn-sm" onclick="exportHTMLReport()">${esc(tr('next.report'))}</button><button class="btn btn-ghost btn-sm" onclick="_sendToAnonymizer()">${esc(tr('next.share'))}</button>`;
 }

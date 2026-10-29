@@ -456,13 +456,20 @@ function computeSwitchHealth(parsed){
       const w=WEIGHT[f.risk]||WEIGHT.low;
       const capped=f.value>3;
       score-=capped?w*3:f.value*w;
-      issues.push(capped?{sev:SEV[f.risk]||'info',label:f.check,count:f.value,capped:true}:{sev:SEV[f.risk]||'info',label:f.check,count:f.value});
+      issues.push(capped?{id:f.id,sev:SEV[f.risk]||'info',label:f.check,count:f.value,capped:true}:{id:f.id,sev:SEV[f.risk]||'info',label:f.check,count:f.value});
     }
   });
   score=Math.max(0,Math.min(100,score));
   const grade=score>=90?'A':score>=75?'B':score>=60?'C':score>=40?'D':'F';
   const gradeColor=grade==='A'?'var(--green)':grade==='B'?'var(--teal)':grade==='C'?'var(--yellow)':grade==='D'?'var(--orange)':'var(--red)';
   return {score,grade,gradeColor,issues};
+}
+
+// 先處理哪幾項（XN51）：總覽結論卡與羊駝值勤共用；高風險在前、同級依數量，低風險（info）不列
+function swPriorityItems(health){
+  const RANK={crit:0,warn:1};
+  return ((health&&health.issues)||[]).filter(i=>RANK[i.sev]!==undefined)
+    .slice().sort((a,b)=>RANK[a.sev]-RANK[b.sev]||b.count-a.count);
 }
 
 // 健康度分數時序追蹤（2026-09-16 新增）：輕量單序列折線圖，比照 log_analyzer 既有

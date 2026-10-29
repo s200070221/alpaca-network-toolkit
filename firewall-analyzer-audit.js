@@ -1597,14 +1597,19 @@
     let h = '<div id="compliance-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--purple);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + tip('tip.compliance', tr('audit.compliance_title')) + '</div>';
     h += `<div style="color:var(--text-dim);font-size:11px;margin-bottom:8px">${esc(tr('audit.standards_disclaimer'))}</div>`;
     if (marks) h += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px"><button class="btn btn-ghost btn-sm" onclick="window._fwExportWorkpaper()">📋 ${esc(tr('wp.export_btn'))}</button><input id="fw-audit-reviewer" value="${esc(reviewer || '')}" placeholder="${esc(tr('wp.reviewer_ph'))}" aria-label="${esc(tr('wp.col_reviewer'))}" onchange="window._fwSetAuditReviewer(this.value)" style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg2);color:var(--text);width:140px"><span style="font-size:11px;color:var(--text-muted)">${esc(tr('wp.hint'))}</span></div>`;
-    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_check') + '</th><th>' + tr('audit.col_result') + '</th><th>' + tr('audit.col_risk') + '</th><th>' + tr('audit.col_detail') + '</th><th>' + tr('audit.col_standards') + '</th>' + (marks ? '<th>' + tr('wp.col_status') + '</th>' : '') + '</tr></thead><tbody>';
-    findings.forEach(f => {
+    const THEAD = '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + tr('audit.col_check') + '</th><th>' + tr('audit.col_result') + '</th><th>' + tr('audit.col_risk') + '</th><th>' + tr('audit.col_detail') + '</th><th>' + tr('audit.col_standards') + '</th>' + (marks ? '<th>' + tr('wp.col_status') + '</th>' : '') + '</tr></thead><tbody>';
+    // 數量 > 0 的檢查在主表；通過（0）的收進下方折疊（XN51，第一屏只看有發現的）
+    const rowOf = f => {
       const ok = f.value === 0;
       const vc = (!ok && f.risk !== 'low') ? 'var(--red)' : 'var(--green)';
       const stdBadges = (f.standards||[]).map(s => `<span style="display:inline-block;margin:1px 3px 1px 0;padding:1px 6px;border-radius:3px;font-size:10px;background:var(--surface2);color:var(--text-dim);border:1px solid var(--border)">${esc(s)}</span>`).join('');
-      h += `<tr><td>${esc(f.check)}</td><td class="mono" style="color:${vc};font-weight:600">${esc(String(f.value))}</td><td>${rp(f.risk)}</td><td style="color:var(--text-dim);font-size:11px">${esc(f.detail)}${_buildEvidenceDetails(f, evidence && evidence[f.id])}${_buildFixDetails(f, vendor)}</td><td style="font-size:11px;white-space:normal;min-width:220px">${stdBadges || '-'}</td>${marks ? `<td>${f.value ? _buildMarkCell(f.id, marks[f.id] || {}) : '-'}</td>` : ''}</tr>`;
-    });
-    h += '</tbody></table></div></div>';
+      return `<tr><td>${esc(f.check)}</td><td class="mono" style="color:${vc};font-weight:600">${esc(String(f.value))}</td><td>${rp(f.risk)}</td><td style="color:var(--text-dim);font-size:11px">${esc(f.detail)}${_buildEvidenceDetails(f, evidence && evidence[f.id])}${_buildFixDetails(f, vendor)}</td><td style="font-size:11px;white-space:normal;min-width:220px">${stdBadges || '-'}</td>${marks ? `<td>${f.value ? _buildMarkCell(f.id, marks[f.id] || {}) : '-'}</td>` : ''}</tr>`;
+    };
+    const hits = findings.filter(f => f.value !== 0), passed = findings.filter(f => f.value === 0);
+    const tbl = list => THEAD + list.map(rowOf).join('') + '</tbody></table></div>';
+    h += hits.length ? tbl(hits) : '<div class="nodata" style="padding:10px 0;color:var(--green)">' + esc(tr('audit.no_hits')) + '</div>';
+    if (passed.length) h += '<details id="compliance-passed" style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:var(--text-dim)">' + esc(tr('audit.passed_title').replace('{n}', passed.length)) + '</summary>' + tbl(passed) + '</details>';
+    h += '</div>';
     return h;
   }
 
@@ -2044,11 +2049,11 @@
     }
     return list;
   }
-  function buildPriorityHtml(items) {
+  function buildPriorityHtml(items, limit, title) {
     if (!items || !items.length) return '';
     let h = '<div id="prio-card" style="margin-bottom:20px;padding:12px 14px;border:1px solid var(--red);border-left:4px solid var(--red);border-radius:8px;background:var(--surface2)">' +
-      '<div style="font-size:13px;font-weight:700;margin-bottom:4px">' + esc(tr('prio.title')) + '</div><div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('prio.hint')) + '</div><ol style="margin:0;padding-left:20px">';
-    items.slice(0, 5).forEach(i => {
+      '<div style="font-size:13px;font-weight:700;margin-bottom:4px">' + esc(title || tr('prio.title')) + '</div><div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('prio.hint')) + '</div><ol style="margin:0;padding-left:20px">';
+    items.slice(0, limit || 5).forEach(i => {
       const sevPill = pill(tr(i.sev === 'crit' ? 'audit.risk_high' : 'audit.risk_mid'), i.sev === 'crit' ? 'p-deny' : 'p-warn');
       const sub = i.parts ? i.parts.map(x => x.label).join(' ＋ ') : '';
       const cve = i.cves && i.cves.length ? ' <span class="mono" style="font-size:11px;color:var(--text-dim)">' + i.cves.map(esc).join(', ') + '</span>' : '';
