@@ -910,6 +910,8 @@
       `<label class="btn btn-ghost btn-sm" style="cursor:pointer">${esc(tr('vuln.upload'))}<input type="file" accept=".csv,.txt" style="display:none" onchange="window._fwVulnFile(this)"></label>` +
       `<button class="btn btn-ghost btn-sm" onclick="window._fwVulnSample()">${esc(tr('vuln.sample'))}</button></div>`;
     if (!V.parse(sch, ver)) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-bottom:6px">${esc(tr(sch === 'fortios' && /^\d+\.\d{2}\b/.test(fw) ? 'vuln.version_fortios_short' : 'vuln.version_missing'))}</div>`;
+    // Check Point：設定檔只有 train（R81.20），依 Jumbo Hotfix Take 判斷的漏洞需補填 Take（XN42）
+    else if (sch === 'gaia' && V.parse(sch, ver).take == null) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-bottom:6px">${esc(tr('vuln.version_gaia_take'))}</div>`;
     h += `<textarea id="vuln-text" spellcheck="false" placeholder="${esc(V.CSV_HEADER)}" style="width:100%;height:90px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;${inp}">${esc(st.text || '')}</textarea>`;
     const vs = fwVulnStatus(p, { vulnText: st.text, vulnVersion: st.version });
     if (vs.errors.length) h += `<div style="font-size:12px;color:var(--red);margin:6px 0">${vs.errors.map(e => esc(tr('vuln.err_' + e.reason).replace('{n}', e.line))).join('<br>')}</div>`;
