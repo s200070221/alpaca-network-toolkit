@@ -2372,9 +2372,16 @@ async function _readZipEntries(buf) {
 async function _readDropEntries(file) {
   const label = n => String(n).replace(/\.gz$/i, '');
   const buf = new Uint8Array(await file.arrayBuffer());
+  // 錯誤檔案（XN53）：PDF、Office、圖片、evtx、pcap、7z 等依檔頭或副檔名先判斷，不嘗試解碼或展開（docx 本身也是 zip）
+  const head = buf.subarray(0, 16);
+  // 這一步只看檔頭與副檔名（text 給非空白的佔位字，讓 empty／binary 判斷留到解碼之後）
+  const pre = window.FileHowto ? FileHowto.classify({ name: file.name, head, text: 'x' }) : 'text';
+  if (pre !== 'text' && pre !== 'binary') return [{ name: label(file.name), text: '', head, kind: pre }];
   if (!(buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04)) return [{ name: label(file.name), text: await _decodeBytes(buf) }];
   const out = [];
-  for (const e of await _readZipEntries(buf)) out.push({ name: file.name + '/' + label(e.name), text: await _decodeBytes(e.bytes) });
+  let entries;
+  try { entries = await _readZipEntries(buf); } catch (e) { return [{ name: file.name, text: '', head, error: e.message }]; }
+  for (const e of entries) out.push({ name: file.name + '/' + label(e.name), text: await _decodeBytes(e.bytes) });
   return out;
 }
 function _readDroppedFiles(files) {
@@ -2384,7 +2391,7 @@ function _readDroppedFiles(files) {
     const items = lists.flat();
     // 彩蛋：檔名含 114514 或 1919810（第二十七輪），同一頁面只提示一次
     if (!window._smellyFileShown && items.some(it => /114514|1919810/.test(it.name || ''))) { window._smellyFileShown = true; setTimeout(() => showEggToast(tr('egg.smelly_yarimasu')), 600); }
-    if (items.length === 1) { _showDropResult(items[0].name, items[0].text ? detectTool(items[0].text) : null, items[0].text); return; }
+    if (items.length === 1) { _showDropResult(items[0].name, items[0].text ? detectTool(items[0].text) : null, items[0].text, items[0]); return; }
     _showDropMultiResult(items.map(it => ({ ...it, detected: it.text ? detectTool(it.text) : null })));
   });
 }
@@ -2451,7 +2458,8 @@ function _showDropMultiResult(items) {
       row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border,#334155)';
       const nm = document.createElement('span');
       nm.style.cssText = 'flex:1;word-break:break-all;font-size:13px';
-      nm.textContent = it.name + (it.detected && it.detected.vendor ? `（${VENDOR_NAMES[it.detected.vendor] || it.detected.vendor}）` : '');
+      nm.textContent = it.name + (it.detected && it.detected.vendor ? `（${VENDOR_NAMES[it.detected.vendor] || it.detected.vendor}）` : '')
+        + (!it.detected && window.FileHowto ? ' — ' + FileHowto.explain(_dropKind(it), _lang) : '');
       const btn = document.createElement('button');
       btn.className = 'da-secondary';
       btn.id = 'drop-multi-btn-' + i;
@@ -2463,7 +2471,9 @@ function _showDropMultiResult(items) {
   });
 }
 
-function _showDropResult(name, detected, text) {
+// 判斷不出工具時是哪一種錯誤檔案（XN53，file-howto.js）
+function _dropKind(it) { return it.kind || FileHowto.classify({ name: it.name, head: it.head, text: it.text, error: it.error }); }
+function _showDropResult(name, detected, text, entry) {
   const ml = document.getElementById('drop-multi-list');
   if (ml) { ml.style.display = 'none'; ml.innerHTML = ''; }
   const dt = document.getElementById('drop-debug-toggle');
@@ -2496,10 +2506,13 @@ function _showDropResult(name, detected, text) {
     manualBtn.textContent = tr('drop.manual');
     manualBtn.style.display = '';
   } else {
-    chip.textContent = tr('drop.unknown');
-    actions.innerHTML = '';
-    manualBtn.style.display = 'none';
-    choices.classList.add('open');
+    // 說出是什麼檔、為什麼不能用、該改拿什麼（XN53）；只有看得懂的文字才預先展開手動選工具，二進位類避免誤送
+    const kind = window.FileHowto ? _dropKind(entry || { name, text }) : 'text';
+    chip.textContent = window.FileHowto ? FileHowto.explain(kind, _lang) : tr('drop.unknown');
+    chip.setAttribute('data-drop-kind', kind);
+    actions.innerHTML = window.FileHowto ? `<details class="drop-howto" style="text-align:left;max-width:560px"><summary style="cursor:pointer;font-size:13px">${_glEsc(FileHowto.title(_lang))}</summary>${FileHowto.listHtml(FileHowto.howtoKinds(kind), _lang)}</details>` : '';
+    if (kind === 'text') { manualBtn.style.display = 'none'; choices.classList.add('open'); }
+    else { manualBtn.textContent = tr('drop.manual'); manualBtn.style.display = ''; }
   }
   choices.innerHTML = TOOLS.map((t, i) =>
     `<button onclick="_dispatchWithPending(${i},null)">${t.icon} ${tr(t.id+'.title')}</button>`

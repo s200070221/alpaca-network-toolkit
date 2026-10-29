@@ -3891,7 +3891,10 @@ function renderNextBar(){
   if(!parsed){b.style.display='none';b.innerHTML='';if(window.AlpacaBuddy)window.AlpacaBuddy.setDuty(null);return;}
   b.style.display='flex';
   if(!(parsed.interfaces||[]).length&&!(parsed.vlans||[]).length){
-    b.innerHTML=`<span>⚠ ${esc(tr('next.empty'))}</span><button class="btn btn-ghost btn-sm" onclick="_routeToHub()">${esc(tr('next.route'))}</button>`;return;
+    // 解析不出內容時說出原因並連到「如何取得設定檔」（XN53，file-howto.js）
+    const fh=window.FileHowto,k=fh?fh.classify({text:rawCfgText||''}):'text';
+    b.innerHTML=`<span>⚠ ${esc(tr('next.empty'))}${fh?' '+esc(fh.explain(k,_lang)):''}</span><button class="btn btn-ghost btn-sm" onclick="_routeToHub()">${esc(tr('next.route'))}</button>`
+      +(fh?`<button class="btn btn-ghost btn-sm" data-empty-howto onclick="navGo('upload');FileHowto.open('#howto')">${esc(fh.title(_lang))}</button>`:'');return;
   }
   tourDone();
   let h=null;try{h=computeSwitchHealth(parsed);}catch(e){h=null;}
