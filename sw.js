@@ -112,6 +112,7 @@ const FILES = [
   'vuln-seed.js',
   'payload-sniff.js',
   'alpaca-buddy.js',
+  'file-howto.js',
   'https://cdn.jsdelivr.net/npm/docx@8.6.0/build/index.umd.js',
 ];
 const EXTERNAL = new Set(FILES.filter(f => /^https:/.test(f)));

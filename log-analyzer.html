@@ -163,6 +163,7 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
 <script src="toolkit-version.js"></script>
 <script src="payload-sniff.js"></script>
 <script src="alpaca-buddy.js"></script>
+<script src="file-howto.js"></script>
 </head>
 <body data-theme="dark">
 <header id="topbar">
@@ -199,6 +200,7 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
     <h2 id="t-import-title"></h2>
     <div class="hint" id="t-import-short"></div>
     <details class="hint-more"><summary id="t-import-formats"></summary><div class="hint" id="t-import-hint"></div></details>
+    <details class="hint-more file-howto" data-file-howto="log"></details>
     <div id="large-file-notice" class="large-file-notice" style="display:none"></div>
     <textarea class="paste" id="paste-area"></textarea>
     <div class="btn-row">
@@ -11613,6 +11615,7 @@ function renderStatic() {
   document.getElementById('btn-print-report').textContent = tr('btn.print_full_report');
   document.getElementById('footer-note').textContent = tr('footer.note');
   window.renderToolkitVersion&&renderToolkitVersion(currentLang);
+  window.FileHowto&&FileHowto.render(currentLang);
   renderHealthStatic();
   renderBaselineStatic();
 }

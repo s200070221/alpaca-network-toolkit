@@ -486,11 +486,12 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 <script src="toolkit-version.js"></script>
 <script src="payload-sniff.js"></script>
 <script src="alpaca-buddy.js"></script>
+<script src="file-howto.js"></script>
 </head>
 <body>
 <div id="app">
 <div id="sidebar">
-  <div class="sidebar-logo"><div class="icon">🛡️</div><div><h2>FW Analyzer</h2><p data-i18n="subtitle">20-Vendor · No AI</p><p data-toolkit-version></p></div></div>
+  <div class="sidebar-logo"><div class="icon">🛡️</div><div><h2>FW Analyzer</h2><p data-i18n="subtitle" data-vendor-count="fw">{n}-Vendor · No AI</p><p data-toolkit-version></p></div></div>
   <nav class="sidebar-nav">
     <div class="nav-group">
       <div class="nav-group-label" data-i18n="nav.upload_group">上傳</div>
@@ -573,7 +574,8 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
     <!-- Upload -->
     <div id="view-upload">
       <h1 class="upload-headline" data-i18n="upload.headline">防火牆設定分析器</h1>
-      <div class="upload-sub" data-i18n="upload.sub">支援 13 家主流防火牆（FortiGate、Palo Alto、Check Point、Cisco ASA／FTD、Juniper SRX、Sophos 等）— 純前端 · 離線 · 不依賴外部 AI</div>
+      <div class="upload-sub" data-i18n="upload.sub" data-vendor-count="fw">支援 {n} 家主流防火牆（FortiGate、Palo Alto、Check Point、Cisco ASA／FTD、Juniper SRX、Sophos 等）— 純前端 · 離線 · 不依賴外部 AI</div>
+      <details class="file-howto" data-file-howto="fw" style="max-width:720px;margin:-16px auto 20px;text-align:left"></details>
       <div id="tour" class="tour" role="note" hidden><div class="tour-title" data-i18n="tour.title">第一次使用？三步驟上手</div><ol class="tour-steps"><li data-i18n="tour.s1">把設定檔拖到自動偵測區（或放進對應廠牌欄位），可一次放多台</li><li data-i18n="tour.s2">按「開始分析」，整理規則、物件、NAT、VPN 與路由</li><li data-i18n="tour.s3">看結果上方的提示列：健康度、稽核問題與匯出報表；「IP/Policy 查詢」可查某條連線會命中哪條規則</li></ol><button type="button" class="tour-ok" data-i18n="tour.ok" onclick="tourDone()">知道了，不再顯示</button></div>
       <!-- 自動偵測上傳（PC）：依檔案內容特徵放入下方對應廠牌欄位，可一次多檔 -->
       <div class="ucard" id="autoc" style="width:100%;max-width:860px;margin-bottom:10px;border-style:dashed;padding:12px" ondragover="event.preventDefault();event.stopPropagation();document.getElementById('autoc').classList.add('drag-over')" ondragleave="document.getElementById('autoc').classList.remove('drag-over')" ondrop="handleAutoDrop(event)" onclick="if(event.target.closest('#auto-msg'))return;document.getElementById('auto-fi').click()">

@@ -834,6 +834,7 @@ function setLang(code) {
   saveLangPref(code);
   window.renderToolkitVersion&&renderToolkitVersion(code);
   document.documentElement.lang = htmlLangFor(code);
+  window.FileHowto&&FileHowto.render(code);
   document.querySelectorAll('[data-i18n]').forEach(function(el) {
     var k = el.dataset.i18n;
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.placeholder = tr(k);
