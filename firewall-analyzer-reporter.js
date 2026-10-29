@@ -367,48 +367,51 @@ const Reporter = (() => {
   }
 
   // ─── HTML Report ──────────────────────────────────────────────────────────
+  // 報告配色（XN54）：淺色、可直接列印交給主管，比照交換器分析與 log 報告
   const REPORT_CSS_FW=`*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Noto Sans TC',system-ui,sans-serif;background:#0a0e1a;color:#e2e8f0;font-size:13px;padding:32px}
-h1{font-size:24px;font-weight:700;background:linear-gradient(90deg,#00d4ff,#fff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:4px}
-h2{font-size:17px;color:#00d4ff;margin-bottom:12px;border-left:4px solid #00d4ff;padding-left:10px}
-h3{font-size:14px;color:#94a3b8;margin:10px 0 6px;font-weight:600}
+:root{--green:#047857;--teal:#0e7490;--yellow:#b45309;--orange:#c2410c;--red:#dc2626}
+body{font-family:'Noto Sans TC',system-ui,sans-serif;background:#f8f9fa;color:#1e293b;font-size:13px;padding:32px;line-height:1.5}
+h1{font-size:24px;font-weight:700;color:#0f172a;margin-bottom:4px;border-left:5px solid #0e7490;padding-left:12px}
+h2{font-size:17px;color:#0f172a;margin-bottom:12px;border-left:4px solid #0e7490;padding-left:10px}
+h3{font-size:14px;color:#475569;margin:10px 0 6px;font-weight:600}
 .wrap{max-width:1200px;margin:0 auto}
-.subtitle{color:#64748b;font-size:12px;margin-bottom:32px;font-family:monospace}
+.subtitle{color:#64748b;font-size:12px;margin-bottom:32px}
 .section{margin-bottom:40px}
-.section-title{font-size:15px;font-weight:700;color:#00d4ff;margin-bottom:12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #1e3a5f;padding-bottom:8px}
+.section-title{font-size:15px;font-weight:700;color:#0f172a;margin-bottom:12px;display:flex;align-items:center;gap:8px;border-bottom:2px solid #e2e8f0;padding-bottom:8px}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:32px}
-.stat-card{background:#111827;border-radius:10px;padding:16px;border:1px solid #1e3a5f}
+.stat-card{background:#fff;border-radius:10px;padding:16px;border:1px solid #e2e8f0}
 .stat-link{cursor:pointer;transition:opacity .15s,transform .15s}.stat-link:hover{opacity:.8;transform:translateY(-2px)}
 .stat-num{font-size:28px;font-weight:700;font-family:monospace}
-.stat-lbl{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:4px}
-.card{background:#111827;border-radius:8px;padding:20px;margin-bottom:20px;border:1px solid #1e3a5f}
+.stat-lbl{font-size:11px;color:#64748b;letter-spacing:.5px;margin-top:4px}
+.card{background:#fff;border-radius:8px;padding:20px;margin-bottom:20px;border:1px solid #e2e8f0;box-shadow:0 2px 4px rgba(0,0,0,.04)}
+.card.urgent{border-left:4px solid #dc2626}
 .meta-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:16px}
-.meta-item{background:#0d1117;border:1px solid #1e3a5f;border-radius:6px;padding:10px 14px}
-.meta-label{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:600}
-.meta-value{font-size:16px;font-weight:700;color:#e2e8f0;margin-top:2px;font-family:monospace;word-break:break-word}
-table{width:100%;border-collapse:collapse;background:#111827;border-radius:8px;overflow:hidden;border:1px solid #1e3a5f}
-th{background:#1a2235;padding:10px 14px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:#64748b;border-bottom:1px solid #1e3a5f;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-td{padding:9px 14px;border-bottom:1px solid rgba(30,58,95,.4);vertical-align:middle;max-width:300px;word-break:break-all}
+.meta-item{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px 14px}
+.meta-label{font-size:11px;letter-spacing:.05em;color:#64748b;font-weight:600}
+.meta-value{font-size:16px;font-weight:700;color:#0f172a;margin-top:2px;font-family:monospace;word-break:break-word}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #e2e8f0}
+th{background:#334155;color:#fff;padding:10px 14px;text-align:left;font-size:11px;letter-spacing:.5px;border-bottom:1px solid #e2e8f0;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+td{padding:9px 14px;border-bottom:1px solid #eef2f6;vertical-align:middle;max-width:300px;word-break:break-all}
 tr:last-child td{border-bottom:none}
-tr:hover td{background:rgba(0,212,255,.03)}
+tr:nth-child(even) td{background:#f9fafb}
 td:first-child,th:first-child{padding-left:16px}
 .mono{font-family:'Courier New',monospace;font-size:12px}
 .badge{display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-family:monospace;font-weight:600}
-.badge-allow{background:rgba(16,185,129,.15);color:#10b981}
-.badge-deny{background:rgba(239,68,68,.15);color:#ef4444}
-.badge-warn{background:rgba(217,119,6,.15);color:#d97706}
-.badge-info{background:rgba(14,165,233,.15);color:#0ea5e9}
-.badge-on{background:rgba(16,185,129,.1);color:#6ee7b7}
-.badge-off{background:rgba(100,116,139,.15);color:#64748b}
-.up{color:#10b981;font-weight:700}.down{color:#ef4444;font-weight:700}
-.empty{text-align:center;color:#475569;font-style:italic;padding:16px 0}
+.badge-allow{background:#d1fae5;color:#065f46}
+.badge-deny{background:#fee2e2;color:#991b1b}
+.badge-warn{background:#fef3c7;color:#92400e}
+.badge-info{background:#e0f2fe;color:#075985}
+.badge-on{background:#d1fae5;color:#065f46}
+.badge-off{background:#f1f5f9;color:#64748b}
+.up{color:#047857;font-weight:700}.down{color:#dc2626;font-weight:700}
+.empty{text-align:center;color:#94a3b8;font-style:italic;padding:16px 0}
 .info-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:32px}
-.info-item{background:#111827;border:1px solid #1e3a5f;border-radius:8px;padding:12px 16px}
-.info-item .k{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
-.info-item .v{font-family:monospace;color:#e2e8f0;font-size:13px;word-break:break-word;overflow-wrap:break-word}
+.info-item{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px}
+.info-item .k{font-size:10px;color:#64748b;letter-spacing:.5px;margin-bottom:4px}
+.info-item .v{font-family:monospace;color:#0f172a;font-size:13px;word-break:break-word;overflow-wrap:break-word}
 .overflow{overflow-x:auto}
 b{font-weight:600}small{color:#64748b;font-size:11px}
-@media print{body{background:#fff;color:#000}table{width:100%;border:1px solid #ccc}thead{display:table-header-group}tbody tr{break-inside:avoid}.card{break-inside:avoid}th{background:#f5f5f5;color:#333;-webkit-print-color-adjust:exact;print-color-adjust:exact}td{border-bottom:1px solid #eee}.badge-allow{background:#d1fae5;color:#065f46}.badge-deny{background:#fee2e2;color:#991b1b}.badge-warn{background:#fef3c7;color:#92400e}.badge-info{background:#e0f2fe;color:#0369a1}.badge-on{background:#d1fae5;color:#065f46}.badge-off{background:#f1f5f9;color:#475569}@page{margin:1.5cm}}`;
+@media print{body{background:#fff;padding:0}table{width:100%}thead{display:table-header-group}tbody tr{break-inside:avoid}.card{break-inside:avoid;box-shadow:none}.stat-link:hover{transform:none}}`;
 
   // 2026-08-24 新增（candidate list #11）：本函式先前是同步整段字串拼接，大量規則的
   // 設定檔匯出時會讓畫面凍結；現有 11 個天然的分段建置點（policyRows/ifaceRows/...）
@@ -447,8 +450,16 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
     const complianceFindings = analyzeCompliance(parsed);
     const healthIssueRows = health.issues.map(hi =>
       `<tr><td>${esc(hi.label)}${hi.accepted ? ` <em>(${esc(tr('health.accepted_mark'))})</em>` : ''}${hi.capped ? ` <em>(${esc(tr('health.capped_mark'))})</em>` : ''}</td><td>${hi.count}</td></tr>`).join('');
-    const complianceRows = complianceFindings.map(f =>
-      `<tr><td>${esc(f.check)}</td><td>${esc(f.value)}</td><td>${esc(f.risk)}</td><td>${esc(f.detail)}</td><td>${esc((f.standards||[]).join('; '))}</td></tr>`).join('');
+    // 合規表（XN54）：只列有發現的檢查（與畫面同口徑），風險等級在地化；通過的檢查只寫數量
+    const riskLabel = r => tr(r === 'high' ? 'audit.risk_high' : r === 'medium' ? 'audit.risk_mid' : 'audit.risk_low');
+    const complianceHits = complianceFindings.filter(f => f.value !== 0);
+    const compliancePassed = complianceFindings.length - complianceHits.length;
+    const complianceRows = complianceHits.map(f =>
+      `<tr><td>${esc(f.check)}</td><td>${esc(f.value)}</td><td><span class="badge ${f.risk === 'high' ? 'badge-deny' : f.risk === 'medium' ? 'badge-warn' : 'badge-info'}">${esc(riskLabel(f.risk))}</span></td><td>${esc(f.detail)}</td><td>${esc((f.standards||[]).join('; '))}</td></tr>`).join('');
+    // 建議立即處理（XN54）：與畫面優先處理同一排序，只列高風險
+    const urgent = fwPriorityItems(health).filter(i => i.sev === 'crit').slice(0, 5);
+    const urgentHtml = urgent.length ? `<div class="card urgent"><h2>${esc(tr('rpt.urgent_title'))}</h2><ol style="padding-left:20px">${urgent.map(i =>
+      `<li style="margin:4px 0">${esc(i.label)}${i.parts ? '' : ` (${esc(String(i.count))})`}${i.cves && i.cves.length ? ` <span class="mono" style="color:#64748b">${i.cves.map(esc).join(', ')}</span>` : ''}${i.parts ? `<div style="font-size:12px;color:#64748b">${esc(i.parts.map(x => x.label).join(' ＋ '))}</div>` : ''}</li>`).join('')}</ol></div>` : '';
 
     const policyRows = parsed.policies.map(p =>
       `<tr>
@@ -468,14 +479,14 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
         <td><b>${esc(i.name)}</b></td><td>${esc(i.alias)}</td>
         <td>${esc(i.ip)}</td><td>${esc(i.mask)}</td>
         <td>${esc(i.type)}</td><td>${esc(i.vlanId)}</td>
-        <td><span class="badge" style="background:#334155;color:#94a3b8">${esc(i.role)}</span></td>
+        <td><span class="badge" style="background:#e2e8f0;color:#475569">${esc(i.role)}</span></td>
         <td>${esc(i.status)}</td><td>${esc(i.desc)}</td>
       </tr>`).join('');
     await ms(0);
 
     const routeRows = parsed.routes.map(r =>
       `<tr>
-        <td><span class="badge" style="background:#1e3a5f;color:#7dd3fc">${esc(r.type.toUpperCase())}</span></td>
+        <td><span class="badge" style="background:#e2e8f0;color:#0369a1">${esc(r.type.toUpperCase())}</span></td>
         <td>${esc(r.dst)}</td><td>${esc(r.gateway)}</td><td>${esc(r.device)}</td>
         <td>${esc(r.distance)}</td><td>${esc(r.status)}</td><td>${esc(r.comment)}</td>
       </tr>`).join('');
@@ -483,7 +494,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
 
     const vpnRows = parsed.vpn.map(v =>
       `<tr>
-        <td><span class="badge" style="background:#1e1b4b;color:#a78bfa">${esc(v.type)}</span></td>
+        <td><span class="badge" style="background:#ede9fe;color:#6d28d9">${esc(v.type)}</span></td>
         <td><b>${esc(v.name)}</b></td><td>${esc(v.remote)}</td><td>${esc(v.iface)}</td>
         <td>${esc(v.ikeVer)}</td><td>${esc(v.authMethod)}</td><td>${esc(v.proposal)}</td>
         <td>${esc(v.dhgrp)}</td><td>${esc(v.status)}</td>
@@ -501,7 +512,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
 
     const addrRows = parsed.addresses.slice(0, 200).map(a =>
       `<tr>
-        <td><span class="badge" style="background:#0f2027;color:#38bdf8">${esc(a.category)}</span></td>
+        <td><span class="badge" style="background:#e0f2fe;color:#0369a1">${esc(a.category)}</span></td>
         <td>${esc(a.name)}</td><td>${esc(a.type)}</td>
         <td>${esc(a.subnet||(a.startIp&&a.endIp?a.startIp+' ~ '+a.endIp:'')||a.fqdn||'-')}</td>
         <td>${esc(a.members||'-')}</td><td>${esc(a.comment)}</td>
@@ -509,7 +520,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
 
     const userRows = parsed.users.map(u =>
       `<tr>
-        <td><span class="badge" style="background:#0f2027;color:#34d399">${esc(u.type)}</span></td>
+        <td><span class="badge" style="background:#e0f2fe;color:#047857">${esc(u.type)}</span></td>
         <td>${esc(u.name)}</td><td>${esc(u.status)}</td>
         <td>${esc(u.authType||u.groupType||'-')}</td>
         <td>${esc(u.members||'-')}</td><td>${esc(u.email||u.server||'-')}</td>
@@ -522,19 +533,19 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       if(!sd||!sd.enabled) return '';
       const modeLabel={'source-ip-based':tr('sdwan.mode_src_ip'),'weight-based':tr('sdwan.mode_weight'),'usage-based':tr('sdwan.mode_usage'),'measured-volume-based':tr('sdwan.mode_volume'),'auto':tr('sdwan.mode_auto')};
       let h='<div class="section"><div class="section-title">🔀 SD-WAN</div>';
-      h+=`<p style="margin-bottom:12px;font-size:12px;color:#94a3b8">${tr('sdwan.lb_mode_label')}：${modeLabel[sd.lbMode]||esc(sd.lbMode)} | ${tr('sdwan.wan_links_label')}：${sd.members.length} | ${tr('sdwan.sla_probes_label')}：${sd.healthChecks.length} | ${tr('sdwan.rules_label')}：${sd.services.length}</p>`;
+      h+=`<p style="margin-bottom:12px;font-size:12px;color:#475569">${tr('sdwan.lb_mode_label')}：${modeLabel[sd.lbMode]||esc(sd.lbMode)} | ${tr('sdwan.wan_links_label')}：${sd.members.length} | ${tr('sdwan.sla_probes_label')}：${sd.healthChecks.length} | ${tr('sdwan.rules_label')}：${sd.services.length}</p>`;
       // Members
-      h+=`<div style="font-size:11px;font-weight:600;color:#7dd3fc;margin-bottom:6px">${tr('sdwan.members_title')}</div><div class="overflow"><table>`;
+      h+=`<div style="font-size:11px;font-weight:600;color:#0369a1;margin-bottom:6px">${tr('sdwan.members_title')}</div><div class="overflow"><table>`;
       h+=`<thead><tr><th>ID</th><th>${tr('col.intf')}</th><th>Zone</th><th>${tr('col.gateway')}</th><th>${tr('col.priority')}</th><th>${tr('sdwan.col_weight')}</th><th>Cost</th><th>${tr('col.status')}</th><th>${tr('col.comment')}</th></tr></thead><tbody>`;
       sd.members.forEach(m=>{ h+=`<tr><td>${esc(m.id)}</td><td><b>${esc(m.iface)}</b></td><td>${esc(m.zone)}</td><td>${esc(m.gateway)}</td><td>${esc(m.priority)}</td><td>${esc(m.weight)}</td><td>${esc(m.cost)}</td><td>${esc(m.status)}</td><td>${esc(m.comment)}</td></tr>`; });
       h+='</tbody></table></div>';
       // Health Checks
-      h+=`<div style="font-size:11px;font-weight:600;color:#fbbf24;margin-bottom:6px;margin-top:12px">${tr('sdwan.health_title')}</div><div class="overflow"><table>`;
+      h+=`<div style="font-size:11px;font-weight:600;color:#b45309;margin-bottom:6px;margin-top:12px">${tr('sdwan.health_title')}</div><div class="overflow"><table>`;
       h+=`<thead><tr><th>${tr('col.name')}</th><th>${tr('sdwan.col_server')}</th><th>${tr('col.proto')}</th><th>${tr('sdwan.col_interval')}</th><th>Failtime</th><th>${tr('sdwan.col_members')}</th><th>SLA</th></tr></thead><tbody>`;
       sd.healthChecks.forEach(hc=>{ const sla=esc(hc.slaThresholds.map(s=>`L≤${s.latency} J≤${s.jitter} PL≤${s.packetLoss}%`).join('; ')||'-'); h+=`<tr><td><b>${esc(hc.name)}</b></td><td>${esc(hc.server)}</td><td>${esc(hc.protocol)}</td><td>${esc(hc.interval)}ms</td><td>${esc(hc.failtime)}</td><td>${esc(hc.members)}</td><td style="font-size:11px">${sla}</td></tr>`; });
       h+='</tbody></table></div>';
       // Rules
-      h+=`<div style="font-size:11px;font-weight:600;color:#4ade80;margin-bottom:6px;margin-top:12px">${tr('sdwan.rules_title')}</div><div class="overflow"><table>`;
+      h+=`<div style="font-size:11px;font-weight:600;color:#15803d;margin-bottom:6px;margin-top:12px">${tr('sdwan.rules_title')}</div><div class="overflow"><table>`;
       h+=`<thead><tr><th>#</th><th>${tr('col.name')}</th><th>${tr('col.mode')}</th><th>${tr('sdwan.col_src')}</th><th>${tr('sdwan.col_dst')}</th><th>${tr('sdwan.col_priority_zone')}</th><th>SLA</th><th>${tr('col.status')}</th></tr></thead><tbody>`;
       sd.services.forEach(s=>{ const sla=esc(s.slaRefs.map(r=>r.healthCheck+'#'+r.id).join(', ')||'-'); const tgt=esc(s.priorityZone!=='-'?s.priorityZone:s.priorityMembers); h+=`<tr><td>${esc(s.id)}</td><td><b>${esc(s.name)}</b></td><td>${esc(s.mode)}</td><td>${esc(s.src)}</td><td>${esc(s.dst)}</td><td>${tgt}</td><td style="font-size:11px">${sla}</td><td>${esc(s.status)}</td></tr>`; });
       h+='</tbody></table></div></div>';
@@ -571,14 +582,14 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       h += '<div class="section-title">&#x1F4E1; ' + tr('wifi.export_title') + '</div>';
       h += '<div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))">';
       [
-        [tr('wifi.ssid_count'),       s.ssidCount,    '#00d4ff'],
+        [tr('wifi.ssid_count'),       s.ssidCount,    '#0e7490'],
         [tr('wifi.managed_ap_short'), s.apCount,      '#10b981'],
-        [tr('wifi.ap_profile_count'), s.profileCount, '#a78bfa'],
-        [tr('wifi.avg_sec_short'),    s.avgSecScore,  '#f59e0b'],
-        [tr('wifi.wifi6_count'),      s.wifi6Aps,     '#4ade80'],
-        ['Captive SSID',              s.captiveSsids, '#fbbf24'],
-        [tr('wifi.hidden_ssid'),      s.hiddenSsids,  '#94a3b8'],
-        ['&#x26A0; ' + tr('wifi.warn_issues'), s.warnIssues, '#f87171'],
+        [tr('wifi.ap_profile_count'), s.profileCount, '#6d28d9'],
+        [tr('wifi.avg_sec_short'),    s.avgSecScore,  '#b45309'],
+        [tr('wifi.wifi6_count'),      s.wifi6Aps,     '#15803d'],
+        ['Captive SSID',              s.captiveSsids, '#b45309'],
+        [tr('wifi.hidden_ssid'),      s.hiddenSsids,  '#475569'],
+        ['&#x26A0; ' + tr('wifi.warn_issues'), s.warnIssues, '#dc2626'],
       ].forEach(([lbl,val,col]) => {
         h += '<div class="stat-card" style="border-top:3px solid '+col+'">';
         h += '<div class="stat-num" style="color:'+col+'">'+val+'</div>';
@@ -587,7 +598,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       h += '</div>';
 
       // SSID table
-      h += '<div style="color:#94a3b8;font-size:11px;margin-bottom:6px">&#x1F4F6; ' + tr('wifi.ssid_analysis') + '</div>';
+      h += '<div style="color:#475569;font-size:11px;margin-bottom:6px">&#x1F4F6; ' + tr('wifi.ssid_analysis') + '</div>';
       h += '<div class="overflow"><table>';
       h += '<thead><tr><th>'+tr('wifi.ssid_name')+'</th><th>'+tr('wifi.sec_mode')+'</th><th>'+tr('wifi.sec_grade')+'</th><th>'+tr('wifi.score_col')+'</th><th>Captive</th><th>'+tr('wifi.broadcast_short')+'</th><th>PMF</th><th>VLAN</th><th>'+tr('wifi.ap_deploy')+'</th><th>'+tr('wifi.issue_col')+'</th></tr></thead><tbody>';
       wifiData.vaps.forEach(v => {
@@ -600,30 +611,30 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
           : tr('wifi.no_issue_short');
         h += '<tr>';
         h += '<td><b>'+esc2(v.ssid)+'</b>'+((!v.broadcastSsid)?' <span style="color:#64748b;font-size:10px">'+tr('wifi.hidden_short')+'</span>':'')+'</td>';
-        h += '<td><span class="badge" style="background:#1e3a5f;color:#7dd3fc">'+esc2(secLabel)+'</span></td>';
+        h += '<td><span class="badge" style="background:#e2e8f0;color:#0369a1">'+esc2(secLabel)+'</span></td>';
         h += '<td><span class="badge" style="background:'+gc+';color:'+gtc+'">'+esc2(v.secGrade)+'</span></td>';
         h += '<td style="font-family:monospace">'+v.secScore+'</td>';
         h += '<td>'+( v.captivePortal ? '&#x2705;' : '-')+'</td>';
         h += '<td>'+(v.broadcastSsid ? tr('wifi.yes') : tr('wifi.no'))+'</td>';
         h += '<td style="color:'+(v.pmf&&v.pmf!=='-'&&v.pmf!=='disable'?'#10b981':'#64748b')+'">'+esc2(v.pmf!=='-'?v.pmf:'-')+'</td>';
-        h += '<td>'+(v.vlanId!=='-' ? '<span style="color:#a78bfa">VLAN '+esc2(v.vlanId)+'</span>' : '-')+'</td>';
-        h += '<td style="color:#00d4ff">'+(v.deployedOnAps>0 ? v.deployedOnAps+' '+tr('wifi.unit_ap') : '-')+'</td>';
-        h += '<td style="font-size:11px;color:'+(issues.some(i=>i.level==='critical')?'#ef4444':issues.some(i=>i.level==='warn')?'#f59e0b':'#10b981')+'">'+issueHtml+'</td>';
+        h += '<td>'+(v.vlanId!=='-' ? '<span style="color:#6d28d9">VLAN '+esc2(v.vlanId)+'</span>' : '-')+'</td>';
+        h += '<td style="color:#0e7490">'+(v.deployedOnAps>0 ? v.deployedOnAps+' '+tr('wifi.unit_ap') : '-')+'</td>';
+        h += '<td style="font-size:11px;color:'+(issues.some(i=>i.level==='critical')?'#ef4444':issues.some(i=>i.level==='warn')?'#b45309':'#10b981')+'">'+issueHtml+'</td>';
         h += '</tr>';
       });
       h += '</tbody></table></div>';
 
       // AP instances table
       if (wifiData.wtps.length) {
-        h += '<br><div style="color:#94a3b8;font-size:11px;margin-bottom:6px">&#x1F3E2; '+tr('wifi.managed_ap_list')+' ('+wifiData.wtps.length+' '+tr('wifi.unit_ap')+')</div>';
+        h += '<br><div style="color:#475569;font-size:11px;margin-bottom:6px">&#x1F3E2; '+tr('wifi.managed_ap_list')+' ('+wifiData.wtps.length+' '+tr('wifi.unit_ap')+')</div>';
         h += '<div class="overflow"><table>';
         h += '<thead><tr><th>'+tr('wifi.col_serial')+'</th><th>'+tr('col.name')+'</th><th>'+tr('wifi.col_location')+'</th><th>'+tr('wifi.col_profile')+'</th><th>'+tr('col.status')+'</th></tr></thead><tbody>';
         wifiData.wtps.forEach(ap => {
           h += '<tr>';
           h += '<td style="font-family:monospace;font-size:11px;color:#64748b">'+esc2(ap.serial)+'</td>';
           h += '<td><b>'+esc2(ap.name)+'</b></td>';
-          h += '<td style="color:#94a3b8">'+esc2(ap.location&&ap.location!=='-'?ap.location:'')+'</td>';
-          h += '<td style="color:#a78bfa">'+esc2(ap.profile)+'</td>';
+          h += '<td style="color:#475569">'+esc2(ap.location&&ap.location!=='-'?ap.location:'')+'</td>';
+          h += '<td style="color:#6d28d9">'+esc2(ap.profile)+'</td>';
           h += '<td><span class="badge '+(ap.status==='enable'?'badge-on':'badge-off')+'">'+esc2(ap.status)+'</span></td>';
           h += '</tr>';
         });
@@ -632,14 +643,14 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
 
       // WIDS profiles
       if (wifiData.widsProfiles.length) {
-        h += '<br><div style="color:#94a3b8;font-size:11px;margin-bottom:6px">&#x1F6E1; '+tr('wifi.wids_short')+'</div>';
+        h += '<br><div style="color:#475569;font-size:11px;margin-bottom:6px">&#x1F6E1; '+tr('wifi.wids_short')+'</div>';
         h += '<div class="overflow"><table>';
         h += '<thead><tr><th>'+tr('col.name')+'</th><th>'+tr('wifi.wids_coverage')+'</th><th>'+tr('col.desc')+'</th></tr></thead><tbody>';
         wifiData.widsProfiles.forEach(p => {
-          const barColor = p.coverage>=80 ? '#10b981' : p.coverage>=50 ? '#f59e0b' : '#ef4444';
+          const barColor = p.coverage>=80 ? '#10b981' : p.coverage>=50 ? '#b45309' : '#ef4444';
           h += '<tr><td><b>'+esc2(p.name)+'</b></td>';
           h += '<td><div style="display:flex;align-items:center;gap:8px">';
-          h += '<div style="flex:1;height:6px;background:#1e3a5f;border-radius:3px">';
+          h += '<div style="flex:1;height:6px;background:#e2e8f0;border-radius:3px">';
           h += '<div style="width:'+p.coverage+'%;height:100%;background:'+barColor+';border-radius:3px"></div></div>';
           h += '<span style="font-family:monospace">'+p.coverage+'%</span></div></td>';
           h += '<td style="color:#64748b">'+esc2(p.comment&&p.comment!=='-'?p.comment:'-')+'</td></tr>';
@@ -662,7 +673,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       const e2 = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       const fmt5G = (m, label) => {
         if (!m) return '';
-        let r = '<div style="font-size:11px;color:#00d4ff;font-weight:600;margin:12px 0 6px">&#x1F4F6; ' + label + '</div>';
+        let r = '<div style="font-size:11px;color:#0e7490;font-weight:600;margin:12px 0 6px">&#x1F4F6; ' + label + '</div>';
         r += '<div class="overflow"><table><thead><tr><th>APN</th><th>'+tr('wwan.col_carrier')+'</th><th>'+tr('wwan.col_auth')+'</th><th>'+tr('wwan.col_user')+'</th><th>SIM1 PIN</th><th>SIM2 PIN</th><th>'+tr('wwan.col_prefer_sim')+'</th><th>'+tr('wwan.col_iface')+'</th></tr></thead><tbody>';
         r += '<tr>' +
           '<td style="font-family:monospace">' + e2(m.apn) + '</td>' +
@@ -684,7 +695,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
         h += fmt5G(m5g.modem2, '5G Modem 2');
       }
       if (ww.profiles?.length) {
-        h += '<div style="font-size:11px;color:#00d4ff;font-weight:600;margin:12px 0 6px">&#x1F4CB; WWAN Profile</div>';
+        h += '<div style="font-size:11px;color:#0e7490;font-weight:600;margin:12px 0 6px">&#x1F4CB; WWAN Profile</div>';
         h += '<div class="overflow"><table><thead><tr><th>Profile</th><th>APN</th><th>'+tr('wwan.col_auth')+'</th><th>'+tr('wwan.col_user')+'</th><th>Modem</th><th>'+tr('wwan.col_simpin')+'</th><th>'+tr('wwan.col_carrier')+'</th><th>VDOM</th></tr></thead><tbody>';
         ww.profiles.forEach(p => {
           h += '<tr><td><b>' + e2(p.name) + '</b></td><td style="font-family:monospace">' + e2(p.apn) + '</td><td>' + e2(p.authType) + '</td><td style="font-family:monospace">' + e2(p.username) + '</td><td>' + e2(p.modemId) + '</td><td><span class="badge ' + (p.simPin==='set'?'badge-on':'badge-off') + '">' + (p.simPin==='set'?tr('wwan.pin_set'):tr('wwan.pin_notset')) + '</span></td><td>' + e2(p.provider) + '</td><td style="color:#64748b">' + e2(p._vdom||'-') + '</td></tr>';
@@ -692,7 +703,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
         h += '</tbody></table></div>';
       }
       if (ww.lteInterfaces?.length) {
-        h += '<div style="font-size:11px;color:#00d4ff;font-weight:600;margin:12px 0 6px">&#x1F4F1; ' + tr('wwan.lte_iface') + '</div>';
+        h += '<div style="font-size:11px;color:#0e7490;font-weight:600;margin:12px 0 6px">&#x1F4F1; ' + tr('wwan.lte_iface') + '</div>';
         h += '<div class="overflow"><table><thead><tr><th>'+tr('col.name')+'</th><th>'+tr('wwan.col_apn_profile')+'</th><th>'+tr('wwan.col_roaming')+'</th><th>'+tr('col.status')+'</th><th>'+tr('col.comment')+'</th></tr></thead><tbody>';
         ww.lteInterfaces.forEach(i => {
           h += '<tr><td style="font-family:monospace">' + e2(i.name) + '</td><td>' + e2(i.apnProfile) + '</td><td>' + (i.allowRoaming==='yes'?tr('wwan.pill_allow'):tr('wwan.pill_disable')) + '</td><td>' + (i.disabled==='yes'?tr('wwan.pill_disable'):tr('wwan.pill_enable')) + '</td><td style="color:#64748b">' + e2(i.comment) + '</td></tr>';
@@ -700,7 +711,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
         h += '</tbody></table></div>';
       }
       if (ww.apnProfiles?.length) {
-        h += '<div style="font-size:11px;color:#fbbf24;font-weight:600;margin:12px 0 6px">&#x1F4CB; ' + tr('wwan.lte_apn_profile') + '</div>';
+        h += '<div style="font-size:11px;color:#b45309;font-weight:600;margin:12px 0 6px">&#x1F4CB; ' + tr('wwan.lte_apn_profile') + '</div>';
         h += '<div class="overflow"><table><thead><tr><th>'+tr('wwan.col_apn_name')+'</th><th>APN</th><th>'+tr('wwan.col_auth')+'</th><th>'+tr('wwan.col_user')+'</th><th>'+tr('wwan.col_password')+'</th><th>'+tr('wwan.col_ip_type')+'</th><th>'+tr('wwan.col_distance')+'</th></tr></thead><tbody>';
         ww.apnProfiles.forEach(p => {
           h += '<tr><td style="font-family:monospace">' + e2(p.name) + '</td><td>' + e2(p.apn) + '</td><td>' + e2(p.authType) + '</td><td style="font-family:monospace">' + e2(p.username) + '</td><td style="color:#64748b">' + e2(p.passwd) + '</td><td>' + e2(p.ipType) + '</td><td>' + e2(p.distance) + '</td></tr>';
@@ -708,7 +719,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
         h += '</tbody></table></div>';
       }
       if (ww.lteModem) {
-        h += '<div style="font-size:11px;color:#fbbf24;font-weight:600;margin:16px 0 6px">&#x2699; ' + tr('wwan.lte_settings') + '</div>';
+        h += '<div style="font-size:11px;color:#b45309;font-weight:600;margin:16px 0 6px">&#x2699; ' + tr('wwan.lte_settings') + '</div>';
         h += '<div class="overflow"><table><thead><tr><th>'+tr('col.status')+'</th><th>'+tr('wwan.col_port')+'</th><th>APN</th><th>'+tr('wwan.col_auth')+'</th><th>'+tr('wwan.col_autoswitch')+'</th></tr></thead><tbody>';
         h += '<tr><td><span class="badge ' + (ww.lteModem.status==='enable'?'badge-on':'badge-off') + '">' + ww.lteModem.status + '</span></td><td style="font-family:monospace">' + e2(ww.lteModem.modemPort) + '</td><td style="font-family:monospace">' + e2(ww.lteModem.apn) + '</td><td>' + e2(ww.lteModem.authType) + '</td><td><span class="badge ' + (ww.lteModem.autoSwitch==='enable'?'badge-on':'badge-off') + '">' + ww.lteModem.autoSwitch + '</span></td></tr>';
         h += '</tbody></table></div>';
@@ -725,7 +736,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
       let h = '<div class="section" id="sec-wlan">';
       h += '<div class="section-title">&#x1F4F6; ' + tr('wlan.section_title') + '</div>';
       if (wl.interfaces.length) {
-        h += '<div style="font-size:11px;color:#00d4ff;font-weight:600;margin:0 0 6px">&#x1F4FB; ' + tr('wlan.iface_title') + '</div>';
+        h += '<div style="font-size:11px;color:#0e7490;font-weight:600;margin:0 0 6px">&#x1F4FB; ' + tr('wlan.iface_title') + '</div>';
         h += '<div class="overflow"><table><thead><tr><th>'+tr('col.if_name')+'</th><th>SSID</th><th>'+tr('wlan.col_band')+'</th><th>'+tr('col.mode')+'</th><th>'+tr('wlan.col_freq')+'</th><th>'+tr('wlan.col_auth_types')+'</th><th>'+tr('wlan.col_key')+'</th><th>'+tr('col.status')+'</th></tr></thead><tbody>';
         wl.interfaces.forEach(i => {
           h += '<tr>' +
@@ -742,7 +753,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
         h += '</tbody></table></div>';
       }
       if (wl.capsmanConfigs.length) {
-        h += '<div style="font-size:11px;color:#fbbf24;font-weight:600;margin:12px 0 6px">&#x1F5C2; ' + tr('wlan.capsman_title') + '</div>';
+        h += '<div style="font-size:11px;color:#b45309;font-weight:600;margin:12px 0 6px">&#x1F5C2; ' + tr('wlan.capsman_title') + '</div>';
         h += '<div class="overflow"><table><thead><tr><th>'+tr('col.name')+'</th><th>SSID</th><th>'+tr('wlan.col_band')+'</th><th>'+tr('wlan.col_auth_types')+'</th><th>'+tr('wlan.col_key')+'</th></tr></thead><tbody>';
         wl.capsmanConfigs.forEach(c => {
           h += '<tr>' +
@@ -768,9 +779,10 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
 </head>
 <body>
 <h1>🛡️ ${tr('rpt.fw_title')}</h1>
-<div class="subtitle">Generated by FW-Analyzer · ${esc(info.vendor||info.hostname)} · ${now}</div>
+<div class="subtitle">${esc(tr('rpt.generated_by'))} · ${esc(info.vendor||info.hostname)} · ${now}</div>
 
 <div class="card"><h2>${esc(tr('exec.title'))}</h2>${buildFirewallExecSummary(info.hostname, health).map(x=>`<p style="margin:4px 0">${esc(x)}</p>`).join('')}</div>
+${urgentHtml}
 
 <div class="info-grid">
   <div class="info-item"><div class="k">${tr('rpt.vendor_label')}</div><div class="v">${esc(info.vendor)}</div></div>
@@ -781,20 +793,20 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
 
 <div class="stats">
   ${stat(tr('rpt.stat_health')+' '+health.grade, health.score, health.gradeColor, 'sec-audit')}
-  ${stat(tr('rpt.stat_iface'), parsed.interfaces.length, '#00d4ff', 'sec-interfaces')}
-  ${stat(tr('rpt.stat_policy'), parsed.policies.length, '#7dd3fc', 'sec-policies')}
+  ${stat(tr('rpt.stat_iface'), parsed.interfaces.length, '#0e7490', 'sec-interfaces')}
+  ${stat(tr('rpt.stat_policy'), parsed.policies.length, '#0369a1', 'sec-policies')}
   ${stat(tr('rpt.stat_allow'), allowN, '#10b981', 'sec-policies')}
   ${stat(tr('rpt.stat_deny'), denyN, '#ef4444', 'sec-policies')}
-  ${stat(tr('rpt.stat_static_rt'), parsed.routes.filter(r=>r.type==='static').length, '#f59e0b', 'sec-routes')}
-  ${stat(tr('rpt.stat_dyn_rt'), parsed.routes.filter(r=>r.type!=='static'&&r.type!=='policy').length, '#fb923c', 'sec-routes')}
-  ${stat(tr('rpt.stat_vpn'), parsed.vpn.length, '#a78bfa', 'sec-vpn')}
-  ${stat(tr('rpt.stat_addr'), parsed.addresses.length, '#38bdf8', 'sec-addresses')}
-  ${stat(tr('rpt.stat_svc'), parsed.services.length, '#4ade80')}
-  ${stat(tr('rpt.stat_user'), parsed.users.filter(u=>u.type==='local').length, '#f472b6', 'sec-users')}
-  ${stat(tr('rpt.stat_group'), parsed.users.filter(u=>u.type==='group').length, '#fb923c', 'sec-users')}
-  ${stat(tr('rpt.stat_nat'), parsed.nat.length, '#fbbf24')}
-  ${parsed.wwan&&parsed.wwan.modem5G ? stat('5G Modem', (parsed.wwan.modem5G.modem1?1:0)+(parsed.wwan.modem5G.modem2?1:0), '#00c8f0', 'sec-wwan') : parsed.wwan&&((parsed.wwan.profiles?.length)||(parsed.wwan.lteInterfaces?.length)) ? stat('LTE/WWAN', (parsed.wwan.profiles?.length)||(parsed.wwan.lteInterfaces?.length)||0, '#00c8f0', 'sec-wwan') : ''}
-  ${parsed.wlan&&parsed.wlan.interfaces.length ? stat(tr('rpt.stat_wlan'), parsed.wlan.interfaces.length, '#4ade80', 'sec-wlan') : ''}
+  ${stat(tr('rpt.stat_static_rt'), parsed.routes.filter(r=>r.type==='static').length, '#b45309', 'sec-routes')}
+  ${stat(tr('rpt.stat_dyn_rt'), parsed.routes.filter(r=>r.type!=='static'&&r.type!=='policy').length, '#c2410c', 'sec-routes')}
+  ${stat(tr('rpt.stat_vpn'), parsed.vpn.length, '#6d28d9', 'sec-vpn')}
+  ${stat(tr('rpt.stat_addr'), parsed.addresses.length, '#0369a1', 'sec-addresses')}
+  ${stat(tr('rpt.stat_svc'), parsed.services.length, '#15803d')}
+  ${stat(tr('rpt.stat_user'), parsed.users.filter(u=>u.type==='local').length, '#be185d', 'sec-users')}
+  ${stat(tr('rpt.stat_group'), parsed.users.filter(u=>u.type==='group').length, '#c2410c', 'sec-users')}
+  ${stat(tr('rpt.stat_nat'), parsed.nat.length, '#b45309')}
+  ${parsed.wwan&&parsed.wwan.modem5G ? stat('5G Modem', (parsed.wwan.modem5G.modem1?1:0)+(parsed.wwan.modem5G.modem2?1:0), '#0e7490', 'sec-wwan') : parsed.wwan&&((parsed.wwan.profiles?.length)||(parsed.wwan.lteInterfaces?.length)) ? stat('LTE/WWAN', (parsed.wwan.profiles?.length)||(parsed.wwan.lteInterfaces?.length)||0, '#0e7490', 'sec-wwan') : ''}
+  ${parsed.wlan&&parsed.wlan.interfaces.length ? stat(tr('rpt.stat_wlan'), parsed.wlan.interfaces.length, '#15803d', 'sec-wlan') : ''}
 </div>
 
 <div class="section" id="sec-audit">
@@ -807,6 +819,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
     <thead><tr><th>${tr('audit.col_check')}</th><th>${tr('audit.col_result')}</th><th>${tr('audit.col_risk')}</th><th>${tr('audit.col_detail')}</th><th>${tr('audit.col_standards')}</th></tr></thead>
     <tbody>${complianceRows || '<tr><td colspan="5" style="text-align:center;color:#64748b">'+tr('rpt.no_data')+'</td></tr>'}</tbody>
   </table></div>
+  ${compliancePassed ? `<p style="margin-top:6px;font-size:12px;color:#64748b">${esc(tr('rpt.passed_note').replace('{n}', compliancePassed))}</p>` : ''}
 </div>
 
 <div class="section" id="sec-interfaces">
@@ -839,7 +852,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
     <thead><tr><th>${tr('col.type')}</th><th>${tr('col.name')}</th><th>${tr('col.remote_gw')}</th><th>${tr('col.intf')}</th><th>IKE</th><th>${tr('col.auth')}</th><th>${tr('col.proposal')}</th><th>${tr('col.dh_group')}</th><th>${tr('col.status')}</th></tr></thead>
     <tbody>${vpnRows || '<tr><td colspan="9" style="text-align:center;color:#64748b">'+tr('rpt.no_data')+'</td></tr>'}</tbody>
   </table></div>
-  ${ph2Rows ? `<br><div style="color:#94a3b8;font-size:11px;margin-bottom:6px">${tr('rpt.ph2_detail')}</div>
+  ${ph2Rows ? `<br><div style="color:#475569;font-size:11px;margin-bottom:6px">${tr('rpt.ph2_detail')}</div>
   <div class="overflow"><table>
     <thead><tr><th>Phase1</th><th>Phase2</th><th>${tr('col.proposal')}</th><th>${tr('col.dh_group')}</th><th>${tr('col.lifetime')}</th><th>${tr('col.local_sub')}</th><th>${tr('col.remote_sub')}</th></tr></thead>
     <tbody>${ph2Rows}</tbody>
@@ -882,7 +895,7 @@ ${(parsed.nat&&parsed.nat.length)?`<div class="section" id="sec-nat">
       <td class="mono">${esc(n.extIp)||'&#x2014;'}</td><td class="mono">${esc(n.mapIp)||'&#x2014;'}</td>
       <td class="mono">${esc(n.extPort)||'&#x2014;'}</td><td class="mono">${esc(n.mapPort)||'&#x2014;'}</td>
       <td>${esc(n.proto)||'&#x2014;'}</td>
-      <td><span class="badge" style="background:${n.status==='enable'?'rgba(34,197,94,.2);color:#22c55e':'rgba(100,116,139,.2);color:#94a3b8'}">${esc(n.status)||'&#x2014;'}</span></td>
+      <td><span class="badge" style="background:${n.status==='enable'?'rgba(34,197,94,.2);color:#22c55e':'rgba(100,116,139,.2);color:#475569'}">${esc(n.status)||'&#x2014;'}</span></td>
       <td>${esc(n.comment)||'&#x2014;'}</td>
     </tr>`).join('')}</tbody>
   </table></div>
@@ -892,7 +905,7 @@ ${(parsed.services&&parsed.services.filter(s=>s.category==='custom'||s.category=
   <div class="overflow"><table>
     <thead><tr><th>${tr('col.category')}</th><th>${tr('col.name')}</th><th>Proto</th><th>TCP</th><th>UDP</th><th>${tr('col.members')}</th><th>${tr('col.comment')}</th></tr></thead>
     <tbody>${parsed.services.filter(s=>s.category==='custom'||s.category==='group').slice(0,200).map(s=>`<tr>
-      <td><span class="badge" style="background:#0f2027;color:#38bdf8">${esc(s.category)}</span></td>
+      <td><span class="badge" style="background:#e0f2fe;color:#0369a1">${esc(s.category)}</span></td>
       <td>${esc(s.name)||'&#x2014;'}</td><td>${esc(s.proto)||'&#x2014;'}</td>
       <td class="mono">${esc(s.tcpPorts)||'&#x2014;'}</td><td class="mono">${esc(s.udpPorts)||'&#x2014;'}</td>
       <td>${esc(s.members)||'&#x2014;'}</td><td>${esc(s.comment)||'&#x2014;'}</td>
@@ -910,7 +923,7 @@ ${(parsed.dhcp&&((parsed.dhcp.servers&&parsed.dhcp.servers.length)||(parsed.dhcp
       <td class="mono">${esc(s.iface)||'&#x2014;'}</td>
     </tr>`).join('')}</tbody>
   </table></div>`:''}
-  ${(parsed.dhcp.relays&&parsed.dhcp.relays.length)?`<p style="margin:8px 0 4px;color:#94a3b8;font-size:12px">Relay</p><div class="overflow"><table>
+  ${(parsed.dhcp.relays&&parsed.dhcp.relays.length)?`<p style="margin:8px 0 4px;color:#475569;font-size:12px">Relay</p><div class="overflow"><table>
     <thead><tr><th>Interface</th><th>Server IP</th></tr></thead>
     <tbody>${parsed.dhcp.relays.map(r=>`<tr><td class="mono">${esc(r.iface)||'&#x2014;'}</td><td class="mono">${esc(r.serverIp)||'&#x2014;'}</td></tr>`).join('')}</tbody>
   </table></div>`:''}
@@ -921,7 +934,7 @@ ${(parsed.dns&&((parsed.dns.servers&&parsed.dns.servers.length)||(parsed.dns.sta
     <thead><tr><th>DNS Server</th></tr></thead>
     <tbody>${parsed.dns.servers.map(s=>`<tr><td class="mono">${esc(typeof s==='string'?s:(s.ip||JSON.stringify(s)))}</td></tr>`).join('')}</tbody>
   </table></div>`:''}
-  ${(parsed.dns.static&&parsed.dns.static.length)?`<p style="margin:8px 0 4px;color:#94a3b8;font-size:12px">Static DNS</p><div class="overflow"><table>
+  ${(parsed.dns.static&&parsed.dns.static.length)?`<p style="margin:8px 0 4px;color:#475569;font-size:12px">Static DNS</p><div class="overflow"><table>
     <thead><tr><th>${tr('col.name')}</th><th>IP</th><th>${tr('col.type')}</th></tr></thead>
     <tbody>${parsed.dns.static.map(s=>`<tr><td>${esc(s.fqdn||s.name)||'&#x2014;'}</td><td class="mono">${esc(s.ip)||'&#x2014;'}</td><td>${esc(s.type)||'&#x2014;'}</td></tr>`).join('')}</tbody>
   </table></div>`:''}
@@ -936,7 +949,7 @@ ${(parsed.snmp&&((parsed.snmp.communities&&parsed.snmp.communities.length)||(par
       <td class="mono">${esc(Array.isArray(s.hosts)?s.hosts.join(', '):s.hosts)||'&#x2014;'}</td>
     </tr>`).join('')}</tbody>
   </table></div>`:''}
-  ${(parsed.snmp.trapServers&&parsed.snmp.trapServers.length)?`<p style="margin:8px 0 4px;color:#94a3b8;font-size:12px">Trap Servers</p><div class="overflow"><table>
+  ${(parsed.snmp.trapServers&&parsed.snmp.trapServers.length)?`<p style="margin:8px 0 4px;color:#475569;font-size:12px">Trap Servers</p><div class="overflow"><table>
     <thead><tr><th>Server</th><th>Community</th><th>Port</th><th>Version</th></tr></thead>
     <tbody>${parsed.snmp.trapServers.map(s=>`<tr>
       <td class="mono">${esc(s.ip||s.host||s.server)||'&#x2014;'}</td>
@@ -947,15 +960,15 @@ ${(parsed.snmp&&((parsed.snmp.communities&&parsed.snmp.communities.length)||(par
 </div>`:''}
 ${(parsed.logservers&&((parsed.logservers.syslog&&parsed.logservers.syslog.length)||(parsed.logservers.fortianalyzer&&parsed.logservers.fortianalyzer.length)||(parsed.logservers.netflow&&parsed.logservers.netflow.length)))?`<div class="section" id="sec-log">
   <div class="section-title">&#x1F4CB; ${tr('rpt.sec_log')}</div>
-  ${(parsed.logservers.syslog&&parsed.logservers.syslog.length)?`<p style="margin:4px 0;color:#94a3b8;font-size:12px">Syslog (${parsed.logservers.syslog.length})</p><div class="overflow"><table>
+  ${(parsed.logservers.syslog&&parsed.logservers.syslog.length)?`<p style="margin:4px 0;color:#475569;font-size:12px">Syslog (${parsed.logservers.syslog.length})</p><div class="overflow"><table>
     <thead><tr><th>Server</th><th>Port</th><th>Facility</th><th>Level</th><th>Status</th></tr></thead>
     <tbody>${parsed.logservers.syslog.map(s=>`<tr><td class="mono">${esc(s.ip||s.server)||'&#x2014;'}</td><td>${esc(s.port||'514')}</td><td>${esc(s.facility)||'&#x2014;'}</td><td>${esc(s.level||s.severity)||'&#x2014;'}</td><td>${esc(s.status||'enable')}</td></tr>`).join('')}</tbody>
   </table></div>`:''}
-  ${(parsed.logservers.fortianalyzer&&parsed.logservers.fortianalyzer.length)?`<p style="margin:8px 0 4px;color:#94a3b8;font-size:12px">FortiAnalyzer</p><div class="overflow"><table>
+  ${(parsed.logservers.fortianalyzer&&parsed.logservers.fortianalyzer.length)?`<p style="margin:8px 0 4px;color:#475569;font-size:12px">FortiAnalyzer</p><div class="overflow"><table>
     <thead><tr><th>Server</th><th>Status</th><th>Upload Day</th></tr></thead>
     <tbody>${parsed.logservers.fortianalyzer.map(s=>`<tr><td class="mono">${esc(s.ip||s.server)||'&#x2014;'}</td><td>${esc(s.status)||'&#x2014;'}</td><td>${esc(s.uploadDay)||'&#x2014;'}</td></tr>`).join('')}</tbody>
   </table></div>`:''}
-  ${(parsed.logservers.netflow&&parsed.logservers.netflow.length)?`<p style="margin:8px 0 4px;color:#94a3b8;font-size:12px">NetFlow</p><div class="overflow"><table>
+  ${(parsed.logservers.netflow&&parsed.logservers.netflow.length)?`<p style="margin:8px 0 4px;color:#475569;font-size:12px">NetFlow</p><div class="overflow"><table>
     <thead><tr><th>Collector</th><th>Port</th><th>Version</th></tr></thead>
     <tbody>${parsed.logservers.netflow.map(s=>`<tr><td class="mono">${esc(s.collector||s.ip)||'&#x2014;'}</td><td>${esc(s.port||'2055')}</td><td>${esc(s.version||s.ver)||'&#x2014;'}</td></tr>`).join('')}</tbody>
   </table></div>`:''}
@@ -966,13 +979,13 @@ ${(parsed.schedules&&parsed.schedules.length)?`<div class="section" id="sec-sche
     <thead><tr><th>${tr('col.name')}</th><th>${tr('col.type')}</th><th>Start</th><th>End</th><th>Day</th></tr></thead>
     <tbody>${parsed.schedules.map(s=>`<tr>
       <td>${esc(s.name)||'&#x2014;'}</td>
-      <td><span class="badge" style="background:#0f2027;color:#38bdf8">${esc(s.type)||'&#x2014;'}</span></td>
+      <td><span class="badge" style="background:#e0f2fe;color:#0369a1">${esc(s.type)||'&#x2014;'}</span></td>
       <td class="mono">${esc(s.start)||'&#x2014;'}</td><td class="mono">${esc(s.end)||'&#x2014;'}</td>
       <td>${esc(s.day)||'&#x2014;'}</td>
     </tr>`).join('')}</tbody>
   </table></div>
 </div>`:''}
-<div style="text-align:center;color:#334155;font-size:11px;margin-top:40px;font-family:monospace">
+<div style="text-align:center;color:#e2e8f0;font-size:11px;margin-top:40px;font-family:monospace">
   FW-Analyzer — Pure JS Firewall Configuration Analyzer | ${now}
 </div>
 

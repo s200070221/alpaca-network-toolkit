@@ -609,7 +609,9 @@ function buildSwitchExecSummary(host,health){
   if(!active.length)lines.push(tr('exec.none'));
   else{
     lines.push(tr('exec.found').replace('{n}',active.length).replace('{crit}',active.filter(i=>i.sev==='crit').length).replace('{warn}',active.filter(i=>i.sev==='warn').length));
-    const top=active.slice().sort((a,b)=>(RANK[a.sev]??3)-(RANK[b.sev]??3)||b.count-a.count).slice(0,3);
+    // 與總覽結論卡同一排序（XN54：swPriorityItems 只含高／中風險，沒有時退回原本排序）
+    const prio=swPriorityItems({issues:active});
+    const top=(prio.length?prio:active.slice().sort((a,b)=>(RANK[a.sev]??3)-(RANK[b.sev]??3)||b.count-a.count)).slice(0,3);
     lines.push(tr('exec.top').replace('{list}',top.map(i=>tr('exec.item').replace('{label}',i.label).replace('{count}',i.count)).join(tr('exec.sep'))));
   }
   if(accepted)lines.push(tr('exec.accepted').replace('{n}',accepted));
