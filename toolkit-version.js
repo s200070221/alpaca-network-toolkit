@@ -166,7 +166,19 @@
     dlg.showModal();
   }
 
+  // 各工具支援廠牌數（XN52）：唯一來源是入口頁 TOOLS[].vendors 的清單長度（qa test_hub_tasks 比對），
+  // 頁面文字寫 {n}，元素加 data-vendor-count="fw|sw|ca|gen|log" 後由 fillVendorCounts() 填入
+  const TOOLKIT_VENDOR_COUNTS = { fw: 28, sw: 25, ca: 48, gen: 19, log: 51 };
+  function fillVendorCounts() {
+    if (typeof document === 'undefined') return;
+    document.querySelectorAll('[data-vendor-count]').forEach(el => {
+      const n = TOOLKIT_VENDOR_COUNTS[el.getAttribute('data-vendor-count')];
+      if (n != null && el.textContent.indexOf('{n}') >= 0) el.textContent = el.textContent.split('{n}').join(String(n));
+    });
+  }
   function renderToolkitVersion(lang) {
+    // 各頁 setLang() 先呼叫本函式才套用 data-i18n 文字，數字等目前這輪語言切換完成後再填
+    setTimeout(fillVendorCounts, 0);
     if (lang) current = lang;
     const L = lbl(current);
     document.querySelectorAll('[data-toolkit-version]').forEach(el => {
@@ -184,6 +196,8 @@
   window.TOOLKIT_VERSION = TOOLKIT_VERSION;
   window.TOOLKIT_CHANGELOG = CHANGELOG;
   window.renderToolkitVersion = renderToolkitVersion;
+  window.TOOLKIT_VENDOR_COUNTS = TOOLKIT_VENDOR_COUNTS;
+  window.fillVendorCounts = fillVendorCounts;
   // 頁面自己的 setLang 會再呼叫一次；這裡先依共用語言偏好畫出來
   document.addEventListener('DOMContentLoaded', () => {
     let lang = '';
