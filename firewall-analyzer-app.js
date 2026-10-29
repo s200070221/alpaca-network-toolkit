@@ -1012,24 +1012,8 @@ function onParsed(){
     if (auditNav) {
       auditNav.style.display = '';
       try {
-        // 與 case 'audit' 的 tbl-cnt 用同一套算法（原本漏算 analyzeDenyBlocking()／
-        // analyzeMergeSuggestions()，會讓側邊欄徽章顯示綠色「0」但實際打開稽核頁卻有紅色
-        // 警示，2026-09 全功能審查發現）
-        const _sh = analyzeRuleShadowing(d.policies || [], d.addresses);
-        const _db = analyzeDenyBlocking(d.policies || [], d.addresses);
-        const _mg = analyzeMergeSuggestions(d.policies || []);
-        const _un = analyzeUnusedObjects(d);
-        const _co = analyzeCompliance(d);
-        const _dup = analyzeExactDuplicates(d.policies || []);
-        const _xv = analyzeCrossVdomInconsistency(d);
-        // 2026-09-23 新增：規則缺無備註／過大巢狀群組，比照上方既有註解精神，需與 case 'audit'
-        // 的 tbl-cnt 用同一套算法，避免側邊欄徽章與稽核頁面實際命中數再次脫節
-        const _mc = analyzeMissingComments(d);
-        const _og = analyzeOversizedGroups(d);
-        const _do = analyzeDuplicateObjects(d);
-        const total = _sh.length + _db.length + _mg.length + _un.unusedAddrs.length + _un.unusedSvcs.length +
-                      _co.filter(f => f.risk === 'high' || f.risk === 'medium').length + _dup.length + _xv.length +
-                      _mc.length + _og.length + _do.length;
+        // 與 case 'audit' 的 tbl-cnt 共用 _fwAuditCounts()（XN51：原本各算各的，合規連數量 0 的檢查也算進徽章）
+        const total = _fwAuditCounts(d).total;
         const nc = $('nc-audit');
         if (nc) { nc.textContent = total; nc.style.color = total > 0 ? 'var(--red)' : 'var(--green)'; }
       } catch(e) { console.warn('audit badge error:', e); }
@@ -1042,7 +1026,8 @@ function onParsed(){
     buildVdomBar(PARSED);
     buildRefIndex(PARSED);
     // 只上傳無線控制器時沒有防火牆規則，直接開 WiFi 分析頁
-    showSection(_onlyWlcUpload()&&WIFI_DATA?'wifi':'policies');
+    // 分析完先看摘要（XN51）；只上傳無線控制器時沒有防火牆規則，直接開 WiFi 分析頁
+    showSection(_onlyWlcUpload()&&WIFI_DATA?'wifi':'summary');
     _applyPendingFwQuery();
     renderNextBar();
   }
@@ -1133,12 +1118,14 @@ function onParsed(){
   // 既有慣例，audit.js 載入順序在 app.js 之前，此處直接呼叫其全域宣告的版本）。
 
   // ── Section renderer ──────────────────────────────────────────
-  const SEC_LABELS={interfaces:()=>tr('sec.interfaces'),policies:()=>tr('sec.policies'),routes:()=>tr('sec.routes'),vpn:()=>tr('sec.vpn'),nat:()=>tr('sec.nat'),addresses:()=>tr('sec.addresses'),services:()=>tr('sec.services'),schedules:()=>tr('sec.schedules'),users:()=>tr('sec.users'),audit:()=>tr('nav.audit'),query:()=>tr('nav.query'),fortiswitch:()=>tr('nav.fortiswitch')};
+  const SEC_LABELS={summary:()=>tr('nav.summary'),interfaces:()=>tr('sec.interfaces'),policies:()=>tr('sec.policies'),routes:()=>tr('sec.routes'),vpn:()=>tr('sec.vpn'),nat:()=>tr('sec.nat'),addresses:()=>tr('sec.addresses'),services:()=>tr('sec.services'),schedules:()=>tr('sec.schedules'),users:()=>tr('sec.users'),audit:()=>tr('nav.audit'),query:()=>tr('nav.query'),fortiswitch:()=>tr('nav.fortiswitch')};
 
   function renderSection(sec){
     // 這幾頁是直接把標題／說明／多個區塊寫進 #tbl-wrap，本身沒有左右內距（原本貼齊左邊界）；
     // 其他頁面各自已有內距或是單一表格，維持原樣
-    $('tbl-wrap').style.padding=['snmp','log','audit','query'].includes(sec)?'12px 18px':'';
+    $('tbl-wrap').style.padding=['summary','snmp','log','audit','query'].includes(sec)?'12px 18px':'';
+    // 摘要頁沒有表格，搜尋列與匯出 CSV 不適用（XN51）
+    const _tbar=document.querySelector('#view-data .tbar'); if(_tbar) _tbar.style.display=sec==='summary'?'none':'';
     $('tbl-section-label').textContent=(typeof SEC_LABELS[sec]==='function'?SEC_LABELS[sec]():SEC_LABELS[sec])||sec;
     const d=PARSED;
     let data,sumCards,thead,rowFn,_extraHtml='';
@@ -1498,41 +1485,41 @@ function onParsed(){
         thead=`<tr><th>${tr('col.type')}</th><th>${tr('col.name')}</th><th>${tr('col.status')}</th><th>${tr('col.access_level')}</th><th>${tr('col.auth_method')}</th><th>${tr('col.email_server')}</th><th>2FA</th><th>${tr('col.role_profile')}</th><th>${tr('col.main_perm')}</th><th>${tr('col.members')}</th><th>${tr('col.desc')}</th></tr>`;
         rowFn=r=>`<tr><td>${pUserType(r.type)}</td><td class="mono" style="color:var(--accent)">${esc(r.name)}</td><td>${r.status==='disable'||r.status==='Disable'||r.status==='inactive'?pill(tr('wwan.pill_disable'),'p-deny'):pill(tr('wwan.pill_enable'),'p-allow')}</td><td>${pAccessLevel(r.accessLevel)}</td><td style="color:var(--text-dim)">${esc(r.authType||r.groupType||r.authMethod||'-')}</td><td style="color:var(--text-dim)">${esc(r.email||r.server||'-')}</td><td>${r.twoFactor&&r.twoFactor!=='disable'?pill('2FA','p-purple'):'-'}</td><td style="font-size:11px;color:var(--text-dim)">${esc((r.roles&&r.roles.length?r.roles.join(', '):'-'))}</td><td style="font-size:11px">${renderPerms(r.permissions)}</td><td style="max-width:160px;font-size:11px;color:var(--text-dim)">${esc(r.members||'-')}</td><td style="color:var(--text-dim);font-size:11px">${esc(r.comment||'-')}</td></tr>`;
         break;
+      case 'summary': {
+        // 摘要分頁（XN51）：分析完的落點，先給結論再看細節
+        $('sum-wrap').innerHTML = ''; $('filter-action').style.display = 'none'; $('filter-type').style.display = 'none';
+        let _h = null; try { _h = computeFirewallHealth(d, _fwHealthOpts()); } catch (e) { _h = null; }
+        if (!_h) { $('tbl-wrap').innerHTML = '<div class="nodata">' + tr('msg.no_data_yet') + '</div>'; return; }
+        let _v = null; try { _v = fwVulnStatus(d, _fwHealthOpts()); } catch (e) { _v = null; }
+        $('tbl-cnt').textContent = '';
+        $('tbl-wrap').innerHTML = buildFwSummaryHtml({ health: _h, prio: fwPriorityItems(_h), parsed: d, vuln: _v });
+        return;
+      }
       case 'audit': {
         $('sum-wrap').innerHTML = '';
         $('filter-action').style.display = 'none';
         $('filter-type').style.display   = 'none';
         if (!PARSED) { $('tbl-wrap').innerHTML = '<div class="nodata">'+tr('msg.no_data_yet')+'</div>'; return; }
-        const _sh  = analyzeRuleShadowing(PARSED.policies || [], PARSED.addresses);
-        const _db  = analyzeDenyBlocking(PARSED.policies || [], PARSED.addresses);
-        const _mg  = analyzeMergeSuggestions(PARSED.policies || []);
-        const _un  = analyzeUnusedObjects(PARSED);
-        const _co  = analyzeCompliance(PARSED);
-        const _dup = analyzeExactDuplicates(PARSED.policies || []);
-        const _xv  = analyzeCrossVdomInconsistency(PARSED);
-        const _mc  = analyzeMissingComments(PARSED);
-        const _og  = analyzeOversizedGroups(PARSED);
-        const _do  = analyzeDuplicateObjects(PARSED);
-        // 高／中風險數與結果列、主管摘要同一來源：健康度未接受的高風險／中風險類數（XN50；原本是固定的檢查項數，數量 0 也算）
-        let _hl = null; try { _hl = computeFirewallHealth(PARSED, _fwHealthOpts()); } catch (e) { _hl = null; }
-        const _act = _hl ? _hl.issues.filter(i => !i.accepted) : [];
-        const _hi  = _act.filter(i => i.sev === 'crit').length;
-        const _med = _act.filter(i => i.sev === 'warn').length;
-        $('sum-wrap').innerHTML = sumC([
-          { l:tr('audit.sum_shadow'),      v: _sh.length,              c: _sh.length  ? 'var(--red)'    : 'var(--green)' },
-          { l:tr('audit.sum_deny_block'),  v: _db.length,               c: _db.length  ? 'var(--red)'    : 'var(--green)' },
-          { l:tr('audit.sum_merge'),       v: _mg.length,               c: _mg.length  ? 'var(--teal)'   : 'var(--green)' },
-          { l:tr('audit.sum_duplicate'),   v: _dup.length,             c: _dup.length ? 'var(--red)'    : 'var(--green)' },
-          { l:tr('audit.sum_unused_addr'), v: _un.unusedAddrs.length,  c: _un.unusedAddrs.length ? 'var(--yellow)' : 'var(--green)' },
-          { l:tr('audit.sum_unused_svc'),  v: _un.unusedSvcs.length,   c: _un.unusedSvcs.length  ? 'var(--orange)' : 'var(--green)' },
-          { l:tr('audit.sum_high_risk'),   v: _hi,                     c: _hi   ? 'var(--red)'    : 'var(--green)' },
-          { l:tr('audit.sum_mid_risk'),    v: _med,                    c: _med  ? 'var(--yellow)' : 'var(--green)' },
-          { l:tr('audit.sum_cross_vdom'),  v: _xv.length,              c: _xv.length ? 'var(--orange)' : 'var(--green)' },
-          { l:tr('audit.sum_missing_comments'), v: _mc.length,         c: _mc.length ? 'var(--yellow)' : 'var(--green)' },
-          { l:tr('audit.sum_oversized_groups'), v: _og.length,         c: _og.length ? 'var(--yellow)' : 'var(--green)' },
-          { l:tr('audit.sum_dup_objects'), v: _do.length,              c: _do.length ? 'var(--yellow)' : 'var(--green)' },
-        ]);
-        $('tbl-cnt').textContent = `${_sh.length + _db.length + _mg.length + _dup.length + _un.unusedAddrs.length + _un.unusedSvcs.length + _hi + _med + _xv.length + _mc.length + _og.length + _do.length} ${tr('unit.findings')}`;
+        const A = _fwAuditCounts(PARSED);
+        const { sh: _sh, db: _db, mg: _mg, un: _un, co: _co, dup: _dup, xv: _xv, mc: _mc, og: _og, do: _do, hl: _hl, hi: _hi, med: _med } = A;
+        // 摘要卡只顯示有數值的（XN51，第一屏不再是一排綠色 0）；全部為 0 時留高風險卡
+        const _cards = [
+          { l:tr('audit.sum_high_risk'),   v: _hi,                     c: 'var(--red)' },
+          { l:tr('audit.sum_mid_risk'),    v: _med,                    c: 'var(--yellow)' },
+          { l:tr('audit.sum_shadow'),      v: _sh.length,              c: 'var(--red)' },
+          { l:tr('audit.sum_deny_block'),  v: _db.length,              c: 'var(--red)' },
+          { l:tr('audit.sum_merge'),       v: _mg.length,              c: 'var(--teal)' },
+          { l:tr('audit.sum_duplicate'),   v: _dup.length,             c: 'var(--red)' },
+          { l:tr('audit.sum_unused_addr'), v: _un.unusedAddrs.length,  c: 'var(--yellow)' },
+          { l:tr('audit.sum_unused_svc'),  v: _un.unusedSvcs.length,   c: 'var(--orange)' },
+          { l:tr('audit.sum_cross_vdom'),  v: _xv.length,              c: 'var(--orange)' },
+          { l:tr('audit.sum_missing_comments'), v: _mc.length,         c: 'var(--yellow)' },
+          { l:tr('audit.sum_oversized_groups'), v: _og.length,         c: 'var(--yellow)' },
+          { l:tr('audit.sum_dup_objects'), v: _do.length,              c: 'var(--yellow)' },
+        ];
+        const _shown = _cards.filter(x => x.v > 0);
+        $('sum-wrap').innerHTML = sumC(_shown.length ? _shown : [{ l: tr('audit.sum_high_risk'), v: 0, c: 'var(--green)' }]);
+        $('tbl-cnt').textContent = `${A.total} ${tr('unit.findings')}`;
         // Zone 拓樸圖：表格/拓樸切換，比照 case 'routes' 內既有 BGP peer 拓樸的 _fwBgpView 慣例
         let _zoneHtml = buildZoneMatrixHtml(PARSED.policies);
         if (_zoneHtml) {
@@ -1540,7 +1527,24 @@ function onParsed(){
           const _zTgl=`<div style="display:flex;gap:5px;margin-bottom:8px"><button onclick="window._fwZoneView='table';renderSection('audit')" style="${_zbs(!window._fwZoneView||window._fwZoneView==='table')}">${tr('routing.view_table')}</button><button onclick="window._fwZoneView='topo';renderSection('audit')" style="${_zbs(window._fwZoneView==='topo')}">${tr('routing.view_topo')}</button></div>`;
           _zoneHtml = _zTgl + (window._fwZoneView==='topo' ? buildZoneTopoHtml(PARSED.policies) : _zoneHtml);
         }
-        $('tbl-wrap').innerHTML = buildPriorityHtml(_hl ? fwPriorityItems(_hl) : []) + _zoneHtml + buildShadowHtml(_sh) + buildDenyBlockHtml(_db) + buildMergeHtml(_mg) + buildDuplicateHtml(_dup) + buildUnusedHtml(_un) + buildDuplicateObjectsHtml(_do) + buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()) + buildExposedServicesHtml(analyzeExposedServices(PARSED)) + buildVulnCheckHtml({ text: _fwVulnText(), version: _fwVulnVer[_acceptedRiskHost()] || '', parsed: PARSED }) + buildDisabledPoliciesHtml(analyzeDisabledPolicies(PARSED)) + buildCrossVdomHtml(_xv) + buildMissingCommentsHtml(_mc) + buildOversizedGroupsHtml(_og) + buildNamingConventionHtml(analyzeNamingConvention(PARSED, _loadNamingRules()), _loadNamingRules()) + buildExpiredRulesHtml(analyzeExpiredRules(PARSED, { keywords: _loadExpiryKeywords() }), _loadExpiryKeywords())
+        // 有發現的區塊在前；沒有發現的與 Zone 矩陣（參考資訊）收進折疊區，開合狀態記在記憶體（XN51）
+        const _exp = analyzeExposedServices(PARSED), _dis = analyzeDisabledPolicies(PARSED);
+        const _nm = analyzeNamingConvention(PARSED, _loadNamingRules()), _ex = analyzeExpiredRules(PARSED, { keywords: _loadExpiryKeywords() });
+        const _blocks = [
+          [buildShadowHtml(_sh), _sh.length], [buildDenyBlockHtml(_db), _db.length], [buildMergeHtml(_mg), _mg.length],
+          [buildDuplicateHtml(_dup), _dup.length], [buildUnusedHtml(_un), _un.unusedAddrs.length + _un.unusedSvcs.length], [buildDuplicateObjectsHtml(_do), _do.length],
+          [buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()), 1],
+          [buildExposedServicesHtml(_exp), (_exp.items || []).length],
+          [buildVulnCheckHtml({ text: _fwVulnText(), version: _fwVulnVer[_acceptedRiskHost()] || '', parsed: PARSED }), 1],
+          [buildDisabledPoliciesHtml(_dis), _dis.length], [buildCrossVdomHtml(_xv), _xv.length], [buildMissingCommentsHtml(_mc), _mc.length],
+          [buildOversizedGroupsHtml(_og), _og.length], [buildNamingConventionHtml(_nm, _loadNamingRules()), (_nm.results || []).length + (_nm.errors || []).length],
+          [buildExpiredRulesHtml(_ex, _loadExpiryKeywords()), (_ex.results || []).length],
+        ];
+        const _clean = _blocks.filter(b => !b[1]);
+        const _cleanHtml = (_zoneHtml || _clean.length)
+          ? `<details id="audit-clean" style="margin:6px 0 24px"${window._fwAuditCleanOpen ? ' open' : ''} ontoggle="window._fwAuditCleanOpen=this.open"><summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text-dim)">${esc(tr('audit.clean_title').replace('{n}', _clean.length))}</summary><div style="padding-top:10px">${_zoneHtml}${_clean.map(b => b[0]).join('')}</div></details>`
+          : '';
+        $('tbl-wrap').innerHTML = buildPriorityHtml(_hl ? fwPriorityItems(_hl) : []) + _blocks.filter(b => b[1]).map(b => b[0]).join('') + _cleanHtml
           + (PARSED.vendor === 'FortiGate' ? _fwCleanupCardHtml() : '')
           + (_HIT_VENDOR_SUFFIX[PARSED.vendor] !== undefined ? _fwHitCardHtml() : '')
           + _fwRecertCardHtml()
@@ -1831,6 +1835,19 @@ function onParsed(){
     return _fwVulnMem || '';
   }
   function _fwVulnSave(t) { _fwVulnMem = t; try { localStorage.setItem(FW_VULN_LS, t); } catch (e) { /* 不可用時由 _fwVulnMem 維持本次有效 */ } }
+  // 稽核數字（XN51）：側邊欄徽章與稽核頁「N 項發現」共用；高／中風險為健康度未接受的類數，與結果列、主管摘要同源
+  function _fwAuditCounts(d) {
+    const pol = d.policies || [];
+    const c = { sh: analyzeRuleShadowing(pol, d.addresses), db: analyzeDenyBlocking(pol, d.addresses), mg: analyzeMergeSuggestions(pol),
+      un: analyzeUnusedObjects(d), co: analyzeCompliance(d), dup: analyzeExactDuplicates(pol), xv: analyzeCrossVdomInconsistency(d),
+      mc: analyzeMissingComments(d), og: analyzeOversizedGroups(d), do: analyzeDuplicateObjects(d), hl: null };
+    try { c.hl = computeFirewallHealth(d, _fwHealthOpts()); } catch (e) { c.hl = null; }
+    const act = c.hl ? c.hl.issues.filter(i => !i.accepted) : [];
+    c.hi = act.filter(i => i.sev === 'crit').length;
+    c.med = act.filter(i => i.sev === 'warn').length;
+    c.total = c.sh.length + c.db.length + c.mg.length + c.dup.length + c.un.unusedAddrs.length + c.un.unusedSvcs.length + c.hi + c.med + c.xv.length + c.mc.length + c.og.length + c.do.length;
+    return c;
+  }
   // 健康度與優先處理共用的選項（XN50）：接受風險、到期關鍵字、韌體漏洞清單與補填版本，結果列、稽核頁、報告一致
   function _fwHealthOpts() {
     return { acceptedRisks: _loadAcceptedRisks(), expiryKeywords: _loadExpiryKeywords(), vulnText: _fwVulnText(), vulnVersion: _fwVulnVer[_acceptedRiskHost()] || '' };
@@ -3837,6 +3854,9 @@ function startMatrixRain(){
     const critList = h ? h.issues.filter(i => i.sev === 'crit' && !i.accepted) : [];
     const crit = critList.length;
     const prio = h ? fwPriorityItems(h) : [];
+    // 補填韌體版本、標記接受風險後，側邊欄稽核徽章與摘要頁一併更新（XN51）
+    try { const nc = $('nc-audit'), t = _fwAuditCounts(PARSED).total; if (nc) { nc.textContent = t; nc.style.color = t > 0 ? 'var(--red)' : 'var(--green)'; } } catch (e) { /* 徽章更新失敗不影響結果列 */ }
+    if (CURRENT_SECTION === 'summary') renderSection('summary');
     const kev = critList.find(i => i.key === 'firmware_kev');
     // 羊駝值勤模式（XN49）：有嚴重項目時戴安全帽，泡泡只說先看哪一項（與稽核頁優先處理同一排序，XN50）
     if (window.AlpacaBuddy) window.AlpacaBuddy.setDuty(crit ? { n: crit, top: (prio[0] || critList[0]).label, go: () => window._fwGoAudit(prio[0] ? prio[0].target : '') } : null);

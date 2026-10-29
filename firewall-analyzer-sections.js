@@ -1302,6 +1302,32 @@ function buildAuditCompareHtml(cmp){
   if(cmp.same)h+=`<div style="font-size:11px;color:var(--text-dim);margin-top:4px">${tr('ac.same').replace('{n}',cmp.same)}</div>`;
   return h+'</div>';
 }
+// 摘要分頁（XN51）：分析完先給結論——健康度、先處理的 3 件、設備概況、下一步。
+// st：{health（computeFirewallHealth 結果）, prio（fwPriorityItems 結果）, parsed, vuln（fwVulnStatus 結果或 null）}
+// 按鈕只呼叫既有全域函式，不帶任何設定檔內容
+function buildFwSummaryHtml(st){
+  const h=st.health,p=st.parsed||{},info=p.deviceInfo||{},v=st.vuln;
+  const box='padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);margin-bottom:14px';
+  let o=`<div id="fw-summary">`;
+  o+=`<div style="${box};display:flex;gap:18px;align-items:center;flex-wrap:wrap"><div style="font-size:40px;font-weight:800;color:${h.gradeColor};line-height:1">${esc(h.grade)}</div>`
+    +`<div><div style="font-size:15px;font-weight:700">${esc(tr('sum.health').replace('{score}',h.score))}</div>`
+    +`<div style="font-size:12px;color:var(--text-dim);margin-top:2px">${esc(tr('exec.grade_'+h.grade))}</div></div></div>`;
+  const top=(st.prio||[]).slice(0,3);
+  if(top.length) o+=buildPriorityHtml(top,3,tr('sum.top3'));
+  else o+=`<div style="${box};color:var(--green)">✓ ${esc(tr('sum.zero_note'))}</div>`;
+  // 韌體版本不完整（FortiGate 檔頭只有主次版本）時提醒補填，否則已知漏洞比對不會生效
+  if(v&&v.r&&(v.r.status==='noVersion'||v.r.status==='unknown')) o+=`<div style="${box};border-left:3px solid var(--orange)">⚠ ${esc(tr('sum.fill_version'))} <button class="btn btn-ghost btn-sm" data-prio-go="vuln-card">${esc(tr('prio.go'))}</button></div>`;
+  const cnt=k=>(p[k]||[]).length;
+  o+=`<div style="${box};font-size:12px"><div style="font-weight:600;margin-bottom:4px">${esc(tr('sum.device'))}</div>`
+    +`<div class="mono" style="color:var(--text-dim)">${esc([p.vendor,info.hostname,info.firmware].filter(x=>x&&x!=='-').join(' · '))}</div>`
+    +`<div style="margin-top:4px">${esc(tr('sum.counts').replace('{pol}',cnt('policies')).replace('{intf}',cnt('interfaces')).replace('{nat}',cnt('nat')).replace('{vpn}',cnt('vpn')))}</div></div>`;
+  const btn=(fn,k)=>`<button class="btn btn-ghost btn-sm" onclick="${fn}">${esc(tr(k))}</button>`;
+  o+=`<div style="${box}"><div style="font-weight:600;font-size:12px;margin-bottom:6px">${esc(tr('sum.next'))}</div><div style="display:flex;flex-wrap:wrap;gap:6px">`
+    +btn("showSection('audit')",'sum.btn_audit')+btn("doExport('html-report')",'sum.btn_report')+btn("showSection('query')",'sum.btn_query')
+    +btn("showView('convert')",'sum.btn_convert')+btn('window._sendToAnonymizer()','sum.btn_share')+`</div></div>`;
+  return o+'</div>';
+}
+window.buildFwSummaryHtml=buildFwSummaryHtml;
 window.buildAuditCompareHtml=buildAuditCompareHtml;
 window.buildConvReportHtml=buildConvReportHtml;
 window.buildConvPortMapHtml=buildConvPortMapHtml;
