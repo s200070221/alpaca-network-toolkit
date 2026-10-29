@@ -2726,10 +2726,30 @@ const Converter = (() => {
   // 統一在此集中偵測並誠實告知使用者需要人工核對的項目，與 getConversionLoss()（資料真的
   // 被拿掉）區分開來——這裡回報的是「資料還在，但正確性需要人工複核」
   // opts.portModel：已套用目標型號埠對應（XN38）時的型號名稱，第一則改為說明已對應
-  function getConversionCaveats(parsed, targetVendor, opts){
-    const notes=[opts&&opts.portModel
-      ? `介面名稱已依目標型號 ${opts.portModel} 對應（未對應的埠保留原名），請依實際接線、速度與模組人工複核`
-      : '介面實體名稱／埠位對應皆直接沿用來源設定，未轉換為目標設備慣用命名，請依目標設備實際型號與埠數量人工核對介面清單'];
+  // 轉換注意事項的中文原文（i18n LANG_FW.zhTW 的 cvt.* 必須與此相同，test_fw_converter_reporter 檢查）
+  const CAVEAT_ZH={
+    "cvt.vdom_dup":"偵測到來源設定檔為多 VDOM／vsys 且不同 VDOM 存在同名位址或服務物件：本轉換器的具名物件查找/輸出未依 VDOM 區分，轉換結果引用到的 IP／Port 可能夾帶另一個 VDOM 的值，請務必人工核對規則實際引用的物件內容是否正確（Zyxel／EdgeRouter 目標已修復此問題，不受此提示影響）",
+    "cvt.asa_nameif":"偵測到多個相同角色介面，已自動編號區分 nameif 避免命名衝突，靜態路由的介面對應為概略猜測，請人工核對",
+    "cvt.mt_svcgroup":"服務群組已依協定分桶展開成對應數量的規則（同協定成員合併、跨協定成員各自一條規則）；巢狀群組（群組成員本身又是另一個群組）僅展開一層不遞迴，請人工核對是否有巢狀情形，以及個別成員若同時定義 TCP/UDP 雙協定時本轉換器僅採計其中一種",
+    "cvt.er_fqdn":"FQDN 位址物件本轉換器不會攤平——EdgeOS 原生 address-group 不支援 FQDN 成員（僅支援字面 IP/CIDR），請人工核對並改用目標裝置實際支援的表示方式（位址群組已可正確攤平，不受此提示影響）",
+    "cvt.er_svcgroup":"服務群組已依協定分桶展開成對應數量的規則（同協定成員合併、跨協定成員各自一條規則，規則序號採原規則序號+子索引）；巢狀群組（群組成員本身又是另一個群組）僅展開一層不遞迴，請人工核對是否有巢狀情形",
+    "cvt.zy_group":"位址群組／服務群組本轉換器不會攤平（官方 ZLD CLI Reference Guide 雖有對應章節，但本輪查無足夠信心度的逐字語法可供實作），規則若引用這類物件，輸出欄位會是不合法語法或遺漏，請人工核對（單一位址/服務物件含 FQDN 已可正確攤平，不受此提示影響）",
+    "cvt.ow_fqdn":"FQDN 位址物件／服務群組本轉換器不會攤平成目標格式對應的定義，規則若引用這類物件，輸出欄位會是不合法語法或遺漏，請人工核對並改用目標裝置實際支援的表示方式（單一位址/服務物件與位址群組皆已可正確攤平，不受此提示影響）",
+    "cvt.vlan":"VLAN 子介面語法為近似對應，實機匯入前請人工確認子介面設定是否完整",
+    "cvt.sonicwall":"SonicWall 僅支援 SonicOS 6.2 之前版本的 XML 匯入格式（6.2+ 已停用 XML 匯出），本輸出僅適用於舊版韌體裝置",
+    "cvt.zyxel":"Zyxel ZLD 語法純依官方 CLI Reference Guide 組出，無真實裝置匯出檔比對校正，信心度低於已用真實範例驗證過的廠牌；VPN／NAT／DHCP 等欄位本轉換器不支援輸出，請人工於裝置上另行設定",
+    "cvt.edgerouter":"EdgeRouter 規則來源設定檔通常已按介面方向分別建立具名規則集，本轉換器無法得知原始規則應歸屬哪個介面，統一併入單一規則集 CONVERTED_IN 且未綁定任何介面，請人工在裝置上用 firewall in/out/local name 指令綁定至正確介面方向後才會生效",
+    "cvt.openwrt":"OpenWrt (UCI) 語法純依官方文件組出，無真實裝置匯出檔比對校正；來源規則的介面欄位未必是 UCI 慣用的 zone 名稱，本轉換器已自動合成對應 config zone 區塊讓輸出自我一致，但實際 zone／network 對應請人工依裝置真實拓樸核對",
+    "cvt.checkpoint":"查證官方 Gaia Admin Guide 確認規則庫（Access Policy）／NAT／VPN site-to-site community 並無對應的 clish \"set\" 指令，這幾類物件僅能透過 SmartConsole 或 Management API 管理，本轉換器不產生對應輸出，僅轉換 OS 層級設定（介面/路由/hostname 等）",
+    "cvt.mt_noip":"{n} 個無 IP 位址的介面未輸出於 /ip address（RouterOS 此區塊僅列出已指派 IP 的介面）",
+    "cvt.port_model":"介面名稱已依目標型號 {model} 對應（未對應的埠保留原名），請依實際接線、速度與模組人工複核",
+    "cvt.port_generic":"介面實體名稱／埠位對應皆直接沿用來源設定，未轉換為目標設備慣用命名，請依目標設備實際型號與埠數量人工核對介面清單"
+  };
+  function getConversionCaveatItems(parsed, targetVendor, opts){
+    const notes=[];
+    const add=(key,p)=>notes.push({key,p:p||{}});
+    if(opts&&opts.portModel) add('cvt.port_model',{model:opts.portModel});
+    else add('cvt.port_generic');
     const ifs=parsed.interfaces||[];
     // 2026-09-22 新增：跨 VDOM 同名具名物件警語。toZyxel()/toEdgeRouter() 的具名物件查找已
     // 直接修復為 VDOM 感知（見各自函式內 _vdom 比對邏輯）；toMikrotik()/toOpenWrt() 的具名
@@ -2750,17 +2770,17 @@ const Converter = (() => {
     };
     if((targetVendor==='mikrotik'||targetVendor==='openwrt'||targetVendor==='sonicwall')&&
        (_crossVdomDup(parsed.addresses)||_crossVdomDup(parsed.services))){
-      notes.push('偵測到來源設定檔為多 VDOM／vsys 且不同 VDOM 存在同名位址或服務物件：本轉換器的具名物件查找/輸出未依 VDOM 區分，轉換結果引用到的 IP／Port 可能夾帶另一個 VDOM 的值，請務必人工核對規則實際引用的物件內容是否正確（Zyxel／EdgeRouter 目標已修復此問題，不受此提示影響）');
+      add('cvt.vdom_dup');
     }
     if(targetVendor==='ciscoasa'||targetVendor==='ciscoftd'){
       const intfOf=role=>{const z=mapZone(role,'ciscoasa');return z==='any'?'inside':z;};
       const counts={};
       ifs.forEach(i=>{const base=i.nameif||intfOf(i.role);counts[base]=(counts[base]||0)+1;});
-      if(Object.values(counts).some(n=>n>1)) notes.push('偵測到多個相同角色介面，已自動編號區分 nameif 避免命名衝突，靜態路由的介面對應為概略猜測，請人工核對');
+      if(Object.values(counts).some(n=>n>1)) add('cvt.asa_nameif');
     }
     if(targetVendor==='mikrotik'){
       const noIp=ifs.filter(i=>!i.ip||i.ip==='-'||i.ip==='DHCP').length;
-      if(noIp) notes.push(`${noIp} 個無 IP 位址的介面未輸出於 /ip address（RouterOS 此區塊僅列出已指派 IP 的介面）`);
+      if(noIp) add('cvt.mt_noip',{n:noIp});
     }
     // 2026-09-10：MikroTik／Zyxel／EdgeRouter／OpenWrt 四個目標的具名「單一位址物件」與
     // 「單一服務物件」已攤平成目標格式對應的定義（見各自 to*() 函式），SonicWall 已完整攤平
@@ -2775,7 +2795,7 @@ const Converter = (() => {
       // 對應數量的多條規則（RouterOS 單一規則僅一個 protocol= 欄位，無法像具名服務物件那樣一次
       // 涵蓋多協定），僅巢狀群組（群組成員又是另一個群組）與群組成員本身混合 TCP/UDP 單一服務
       // 物件（svcLiteral() 既有限制，見該函式）兩種情境仍需人工核對
-      if((parsed.services||[]).some(s=>s.category==='group')) notes.push('服務群組已依協定分桶展開成對應數量的規則（同協定成員合併、跨協定成員各自一條規則）；巢狀群組（群組成員本身又是另一個群組）僅展開一層不遞迴，請人工核對是否有巢狀情形，以及個別成員若同時定義 TCP/UDP 雙協定時本轉換器僅採計其中一種');
+      if((parsed.services||[]).some(s=>s.category==='group')) add('cvt.mt_svcgroup');
     }
     if(targetVendor==='edgerouter'){
       // 位址群組（address-group/network-group）已攤平；服務群組已於 2026-09-16 依協定分桶
@@ -2784,14 +2804,14 @@ const Converter = (() => {
       // 因官方查證確認 EdgeOS 原生 address-group 不支援 FQDN 成員（需第三方腳本注入變通，
       // 非官方語法）仍未攤平
       const hasFqdn=(parsed.addresses||[]).some(a=>a.type==='fqdn');
-      if(hasFqdn) notes.push('FQDN 位址物件本轉換器不會攤平——EdgeOS 原生 address-group 不支援 FQDN 成員（僅支援字面 IP/CIDR），請人工核對並改用目標裝置實際支援的表示方式（位址群組已可正確攤平，不受此提示影響）');
-      if((parsed.services||[]).some(s=>s.category==='group')) notes.push('服務群組已依協定分桶展開成對應數量的規則（同協定成員合併、跨協定成員各自一條規則，規則序號採原規則序號+子索引）；巢狀群組（群組成員本身又是另一個群組）僅展開一層不遞迴，請人工核對是否有巢狀情形');
+      if(hasFqdn) add('cvt.er_fqdn');
+      if((parsed.services||[]).some(s=>s.category==='group')) add('cvt.er_svcgroup');
     }
     if(targetVendor==='zyxel'){
       // FQDN 本輪已攤平（與 address-object 同一語法）；address-group／service-group 因查無
       // 官方逐字語法佐證仍未攤平
       const hasGroup=(parsed.addresses||[]).some(a=>a.category==='address-group')||(parsed.services||[]).some(s=>s.category==='group');
-      if(hasGroup) notes.push('位址群組／服務群組本轉換器不會攤平（官方 ZLD CLI Reference Guide 雖有對應章節，但本輪查無足夠信心度的逐字語法可供實作），規則若引用這類物件，輸出欄位會是不合法語法或遺漏，請人工核對（單一位址/服務物件含 FQDN 已可正確攤平，不受此提示影響）');
+      if(hasGroup) add('cvt.zy_group');
     }
     if(targetVendor==='openwrt'){
       // 位址群組已於 2026-09-14 補上攤平（config ipset + list entry 靜態成員語法已查證，
@@ -2799,18 +2819,26 @@ const Converter = (() => {
       // 主機名稱的限制（非信心度問題），服務群組則是查無官方逐字語法佐證維持排除
       const hasFqdnOrSvcGroup=(parsed.addresses||[]).some(a=>a.type==='fqdn')
         ||(parsed.services||[]).some(s=>s.category==='group');
-      if(hasFqdnOrSvcGroup) notes.push('FQDN 位址物件／服務群組本轉換器不會攤平成目標格式對應的定義，規則若引用這類物件，輸出欄位會是不合法語法或遺漏，請人工核對並改用目標裝置實際支援的表示方式（單一位址/服務物件與位址群組皆已可正確攤平，不受此提示影響）');
+      if(hasFqdnOrSvcGroup) add('cvt.ow_fqdn');
     }
-    if(ifs.some(i=>i.type==='vlan')) notes.push('VLAN 子介面語法為近似對應，實機匯入前請人工確認子介面設定是否完整');
-    if(targetVendor==='sonicwall') notes.push('SonicWall 僅支援 SonicOS 6.2 之前版本的 XML 匯入格式（6.2+ 已停用 XML 匯出），本輸出僅適用於舊版韌體裝置');
-    if(targetVendor==='zyxel') notes.push('Zyxel ZLD 語法純依官方 CLI Reference Guide 組出，無真實裝置匯出檔比對校正，信心度低於已用真實範例驗證過的廠牌；VPN／NAT／DHCP 等欄位本轉換器不支援輸出，請人工於裝置上另行設定');
-    if(targetVendor==='edgerouter') notes.push('EdgeRouter 規則來源設定檔通常已按介面方向分別建立具名規則集，本轉換器無法得知原始規則應歸屬哪個介面，統一併入單一規則集 CONVERTED_IN 且未綁定任何介面，請人工在裝置上用 firewall in/out/local name 指令綁定至正確介面方向後才會生效');
-    if(targetVendor==='openwrt') notes.push('OpenWrt (UCI) 語法純依官方文件組出，無真實裝置匯出檔比對校正；來源規則的介面欄位未必是 UCI 慣用的 zone 名稱，本轉換器已自動合成對應 config zone 區塊讓輸出自我一致，但實際 zone／network 對應請人工依裝置真實拓樸核對');
-    if(targetVendor==='checkpoint') notes.push('查證官方 Gaia Admin Guide 確認規則庫（Access Policy）／NAT／VPN site-to-site community 並無對應的 clish "set" 指令，這幾類物件僅能透過 SmartConsole 或 Management API 管理，本轉換器不產生對應輸出，僅轉換 OS 層級設定（介面/路由/hostname 等）');
+    if(ifs.some(i=>i.type==='vlan')) add('cvt.vlan');
+    if(targetVendor==='sonicwall') add('cvt.sonicwall');
+    if(targetVendor==='zyxel') add('cvt.zyxel');
+    if(targetVendor==='edgerouter') add('cvt.edgerouter');
+    if(targetVendor==='openwrt') add('cvt.openwrt');
+    if(targetVendor==='checkpoint') add('cvt.checkpoint');
     return notes;
   }
+  // 項目轉成文字：tpl 為 tr(key) 的結果（畫面），未提供時用中文原文（測試與舊呼叫端）
+  function caveatText(it, tpl){
+    return String(tpl||CAVEAT_ZH[it.key]||it.key).replace(/\{(\w+)\}/g,(m,k)=>it.p[k]!=null?it.p[k]:m);
+  }
+  // trFn：傳入 tr 時依目前語言輸出
+  function getConversionCaveats(parsed, targetVendor, opts, trFn){
+    return getConversionCaveatItems(parsed, targetVendor, opts).map(it=>caveatText(it, trFn?trFn(it.key):null));
+  }
 
-  return { convert, getConversionLoss, getConversionCaveats, toFortigate, toSophos, toCheckpoint, toPaloAlto, toJuniper, toPfsense, toCiscoASA, toCiscoFTD, toSonicWall, toMikrotik, toZyxel, toEdgeRouter, toOpenWrt };
+  return { convert, getConversionLoss, getConversionCaveats, getConversionCaveatItems, CAVEAT_ZH, toFortigate, toSophos, toCheckpoint, toPaloAlto, toJuniper, toPfsense, toCiscoASA, toCiscoFTD, toSonicWall, toMikrotik, toZyxel, toEdgeRouter, toOpenWrt };
 })();
 
 

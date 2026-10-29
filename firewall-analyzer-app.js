@@ -2068,7 +2068,7 @@ function onParsed(){
     if(lossFields.length){
       html+=`<span style="color:var(--orange)">${tr('conv.data_loss_warning').replace('{list}',lossFields.join(', '))}</span>`;
     }
-    const caveats=Converter.getConversionCaveats(srcParsed, targetVendor, opts);
+    const caveats=Converter.getConversionCaveats(srcParsed, targetVendor, opts, tr);
     if(caveats.length){
       html+=(html?'<br>':'')+`<span style="color:var(--text-dim);font-size:12px">⚠️ ${caveats.map(esc).join('<br>⚠️ ')}</span>`;
     }
@@ -2354,7 +2354,7 @@ function onParsed(){
     const html=buildConvReportHtml({ srcVendor:_CONV_NAMES[_pm.src]||_pm.src, srcModel:sm?((FwPortMap.getModel(sm.vendor,sm.id)||{}).label||sm.id):'',
       dstVendor:_CONV_NAMES[_pm.target]||_pm.target, dstModel:r?r.model.label:'', vdom:_pm.vdom, time:new Date().toLocaleString(),
       rows:r?r.rows:[], extraNotes:r?r.extraNotes:[],
-      loss:Converter.getConversionLoss(_pm.parsed,_pm.target), caveats:Converter.getConversionCaveats(_pm.parsed,_pm.target,_pm.applied?{portModel:_pm.appliedModel}:null),
+      loss:Converter.getConversionLoss(_pm.parsed,_pm.target), caveats:Converter.getConversionCaveats(_pm.parsed,_pm.target,_pm.applied?{portModel:_pm.appliedModel}:null,tr),
       review:review.slice(0,500), reviewTotal:review.length, verify:_pm.verify||null, auditCmp:_pm.auditCmp||null });
     Reporter.download(html,`fw_conversion_report_${_pm.target}_${dateStr()}.html`,'text/html');
   }
