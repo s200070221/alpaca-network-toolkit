@@ -3,8 +3,27 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.10.29';
+  const TOOLKIT_VERSION = '2026.10.30';
   const CHANGELOG = [
+    {
+      version: '2026.10.30',
+      items: {
+        zhTW: [
+          '防火牆設定轉換：同時有 IPv4 與 IPv6 的規則只轉換 IPv4 並列出規則，僅 IPv6 的規則不再輸出成無法匯入的設定，遺失清單與注意事項會說明；轉換注意事項依介面語言顯示',
+          '交換器分析：韌體落在已遭利用（CISA KEV）漏洞範圍時計入健康度、總覽結論與報告，結果列可直接前往韌體比對；修正 Dell OS9 被拿去比對 OS10 公告的誤判',
+          '防火牆與交換器分析：新舊設定檔比對時直接列出這次變更的安全影響（新增、增加、減少、已解決的稽核項目與健康度變化）',
+          '韌體漏洞比對支援 Check Point Gaia：補填「R81.20 Take 141」即可比對內建 KEV 清單',
+          '入口頁綜合健檢標示哪幾台設備的韌體落在已遭利用漏洞範圍，健檢報告列出 CVE',
+        ],
+        en: [
+          'Firewall conversion: dual-stack rules convert only the IPv4 part and are listed, IPv6-only rules are no longer output as configs that cannot be imported, and both are explained in the data-loss list and notes; conversion notes follow the UI language',
+          'Switch analyzer: firmware in range of exploited (CISA KEV) vulnerabilities now counts toward health, the overview verdict and reports, with a result-bar link to the firmware check; fixed Dell OS9 being matched against OS10 advisories',
+          'Firewall and switch analyzers: comparing old and new configs now shows the security impact of the change (new, increased, reduced and resolved findings and the health change)',
+          'Firmware vulnerability check supports Check Point Gaia: enter "R81.20 Take 141" to match the built-in KEV list',
+          'Home page health summary marks devices whose firmware is in range of exploited vulnerabilities, and the report lists the CVEs',
+        ],
+      },
+    },
     {
       version: '2026.10.29',
       items: {
