@@ -803,6 +803,9 @@ const App = (() => {
         score:h.score,grade:h.grade,n:act.length,crit:act.filter(i=>i.sev==='crit').length,warn:act.filter(i=>i.sev==='warn').length,
         accepted:h.issues.length-act.length,
         top:act.slice().sort((x,y)=>(RANK[x.sev]??3)-(RANK[y.sev]??3)||y.count-x.count).slice(0,3).map(i=>({label:i.label,count:i.count,sev:i.sev}))};
+      // 韌體落在已遭利用漏洞範圍（XN63）：入口頁綜合健檢標示，只存數量與 CVE 編號
+      const kev=act.find(i=>i.key==='firmware_kev');
+      if(kev){entry.kev=kev.count;entry.cves=(kev.cves||[]).slice(0,5);}
       let a=[];
       try{a=JSON.parse(localStorage.getItem('_netAnalyzer_summaries')||'[]');}catch(e){a=[];}
       if(!Array.isArray(a))a=[];

@@ -381,9 +381,13 @@ function recordSwitchSummary(p){
     const h=computeSwitchHealth(p,_swHealthOpts(p));
     const RANK={crit:0,warn:1,info:2};
     const act=h.issues.filter(i=>!i.accepted);
-    _pushToolSummary({tool:'switch_analyzer',name:(p.sys&&p.sys.hostname)||'',vendor:p.vendor||null,ts:Date.now(),
+    const entry={tool:'switch_analyzer',name:(p.sys&&p.sys.hostname)||'',vendor:p.vendor||null,ts:Date.now(),
       score:h.score,grade:h.grade,n:act.length,crit:act.filter(i=>i.sev==='crit').length,warn:act.filter(i=>i.sev==='warn').length,
-      top:act.slice().sort((x,y)=>(RANK[x.sev]??3)-(RANK[y.sev]??3)||y.count-x.count).slice(0,3).map(i=>({label:i.label,count:i.count,sev:i.sev}))});
+      top:act.slice().sort((x,y)=>(RANK[x.sev]??3)-(RANK[y.sev]??3)||y.count-x.count).slice(0,3).map(i=>({label:i.label,count:i.count,sev:i.sev}))};
+    // 韌體落在已遭利用漏洞範圍（XN63）：入口頁綜合健檢標示，只存數量與 CVE 編號
+    const kev=act.find(i=>i.id==='firmware-kev');
+    if(kev){entry.kev=kev.count;entry.cves=(kev.cves||[]).slice(0,5);}
+    _pushToolSummary(entry);
   }catch(e){}
 }
 function showResultViews(){
