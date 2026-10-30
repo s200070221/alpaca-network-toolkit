@@ -2124,10 +2124,26 @@ function renderSwitchBaselineDiff(d){
     <div style="font-size:12px;margin-bottom:6px">${esc(tr('swbase.summary').replace('{time}',time).replace('{new}',d.summary.new).replace('{resolved}',d.summary.resolved).replace('{persist}',d.summary.persisting))}</div>`;
   if(d.hostMismatch)h+=`<div style="font-size:12px;color:var(--orange);margin-bottom:6px">${esc(tr('swbase.host_mismatch').replace('{old}',d.oldHost).replace('{now}',hn()))}</div>`;
   if(!d.rows.length)return h+`<div style="font-size:12px;color:var(--green)">${esc(tr('swbase.none'))}</div></div>`;
+  return h+swAuditDiffTable(d.rows)+'</div>';
+}
+// 稽核差異表格：基準線比較與設定檔比對的安全影響（XN59）共用；rows 為 diffSwitchAudit() 的 rows
+function swAuditDiffTable(rows){
   const pc={new:'down',persisting:'warn',resolved:'up'};
-  h+=`<table class="data-tbl"><thead><tr><th>${esc(tr('audit.col_check'))}</th><th>${esc(tr('swbase.col_change'))}</th><th>${esc(tr('audit.col_result'))}</th><th>${esc(tr('swbase.col_added'))}</th><th>${esc(tr('swbase.col_resolved'))}</th></tr></thead><tbody>`+
-    d.rows.map(r=>`<tr><td>${esc(r.check)}</td><td>${pill(pc[r.category],tr('swbase.cat_'+r.category))}</td><td class="mono">${r.oldValue} → ${r.newValue}</td><td style="font-size:11px">${esc(r.addedItems.slice(0,10).join(', '))}${r.addedItems.length>10?'…':''}</td><td style="font-size:11px">${esc(r.resolvedItems.slice(0,10).join(', '))}${r.resolvedItems.length>10?'…':''}</td></tr>`).join('')+'</tbody></table>';
-  return h+'</div>';
+  return `<table class="data-tbl"><thead><tr><th>${esc(tr('audit.col_check'))}</th><th>${esc(tr('swbase.col_change'))}</th><th>${esc(tr('audit.col_result'))}</th><th>${esc(tr('swbase.col_added'))}</th><th>${esc(tr('swbase.col_resolved'))}</th></tr></thead><tbody>`+
+    rows.map(r=>`<tr data-ci-id="${esc(r.id)}"><td>${esc(r.check)}</td><td>${pill(pc[r.category],tr('swbase.cat_'+r.category))}</td><td class="mono">${r.oldValue} → ${r.newValue}</td><td style="font-size:11px">${esc(r.addedItems.slice(0,10).join(', '))}${r.addedItems.length>10?'…':''}</td><td style="font-size:11px">${esc(r.resolvedItems.slice(0,10).join(', '))}${r.resolvedItems.length>10?'…':''}</td></tr>`).join('')+'</tbody></table>';
+}
+// 設定檔比對的安全影響（XN59）：新舊各跑一次稽核，只列有變化的檢查（新出現、已解決、數量或對象有變動的）；
+// 健康度不含韌體（skipVuln，韌體以稽核頁補填版本為準）
+function renderChangeImpact(oldParsed,newParsed){
+  const d=diffSwitchAudit(buildSwitchAuditBaseline(oldParsed),newParsed);
+  const ho=computeSwitchHealth(oldParsed,{skipVuln:true}), hw=computeSwitchHealth(newParsed,{skipVuln:true});
+  const rows=d.rows.filter(r=>r.category!=='persisting'||r.oldValue!==r.newValue||r.addedItems.length||r.resolvedItems.length);
+  let h=`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin:0 0 10px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:4px">🛡 ${esc(tr('ci.title'))}</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${esc(tr('ci.note'))}</div>
+    <div style="font-size:12px;margin-bottom:6px">${esc(tr('ci.health'))}：${esc(String(ho.score))}（${esc(ho.grade)}） → ${esc(String(hw.score))}（${esc(hw.grade)}）</div>`;
+  if(!rows.length)return h+`<div style="font-size:12px;color:var(--green)">✓ ${esc(tr('ci.none'))}</div></div>`;
+  return h+swAuditDiffTable(rows)+'</div>';
 }
 function exportAuditWorkpaper(){
   if(!parsed){alert(tr('msg.no_config'));return;}
@@ -4635,6 +4651,7 @@ function renderDiffCard(){
       </div>
       <button style="align-self:flex-end;background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:12px;cursor:pointer" onclick="performDiff()">${esc(tr('diff.runBtn'))}</button>
     </div>
+    <div id="diff-impact"></div>
     <div id="diff-result" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;max-height:520px;overflow-y:auto;font-family:Menlo,'Courier New',monospace;font-size:11px;line-height:1.5"></div>
   </div>`;
 }
@@ -4643,8 +4660,11 @@ function performDiff(){
   const newFile=document.getElementById('diff-new-file').files[0];
   if(!oldFile||!newFile){alert(tr('diff.uploadBothAlert'));return;}
   Promise.all([oldFile.text(),newFile.text()]).then(([oldText,newText])=>{
+    const oldParsed=parseAny(oldText), newParsed=parseAny(newText); // parseAny() 自動偵測廠牌，無需下拉選單
+    // 這次變更的安全影響（XN59）：文字與結構化兩種模式都顯示
+    const imp=document.getElementById('diff-impact');
+    if(imp){try{imp.innerHTML=renderChangeImpact(oldParsed,newParsed);}catch(e){imp.innerHTML='';console.error(e);}}
     if(diffMode==='structured'){
-      const oldParsed=parseAny(oldText), newParsed=parseAny(newText); // parseAny() 自動偵測廠牌，無需下拉選單
       displayStructuredDiff(computeStructuredDiff(oldParsed,newParsed));
     }else{
       const oldLines=oldText.split('\n');

@@ -1302,6 +1302,24 @@ function buildAuditCompareHtml(cmp){
   if(cmp.same)h+=`<div style="font-size:11px;color:var(--text-dim);margin-top:4px">${tr('ac.same').replace('{n}',cmp.same)}</div>`;
   return h+'</div>';
 }
+// 設定檔比對的安全影響（XN59）：cmp 為 FwPortMap.compareAudit(舊, 新)。同廠牌新舊比對的增減是真的變化，
+// 減少／消失可以寫「已解決」，與轉換比對（buildAuditCompareHtml，不可說成改善）的狀態文字分開
+const CI_STATUS_COLOR={new:'var(--red)',worse:'var(--red)',less:'var(--green)',gone:'var(--green)'};
+const CI_RISK_KEY={high:'audit.risk_high',medium:'audit.risk_mid',low:'audit.risk_low'};
+function buildChangeImpactHtml(cmp){
+  const hb=cmp.health.before, ha=cmp.health.after;
+  const hs=h=>h?`${esc(String(h.score))}（${esc(String(h.grade))}）`:'-';
+  let h=`<div id="diff-impact" style="margin:0 0 14px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2)">
+    <div style="font-weight:700;font-size:13px;margin-bottom:6px">🛡 ${esc(tr('ci.title'))}</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">${esc(tr('ci.note'))}</div>
+    <div style="font-size:13px;margin-bottom:8px">${esc(tr('ci.health'))}：${hs(hb)} → ${hs(ha)}</div>`;
+  const rows=cmp.rows.filter(r=>CI_STATUS_COLOR[r.status]);
+  if(!rows.length) return h+`<div style="font-size:12px;color:var(--green)">✓ ${esc(tr('ci.none'))}</div></div>`;
+  h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>${tr('ac.col_item')}</th><th>${tr('ac.col_risk')}</th><th>${tr('ac.col_before')}</th><th>${tr('ac.col_after')}</th><th>${tr('ac.col_status')}</th></tr></thead><tbody>`
+    +rows.map(r=>`<tr data-ci-status="${r.status}"><td>${esc(r.label)}<br><span class="mono" style="font-size:11px;color:var(--text-dim)">${esc(r.id)}</span></td><td>${esc(CI_RISK_KEY[r.risk]?tr(CI_RISK_KEY[r.risk]):(r.risk||'-'))}</td><td class="mono">${r.before==null?'-':r.before}</td><td class="mono">${r.after==null?'-':r.after}</td><td style="color:${CI_STATUS_COLOR[r.status]};font-weight:600">${esc(tr('ci.st_'+r.status))}</td></tr>`).join('')
+    +'</tbody></table></div>';
+  return h+'</div>';
+}
 // 摘要分頁（XN51）：分析完先給結論——健康度、先處理的 3 件、設備概況、下一步。
 // st：{health（computeFirewallHealth 結果）, prio（fwPriorityItems 結果）, parsed, vuln（fwVulnStatus 結果或 null）}
 // 按鈕只呼叫既有全域函式，不帶任何設定檔內容
@@ -1329,6 +1347,7 @@ function buildFwSummaryHtml(st){
 }
 window.buildFwSummaryHtml=buildFwSummaryHtml;
 window.buildAuditCompareHtml=buildAuditCompareHtml;
+window.buildChangeImpactHtml=buildChangeImpactHtml;
 window.buildConvReportHtml=buildConvReportHtml;
 window.buildConvPortMapHtml=buildConvPortMapHtml;
 window.buildConvVerifyHtml=buildConvVerifyHtml;
