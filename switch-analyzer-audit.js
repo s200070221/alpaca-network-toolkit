@@ -442,7 +442,20 @@ function analyzeSwitchAudit(parsed){
   return findings;
 }
 
-function computeSwitchHealth(parsed){
+// 韌體版本比對（XN58，比照防火牆 fwVulnStatus）：opts {vulnText（使用者 CSV）, vulnVersion（補填版本）, skipVuln}；
+// 沒有 VulnCheck、skipVuln 或廠牌不支援時回 null；版本無法解析時 kev／other 為空（不扣分）
+function swVulnStatus(parsed,opts){
+  const V=typeof VulnCheck!=='undefined'?VulnCheck:null;
+  if(!V||(opts&&opts.skipVuln)||!parsed)return null;
+  const sv=String((parsed.sys&&parsed.sys.version)||'').trim();
+  const ver=(opts&&opts.vulnVersion)||(sv==='-'||sv==='all'?'':sv);
+  const sch=V.deviceScheme(parsed.vendor,ver);
+  if(!sch)return null;
+  const r=V.check([{name:(parsed.sys&&parsed.sys.hostname)||'',vendor:parsed.vendor,version:ver}],V.withBuiltin(V.parseCsv((opts&&opts.vulnText)||'').entries))[0];
+  return {scheme:sch,version:ver,kev:r.hits.filter(e=>e.kev),other:r.hits.filter(e=>!e.kev)};
+}
+
+function computeSwitchHealth(parsed,opts){
   const findings=analyzeSwitchAudit(parsed);
   let score=100;
   const issues=[];
@@ -459,17 +472,26 @@ function computeSwitchHealth(parsed){
       issues.push(capped?{id:f.id,sev:SEV[f.risk]||'info',label:f.check,count:f.value,capped:true}:{id:f.id,sev:SEV[f.risk]||'info',label:f.check,count:f.value});
     }
   });
+  // 韌體落在已遭利用（KEV）漏洞範圍為 crit，其餘已知漏洞為 warn，同樣每項上限權重×3（XN58）
+  const vs=swVulnStatus(parsed,opts);
+  if(vs)[['firmware-kev','crit',vs.kev,WEIGHT.high],['firmware-vuln','warn',vs.other,WEIGHT.medium]].forEach(([id,sev,list,w])=>{
+    if(!list.length)return;
+    const capped=list.length>3;
+    score-=capped?w*3:list.length*w;
+    issues.push({id,sev,label:tr('health.'+id.replace('-','_')),count:list.length,...(capped?{capped:true}:{}),cves:list.map(e=>e.cve).filter(Boolean).slice(0,5),version:vs.version});
+  });
   score=Math.max(0,Math.min(100,score));
   const grade=score>=90?'A':score>=75?'B':score>=60?'C':score>=40?'D':'F';
   const gradeColor=grade==='A'?'var(--green)':grade==='B'?'var(--teal)':grade==='C'?'var(--yellow)':grade==='D'?'var(--orange)':'var(--red)';
   return {score,grade,gradeColor,issues};
 }
 
-// 先處理哪幾項（XN51）：總覽結論卡與羊駝值勤共用；高風險在前、同級依數量，低風險（info）不列
+// 先處理哪幾項（XN51）：總覽結論卡與羊駝值勤共用；韌體已遭利用漏洞（XN58）固定第一，其餘高風險在前、同級依數量，低風險（info）不列
 function swPriorityItems(health){
   const RANK={crit:0,warn:1};
+  const first=i=>i.id==='firmware-kev'?0:1;
   return ((health&&health.issues)||[]).filter(i=>RANK[i.sev]!==undefined)
-    .slice().sort((a,b)=>RANK[a.sev]-RANK[b.sev]||b.count-a.count);
+    .slice().sort((a,b)=>first(a)-first(b)||RANK[a.sev]-RANK[b.sev]||b.count-a.count);
 }
 
 // 健康度分數時序追蹤（2026-09-16 新增）：輕量單序列折線圖，比照 log_analyzer 既有

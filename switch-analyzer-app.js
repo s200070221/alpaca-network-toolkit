@@ -378,7 +378,7 @@ function _pushToolSummary(entry){
 }
 function recordSwitchSummary(p){
   try{
-    const h=computeSwitchHealth(p);
+    const h=computeSwitchHealth(p,_swHealthOpts(p));
     const RANK={crit:0,warn:1,info:2};
     const act=h.issues.filter(i=>!i.accepted);
     _pushToolSummary({tool:'switch_analyzer',name:(p.sys&&p.sys.hostname)||'',vendor:p.vendor||null,ts:Date.now(),
@@ -805,7 +805,7 @@ function renderView(view){
 }
 // 總覽頂端結論卡（XN51）：健康度、先處理的 3 項、下一步；按鈕只呼叫既有函式，不帶設定檔內容
 function renderOverviewVerdict(){
-  let h=null;try{h=computeSwitchHealth(parsed);}catch(e){h=null;}
+  let h=null;try{h=computeSwitchHealth(parsed,_swHealthOpts(parsed));}catch(e){h=null;}
   if(!h)return'';
   const top=swPriorityItems(h).slice(0,3);
   const box='margin:12px 18px 0;padding:12px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface2)';
@@ -1903,7 +1903,7 @@ function _doSwitchHealthCheck(){
   if(!parsed)return;
   const btn=document.getElementById('sw-health-btn');
   if(btn)btn.textContent=tr('health.recheck');
-  const res=computeSwitchHealth(parsed);
+  const res=computeSwitchHealth(parsed,_swHealthOpts(parsed));
   const hostname=parsed.sys.hostname;
   _saveHealthHistoryEntry(hostname,res.score,res.grade);
   const history=_loadHealthHistory()[hostname]||[];
@@ -2654,7 +2654,7 @@ function exportHTMLReport(mode){
 <h1>🔀 ${tr('rpt.h1')}</h1>
 <div class="rpt-subtitle">${esc(tr('rpt.generated_by'))} · ${rptVendorLabel} · ${new Date().toLocaleString(_lang==='ja'?'ja-JP':_lang==='en'?'en-US':'zh-TW')}</div>
 
-<div class="card"><h2>${esc(tr('exec.title'))}</h2>${buildSwitchExecSummary(p.sys.hostname,computeSwitchHealth(p)).map(x=>`<p style="margin:4px 0">${esc(x)}</p>`).join('')}</div>${buildSwitchUrgentHtml(computeSwitchHealth(p))}
+<div class="card"><h2>${esc(tr('exec.title'))}</h2>${buildSwitchExecSummary(p.sys.hostname,computeSwitchHealth(p,_swHealthOpts(p))).map(x=>`<p style="margin:4px 0">${esc(x)}</p>`).join('')}</div>${buildSwitchUrgentHtml(computeSwitchHealth(p,_swHealthOpts(p)))}
 
 <div class="card">
   <h2>${tr('rpt.device_overview')}</h2>
@@ -3783,7 +3783,7 @@ if (/[?&]structcheck=1(?:&|$)/.test(location.search) && window.parent !== window
         var counts = {};
         ['vlans','interfaces','routes','users','acls','lacp','vrrp','dhcp'].forEach(function(k){ counts[k] = len(p[k]); });
         // 第十輪 ZO：另回傳分析結論（健康度分數與等級、命中的稽核項目及數量），比對去識別化是否改變結論
-        var h = computeSwitchHealth(p), audit = {};
+        var h = computeSwitchHealth(p, { skipVuln: true }), audit = {};
         analyzeSwitchAudit(p).filter(function(f){ return f.value > 0; }).forEach(function(f){ audit[f.id] = { v: f.value, label: f.check }; });
         return { vendor: p.vendor || '', counts: counts, health: { score: h.score, grade: h.grade }, audit: audit };
       } catch (err) { return { error: String(err && err.message || err) }; }
@@ -3798,7 +3798,7 @@ if (/[?&]structcheck=1(?:&|$)/.test(location.search) && window.parent !== window
     try {
       var p = parseAny(String(e.data.text || '').replace(/^﻿/, '').replace(/\r\n/g, '\n'));
       // 稽核（XN45 轉換前後比對）：evaluated 為該廠牌評估過的項目 id（不評估的不出現），audit 只放數值大於 0 的項目
-      var h = computeSwitchHealth(p), audit = {}, all = analyzeSwitchAudit(p);
+      var h = computeSwitchHealth(p, { skipVuln: true }), audit = {}, all = analyzeSwitchAudit(p);
       all.filter(function(f){ return f.value > 0; }).forEach(function(f){ audit[f.id] = { v: f.value, label: f.check, risk: f.risk }; });
       res = { vendor: p.vendor || '', evaluated: all.map(function(f){ return f.id; }),
         vlans: (p.vlans || []).map(function(v){ return { id: String(v.id) }; }),
@@ -3897,13 +3897,16 @@ function renderNextBar(){
       +(fh?`<button class="btn btn-ghost btn-sm" data-empty-howto onclick="navGo('upload');FileHowto.open('#howto')">${esc(fh.title(_lang))}</button>`:'');return;
   }
   tourDone();
-  let h=null;try{h=computeSwitchHealth(parsed);}catch(e){h=null;}
+  let h=null;try{h=computeSwitchHealth(parsed,_swHealthOpts(parsed));}catch(e){h=null;}
   const critList=h?h.issues.filter(i=>i.sev==='crit'):[];
   const crit=critList.length;
   // 羊駝值勤模式（XN49）：有嚴重項目時戴安全帽，泡泡只說先看哪一項
   if(window.AlpacaBuddy)window.AlpacaBuddy.setDuty(crit?{n:crit,top:swPriorityItems(h)[0].label,go:()=>navGo('audit')}:null);
   const head=h?`<span style="font-weight:600">${esc(tr('next.health').replace('{grade}',h.grade).replace('{score}',h.score))}${crit?` · <span style="color:var(--red)">${esc(tr('next.crit').replace('{n}',crit))}</span>`:''}</span>`:'';
-  b.innerHTML=head+`<button class="btn btn-ghost btn-sm" onclick="navGo('audit')">${esc(tr('next.audit'))}</button><button class="btn btn-ghost btn-sm" onclick="exportHTMLReport()">${esc(tr('next.report'))}</button><button class="btn btn-ghost btn-sm" onclick="_sendToAnonymizer()">${esc(tr('next.share'))}</button>`;
+  // 韌體落在已遭利用漏洞範圍（XN58）：按鈕直接到稽核頁的韌體比對卡片
+  const kev=h&&h.issues.find(i=>i.id==='firmware-kev');
+  const kevBtn=kev?`<button class="btn btn-ghost btn-sm" data-next-kev style="color:var(--red)" onclick="_swGoVuln()">${esc(tr('next.kev').replace('{n}',kev.count))}</button>`:'';
+  b.innerHTML=head+kevBtn+`<button class="btn btn-ghost btn-sm" onclick="navGo('audit')">${esc(tr('next.audit'))}</button><button class="btn btn-ghost btn-sm" onclick="exportHTMLReport()">${esc(tr('next.report'))}</button><button class="btn btn-ghost btn-sm" onclick="_sendToAnonymizer()">${esc(tr('next.share'))}</button>`;
 }
 function _routeToHub(){
   const cfg=(document.getElementById('paste-area')||{}).value||'';
@@ -4208,6 +4211,8 @@ function renderVulnCard(){
 }
 // 安全稽核頁：比對目前分析的這台；補填的版本以 parsed 物件為鍵只存記憶體（重新分析或換檔即重置）
 const vulnAuditVer=new WeakMap();
+// 健康度的韌體比對選項（XN58）：使用者清單＋稽核頁補填的版本；structcheck（去識別化結構檢查、產生器讀回）改傳 skipVuln
+function _swHealthOpts(p){return {vulnText:vulnLoadText(),vulnVersion:(p&&vulnAuditVer.get(p))||''};}
 function renderAuditVulnCard(){
   if(!parsed)return '';
   const s=parsed.sys||{}, v=String(s.version||'').trim();
@@ -4220,6 +4225,14 @@ function vulnAuditApply(){
   const el=document.querySelector('#vuln-audit-card input[data-vuln-file]');
   if(el&&parsed){if(el.value.trim())vulnAuditVer.set(parsed,el.value.trim());else vulnAuditVer.delete(parsed);}
   navGo('audit');
+  // 補填版本或更新清單後，結果列與入口頁摘要跟著重算（XN58）
+  renderNextBar();
+  if(parsed)recordSwitchSummary(parsed);
+}
+function _swGoVuln(){
+  navGo('audit');
+  const c=document.getElementById('vuln-audit-card');
+  if(c)c.scrollIntoView({block:'start'});
 }
 function vulnApply(){
   const t=document.getElementById('vuln-text');
@@ -4230,7 +4243,7 @@ function vulnApply(){
 function vulnReadFile(inp){
   const f=inp.files&&inp.files[0];
   if(!f)return;
-  swReadText(f).then(t=>{vulnSave(t.replace(/^﻿/,''));navGo(currentView==='audit'?'audit':'inventory');});
+  swReadText(f).then(t=>{vulnSave(t.replace(/^﻿/,''));navGo(currentView==='audit'?'audit':'inventory');renderNextBar();});
 }
 function vulnDownloadSample(){
   const csv=tr('vuln.sample_comment')+'\n'+VulnCheck.CSV_HEADER+'\niosxe,IOS XE Web UI,17.9.1-17.9.4,17.9.4a,CVE-0000-00000,critical,no,example only\n';
@@ -4373,7 +4386,7 @@ function invAddFiles(inp){
       const cfg=t.replace(/^﻿/,'').replace(/\r\n/g,'\n');
       try{
         const p=parseAny(cfg);
-        invRows.push(invBuildRow(files[k].name,cfg,p,computeSwitchHealth));
+        invRows.push(invBuildRow(files[k].name,cfg,p,x=>computeSwitchHealth(x,{vulnText:vulnLoadText(),vulnVersion:vulnVerOverride[files[k].name]||''})));
         invTexts.push(cfg);
         invParsed.push(p);
       }catch(e){invFails.push(files[k].name);}

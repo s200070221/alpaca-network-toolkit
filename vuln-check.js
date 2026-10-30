@@ -29,6 +29,8 @@ const VulnCheck = (function () {
   // 設備（防火牆 parsed.vendor 或交換器 vendor 代碼）＋版本字串 → 版本格式；Cisco 交換器依版本寫法分 IOS／IOS-XE
   function deviceScheme(vendor, version) {
     const v = String(vendor || '').trim();
+    // Dell OS9（FTOS，9.x）與 OS10 是不同作業系統，交換器 parser 同樣標 dell-os10，OS10 公告不適用（XN58）
+    if (v === 'dell-os10' && /^\s*[1-9]\./.test(String(version || ''))) return '';
     const map = { FortiGate: 'fortios', PaloAlto: 'panos', 'Cisco ASA': 'asa', 'Cisco FTD': 'ftd', Juniper: 'junos', juniper: 'junos',
       nxos: 'nxos', arista: 'eos', aruba: 'aoscx', MikroTik: 'routeros', routeros: 'routeros', 'dell-os10': 'os10', CheckPoint: 'gaia' };
     if (map[v]) return map[v];
