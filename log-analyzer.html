@@ -3588,6 +3588,26 @@ const EXPLOIT_SIGS = [
   { id: 'fortios-auth-bypass', name: 'FortiOS', cve: ['CVE-2022-40684'], re: /\/api\/v2\/cmdb\/system\/admin\b/i, ua: /^(?:Report Runner|Node\.js)$/i },
   { id: 'iosxe-webui', name: 'Cisco IOS XE Web UI', cve: ['CVE-2023-20198'], re: /\/(?:%2577eb%2575i|%77eb%75i)_(?:%2577|%77)sma_https?\b/i, raw: true },
   { id: 'junos-phprc', name: 'Juniper J-Web', cve: ['CVE-2023-36845'], re: /[?&]PHPRC=/i },
+  // ── 2025～2026 KEV（XN60，2026-10-30 依 nuclei-templates 與 KEV 2026.10.28 版核對）：只收 URL 本身看得出利用的樣式 ──
+  { id: 'panos-unauth-traversal', name: 'PAN-OS', cve: ['CVE-2025-0108'], re: /\/unauth\/(?:[^/?\s]*\/)*\.\.\/(?:[^?\s]*\/)?php\//i },
+  { id: 'asa-webvpn-traversal', name: 'Cisco ASA/FTD WebVPN', cve: ['CVE-2025-20362'], re: /\/\+CSCOU\+\/+\.\.\/\+CSCOE\+\/files\/file_action\.html/i },
+  { id: 'fortiweb-fwbcgi', name: 'FortiWeb', cve: ['CVE-2025-64446'], re: /\/api\/v2\.0\/cmdb\/[^\s]*\.\.\/[^\s]*cgi-bin\/fwbcgi/i },
+  { id: 'unifi-validate-sso', name: 'UniFi OS', cve: ['CVE-2026-34908', 'CVE-2026-34910'], re: /\/api\/auth\/validate-sso\/(?:\.\.\/)+proxy\//i },
+  { id: 'fortisandbox-jid', name: 'FortiSandbox', cve: ['CVE-2026-39808'], re: /\/job-detail\/tracer-behavior\?(?:[^\s]*&)?jid=[^&\s]*(?:[|;`]|\$\()/i },
+  { id: 'ivanti-epmm-el', name: 'Ivanti EPMM', cve: ['CVE-2025-4427'], re: /\/api\/v2\/featureusage(?:_history)?\?(?:[^\s]*&)?format=[^&\s]*\$\{/i },
+  { id: 'sharepoint-toolshell', name: 'Microsoft SharePoint (ToolShell)', cve: ['CVE-2025-49706', 'CVE-2025-53770'], re: /\/_layouts\/1[56]\/ToolPane\.aspx\/?\?(?=[^\s]*DisplayMode=Edit)(?=[^\s]*[?&]a=\/ToolPane\.aspx)/i },
+  { id: 'sap-metadatauploader', name: 'SAP NetWeaver Visual Composer', cve: ['CVE-2025-31324'], re: /\/developmentserver\/metadatauploader\b/i },
+  { id: 'xwiki-solr-groovy', name: 'XWiki', cve: ['CVE-2025-24893'], re: /\/SolrSearch\?.*\{\{(?:groovy|python)\}\}/i },
+  { id: 'freepbx-endpoint-sqli', name: 'FreePBX', cve: ['CVE-2025-57819'], re: /\/admin\/ajax\.php\?(?=[^\s]*module=FreePBX\\modules\\endpoint\\ajax)[^\s]*=[^&\s]*'/i },
+  { id: 'freepbx-filestore-cmd', name: 'FreePBX', cve: ['CVE-2025-64328'], re: /\/admin\/ajax\.php\?(?=[^\s]*module=filestore)(?=[^\s]*command=testconnection)[^\s]*`/i },
+  { id: 'oracle-ebs-traversal', name: 'Oracle E-Business Suite', cve: ['CVE-2025-61882'], re: /\/OA_HTML\/[^\s?]*\.\.\/ieshostedsurvey\.jsp/i },
+  { id: 'vite-fs', name: 'Vite', cve: ['CVE-2025-31125'], re: /\/@fs\/[^\s]*\?import&\?inline=1\.wasm\?init/i },
+  { id: 'gladinet-tdn', name: 'Gladinet CentreStack/Triofox', cve: ['CVE-2025-11371'], re: /\/storage\/t\.dn\?(?:[^\s]*&)?s=(?:\.\.[\\/])+/i },
+  { id: 'magicinfo-upload', name: 'Samsung MagicINFO', cve: ['CVE-2025-4632'], re: /\/SWUpdateFileUploader\?(?:[^\s]*&)?fileName=[^&\s]*\.\.[\\/]/i },
+  { id: 'atlassian-resources-traversal', name: 'Atlassian (Jira/Confluence/Bitbucket)', cve: ['CVE-2026-21589'], re: /\/download\/resources\/[^\s]*\.\.::\.\.::/i },
+  { id: 'goanywhere-license', name: 'GoAnywhere MFT', cve: ['CVE-2025-10035'], re: /\/license\/Unlicensed\.xhtml\/[^\s?/]+\?[^\s]*GARequestAction=activate/i },
+  { id: 'collabora-proxy-cmd', name: 'Collabora Online (CODE)', cve: ['CVE-2026-110447'], re: /\$\([^)]*\)[^\s]*\/apps\/richdocumentscode(?:_arm64)?\/proxy\.php/i },
+  { id: 'meteobridge-template', name: 'Meteobridge', cve: ['CVE-2025-4008'], re: /\/public\/template\.cgi\?(?:[^\s]*&)?templatefile=[^&\s]*(?:\$\(|[`;|])/i },
 ];
 const EXPLOIT_SIG_IDS = new Set(EXPLOIT_SIGS.map(s => s.id));
 // %XX 逐一換成字元（不經 UTF-8 解碼，%AD 這類單一位元組也保留），不會因無效編碼拋錯
