@@ -577,7 +577,10 @@ const App = (() => {
       const newParsed=FW_DIFF_PARSERS[vendor](newText);
       const haMode=!!document.getElementById('diff-ha-mode')?.checked;
       DIFF_RESULT=diffConfigs(oldParsed,newParsed,{haMode});
-      $('diff-result').innerHTML=buildDiffHtml(DIFF_RESULT);
+      // 這次變更的安全影響（XN59）：新舊各跑一次稽核，只列有變化的項目
+      let impact='';
+      try{ impact=buildChangeImpactHtml(FwPortMap.compareAudit(_fwAuditOf(oldParsed),_fwAuditOf(newParsed))); }catch(e){ console.error(e); }
+      $('diff-result').innerHTML=impact+buildDiffHtml(DIFF_RESULT);
       DIFF_OLD_PARSED=oldParsed; DIFF_NEW_PARSED=newParsed; LAST_BATCH_DIFF=null;
       $('diff-batch').style.display=''; $('diff-batch-result').innerHTML='';
     }catch(e){
