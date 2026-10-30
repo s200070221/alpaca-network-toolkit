@@ -2657,9 +2657,28 @@ const Converter = (() => {
     if (!_NOLIMIT(p.users) || !_NOLIMIT(p.groups)) why.push('users/groups');
     return why;
   }
+  // IPv6（XN57）：各 to*() 都不輸出 IPv6 位址物件與 IPv6 規則語法。
+  // dual：規則的 srcAddr6／dstAddr6 有 srcAddr／dstAddr 沒列出的名稱（FortiGate 雙堆疊 srcaddr6／dstaddr6），只會轉換 IPv4 部分；
+  // only：僅 IPv6 的規則（_family v6 或 id v6/），引用的物件不會輸出、語法家族也不對，_guardPolicies() 不輸出
+  const _addrNames = v => String(v == null ? '' : v).split(/\s*,\s*/).map(s => s.trim()).filter(s => s && !_NOLIMIT(s));
+  const _isV6Only = p => p._family === 'v6' || String(p.id).startsWith('v6/');
+  function _v6Report(parsed) {
+    const dual = [], only = [];
+    ((parsed && parsed.policies) || []).forEach(p => {
+      const name = p.name || String(p.id);
+      if (_isV6Only(p)) { only.push(name); return; }
+      const v4 = new Set([..._addrNames(p.srcAddr), ..._addrNames(p.dstAddr)]);
+      if ([..._addrNames(p.srcAddr6), ..._addrNames(p.dstAddr6)].some(n => !v4.has(n))) dual.push(name);
+    });
+    return { dual, only };
+  }
+  // 規則名稱清單，最多 10 條
+  const _nameList = a => a.slice(0, 10).join(', ') + (a.length > 10 ? ` … (+${a.length - 10})` : '');
   function _guardPolicies(parsed) {
     if (!parsed || !Array.isArray(parsed.policies)) return parsed;
     let changed = false;
+    const kept = parsed.policies.filter(p => !_isV6Only(p));
+    if (kept.length !== parsed.policies.length) { changed = true; parsed = { ...parsed, policies: kept }; }
     const policies = parsed.policies.map(p => {
       const why = _unconvertible(p);
       if (!why.length) return p;
@@ -2717,7 +2736,7 @@ const Converter = (() => {
       if(vendor.startsWith('PaloAlto')&&targetVendor==='paloalto'&&f.key==='ha')return false;
       if(vendor.startsWith('Juniper')&&targetVendor==='juniper'&&f.key==='ha')return false;
       return true;
-    }).map(f=>f.label);
+    }).map(f=>f.label).concat((()=>{const r=_v6Report(parsed);return r.dual.length||r.only.length?['IPv6']:[];})());
   }
 
   // 2026-07-24 新增：轉換警語——回答「不同 port 數量/型號能否轉換」的疑慮：能跑，但介面
@@ -2743,13 +2762,18 @@ const Converter = (() => {
     "cvt.checkpoint":"查證官方 Gaia Admin Guide 確認規則庫（Access Policy）／NAT／VPN site-to-site community 並無對應的 clish \"set\" 指令，這幾類物件僅能透過 SmartConsole 或 Management API 管理，本轉換器不產生對應輸出，僅轉換 OS 層級設定（介面/路由/hostname 等）",
     "cvt.mt_noip":"{n} 個無 IP 位址的介面未輸出於 /ip address（RouterOS 此區塊僅列出已指派 IP 的介面）",
     "cvt.port_model":"介面名稱已依目標型號 {model} 對應（未對應的埠保留原名），請依實際接線、速度與模組人工複核",
-    "cvt.port_generic":"介面實體名稱／埠位對應皆直接沿用來源設定，未轉換為目標設備慣用命名，請依目標設備實際型號與埠數量人工核對介面清單"
+    "cvt.port_generic":"介面實體名稱／埠位對應皆直接沿用來源設定，未轉換為目標設備慣用命名，請依目標設備實際型號與埠數量人工核對介面清單",
+    "cvt.v6_dual":"{n} 條規則同時有 IPv4 與 IPv6 位址，只轉換了 IPv4 部分；IPv6 部分（{list}）需在目標設備另行建立",
+    "cvt.v6_only":"{n} 條僅 IPv6 的規則（{list}）未輸出：轉換器尚未支援 IPv6 位址物件與 IPv6 規則語法，請在目標設備另行建立"
   };
   function getConversionCaveatItems(parsed, targetVendor, opts){
     const notes=[];
     const add=(key,p)=>notes.push({key,p:p||{}});
     if(opts&&opts.portModel) add('cvt.port_model',{model:opts.portModel});
     else add('cvt.port_generic');
+    const v6=_v6Report(parsed);
+    if(v6.dual.length) add('cvt.v6_dual',{n:v6.dual.length,list:_nameList(v6.dual)});
+    if(v6.only.length) add('cvt.v6_only',{n:v6.only.length,list:_nameList(v6.only)});
     const ifs=parsed.interfaces||[];
     // 2026-09-22 新增：跨 VDOM 同名具名物件警語。toZyxel()/toEdgeRouter() 的具名物件查找已
     // 直接修復為 VDOM 感知（見各自函式內 _vdom 比對邏輯）；toMikrotik()/toOpenWrt() 的具名
