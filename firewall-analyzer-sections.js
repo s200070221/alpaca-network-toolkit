@@ -614,7 +614,7 @@ function buildQuerySectionHtml(qvdoms, isFortiGate, qintfs, wiRules){
 const PC_ROUTE_CMDS = [
   ['FortiGate', 'get router info routing-table all', 'get router info ospf neighbor', 'get router info bgp summary', true],
   ['Palo Alto', 'show routing route（Advanced Routing：show advanced-routing route）', 'show routing protocol ospf neighbor', 'show routing protocol bgp summary', true],
-  ['Juniper SRX', 'show route', 'show ospf neighbor', 'show bgp summary', false],
+  ['Juniper SRX', 'show route', 'show ospf neighbor', 'show bgp summary', true],
   ['Cisco ASA／FTD', 'show route', 'show ospf neighbor', 'show bgp summary', true],
   ['Check Point（Gaia clish）', 'show route', 'show ospf neighbors', 'show bgp peers', true],
   ['H3C SecPath', 'display ip routing-table', 'display ospf peer', 'display bgp peer ipv4', true],
