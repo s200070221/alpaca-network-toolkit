@@ -123,12 +123,13 @@ const FwPath = (function () {
   // cisco：FortiGate get router info routing-table all、Cisco ASA show route、Cisco IOS show ip route、
   //        VyOS／EdgeRouter show ip route、Check Point Gaia show route（代碼＋前綴＋via 下一跳, 介面／is directly connected, 介面）
   // panos：Palo Alto show routing route；comware：H3C／HPE display ip routing-table；linux：ip route；
-  // mikrotik：/ip route print detail。Juniper show route、pfSense netstat -rn 沒有可查證的範例，不支援。
+  // mikrotik：/ip route print detail；junos：Juniper show route（範例取自 genieparser，見 parseJunos）。pfSense netstat -rn 沒有可查證的範例，不支援。
   // 回傳 {format, routes:[{type, dst:'網段/長度', gateway, device, distance, ecmp, vr}], skipped}；
   // type：connected｜static｜dynamic｜blackhole。本機位址（L、H、/32 Direct）與迴路位址不收
   const IP_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
   const cidrOf = (ip, len) => { const n = ipInt(ip); return n === null || len === null || len === undefined ? null : intIp(len === 0 ? 0 : (n & ((0xFFFFFFFF << (32 - len)) >>> 0)) >>> 0) + '/' + len; };
   function detectRouteFormat(text) {
+    if (/^\s*\S+: \d+ destinations, \d+ routes/m.test(text) || /^\s*\+ = Active Route, - = Last Active, \* = Both/m.test(text)) return 'junos';
     if (/^\s*destination\s+nexthop\s+metric\s+flags/im.test(text)) return 'panos';
     if (/Destination\/Mask\s+Proto\s+Pre\s+Cost/i.test(text)) return 'comware';
     if (/dst-address=/.test(text)) return 'mikrotik';
@@ -145,7 +146,60 @@ const FwPath = (function () {
     else if (format === 'comware') parseComware(t, out);
     else if (format === 'linux') parseLinux(t, out);
     else if (format === 'mikrotik') parseMikrotik(t, out);
+    else if (format === 'junos') parseJunos(t, out);
     return out;
+  }
+  // Juniper show route（XN62，格式依 CiscoTestAutomation/genieparser junos ShowRoute 測試的真實輸出，副本 test_config/genie_junos_show_route.txt）：
+  // 「表名: N destinations」切換路由表，只收 IPv4 單播表；有 inet.0 時只用 inet.0，否則用第一個 <instance>.inet.0（vr 記表名），
+  // 不同 routing-instance 的路由不混用。目的行「網段 *[Proto/pref] …」只取標 * 或 + 的使用中路由，同目的的備選路由略過；
+  // 下一跳取「> to X via 介面」（沒有 > 時取第一個 to），多個 to 標 ecmp；「> via 介面」為直連，Local 為本機位址不收，Discard／Reject 為黑洞
+  function parseJunos(t, out) {
+    const tables = [];
+    let cur = null;
+    for (const line of t.split('\n')) {
+      const h = line.match(/^\s*(\S+): \d+ destinations/);
+      if (h) { cur = { name: h[1], lines: [] }; tables.push(cur); continue; }
+      if (cur) cur.lines.push(line);
+    }
+    const v4 = tables.filter(x => /(^|\.)inet\.0$/.test(x.name));
+    const use = v4.find(x => x.name === 'inet.0') || v4[0];
+    tables.forEach(x => { if (x !== use) out.skipped += x.lines.filter(l => /^\s*\S+\/\d+\s/.test(l)).length; });
+    if (!use) return;
+    const vr = use.name === 'inet.0' ? '' : use.name.replace(/\.inet\.0$/, '');
+    let r = null, active = false, tos = 0;
+    const flush = () => {
+      if (r && r.keep) { delete r.keep; if (tos > 1) r.ecmp = true; out.routes.push(r); }
+      r = null; active = false; tos = 0;
+    };
+    for (const line of use.lines) {
+      const d = line.match(/^\s*(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})\s+([*+-]?)\[([\w-]+)\/(\d+)/);
+      // 同一目的的第二條以後路由：續行以 [Proto/pref] 開頭
+      const alt = !d && line.match(/^\s+([*+-]?)\[([\w-]+)\/(\d+)/);
+      if (d || alt) {
+        const mark = d ? d[3] : alt[1], proto = d ? d[4] : alt[2], pref = d ? d[5] : alt[3];
+        if (d) { flush(); r = { dst: cidrOf(d[1], +d[2]), gateway: '', device: '', vr }; }
+        if (!r) continue;
+        active = /[*+]/.test(mark);
+        if (!active) { if (d) out.skipped++; continue; }
+        // 使用中的那一條：類型與 distance 以它為準（同目的若有多條標 *，只取第一條）
+        if (r.type) { active = false; continue; }
+        r.type = /^Direct$/i.test(proto) ? 'connected' : /^Static$/i.test(proto) ? 'static' : /^Local$/i.test(proto) ? 'local' : 'dynamic';
+        r.distance = pref; r.keep = r.type !== 'local'; tos = 0;
+        if (r.type === 'local') out.skipped++;
+        continue;
+      }
+      if (!r || !active) continue;
+      const to = line.match(/^\s*(>)?\s*to\s+(\d{1,3}(?:\.\d{1,3}){3})\s+via\s+([^\s,]+)/);
+      if (to) {
+        tos++;
+        if (to[1] || !r.gateway) { r.gateway = to[2]; r.device = to[3]; }
+        continue;
+      }
+      const via = line.match(/^\s*>?\s*via\s+([^\s,]+)/);
+      if (via && !r.device) { r.device = via[1]; continue; }
+      if (/^\s*(Discard|Reject)\b/.test(line)) { r.type = 'blackhole'; r.gateway = ''; continue; }
+    }
+    flush();
   }
   // via 之後的「下一跳, 介面, 時間…」：介面取第一個以英文字母開頭、不是 cost／age 的欄位；EdgeRouter 的 (recursive is directly connected, 介面)
   function ciscoVia(rest) {
