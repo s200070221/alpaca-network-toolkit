@@ -49,13 +49,16 @@ const Converter = (() => {
   // 產生「192.168.1.0 255.255.255.0/32」這種畸形值。統一用此 helper 正確判斷格式後轉真正 CIDR，
   // 保證回傳值必定是合法的 "ip/bits" 形式
   function addrCidr(a){
-    const sub=a.subnet;
+    const sub=a.subnet&&a.subnet!=='-'?a.subnet:'';
+    // IPv6 單一位址沒有前綴時補 /128（XN57）；FortiGate address6 未寫 ip6 時為 ::/0
     if(sub){
       if(sub.includes('/')) return sub;
+      if(sub.includes(':')) return sub+'/128';
       if(sub.includes(' ')){ const p=sub.trim().split(/\s+/); return cidr(p[0],p[1]); }
       return sub+'/32';
     }
-    return (a.ip&&a.ip!=='-'&&a.ip!=='DHCP')?a.ip+'/32':'0.0.0.0/0';
+    if(a.ip&&a.ip!=='-'&&a.ip!=='DHCP') return a.ip+(String(a.ip).includes(':')?'/128':'/32');
+    return a.category==='address6'?'::/0':'0.0.0.0/0';
   }
   // VPN phase2 子網等欄位可能是「IP/前綴」「IP/點分遮罩」或「IP 空白 點分遮罩」，統一轉成合法
   // 「IP/前綴」；原本各轉換函式直接把空白換成斜線（產生 IP/255.255.255.0）或把點分遮罩當前綴
@@ -364,8 +367,12 @@ const Converter = (() => {
       L.push('end'); L.push('');
     }
 
-    // address objects
-    const addrs=parsed.addresses.filter(a=>a.category==='address');
+    // address objects：IPv6 物件（address6 或位址含冒號）另寫 config firewall address6（XN57）
+    const fam=_famMap(parsed);
+    const isV6Obj=a=>a.category==='address6'||(a.category==='address'&&fam(a.name)==='v6');
+    // 同時含 IPv4／IPv6 成員的群組：IPv6 部分另建「名稱-v6」的 addrgrp6，IPv6 規則改引用該名稱
+    const v6Name=n=>fam(n)==='mixed'?n+'-v6':n;
+    const addrs=parsed.addresses.filter(a=>a.category==='address'&&!isV6Obj(a));
     if(addrs.length) {
       L.push('config firewall address');
       addrs.forEach(a=>{
@@ -383,18 +390,35 @@ const Converter = (() => {
       L.push('end'); L.push('');
     }
 
-    // address groups
-    const agrps=parsed.addresses.filter(a=>a.category==='address-group');
-    if(agrps.length) {
-      L.push('config firewall addrgrp');
-      agrps.forEach(g=>{
-        L.push(`    edit "${qstr(g.name)}"`);
-        const mems=sl(g.members).map(m=>`"${qstr(m)}"`).join(' ');
-        if(mems) L.push(`        set member ${mems}`);
+    const addrs6=parsed.addresses.filter(isV6Obj);
+    if(addrs6.length) {
+      L.push('config firewall address6');
+      addrs6.forEach(a=>{
+        L.push(`    edit "${qstr(a.name)}"`);
+        if(a.type==='fqdn') { L.push('        set type fqdn'); L.push(`        set fqdn "${qstr(a.fqdn)}"`); }
+        else if(a.type==='iprange') { L.push('        set type iprange'); L.push(`        set start-ip ${a.startIp}`); L.push(`        set end-ip ${a.endIp}`); }
+        else L.push(`        set ip6 ${addrCidr(a)}`);
+        if(a.comment&&a.comment!=='-') L.push(`        set comment "${qstr(a.comment)}"`);
         L.push('    next');
       });
       L.push('end'); L.push('');
     }
+
+    // address groups：IPv4 群組只放 IPv4 成員，IPv6 成員放 addrgrp6
+    const grpOut=(title,list,keep,rename)=>{
+      if(!list.length) return;
+      L.push(title);
+      list.forEach(g=>{
+        L.push(`    edit "${qstr(rename(g.name))}"`);
+        const mems=sl(g.members).filter(keep).map(m=>`"${qstr(rename(m))}"`).join(' ');
+        if(mems) L.push(`        set member ${mems}`);
+        L.push('    next');
+      });
+      L.push('end'); L.push('');
+    };
+    const grpAll=parsed.addresses.filter(a=>a.category==='address-group'||a.category==='address-group6');
+    grpOut('config firewall addrgrp',grpAll.filter(g=>g.category==='address-group'&&fam(g.name)!=='v6'),m=>fam(m)!=='v6',String);
+    grpOut('config firewall addrgrp6',grpAll.filter(g=>g.category==='address-group6'||fam(g.name)==='v6'||fam(g.name)==='mixed'),m=>fam(m)!=='v4',v6Name);
 
     // services
     const csvcs=parsed.services.filter(s=>s.category==='custom');
@@ -576,10 +600,13 @@ const Converter = (() => {
         const di=p.dstIntf&&p.dstIntf!=='-'?p.dstIntf:'any';
         L.push(`        set srcintf "${qstr(si)}"`);
         L.push(`        set dstintf "${qstr(di)}"`);
-        const sa=sl(p.srcAddr).map(a=>`"${qstr(a)}"`).join(' ')||'"all"';
-        const da=sl(p.dstAddr).map(a=>`"${qstr(a)}"`).join(' ')||'"all"';
-        L.push(`        set srcaddr ${sa}`);
-        L.push(`        set dstaddr ${da}`);
+        const v6p=p._family==='v6';
+        const nm=v6p?v6Name:String;
+        const sa=sl(p.srcAddr).map(a=>`"${qstr(nm(a))}"`).join(' ')||'"all"';
+        const da=sl(p.dstAddr).map(a=>`"${qstr(nm(a))}"`).join(' ')||'"all"';
+        // IPv6 規則（FortiOS 6.4 起合併的規則表）寫 srcaddr6／dstaddr6
+        L.push(`        set srcaddr${v6p?'6':''} ${sa}`);
+        L.push(`        set dstaddr${v6p?'6':''} ${da}`);
         const sv=sl(p.service).map(s=>`"${qstr(s)}"`).join(' ')||'"ALL"';
         L.push(`        set service ${sv}`);
         L.push(`        set schedule "${qstr(p.schedule||'always')}"`);
@@ -1037,7 +1064,7 @@ const Converter = (() => {
     // Address objects
     if(parsed.addresses.length) {
       L.push('      <address>');
-      parsed.addresses.filter(a=>a.category==='address').forEach(a=>{
+      parsed.addresses.filter(a=>a.category==='address'||a.category==='address6').forEach(a=>{
         L.push(`        <entry name="${esc(a.name)}">`);
         if(a.type==='fqdn') L.push(`          <fqdn>${esc(a.fqdn)}</fqdn>`);
         else if(a.type==='iprange') L.push(`          <ip-range>${esc(a.startIp+'-'+a.endIp)}</ip-range>`);
@@ -1046,9 +1073,9 @@ const Converter = (() => {
         L.push('        </entry>');
       });
       L.push('      </address>');
-      if(parsed.addresses.filter(a=>a.category==='address-group').length) {
+      if(parsed.addresses.filter(a=>a.category==='address-group'||a.category==='address-group6').length) {
         L.push('      <address-group>');
-        parsed.addresses.filter(a=>a.category==='address-group').forEach(g=>{ L.push(`        <entry name="${esc(g.name)}"><static>${sl(g.members).map(m=>`<member>${esc(m)}</member>`).join('')}</static></entry>`); });
+        parsed.addresses.filter(a=>a.category==='address-group'||a.category==='address-group6').forEach(g=>{ L.push(`        <entry name="${esc(g.name)}"><static>${sl(g.members).map(m=>`<member>${esc(m)}</member>`).join('')}</static></entry>`); });
         L.push('      </address-group>');
       }
     }
@@ -1208,11 +1235,11 @@ const Converter = (() => {
       // 就會完全缺漏、policy 卻仍引用其名稱，commit 必定失敗。改為比照 Check Point 來源
       // （原本 _vdom 恆為空字串）既有行為，全部位址物件複製進每個 zone 的 address-book，
       // 不再嘗試用 _vdom/vsys 猜測 zone 歸屬（2026-09 全功能審查發現）
-      const zA=parsed.addresses.filter(a=>a.category==='address');
-      const zG=z==='trust'?parsed.addresses.filter(a=>a.category==='address-group'):[];
+      const zA=parsed.addresses.filter(a=>a.category==='address'||a.category==='address6');
+      const zG=z==='trust'?parsed.addresses.filter(a=>a.category==='address-group'||a.category==='address-group6'):[];
       if(zA.length||zG.length){
         L.push(`${I(3)}address-book {`);
-        zA.forEach(a=>{ if(a.type==='iprange') L.push(`${I(4)}address ${a.name} range-address ${a.startIp} to ${a.endIp};`); else if(a.type==='fqdn') L.push(`${I(4)}address ${a.name} dns-name ${a.fqdn};`); else { const s2=a.subnet||(a.ip?cidr(a.ip,a.mask):'0.0.0.0/0'); L.push(`${I(4)}address ${a.name} ${s2.includes('/')?s2:s2+'/32'};`); } });
+        zA.forEach(a=>{ if(a.type==='iprange') L.push(`${I(4)}address ${a.name} range-address ${a.startIp} to ${a.endIp};`); else if(a.type==='fqdn') L.push(`${I(4)}address ${a.name} dns-name ${a.fqdn};`); else { const s2=(a.subnet&&a.subnet!=='-')?addrCidr(a):(a.ip&&!String(a.ip).includes(':')?cidr(a.ip,a.mask):addrCidr(a)); L.push(`${I(4)}address ${a.name} ${s2};`); } });
         zG.forEach(g=>{L.push(`${I(4)}address-set ${g.name} {`); sl(g.members).forEach(m=>L.push(`${I(5)}address ${m};`)); L.push(`${I(4)}}`);});
         L.push(`${I(3)}}`);
       }
@@ -2657,28 +2684,83 @@ const Converter = (() => {
     if (!_NOLIMIT(p.users) || !_NOLIMIT(p.groups)) why.push('users/groups');
     return why;
   }
-  // IPv6（XN57）：各 to*() 都不輸出 IPv6 位址物件與 IPv6 規則語法。
-  // dual：規則的 srcAddr6／dstAddr6 有 srcAddr／dstAddr 沒列出的名稱（FortiGate 雙堆疊 srcaddr6／dstaddr6），只會轉換 IPv4 部分；
-  // only：僅 IPv6 的規則（_family v6 或 id v6/），引用的物件不會輸出、語法家族也不對，_guardPolicies() 不輸出
-  const _addrNames = v => String(v == null ? '' : v).split(/\s*,\s*/).map(s => s.trim()).filter(s => s && !_NOLIMIT(s));
+  // IPv6（XN57）：FortiGate／Palo Alto／Juniper（V6_TARGETS）輸出 IPv6 位址物件與規則，其餘目標不輸出 IPv6。
+  // 依 FortiOS（address6 ip6、規則 srcaddr6／dstaddr6）、PAN-OS（ip-netmask 接受 IPv6）、Junos（address-book 可放 IPv6）文件
+  const V6_TARGETS = { fortigate: 1, paloalto: 1, juniper: 1 };
+  const _addrToks = v => String(v == null ? '' : v).split(/\s*,\s*/).map(s => s.trim()).filter(s => s && s !== '-');
   const _isV6Only = p => p._family === 'v6' || String(p.id).startsWith('v6/');
-  function _v6Report(parsed) {
-    const dual = [], only = [];
+  const _hasColon = a => /:/.test(String(a.subnet || '')) || /:/.test(String(a.ip || '')) || /:/.test(String(a.startIp || ''));
+  // 位址物件家族：v4｜v6｜mixed（群組同時含兩族）；any／all 與查不到的名稱回傳 any／v4
+  function _famMap(parsed) {
+    const by = Object.create(null), memo = Object.create(null);
+    ((parsed && parsed.addresses) || []).forEach(a => { if (a && a.name && !(a.name in by)) by[a.name] = a; });
+    const fam = (name, depth) => {
+      if (_NOLIMIT(name)) return 'any';
+      if (name in memo) return memo[name];
+      // ASA 群組成員寫成「object 名稱」「object-group 名稱」「host 位址」或直接寫位址
+      const key = String(name).replace(/^(object-group|object|host)\s+/, '').trim();
+      const a = by[name] || by[key];
+      let f = 'v4';
+      if (!a) f = /:/.test(key) ? 'v6' : 'v4';
+      else if (a.category === 'address6') f = 'v6';
+      else if (/group/i.test(a.category || '') && (depth || 0) < 8) {
+        const fs = _addrToks(a.members).map(m => fam(m, (depth || 0) + 1));
+        const has6 = fs.some(x => x === 'v6' || x === 'mixed') || /6$/.test(a.category), has4 = fs.some(x => x === 'v4' || x === 'mixed');
+        f = has6 && has4 ? 'mixed' : has6 ? 'v6' : 'v4';
+      } else if (_hasColon(a)) f = 'v6';
+      memo[name] = f; return f;
+    };
+    return fam;
+  }
+  // 把規則拆成 IPv4 與 IPv6 部分；沒有明確 IPv6 物件的規則原樣保留（不改既有輸出）。
+  // 回傳 {policies, dual:[兩族都有的規則名], only:[只有 IPv6 的規則名], fam}
+  function _familySplit(parsed) {
+    const fam = _famMap(parsed), dual = [], only = [], policies = [];
     ((parsed && parsed.policies) || []).forEach(p => {
       const name = p.name || String(p.id);
-      if (_isV6Only(p)) { only.push(name); return; }
-      const v4 = new Set([..._addrNames(p.srcAddr), ..._addrNames(p.dstAddr)]);
-      if ([..._addrNames(p.srcAddr6), ..._addrNames(p.dstAddr6)].some(n => !v4.has(n))) dual.push(name);
+      if (_isV6Only(p)) {
+        only.push(name);
+        const pick = (six, plain) => _addrToks(six).length ? six : plain;
+        policies.push({ ...p, _family: 'v6', srcAddr: pick(p.srcAddr6, p.srcAddr), dstAddr: pick(p.dstAddr6, p.dstAddr) });
+        return;
+      }
+      const side = (plain, six) => {
+        const names = _addrToks(plain), fs = names.map(n => fam(n));
+        const extra6 = _addrToks(six).filter(n => !names.includes(n));
+        const v4 = names.filter((n, i) => fs[i] !== 'v6');
+        const v6 = names.filter((n, i) => fs[i] === 'v6' || fs[i] === 'mixed').concat(extra6);
+        return { v4: names.length ? v4 : ['all'], v6, exp6: fs.some(f => f === 'v6' || f === 'mixed') || extra6.some(n => !_NOLIMIT(n)), exp4: fs.some(f => f === 'v4') };
+      };
+      const s = side(p.srcAddr, p.srcAddr6), d = side(p.dstAddr, p.dstAddr6);
+      if (!s.exp6 && !d.exp6) { policies.push(p); return; }
+      const has4 = s.v4.length > 0 && d.v4.length > 0;
+      // IPv6 部分：沒有 IPv6 名稱的一側，若該側也沒有明確的 IPv4 物件（只有 any／all）就補 all
+      const six = x => x.v6.length ? x.v6 : (x.exp4 ? [] : ['all']);
+      const s6 = six(s), d6 = six(d), has6 = s6.length > 0 && d6.length > 0;
+      if (has4) policies.push({ ...p, _family: 'v4', srcAddr: s.v4.join(', '), dstAddr: d.v4.join(', '), srcAddr4: s.v4.join(', '), dstAddr4: d.v4.join(', '), srcAddr6: '-', dstAddr6: '-' });
+      if (has6) {
+        policies.push({ ...p, _family: 'v6', id: 'v6/' + p.id, name: has4 ? name + '-v6' : p.name, srcAddr: s6.join(', '), dstAddr: d6.join(', '), srcAddr4: '-', dstAddr4: '-', srcAddr6: s6.join(', '), dstAddr6: d6.join(', ') });
+        (has4 ? dual : only).push(name);
+      }
+      if (!has4 && !has6) policies.push(p);
     });
-    return { dual, only };
+    return { policies, dual, only, fam };
+  }
+  function _v6Report(parsed) { const r = _familySplit(parsed); return { dual: r.dual, only: r.only }; }
+  // 依目標處理 IPv6：V6_TARGETS 用拆分後的規則；其他目標移除 IPv6 規則、IPv6 位址物件，群組只留 IPv4 成員
+  function _applyFamilies(parsed, targetVendor) {
+    if (!parsed || !Array.isArray(parsed.policies)) return parsed;
+    const r = _familySplit(parsed);
+    if (V6_TARGETS[targetVendor]) return { ...parsed, policies: r.policies };
+    const addresses = (parsed.addresses || []).filter(a => r.fam(a.name) !== 'v6' && a.category !== 'address6' && a.category !== 'address-group6')
+      .map(a => r.fam(a.name) === 'mixed' ? { ...a, members: _addrToks(a.members).filter(m => r.fam(m) !== 'v6').join(', ') } : a);
+    return { ...parsed, addresses, policies: r.policies.filter(p => !_isV6Only(p)) };
   }
   // 規則名稱清單，最多 10 條
   const _nameList = a => a.slice(0, 10).join(', ') + (a.length > 10 ? ` … (+${a.length - 10})` : '');
   function _guardPolicies(parsed) {
     if (!parsed || !Array.isArray(parsed.policies)) return parsed;
     let changed = false;
-    const kept = parsed.policies.filter(p => !_isV6Only(p));
-    if (kept.length !== parsed.policies.length) { changed = true; parsed = { ...parsed, policies: kept }; }
     const policies = parsed.policies.map(p => {
       const why = _unconvertible(p);
       if (!why.length) return p;
@@ -2689,7 +2771,7 @@ const Converter = (() => {
     return changed ? { ...parsed, policies } : parsed;
   }
   function convert(parsed, targetVendor) {
-    parsed = _guardPolicies(parsed);
+    parsed = _guardPolicies(_applyFamilies(parsed, targetVendor));
     switch(targetVendor) {
       case 'fortigate':  return toFortigate(parsed);
       case 'sophos':     return toSophos(parsed);
@@ -2736,7 +2818,7 @@ const Converter = (() => {
       if(vendor.startsWith('PaloAlto')&&targetVendor==='paloalto'&&f.key==='ha')return false;
       if(vendor.startsWith('Juniper')&&targetVendor==='juniper'&&f.key==='ha')return false;
       return true;
-    }).map(f=>f.label).concat((()=>{const r=_v6Report(parsed);return r.dual.length||r.only.length?['IPv6']:[];})());
+    }).map(f=>f.label).concat((()=>{if(V6_TARGETS[targetVendor])return [];const r=_v6Report(parsed);return r.dual.length||r.only.length?['IPv6']:[];})());
   }
 
   // 2026-07-24 新增：轉換警語——回答「不同 port 數量/型號能否轉換」的疑慮：能跑，但介面
@@ -2764,7 +2846,8 @@ const Converter = (() => {
     "cvt.port_model":"介面名稱已依目標型號 {model} 對應（未對應的埠保留原名），請依實際接線、速度與模組人工複核",
     "cvt.port_generic":"介面實體名稱／埠位對應皆直接沿用來源設定，未轉換為目標設備慣用命名，請依目標設備實際型號與埠數量人工核對介面清單",
     "cvt.v6_dual":"{n} 條規則同時有 IPv4 與 IPv6 位址，只轉換了 IPv4 部分；IPv6 部分（{list}）需在目標設備另行建立",
-    "cvt.v6_only":"{n} 條僅 IPv6 的規則（{list}）未輸出：轉換器尚未支援 IPv6 位址物件與 IPv6 規則語法，請在目標設備另行建立"
+    "cvt.v6_only":"{n} 條僅 IPv6 的規則（{list}）未輸出：轉換器尚未支援 IPv6 位址物件與 IPv6 規則語法，請在目標設備另行建立",
+    "cvt.v6_split":"{n} 條同時有 IPv4 與 IPv6 位址的規則（{list}）已拆成 IPv4、IPv6 各一條（IPv6 那條名稱加 -v6）；IPv6 語法依廠商文件產生，未以實機驗證"
   };
   function getConversionCaveatItems(parsed, targetVendor, opts){
     const notes=[];
@@ -2772,8 +2855,13 @@ const Converter = (() => {
     if(opts&&opts.portModel) add('cvt.port_model',{model:opts.portModel});
     else add('cvt.port_generic');
     const v6=_v6Report(parsed);
-    if(v6.dual.length) add('cvt.v6_dual',{n:v6.dual.length,list:_nameList(v6.dual)});
-    if(v6.only.length) add('cvt.v6_only',{n:v6.only.length,list:_nameList(v6.only)});
+    if(V6_TARGETS[targetVendor]){
+      // 支援 IPv6 的目標：兩族都有的規則拆成兩條（IPv6 那條名稱加 -v6），語法依廠商文件產生
+      if(v6.dual.length) add('cvt.v6_split',{n:v6.dual.length,list:_nameList(v6.dual)});
+    }else{
+      if(v6.dual.length) add('cvt.v6_dual',{n:v6.dual.length,list:_nameList(v6.dual)});
+      if(v6.only.length) add('cvt.v6_only',{n:v6.only.length,list:_nameList(v6.only)});
+    }
     const ifs=parsed.interfaces||[];
     // 2026-09-22 新增：跨 VDOM 同名具名物件警語。toZyxel()/toEdgeRouter() 的具名物件查找已
     // 直接修復為 VDOM 感知（見各自函式內 _vdom 比對邏輯）；toMikrotik()/toOpenWrt() 的具名
