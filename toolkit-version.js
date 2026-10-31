@@ -3,8 +3,21 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.10.30';
+  const TOOLKIT_VERSION = '2026.10.31';
   const CHANGELOG = [
+    {
+      version: '2026.10.31',
+      items: {
+        zhTW: [
+          'log 分析：已知漏洞利用嘗試新增 19 條 2025～2026 年 CISA KEV 樣式（PAN-OS、Cisco ASA／FTD WebVPN、FortiWeb、UniFi OS、FortiSandbox、Ivanti EPMM、SharePoint ToolShell、SAP NetWeaver 等），只收網址本身看得出利用的樣式',
+          '防火牆多台路徑查詢：可貼上 Juniper SRX 的 show route 輸出，取代設定檔的靜態路由（含 OSPF、BGP 等動態路由）',
+        ],
+        en: [
+          'Log analyzer: 19 new exploit-attempt patterns for 2025–2026 CISA KEV entries (PAN-OS, Cisco ASA/FTD WebVPN, FortiWeb, UniFi OS, FortiSandbox, Ivanti EPMM, SharePoint ToolShell, SAP NetWeaver and more), only where the URL itself shows the exploit',
+          'Firewall multi-device path query: paste Juniper SRX show route output to replace the static routes from the config (including OSPF, BGP and other dynamic routes)',
+        ],
+      },
+    },
     {
       version: '2026.10.30',
       items: {
