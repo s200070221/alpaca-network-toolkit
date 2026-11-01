@@ -708,7 +708,7 @@ function parseMgmtServices(cfg, vendor, brand){
   const mp=parseMgmtPlane(cfg, vendor);
   return {ntp:[...new Set(ntp)], aaa:[...new Set(aaa)], banner, httpPlain, sshV1, idleOff, syslogExtra:[...new Set(syslogExtra)],
     sshV2Only:vendor==='cisco'?has(/^\s*ip\s+ssh\s+version\s+2\b/m):null, smartInstall, webUi,
-    vtyOpen:mp.vtyOpen, cmdAcct:mp.cmdAcct, cfgLog:mp.cfgLog};
+    vtyOpen:mp.vtyOpen, cmdAcct:mp.cmdAcct, cfgLog:mp.cfgLog, sshPort:mp.sshPort, aclPublic:mp.aclPublic};
 }
 
 // 管理平面與稽核紀錄（2026-10-27，第三十四輪 XN24）：依 CISA 2025-02 邊界設備指引與 AA25-239A（搭配 AAA 指令記帳，
@@ -726,12 +726,24 @@ function parseMgmtServices(cfg, vendor, brand){
 function parseMgmtPlane(cfg, vendor){
   const blocks=re=>{const out=[];let m;const r=new RegExp(re.source+'[^\\n]*\\n((?:[ \\t]+[^\\n]*(?:\\n|$))*)','gm');
     while((m=r.exec(cfg))!==null)out.push({head:m[0].split('\n')[0].trim(),body:m[1]});return out;};
-  let vtyOpen=null, cmdAcct=null, cfgLog=null;
+  let vtyOpen=null, cmdAcct=null, cfgLog=null, sshPort=null, aclPublic=null;
   if(vendor==='cisco'||vendor==='nxos'){
     const vty=blocks(/^line\s+vty\b/);
     if(vty.length)vtyOpen=vty.filter(b=>!/^\s*transport\s+input\s+none\s*$/m.test(b.body)&&!/^\s*(?:ipv6\s+)?access-class\s+\S+\s+in\b/m.test(b.body)).map(b=>b.head);
     cmdAcct=vendor==='cisco'?/^aaa\s+accounting\s+commands\s+\d+\s/m.test(cfg):/^aaa\s+accounting\s+default\s+group\s/m.test(cfg);
     if(vendor==='cisco')cfgLog=blocks(/^archive\s*$/).some(b=>/^\s+log\s+config\s*$/m.test(b.body)&&/^\s+logging\s+enable\s*$/m.test(b.body));
+    if(vendor==='cisco'){
+      // 需人工確認的入侵樣式（XN23，CISA AA25-239A）：SSH 開在非預設埠（22x22／xxx22 等）、
+      // 編號 20（或 50、10）的 ACL 放行公網位址；只列出，不判定為入侵
+      sshPort=(cfg.match(/^ip\s+ssh\s+port\s+\d+[^\n]*/gm)||[]).map(x=>x.trim()).filter(x=>x.split(/\s+/)[3]!=='22');
+      aclPublic=[];
+      const pub=a=>{const o=a.split('.').map(Number);if(o.length!==4||o.some(n=>!(n>=0&&n<=255)))return false;
+        return !(o[0]===10||o[0]===127||o[0]===0||o[0]>=224||(o[0]===172&&o[1]>=16&&o[1]<=31)||(o[0]===192&&o[1]===168)||(o[0]===169&&o[1]===254)||(o[0]===100&&o[1]>=64&&o[1]<=127));};
+      const ent=(acl,rule)=>{const m=rule.match(/^permit\s+(?:host\s+)?(\d+\.\d+\.\d+\.\d+)\b/);if(m&&pub(m[1]))aclPublic.push(`ACL ${acl}: ${rule}`);};
+      (cfg.match(/^access-list\s+(?:10|20|50)\s+permit\s+[^\n]*/gm)||[]).forEach(l=>{const t=l.trim().split(/\s+/);ent(t[1],t.slice(2).join(' '));});
+      blocks(/^ip\s+access-list\s+standard\s+(?:10|20|50)\s*$/).forEach(b=>{const acl=b.head.split(/\s+/)[3];
+        b.body.split('\n').map(x=>x.trim().replace(/^\d+\s+/,'')).filter(Boolean).forEach(r=>ent(acl,r));});
+    }
   }else if(vendor==='arista'){
     const ms=blocks(/^management\s+ssh\s*$/);
     vtyOpen=ms.some(b=>/^\s*ip\s+access-group\s+\S+(?:\s+vrf\s+\S+)?\s+in\b/m.test(b.body))?[]:['management ssh'];
@@ -741,7 +753,7 @@ function parseMgmtPlane(cfg, vendor){
     const globalAcl=/^\s*(?:ssh|telnet)\s+server\s+(?:ipv6\s+)?acl\s+\S+/m.test(cfg);
     if(vty.length)vtyOpen=globalAcl?[]:vty.filter(b=>!/^\s*acl\s+(?!mac\b)[^\n]*\binbound\b/m.test(b.body)).map(b=>b.head);
   }
-  return {vtyOpen, cmdAcct, cfgLog};
+  return {vtyOpen, cmdAcct, cfgLog, sshPort, aclPublic};
 }
 
 // eBGP 鄰居進出過濾（2026-10-27，第三十五輪 XN28）：RFC 8212 要求沒有政策的 eBGP 預設不收不送；Job Snijders 的

@@ -396,6 +396,11 @@ function analyzeSwitchAudit(parsed){
       ms.cmdAcct?none:tr('audit.aaa_no_cmd_accounting_detail'), ['NIST 800-53 AU-12','CIS v8 8.5'], ms.cmdAcct?[]:['aaa']);
     if(typeof ms.cfgLog==='boolean')f('config-change-log', tr('audit.check_config_change_log'), ms.cfgLog?0:1, 'low',
       ms.cfgLog?none:tr('audit.config_change_log_detail'), ['NIST 800-53 CM-3','DISA STIG V-220613','CIS v8 8.5'], ms.cfgLog?[]:['archive']);
+    // 需人工確認的入侵樣式（XN23，CISA AA25-239A，Cisco IOS／IOS-XE）：只列出供確認，不判定為入侵
+    if(Array.isArray(ms.sshPort))f('ssh-nondefault-port', tr('audit.check_ssh_nondefault_port'), ms.sshPort.length, 'low',
+      ms.sshPort.length?ms.sshPort.slice(0,8).join(', ')+' — '+tr('audit.ssh_nondefault_port_detail'):none, ['CISA AA25-239A'], ms.sshPort.slice());
+    if(Array.isArray(ms.aclPublic))f('acl-actor-pattern', tr('audit.check_acl_actor_pattern'), ms.aclPublic.length, 'low',
+      ms.aclPublic.length?ms.aclPublic.slice(0,8).join(', ')+' — '+tr('audit.acl_actor_pattern_detail'):none, ['CISA AA25-239A'], ms.aclPublic.slice());
   }
   // L2 防護（2026-10-06，第十二輪 MB）：parsed.l2Protect 由 parseL2Protect() 產生；只看啟用中的 access 埠
   // （使用者端），沒有 access 埠或整組／單一功能為 null（未查證）時不列。DAI 與 IP Source Guard 依賴 DHCP
@@ -753,6 +758,7 @@ const EVIDENCE_KIND={
   'http-mgmt':'line','ssh-v1':'line','idle-timeout-off':'line',
   'smart-install':'line','iosxe-webui':'line',
   'vty-no-acl':'line','aaa-no-cmd-accounting':'line','config-change-log':'line','bgp-ebgp-no-policy':'line',
+  'ssh-nondefault-port':'line','acl-actor-pattern':'line',
   'dhcp-snooping-off':'line','dai-off':'line','ipsg-off':'iface','storm-control-off':'iface','loop-protect-off':'iface',
 };
 // 關鍵字型證據行（第十二輪 MA）：命中這些設定行即列出；ntp／syslog／aaa／banner 是「缺少設定」，沒有對應行
@@ -765,6 +771,9 @@ const EVIDENCE_LINE_RE={
   // XN24：列出管理連線區塊與既有的記帳／archive 設定行（看得出哪些區塊沒有來源限制、記帳只設了哪幾種）
   'vty-no-acl':/^\s*(line\s+vty\b|user-interface\s+vty\b|management\s+ssh\s*$|transport\s+input\b|(ipv6\s+)?access-class\b|(ssh|telnet)\s+server\s+(ipv6\s+)?acl\b)/i,
   'aaa-no-cmd-accounting':/^\s*aaa\s+accounting\b/i,
+  // XN23：SSH 埠設定行與編號 10／20／50 的標準 ACL
+  'ssh-nondefault-port':/^\s*ip\s+ssh\s+port\b/i,
+  'acl-actor-pattern':/^\s*(access-list\s+(10|20|50)\s|ip\s+access-list\s+standard\s+(10|20|50)\s*$)/i,
   // XN28：列出 router bgp 與鄰居宣告、既有的過濾設定行（看得出哪個方向沒設）
   // XN41 Juniper：bgp／group／neighbor 區塊、type external、peer-as、import／export
   'bgp-ebgp-no-policy':/^\s*(router\s+bgp\b|neighbor\s+\S+(\s+remote-as\b|\s+peer[- ]group\b|\s*$|\s*[{;])|(neighbor\s+\S+\s+)?(route-map|prefix-list|filter-list|distribute-list)\s+\S+\s+(in|out)\b|bgp\s*\{|group\s+\S+\s*\{|type\s+external;|peer-as\s+\d+;|(import|export)\s+\S)/i,
@@ -914,6 +923,9 @@ const SW_FIX_CMDS={
     'vty-no-acl':it=>['ip access-list standard MGMT-ONLY',' permit <mgmt-subnet> <wildcard>',' deny any log',...(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(b=>[b,' access-class MGMT-ONLY in'])],
     'aaa-no-cmd-accounting':()=>['aaa accounting commands 1 default start-stop group tacacs+','aaa accounting commands 15 default start-stop group tacacs+'],
     'config-change-log':()=>['archive',' log config','  logging enable','  notify syslog contenttype plaintext','  hidekeys'],
+    // XN23：先確認是否為核准的設定，不是才移除（移除前保留證據：show running-config 存檔、比對備份）
+    'ssh-nondefault-port':it=>['! confirm first: show running-config | include ip ssh port',...(it||[]).slice(0,FIX_MAX_ITEMS).map(l=>'! no '+l)],
+    'acl-actor-pattern':it=>['! confirm first: show access-lists 10 / 20 / 50, show running-config | include access-class',...(it||[]).slice(0,FIX_MAX_ITEMS).map(l=>'! '+l)],
     'bgp-ebgp-no-policy':it=>['router bgp <asn>',...(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(ip=>[` neighbor ${ip} route-map <IN-POLICY> in`,` neighbor ${ip} route-map <OUT-POLICY> out`])],
     'idle-timeout-off':()=>['line con 0',' exec-timeout 10 0','line vty 0 15',' exec-timeout 10 0'],
     'dhcp-snooping-off':it=>['ip dhcp snooping',`ip dhcp snooping vlan ${(it||[]).slice(0,FIX_MAX_ITEMS).join(',')}`,'interface <uplink-to-dhcp-server>',' ip dhcp snooping trust'],

@@ -402,15 +402,19 @@ const JuniperParser = (() => {
       // Parse address SIMPLE values: "address NAME 1.2.3.4/24;" stored as _values
       if (bookNode._values) {
         bookNode._values.forEach(v => {
+          const base = { wildcard:'-', iface:'-', color:'0', comment:zoneName||'-', members:'-', _vdom:zoneName||'global' };
+          // 單行寫法：address 名稱 range-address A to B; 與 address 名稱 dns-name 網域;
+          const r = v.match(/^address\s+(\S+)\s+range-address\s+(\S+)\s+to\s+(\S+)$/);
+          if (r) { objs.push({ category:'address', name:r[1], type:'iprange', subnet:'-', fqdn:'-', startIp:r[2], endIp:r[3], ...base }); return; }
+          const d = v.match(/^address\s+(\S+)\s+dns-name\s+(\S+)$/);
+          if (d) { objs.push({ category:'address', name:d[1], type:'fqdn', subnet:'-', fqdn:d[2], startIp:'-', endIp:'-', ...base }); return; }
           const m = v.match(/^address\s+(\S+)\s+(\S+)$/);
           if (!m) return;
           const name=m[1], prefix=m[2];
-          if (prefix.includes('.') || prefix.includes(':')) { // IPv4 or IPv6
+          if (prefix.includes('.') || prefix.includes(':')) { // IPv4 or IPv6（IPv6 單一位址補 /128）
             objs.push({ category:'address', name, type:'ipmask',
-              subnet:prefix.includes('/')?prefix:prefix+'/32',
-              fqdn:'-', startIp:prefix.split('/')[0], endIp:'-',
-              wildcard:'-', iface:'-', color:'0', comment:zoneName||'-',
-              members:'-', _vdom:zoneName||'global' });
+              subnet:prefix.includes('/')?prefix:prefix+(prefix.includes(':')?'/128':'/32'),
+              fqdn:'-', startIp:prefix.split('/')[0], endIp:'-', ...base });
           }
         });
       }
@@ -432,7 +436,10 @@ const JuniperParser = (() => {
           const name = akey.replace('address ','');
           const ip4 = val(anode,'ip-prefix') || val(anode,'ip-address');
           const dns = val(anode,'dns-name');
-          const range = val(anode,'range-address');
+          // range-address 可能是單行值，或 show configuration／display set 轉出的巢狀區塊（range-address A { to { B; } }），
+          // 一律攤平成文字再比對
+          const flat = n => [...(n._values||[]), ...Object.entries(n._children||{}).map(([k, c]) => k + ' ' + flat(c))].join(' ');
+          const range = val(anode,'range-address') || ((flat(anode).match(/range-address\s+(\S+)\s+to\s+(\S+)/) || [])[0] || '').replace(/^range-address\s+/, '');
           let type='ipmask', subnet=ip4||'-', fqdn='-', startIp='-', endIp='-';
           if (dns) { type='fqdn'; fqdn=dns; subnet='-'; }
           else if (range) {
