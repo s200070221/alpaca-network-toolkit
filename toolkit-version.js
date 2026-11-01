@@ -3,8 +3,23 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.10.31';
+  const TOOLKIT_VERSION = '2026.11.01';
   const CHANGELOG = [
+    {
+      version: '2026.11.01',
+      items: {
+        zhTW: [
+          '防火牆設定轉換：轉 FortiGate、Palo Alto、Juniper 時輸出 IPv6 位址物件、群組與規則，同時有 IPv4 與 IPv6 位址的規則拆成兩條；轉其他廠牌時不輸出 IPv6 並列出受影響的規則',
+          '交換器分析：Cisco IOS／IOS-XE 的 SSH 開在非 22 埠、ACL 10／20／50 放行公網位址時列為「需人工確認」（依 CISA AA25-239A 描述的手法，不代表已遭入侵）',
+          '內建韌體漏洞清單更新到 CISA KEV 2026-10-30（新增 Cisco ASA／FTD CVE-2026-76418）；Juniper 位址範圍與 FQDN 物件的各種寫法都能正確讀取',
+        ],
+        en: [
+          'Firewall config conversion: IPv6 address objects, groups and rules are now written when converting to FortiGate, Palo Alto or Juniper; rules with both IPv4 and IPv6 addresses are split in two. Other targets skip IPv6 and list the affected rules',
+          'Switch analyzer: Cisco IOS/IOS-XE SSH on a port other than 22 and ACL 10/20/50 permitting public addresses are flagged for review (patterns described in CISA AA25-239A; not proof of compromise)',
+          'Built-in firmware vulnerability list updated to CISA KEV 2026-10-30 (adds Cisco ASA/FTD CVE-2026-76418); all forms of Juniper address ranges and FQDN objects are now read correctly',
+        ],
+      },
+    },
     {
       version: '2026.10.31',
       items: {
