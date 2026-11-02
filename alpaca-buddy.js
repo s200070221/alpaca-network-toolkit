@@ -147,10 +147,11 @@
     }
     return p;
   }
-  // 頁面頂端的彩蛋語言圖示搬進換裝區（只搬一次）
+  // 頁面頂端的彩蛋語言圖示搬進換裝區（只搬一次）；入口頁頁尾的 🦙（#alpaca-btn，連點三次切 Klingon）
+  // 也一併搬入，否則捲到頁尾時會和右下角的羊駝重疊
   function adoptLangEggs() {
     const w = panelEl().querySelector('[data-buddy="wardrobe"]');
-    document.querySelectorAll('.lang-egg').forEach(el => { if (el.parentNode !== w) { el.style.opacity = '1'; w.appendChild(el); } });
+    document.querySelectorAll('.lang-egg,#alpaca-btn').forEach(el => { if (el.parentNode !== w) { el.style.opacity = '1'; w.appendChild(el); } });
   }
   function renderPanel() {
     const p = panelEl(), lang = curLang();
