@@ -161,6 +161,16 @@ const VulnCheck = (function () {
       return Object.assign(base, { status: base.hits.length ? 'affected' : base.unknown.length ? 'unknown' : 'ok' });
     });
   }
+  // 受影響功能是否啟用（XN66）：entry.requires 為功能代號（+ 連接多個條件，全部成立才受影響），features 為 {代號: true|false|null}。
+  // 任一條件為 false（設定檔明確未啟用）→ 該筆由 hits 移到 inactive；true／null／未提供者不動。
+  // 只有 hits 全部移走時 status 才改為 inactive。回傳新物件，不改動傳入的 result
+  function applyFeatures(result, features) {
+    if (!result || !features) return result;
+    const off = e => String(e.requires || '').split('+').some(k => k && features[k] === false);
+    const hits = (result.hits || []).filter(e => !off(e)), inactive = (result.hits || []).filter(off);
+    if (!inactive.length) return result;
+    return Object.assign({}, result, { hits, inactive, status: hits.length ? result.status : 'inactive' });
+  }
   const CSV_HEADER = 'vendor,product,affected,fixed,cve,severity,kev,note';
   // 內建起始清單（vuln-seed.js 載入後掛上 BUILTIN／BUILTIN_ASOF）與使用者 CSV 合併：
   // 內建在前、使用者在後；同一 cve＋scheme 以使用者的為準（可覆蓋或停用內建判斷）。
@@ -172,6 +182,6 @@ const VulnCheck = (function () {
       .map(e => Object.assign({}, e, { builtin: true }));
     return builtin.concat(user);
   }
-  const API = { scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, withBuiltin, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
+  const API = { scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, withBuiltin, applyFeatures, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
   return API;
 })();

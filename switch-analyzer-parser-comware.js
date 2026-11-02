@@ -309,6 +309,7 @@ function parseUsers(cfg){
 // 不重新設計 schema。稽核檢查只需要「v1/v2c community 是否存在」，v3 使用者清單為輔助資訊。
 function parseSNMP(cfg, vendor){
   const communities=[], v3Users=[], hosts=[], seenC=new Set(), seenU=new Set(), seenH=new Set();
+  let v3Groups=null;
   const pushC=name=>{ if(name&&!seenC.has(name)){seenC.add(name);communities.push({name});} };
   const pushU=name=>{ if(name&&!seenU.has(name)){seenU.add(name);v3Users.push({name});} };
   const pushH=host=>{ if(host&&!seenH.has(host)){seenH.add(host);hosts.push({host});} };
@@ -440,8 +441,10 @@ function parseSNMP(cfg, vendor){
     // Dell OS10（SmartFabric OS10 User Guide）、Ruckus/Brocade FastIron 皆一致）
     const reH=/^\s*snmp-server\s+host\s+(\S+)/gm;
     while((m=reH.exec(cfg))!==null)pushH(m[1]);
+    // Cisco IOS／IOS-XE 的 snmp-server user 不會出現在 running-config，有 v3 群組就可能有隱藏的 v3 使用者（XN66 判斷 SNMP 是否啟用用）
+    if(vendor==='cisco')v3Groups=(cfg.match(/^\s*snmp-server\s+group\s+\S+\s+v3\b/gm)||[]).length;
   }
-  return {communities,v3Users,hosts};
+  return v3Groups===null?{communities,v3Users,hosts}:{communities,v3Users,hosts,v3Groups};
 }
 // Syslog 伺服器解析（2026-08-19 新增第一階段 6 家；2026-08-20 對外查證後擴大剩餘 11 家，
 // 17 家全數涵蓋，sonic 除外——sonic 走 parseSONiC()/_parseSyslogSONiC() 專屬 JSON 表格

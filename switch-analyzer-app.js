@@ -4194,7 +4194,7 @@ function vulnLoadText(){
 }
 function vulnSave(t){vulnText=t;try{localStorage.setItem('sw_vuln_list',t||'');}catch(e){}}
 function vulnDevices(){return invRows.map(r=>({name:r.hostname||r.file,vendor:r.vendor,version:vulnVerOverride[r.file]||r.version||'',file:r.file}));}
-const VULN_PILL={affected:'down',ok:'up',unknown:'warn',noVersion:'warn',noRules:'',unsupported:''};
+const VULN_PILL={affected:'down',ok:'up',unknown:'warn',inactive:'warn',noVersion:'warn',noRules:'',unsupported:''};
 // 韌體漏洞比對卡片：資產清冊（多台）與安全稽核頁（目前分析的這台）共用標頭與結果表格
 // 標頭：標題、說明、內建清單情資截止日、清單編輯區；cardId／textId 讓兩頁的元素 id 不衝突，applyFn 為「比對」按鈕呼叫的函式名稱
 function vulnCardHead(cardId,textId,applyFn){
@@ -4215,12 +4215,14 @@ function vulnCardHead(cardId,textId,applyFn){
 function vulnResultTable(devs){
   const p=VulnCheck.parseCsv(vulnLoadText());
   let h=p.errors.length?`<div style="font-size:12px;color:var(--red);margin-bottom:6px">${p.errors.map(e=>esc(tr('vuln.err_'+e.reason).replace('{n}',e.line))).join('<br>')}</div>`:'';
-  const res=VulnCheck.check(devs,VulnCheck.withBuiltin(p.entries));
+  // devs[i].features（稽核頁傳入目前這台的 swFeatureStates）：設定未啟用受影響功能者移到 inactive（XN66）
+  const res=VulnCheck.check(devs,VulnCheck.withBuiltin(p.entries)).map((r,i)=>devs[i].features&&VulnCheck.applyFeatures?VulnCheck.applyFeatures(r,devs[i].features):r);
+  const featOf=e=>String(e.requires||'').split('+').filter(Boolean).map(k=>tr('vuln.feat_'+k)).join(' + ');
   const st=r=>{const k=VULN_PILL[r.status];const t=tr('vuln.st_'+r.status);return k?pill(k,t):`<span style="color:var(--text-muted)">${esc(t)}</span>`;};
   h+=`<div class="tbl-wrap" style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc(tr('vuln.col_device'))}</th><th>${esc(tr('inv.col_vendor'))}</th><th>${esc(tr('vuln.version'))}</th><th>${esc(tr('vuln.col_result'))}</th><th>${esc(tr('vuln.col_cve'))}</th><th>${esc(tr('vuln.col_fixed'))}</th></tr></thead><tbody>`+
     res.map((r,i)=>{const sch=VulnCheck.deviceScheme(r.vendor,r.version)||VulnCheck.deviceScheme(r.vendor,'0');
       const ver=`<input class="mono" data-vuln-file="${esc(devs[i].file)}" value="${esc(r.version)}" placeholder="${esc(sch?tr('vuln.version_ph_'+sch):'')}" style="width:130px;font-size:11px;padding:2px 4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px">`;
-      const cves=r.hits.map(e=>`<span class="mono">${esc(e.cve)}</span>${e.kev?' <b style="color:var(--red)">KEV</b>':''}${e.builtin?' <span style="color:var(--text-dim)">'+esc(tr(e.advisory?'vuln.src_advisory':'vuln.src_builtin'))+'</span>':''}`).concat(r.unknown.map(e=>`<span class="mono" style="color:var(--text-dim)">${esc(e.cve)}?</span>`)).join('<br>');
+      const cves=r.hits.map(e=>`<span class="mono">${esc(e.cve)}</span>${e.kev?' <b style="color:var(--red)">KEV</b>':''}${e.builtin?' <span style="color:var(--text-dim)">'+esc(tr(e.advisory?'vuln.src_advisory':'vuln.src_builtin'))+'</span>':''}`).concat((r.inactive||[]).map(e=>`<span class="mono" style="color:var(--text-dim)">${esc(e.cve)}</span> <span style="color:var(--text-dim)">${esc(tr('vuln.res_inactive'))} — ${esc(tr('vuln.inactive_note').replace('{feat}',featOf(e)))}</span>`),r.unknown.map(e=>`<span class="mono" style="color:var(--text-dim)">${esc(e.cve)}?</span>`)).join('<br>');
       return `<tr><td><b>${esc(r.name)}</b></td><td>${esc(r.vendor)}</td><td>${ver}</td><td>${st(r)}</td><td style="font-size:11px">${cves||'-'}</td><td class="mono" style="font-size:11px">${esc([...new Set(r.hits.map(e=>e.fixed).filter(Boolean))].join('; ')||'-')}</td></tr>`;}).join('')+'</tbody></table></div>';
   return h+`<div style="font-size:11px;color:var(--text-dim);margin-top:6px">${esc(tr('vuln.disclaimer'))}</div>`;
 }
@@ -4236,7 +4238,7 @@ function _swHealthOpts(p){return {vulnText:vulnLoadText(),vulnVersion:(p&&vulnAu
 function renderAuditVulnCard(){
   if(!parsed)return '';
   const s=parsed.sys||{}, v=String(s.version||'').trim();
-  const dev={name:s.hostname||'-',vendor:parsed.vendor||'',version:vulnAuditVer.get(parsed)||(v==='-'||v==='all'?'':v),file:'audit'};
+  const dev={name:s.hostname||'-',vendor:parsed.vendor||'',version:vulnAuditVer.get(parsed)||(v==='-'||v==='all'?'':v),file:'audit',features:swFeatureStates(parsed)};
   return vulnCardHead('vuln-audit-card','vuln-audit-text','vulnAuditApply')+vulnResultTable([dev])+'</div>';
 }
 function vulnAuditApply(){

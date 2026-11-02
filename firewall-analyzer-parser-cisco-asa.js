@@ -564,7 +564,9 @@ const CiscoASAParser = (() => {
       // 管理面與 VPN 入口（2026-10-24，XN18 高風險曝險服務）：http server enable（ASDM／HTTPS 管理，允許的介面在
       // interfaces 的 allowaccess 'http'）、webvpn 區塊的 enable <nameif>（AnyConnect／無用戶端 SSL VPN 入口）
       mgmtPlane: { httpServer: /^http\s+server\s+enable\b/m.test(text),
-        webvpnIfs: ((text.match(/^webvpn\s*\n((?:[ \t]+.*\n?)*)/m) || [])[1] || '').split('\n').map(l => (l.match(/^\s+enable\s+(\S+)/) || [])[1]).filter(Boolean) },
+        webvpnIfs: ((text.match(/^webvpn\s*\n((?:[ \t]+.*\n?)*)/m) || [])[1] || '').split('\n').map(l => (l.match(/^\s+enable\s+(\S+)/) || [])[1]).filter(Boolean),
+        // tunnel-group … general-attributes 的 secondary-authentication-server-group（XN66，CVE-2026-76418 的觸發條件）
+        secondaryAuth: /^\s+secondary-authentication-server-group\s+\S/m.test(text) },
       addresses,
       services:    parseServiceObjects(text),
       nat:         parseNAT(text),

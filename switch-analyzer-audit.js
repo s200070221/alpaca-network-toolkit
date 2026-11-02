@@ -449,6 +449,16 @@ function analyzeSwitchAudit(parsed){
 
 // 韌體版本比對（XN58，比照防火牆 fwVulnStatus）：opts {vulnText（使用者 CSV）, vulnVersion（補填版本）, skipVuln}；
 // 沒有 VulnCheck、skipVuln 或廠牌不支援時回 null；版本無法解析時 kev／other 為空（不扣分）
+// 受影響功能是否啟用（XN66）：只回傳設定檔能確定的值，代號對應 vuln-seed 的 requires（scripts/vuln_seed_requires.txt）。
+// iosxe-webui：IOS-XE 是否有 ip http server／secure-server（mgmtSvc.webUi，傳統 IOS 為 null 不判斷）；
+// snmp：Cisco IOS／IOS-XE 沒有任何 community、v3 使用者與 v3 群組（snmp-server user 不顯示在 running-config）時無法通過 SNMP 認證，視為未啟用
+function swFeatureStates(parsed){
+  const p=parsed||{},f={},ms=p.mgmtSvc||null,brand=p.sys&&p.sys.brand;
+  if(ms&&typeof ms.webUi==='boolean')f['iosxe-webui']=ms.webUi;
+  if(p.vendor==='cisco'&&!/^(ciscobiz|awplus|fs)$/.test(brand||'')&&p.snmp)
+    f.snmp=((p.snmp.communities||[]).length+(p.snmp.v3Users||[]).length+(p.snmp.v3Groups||0))>0;
+  return f;
+}
 function swVulnStatus(parsed,opts){
   const V=typeof VulnCheck!=='undefined'?VulnCheck:null;
   if(!V||(opts&&opts.skipVuln)||!parsed)return null;
@@ -456,8 +466,10 @@ function swVulnStatus(parsed,opts){
   const ver=(opts&&opts.vulnVersion)||(sv==='-'||sv==='all'?'':sv);
   const sch=V.deviceScheme(parsed.vendor,ver);
   if(!sch)return null;
-  const r=V.check([{name:(parsed.sys&&parsed.sys.hostname)||'',vendor:parsed.vendor,version:ver}],V.withBuiltin(V.parseCsv((opts&&opts.vulnText)||'').entries))[0];
-  return {scheme:sch,version:ver,kev:r.hits.filter(e=>e.kev),other:r.hits.filter(e=>!e.kev)};
+  const r0=V.check([{name:(parsed.sys&&parsed.sys.hostname)||'',vendor:parsed.vendor,version:ver}],V.withBuiltin(V.parseCsv((opts&&opts.vulnText)||'').entries))[0];
+  // 設定檔明確未啟用受影響功能的漏洞不計入健康度（XN66）
+  const r=V.applyFeatures?V.applyFeatures(r0,swFeatureStates(parsed)):r0;
+  return {scheme:sch,version:ver,kev:r.hits.filter(e=>e.kev),other:r.hits.filter(e=>!e.kev),inactive:r.inactive||[]};
 }
 
 function computeSwitchHealth(parsed,opts){

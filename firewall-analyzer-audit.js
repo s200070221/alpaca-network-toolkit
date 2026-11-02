@@ -881,6 +881,22 @@
   // ── 韌體版本比對已知漏洞（2026-10-24，XN19）：比對邏輯在共用模組 vuln-check.js（VulnCheck），這裡只組畫面 ──
   // 韌體比對結果（XN50）：健康度、優先處理、主管摘要與韌體卡片共用。opts：{vulnText（使用者 CSV）, vulnVersion（使用者補填的版本）, skipVuln}
   // 沒有 VulnCheck（Node 單元測試沙箱）、不支援的廠牌或 skipVuln 時回傳 null
+  // 受影響功能是否啟用（XN66）：只回傳設定檔能確定的值（true／false），看不出來的不放（＝維持只比版本）。
+  // 代號對應 vuln-seed 的 requires（scripts/vuln_seed_requires.txt）
+  function fwFeatureStates(parsed) {
+    const p = parsed || {}, vendor = String(p.vendor || ''), mp = p.mgmtPlane || {}, f = {};
+    if (vendor === 'FortiGate') {
+      const ssl = (p.vpn || []).filter(v => v.type === 'ssl-vpn');
+      // 沒有 vpn ssl settings 區塊（設定不完整）時不判斷；有區塊時，未停用且有 source-interface 才算啟用
+      if (ssl.length) f['fg-sslvpn'] = ssl.some(v => v.status !== 'disable' && String(v.iface || '').replace(/"/g, '').split(/[\s,]+/).some(x => x && x !== '-'));
+    } else if (/^Cisco (ASA|FTD)$/.test(vendor) && Array.isArray(mp.webvpnIfs)) {
+      f['asa-sslvpn'] = mp.webvpnIfs.length > 0;
+      if (typeof mp.secondaryAuth === 'boolean') f['asa-secauth'] = mp.secondaryAuth;
+    } else if (vendor === 'Juniper' && 'jweb' in mp) {
+      f['jn-jweb'] = !!(mp.jweb && (mp.jweb.http || mp.jweb.https));
+    }
+    return f;
+  }
   function fwVulnStatus(parsed, opts) {
     const V = typeof VulnCheck !== 'undefined' ? VulnCheck : null;
     if (!V || (opts && opts.skipVuln)) return null;
@@ -889,8 +905,10 @@
     if (!sch) return null;
     const pc = V.parseCsv((opts && opts.vulnText) || '');
     const entries = V.withBuiltin(pc.entries);  // 內建起始清單＋使用者 CSV
-    const r = V.check([{ name: (p.deviceInfo && p.deviceInfo.hostname) || '', vendor: p.vendor, version: ver }], entries)[0];
-    return { scheme: sch, version: ver, firmware: fw, entries, errors: pc.errors, r, kev: r.hits.filter(e => e.kev), other: r.hits.filter(e => !e.kev) };
+    // 設定檔明確未啟用受影響功能的漏洞移到 inactive，不計入健康度與優先項目（XN66）
+    const r0 = V.check([{ name: (p.deviceInfo && p.deviceInfo.hostname) || '', vendor: p.vendor, version: ver }], entries)[0];
+    const r = V.applyFeatures ? V.applyFeatures(r0, fwFeatureStates(p)) : r0;
+    return { scheme: sch, version: ver, firmware: fw, entries, errors: pc.errors, r, kev: r.hits.filter(e => e.kev), other: r.hits.filter(e => !e.kev), inactive: r.inactive || [] };
   }
   // st：{text（使用者 CSV）, version（使用者填的版本，空字串用設定檔的 firmware）, parsed}
   function buildVulnCheckHtml(st) {
@@ -916,13 +934,15 @@
     const vs = fwVulnStatus(p, { vulnText: st.text, vulnVersion: st.version });
     if (vs.errors.length) h += `<div style="font-size:12px;color:var(--red);margin:6px 0">${vs.errors.map(e => esc(tr('vuln.err_' + e.reason).replace('{n}', e.line))).join('<br>')}</div>`;
     const entries = vs.entries, r = vs.r;
-    const pillCls = { affected: 'p-deny', ok: 'p-accept', unknown: 'p-warn', noVersion: 'p-warn', noRules: '', unsupported: '' }[r.status] || '';
+    const pillCls = { affected: 'p-deny', ok: 'p-accept', unknown: 'p-warn', inactive: 'p-warn', noVersion: 'p-warn', noRules: '', unsupported: '' }[r.status] || '';
     h += `<div style="margin:8px 0;font-size:12px">${pillCls ? pill(tr('vuln.st_' + r.status), pillCls) : esc(tr('vuln.st_' + r.status))} ${esc(tr('vuln.summary').replace('{n}', entries.filter(e => e.scheme === sch).length).replace('{hit}', r.hits.length))}</div>`;
-    const rows = r.hits.map(e => ['hit', e]).concat(r.unknown.map(e => ['unknown', e]));
+    // 設定未啟用受影響功能者（XN66）排在受影響之後，備註寫出功能名稱
+    const featOf = e => String(e.requires || '').split('+').filter(Boolean).map(k => tr('vuln.feat_' + k)).join(' + ');
+    const rows = r.hits.map(e => ['hit', e]).concat((r.inactive || []).map(e => ['inactive', e]), r.unknown.map(e => ['unknown', e]));
     if (rows.length) {
       h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + ['vuln.col_cve', 'vuln.col_result', 'vuln.col_severity', 'vuln.col_kev', 'vuln.col_affected', 'vuln.col_fixed', 'vuln.col_src', 'vuln.col_note'].map(k => esc(tr(k))).join('</th><th>') + '</th></tr></thead><tbody>';
-      rows.forEach(([k, e]) => { h += `<tr><td class="mono">${esc(e.cve)}</td><td>${k === 'hit' ? pill(tr('vuln.res_hit'), 'p-deny') : pill(tr('vuln.res_unknown'), 'p-warn')}</td><td>${esc(e.severity || '-')}</td><td>${e.kev ? 'KEV' : '-'}</td>` +
-        `<td class="mono" style="font-size:11px">${esc(e.affected)}</td><td class="mono" style="font-size:11px">${esc(e.fixed || '-')}</td><td style="font-size:11px">${esc(tr(!e.builtin ? 'vuln.src_user' : e.advisory ? 'vuln.src_advisory' : 'vuln.src_builtin'))}</td><td style="font-size:11px">${esc([e.product, e.note].filter(Boolean).join(' — ') || '-')}${e.line ? ' <span style="color:var(--text-dim)">(#' + e.line + ')</span>' : ''}</td></tr>`; });
+      rows.forEach(([k, e]) => { h += `<tr><td class="mono">${esc(e.cve)}</td><td>${k === 'hit' ? pill(tr('vuln.res_hit'), 'p-deny') : k === 'inactive' ? pill(tr('vuln.res_inactive'), 'p-warn') : pill(tr('vuln.res_unknown'), 'p-warn')}</td><td>${esc(e.severity || '-')}</td><td>${e.kev ? 'KEV' : '-'}</td>` +
+        `<td class="mono" style="font-size:11px">${esc(e.affected)}</td><td class="mono" style="font-size:11px">${esc(e.fixed || '-')}</td><td style="font-size:11px">${esc(tr(!e.builtin ? 'vuln.src_user' : e.advisory ? 'vuln.src_advisory' : 'vuln.src_builtin'))}</td><td style="font-size:11px">${k === 'inactive' ? esc(tr('vuln.inactive_note').replace('{feat}', featOf(e))) + '<br>' : ''}${esc([e.product, e.note].filter(Boolean).join(' — ') || '-')}${e.line ? ' <span style="color:var(--text-dim)">(#' + e.line + ')</span>' : ''}</td></tr>`; });
       h += '</tbody></table></div>';
     }
     return h + '<div style="font-size:11px;color:var(--text-dim);margin-top:6px">' + esc(tr('vuln.disclaimer')) + '</div></div>';
