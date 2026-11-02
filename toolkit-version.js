@@ -3,8 +3,19 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.01';
+  const TOOLKIT_VERSION = '2026.11.02';
   const CHANGELOG = [
+    {
+      version: '2026.11.02',
+      items: {
+        zhTW: [
+          '入口頁：捲到頁尾時頁尾的羊駝不再與右下角羊駝重疊（頁尾羊駝收進口袋面板的換裝區，連點三次切 Klingon 的彩蛋照常可用）',
+        ],
+        en: [
+          'Hub page: the footer alpaca no longer overlaps the corner alpaca when scrolled to the bottom (it now lives in the pocket panel wardrobe; triple-clicking it still switches to Klingon)',
+        ],
+      },
+    },
     {
       version: '2026.11.01',
       items: {
