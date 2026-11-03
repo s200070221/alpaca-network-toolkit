@@ -3395,6 +3395,15 @@ async function handleConfigFileUpload(e){
   document.getElementById('import-text').value=await f.text();
 }
 
+// 上傳分析頁的來源判斷結果（XN85）：已知官方版本顯示綠字；未知則顯示警告與確認勾選框
+function renderParserTrust(){
+  const shaEl=document.getElementById('import-parser-sha'), cfRow=document.getElementById('import-parser-confirm-row'), t=window._parserTrust;
+  if(!shaEl||!t)return;
+  const ver=t.version==='this'?tr('lbl.parserThisBuild'):t.version;
+  shaEl.textContent=(t.sha?tr('lbl.parserSha').replace('{hash}',t.sha)+'\n':'')+(ver?tr('lbl.parserKnown').replace('{ver}',ver):tr('lbl.parserUnknown'));
+  shaEl.style.color=ver?'var(--green)':'var(--orange,#f59e0b)';
+  if(cfRow)cfRow.style.display=ver?'none':'';
+}
 function handleParserFileUpload(e){
   const f=e.target.files[0];
   if(!f){
@@ -3404,11 +3413,17 @@ function handleParserFileUpload(e){
   document.getElementById('import-parser-file-name').textContent=f.name;
   // 上傳的程式會以 new Function() 執行：顯示 SHA-256 供使用者與 Release 的 SHA256SUMS.txt 比對（不支援 crypto.subtle 時不顯示）
   const shaEl=document.getElementById('import-parser-sha');
+  _parserFnsCache=null; window._parserTrust=undefined;
+  const cf=document.getElementById('import-parser-confirm'), cfRow=document.getElementById('import-parser-confirm-row');
+  if(cf)cf.checked=false; if(cfRow)cfRow.style.display='none';
   if(shaEl){
     shaEl.textContent='';
     if(window.crypto&&crypto.subtle)f.arrayBuffer().then(b=>crypto.subtle.digest('SHA-256',b)).then(h=>{
-      shaEl.textContent=tr('lbl.parserSha').replace('{hash}',[...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,'0')).join(''));
-    }).catch(()=>{});
+      const sha=[...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,'0')).join('');
+      window._parserTrust={sha,version:parserTrustOf(sha)};
+      renderParserTrust();
+    }).catch(()=>{ window._parserTrust={sha:'',version:null}; renderParserTrust(); });
+    else { window._parserTrust={sha:'',version:null}; renderParserTrust(); }
   }
   const reader=new FileReader();
   reader.onload=evt=>{window._parserHTML=evt.target.result;};
@@ -3523,6 +3538,27 @@ const BasicParser={
 };
 
 let _parserFnsCache=null;
+// 已發佈的合併版分析頁 SHA-256（XN85）：上傳檔案的雜湊在表內才直接執行，否則須勾選確認。
+// __PARSER_SHA256_THIS_BUILD__ 由 build-standalone.ps1 在建置時換成同一次建置的 switch-config-parser.html 雜湊；
+// 每次發版後把該版 Release 的雜湊補進表內（GitHub Pages 的分頁版才認得最新 Release 的單檔）
+const PARSER_KNOWN_SHA256={
+  '__PARSER_SHA256_THIS_BUILD__':'this',
+  '3f87e05047ffb42df6107dc9038f599ea7e9ce5a13f0a052ab619966bd28ed8b':'v2026.11.03',
+  '37c3fdfd720b3446a916a876d2ca6b6447e1f2873b4be1d9af83722e26d3ce26':'v2026.11.02',
+  '0295bf054e039b415ba21c48543dea0331c5333c703d365b4663c191e90730e0':'v2026.11.01',
+  'b5d8f6b3ff12ba41147d80e061baa3bb9eb6032069d2aca646589e8fa7388118':'v2026.10.31',
+  '0fe49b32cc48e00f236150668c2ca0b30bf52af3d587657fa1fabf541ec304c4':'v2026.10.30',
+  '89aae0312ff88514f97eefd03cd1721a0847de2af99dc0f6cdd7486d976402c2':'v2026.10.29',
+  '36c7ff0cdb9eaf4b6e2070c08a36847a8872a2acaf4eeced5778dfd8c25be376':'v2026.10.28',
+  '80832dbc4d53c804e76a611ca8194dd741f9d3cecf523126b99f381cb36389f7':'v2026.10.25',
+  'b260d347eb035b21f66e2f23dfd63c49af0eb6287717e8d846a6583475f5ef16':'v2026.10.22.1',
+  '8cd35a2e7a914da0f20a96c5b4b40466846b4ad4b8a10b0550885a8fa4a50afc':'v2026.10.22',
+  '0707a62a58f51a6b4981ef29d10214a488ad0f23cd8d5b47af851279811e0ad7':'v2026.10.21'
+};
+// { sha, version }：version 為已知版本、'this'（同一次建置）或 null（未知）；undefined＝尚未算完
+window._parserTrust=undefined;
+function parserTrustOf(sha){ return Object.prototype.hasOwnProperty.call(PARSER_KNOWN_SHA256,sha)?PARSER_KNOWN_SHA256[sha]:null; }
+window.renderParserTrust=renderParserTrust;
 
 async function loadParserFunctions(){
   if(_parserFnsCache)return _parserFnsCache;
@@ -3532,6 +3568,10 @@ async function loadParserFunctions(){
   const fileInput=document.getElementById('import-parser-file');
   if(fileInput.files&&fileInput.files[0])src=await fileInput.files[0].text();
   if(!src)throw new Error('NO_PARSER_SOURCE - 請上傳 switch-config-parser.html 檔案');
+  // 只有雜湊是已知官方版本，或使用者勾選確認，才執行上傳檔的程式（XN85）
+  const t=window._parserTrust, ok=t&&t.version;
+  const cf=document.getElementById('import-parser-confirm');
+  if(!ok&&!(cf&&cf.checked))throw new Error('PARSER_UNTRUSTED');
   const scriptMatch=src.match(/<script>([\s\S]*)<\/script>/);
   if(!scriptMatch)throw new Error('NO_SCRIPT_TAG');
   const script=scriptMatch[1];
@@ -3567,7 +3607,11 @@ async function parseAndImport(){
   let fns=null;
   try{
     fns=await loadParserFunctions();
-  }catch(e){ /* 兩層都失敗，改用內建基礎解析 BasicParser */ }
+  }catch(e){
+    /* 兩層都失敗，改用內建基礎解析 BasicParser；上傳檔未確認來源時提示（XN85） */
+    // 上傳檔未確認來源：停下來讓使用者決定，不默默改用基礎解析
+    if(e&&e.message==='PARSER_UNTRUSTED'){showImportMsg(tr('msg.parserUntrusted'),true);return;}
+  }
   const api=fns||BasicParser;
 
   const vendor=api.detectVendor(text);
@@ -5047,6 +5091,7 @@ function setLang(lang){
   }
   updateAppliedModelNotice();
   updateModeOptions(); // 重新翻譯 #classmap-scope-hint 等依語言即時組字串的提示文字
+  renderParserTrust();
   // 檢查面板的訊息在驗證當下組成，切換語言時重新驗證一次重繪
   const vp=document.querySelector('.validation-panel');
   if(vp)showValidationResults(validateForm(),vp.dataset.fromImport==='1');

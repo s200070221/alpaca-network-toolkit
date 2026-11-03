@@ -56,4 +56,20 @@ foreach ($file in $htmlFiles) {
     Write-Host "  merged $mergedCount script(s) -> $($file.Name)"
 }
 
+# The generator runs an uploaded analyzer page only when its SHA-256 is known (XN85).
+# Write this build's analyzer hash into the generator so files from the same release are accepted.
+$parserOut = Join-Path $OutDir 'switch-config-parser.html'
+$genOut = Join-Path $OutDir 'switch-config-generator.html'
+if ((Test-Path $parserOut) -and (Test-Path $genOut)) {
+    $parserHash = (Get-FileHash -Path $parserOut -Algorithm SHA256).Hash.ToLower()
+    $genContent = Get-Content -Path $genOut -Raw -Encoding UTF8
+    if ($genContent.Contains('__PARSER_SHA256_THIS_BUILD__')) {
+        $genContent = $genContent.Replace('__PARSER_SHA256_THIS_BUILD__', $parserHash)
+        Set-Content -Path $genOut -Value $genContent -Encoding utf8 -NoNewline
+        Write-Host "  generator: trusted analyzer SHA-256 $parserHash"
+    } else {
+        Write-Warning "  generator: placeholder __PARSER_SHA256_THIS_BUILD__ not found"
+    }
+}
+
 Write-Host "`nDone. Standalone single-file builds are in: $OutDir"
