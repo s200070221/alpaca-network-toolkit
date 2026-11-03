@@ -93,8 +93,9 @@ function ipv4ToInt(ip){
 function comwareOspfNetworkWarnings(model){
   const warnings=[];
   if(!model||model.vendor!=='comware')return warnings;
-  // VLAN 表格的 IP 在產生時合成為 Vlan-interface（withSviInterfaces），一併算入
-  const ifaceIps=[...(model.interfaces||[]),...(model.vlans||[])]
+  // VLAN 表格的 IP 在產生時合成為 Vlan-interface（withSviInterfaces），一併算入；
+  // 有 VRRP 時 SVI IP 寫在 VRRP 列（用途範本與 VLSM 的慣例），也算入
+  const ifaceIps=[...(model.interfaces||[]),...(model.vlans||[]),...(model.vrrp||[])]
     .map(i=>(i.ip||'').split('/')[0].split(' ')[0])
     .filter(ip=>isValidIPv4(ip));
   (model.ospf||[]).forEach((proc,pIdx)=>{

@@ -324,6 +324,8 @@ function matchSourceByFile(fileName, sources) {
 }
 // 來源表只顯示網址的主機名稱（完整網址放在連結與提示）
 function urlHost(u) { const m = String(u).match(/^https?:\/\/([^/?#]+)/i); return m ? m[1] : String(u); }
+// 網址的最後一段路徑（檔名），多個來源同在 raw.githubusercontent.com 時用來區分（UX16）；沒有路徑時回傳空字串
+function urlFile(u) { const m = String(u).match(/^https?:\/\/[^/?#]+\/(?:[^?#]*\/)?([^/?#]+)/i); return m ? m[1] : ''; }
 const OUTPUT_FILES = { ip: 'threat_intel_ip.ndjson', domain: 'threat_intel_domain.ndjson', hash: 'threat_intel_hash.txt', asn: 'threat_intel_asndrop.json', hosting: 'threat_intel_hosting_asn.json', anonvpn: 'threat_intel_anonvpn.ndjson', rmm: 'threat_intel_rmm.ndjson' };
 // 儲存的來源設定（localStorage `_netAnalyzer_intelSources`）：{ custom:[來源], on:{id:true|false} }
 function loadSourceConfig(raw) {
@@ -388,7 +390,7 @@ function allSources() { return [...BUILTIN_SOURCES, ...CFG.custom]; }
 function isOn(s) { return CFG.on[s.id] !== undefined ? !!CFG.on[s.id] : !!s.on; }
 function statusText(s) {
   const st = STATUS[s.id];
-  if (!st) return '';
+  if (!st) return '<span class="hint">—</span>';
   if (st.st === 'wait') return `<span class="st-wait">${esc(tr('st.wait'))}</span>`;
   if (st.st === 'fail') return `<span class="st-fail">${esc(tr('st.fail'))}</span>`;
   return `<span class="st-ok">${esc(tr('st.ok').replace('{n}', st.ok).replace('{r}', st.reserved).replace('{x}', st.invalid))}</span>`;
@@ -400,7 +402,7 @@ function renderSources() {
     <td><input type="checkbox" data-id="${esc(s.id)}" ${isOn(s) ? 'checked' : ''} aria-label="${esc(s.id)}"></td>
     <td>${esc(s.id)}${s.noteKey && s.noteKey !== 'note.manual' ? `<div class="hint">${esc(tr(s.noteKey))}</div>` : ''}${s.custom ? ` <span class="tag">${esc(tr('tag.custom'))}</span>` : ''}</td>
     <td><span class="tag">${esc(tr('kind.' + s.kind))}</span></td>
-    <td class="url"><a href="${esc(s.url)}" title="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(urlHost(s.url))}</a></td>
+    <td class="url"><a href="${esc(s.url)}" title="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(urlFile(s.url) || urlHost(s.url))}</a>${urlFile(s.url) ? `<div class="hint">${esc(urlHost(s.url))}</div>` : ''}</td>
     <td>${statusText(s)}</td>
     <td>${s.custom ? `<button class="btn" data-del="${esc(s.id)}">${esc(tr('btn.del'))}</button>` : ''}</td></tr>`).join('')).join('');
   $('manual-src').innerHTML = allSources().map(s => `<option value="${esc(s.id)}">${esc(s.id)}（${esc(tr('kind.' + s.kind))}）</option>`).join('');

@@ -156,6 +156,7 @@ body[data-theme="light"] .p-gray{background:rgba(100,116,139,.18);color:#334155;
 body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;border-color:rgba(154,52,18,.35)}
 /* Sum cards */
 .sum-wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;padding:12px 18px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0;}
+.sum-wrap:empty{display:none}
 .sum-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;}
 .sum-card.clickable{cursor:pointer;transition:border-color .15s,opacity .15s}.sum-card.clickable:hover{border-color:var(--accent);opacity:.85}
 .sum-card .sl{font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.6px;font-family:'JetBrains Mono',monospace;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -270,6 +271,9 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 }
 /* ═══ Responsive: Phone ≤540px ══════════════════════════════════════ */
 @media(max-width:540px){
+  /* 手機版（UX11）：結果頁按鈕與統計卡片各自單行橫向捲動，不再換成好幾行佔掉第一屏 */
+  #tb-actions{flex-wrap:nowrap !important;justify-content:flex-start !important;margin-left:0 !important;overflow-x:auto;width:100%;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+  #tb-actions>*{flex-shrink:0}
   /* 手機版（2026-09-29，UC）：頂部列換行，避免右側主題／工具按鈕被擠出畫面 */
   #topbar{flex-wrap:wrap;row-gap:6px}
   .lang-btn{white-space:nowrap}

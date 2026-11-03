@@ -811,13 +811,13 @@ function renderView(view){
 function renderOverviewVerdict(){
   let h=null;try{h=computeSwitchHealth(parsed,_swHealthOpts(parsed));}catch(e){h=null;}
   if(!h)return'';
-  const top=swPriorityItems(h).slice(0,3);
+  const allTop=swPriorityItems(h),top=allTop.slice(0,3);
   const box='margin:12px 18px 0;padding:12px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface2)';
   let o=`<div id="ov-verdict" style="${box}"><div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">`
     +`<div style="font-size:36px;font-weight:800;color:${h.gradeColor};line-height:1">${esc(h.grade)}</div>`
     +`<div><div style="font-size:14px;font-weight:700">${esc(tr('ov.verdict_health').replace('{score}',h.score))}</div><div style="font-size:12px;color:var(--text-dim)">${esc(tr('exec.grade_'+h.grade))}</div></div></div>`;
   if(top.length){
-    o+=`<div style="font-weight:600;font-size:12px;margin:10px 0 4px">${esc(tr('ov.verdict_top3'))}</div><ol style="margin:0;padding-left:20px">`
+    o+=`<div style="font-weight:600;font-size:12px;margin:10px 0 4px">${esc((allTop.length>top.length?tr('ov.verdict_top_of').replace('{total}',allTop.length):tr('ov.verdict_top_n')).replace('{n}',top.length))}</div><ol style="margin:0;padding-left:20px">`
       +top.map(i=>`<li data-ov-key="${esc(i.id||'')}" style="margin:3px 0;font-size:12px">${i.sev==='crit'?pill('down',tr('audit.risk_high')):pill('warn',tr('audit.risk_mid'))} ${esc(i.label)} <span style="color:var(--text-dim)">(${esc(String(i.count))})</span></li>`).join('')+'</ol>';
   }else o+=`<div style="margin-top:8px;font-size:12px;color:var(--green)">✓ ${esc(tr('ov.verdict_zero'))}</div>`;
   const btn=(fn,k)=>`<button class="btn btn-ghost btn-sm" onclick="${fn}">${esc(tr(k))}</button>`;

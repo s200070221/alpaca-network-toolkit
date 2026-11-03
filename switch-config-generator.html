@@ -74,6 +74,8 @@ td input.i-name{min-width:170px}
 /* 「產生設定」按鈕卡片改為固定懸浮在畫面下方，避免長表單捲動時找不到按鈕；
    z-index 低於 .validation-panel(5000)/.mini-alpaca(9999)，避免懸浮元件互相遮擋 */
 #generate-card{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:4000;width:auto;max-width:calc(100vw - 32px);margin:0;box-shadow:0 6px 20px rgba(0,0,0,.35)}
+/* 寬螢幕時移到左下角空白處，不蓋住置中的表單（UX17）；窄螢幕仍置中，頁底由羊駝模組留白 */
+@media(min-width:1440px){#generate-card{left:16px;transform:none}}
 .out-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
 .act-btn{background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer;padding:6px 14px;font-size:12px;font-family:inherit;white-space:nowrap}
 .act-btn:hover{border-color:var(--accent);color:var(--accent)}

@@ -3144,7 +3144,11 @@ function showValidationResults(results,fromImport=false){
   panel.className='validation-panel show';
   let html=`<h3 style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span>${fromImport?'📥 '+tr('val.importResultTitle'):'📋 '+tr('val.generateCheckTitle')}</span><button class="rm-btn" style="flex-shrink:0" onclick="this.closest('.validation-panel').remove()">✕</button></h3>`;
 
-  if(results.valid){
+  // 沒有錯誤但有提示時不寫「全部通過」，避免與下方 ⚠ 提示看起來矛盾
+  const tipsOnly=results.valid&&results.warnings.length>0;
+  if(tipsOnly){
+    html+=`<div class="validation-item warning"><div class="msg">✅ ${tr('val.passedWithTips').replace('{n}',results.warnings.length)}</div></div>`;
+  }else if(results.valid){
     html+=`<div class="validation-item success"><div class="msg">✅ ${tr('val.allPassed')}</div></div>`;
   }else{
     html+=`<div class="validation-item error"><div class="msg">⚠️ ${tr('val.errorsFound').replace('{n}',results.errors.length)}</div></div>`;
@@ -3158,13 +3162,14 @@ function showValidationResults(results,fromImport=false){
   });
 
   if(results.warnings.length>0){
-    html+=`<div class="validation-item warning"><div class="msg">💡 ${tr('val.tipsCount').replace('{n}',results.warnings.length)}</div></div>`;
+    if(!tipsOnly)html+=`<div class="validation-item warning"><div class="msg">💡 ${tr('val.tipsCount').replace('{n}',results.warnings.length)}</div></div>`;
     results.warnings.forEach(warn=>{
       html+=`<div class="validation-item warning"><div class="msg" style="font-size:10px">${esc(warn)}</div></div>`;
     });
   }
 
   panel.innerHTML=html;
+  panel.dataset.fromImport=fromImport?'1':'';
   const old=document.querySelector('.validation-panel');
   if(old)old.remove();
   document.body.appendChild(panel);
@@ -5042,6 +5047,9 @@ function setLang(lang){
   }
   updateAppliedModelNotice();
   updateModeOptions(); // 重新翻譯 #classmap-scope-hint 等依語言即時組字串的提示文字
+  // 檢查面板的訊息在驗證當下組成，切換語言時重新驗證一次重繪
+  const vp=document.querySelector('.validation-panel');
+  if(vp)showValidationResults(validateForm(),vp.dataset.fromImport==='1');
 }
 
 // ── theme ──────────────────────────────────────────────────────────
@@ -5262,6 +5270,7 @@ window.addEventListener('load',function(){
 function loadExampleData(){
   addVlanRow('10','Management');
   addVlanRow('20','Server');
+  addVlanRow('30','Stub','10.30.0.1/24');
   addIfaceRow('GigabitEthernet1/0/1','trunk');
   rowsOf('#iface-body tr')[rowsOf('#iface-body tr').length-1].querySelector('.i-trunk-vlans').value='10 20';
   addIfaceRow('GigabitEthernet1/0/2','hybrid');

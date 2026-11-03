@@ -459,7 +459,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
     // 建議立即處理（XN54）：與畫面優先處理同一排序，只列高風險
     const urgent = fwPriorityItems(health).filter(i => i.sev === 'crit').slice(0, 5);
     const urgentHtml = urgent.length ? `<div class="card urgent"><h2>${esc(tr('rpt.urgent_title'))}</h2><ol style="padding-left:20px">${urgent.map(i =>
-      `<li style="margin:4px 0">${esc(i.label)}${i.parts ? '' : ` (${esc(String(i.count))})`}${i.cves && i.cves.length ? ` <span class="mono" style="color:#64748b">${i.cves.map(esc).join(', ')}</span>` : ''}${i.parts ? `<div style="font-size:12px;color:#64748b">${esc(i.parts.map(x => x.label).join(' ＋ '))}</div>` : ''}</li>`).join('')}</ol></div>` : '';
+      `<li style="margin:4px 0">${esc(i.label)}${i.parts ? '' : ` (${esc(String(i.count))})`}${i.cves && i.cves.length ? ` <span class="mono" style="color:#64748b">${i.cves.map(esc).join(', ')}</span>${typeof fwCveMore === 'function' ? fwCveMore(i) : ''}` : ''}${i.parts ? `<div style="font-size:12px;color:#64748b">${esc(i.parts.map(x => x.label).join(' ＋ '))}</div>` : ''}</li>`).join('')}</ol></div>` : '';
 
     const policyRows = parsed.policies.map(p =>
       `<tr>

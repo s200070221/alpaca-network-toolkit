@@ -105,6 +105,17 @@
     css(h, { left: (a.left + a.w / 2 - 9) + 'px', top: (a.top - 12) + 'px' });
   }
   // 泡泡：羊駝上方，可關閉；值勤泡泡另帶「前往」
+  let shownAt = 0, scrollHook = false;
+  // 內容底部留出羊駝的高度，捲到最下面時最後一列不會被右下角羊駝蓋住（UX10）；
+  // 工具頁是內容區自己捲動（view-data／view-result／view-preview），其餘頁面由 body 捲動
+  function bottomRoom() {
+    if ($('alpaca-buddy-room')) return;
+    const sel = ['#view-data::after', '#view-result::after', '#view-preview::after'];
+    if (getComputedStyle(document.body).overflowY !== 'hidden') sel.push('body::after');
+    const st = document.createElement('style'); st.id = 'alpaca-buddy-room';
+    st.textContent = sel.join(',') + "{content:'';display:block;height:96px}";
+    document.head.appendChild(st);
+  }
   function bubble(text, ms, goFn) {
     let el = $('alpaca-bubble');
     if (!el) {
@@ -128,6 +139,10 @@
     el.appendChild(x);
     clearTimeout(hideTimer);
     hideTimer = setTimeout(hideBubble, ms || 5000);
+    // 使用者開始捲動閱讀時收起，避免泡泡蓋住表格欄位（內容仍可從口袋面板查看）
+    // 工具頁多半是內容區自己捲動，以 capture 監聽所有捲動；顯示後 1.5 秒內的捲動（頁面自己定位）不算
+    shownAt = Date.now();
+    if (!scrollHook) { scrollHook = true; document.addEventListener('scroll', () => { const b = $('alpaca-bubble'); if (b && b.style.display !== 'none' && Date.now() - shownAt > 1500) hideBubble(); }, { passive: true, capture: true }); }
   }
   function hideBubble() { const el = $('alpaca-bubble'); if (el) el.style.display = 'none'; }
 
@@ -229,7 +244,7 @@
     // 頁面載入完成前不建立任何畫面元素（交換器分析的羊駝寫在最後一個 script 之後，?demo=1 會先觸發彩蛋），
     // 載入後才找頁面羊駝定位，再補畫值勤與待顯示的泡泡
     const start = () => {
-      ready = true; adoptLangEggs(); pocketBtn();
+      ready = true; adoptLangEggs(); pocketBtn(); bottomRoom();
       if (duty) setDuty(duty);
       else if (pendingBubble) bubble(pendingBubble[0], pendingBubble[1]);
       pendingBubble = null;

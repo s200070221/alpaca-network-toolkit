@@ -2084,14 +2084,19 @@
     }
     return list;
   }
-  function buildPriorityHtml(items, limit, title) {
+  // 優先項目只列前 5 個 CVE，總數較多時補「等共 N 個」，避免與結果列的數量看起來不一致（UX08）
+function fwCveMore(i) {
+  const n = Number(i && i.count) || 0, shown = (i && i.cves || []).length;
+  return n > shown && shown ? ' <span style="font-size:11px;color:var(--text-dim,#64748b)">' + esc(tr('prio.cve_more').replace('{n}', n)) + '</span>' : '';
+}
+function buildPriorityHtml(items, limit, title) {
     if (!items || !items.length) return '';
     let h = '<div id="prio-card" style="margin-bottom:20px;padding:12px 14px;border:1px solid var(--red);border-left:4px solid var(--red);border-radius:8px;background:var(--surface2)">' +
       '<div style="font-size:13px;font-weight:700;margin-bottom:4px">' + esc(title || tr('prio.title')) + '</div><div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('prio.hint')) + '</div><ol style="margin:0;padding-left:20px">';
     items.slice(0, limit || 5).forEach(i => {
       const sevPill = pill(tr(i.sev === 'crit' ? 'audit.risk_high' : 'audit.risk_mid'), i.sev === 'crit' ? 'p-deny' : 'p-warn');
       const sub = i.parts ? i.parts.map(x => x.label).join(' ＋ ') : '';
-      const cve = i.cves && i.cves.length ? ' <span class="mono" style="font-size:11px;color:var(--text-dim)">' + i.cves.map(esc).join(', ') + '</span>' : '';
+      const cve = i.cves && i.cves.length ? ' <span class="mono" style="font-size:11px;color:var(--text-dim)">' + i.cves.map(esc).join(', ') + '</span>' + fwCveMore(i) : '';
       h += `<li data-prio-key="${esc(i.key)}" style="margin:4px 0;font-size:12px">${sevPill} ${esc(i.label)}${i.parts ? '' : ' <span style="color:var(--text-dim)">(' + esc(String(i.count)) + ')</span>'}${cve}` +
         (sub ? `<div style="font-size:11px;color:var(--text-dim)">${esc(sub)}</div>` : '') +
         ` <button class="btn btn-ghost btn-sm" data-prio-go="${esc(i.target)}" style="margin-left:6px">${esc(tr('prio.go'))}</button></li>`;

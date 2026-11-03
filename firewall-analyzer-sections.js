@@ -1331,7 +1331,9 @@ function buildFwSummaryHtml(st){
     +`<div><div style="font-size:15px;font-weight:700">${esc(tr('sum.health').replace('{score}',h.score))}</div>`
     +`<div style="font-size:12px;color:var(--text-dim);margin-top:2px">${esc(tr('exec.grade_'+h.grade))}</div></div></div>`;
   const top=(st.prio||[]).slice(0,3);
-  if(top.length) o+=buildPriorityHtml(top,3,tr('sum.top3'));
+  // 標題寫出實際列出數與總數，避免「高風險 N 類」與只列 3 件看起來對不上（UX12）
+  const prioN=(st.prio||[]).length;
+  if(top.length) o+=buildPriorityHtml(top,3,(prioN>top.length?tr('sum.top_of').replace('{total}',prioN):tr('sum.top_n')).replace('{n}',top.length));
   else o+=`<div style="${box};color:var(--green)">✓ ${esc(tr('sum.zero_note'))}</div>`;
   // 韌體版本不完整（FortiGate 檔頭只有主次版本）時提醒補填，否則已知漏洞比對不會生效
   if(v&&v.r&&(v.r.status==='noVersion'||v.r.status==='unknown')) o+=`<div style="${box};border-left:3px solid var(--orange)">⚠ ${esc(tr('sum.fill_version'))} <button class="btn btn-ghost btn-sm" data-prio-go="vuln-card">${esc(tr('prio.go'))}</button></div>`;

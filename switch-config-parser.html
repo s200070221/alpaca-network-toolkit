@@ -418,6 +418,11 @@ body[data-theme="light"] .p-purple{background:rgba(167,139,250,.2);color:#6d28d9
 
 /* ≤599px — phone */
 @media(max-width:599px){
+  /* 手機版（UX11）：結果頁按鈕與統計卡片各自單行橫向捲動，不再換成好幾行佔掉第一屏 */
+  #tb-actions{flex-wrap:nowrap !important;justify-content:flex-start !important;margin-left:0 !important;overflow-x:auto;width:100%;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+  #tb-actions>*{flex-shrink:0}
+  .sum-wrap{display:flex !important;overflow-x:auto;flex-wrap:nowrap}
+  .sum-wrap>.sum-card{flex:0 0 auto;min-width:84px}
   /* 手機版保留 ≤899px 的 52px 圖示導覽列（原本整個隱藏，手機上完全無法切換頁面，只能看總覽） */
   /* 手機版（2026-09-29，UC）：頂部列換行，避免右側主題／工具按鈕被擠出畫面 */
   #topbar{flex-wrap:wrap;row-gap:6px}

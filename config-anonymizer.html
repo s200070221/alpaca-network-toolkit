@@ -1168,6 +1168,7 @@ function _onLangChange() {
     document.getElementById('anon-line-cnt').textContent = totalLines + ' ' + tr('unit.line');
     document.getElementById('changed-cnt').textContent = changed + ' ' + tr('unit.changed');
     renderStats(STATE.vendor, changed);
+    if (STATE.lastStats) renderAnonSummary(STATE.lastStats);
     renderMappingTable();
     renderReportSection(false);
   } else {
@@ -1203,7 +1204,7 @@ function _onLangChange() {
 // exportMapping()/doExportEncrypted() 一律讀這份快照而非即時全域 mappings，避免使用者
 // 切去「批次處理」跑完後，回到單檔案畫面點擊匯出時，實際匯出的是批次最後一個檔案的映射
 // （批次流程與單檔案流程共用同一份全域 mappings 物件，批次跑完會把它覆蓋成最後一筆資料）
-const STATE = { original:'', anonymized:'', filename:'', vendor:null, mappings:null, vendorCandidates:[], reportMeta:null, reportDiffViewed:false, reportHash:'' };
+const STATE = { original:'', anonymized:'', filename:'', vendor:null, mappings:null, vendorCandidates:[], reportMeta:null, reportDiffViewed:false, reportHash:'', lastStats:null };
 let _anonChainTarget = null; // {href} — set when opened from network_analyzer "anonymize & analyze"
 // Phase 4 第 18 項：新增 switch-config-generator.html 為第三個轉送目標（原僅 fw/sw 兩家）。
 // 提升到頂層供 _sendToAnalysisTool() 與下方接收 `_netAnalyzer_anonThenOpen` 的 IIFE 共用，
@@ -5518,6 +5519,7 @@ function runAnonymize() {
   renderStats(vendor, changedCount);
   const _sc = document.getElementById('struct-check-result'); if (_sc) _sc.textContent = '';
   const _sb = document.getElementById('btn-struct-check'); if (_sb) _sb.disabled = !structCheckTool(vendor, text);
+  STATE.lastStats = stats;
   renderAnonSummary(stats);
 
   // Mapping table

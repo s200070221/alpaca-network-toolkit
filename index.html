@@ -55,7 +55,7 @@ a{text-decoration:none;color:inherit}
 .task-links a{font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid var(--accent);color:var(--accent);text-decoration:none}
 .task-links a:hover{background:var(--accent);color:#fff}
 .task-card details summary{cursor:pointer;font-size:12px;color:var(--text-dim)}
-.task-card .task-drop{font-size:11px;color:var(--text-dim)}
+.task-drop{font-size:12px;color:var(--text-dim);margin:8px 0 0}
 @media (max-width:600px){.tasks{padding:20px 16px 0}}
 
 /* ── Cards grid ────────────────────────────────────────────── */
@@ -314,7 +314,7 @@ a{text-decoration:none;color:inherit}
 </div>
 
 <!-- 任務入口（XN52）：先問要做什麼，再給工具與取得檔案的方法 -->
-<section class="tasks" id="tasks" aria-labelledby="tasks-title"><h2 class="tasks-title" id="tasks-title"></h2><div class="tasks-grid" id="tasks-grid"></div></section>
+<section class="tasks" id="tasks" aria-labelledby="tasks-title"><h2 class="tasks-title" id="tasks-title"></h2><div class="tasks-grid" id="tasks-grid"></div><p class="task-drop" id="tasks-drop"></p></section>
 
 <div class="notice" id="h-notice"></div>
 
@@ -1142,9 +1142,11 @@ function renderTasks() {
   const open = new Set([...grid.querySelectorAll('details[open]')].map(d => d.dataset.task));
   grid.innerHTML = TASKS.map(t => `<div class="task-card" data-task="${t.id}"><h3>${_glEsc(tr('task.' + t.id + '_t'))}</h3><p>${_glEsc(tr('task.' + t.id + '_d'))}</p>`
     + `<div class="task-links">${t.links.map(([href, key]) => `<a href="${href}">${_glEsc(tr(key))}</a>`).join('')}</div>`
-    + `<div class="task-drop">${_glEsc(tr('task.drop'))}</div>`
     + (window.FileHowto ? `<details data-task="${t.id}"${open.has(t.id) ? ' open' : ''}><summary>${_glEsc(FileHowto.title(_lang))}</summary>${FileHowto.listHtml(t.howto, _lang)}</details>` : '')
     + `</div>`).join('');
+  // 拖放提示對 4 張卡片都相同，只在卡片下方說一次（UX13）
+  const drop = document.getElementById('tasks-drop');
+  if (drop) drop.textContent = tr('task.drop');
 }
 function renderCards() {
   const wrap = document.getElementById('cards');
