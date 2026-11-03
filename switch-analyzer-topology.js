@@ -692,6 +692,30 @@ function _ljEffective(i){
   return null;
 }
 function _ljSetDiff(a,b){return [[...a].filter(v=>!b.has(v)).slice(0,10).join(','),[...b].filter(v=>!a.has(v)).slice(0,10).join(',')];}
+// LLDP 鄰居與介面描述不符（XN74）：介面描述常寫對端設備名稱，接線改過但描述沒改會誤導現場。
+// 只認「已知設備名稱」（本台 LLDP 看到的鄰居名稱＋另外上傳的多台 hostname，去網域、轉小寫、長度 ≥3），
+// 描述以完整詞（前後不是英數字、底線、連字號、點）出現已知名稱、且該埠實際鄰居不是這個名稱時列出；描述沒提到已知名稱的不猜測
+function checkLldpDescMismatch(parsed,extraNames){
+  const norm=n=>String(n||'').trim().toLowerCase().split('.')[0];
+  const lldp=(parsed&&parsed.lldp)||[];
+  const names=[...new Set(lldp.map(l=>norm(l.neighbor)).concat((extraNames||[]).map(norm)).filter(n=>n.length>=3))];
+  if(!names.length)return [];
+  const dev={ifaces:((parsed&&parsed.interfaces)||[]).map(i=>({name:i.name,type:i.type,desc:i.desc}))};
+  const out=[],seen=new Set();
+  const esc=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  lldp.forEach(l=>{
+    const ifc=_ljFindIface(dev,l.localPort);
+    const desc=ifc&&ifc.desc?String(ifc.desc):'';
+    if(!desc||seen.has(ifc.name))return;
+    const actual=norm(l.neighbor);
+    const said=names.filter(n=>n!==actual&&new RegExp('(^|[^A-Za-z0-9_.-])'+esc(n)+'($|[^A-Za-z0-9_-])','i').test(desc));
+    // 描述同時提到實際鄰居（例如「SW-B via SW-C」）時不列
+    if(!said.length||new RegExp('(^|[^A-Za-z0-9_.-])'+esc(actual)+'($|[^A-Za-z0-9_-])','i').test(desc))return;
+    seen.add(ifc.name);
+    out.push({port:ifc.name,desc,said:said[0],neighbor:l.neighbor,remotePort:l.remotePort||''});
+  });
+  return out;
+}
 function checkLinkConsistency(devices){
   const devs=devices||[];
   const byName=n=>{const s=String(n||'').toLowerCase();return devs.find(d=>String(d.hostname).toLowerCase()===s)||devs.find(d=>String(d.hostname).toLowerCase()===s.split('.')[0]);};

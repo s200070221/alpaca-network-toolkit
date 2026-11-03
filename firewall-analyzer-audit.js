@@ -1031,6 +1031,17 @@
     f('http-mgmt', tr('audit.check_http_mgmt'), riskyIntf.length, 'high',
       riskyIntf.length ? riskyIntf.map(i => `${i.name}(${i.allowaccess})`).join(', ') : tr('audit.normal'),
       ['ISO27001 A.5.15', 'PCI-DSS 4.0 2.2.7', 'NIST 800-53 AC-17', 'CIS v8 12.3'], riskyIntf.map(i => ({ kind: 'iface', name: i.name, vdom: i._vdom })));
+    // 6a. WiFi 安全評等（XN73）：沿用 gradeVap() 的 secIssues，critical（完全開放、WEP）→ wifi-weak，warn（TKIP、只靠 captive portal）→ wifi-legacy；
+    // 沒有 WiFi 資料（parsed.wifiVaps 不是陣列或為空）時不評估
+    if (Array.isArray(parsed.wifiVaps) && parsed.wifiVaps.length) {
+      const vapsWith = lv => parsed.wifiVaps.filter(v => v.status !== 'disable' && (v.secIssues || []).some(i => i.level === lv));
+      const label = v => v.ssid && v.ssid !== '-' ? v.ssid : v.name;
+      const weak = vapsWith('critical'), legacy = vapsWith('warn').filter(v => !weak.includes(v));
+      f('wifi-weak', tr('audit.check_wifi_weak'), weak.length, 'high', weak.length ? weak.map(v => `${label(v)}(${v.security})`).join(', ') : tr('audit.normal'),
+        ['ISO27001 A.8.20', 'PCI-DSS 4.0 4.2.1.2', 'NIST 800-53 AC-18', 'CIS v8 12.6'], []);
+      f('wifi-legacy', tr('audit.check_wifi_legacy'), legacy.length, 'medium', legacy.length ? legacy.map(v => `${label(v)}(${v.security}${v.captivePortal ? ', captive portal' : ''})`).join(', ') : tr('audit.normal'),
+        ['NIST 800-53 AC-18', 'CIS v8 12.6'], []);
+    }
     // 6b. 高風險曝險服務（2026-10-24，XN18）：歷來被大量利用的管理介面／VPN 入口開在外部介面
     const expSvc = analyzeExposedServices(parsed).items.filter(x => x.ext === true && x.cves.length && x.trust !== 'all');
     f('exposed-svc', tr('audit.check_exposed_svc'), expSvc.length, 'high',
@@ -1797,6 +1808,8 @@
       ['ipv6-any-open', 'health.ipv6_any_open'],
       ['ipv6-unfiltered', 'health.ipv6_unfiltered'],
       ['exposed-svc', 'health.exposed_svc'],
+      ['wifi-weak', 'health.wifi_weak'],
+      ['wifi-legacy', 'health.wifi_legacy'],
     ];
     HEALTH_EXTRA_CHECKS.forEach(([id, labelKey]) => {
       const found = complianceFindings.find(f => f.id === id);

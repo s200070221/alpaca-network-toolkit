@@ -1625,6 +1625,15 @@ const SNMP_HOST_UNSUPPORTED = ['fortiswitch'];
 // Syslog 17 家已於 2026-08-20 全數查證涵蓋（sonic 走 parseSONiC() 專屬 JSON 表格解析，
 // 其餘 16 家走 parseSyslog() 文字正則），排除清單清空
 const SYSLOG_UNSUPPORTED = [];
+// LLDP 鄰居與介面描述不符（XN74）：描述寫的對端設備名稱與實際鄰居不同（接線改過或描述沒更新）
+function renderLldpDescMismatch(){
+  const rows=checkLldpDescMismatch(parsed,_multiDevices.map(d=>d.hostname));
+  let h=`<div id="lldp-desc-card" style="margin-top:16px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">${esc(tr('lldp.desc_title'))}</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${esc(tr('lldp.desc_hint'))}</div>`;
+  if(!rows.length)return h+`<div style="font-size:12px">${esc(tr('lldp.desc_none'))}</div></div>`;
+  return h+`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>${esc(tr('lldp.col_local'))}</th><th>${esc(tr('lldp.desc_col_desc'))}</th><th>${esc(tr('lldp.desc_col_said'))}</th><th>${esc(tr('lldp.col_device'))}</th></tr></thead><tbody>`+
+    rows.map(r=>`<tr><td class="mono"><b>${esc(r.port)}</b></td><td>${esc(r.desc)}</td><td>${esc(r.said)}</td><td>${esc(r.neighbor)}${r.remotePort?' <span style="color:var(--text-dim)">('+esc(r.remotePort)+')</span>':''}</td></tr>`).join('')+'</tbody></table></div></div>';
+}
 function renderLLDP(){
   const nbrs=parsed.lldp||[];
   const cmdHints=[
@@ -1684,7 +1693,7 @@ function renderLLDP(){
   }));
   const {html,count}=renderTable(hdrs,fmtRows,null);
   return toggleHtml+mkTbar('search-inp',null,'exportLLDPCSV')+
-    `<div class="tbl-wrap">${html}</div><div class="tbl-foot"><span>${count} / ${nbrs.length} ${tr('unit.count')}</span></div>`;
+    `<div class="tbl-wrap">${html}</div><div class="tbl-foot"><span>${count} / ${nbrs.length} ${tr('unit.count')}</span></div>`+renderLldpDescMismatch();
 }
 // 2026-09 \u8CC7\u5B89\u5BE9\u67E5\u4FEE\u5FA9\uFF1A\u5132\u5B58\u683C\u82E5\u4EE5 =/+/-/@ \u958B\u982D\uFF0CExcel/Sheets \u958B\u555F\u6642\u6703\u7576\u6210\u516C\u5F0F\u57F7\u884C\uFF08\u5982\u4ECB\u9762
 // \u63CF\u8FF0/VLAN \u540D\u7A31\u525B\u597D\u662F\u9019\u985E\u5B57\u4E32\uFF09\uFF0C\u55AE\u7D14\u8DF3\u812B\u96D9\u5F15\u865F\u7121\u6CD5\u9632\u7BC4\uFF1B\u88DC\u4E0A\u958B\u982D\u5B57\u5143\u4E2D\u548C\u2014\u2014\u547D\u4E2D\u6642\u524D\u7DB4\u4E00\u500B
@@ -4504,6 +4513,7 @@ function renderEndpointCard(){
     h+=renderFreePorts();
     h+=renderPhyIssues();
     h+=renderOpticsIssues();
+    h+=renderRandomMacPorts();
   }
   return h+'</div>';
 }
@@ -4562,6 +4572,16 @@ function epExportOpticsCSV(){
   dlCSV(rows,[tr('ep.col_device'),tr('ep.col_port'),tr('ep.col_severity'),tr('ep.opt_col_metric'),tr('ep.opt_col_value'),tr('ep.opt_col_unit'),tr('ep.opt_col_level'),'direction','flag',
     'high alarm','high warning','low warning','low alarm'],'transceiver_dom.csv');
 }
+// 每埠隨機 MAC 較多的埠（XN75）：資訊性，說明這些埠的終端常換 MAC，埠安全上限與 DHCP 租約要預留
+function renderRandomMacPorts(){
+  if(!epModel||!epModel.devices.some(d=>d.macs.length))return '';
+  const rows=epRandomMacPorts(epModel);
+  let h=`<div id="ep-random-card" style="font-size:14px;font-weight:600;margin:18px 0 6px">${esc(tr('ep.random_title'))}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('ep.random_hint'))}</div>`;
+  if(!rows.length)return h+`<div style="font-size:12px">${esc(tr('ep.random_none'))}</div>`;
+  return h+`<table class="data-tbl"><thead><tr><th>${esc(tr('ep.col_device'))}</th><th>${esc(tr('ep.col_port'))}</th><th>${esc(tr('ep.random_col_n'))}</th></tr></thead><tbody>`+
+    rows.map(r=>`<tr><td>${esc(r.device)}</td><td class="mono"><b>${esc(r.port)}</b></td><td>${r.random} / ${r.total}</td></tr>`).join('')+'</tbody></table>';
+}
 function renderEndpointResult(){
   const r=epResult;
   if(!r||!r.query)return '';
@@ -4576,6 +4596,8 @@ function renderEndpointResult(){
     return h;
   }
   if(r.locations.every(l=>l.uplink))h+=`<div style="font-size:12px;color:var(--yellow);margin-top:8px">${esc(tr('ep.all_uplink_note'))}</div>`;
+  // 查詢的 MAC 是本機管理（隨機）MAC 時提示改用帳號或 IP 追查（XN75）
+  if(r.randomMac)h+=`<div data-ep-random-note style="font-size:12px;color:var(--yellow);margin-top:8px">${esc(tr('ep.random_note'))}</div>`;
   h+=`<table class="data-tbl" style="margin-top:8px"><thead><tr><th>${esc(tr('ep.col_device'))}</th><th>${esc(tr('ep.col_port'))}</th><th>${esc(tr('ep.col_vlan'))}</th><th>${esc(tr('ep.col_mac'))}</th><th>${esc(tr('ep.col_status'))}</th><th>${esc(tr('ep.col_desc'))}</th><th>${esc(tr('ep.col_macs'))}</th><th></th></tr></thead><tbody>`+
     r.locations.map(l=>`<tr${l.uplink?' style="opacity:.6"':''}><td>${esc(l.device)}</td><td><b>${esc(l.port)}</b></td><td>${esc(l.vlan)}</td><td style="font-family:monospace">${esc(epFmtMac(l.mac))}</td><td>${esc(l.status||'-')}</td><td>${esc(l.desc||'')}</td><td>${l.macCount}</td><td>${l.uplink?pill('warn',tr('ep.uplink')):pill('up',tr('ep.edge'))}</td></tr>`).join('')+'</tbody></table>';
   return h;

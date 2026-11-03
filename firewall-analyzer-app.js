@@ -770,6 +770,8 @@ const App = (() => {
       }
       setStep(7);await ms(20);setStep(8);await ms(60);
       PARSED=parsedAll.length===1?parsedAll[0]:parsedAll.reduce((a,b)=>merge(a,b));
+      // WiFi 安全評等併入稽核與健康度（XN73）：gradeVap() 的結果掛在解析結果上，analyzeCompliance() 才讀得到
+      if (PARSED) PARSED.wifiVaps = WIFI_DATA ? WIFI_DATA.vaps : [];
       window._PARSED = PARSED; // 供 console 診斷：_PARSED._perVdom.map(v=>({name:v.name,routes:v.routes.length,policies:v.policies.length}))
       $('prog-overlay').classList.remove('show');
       onParsed();

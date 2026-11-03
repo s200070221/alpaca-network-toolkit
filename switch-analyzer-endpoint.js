@@ -18,6 +18,12 @@ function epNormMac(s) {
   return '';
 }
 function epFmtMac(hex) { return hex ? hex.match(/../g).join(':') : ''; }
+// 本機管理（隨機）MAC（XN75）：IEEE 802 第一個位元組的 U/L 位元（bit1）為 1，即第 2 個十六進位字為 2／6／A／E；
+// 手機與筆電預設的隱私 MAC 屬於這類，重新連線會換位址。群播位址（bit0＝1）不算
+function epIsRandomMac(hex) {
+  const n = parseInt(String(hex || '').slice(0, 2), 16);
+  return String(hex || '').length === 12 && !isNaN(n) && (n & 2) === 2 && (n & 1) === 0;
+}
 
 // 介面名稱正規化：Cisco 與 Comware 的全名／縮寫對應到同一個家族代號，方便跨輸出比對
 // （show interfaces status 用 Gi1/0/1、設定檔用 GigabitEthernet1/0/1、Comware 用 GE1/0/1）
@@ -382,6 +388,20 @@ function epMacCountByPort(dev) {
   for (const k in seen) cnt[k] = seen[k].size;
   return cnt;
 }
+// 每埠隨機 MAC 數（XN75）：只列 ≥ EP_RANDOM_PORT_MIN 個、且不是上行／串接埠的埠
+const EP_RANDOM_PORT_MIN = 3;
+function epRandomMacPorts(model) {
+  const out = [];
+  for (const d of (model && model.devices) || []) {
+    const all = epMacCountByPort(d), rnd = {};
+    for (const m of d.macs) if (epIsRandomMac(m.mac)) { const k = epNormIface(m.port); (rnd[k] = rnd[k] || { port: m.port, macs: new Set() }).macs.add(m.mac); }
+    for (const k in rnd) {
+      const n = rnd[k].macs.size, total = all[k] || n;
+      if (n >= EP_RANDOM_PORT_MIN && total < EP_UPLINK_MAC_MIN && !epIsAggregate(rnd[k].port)) out.push({ device: d.name, port: rnd[k].port, random: n, total });
+    }
+  }
+  return out.sort((a, b) => b.random - a.random || a.device.localeCompare(b.device));
+}
 function epPortInfo(dev, port) {
   const k = epNormIface(port);
   return dev.ports.find(p => epNormIface(p.port) === k) || null;
@@ -416,6 +436,7 @@ function epLookup(model, query, cfgByDevice) {
     for (const d of devs) for (const a of d.arps) if (macSet.has(a.mac)) res.arpSeen.push({ device: d.name, ...a });
   }
   res.macs = [...macSet];
+  res.randomMac = res.macs.some(epIsRandomMac);
   for (const d of devs) {
     const counts = epMacCountByPort(d);
     const cfg = cfgByDevice ? cfgByDevice[d.name.toLowerCase()] : null;
@@ -426,7 +447,7 @@ function epLookup(model, query, cfgByDevice) {
       const macCount = counts[epNormIface(m.port)] || 0;
       const uplink = macCount >= EP_UPLINK_MAC_MIN || epIsAggregate(m.port) || !!(st && st.trunk) || !!(ci && ci.mode === 'trunk');
       res.locations.push({
-        device: d.name, mac: m.mac, vlan: m.vlan, port: m.port, type: m.type, macCount, uplink,
+        device: d.name, mac: m.mac, vlan: m.vlan, port: m.port, type: m.type, macCount, uplink, random: epIsRandomMac(m.mac),
         status: st ? st.status : '', desc: (st && st.name) || (ci && ci.desc) || '', speed: st ? st.speed : '',
       });
     }
