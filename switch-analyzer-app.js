@@ -4193,7 +4193,8 @@ function vulnLoadText(){
   return vulnText;
 }
 function vulnSave(t){vulnText=t;try{localStorage.setItem('sw_vuln_list',t||'');}catch(e){}}
-function vulnDevices(){return invRows.map(r=>({name:r.hostname||r.file,vendor:r.vendor,version:vulnVerOverride[r.file]||r.version||'',file:r.file}));}
+// 每台附上 swFeatureStates()，與稽核頁、健康度一樣套用「受影響功能是否啟用」（XN69）
+function vulnDevices(){return invRows.map((r,i)=>({name:r.hostname||r.file,vendor:r.vendor,version:vulnVerOverride[r.file]||r.version||'',file:r.file,features:invParsed[i]?swFeatureStates(invParsed[i]):null}));}
 const VULN_PILL={affected:'down',ok:'up',unknown:'warn',inactive:'warn',noVersion:'warn',noRules:'',unsupported:''};
 // 韌體漏洞比對卡片：資產清冊（多台）與安全稽核頁（目前分析的這台）共用標頭與結果表格
 // 標頭：標題、說明、內建清單情資截止日、清單編輯區；cardId／textId 讓兩頁的元素 id 不衝突，applyFn 為「比對」按鈕呼叫的函式名稱

@@ -3338,6 +3338,8 @@ const NPS_REASON = { 0: 'IAS_SUCCESS', 1: 'IAS_INTERNAL_ERROR', 2: 'IAS_ACCESS_D
   96: 'IAS_SESSION_TIMEOUT', 97: 'IAS_UNEXPECTED_REQUEST' };
 // 原則或設定不符（不是密碼錯誤）的原因碼：沒有符合的網路原則、撥入權限、驗證方法、來電／被叫站、時段、埠類型等限制
 const NPS_POLICY_REASONS = new Set([48, 64, 65, 66, 67, 68, 69, 70, 71]);
+// MAC 比對鍵：去掉 : - . 分隔符的 12 碼小寫，不是 MAC 時回傳空字串
+const macKey = m => { const k = String(m || '').replace(/[:.-]/g, '').toLowerCase(); return /^[0-9a-f]{12}$/.test(k) ? k : ''; };
 function npsTags(line) {
   const out = Object.create(null), seen = new Set();
   const re = /<([A-Za-z][\w-]*) data_type="\d+">([^<]*)<\/\1>/g;
@@ -3434,9 +3436,46 @@ function addrAssignOf(e) {
   }
   return null;
 }
+// NPS 帳號歸屬到位址（XN71）：NPS Access-Accept 給「終端 MAC→帳號」，DHCP 租約給「MAC→IP」；
+// 租約開始時取同一 MAC 在租約前 12 小時內（容許租約後 60 秒，DHCP 與 NPS 主機時鐘可能略有差距）最近一次 Accept 的帳號
+const NPS_MAC_USER_MAX_MS = 12 * 3600 * 1000, NPS_MAC_USER_SKEW_MS = 60 * 1000;
+function npsMacUsers(events) {
+  const m = new Map();
+  events.forEach(e => {
+    const f = e.fields;
+    if (e.format !== 'nps' || !e.timestamp || !f || f.npsPacket !== 2 || !f.user) return;
+    const k = macKey(f.mac);
+    if (!k) return;
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push({ t: e.timestamp.getTime(), user: f.user });
+  });
+  m.forEach(l => l.sort((a, b) => a.t - b.t));
+  return m;
+}
+function npsUserForLease(macUsers, mac, t) {
+  const l = macUsers.get(macKey(mac));
+  if (!l) return '';
+  for (let i = l.length - 1; i >= 0; i--) {
+    if (l[i].t > t + NPS_MAC_USER_SKEW_MS) continue;
+    return t - l[i].t <= NPS_MAC_USER_MAX_MS ? l[i].user : '';
+  }
+  return '';
+}
 function buildAddrMaps(events) {
   const maps = { host: new Map(), user: new Map() };
-  events.filter(e => e.timestamp).map(e => ({ e, a: addrAssignOf(e) })).filter(x => x.a)
+  const macUsers = npsMacUsers(events);
+  const assigns = [];
+  events.filter(e => e.timestamp).forEach(e => {
+    const a = addrAssignOf(e);
+    if (!a) return;
+    assigns.push({ e, a });
+    // DHCP 租約也依 NPS 帳號產生使用者歸屬；租約結束同時結束使用者區間
+    if (macUsers.size && e.fields.dhcp && a.kind === 'host') {
+      if (a.act === 'start') { const user = e.fields.mac ? npsUserForLease(macUsers, e.fields.mac, e.timestamp.getTime()) : ''; if (user) assigns.push({ e, a: { ip: a.ip, act: 'start', kind: 'user', name: user } }); }
+      else assigns.push({ e, a: { ip: a.ip, act: 'end', kind: 'user' } });
+    }
+  });
+  assigns
     .sort((x, y) => x.e.timestamp - y.e.timestamp)
     .forEach(({ e, a }) => {
       const map = maps[a.kind], t = e.timestamp.getTime();
@@ -8984,7 +9023,9 @@ function buildServiceTimeline(events) {
 function detectRadiusIssues(events) {
   const issues = [];
   const rad = events.filter(e => e.fields && e.fields.radius);
-  if (!rad.length) return issues;
+  // Windows NPS 的 Accept／Reject 一併判斷同一終端多帳號（XN70），其餘 RADIUS 檢查只看 FreeRADIUS
+  const nps = events.filter(e => e.format === 'nps' && e.fields && (e.fields.npsPacket === 2 || e.fields.npsPacket === 3) && e.fields.mac && e.fields.user);
+  if (!rad.length && !nps.length) return issues;
   const time = (a, b) => effectiveTime(a) - effectiveTime(b);
   const groupBy = (list, keyOf) => { const m = new Map(); list.forEach(e => { const k = keyOf(e); if (!k) return; if (!m.has(k)) m.set(k, []); m.get(k).push(e); }); return m; };
   const push = (cat, sev, list, key, p, rel) => {
@@ -8999,7 +9040,9 @@ function detectRadiusIssues(events) {
     const users = [...new Set(l.map(e => e.fields.user).filter(Boolean))];
     push('radiusTlsFail', 'Low', l, 'sample.radiusTlsFail', { why, users: users.slice(0, 5).join(', ') || '-' }, users.slice(0, 5));
   }
-  for (const [mac, l] of groupBy(rad.filter(e => (e.fields.radius === 'accept' || e.fields.radius === 'reject') && e.fields.mac && e.fields.user), e => e.fields.mac.toLowerCase())) {
+  // MAC 以去分隔符的 12 碼小寫分組（NPS 用連字號、FreeRADIUS 依 NAS 而定），摘要顯示第一筆的原始寫法
+  for (const [, l] of groupBy(rad.filter(e => (e.fields.radius === 'accept' || e.fields.radius === 'reject') && e.fields.mac && e.fields.user).concat(nps), e => macKey(e.fields.mac))) {
+    const mac = l[0].fields.mac;
     const sorted = [...l].sort(time);
     let best = null, start = 0;
     for (let i = 0; i < sorted.length; i++) {
