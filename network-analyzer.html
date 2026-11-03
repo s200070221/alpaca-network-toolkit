@@ -892,7 +892,7 @@ const TOOLS = [
     color: '#a78bfa',
     icon:  '🔒',
     href:  'config-anonymizer.html',
-    vendors: ['FortiGate','FortiSwitch','Sophos','Check Point','Palo Alto','pfSense','SonicWall','MikroTik','Juniper','H3C Comware','H3C SecPath','HPE Comware','Cisco IOS/NX-OS/ASA/FTD','Arista','Aruba CX/ProCurve','Dell OS10','Extreme','Alcatel','Brocade','Zyxel USG/ATP','EdgeRouter (EdgeOS)','OpenWrt (UCI)','VyOS','Linux iptables/nftables','AWS Security Group','AWS Network ACL','Azure NSG','Azure Firewall Policy','GCP VPC Firewall','GCP Network Firewall Policy','Kubernetes NetworkPolicy','OCI Security List / NSG','Cisco Meraki MX','Cisco Business (CBS/SG)','NVIDIA Cumulus Linux','Allied Telesis AlliedWare Plus','Extreme VOSS / Fabric Engine','Wireless LAN Controller','WatchGuard Firebox','Ruijie RGOS','Planet Technology','Netgear M4300','Ubiquiti EdgeSwitch','SONiC','Netgate TNSR','Broadcom EFOS','Netgear Smart Managed Pro','$ca.vendor_generic'],
+    vendors: ['FortiGate','FortiSwitch','Sophos','Check Point','Palo Alto','pfSense','SonicWall','MikroTik','Juniper','H3C Comware','H3C SecPath','HPE Comware','Cisco IOS/NX-OS/ASA/FTD','Arista','Aruba CX/ProCurve','Dell OS10','Extreme','Alcatel','Brocade','Zyxel USG/ATP','EdgeRouter (EdgeOS)','OpenWrt (UCI)','VyOS','Linux iptables/nftables','AWS Security Group','AWS Network ACL','Azure NSG','Azure Firewall Policy','GCP VPC Firewall','GCP Network Firewall Policy','Kubernetes NetworkPolicy','OCI Security List / NSG','Cisco Meraki MX','Cisco Business (CBS/SG)','NVIDIA Cumulus Linux','Allied Telesis AlliedWare Plus','Extreme VOSS / Fabric Engine','Wireless LAN Controller','WatchGuard Firebox','Ruijie RGOS','Planet Technology','Netgear M4300','Ubiquiti EdgeSwitch','SONiC','Netgate TNSR','Broadcom EFOS','Netgear Smart Managed Pro','$ca.vendor_generic','Windows NPS 設定匯出'],
     features: ['ca.f1','ca.f2','ca.f3','ca.f4'],
   },
   {
@@ -1022,6 +1022,7 @@ const VENDOR_PERSONA_KEY = {
   'Aruba CX/ProCurve':'arubaall',
   'Planet Technology':'planet',
   'WatchGuard Firebox':'watchguard',
+  'Windows NPS 設定匯出':'nps',
 };
 
 // ── tr / setLang ───────────────────────────────────────────────────
@@ -1334,7 +1335,7 @@ document.getElementById('logo-btn').addEventListener('click', () => {
 const VENDOR_NAMES = {t:'Cisco FTD',netgearsmart:'Netgear Smart Managed Pro',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',h3c:'H3C Comware',h:'H3C SecPath',e:'Netgate TNSR',l:'Wireless LAN Controller',hpe:'HPE Comware',f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure 安全群組',awsflow:'AWS VPC Flow Logs',azureflow:'Azure NSG／VNet Flow Logs',u:'OpenWrt (UCI)',sonic:'SONiC',cumulus:'NVIDIA Cumulus Linux',awplus:'Allied Telesis AlliedWare Plus',ciscobiz:'Cisco Business (CBS/SG)',g:'WatchGuard Firebox',
   // 2026-08-19 新增：log_analyzer 拖放偵測的格式標籤（非廠牌，沿用同一份對照表顯示於拖放
   // 提示 chip），key 與 detectTool() 回傳的 vendor 字串一致
-  rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', nps:'Windows NPS', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog',kvfw:'SonicWall／Sophos Firewall Log',pancsv:'Palo Alto PAN-OS CSV',umbrella:'Cisco Umbrella CSV',elb:'AWS ELB Access Log',s3access:'AWS S3 Access Log',dnslog:'DNS 查詢紀錄',dhcplog:'DHCP 租約紀錄',winfw:'Windows 防火牆 log',vpnauth:'OpenVPN／strongSwan／FreeRADIUS log',squid:'Squid access.log',awsnfw:'AWS Network Firewall log',azfw:'Azure Firewall log',zeek:'Zeek Log (TSV)', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log',
+  rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', nps:'Windows NPS', nps_export:'Windows NPS 設定匯出', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog',kvfw:'SonicWall／Sophos Firewall Log',pancsv:'Palo Alto PAN-OS CSV',umbrella:'Cisco Umbrella CSV',elb:'AWS ELB Access Log',s3access:'AWS S3 Access Log',dnslog:'DNS 查詢紀錄',dhcplog:'DHCP 租約紀錄',winfw:'Windows 防火牆 log',vpnauth:'OpenVPN／strongSwan／FreeRADIUS log',squid:'Squid access.log',awsnfw:'AWS Network Firewall log',azfw:'Azure Firewall log',zeek:'Zeek Log (TSV)', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log',
   ciscoios:'Cisco IOS Log', comwarelog:'Comware Log', isosyslog:'Syslog（ISO 時間）', w3c:'IIS W3C Log', weblog:'Web Access Log', mikrotiklog:'MikroTik Log', ldap:'OpenLDAP／389 Directory Server log', radacct:'FreeRADIUS detail（radacct）'};
 let _dropPending = null;
 // 快速連續拖放/選檔的競態防呆：每次啟動新的 FileReader 讀取時遞增，onload 觸發時比對
@@ -1425,6 +1426,8 @@ const EDGEROUTER_SIGS = [/ethernet\s+eth\d+\s*\{/m, /default-action\s+(drop|acce
 function _isEdgeRouter(t) { return EDGEROUTER_SIGS.filter(r => r.test(t)).length >= 2; }
 function detectTool(text) {
   const t = text.slice(0, 8000);
+  // Windows NPS 設定匯出（netsh nps export，XN72）：內含明碼 RADIUS 共用密鑰，只交給去識別化工具（與 config_anonymizer VENDOR_SIGS 相同）
+  if (/<Microsoft_Internet_Authentication_Service\b|<Microsoft_Radius_Protocol\b/.test(t)) return {idx:2, vendor:'nps_export'};
   // 2026-08-09 稽核修復：SONiC（config_db.json 純 JSON，非文字 CLI）先前完全沒有偵測規則，
   // 拖放 SONiC 設定檔會落到「無法自動識別」；必須排在最前面（比照 switch_analyzer 自己
   // detectVendor() 的既有慣例，其餘廠牌皆為行首正則不可能以 "{" 開頭，零副作用）。注意：
@@ -1696,6 +1699,7 @@ function _detectToolReasons(text) {
         } catch(e) { return false; }
       } },
     { reason: '多筆 NDJSON 第一行或 JSON 陣列第一個元素含常見 log 欄位 → JSON/NDJSON Log', test: () => { const tf = text.trim(); return (tf.charAt(0) === '{' || tf.charAt(0) === '[') && _isLogJsonHead(tf); } },
+    { reason: '命中 Windows NPS 設定匯出（netsh nps export）的 Microsoft_Internet_Authentication_Service／Microsoft_Radius_Protocol 元素，內含明碼 RADIUS 共用密鑰，交給去識別化', test: () => /<Microsoft_Internet_Authentication_Service\b|<Microsoft_Radius_Protocol\b/.test(t) },
     { reason: '命中 Windows Event Log XML 匯出的 xmlns 屬性簽章', test: () => /<Event[\s>][\s\S]*?xmlns=["']http:\/\/schemas\.microsoft\.com\/win\/2004\/08\/events\/event["']/.test(text) },
     { reason: '命中 Windows NPS DTS XML 記錄（<Event><Timestamp data_type=…> 與 Packet-Type）', test: () => /^<Event><Timestamp data_type="\d+">[^<]*<\/Timestamp>.*<(?:Packet-Type|Event-Source) data_type=/m.test(t) },
     { reason: '命中 Syslog RFC5424 表頭格式 `<PRI>1 `', test: () => /^<\d{1,3}>1\s/m.test(t) },

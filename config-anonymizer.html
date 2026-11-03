@@ -497,6 +497,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="awplus">Allied Telesis AlliedWare Plus</option>
                 <option value="openwrt">OpenWrt (UCI)</option>
                 <option value="watchguard">WatchGuard Firebox</option>
+                <option value="nps_export">Windows NPS 設定匯出（netsh nps export）</option>
                 <option value="wlc">Wireless LAN Controller (Cisco 9800 / AireOS · Aruba · H3C WX)</option>
               </optgroup>
               <optgroup id="optgrp-sw" label="交換器">
@@ -1392,13 +1393,15 @@ const VENDOR_SIGS = {
   // SONiC 是本檔案唯一 JSON 格式來源，與其餘 28 家語法家族完全不重疊，零碰撞風險
   sonic:       { p:[/"DEVICE_METADATA"\s*:/, /"PORTCHANNEL_MEMBER"\s*:/], min:1 },
   // WatchGuard Firebox config.xml，簽章與 firewall_analyzer 的 WatchGuardParser.detect() 保持一致
-  watchguard:  { p:[/<abs-policy-list/, /<interface-list/, /<address-group-list/], min:3 }
+  watchguard:  { p:[/<abs-policy-list/, /<interface-list/, /<address-group-list/], min:3 },
+  // Windows NPS 設定匯出（netsh nps export，XN72）
+  nps_export:  { p:[/<Microsoft_Internet_Authentication_Service\b/, /<Microsoft_Radius_Protocol\b/], min:1 }
 };
 // sophos／aruba_cx 兩家的簽章相對寬鬆（各自僅需命中 2 個訊號，且其中一個訊號是單純字面
 // "Sophos"/"Aruba" 文字比對），故刻意排在最後——讓其他更具結構特徵的廠牌訊號優先判定，
 // 只有在都沒命中時才輪到這兩家，降低誤判機率
 const VENDOR_ORDER = [
-  'checkpoint_api','cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','netgearsmart','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
+  'nps_export','checkpoint_api','cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','netgearsmart','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
   'checkpoint','pfsense','sonicwall','watchguard','mikrotik','fsos','arista',
   'extreme','alcatel','brocade','procurve','dell_os10','planet','ruijie','netgear','edgeswitch','sonic',
   'ciscoasa','cisco_biz','cisco_ios',
@@ -1414,7 +1417,7 @@ const VENDOR_LABELS = {
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
   edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',checkpoint_api:'Check Point Management API (JSON)',cumulus:'NVIDIA Cumulus Linux (NVUE)',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',netgearsmart:'Netgear Smart Managed Pro',awplus:'Allied Telesis AlliedWare Plus',
   planet:'Planet Technology',ruijie:'Ruijie (RGOS)',netgear:'Netgear M4300 (ICOS)',
-  edgeswitch:'Ubiquiti EdgeSwitch',sonic:'SONiC (config_db.json)',watchguard:'WatchGuard Firebox',
+  edgeswitch:'Ubiquiti EdgeSwitch',sonic:'SONiC (config_db.json)',watchguard:'WatchGuard Firebox',nps_export:'Windows NPS 設定匯出（netsh nps export）',
   unknown:''
 };
 
@@ -3755,6 +3758,17 @@ function anonIcosSecrets(line) {
 // address-group/alias/abs-policy 區塊內才視為識別性物件名稱重新命名，介面自身的 <name>
 // （如 eth0，非識別性）刻意不受影響。opts.comments 沿用既有 checkbox 語意
 // （title="含 alias、description、remark"），與 FortiGate 對 anonAlias() 的既有用法一致
+// Windows NPS 設定匯出（netsh nps export exportPSK=YES，XN72）：RADIUS 用戶端與遠端 RADIUS 伺服器群組成員的共用密鑰為明碼。
+// 依 richardhicks/aovpntools Get-RadiusSharedSecret.ps1，用戶端密鑰在 …/Microsoft_Radius_Protocol/Children/Clients/Children/<用戶端>/Properties/Shared_Secret
+// 的元素文字；屬性寫法與伺服器群組成員的元素名稱查無範例，凡元素名稱含 Secret 且有值一律遮蔽。其餘（位址、名稱）走通用處理
+function anonNpsExport(text, opts) {
+  const red = text.replace(/<([A-Za-z_][\w.-]*secret[\w.-]*)(\s[^>]*)?>([^<]+)<\/\1>/gi, (m, tag, attrs, v) => {
+    if (!v.trim()) return m;
+    stats.key++;
+    return `<${tag}${attrs || ''}>REDACTED_KEY</${tag}>`;
+  });
+  return anonGeneric(red, opts);
+}
 function anonWatchGuard(text, opts) {
   const IP_TAGS = ['ip', 'default-gateway', 'gateway-ip', 'host-ip-addr', 'ip-network-addr', 'start-ip-addr', 'end-ip-addr', 'dest-address'];
   let ctx = null; // 'addrgrp' | 'alias' | 'policy' | null
@@ -4182,7 +4196,7 @@ const VENDOR_FNS = {
   brocade: anonBrocade, ciscoasa: anonCiscoASA, zyxel: anonZyxel,
   edgerouter: anonEdgeRouter, openwrt: anonOpenWrt, vyos: anonVyOS, netfilter: anonNetfilter, cloudsg: anonCloudSG, checkpoint_api: anonCheckPointApi, cumulus: anonCumulus, voss: anonVOSS, efos: anonEFOS, netgearsmart: anonNetgearSmart, awplus: anonAlliedWare,
   planet: anonPlanet, ruijie: anonRuijie, netgear: anonNetgear,
-  edgeswitch: anonEdgeSwitch, sonic: anonSonic, watchguard: anonWatchGuard,
+  edgeswitch: anonEdgeSwitch, sonic: anonSonic, watchguard: anonWatchGuard, nps_export: anonNpsExport,
   unknown: anonGeneric
 };
 
@@ -4506,7 +4520,7 @@ const LEAK_CAT_ORDER = ['adminCred', 'vpnPsk', 'aaaKey', 'snmpCommunity', 'snmpV
 // FortiGate 憑證／SSH 本機金鑰的 password 是私鑰保護密碼，歸私鑰；行動網路（wwan／lte／apn）排在無線之前
 const LEAK_CAT_RULES = [
   ['privateKey', /private[- ]?key|<prv>|certificate local|ssh local-(key|ca)/],
-  ['aaaKey', /radius|tacacs|tacplus|shared-secret|server-private|bindpw|\bldap\b|bind-?pw/],
+  ['aaaKey', /radius|tacacs|tacplus|shared[-_]secret|server-private|bindpw|\bldap\b|bind-?pw/],
   ['otherSecret', /wwan|lte-modem|\blte\b|sim-pin|\bapn\b/],
   ['wifi', /\bwpa|set-key|passphrase|\bwlan\b|wi-?fi|wireless|\bssid\b/],
   ['vpnPsk', /pre-?shared|pre-share|psksecret|isakmp|\bipsec\b|\bike(v[12])?\b|<shared_key>|\bpsk\b|phase1|\bvpn\b|openvpn/],
