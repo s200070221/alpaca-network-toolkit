@@ -3,8 +3,27 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.02';
+  const TOOLKIT_VERSION = '2026.11.03';
   const CHANGELOG = [
+    {
+      version: '2026.11.03',
+      items: {
+        zhTW: [
+          'log 分析：支援 Windows NPS（RADIUS）記錄，同一帳號短時間多次被拒、同一終端用多個帳號認證都會列出，並可配合 DHCP 把帳號對應到 IP；調查案件包附外部位址、網域與雜湊清單',
+          '韌體漏洞比對：漏洞需要的功能（如 SSL VPN、IOS-XE 網頁介面、SNMP）在設定檔確定沒啟用時，標示「設定未啟用受影響功能」且不扣健康度；交換器多設備清冊同樣適用',
+          '防火牆分析：無線網路完全開放或 WEP、只用 TKIP 等舊式加密時列入稽核與健康度；去識別化支援 Windows NPS 設定匯出檔（共用密鑰會遮蔽）',
+          '交換器分析：標示手機與筆電的隨機 MAC 並列出隨機 MAC 多的埠；介面描述寫的設備與 LLDP 實際鄰居不同時列出；情資整理頁顯示與上次整理的筆數增減',
+          '畫面好讀度：log 先顯示問題清單與健檢分數、時間軸不再被沒有時間的事件拉長；「先處理」標題寫出共幾件；手機版頂端按鈕改單行滑動；切換語言時去識別化摘要與產生器檢查面板一起換語言',
+        ],
+        en: [
+          'Log analyzer: Windows NPS (RADIUS) logs are supported — repeated rejects for one account and one device using several accounts are flagged, and accounts can be mapped to IPs via DHCP; investigation case packs now include external IPs, domains and hashes',
+          'Firmware vulnerability check: when a vulnerable feature (e.g. SSL VPN, IOS-XE web UI, SNMP) is confirmed disabled in the config, the CVE is shown as "affected feature not enabled" and does not reduce the health score; also applies to the switch multi-device inventory',
+          'Firewall analyzer: Wi-Fi SSIDs that are fully open, use WEP, or rely on legacy encryption such as TKIP are now part of the audit and health score; the anonymizer supports Windows NPS configuration exports (shared secrets are redacted)',
+          'Switch analyzer: randomized phone/laptop MACs are marked and ports with many of them are listed; interface descriptions naming a different device than the actual LLDP neighbor are listed; the threat-intel builder shows count changes since the last run',
+          'Readability: the log analyzer shows issues and the health score first, and the timeline is no longer stretched by events without a timestamp; "fix first" headings state the total; the mobile top toolbar is a single scrollable row; switching language now updates the anonymizer summary and generator check panel',
+        ],
+      },
+    },
     {
       version: '2026.11.02',
       items: {
