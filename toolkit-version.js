@@ -3,8 +3,25 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.03';
+  const TOOLKIT_VERSION = '2026.11.03.1';
   const CHANGELOG = [
+    {
+      version: '2026.11.03.1',
+      items: {
+        zhTW: [
+          'log 分析：可偵測 Appsmith 等內部工具遭入侵的跡象（重設密碼連結被導向他站、外部操作資料來源與管理設定、以程式直接呼叫高風險 API），並在匯入區說明要匯入哪些 log',
+          'log 分析：可偵測憑證與密鑰外洩跡象——.env／.git 等密鑰檔被下載、雲端機密被大量讀取、同一把 AWS 或 SSH 金鑰從多個位址使用、Entra 應用程式被加上憑證；新增 AWS root 使用與主控台未用 MFA',
+          'log 分析：支援 GitLab log，列出 CI/CD 變數讀取、權杖從多個位址使用、短時間大量下載程式庫與建立權杖；log 內出現針對 AI 的提示注入字串時提示',
+          '安全強化：產生器上傳的分析頁雜湊不是官方版本時須確認才執行；Release 附建置來源證明（gh attestation verify）；工作區含設定內容時檔名標示並提醒；情資整理頁限制單一來源大小',
+        ],
+        en: [
+          'Log analyzer: detects signs of intrusion through internal tools such as Appsmith (password-reset links redirected elsewhere, external operations on data sources and admin settings, scripted calls to high-risk APIs), and the import area explains which logs to collect',
+          'Log analyzer: detects signs of credential and secret theft — secret files such as .env/.git downloaded, bulk reads of cloud secrets, one AWS or SSH key used from many addresses, credentials added to Entra applications; plus AWS root usage and console sign-in without MFA',
+          'Log analyzer: supports GitLab logs, flagging CI/CD variable reads, tokens used from many addresses, bulk repository downloads and token creation; flags prompt-injection text aimed at AI inside logs',
+          'Hardening: the generator only runs an uploaded analyzer page after confirmation unless its hash matches an official release; releases include build provenance (gh attestation verify); workspace exports with config content are labeled and warned; the threat-intel builder limits source size',
+        ],
+      },
+    },
     {
       version: '2026.11.03',
       items: {
