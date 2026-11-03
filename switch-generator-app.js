@@ -3543,6 +3543,7 @@ let _parserFnsCache=null;
 // 每次發版後把該版 Release 的雜湊補進表內（GitHub Pages 的分頁版才認得最新 Release 的單檔）
 const PARSER_KNOWN_SHA256={
   '__PARSER_SHA256_THIS_BUILD__':'this',
+  '9d4a7d23e4d46ce3ab70db0eb18ccf4fcfb1f7bacdb688e80213970315c430f2':'v2026.11.03.1',
   '3f87e05047ffb42df6107dc9038f599ea7e9ce5a13f0a052ab619966bd28ed8b':'v2026.11.03',
   '37c3fdfd720b3446a916a876d2ca6b6447e1f2873b4be1d9af83722e26d3ce26':'v2026.11.02',
   '0295bf054e039b415ba21c48543dea0331c5333c703d365b4663c191e90730e0':'v2026.11.01',
