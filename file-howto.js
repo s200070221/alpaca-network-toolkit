@@ -34,6 +34,7 @@ const FileHowto = (function () {
     ['Palo Alto', '', { zhTW: 'Monitor → Logs → Traffic／Threat → 匯出 CSV', en: 'Monitor → Logs → Traffic / Threat → Export to CSV', ja: 'Monitor → Logs → Traffic／Threat → CSV にエクスポート' }],
     ['Windows', 'wevtutil qe Security /c:5000 /rd:true /f:renderedxml > security.xml', { zhTW: '事件檢視器 → 在「安全性」按右鍵 → 另存所有事件 → CSV', en: 'Event Viewer → right-click Security → Save All Events As → CSV', ja: 'イベント ビューアー → 「セキュリティ」を右クリック → すべてのイベントを名前を付けて保存 → CSV' }],
     ['Windows PowerShell', 'Get-WinEvent -LogName Security -MaxEvents 5000 | Export-Csv security.csv -NoTypeInformation', null],
+    ['Windows NPS', 'copy C:\\Windows\\System32\\LogFiles\\IN*.log .', { zhTW: '預設位置與檔名 INyymmdd.log；記錄格式需為 DTS 相容（XML），舊的 IAS 文字格式不支援', en: 'Default folder and file name INyymmdd.log; the log format must be DTS Compliant (XML) — the legacy IAS text format is not supported', ja: '既定の場所とファイル名は INyymmdd.log。ログ形式は DTS 準拠（XML）が必要で、旧 IAS テキスト形式は非対応' }],
     ['Linux', 'cat /var/log/auth.log', { zhTW: '或直接使用 syslog 伺服器上收到的檔案（.gz 可直接匯入）', en: 'Or use the files on your syslog server (.gz can be imported directly)', ja: 'または syslog サーバー上のファイル（.gz はそのまま取り込み可）' }],
     ['AWS CloudTrail / VPC Flow Logs', 'aws s3 cp s3://<bucket>/<prefix>/ ./logs --recursive', { zhTW: '從 S3 下載的 .gz 檔可直接匯入', en: '.gz files downloaded from S3 can be imported directly', ja: 'S3 からダウンロードした .gz はそのまま取り込み可' }],
   ];
