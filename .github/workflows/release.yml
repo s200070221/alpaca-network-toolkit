@@ -31,6 +31,9 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+      # 建置來源證明（XN86）：以 GitHub OIDC 簽署 dist 單檔的來源，使用者可用 gh attestation verify 驗證檔案確實由本 workflow 產出
+      id-token: write
+      attestations: write
     defaults:
       run:
         shell: bash
@@ -76,7 +79,8 @@ jobs:
           sha256sum -c SHA256SUMS.txt
           if grep -q $'\r' SHA256SUMS.txt; then echo 'SHA256SUMS.txt 含 CR'; exit 1; fi
           { cat "$RUNNER_TEMP/notes.md"
-            printf '\n## SHA256\n驗證方式（PowerShell）：`Get-FileHash 檔名 -Algorithm SHA256`；Linux／macOS：`sha256sum -c SHA256SUMS.txt`\n\n```\n'
+            printf '\n## SHA256\n驗證方式（PowerShell）：`Get-FileHash 檔名 -Algorithm SHA256`；Linux／macOS：`sha256sum -c SHA256SUMS.txt`\n'
+            printf '確認檔案由本專案的發版流程產出（需要 GitHub CLI）：`gh attestation verify 檔名 --repo %s`\n\n```\n' "$GITHUB_REPOSITORY"
             cat SHA256SUMS.txt
             printf '```\n'; } > "$RUNNER_TEMP/body.md"
 
@@ -89,3 +93,9 @@ jobs:
           # 推 tag 觸發時 tag 已存在；手動發布時在這次執行的 commit 建立 tag
           if [ "$GITHUB_EVENT_NAME" = push ]; then opt=--verify-tag; else opt="--target $GITHUB_SHA"; fi
           gh release create "$TAG" dist/*.html dist/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file "$RUNNER_TEMP/body.md" $opt
+
+      - name: 建置來源證明（build provenance）
+        if: github.event_name == 'push' || inputs.publish
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'dist/*.html'
