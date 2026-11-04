@@ -84,18 +84,32 @@ jobs:
             cat SHA256SUMS.txt
             printf '```\n'; } > "$RUNNER_TEMP/body.md"
 
-      - name: 建立 Release
+      # 發佈分三段：先建草稿並上傳全部單檔 → 產生建置來源證明 → 最後才發佈。
+      # Release 設為不可變更（immutable releases）時，檔案只能在草稿階段上傳；來源證明失敗時 Release 停在草稿、不會公開
+      - name: 建立 Release 草稿並上傳單檔
         if: github.event_name == 'push' || inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          # 推 tag 觸發時 tag 已存在；手動發布時在這次執行的 commit 建立 tag
+          # 推 tag 觸發時 tag 已存在；手動發布時在這次執行的 commit 建立 tag（草稿發佈時才建立）
           if [ "$GITHUB_EVENT_NAME" = push ]; then opt=--verify-tag; else opt="--target $GITHUB_SHA"; fi
-          gh release create "$TAG" dist/*.html dist/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file "$RUNNER_TEMP/body.md" $opt
+          gh release create "$TAG" dist/*.html dist/SHA256SUMS.txt --draft --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file "$RUNNER_TEMP/body.md" $opt
+          # 確認草稿上的檔案數與 dist 一致再往下（7 個單檔＋SHA256SUMS.txt）
+          want=$(ls dist/*.html dist/SHA256SUMS.txt | wc -l)
+          got=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')
+          echo "草稿檔案：$got／$want"
+          [ "$got" = "$want" ] || { echo '草稿上的檔案數不符'; exit 1; }
 
       - name: 建置來源證明（build provenance）
         if: github.event_name == 'push' || inputs.publish
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: 'dist/*.html'
+
+      - name: 發佈 Release
+        if: github.event_name == 'push' || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"
