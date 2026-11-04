@@ -3,8 +3,25 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.03.1';
+  const TOOLKIT_VERSION = '2026.11.04';
   const CHANGELOG = [
+    {
+      version: '2026.11.04',
+      items: {
+        zhTW: [
+          'log 分析：支援 PostgreSQL／MySQL 連線與認證 log，列出管理帳號從其他主機登入、帳號從外部位址或新來源登入、認證失敗暴增後成功；支援 Ivanti Connect Secure／Pulse Secure VPN log',
+          'log 分析：偵測到憑證可能外洩時列出「憑證處置清單」（要更換或撤銷的金鑰、權杖、帳號識別碼與處理位置，不含機密值），頁面、報告、Markdown 與案件包都有',
+          '防火牆分析：列出特定來源可連網際網路任何位址、任何服務的允許規則（低風險、不計健康度，請確認是否為伺服器網段）；去識別化支援 .env 與 docker-compose 環境變數',
+          '入口頁：新增「懷疑被入侵」任務卡，依序說明保全 log、分析、更換憑證與交給外部前遮蔽',
+        ],
+        en: [
+          'Log analyzer: supports PostgreSQL/MySQL connection and authentication logs, flagging admin accounts logging in from other hosts, logins from external addresses or new sources, and bursts of failures followed by success; supports Ivanti Connect Secure / Pulse Secure VPN logs',
+          'Log analyzer: when credentials may have leaked, a "credentials to rotate" list shows the key, token and account identifiers to replace or revoke and where to do it (no secret values), in the page, reports, Markdown and case packs',
+          'Firewall analyzer: lists allow rules letting a specific source reach any internet address on any service (low risk, not in the health score — check whether it is a server network); the anonymizer supports .env and docker-compose environment variables',
+          'Hub: new "Suspect a compromise" task card walking through preserving logs, analyzing, rotating credentials and masking data before sharing',
+        ],
+      },
+    },
     {
       version: '2026.11.03.1',
       items: {
