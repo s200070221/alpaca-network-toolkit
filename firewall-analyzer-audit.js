@@ -791,6 +791,14 @@
     if (def) return { ext: true, basis: 'defaultRoute' };
     return { ext: false, basis: '' };
   }
+  // XN92：規則的目的介面或區域是否對外——名稱本身像外部區域、介面依 _exposeExternal()、或該區域內有對外介面；
+  // FortiGate zone 另看 dstIntfMembers。any／all 或找不到介面時不判斷（不列）
+  function _polDstExternal(parsed, p) {
+    const names = [].concat(p.dstIntfMembers || [], String(p.dstIntf || '').split(/[\s,]+/))
+      .map(x => String(x).replace(/^"|"$/g, '')).filter(x => x && x !== '-' && !/^(any|all)$/i.test(x));
+    return names.some(n => _EXT_ZONE_RE.test(n) || _exposeExternal(parsed, n).ext === true ||
+      (parsed.interfaces || []).some(i => (i.zone === n || i._zone === n) && _exposeExternal(parsed, i.name).ext === true));
+  }
   function _exposeSameNet(a, b, mask) {
     const n = s => { const m = String(s || '').match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/); return m ? ((+m[1] << 24) >>> 0) + (+m[2] << 16) + (+m[3] << 8) + +m[4] : null; };
     const len = /^\d+$/.test(String(mask)) ? +mask : (n(mask) === null ? null : n(mask).toString(2).replace(/0+$/, '').length);
@@ -1047,6 +1055,16 @@
     f('exposed-svc', tr('audit.check_exposed_svc'), expSvc.length, 'high',
       expSvc.length ? expSvc.map(x => `${tr('expose.svc_' + x.svc)}@${x.iface}`).slice(0, 8).join(', ') + (expSvc.length > 8 ? '…' : '') + tr('audit.rec_exposed_svc') : tr('audit.none'),
       ['CISA KEV', 'NIST 800-53 SC-7', 'CIS v8 12.2'], expSvc.map(x => ({ kind: 'iface', name: x.iface })));
+    // 6c. 指定來源到網際網路不限目的與服務（XN92）：來源不是 any（any-any 已另外列出）、目的 any、服務 any，且目的介面或區域對外。
+    // 伺服器、CI、資料庫網段應只開必要的對外連線，避免資料被直接送出（NIST 800-53 SC-7(5)、PCI-DSS 1.3.2 限制對外流量）
+    // 使用者網段的上網規則多半長這樣，設定檔看不出來源是使用者還是伺服器，因此列為 low、不計入健康度，由使用者確認
+    const ANY_RE = /^\s*(all|any|0\.0\.0\.0\/0|0\.0\.0\.0 0\.0\.0\.0)\s*$/i;
+    const egressAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && !_hasNegate(p) &&
+      !/\b(all|any)\b/i.test(p.srcAddr || '') && String(p.srcAddr || '').trim() && ANY_RE.test(p.dstAddr || '') && /^\s*(all|any|ALL)\s*$/i.test(p.service || '') &&
+      _polDstExternal(parsed, p));
+    f('egress-any', tr('audit.check_egress_any'), egressAny.length, 'low',
+      egressAny.length ? tr('audit.id_prefix') + egressAny.map(p => idLabel(p)).slice(0, 10).join(', ') + (egressAny.length > 10 ? '…' : '') + tr('audit.rec_egress_any') : tr('audit.none'),
+      ['ISO27001 A.8.20', 'PCI-DSS 4.0 1.3.2', 'NIST 800-53 SC-7(5)', 'CIS v8 4.4'], polItems(egressAny));
     // 7. VPN 弱加密
     const WEAK = /\b(des\b|3des|md5|rc4|null)/i;
     const weakVpn = (parsed.vpn || []).filter(v => WEAK.test((v.proposal || '') + ' ' + (v.dhgrp || '')));
@@ -2488,6 +2506,7 @@ function buildPriorityHtml(items, limit, title) {
   // Palo Alto／Sophos 等 XML 縮排、Junos 大括號皆適用）。
   const _FW_EV_SUB = {
     'any-any': /srcaddr|dstaddr|service|action|source|destination|application|from|to\b|match/i,
+    'egress-any': /srcaddr|dstaddr|service|action|source|destination|application|from|to\b|match/i,
     'broad-network': /srcaddr|dstaddr|source|destination|address/i,
     'no-log': /log|action/i,
     'disabled-pol': /status|disable/i,
@@ -2599,6 +2618,7 @@ function buildPriorityHtml(items, limit, title) {
   const _fgEdit = (table, it, lines) => [`config ${table}`, ...(it || []).slice(0, FW_FIX_MAX).flatMap(x => [`    edit ${_fgQuote(x.name)}`, ...lines.map(l => '        ' + l), '    next']), 'end'];
   const FW_FIX_CMDS_FORTIGATE = {
     'any-any': it => _fgPol(it, ['set srcaddr "<specific-source>"', 'set dstaddr "<specific-destination>"', 'set service "<specific-service>"']),
+    'egress-any': it => _fgPol(it, ['set dstaddr "<required-destinations>"', 'set service "<required-services>"']),
     'disabled-pol': it => ['config firewall policy', ...(it || []).filter(x => !String(x.id).startsWith('v6/')).slice(0, FW_FIX_MAX).map(x => `    delete ${x.id}`), 'end'],
     'no-log': it => _fgPol(it, ['set logtraffic all']),
     'snmp-v1v2': () => ['config system snmp community', '    delete <community-id>', 'end', 'config system snmp user', '    edit "<user>"', '        set security-level auth-priv', '        set auth-proto sha256', '        set auth-pwd <auth-password>', '        set priv-proto aes256', '        set priv-pwd <priv-password>', '    next', 'end'],

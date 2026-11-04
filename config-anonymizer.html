@@ -498,6 +498,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="openwrt">OpenWrt (UCI)</option>
                 <option value="watchguard">WatchGuard Firebox</option>
                 <option value="nps_export">Windows NPS 設定匯出（netsh nps export）</option>
+                <option value="appenv">應用程式環境變數（.env／docker-compose）</option>
                 <option value="wlc">Wireless LAN Controller (Cisco 9800 / AireOS · Aruba · H3C WX)</option>
               </optgroup>
               <optgroup id="optgrp-sw" label="交換器">
@@ -1309,6 +1310,8 @@ const subnetMaps = { top: new Map(), topUsed: new Set(), oct3: new Map(), oct3Us
 // ============================================================
 // [2] VENDOR DETECTION
 // ============================================================
+// 應用程式環境變數檔（XN93，見 anonAppEnv()）：至少 3 行「大寫名稱=值」
+const ENV_FILE_RE = /^(?:export\s+)?[A-Z][A-Z0-9_]*=[^\n]*\n(?:[ \t]*(?:#[^\n]*)?\n)*(?:export\s+)?[A-Z][A-Z0-9_]*=[^\n]*\n(?:[ \t]*(?:#[^\n]*)?\n)*(?:export\s+)?[A-Z][A-Z0-9_]*=/m;
 const VENDOR_SIGS = {
   cisco_nxos:  { p:[/Cisco Nexus/i, /^feature\s+\w+/m, /^vdc\s+\S+\s+id\s+\d+/m, /^version\s+\d+\.\d+\(\d+\)/m, /^!Command:\s*show running-config/m], min:1 },
   fortiswitch: { p:[/^config system global/m, /^config switch physical-port/m], min:2 },
@@ -1396,7 +1399,10 @@ const VENDOR_SIGS = {
   // WatchGuard Firebox config.xml，簽章與 firewall_analyzer 的 WatchGuardParser.detect() 保持一致
   watchguard:  { p:[/<abs-policy-list/, /<interface-list/, /<address-group-list/], min:3 },
   // Windows NPS 設定匯出（netsh nps export，XN72）
-  nps_export:  { p:[/<Microsoft_Internet_Authentication_Service\b/, /<Microsoft_Radius_Protocol\b/], min:1 }
+  nps_export:  { p:[/<Microsoft_Internet_Authentication_Service\b/, /<Microsoft_Radius_Protocol\b/], min:1 },
+  // 應用程式環境變數（XN93）：.env 至少 3 行「大寫名稱=值」（中間可夾空行與註解），或 docker-compose 的 services: 加 environment:；
+  // 排在 VENDOR_ORDER 最後，其他廠牌都沒命中時才採用（與入口頁 detectTool() 相同）
+  appenv:      { p:[ENV_FILE_RE, /^services:\s*$[\s\S]*^\s+environment:\s*$/m], min:1 }
 };
 // sophos／aruba_cx 兩家的簽章相對寬鬆（各自僅需命中 2 個訊號，且其中一個訊號是單純字面
 // "Sophos"/"Aruba" 文字比對），故刻意排在最後——讓其他更具結構特徵的廠牌訊號優先判定，
@@ -1406,7 +1412,7 @@ const VENDOR_ORDER = [
   'checkpoint','pfsense','sonicwall','watchguard','mikrotik','fsos','arista',
   'extreme','alcatel','brocade','procurve','dell_os10','planet','ruijie','netgear','edgeswitch','sonic',
   'ciscoasa','cisco_biz','cisco_ios',
-  'zyxel','sophos','aruba_cx'
+  'zyxel','sophos','aruba_cx','appenv'
 ];
 const VENDOR_LABELS = {
   fortigate:'FortiGate',fortiswitch:'FortiSwitch',sophos:'Sophos XG',
@@ -1419,6 +1425,7 @@ const VENDOR_LABELS = {
   edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',checkpoint_api:'Check Point Management API (JSON)',cumulus:'NVIDIA Cumulus Linux (NVUE)',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',netgearsmart:'Netgear Smart Managed Pro',awplus:'Allied Telesis AlliedWare Plus',
   planet:'Planet Technology',ruijie:'Ruijie (RGOS)',netgear:'Netgear M4300 (ICOS)',
   edgeswitch:'Ubiquiti EdgeSwitch',sonic:'SONiC (config_db.json)',watchguard:'WatchGuard Firebox',nps_export:'Windows NPS 設定匯出（netsh nps export）',
+  appenv:'應用程式環境變數（.env／docker-compose）',
   unknown:''
 };
 
@@ -3770,6 +3777,27 @@ function anonNpsExport(text, opts) {
   });
   return anonGeneric(red, opts);
 }
+// 應用程式環境變數（XN93）：.env（KEY=值、export KEY=值）與 docker-compose environment（- KEY=值 清單或 KEY: 值 對應）。
+// 名稱含密碼、金鑰、權杖等字樣的值，或值本身是常見權杖格式（GitHub ghp_／gho_、GitLab glpat-、Slack xox?-、AWS AKIA／ASIA、Stripe sk_live_、JWT）
+// 一律換成 REDACTED_KEY；${變數} 參照與空值保留。連線字串內的帳密由 anonymize() 最後的 anonUrlCredentials() 處理，位址與網域走 anonGeneric()
+const ENV_SECRET_NAME_RE = /PASS|PWD|SECRET|TOKEN|KEY|PRIVATE|CREDENTIAL|DSN|SALT|COOKIE|SIGNATURE|CERT/i;
+const ENV_SECRET_VALUE_RE = /^(?:ghp_|gho_|ghs_|glpat-|xox[abpr]-|AKIA|ASIA|sk_live_|rk_live_|eyJ[A-Za-z0-9_-]{8,}\.)[A-Za-z0-9_\-.]{8,}/;
+function anonAppEnv(text, opts) {
+  const red = text.split('\n').map(line => {
+    const m = line.match(/^(\s*(?:-\s*)?(?:export\s+)?)([A-Za-z_][A-Za-z0-9_.]*)(\s*=\s*|:\s+)(.*)$/);
+    if (!m || /^\s*#/.test(line)) return line;
+    const [, pre, name, sep, raw] = m;
+    // docker-compose 的鍵（image:、ports: 等）只處理 environment 底下的大寫名稱
+    if (sep.trim() === ':' && !/^[A-Z][A-Z0-9_]*$/.test(name)) return line;
+    const q = /^["']/.test(raw) ? raw[0] : '';
+    const val = q && raw.endsWith(q) && raw.length > 1 ? raw.slice(1, -1) : raw.trim();
+    if (!val || /^\$\{[^}]*\}$/.test(val) || /REDACTED/.test(val)) return line;
+    if (!ENV_SECRET_NAME_RE.test(name) && !ENV_SECRET_VALUE_RE.test(val)) return line;
+    stats.key++;
+    return pre + name + sep + q + 'REDACTED_KEY' + q;
+  }).join('\n');
+  return anonGeneric(red, opts);
+}
 function anonWatchGuard(text, opts) {
   const IP_TAGS = ['ip', 'default-gateway', 'gateway-ip', 'host-ip-addr', 'ip-network-addr', 'start-ip-addr', 'end-ip-addr', 'dest-address'];
   let ctx = null; // 'addrgrp' | 'alias' | 'policy' | null
@@ -4197,7 +4225,7 @@ const VENDOR_FNS = {
   brocade: anonBrocade, ciscoasa: anonCiscoASA, zyxel: anonZyxel,
   edgerouter: anonEdgeRouter, openwrt: anonOpenWrt, vyos: anonVyOS, netfilter: anonNetfilter, cloudsg: anonCloudSG, checkpoint_api: anonCheckPointApi, cumulus: anonCumulus, voss: anonVOSS, efos: anonEFOS, netgearsmart: anonNetgearSmart, awplus: anonAlliedWare,
   planet: anonPlanet, ruijie: anonRuijie, netgear: anonNetgear,
-  edgeswitch: anonEdgeSwitch, sonic: anonSonic, watchguard: anonWatchGuard, nps_export: anonNpsExport,
+  edgeswitch: anonEdgeSwitch, sonic: anonSonic, watchguard: anonWatchGuard, nps_export: anonNpsExport, appenv: anonAppEnv,
   unknown: anonGeneric
 };
 
