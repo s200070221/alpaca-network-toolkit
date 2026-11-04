@@ -3,8 +3,23 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.04';
+  const TOOLKIT_VERSION = '2026.11.04.1';
   const CHANGELOG = [
+    {
+      version: '2026.11.04.1',
+      items: {
+        zhTW: [
+          'log 分析：偵測 webshell 存取跡象——網址參數帶系統指令、上傳目錄下的腳本被執行、只被少數來源 POST 的腳本（皆需人工確認）',
+          'log 分析：偵測 VMware ESXi 可疑操作——SSH 被開啟或 root 遠端登入、防護設定被關閉、帳號與權限變更、虛擬機大量關機與刪除快照',
+          '韌體漏洞比對：內建清單截止日更新；匯入 Ivanti Connect Secure log 時提醒依官方公告確認韌體修補',
+        ],
+        en: [
+          'Log analyzer: detects signs of webshells — system commands in URL parameters, scripts executed from upload directories, and scripts used only via POST by a few sources (all need manual review)',
+          'Log analyzer: detects suspicious VMware ESXi activity — SSH enabled or remote root logins, protections turned off, account and permission changes, and VMs mass powered off or snapshots removed',
+          'Firmware vulnerability check: built-in list date refreshed; importing Ivanti Connect Secure logs now reminds you to confirm firmware patches against Ivanti advisories',
+        ],
+      },
+    },
     {
       version: '2026.11.04',
       items: {
