@@ -400,7 +400,7 @@
       if (cur.selfIssued) {
         const ex = extra.find(x => sameBytes(x.spki, cur.spki) && x.subjectHex === cur.subjectHex);
         cur.sigOk = await verifySig(cur, cur.spki, cur.key);
-        res.anchor = ex ? { type: 'internal', name: ex.cn, sent: true } : { type: 'untrusted', name: cur.cn, sent: true };
+        res.anchor = ex ? { type: 'internal', name: ex.cn, sent: true, subjectHex: ex.subjectHex } : { type: 'untrusted', name: cur.cn, sent: true };
         break;
       }
       let next = null, nextIdx = -1;
@@ -412,7 +412,7 @@
       const ex = extra.find(x => x.subjectHex === cur.issuerHex && akiOk(x));
       if (ex) {
         cur.sigOk = await verifySig(cur, ex.spki, ex.key);
-        res.anchor = { type: 'internal', name: ex.cn, sent: false };
+        res.anchor = { type: 'internal', name: ex.cn, sent: false, subjectHex: ex.subjectHex };
         break;
       }
       res.anchor = { type: 'incomplete', name: nameGet(cur.issuer, 'CN') || nameStr(cur.issuer) };
@@ -433,8 +433,12 @@
     if (entry.chainSource !== 'os') {
       const sentOrder = path.map(c => c.sentIndex).filter(x => x !== undefined);
       if (sentOrder.some((x, i) => i && x < sentOrder[i - 1])) add('chain-order', 'low');
+      // 主體與信任錨相同、但由另一個 CA 簽發的憑證是根憑證的交叉簽署版本（給還沒內建新根憑證的舊裝置用），不算無關
+      const anchorSubject = res.anchor.root ? res.anchor.root.subjectHex : res.anchor.subjectHex;
       const unused = certs.filter((c, i) => !used.has(i));
-      if (unused.length) add('unused-certs', 'info', { n: unused.length });
+      const cross = unused.filter(c => anchorSubject && c.subjectHex === anchorSubject && !c.selfIssued);
+      if (cross.length) add('cross-signed', 'info', { name: res.anchor.name, issuer: nameGet(cross[0].issuer, 'CN') || nameStr(cross[0].issuer) });
+      if (unused.length > cross.length) add('unused-certs', 'info', { n: unused.length - cross.length });
       if (res.anchor.type === 'mozilla' && res.anchor.sent && path.length > 1) add('root-sent', 'info');
     }
     if (res.anchor.type === 'mozilla' && res.anchor.root.distrustAfter && leaf.notBefore > res.anchor.root.distrustAfter)
