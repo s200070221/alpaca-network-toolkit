@@ -46,10 +46,19 @@ function Invoke-Tls([string]$hostName, [int]$port, $protocols) {
     $tcp.EndConnect($iar)
     $tcp.ReceiveTimeout = $TimeoutSec * 1000; $tcp.SendTimeout = $TimeoutSec * 1000
     $script:captured = $null
-    # 憑證一律先接受：檢查由入口頁做，這裡只負責收集伺服器送出的內容
+    # 憑證一律先接受：檢查由入口頁做，這裡只負責收集伺服器送出的內容。
+    # 內容要在回呼當下取出：Windows PowerShell 5.1（.NET Framework）在回呼結束後會釋放憑證物件，之後讀到的是 null
     $cb = [System.Net.Security.RemoteCertificateValidationCallback] {
       param($s, $cert, $chain, $errors)
-      $script:captured = @{ cert = $cert; chain = $chain; errors = $errors }
+      $info = @{ leaf = ''; extra = @(); os = @(); errors = [string]$errors; status = @() }
+      try { $info.leaf = [Convert]::ToBase64String($cert.GetRawCertData()) } catch { }
+      if ($chain) {
+        # 伺服器送出的中繼憑證在 ExtraStore（.NET 5 以後）；.NET Framework 通常是空的，改記作業系統建出的鏈
+        try { foreach ($x in $chain.ChainPolicy.ExtraStore) { $info.extra += [Convert]::ToBase64String($x.RawData) } } catch { }
+        try { foreach ($el in $chain.ChainElements) { $info.os += [Convert]::ToBase64String($el.Certificate.RawData) } } catch { }
+        try { foreach ($st in $chain.ChainStatus) { $info.status += [string]$st.Status } } catch { }
+      }
+      $script:captured = $info
       return $true
     }
     $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, $cb)
@@ -60,23 +69,17 @@ function Invoke-Tls([string]$hostName, [int]$port, $protocols) {
       try { $r.cipher = [string]$ssl.NegotiatedCipherSuite } catch { $r.cipher = '' }
       if (-not $r.cipher -or $r.cipher -eq '0') { $r.cipher = [string]$ssl.CipherAlgorithm + ' ' + [string]$ssl.CipherStrength }
       $c = $script:captured
-      if ($c) {
-        $leaf = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($c.cert)
+      if ($c -and $c.leaf) {
         $list = New-Object System.Collections.Generic.List[string]
-        $list.Add([Convert]::ToBase64String($leaf.RawData))
-        # 伺服器送出的中繼憑證在 ExtraStore（.NET 5 以後）；拿不到時改記作業系統建出的鏈
-        $extra = $null
-        try { $extra = $c.chain.ChainPolicy.ExtraStore } catch { }
-        if ($extra -and $extra.Count -gt 0) {
-          foreach ($x in $extra) { if ($x.Thumbprint -ne $leaf.Thumbprint) { $list.Add([Convert]::ToBase64String($x.RawData)) } }
-        } elseif ($c.chain -and $c.chain.ChainElements.Count -gt 1) {
+        $list.Add($c.leaf)
+        $extra = @($c.extra | Where-Object { $_ -and $_ -ne $c.leaf })
+        if ($extra.Count -gt 0) { foreach ($x in $extra) { $list.Add($x) } }
+        elseif ($c.os.Count -gt 1) {
           $r.chainSource = 'os'
-          for ($i = 1; $i -lt $c.chain.ChainElements.Count; $i++) { $list.Add([Convert]::ToBase64String($c.chain.ChainElements[$i].Certificate.RawData)) }
+          for ($i = 1; $i -lt $c.os.Count; $i++) { $list.Add($c.os[$i]) }
         }
         $r.chain = $list.ToArray()
-        $status = @()
-        if ($c.chain) { foreach ($s in $c.chain.ChainStatus) { $status += [string]$s.Status } }
-        $r.osTrust = @{ ok = ([string]$c.errors -eq 'None'); status = @(@([string]$c.errors) + $status | Where-Object { $_ -and $_ -ne 'None' -and $_ -ne 'NoError' } | Select-Object -Unique) }
+        $r.osTrust = @{ ok = ($c.errors -eq 'None'); status = @(@($c.errors) + $c.status | Where-Object { $_ -and $_ -ne 'None' -and $_ -ne 'NoError' } | Select-Object -Unique) }
       }
     } finally { $ssl.Dispose() }
   } catch {
