@@ -3,8 +3,23 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.05';
+  const TOOLKIT_VERSION = '2026.11.05.1';
   const CHANGELOG = [
+    {
+      version: '2026.11.05.1',
+      items: {
+        zhTW: [
+          '入口頁新增網站憑證檢查：下載 Windows／Linux／macOS 腳本抓取憑證鏈與 TLS 版本，在本頁離線檢查信任鏈、缺中繼、效期、主機名稱、多送的憑證與 CT 紀錄（內部根憑證只存記憶體）',
+          '防火牆查詢：設定判斷與實測不符時列出可能原因（用戶端預設閘道不是這台、目的是防火牆自己的位址、沒有路由、回程不對稱等）與驗證指令；批次查詢不符的列可展開，命中數 0 的本機目的規則加註',
+          '韌體漏洞比對支援 SonicWall SonicOS 版本格式',
+        ],
+        en: [
+          'New website certificate check on the hub: download a Windows/Linux/macOS script to fetch the chain and TLS versions, then check trust chain, missing intermediates, validity, hostname, extra certificates and CT records offline (internal roots stay in memory)',
+          'Firewall query: when real traffic differs from the rule result, lists possible causes (client gateway is not this firewall, destination is the firewall itself, no route, asymmetric return, etc.) with verification commands; mismatched batch rows can be expanded and zero-hit rules to local addresses are marked',
+          'Firmware vulnerability check supports SonicWall SonicOS version format',
+        ],
+      },
+    },
     {
       version: '2026.11.05',
       items: {
