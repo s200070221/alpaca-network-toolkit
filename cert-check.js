@@ -169,6 +169,13 @@
       }
       case '2.5.29.37': c.eku = kids(v, n).map(k => EKU[oid(v, k)] || oid(v, k)); break;
       case '2.5.29.14': c.ski = hex(content(v, n)); break;
+      case '1.3.6.1.4.1.11129.2.4.2': { // 憑證透明度 SCT 清單：OCTET STRING 內為 TLS 編碼（2 位元組總長，每筆 2 位元組長度＋內容）
+        const b = content(v, n);
+        let cnt = 0;
+        for (let p = 2, end = Math.min(b.length, 2 + ((b[0] << 8) | b[1])); p + 2 <= end; cnt++) p += 2 + ((b[p] << 8) | b[p + 1]);
+        c.sctCount = cnt;
+        break;
+      }
       case '2.5.29.35': { const k = kids(v, n).find(x => x.tag === 0x80); if (k) c.aki = hex(content(v, k)); break; }
       case '1.3.6.1.5.5.7.1.1': { // AIA
         for (const ad of kids(v, n)) {
@@ -212,7 +219,7 @@
       sigOid, sigAlg: (SIG_ALGS[sigOid] || { name: sigOid }).name,
       pss: sigOid === '1.2.840.113549.1.1.10' ? pssParams(der, sigAlgN) : null,
       tbs: raw(der, tbsN), sig: content(der, sigN).subarray(1),
-      sanDns: null, sanIp: null, bc: null, ku: null, eku: null, ski: '', aki: '', ocsp: [], caIssuers: [], crl: [],
+      sanDns: null, sanIp: null, sctCount: 0, bc: null, ku: null, eku: null, ski: '', aki: '', ocsp: [], caIssuers: [], crl: [],
     };
     const extWrap = f.slice(i + 6).find(x => x.tag === 0xa3);
     if (extWrap) for (const ext of kids(der, kids(der, extWrap)[0])) {
@@ -433,12 +440,30 @@
     if (entry.chainSource !== 'os') {
       const sentOrder = path.map(c => c.sentIndex).filter(x => x !== undefined);
       if (sentOrder.some((x, i) => i && x < sentOrder[i - 1])) add('chain-order', 'low');
-      // 主體與信任錨相同、但由另一個 CA 簽發的憑證是根憑證的交叉簽署版本（給還沒內建新根憑證的舊裝置用），不算無關
+      // 沒用到的憑證分類（XN101）：與鏈上憑證完全相同＝重複；主體與信任錨或鏈上憑證相同但由別的 CA 簽發＝交叉簽署版
+      // （給尚未內建新根的舊裝置用）；自簽且屬於同一體系（是鏈上或交叉簽署憑證的主體／簽發者）＝多送的根憑證；其餘才算無關
+      const cn = c => nameGet(c.subject, 'CN') || nameStr(c.subject);
       const anchorSubject = res.anchor.root ? res.anchor.root.subjectHex : res.anchor.subjectHex;
       const unused = certs.filter((c, i) => !used.has(i));
-      const cross = unused.filter(c => anchorSubject && c.subjectHex === anchorSubject && !c.selfIssued);
-      if (cross.length) add('cross-signed', 'info', { name: res.anchor.name, issuer: nameGet(cross[0].issuer, 'CN') || nameStr(cross[0].issuer) });
-      if (unused.length > cross.length) add('unused-certs', 'info', { n: unused.length - cross.length });
+      const pathDer = new Set(path.map(c => hex(c.der)));
+      const dup = unused.filter(c => pathDer.has(hex(c.der)));
+      const pathSubj = new Set(path.map(c => c.subjectHex).concat(anchorSubject ? [anchorSubject] : []));
+      const cross = unused.filter(c => !dup.includes(c) && !c.selfIssued && pathSubj.has(c.subjectHex));
+      const family = new Set([...path, ...cross].flatMap(c => [c.subjectHex, c.issuerHex]).concat(anchorSubject ? [anchorSubject] : []));
+      const extraRoots = unused.filter(c => !dup.includes(c) && c.selfIssued && family.has(c.subjectHex));
+      const unrelated = unused.filter(c => !dup.includes(c) && !cross.includes(c) && !extraRoots.includes(c));
+      const names = list => [...new Set(list.map(cn))].join('、');
+      if (cross.length) add('cross-signed', 'info', { name: names(cross), issuer: [...new Set(cross.map(c => nameGet(c.issuer, 'CN') || nameStr(c.issuer)))].join('、') });
+      if (extraRoots.length) add('extra-root', 'info', { names: names(extraRoots) });
+      if (dup.length) add('dup-certs', 'info', { n: dup.length });
+      if (unrelated.length) add('unused-certs', 'info', { n: unrelated.length });
+      // 送出的憑證過多或過大：TCP 初始壅塞視窗約 14 KB（RFC 6928），憑證鏈再加上交握其他內容容易超過而多一次往返，
+      // 部分嵌入式／IoT 用戶端也有鏈長度上限；列出可以不送的憑證（多送的根、重複、無關；交叉簽署版視舊裝置需求自行判斷）
+      const sentBytes = entry.chain.reduce((n, d) => n + d.length, 0);
+      if (entry.chain.length >= 5 || sentBytes > 8192) {
+        const removable = extraRoots.concat(dup, unrelated, res.anchor.sent && path.length > 1 ? [path[path.length - 1]] : []);
+        add('large-chain', 'low', { n: entry.chain.length, kb: (sentBytes / 1024).toFixed(1), names: removable.length ? names(removable) : '—' });
+      }
       if (res.anchor.type === 'mozilla' && res.anchor.sent && path.length > 1) add('root-sent', 'info');
     }
     if (res.anchor.type === 'mozilla' && res.anchor.root.distrustAfter && leaf.notBefore > res.anchor.root.distrustAfter)
@@ -461,6 +486,14 @@
       const max = maxValidityDays(leaf.notBefore), life = (leaf.notAfter - leaf.notBefore) / DAY;
       if (max && life > max + 1) add('long-validity', 'low', { days: Math.round(life), max });
     }
+    // 到期續簽時公開憑證上限會更短（SC-081 逐步縮短）：提醒續簽流程（建議自動化）
+    if (!caOnly && res.anchor.type === 'mozilla' && leaf.notBefore != null && leaf.notAfter != null && leaf.notAfter > now) {
+      const nowMax = maxValidityDays(leaf.notBefore), nextMax = maxValidityDays(leaf.notAfter);
+      if (nowMax && nextMax && nextMax < nowMax) add('renewal-shorter', 'info', { date: iso(leaf.notAfter), max: nextMax });
+    }
+    // 憑證透明度：公開憑證須有 CT 紀錄，Chrome／Safari 才會信任。SCT 也可能由伺服器以 TLS 擴充或 OCSP 裝訂提供，
+    // 憑證內沒有不一定代表沒有，因此只列 medium 並在文字說明
+    if (!caOnly && res.anchor.type === 'mozilla' && leaf.notBefore >= Date.parse('2018-04-30T00:00:00Z') && !leaf.sctCount) add('no-sct', 'medium');
 
     // 加密強度（信任錨本身的自簽章不算）
     path.forEach((c, i) => {

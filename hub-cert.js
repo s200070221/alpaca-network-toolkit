@@ -105,9 +105,9 @@
   function hostDetail(r) {
     let h = '<ul class="cert-findings">' + (r.findings.length ? r.findings.map(f => `<li>${sevBadge(f.sev)} ${esc(findingText(f))}</li>`).join('') : `<li>${esc(tr('cert.ok'))}</li>`) + '</ul>';
     if (r.chain.length) {
-      h += `<div class="cert-sub">${esc(tr('cert.chain_title'))}</div><ol class="cert-chain">` + r.chain.map(c => {
+      h += `<div class="cert-sub">${esc(tr('cert.chain_title'))}</div><ol class="cert-chain">` + r.chain.map((c, i) => {
         const sig = c.sigOk === true ? '✅ ' + tr('cert.sig_ok') : c.sigOk === false ? '❌ ' + tr('cert.sig_bad') : '— ' + tr('cert.sig_na');
-        return `<li><b>${esc(c.cn)}</b><br><small>${esc(fmt('cert.c_valid', { from: iso(c.notBefore), to: iso(c.notAfter) }))} · ${esc(fmt('cert.c_key', { key: keyText(c.key), alg: c.sigAlg }))} · ${esc(sig)}</small></li>`;
+        return `<li><b>${esc(c.cn)}</b><br><small>${esc(fmt('cert.c_valid', { from: iso(c.notBefore), to: iso(c.notAfter) }))} · ${esc(fmt('cert.c_key', { key: keyText(c.key), alg: c.sigAlg }))} · ${esc(sig)}${i === 0 && c.sctCount ? ' · ' + esc(fmt('cert.c_sct', { n: c.sctCount })) : ''}</small></li>`;
       }).join('') + '</ol>';
       const a = r.anchor || {};
       if (a.type === 'mozilla' && !a.sent) h += `<div class="cert-hint">${esc(fmt('cert.anchor_mozilla', { name: a.name }))}</div>`;
