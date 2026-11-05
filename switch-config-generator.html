@@ -76,6 +76,9 @@ td input.i-name{min-width:170px}
 #generate-card{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:4000;width:auto;max-width:calc(100vw - 32px);margin:0;box-shadow:0 6px 20px rgba(0,0,0,.35)}
 /* 寬螢幕時移到左下角空白處，不蓋住置中的表單（UX17）；窄螢幕仍置中，頁底由羊駝模組留白 */
 @media(min-width:1440px){#generate-card{left:16px;transform:none}}
+/* 1440 以下沒有左側空白可放，改成整條底部列（實底色），內容從列下方捲過，不會只蓋住欄位標籤的一半（UX22）；頁底留出列的高度 */
+@media(max-width:1439px){#generate-card{left:0;right:0;bottom:0;transform:none;max-width:none;border-radius:0;border-left:0;border-right:0;border-bottom:0;padding:8px 16px;display:flex;justify-content:center;box-shadow:0 -4px 14px rgba(0,0,0,.18)}
+  body{padding-bottom:64px}}
 .out-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
 .act-btn{background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer;padding:6px 14px;font-size:12px;font-family:inherit;white-space:nowrap}
 .act-btn:hover{border-color:var(--accent);color:var(--accent)}

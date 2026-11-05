@@ -378,8 +378,21 @@ const SRC_KEY = '_netAnalyzer_intelSources';
 const LAST_KEY = '_netAnalyzer_intelLastCounts';  // XN77：上次整理的各類別筆數（入口頁 WS_KEYS）
 let PREV = null;
 try { PREV = parseIntelLastCounts(localStorage.getItem(LAST_KEY)); } catch (e) { PREV = null; }
-let curLang = 'zhTW';
-try { const l = localStorage.getItem('intel_builder_lang'); if (LANG[l]) curLang = l; } catch (e) { /* 無法讀取時用預設語言 */ }
+// 語言（UX23）：正式語言與其他工具共用 'cw_lang'，沒存過時依瀏覽器語言；本頁選的彩蛋語言另存 intel_builder_lang
+const FORMAL_LANGS = ['zhTW', 'en', 'ja'];
+function loadIntelLang() {
+  try { const egg = localStorage.getItem('intel_builder_lang'); if (LANG[egg] && FORMAL_LANGS.indexOf(egg) < 0) return egg; } catch (e) { /* 略過 */ }
+  try { const v = localStorage.getItem('cw_lang'); if (FORMAL_LANGS.indexOf(v) >= 0) return v; } catch (e) { /* 略過 */ }
+  const n = ((typeof navigator !== 'undefined' && navigator.language) || '').toLowerCase();
+  return n.indexOf('ja') === 0 ? 'ja' : (n.indexOf('zh') === 0 || !n ? 'zhTW' : 'en');
+}
+function saveIntelLang(l) {
+  try {
+    if (FORMAL_LANGS.indexOf(l) >= 0) { localStorage.setItem('cw_lang', l); localStorage.removeItem('intel_builder_lang'); }
+    else localStorage.setItem('intel_builder_lang', l);
+  } catch (e) { /* 略過 */ }
+}
+let curLang = loadIntelLang();
 function tr(k) { return (LANG[curLang] && LANG[curLang][k]) || LANG.zhTW[k] || k; }
 const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const $ = id => document.getElementById(id);
@@ -500,7 +513,7 @@ function applyLang() {
 }
 $('lang-sel').innerHTML = LANG_ORDER.map(l => `<option value="${l}">${esc(LANG_NAME[l])}</option>`).join('');
 $('lang-sel').value = curLang;
-$('lang-sel').onchange = e => { curLang = e.target.value; try { localStorage.setItem('intel_builder_lang', curLang); } catch (x) { /* 略過 */ } applyLang(); };
+$('lang-sel').onchange = e => { curLang = e.target.value; saveIntelLang(curLang); applyLang(); };
 $('src-table').addEventListener('change', e => { const id = e.target.dataset && e.target.dataset.id; if (id) { CFG.on[id] = e.target.checked; saveCfg(); } });
 $('src-table').addEventListener('click', e => {
   const id = e.target.dataset && e.target.dataset.del;

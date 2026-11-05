@@ -4886,3 +4886,36 @@ function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'li
 // 入口頁「看範例」（第二十九輪 NU4）：網址帶 ?demo=1 時開頁即載入範例並分析
 // DOMContentLoaded 而非 load：load 會等外部字型樣式表，連不到 Google Fonts 時範例要等到逾時才出現
 document.addEventListener('DOMContentLoaded', function () { if (/[?&]demo=1(?:&|$)/.test(location.search)) setTimeout(function () { loadSampleConfig(); }, 0); });
+
+// 頂端選單（UX19）：展開時依按鈕位置定位面板（fixed，避免手機寬度橫向捲動的工具列裁切），
+// 同時只開一個；點選項目、點選單外或按 Esc 即收起
+(function () {
+  function place(d) {
+    var r = d.querySelector('summary').getBoundingClientRect(), p = d.querySelector('.tb-menu-panel');
+    p.style.top = Math.round(r.bottom + 4) + 'px';
+    p.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - p.offsetWidth - 8))) + 'px';
+  }
+  function closeAll(except) { document.querySelectorAll('details.tb-menu[open]').forEach(function (d) { if (d !== except) d.open = false; }); }
+  document.addEventListener('toggle', function (e) {
+    var d = e.target;
+    if (!d.classList || !d.classList.contains('tb-menu') || !d.open) return;
+    closeAll(d); place(d);
+  }, true);
+  document.addEventListener('click', function (e) {
+    var m = e.target.closest && e.target.closest('details.tb-menu');
+    if (!m) { closeAll(null); return; }
+    if (e.target.closest('.tb-menu-panel button')) m.open = false;
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeAll(null); });
+  window.addEventListener('resize', function () { closeAll(null); });
+})();
+
+// Ctrl／⌘＋Enter 在貼上框直接開始（UX24）；按鈕加提示與 aria-keyshortcuts
+(function () {
+  var ta = document.getElementById('paste-area'), btn = document.getElementById('analyze-btn');
+  if (!ta) return;
+  ta.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); doAnalyze(); }
+  });
+  if (btn) { btn.setAttribute('aria-keyshortcuts', 'Control+Enter Meta+Enter'); btn.title = (btn.title ? btn.title + ' ' : '') + '(Ctrl/⌘+Enter)'; }
+})();

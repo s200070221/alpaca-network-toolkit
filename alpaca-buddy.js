@@ -78,6 +78,9 @@
     const r = mascot().getBoundingClientRect();
     return { right: Math.max(8, window.innerWidth - r.right), bottom: Math.max(8, window.innerHeight - r.top + 8), left: r.left, top: r.top, w: r.width };
   }
+  // 手機寬度（UX21）：值勤不主動跳泡泡（會蓋住結論卡的按鈕），改在口袋按鈕顯示 ⛑️ 件數，點開面板看「先看哪一項」與前往
+  const NARROW_MAX = 720;
+  const narrow = () => window.innerWidth <= NARROW_MAX;
   function pocketBtn() {
     let b = $('alpaca-pocket-btn');
     if (!b) {
@@ -88,9 +91,10 @@
     }
     const a = anchor();
     css(b, { right: (window.innerWidth - a.left + 4) + 'px', top: (a.top + 2) + 'px' });
-    b.textContent = '🎒' + (unread ? ' ' + unread : '');
-    b.title = t('open', curLang());
-    b.setAttribute('aria-label', t('open', curLang()));
+    const dutyMark = duty && narrow() ? '⛑️' + duty.n + ' ' : '';
+    b.textContent = dutyMark + '🎒' + (unread ? ' ' + unread : '');
+    b.title = dutyMark ? dutyText(duty.n, duty.top, curLang()) : t('open', curLang());
+    b.setAttribute('aria-label', b.title);
     return b;
   }
   function helmet() {
@@ -174,6 +178,12 @@
     const d = p.querySelector('[data-buddy="duty"]');
     d.textContent = duty ? dutyText(duty.n, duty.top, lang) : '';
     d.style.display = duty ? '' : 'none';
+    if (duty && duty.go) {
+      const g = document.createElement('button'); g.type = 'button'; g.setAttribute('data-buddy-go', ''); g.textContent = t('go', lang);
+      g.style.cssText = 'margin-left:6px;cursor:pointer';
+      g.addEventListener('click', () => { p.style.display = 'none'; duty.go(); });
+      d.appendChild(g);
+    }
     const list = p.querySelector('[data-buddy="list"]');
     list.textContent = '';
     if (!pocket.length) { const e = document.createElement('div'); e.style.opacity = '.7'; e.textContent = t('empty', lang); list.appendChild(e); }
@@ -216,7 +226,7 @@
     if (!hasDoc || !ready) return;  // 載入完成前只記狀態，start() 再補畫
     helmet(); pocketBtn();
     const key = duty ? duty.n + '|' + duty.top : '';
-    if (duty && key !== dutyShownKey) { dutyShownKey = key; bubble(dutyText(duty.n, duty.top, curLang()), 9000, duty.go); }
+    if (duty && key !== dutyShownKey) { dutyShownKey = key; if (!narrow()) bubble(dutyText(duty.n, duty.top, curLang()), 9000, duty.go); }
     if (!duty) dutyShownKey = '';
     if ($('alpaca-panel') && $('alpaca-panel').style.display !== 'none') renderPanel();
   }
@@ -254,7 +264,7 @@
     else window.addEventListener('load', () => setTimeout(start, 300));
     window.addEventListener('resize', refresh);
   }
-  const api = { say, setDuty, refresh, togglePanel, pocket: () => pocket.map(x => x.text), classify, dutyText, TEXT, LANGS, POCKET_MAX, ACTIVE_MS,
+  const api = { say, setDuty, refresh, togglePanel, pocket: () => pocket.map(x => x.text), classify, dutyText, TEXT, LANGS, POCKET_MAX, ACTIVE_MS, NARROW_MAX,
     _reset() { pendingBubble = null; pocket.length = 0; unread = 0; duty = null; dutyShownKey = ''; lastAct = 0; } };
   if (typeof window !== 'undefined') window.AlpacaBuddy = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

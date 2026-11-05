@@ -5942,3 +5942,13 @@ document.addEventListener('click',e=>{
 document.addEventListener('toggle',e=>{ if(e.target&&e.target.id==='swconv-details'&&e.target.open)swcRender(); },true);
 window.swcRender=swcRender;
 window.swcReportHtml=swcReportHtml;
+
+// Ctrl／⌘＋Enter 在貼上框直接開始（UX24）；按鈕加提示與 aria-keyshortcuts
+(function () {
+  var ta = document.getElementById('import-text'), btn = document.querySelector('button[onclick="parseAndImport()"]');
+  if (!ta) return;
+  ta.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); parseAndImport(); }
+  });
+  if (btn) { btn.setAttribute('aria-keyshortcuts', 'Control+Enter Meta+Enter'); btn.title = (btn.title ? btn.title + ' ' : '') + '(Ctrl/⌘+Enter)'; }
+})();

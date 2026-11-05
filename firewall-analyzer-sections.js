@@ -1343,8 +1343,8 @@ function buildFwSummaryHtml(st){
     +`<div style="margin-top:4px">${esc(tr('sum.counts').replace('{pol}',cnt('policies')).replace('{intf}',cnt('interfaces')).replace('{nat}',cnt('nat')).replace('{vpn}',cnt('vpn')))}</div></div>`;
   const btn=(fn,k)=>`<button class="btn btn-ghost btn-sm" onclick="${fn}">${esc(tr(k))}</button>`;
   o+=`<div style="${box}"><div style="font-weight:600;font-size:12px;margin-bottom:6px">${esc(tr('sum.next'))}</div><div style="display:flex;flex-wrap:wrap;gap:6px">`
-    +btn("showSection('audit')",'sum.btn_audit')+btn("doExport('html-report')",'sum.btn_report')+btn("showSection('query')",'sum.btn_query')
-    +btn("showView('convert')",'sum.btn_convert')+btn('window._sendToAnonymizer()','sum.btn_share')+`</div></div>`;
+    // 檢視稽核、匯出報告、去識別化分享已在上方結果列，這裡只放結果列沒有的（UX20）
+    +btn("showSection('query')",'sum.btn_query')+btn("showView('convert')",'sum.btn_convert')+`</div></div>`;
   return o+'</div>';
 }
 window.buildFwSummaryHtml=buildFwSummaryHtml;

@@ -486,6 +486,14 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 .tour-title{font-weight:600;color:var(--accent)}
 .tour-steps{margin:4px 0 8px;padding-left:22px}
 .tour-ok{font-size:12px;padding:3px 10px;border:1px solid var(--border);border-radius:5px;background:none;color:var(--text);cursor:pointer}
+.tb-menu{position:relative}
+.tb-menu>summary{list-style:none;cursor:pointer;user-select:none}
+.tb-menu>summary::-webkit-details-marker{display:none}
+.tb-menu-panel{position:fixed;z-index:2100;min-width:240px;max-width:min(340px,calc(100vw - 16px));background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.25);padding:4px}
+.tb-menu-panel button{display:block;width:100%;text-align:left;background:none;border:0;border-radius:6px;padding:7px 10px;cursor:pointer;color:var(--text)}
+.tb-menu-panel button:hover,.tb-menu-panel button:focus-visible{background:var(--surface2)}
+.tb-menu-panel b{display:block;font-size:12px;font-weight:600}
+.tb-menu-panel small{display:block;font-size:11px;color:var(--text-dim);margin-top:2px}
 </style>
 <script src="toolkit-version.js"></script>
 <script src="payload-sniff.js"></script>
@@ -558,10 +566,15 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
     </div>
     <div class="topbar-actions" id="tb-actions" style="display:none">
       <button class="btn btn-ghost btn-sm" onclick="showView('perms')">🔑 <span data-i18n="btn.perms">權限</span></button>
-      <button class="btn btn-ghost btn-sm" onclick="showView('convert')">🔄 <span data-i18n="btn.convert">轉換</span></button>
-      <button class="btn btn-ghost btn-sm" onclick="showView('export')">⬇ <span data-i18n="btn.export">匯出</span></button>
-      <button class="btn btn-ghost btn-sm" onclick="doPrint()">🖨️ <span data-i18n="btn.print">列印/PDF</span></button>
-      <button class="btn btn-ghost btn-sm" onclick="_sendToAnonymizer()">➜ <span data-i18n="btn.sendToAnonymizer">傳送到去識別化工具</span></button>
+      <!-- 匯出與送到其他工具整併成兩個選單（UX19），與交換器分析相同 -->
+      <details class="tb-menu"><summary class="btn btn-ghost btn-sm" data-i18n="menu.export">⬇ 匯出 ▾</summary><div class="tb-menu-panel">
+        <button type="button" onclick="showView('export')"><b>⬇ <span data-i18n="btn.export">匯出</span></b><small data-i18n="menu.d_fwexport">HTML 報表、Word、CSV 等格式</small></button>
+        <button type="button" onclick="doPrint()"><b>🖨️ <span data-i18n="btn.print">列印/PDF</span></b><small data-i18n="menu.d_print">只列印目前這一頁</small></button>
+      </div></details>
+      <details class="tb-menu"><summary class="btn btn-ghost btn-sm" data-i18n="menu.send">➜ 送到其他工具 ▾</summary><div class="tb-menu-panel">
+        <button type="button" onclick="showView('convert')"><b>🔄 <span data-i18n="btn.convert">轉換</span></b><small data-i18n="menu.d_conv">換設備時，轉成其他廠牌的設定</small></button>
+        <button type="button" onclick="_sendToAnonymizer()"><b>➜ <span data-i18n="btn.sendToAnonymizer">傳送到去識別化工具</span></b><small data-i18n="menu.d_anon">遮蔽 IP、帳號後再交給廠商</small></button>
+      </div></details>
       <button class="btn btn-ghost btn-sm" onclick="resetAll()">✕ <span data-i18n="btn.reset">清除</span></button>
     </div>
   </header>
