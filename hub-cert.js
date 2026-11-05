@@ -44,7 +44,7 @@
         + `<li>${esc(tr('cert.nix_s2'))}${cmdBlock('cd ~/Downloads && bash fetch_cert_chain.sh ' + t.join(' '))}</li>`
         + `<li>${esc(tr('cert.nix_s3'))}</li></ol>`
         + (st.os === 'mac' ? `<p class="cert-hint">${esc(tr('cert.mac_note'))}</p>` : '')
-        + `<p class="cert-hint">${esc(tr('cert.alt_openssl'))}</p>${cmdBlock(`openssl s_client -connect ${first}:443 -servername ${first} -showcerts </dev/null > ${first}.txt`)}`;
+        + `<p class="cert-hint">${esc(tr('cert.alt_openssl'))}</p>${cmdBlock(`openssl s_client -connect ${first}:443 -servername ${first} -showcerts </dev/null | sed '/SSL-Session:/,$d' > ${first}.txt`)}`;
     }
     body.innerHTML = h + `<p class="cert-hint">🔒 ${esc(tr('cert.privacy'))}</p>`;
   }
@@ -177,7 +177,8 @@
     const C = window.CertCheck, texts = [];
     for (const f of files) {
       const buf = new Uint8Array(await f.arrayBuffer());
-      texts.push(C && C.looksLikeDer(buf) ? C.derToPem(buf) : new TextDecoder('utf-8').decode(buf));
+      const isCert = C && C.looksLikeDer(buf) && (() => { try { C.parseCert(buf); return true; } catch (e) { return false; } })();
+      texts.push(isCert ? C.derToPem(buf) : new TextDecoder('utf-8').decode(buf));
     }
     return texts;
   }

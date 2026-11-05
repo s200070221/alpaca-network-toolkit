@@ -295,6 +295,7 @@
       let o;
       try { o = JSON.parse(t); } catch (e) { return { kind, entries, error: 'json' }; }
       for (const h of Array.isArray(o.hosts) ? o.hosts : []) {
+        if (!h || typeof h !== 'object') continue;
         const chain = [];
         for (const c of Array.isArray(h.chain) ? h.chain : []) { try { chain.push(b64ToBytes(c)); } catch (e) { /* 略過 */ } }
         entries.push({
@@ -319,9 +320,18 @@
   }
 
   // ── 主機名稱比對（RFC 6125：萬用字元只在最左一層、只代表一層）──
+  // IPv6 一律展開成 8 段、去掉前導 0 再比較（::1 與 0:0:0:0:0:0:0:1 相同）
+  function normIp6(h) {
+    const parts = String(h).toLowerCase().split('::');
+    if (parts.length > 2) return h;
+    const a = parts[0] ? parts[0].split(':') : [], b = parts.length === 2 && parts[1] ? parts[1].split(':') : [];
+    const fill = parts.length === 2 ? Array(Math.max(0, 8 - a.length - b.length)).fill('0') : [];
+    return a.concat(fill, b).map(x => (parseInt(x, 16) || 0).toString(16)).join(':');
+  }
   function hostMatches(cert, host) {
     if (!host) return null;
-    if (/^[\d.]+$|:/.test(host)) return (cert.sanIp || []).includes(host);
+    if (host.includes(':')) return (cert.sanIp || []).map(normIp6).includes(normIp6(host));
+    if (/^[\d.]+$/.test(host)) return (cert.sanIp || []).includes(host);
     for (const d of cert.sanDns || []) {
       if (d === host) return true;
       if (d.startsWith('*.')) {

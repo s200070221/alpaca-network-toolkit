@@ -66,7 +66,8 @@ async function _readDropEntries(file) {
   // 錯誤檔案（XN53）：PDF、Office、圖片、evtx、pcap、7z 等依檔頭或副檔名先判斷，不嘗試解碼或展開（docx 本身也是 zip）
   const head = buf.subarray(0, 16);
   // 二進位 DER 憑證（XN101）：轉成 PEM 交給憑證檢查，不當成無法辨識的二進位檔
-  if (window.CertCheck && CertCheck.looksLikeDer(buf)) return [{ name: label(file.name), text: CertCheck.derToPem(buf) }];
+  // 只有能解析成憑證才轉換（私鑰、PKCS#7 等其他 DER 物件照原流程判斷，不當成憑證）
+  if (window.CertCheck && CertCheck.looksLikeDer(buf) && (() => { try { CertCheck.parseCert(buf); return true; } catch (e) { return false; } })()) return [{ name: label(file.name), text: CertCheck.derToPem(buf) }];
   // 這一步只看檔頭與副檔名（text 給非空白的佔位字，讓 empty／binary 判斷留到解碼之後）
   const pre = window.FileHowto ? FileHowto.classify({ name: file.name, head, text: 'x' }) : 'text';
   if (pre !== 'text' && pre !== 'binary') return [{ name: label(file.name), text: '', head, kind: pre }];

@@ -92,7 +92,8 @@ for t in "${TARGETS[@]}"; do
       r="$(connect "$host" "$port" "-$f" ${extra[@]+"${extra[@]}"})"
       if handshake_ok "$r"; then echo "#tls $v yes"; else echo "#tls $v no"; fi
     done
-    printf '%s\n' "$main"
+    # SSL-Session 區段含 Master-Key／Session-ID／Resumption PSK 等連線密鑰，不寫進輸出檔
+    printf '%s\n' "$main" | sed '/SSL-Session:/,$d'
     echo
   } >> "$OUT"
 done
