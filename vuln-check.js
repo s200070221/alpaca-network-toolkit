@@ -5,7 +5,8 @@
 // 版本格式（各取第一個符合的片段，比對時缺少的段視為 0）：
 //   fortios 7.2.5（build 不比）、panos 10.2.9-h1、asa 9.18(4)22、ftd 7.2.5.1、junos 21.4R3-S5.3、
 //   ios 15.2(7)E8（train 字母不同視為無法比較）、iosxe 17.9.4a、nxos 9.3(10)／10.2(5)M、eos 4.30.2F（train 字母不比）、aoscx 10.11.1020、
-//   routeros 7.23.3（beta／rc 視為無法比較）、os10 10.5.6.13（Dell SmartFabric OS10）
+//   routeros 7.23.3（beta／rc 視為無法比較）、os10 10.5.6.13（Dell SmartFabric OS10）、
+//   sonicos 6.5.4.14-109n／7.0.1-5035（點分補足 4 段＋build，結尾字母不比；範圍的 - 前後須有空白，以免與 build 混淆）
 // affected：以 ; 或 | 分隔多段，任一段符合即受影響。每段可寫
 //   「7.2.0-7.2.6」（含頭尾；右側須以數字開頭，因此 10.2.9-h1、21.4R3-S5 不會被當成範圍）、
 //   「<7.4.3」「<=7.0.13」「>=7.4.0 <7.4.3」（空白分隔的條件須同時成立）、「7.2.*」（前綴）或單一版本（相等）
@@ -17,9 +18,9 @@ const VulnCheck = (function () {
     [/^(junos|juniper|srx|junos os)$/, 'junos'], [/^(cisco )?ios$/, 'ios'], [/^(cisco )?ios[- ]?xe$/, 'iosxe'],
     [/^(cisco )?nx-?os$/, 'nxos'], [/^(arista|eos|arista eos)$/, 'eos'], [/^(aruba ?cx|aos-?cx|arubaos-?cx)$/, 'aoscx'],
     [/^(mikrotik|routeros|mikrotik routeros)$/, 'routeros'], [/^(dell ?os10|os10|dell-os10|smartfabric os10)$/, 'os10'],
-    [/^(check ?point|gaia|check ?point gaia)$/, 'gaia'],
+    [/^(check ?point|gaia|check ?point gaia)$/, 'gaia'], [/^(sonicwall|sonicos|sonicwall sonicos)$/, 'sonicos'],
   ];
-  const SCHEMES = ['fortios', 'panos', 'asa', 'ftd', 'junos', 'ios', 'iosxe', 'nxos', 'eos', 'aoscx', 'routeros', 'os10', 'gaia'];
+  const SCHEMES = ['fortios', 'panos', 'asa', 'ftd', 'junos', 'ios', 'iosxe', 'nxos', 'eos', 'aoscx', 'routeros', 'os10', 'gaia', 'sonicos'];
   function scheme(v) {
     const s = String(v || '').trim().toLowerCase();
     if (SCHEMES.includes(s)) return s;
@@ -32,7 +33,7 @@ const VulnCheck = (function () {
     // Dell OS9（FTOS，9.x）與 OS10 是不同作業系統，交換器 parser 同樣標 dell-os10，OS10 公告不適用（XN58）
     if (v === 'dell-os10' && /^\s*[1-9]\./.test(String(version || ''))) return '';
     const map = { FortiGate: 'fortios', PaloAlto: 'panos', 'Cisco ASA': 'asa', 'Cisco FTD': 'ftd', Juniper: 'junos', juniper: 'junos',
-      nxos: 'nxos', arista: 'eos', aruba: 'aoscx', MikroTik: 'routeros', routeros: 'routeros', 'dell-os10': 'os10', CheckPoint: 'gaia' };
+      nxos: 'nxos', arista: 'eos', aruba: 'aoscx', MikroTik: 'routeros', routeros: 'routeros', 'dell-os10': 'os10', CheckPoint: 'gaia', SonicWall: 'sonicos' };
     if (map[v]) return map[v];
     if (v === 'cisco') {
       const s = String(version || '');
@@ -61,6 +62,10 @@ const VulnCheck = (function () {
       case 'gaia': m = s.match(/^R?(\d+)(?:\.(\d+))?(?:\s*(?:with\s+)?(?:jumbo\s*(?:hotfix)?|jhf|hf)?\s*(?:take|t)?\s*(\d+))?\s*$/i);
         if (!m || (m[3] != null && !/take|jhf|jumbo|\bt\s*\d|hf/i.test(s))) return null;
         return { nums: [+m[1], +(m[2] || 0)], take: m[3] != null ? +m[3] : null };
+      // SonicOS（XN26）：Gen5 5.9.2.14-12o、Gen6 6.5.4.14-109n、Gen7 7.0.1-5035；點分補足 4 段再接 build 號，結尾字母（n／o／p）不比
+      case 'sonicos': m = s.match(/(\d+(?:\.\d+)+)(?:-(\d+)[a-z]*)?/i);
+        if (!m) return null;
+        { const d = m[1].split('.').map(Number).slice(0, 4); while (d.length < 4) d.push(0); return { nums: d.concat(+(m[2] || 0)) }; }
       default: return null;
     }
   }
@@ -86,7 +91,8 @@ const VulnCheck = (function () {
     }
     const star = p.match(/^([\d.]+)\.\*$/);
     if (star) { const pre = star[1].split('.').map(Number); return pre.every((x, i) => v.nums[i] === x); }
-    const rg = p.match(/^(.+?)\s*-\s*(\d.*)$/);
+    // SonicOS 版本本身含 -build，範圍須寫成「a - b」（前後空白）
+    const rg = p.match(sch === 'sonicos' ? /^(.+?)\s+-\s+(\d.*)$/ : /^(.+?)\s*-\s*(\d.*)$/);
     if (rg) { const lo = parse(sch, rg[1]), hi = parse(sch, rg[2]); const a = cmp(v, lo), b = cmp(v, hi); return a === null || b === null || !lo || !hi ? null : a >= 0 && b <= 0; }
     const conds = p.split(/\s+(?=[<>=])/).filter(Boolean);
     let ok = true;
