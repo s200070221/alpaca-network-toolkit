@@ -3,8 +3,23 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.04.1';
+  const TOOLKIT_VERSION = '2026.11.05';
   const CHANGELOG = [
+    {
+      version: '2026.11.05',
+      items: {
+        zhTW: [
+          '更好上手：log 分析完匯入區自動收合、問題清單直接出現在第一個畫面；大檔解析時顯示已解析行數',
+          '交換器分析與防火牆頂端按鈕收成「匯出」「送到其他工具」兩個選單並附用途說明；貼上框按 Ctrl+Enter（⌘+Enter）直接分析',
+          '去識別化提示還有幾行描述／備註未遮蔽，可一鍵遮蔽並重做；手機上羊駝不再跳出泡泡遮住按鈕；產生器的產生按鈕固定在底部',
+        ],
+        en: [
+          'Easier to use: after analysis the log importer collapses so the issue list shows on the first screen; large files show how many lines have been parsed',
+          'Switch analyzer and firewall top bars group Export and Send-to-tool into two menus with short descriptions; press Ctrl+Enter (⌘+Enter) in the paste box to analyze',
+          'Anonymizer warns how many description/remark lines are still unmasked and can mask them in one click; on phones the alpaca no longer pops bubbles over buttons; the generator keeps its Generate button pinned at the bottom',
+        ],
+      },
+    },
     {
       version: '2026.11.04.1',
       items: {
