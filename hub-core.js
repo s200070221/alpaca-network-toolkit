@@ -175,11 +175,13 @@ async function checkFiles() {
     renderCards();
     return;
   }
+  // 只有伺服器明確回 404（重試一次仍是）才算缺檔；網路中斷、部署更新中、伺服器不支援 HEAD 等暫時狀況不當成缺檔，
+  // 避免 GitHub Pages 剛部署或連線不穩時整排卡片誤顯示「找不到工具檔案」
+  const status = async href => { try { return (await fetch(href, { method: 'HEAD', cache: 'no-store' })).status; } catch { return 0; } };
   await Promise.all(TOOLS.map(async t => {
-    try {
-      const r = await fetch(t.href, { method: 'HEAD' });
-      if (!r.ok) _missing.add(t.id);
-    } catch { _missing.add(t.id); }
+    if (await status(t.href) !== 404) return;
+    await new Promise(r => setTimeout(r, 1500));
+    if (await status(t.href) === 404) _missing.add(t.id);
   }));
   renderCards();
   document.getElementById('h-notice').style.display = _missing.size === 0 ? 'none' : '';
