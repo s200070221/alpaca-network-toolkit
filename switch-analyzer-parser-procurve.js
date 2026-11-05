@@ -145,7 +145,7 @@ function parseProCurve(cfg) {
     // ip route <dest-ip-addr>/<mask-length> <next-hop-ip-addr|vlan <id>|reject|blackhole> [metric <n>] [distance <n>]
     // 2026-07-22 對外查證真實 HPE 5412zl（J9851A，KB.16.05 韌體）匯出檔後修正：上述 CIDR-only
     // 語法並不完整，真機實際輸出是傳統「dest mask gateway」點分遮罩三段式（如
-    // "ip route 0.0.0.0 0.0.0.0 198.18.48.253"），可能因韌體/型號差異兩種格式併存，
+    // "ip route 0.0.0.0 0.0.0.0 198.51.100.254"），可能因韌體/型號差異兩種格式併存，
     // 故同時支援兩種寫法，避免真實匯出檔被漏解析
     // 修正既有 bug：其餘所有廠牌的路由物件欄位名稱皆為 gw／gwIsInterface（renderRoutes()
     // 共用渲染邏輯讀的就是這兩個名稱），parseProCurve() 原本用 gateway（無 gwIsInterface），

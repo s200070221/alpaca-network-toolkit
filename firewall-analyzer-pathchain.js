@@ -526,5 +526,80 @@ const FwPath = (function () {
     }
     return done('loop', { device: devices[cur].name, count: MAX_HOPS });
   }
-  return { trace, lookupRoute, egressIface, intfLabel, ifaceByIp, findStart, parseRouteTable, parseLinkMap, findSourceNat, snatSupported, MAX_HOPS };
+  // ── 規則與實測不符時的可能原因（XN102）──────────────────────────────────
+  // 只依設定看得到的事實判斷，回傳 [{id, p}]；畫面一律寫成「可能」，上游路由器與用戶端路由表看不到。
+  // q：{src, dst, vdom}；res：_runPolicyQuery() 的結果（可為 null）
+  function mismatchHints(parsed, q, res) {
+    const out = [];
+    const s = ipInt(q && q.src), d = ipInt(q && q.dst);
+    if (!parsed || s === null || d === null) return out;
+    const vd = q.vdom && q.vdom !== '__all__' ? q.vdom : '';
+    const ifs = (parsed.interfaces || []).filter(i => !vd || !i._vdom || i._vdom === vd);
+    // 來源所在的直連介面（取最長前綴）
+    let srcIf = null, srcLen = -1;
+    ifs.forEach(i => ifaceAddrs(i).forEach(a => {
+      if (a.len < 32 && a.len > srcLen && inNet(s, a.ip, a.len)) { srcIf = { iface: i, gw: intIp(a.ip) }; srcLen = a.len; }
+    }));
+    // 目的是防火牆自己的介面位址（含次要位址）＝本機管理流量
+    const dstIf = ifs.find(i => ifaceAddrs(i).some(a => a.ip === d)) || null;
+    const route = dstIf ? null : lookupRoute(parsed, q.dst, vd);
+    const dstOut = dstIf || (route && !route.blackhole ? route.iface : null);
+    const accepted = !!res && res.action === 'accept';
+    // 來源與防火牆同網段、目的在另一個介面：來源主機的預設閘道若不是這台，封包不會進來
+    if (srcIf && dstOut && !dstOut._pseudo && dstOut !== srcIf.iface)
+      out.push({ id: 'src-onlink', p: { src: q.src, dst: q.dst, ifname: srcIf.iface.name, gw: srcIf.gw } });
+    if (dstIf) {
+      // FortiGate 管理者 trusthost：全部帳號涵蓋來源／部分帳號／沒有帳號（未設 trusthost＝任何來源）
+      let trust = '';
+      const admins = (parsed.users || []).filter(u => u.type === 'admin' && u.status !== 'disable');
+      if (/fortigate/i.test(parsed.vendor || '') && admins.length) {
+        const cover = u => !(u.trusthosts && u.trusthosts.length) || u.trusthosts.some(t => { const p = parseDst(t); return !!p && inNet(s, p.net, p.len); });
+        const n = admins.filter(cover).length;
+        trust = n === admins.length ? 'all' : n ? 'some' : 'none';
+      }
+      const acc = String(dstIf.allowaccess || '').trim();
+      out.push({ id: 'dst-local', p: { ifname: dstIf.name, ip: q.dst, access: acc && acc !== '-' ? acc : '', trust } });
+    }
+    if (accepted && !dstIf && !route) out.push({ id: 'no-route', p: { dst: q.dst } });
+    // 依路由推得的進入介面（往來源的路由出口）與出口介面（往目的）
+    const back = lookupRoute(parsed, q.src, vd);
+    const inIf = back && !back.blackhole && back.iface && !back.iface._pseudo ? back.iface : null;
+    const ifNames = i => [i.name, i.nameif, i.zone, i._zone, /juniper/i.test(parsed.vendor || '') ? i._vdom : ''].filter(Boolean).map(x => String(x).toLowerCase());
+    if (q.srcIntf) {
+      // 使用者指定了進入介面：往來源的回程路由走別的介面＝回程不對稱，可能被反向路徑檢查（RPF）丟棄
+      if (accepted && inIf && !ifNames(inIf).includes(String(q.srcIntf).trim().toLowerCase()))
+        out.push({ id: 'asym-return', p: { src: q.src, via: inIf.name, given: q.srcIntf } });
+    } else if (inIf && dstOut && !dstOut._pseudo && typeof _runPolicyQuery === 'function') {
+      // 沒指定介面時查詢會比對所有介面的規則；改用依路由推得的進入／出口介面重新比對，結果不同就列出
+      const sIn = intfLabel(parsed, inIf, 'srcIntf'), sOut = intfLabel(parsed, dstOut, 'dstIntf');
+      const re = _runPolicyQuery(q.src, q.dst, q.proto || 'any', q.port || '', vd || '__all__', parsed, { srcIntf: sIn, dstIntf: sOut, newOnly: q.newOnly !== false });
+      if (re && !re.error) {
+        const a = res && res.matched, b = re.matched;
+        if ((a || null) !== (b || null) || (res && res.action) !== re.action)
+          out.push({ id: 'intf-rematch', p: { inIf: sIn, outIf: sOut, action: re.action, rule: b ? (b.name || '') : '', ruleId: b ? String(b.id) : '' } });
+      }
+    }
+    // FortiGate 多 VDOM：來源與目的的介面分屬不同 VDOM
+    if (!vd && srcIf && dstOut && srcIf.iface._vdom && dstOut._vdom && srcIf.iface._vdom !== dstOut._vdom)
+      out.push({ id: 'vdom-split', p: { a: srcIf.iface._vdom, b: dstOut._vdom } });
+    return out;
+  }
+
+  // 規則的目的物件是否全部是防火牆自己的介面位址（單一位址物件或起訖相同的範圍）：這類流量為本機管理流量，轉送規則不計數（XN102）
+  function policyDstLocal(parsed, pol) {
+    const names = String((pol && pol.dstAddr) || '').split(/\s*,\s*/).map(x => x.trim()).filter(Boolean);
+    if (!names.length) return false;
+    const ifs = (parsed.interfaces || []).filter(i => !pol._vdom || !i._vdom || i._vdom === pol._vdom);
+    const local = new Set(ifs.flatMap(i => ifaceAddrs(i).map(a => a.ip)));
+    return names.every(n => {
+      const o = (parsed.addresses || []).find(a => a.name === n && (!pol._vdom || !a._vdom || a._vdom === pol._vdom));
+      if (!o) return false;
+      let ip = null;
+      if (o.type === 'iprange') { if (o.startIp && o.startIp === o.endIp) ip = ipInt(o.startIp); }
+      else { const p = parseDst(o.subnet || o.value || ''); if (p && p.len === 32) ip = p.net; }
+      return ip !== null && local.has(ip);
+    });
+  }
+
+  return { trace, lookupRoute, egressIface, intfLabel, ifaceByIp, findStart, parseRouteTable, parseLinkMap, findSourceNat, snatSupported, mismatchHints, policyDstLocal, MAX_HOPS };
 })();

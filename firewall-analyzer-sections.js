@@ -777,13 +777,59 @@ function buildAllowRequestHtml(qvdoms){
 window.buildAllowRequestHtml=buildAllowRequestHtml;
 // 批次查詢結果表格（2026-09-29 新增）：results 為 runBatchPolicyQuery() 輸出，errors 為
 // parseBatchQueryCSV() 無法解析的列；純字串組裝，DOM 寫入由 app.js _runBatchQuery() 負責
+// 規則與實測不符時的可能原因與驗證指令（XN102）：提示由 FwPath.mismatchHints() 依設定推得，指令只放各廠牌確定存在的寫法；
+// {src}{dst}{port}{inIf}{outIf}{gw}{vdom} 為佔位字，查不到時留下 <…> 讓使用者自行填入
+const MH_CMDS={
+  FortiGate:[
+    "diagnose sniffer packet any 'host {src} and host {dst}' 4 20",
+    "diagnose debug reset\ndiagnose debug flow filter clear\ndiagnose debug flow filter saddr {src}\ndiagnose debug flow filter daddr {dst}\ndiagnose debug flow show function-name enable\ndiagnose debug flow trace start 20\ndiagnose debug enable\n# (reproduce the connection here)\ndiagnose debug disable"],
+  'Cisco ASA':["packet-tracer input {inIf} tcp {src} 12345 {dst} {port} detailed","capture mhcap match ip host {src} host {dst}\nshow capture mhcap\nno capture mhcap"],
+  'Cisco FTD':["packet-tracer input {inIf} tcp {src} 12345 {dst} {port} detailed","capture mhcap match ip host {src} host {dst}\nshow capture mhcap\nno capture mhcap"],
+  PaloAlto:["test security-policy-match from {inIf} to {outIf} source {src} destination {dst} protocol 6 destination-port {port}"],
+  Juniper:["show security match-policies from-zone {inIf} to-zone {outIf} source-ip {src} destination-ip {dst} source-port 1024 destination-port {port} protocol tcp"],
+};
+function _mhFill(t, v){ return t.replace(/\{(\w+)\}/g,(m,k)=>v[k]?v[k]:'<'+k+'>'); }
+function _mhResult(a){ return tr(a==='accept'?'mh.result_accept':a==='deny'?'mh.result_deny':'mh.result_implicit'); }
+function _mhText(h){
+  const p=h.p, f=k=>tr(k).replace(/\{(\w+)\}/g,(m,n)=>p[n]==null?'':p[n]);
+  if(h.id==='dst-local'){
+    const acc=p.access?p.access:tr('mh.access_none');
+    return tr('mh.dst-local').replace('{ip}',p.ip).replace('{ifname}',p.ifname).replace('{access}',acc)+(p.trust?' '+tr('mh.trust_'+p.trust):'');
+  }
+  if(h.id==='intf-rematch') return tr('mh.intf-rematch').replace('{inIf}',p.inIf).replace('{outIf}',p.outIf).replace('{result}',_mhResult(p.action))
+    .replace('{rule}',p.ruleId?tr('mh.rule').replace('{id}',p.ruleId).replace('{name}',p.rule||''):'');
+  return f('mh.'+h.id);
+}
+// q：{src,dst,proto,port,vdom,srcIntf}；opts.seen＝log 看到允許但設定拒絕（批次）；回傳 <details>，沒有可說的就只給通用驗證方式
+function buildMismatchHintsHtml(parsed, q, res, opts){
+  const o=opts||{}, hints=(typeof FwPath!=='undefined'&&FwPath.mismatchHints)?FwPath.mismatchHints(parsed,q,res):[];
+  const rm=hints.find(h=>h.id==='intf-rematch'), on=hints.find(h=>h.id==='src-onlink');
+  const v={src:q.src,dst:q.dst,port:q.port||'443',inIf:(rm&&rm.p.inIf)||q.srcIntf||'',outIf:(rm&&rm.p.outIf)||'',gw:on?on.p.gw:'',vdom:q.vdom&&q.vdom!=='__all__'?q.vdom:''};
+  const items=(o.seen?[`<li>${esc(tr('mh.batch_seen'))}</li>`]:[]).concat(hints.map(h=>`<li>${esc(_mhText(h))}</li>`));
+  if(!items.length) items.push(`<li>${esc(tr('mh.none'))}</li>`);
+  const pre=t=>`<pre class="mono" style="white-space:pre-wrap;margin:4px 0 8px;padding:6px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:11px">${esc(t)}</pre>`;
+  let cmds=`<div style="font-size:12px;margin-top:6px">${esc(tr('mh.cmd_client'))}</div>`+pre(`tracert -d ${q.dst}\ntraceroute -n ${q.dst}`);
+  if(on) cmds+=`<div style="font-size:12px">${esc(tr('mh.cmd_route'))}</div>`+pre(`route -p add ${q.dst} mask 255.255.255.255 ${on.p.gw}\nsudo ip route add ${q.dst}/32 via ${on.p.gw}`);
+  const fw=MH_CMDS[parsed&&parsed.vendor];
+  if(fw){
+    const vpre=parsed.vendor==='FortiGate'&&v.vdom?`config vdom\nedit ${v.vdom}\n`:'';
+    cmds+=`<div style="font-size:12px">${esc(tr('mh.cmd_fw'))}</div>`+fw.map((c,i)=>pre((i===0?vpre:'')+_mhFill(c,v))).join('');
+  }
+  const open=o.open||hints.some(h=>h.id==='src-onlink'||h.id==='dst-local'||h.id==='intf-rematch');
+  return `<details class="mh-box"${o.id?` id="${esc(o.id)}"`:''}${open?' open':''} style="margin:0 0 12px;padding:10px 14px;border:1px dashed var(--orange);border-radius:8px;font-size:12px">`
+    +`<summary style="cursor:pointer;font-weight:600">🧭 ${esc(tr('mh.title'))}</summary>`
+    +`<div style="color:var(--text-dim);margin:6px 0">${esc(tr('mh.note'))}</div><ul style="margin:0 0 6px 18px;line-height:1.7">${items.join('')}</ul>`
+    +`<div style="font-weight:600;margin-top:8px">${esc(tr('mh.cmds'))}</div>${cmds}</details>`;
+}
+
 // CIDR／範圍列部分允許時的結果文字（2026-09-29 新增，FF），批次查詢與跨版本比對共用
 function batchActionLabel(r){
   if(r.action==='mixed') return tr('batch.result_mixed').replace('{accept}',r.acceptCount).replace('{total}',r.combos);
   const lbl={accept:tr('query.result_accept'),deny:tr('query.result_deny'),implicit_deny:tr('query.result_implicit')}[r.action]||r.action;
   return r.combos>1 ? lbl+' ×'+r.combos : lbl;
 }
-function buildBatchQueryResultHtml(results, errors){
+// ctx（選填）：{parsed, vdom}，有的話「預期」不符的列可展開可能原因（XN102）
+function buildBatchQueryResultHtml(results, errors, ctx){
   const nAccept=results.filter(r=>r.action==='accept').length;
   const nMixed=results.filter(r=>r.action==='mixed').length;
   const nMis=results.filter(r=>r.check===false).length;
@@ -800,11 +846,20 @@ function buildBatchQueryResultHtml(results, errors){
   if(hasCount) h+=`<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('batch.log_note'))}</div>`;
   h+=`<button type="button" class="btn btn-ghost btn-sm" style="margin-bottom:8px" onclick="doExport('csv-batch-query')">⬇ ${tr('batch.export')}</button>`;
   h+=`<div class="tbl-wrap"><table class="data-tbl"><thead><tr><th>#</th><th>${tr('query.src_ip')}</th><th>${tr('query.dst_ip')}</th><th>${tr('query.proto')}</th><th>${tr('query.port')}</th><th>${tr('batch.col_result')}</th><th>${tr('batch.col_policy')}</th><th>${hasCount?tr('batch.col_log_expect'):tr('batch.col_expect')}</th>${hasNat?`<th>${tr('batch.col_nat')}</th>`:''}${hasCount?`<th>${tr('batch.col_count')}</th>`:''}<th>${tr('batch.col_check')}</th></tr></thead><tbody>`;
-  results.forEach(r=>{
-    const chk=r.check===null?'':(r.check?`<span style="color:var(--green)">✓ ${tr('batch.check_ok')}</span>`:`<span style="color:var(--red);font-weight:600">✗ ${tr('batch.check_bad')}</span>`);
+  const ncol=9+(hasNat?1:0)+(hasCount?1:0);
+  results.forEach((r,ri)=>{
+    const mhOk=r.check===false&&ctx&&ctx.parsed;
+    const chk=r.check===null?'':(r.check?`<span style="color:var(--green)">✓ ${tr('batch.check_ok')}</span>`:`<span style="color:var(--red);font-weight:600">✗ ${tr('batch.check_bad')}</span>`
+      +(mhOk?` <button type="button" class="btn btn-ghost btn-sm" data-mh-row="${ri}">🧭 ${esc(tr('mh.batch_btn'))}</button>`:''));
     h+=`<tr${r.check===false?' style="background:rgba(239,83,80,.08)"':''}><td class="mono">${r.line}</td><td class="mono">${esc(r.src)}</td><td class="mono">${esc(r.dst)}</td><td>${esc(r.proto==='any'?tr('query.any_proto'):r.proto)}</td><td class="mono">${esc(r.port||'-')}</td>`
       +`<td>${esc(batchActionLabel(r))}${r.hasFqdn?` <span style="font-size:11px;color:var(--orange)">(${tr('query.fqdn_note')})</span>`:''}</td>`
       +`<td class="mono">${esc(r.policyId===''?'-':String(r.policyId))}${r.policyName?' '+esc(r.policyName):''}</td><td>${esc(r.expect||'-')}</td>${hasNat?`<td class="mono">${natCell(r)}</td>`:''}${hasCount?`<td class="mono">${r.count==null?'-':r.count}</td>`:''}<td>${chk}</td></tr>`;
+    if(mhOk){
+      const one=x=>String((x||'').split(/[,\s]+/)[0]||'').replace(/\/32$/,'');
+      const q={src:one((r.srcList&&r.srcList[0])||r.src),dst:one((r.dstList&&r.dstList[0])||r.dst),proto:r.proto,port:r.port,vdom:ctx.vdom,srcIntf:r.srcIntf||''};
+      const res=r.policyRef?{matched:r.policyRef,action:r.action}:{matched:null,action:r.action};
+      h+=`<tr data-mh-for="${ri}" hidden><td colspan="${ncol}">${buildMismatchHintsHtml(ctx.parsed,q,res,{seen:r.expect==='accept',open:true})}</td></tr>`;
+    }
   });
   return h+'</tbody></table></div>';
 }
@@ -1131,6 +1186,7 @@ window.buildWlanSectionHtml=buildWlanSectionHtml;
 window.buildFortiswitchSectionHtml=buildFortiswitchSectionHtml;
 window.buildQuerySectionHtml=buildQuerySectionHtml;
 window.buildBatchQueryResultHtml=buildBatchQueryResultHtml;
+window.buildMismatchHintsHtml=buildMismatchHintsHtml;
 // 批次查詢跨版本比對結果（2026-09-29 新增，FE）：results 為 compareBatchQuery() 輸出；預設只列有改變的列
 function buildBatchDiffResultHtml(results, errors, o){
   o=o||{};

@@ -225,9 +225,12 @@ const App = (() => {
     if (notes.length) h += `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${notes.map(esc).join('<br>')}</div>`;
     const list = r.rows.filter(x => x.kind !== 'ok');
     if (!list.length) return h + `<div style="font-size:12px;color:var(--green)">${esc(tr('hit.none'))}</div>`;
+    // 命中 0 的允許規則（XN102）：目的是防火牆本機位址時標註「本機管理流量不計數」，並提示可能沒經過這台
+    const localOf = x => x.kind === 'zero' && /^(accept|allow)$/i.test(x.action || '') && typeof FwPath !== 'undefined' && FwPath.policyDstLocal(PARSED, x._pol);
     h += `<table class="data-tbl"><thead><tr><th>ID</th><th>${esc(tr('hit.col_name'))}</th>${PARSED._isMultiVdom ? '<th>VDOM</th>' : ''}<th>${esc(tr('hit.col_action'))}</th><th>${esc(tr('hit.col_hits'))}</th><th>${esc(tr('hit.col_last'))}</th><th>${esc(tr('hit.col_result'))}</th></tr></thead><tbody>` +
-      list.map(x => `<tr><td>${esc(x.id)}</td><td>${esc(x.name)}</td>${PARSED._isMultiVdom ? `<td>${esc(x.vdom)}</td>` : ''}<td>${esc(x.action)}</td><td>${x.hits}</td><td>${esc(fmt(x.lastUsed))}</td><td>${pill(tr(x.kind === 'zero' ? 'hit.kind_zero' : 'hit.kind_stale').replace('{days}', _fwHit.days), x.kind === 'zero' ? 'p-warn' : 'p-info')}</td></tr>`).join('') +
+      list.map(x => `<tr><td>${esc(x.id)}</td><td>${esc(x.name)}${localOf(x) ? ` <span style="font-size:11px;color:var(--orange)">(${esc(tr('mh.hit_local'))})</span>` : ''}</td>${PARSED._isMultiVdom ? `<td>${esc(x.vdom)}</td>` : ''}<td>${esc(x.action)}</td><td>${x.hits}</td><td>${esc(fmt(x.lastUsed))}</td><td>${pill(tr(x.kind === 'zero' ? 'hit.kind_zero' : 'hit.kind_stale').replace('{days}', _fwHit.days), x.kind === 'zero' ? 'p-warn' : 'p-info')}</td></tr>`).join('') +
       '</tbody></table>' +
+      (list.some(x => x.kind === 'zero') ? `<div style="font-size:11px;color:var(--text-dim);margin-top:4px">${esc(tr('mh.hit_note'))}</div>` : '') +
       `<div style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="window._fwHitCsv()">${esc(tr('hit.csv_btn'))}</button></div>`;
     return h;
   }
@@ -2941,13 +2944,20 @@ function onParsed(){
     const shadow = compareShadowing(analyzeRuleShadowing(PARSED.policies || [], PARSED.addresses), analyzeRuleShadowing(sim.parsed.policies, PARSED.addresses));
     el.innerHTML = buildWhatIfResultHtml(LAST_WHATIF, errors, shadow, rows.length);
   };
+  // 批次查詢「預期」不符列的可能原因（XN102）：事件代理展開／收合
+  document.addEventListener('click', e => {
+    const b = e.target.closest && e.target.closest('[data-mh-row]');
+    if (!b) return;
+    const row = document.querySelector('#batch-result tr[data-mh-for="' + String(b.dataset.mhRow).replace(/\D/g, '') + '"]');
+    if (row) row.hidden = !row.hidden;
+  });
   window._runBatchQuery = function() {
     const el = $('batch-result'); if (!el) return;
     const { rows, errors } = parseBatchQueryCSV(($('batch-input')||{}).value||'');
     const vdom = $('q-vdom') ? $('q-vdom').value : '__all__';
     LAST_BATCH_RESULTS = runBatchPolicyQuery(rows, vdom, PARSED, _batchOpts());
     LAST_TIGHTEN = analyzeObservedTraffic(LAST_BATCH_RESULTS, PARSED);
-    el.innerHTML = buildBatchQueryResultHtml(LAST_BATCH_RESULTS, errors);
+    el.innerHTML = buildBatchQueryResultHtml(LAST_BATCH_RESULTS, errors, { parsed: PARSED, vdom });
     const tg = $('tighten-result'); if (tg) tg.innerHTML = buildObservedTrafficHtml(LAST_TIGHTEN, PARSED.vendor === 'FortiGate');
   };
   window._fwTightenScript = function() {
@@ -3153,7 +3163,10 @@ function onParsed(){
       return mainRow + resolvedRow;
     }).join('');
 
-    el.innerHTML = natHtml + _pwHtml + banner + `
+    // 規則與實測不符時的可能原因（XN102）：依設定推得，目的用轉換後的位址
+    const _qo = _queryOpts();
+    const mhHtml = window.buildMismatchHintsHtml ? buildMismatchHintsHtml(PARSED, { src: src.trim(), dst: _pwDst, proto, port: qPort, vdom, srcIntf: _qo.srcIntf, newOnly: _qo.newOnly }, res, { id: 'query-hints' }) : '';
+    el.innerHTML = natHtml + _pwHtml + banner + mhHtml + `
       <details open>
         <summary style="cursor:pointer;font-weight:600;margin-bottom:8px;font-size:13px;user-select:none">
           ${tr('query.trace_title')} (${res.trace.length})
