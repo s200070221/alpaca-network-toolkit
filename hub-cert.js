@@ -46,7 +46,7 @@
         + (st.os === 'mac' ? `<p class="cert-hint">${esc(tr('cert.mac_note'))}</p>` : '')
         + `<p class="cert-hint">${esc(tr('cert.alt_openssl'))}</p>${cmdBlock(`openssl s_client -connect ${first}:443 -servername ${first} -showcerts </dev/null | sed '/SSL-Session:/,$d' > ${first}.txt`)}`;
     }
-    body.innerHTML = h + `<p class="cert-hint">🔒 ${esc(tr('cert.privacy'))}</p>`;
+    body.innerHTML = h + `<p class="cert-hint">🔒 ${esc(tr('cert.privacy'))}</p><p class="cert-hint">⚠️ ${esc(tr('cert.share_note'))}</p>`;
   }
 
   function renderCertCard() {

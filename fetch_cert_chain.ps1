@@ -118,7 +118,7 @@ foreach ($t in $targets) {
 }
 $doc = [ordered]@{
   format = 'alpaca-certchain'; version = 1; tool = 'fetch_cert_chain.ps1'; date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-  client = "PowerShell $($PSVersionTable.PSVersion) / $([Environment]::OSVersion.VersionString)"; hosts = $results
+  hosts = $results
 }
 $json = $doc | ConvertTo-Json -Depth 6
 $outPath = if ([System.IO.Path]::IsPathRooted($Out)) { $Out } else { Join-Path (Get-Location).Path $Out }
