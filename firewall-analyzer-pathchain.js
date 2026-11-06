@@ -558,7 +558,9 @@ const FwPath = (function () {
         trust = n === admins.length ? 'all' : n ? 'some' : 'none';
       }
       const acc = String(dstIf.allowaccess || '').trim();
-      out.push({ id: 'dst-local', p: { ifname: dstIf.name, ip: q.dst, access: acc && acc !== '-' ? acc : '', trust } });
+      const ingress = srcIf ? srcIf.iface : ((lookupRoute(parsed, q.src, vd) || {}).iface || null);
+      const mgmt = mgmtSourceCheck(parsed, q, dstIf, ingress && !ingress._pseudo ? ingress : null);
+      out.push({ id: 'dst-local', p: { ifname: dstIf.name, ip: q.dst, access: acc && acc !== '-' ? acc : '', trust, mgmt } });
     }
     if (accepted && !dstIf && !route) out.push({ id: 'no-route', p: { dst: q.dst } });
     // 依路由推得的進入介面（往來源的路由出口）與出口介面（往目的）
@@ -585,6 +587,49 @@ const FwPath = (function () {
     return out;
   }
 
+  // 管理來源限制（XN103）：目的是防火牆自己的介面位址時，依設定判斷這個來源能否連到管理服務。
+  // 回傳 null（不評估）或 {verdict:'allow'|'deny', by, ...依據}；只用設定看得到的事實，結論在畫面一律寫「依設定檔」。
+  // FortiGate：local-in-policy 依序比對（第一筆符合者生效，以 _runPolicyQuery 比對；沒有符合＝none，回到 trusthost 判斷）
+  // Palo Alto：目的介面的管理設定檔 permitted-ip（空＝不限來源），服務未開啟＝deny
+  // ASA／FTD：http／ssh／telnet <ip> <mask> <nameif>，只看進入介面 nameif；https 需 http server enable
+  const MGMT_PORTS = { '443': 'https', '80': 'http', '22': 'ssh', '23': 'telnet' };
+  function mgmtSourceCheck(parsed, q, dstIf, ingress) {
+    const s = ipInt(q && q.src);
+    if (!parsed || s === null || !dstIf) return null;
+    const vendor = String(parsed.vendor || '');
+    if (/fortigate/i.test(vendor)) {
+      const li = (parsed.localIn || []).filter(r => !dstIf._vdom || !r._vdom || r._vdom === dstIf._vdom);
+      if (!li.length || typeof _runPolicyQuery !== 'function') return null;
+      const pols = li.map(r => ({ id: r.id, name: 'local-in ' + r.id, srcIntf: r.intf, dstIntf: 'any', srcAddr: r.srcAddr, dstAddr: r.dstAddr,
+        service: r.service, schedule: r.schedule, action: r.action, status: r.status, srcNegate: r.srcNegate, dstNegate: r.dstNegate, svcNegate: r.svcNegate, _vdom: r._vdom }));
+      const tmp = Object.assign({}, parsed, { policies: pols, paDefault: null });
+      const res = _runPolicyQuery(q.src, q.dst, q.proto || 'tcp', q.port || '443', '__all__', tmp, { srcIntf: ingress ? ingress.name : '', newOnly: false });
+      if (!res || res.error || !res.matched) return { verdict: 'none', by: 'localin' };
+      return { verdict: /^(accept|allow)$/i.test(res.matched.action) ? 'allow' : 'deny', by: 'localin', rule: String(res.matched.id) };
+    }
+    const svc = MGMT_PORTS[String(q && q.port || '')];
+    if (!svc) return null;
+    if (/paloalto/i.test(vendor)) {
+      const prof = ((parsed.mgmtPlane || {}).profiles || {})[String(dstIf.allowaccess || '')];
+      if (!prof) return null;
+      if (!prof[svc]) return { verdict: 'deny', by: 'pa-svc', profile: dstIf.allowaccess, svc };
+      const perm = prof.permitted || [];
+      if (!perm.length) return { verdict: 'allow', by: 'pa-any', profile: dstIf.allowaccess };
+      const hit = perm.find(x => { const p = parseDst(x); return !!p && inNet(s, p.net, p.len); });
+      return hit ? { verdict: 'allow', by: 'pa-permit', profile: dstIf.allowaccess, net: hit } : { verdict: 'deny', by: 'pa-permit', profile: dstIf.allowaccess };
+    }
+    if (/cisco\s*(?:asa|ftd)/i.test(vendor)) {
+      const mp = parsed.mgmtPlane || {};
+      const nameif = ingress ? (ingress.nameif || ingress.name) : '';
+      const asaSvc = svc === 'https' ? 'http' : svc;
+      if (asaSvc === 'http' && svc === 'https' && !mp.httpServer) return { verdict: 'deny', by: 'asa-nohttp' };
+      if (!nameif || !Array.isArray(mp.mgmtSources)) return null;
+      const hit = mp.mgmtSources.find(m => m.svc === asaSvc && m.nameif === nameif && inNet(s, ipInt(m.net), maskLen(m.mask)));
+      return hit ? { verdict: 'allow', by: 'asa', svc: asaSvc, nameif, net: hit.net + ' ' + hit.mask } : { verdict: 'deny', by: 'asa', svc: asaSvc, nameif };
+    }
+    return null;
+  }
+
   // 規則的目的物件是否全部是防火牆自己的介面位址（單一位址物件或起訖相同的範圍）：這類流量為本機管理流量，轉送規則不計數（XN102）
   function policyDstLocal(parsed, pol) {
     const names = String((pol && pol.dstAddr) || '').split(/\s*,\s*/).map(x => x.trim()).filter(Boolean);
@@ -601,5 +646,5 @@ const FwPath = (function () {
     });
   }
 
-  return { trace, lookupRoute, egressIface, intfLabel, ifaceByIp, findStart, parseRouteTable, parseLinkMap, findSourceNat, snatSupported, mismatchHints, policyDstLocal, MAX_HOPS };
+  return { trace, lookupRoute, egressIface, intfLabel, ifaceByIp, findStart, parseRouteTable, parseLinkMap, findSourceNat, snatSupported, mismatchHints, policyDstLocal, mgmtSourceCheck, MAX_HOPS };
 })();

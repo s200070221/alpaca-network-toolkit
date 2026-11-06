@@ -788,13 +788,21 @@ const MH_CMDS={
   PaloAlto:["test security-policy-match from {inIf} to {outIf} source {src} destination {dst} protocol 6 destination-port {port}"],
   Juniper:["show security match-policies from-zone {inIf} to-zone {outIf} source-ip {src} destination-ip {dst} source-port 1024 destination-port {port} protocol tcp"],
 };
+// 目的是防火牆自己的位址時，另列查看管理來源限制的指令（XN103）
+const MH_LOCAL_CMDS={
+  FortiGate:"show firewall local-in-policy",
+  'Cisco ASA':"show running-config http\nshow running-config ssh\nshow running-config telnet",
+  'Cisco FTD':"show running-config http\nshow running-config ssh",
+  PaloAlto:"configure\nshow network profiles interface-management-profile",
+};
 function _mhFill(t, v){ return t.replace(/\{(\w+)\}/g,(m,k)=>v[k]?v[k]:'<'+k+'>'); }
 function _mhResult(a){ return tr(a==='accept'?'mh.result_accept':a==='deny'?'mh.result_deny':'mh.result_implicit'); }
 function _mhText(h){
   const p=h.p, f=k=>tr(k).replace(/\{(\w+)\}/g,(m,n)=>p[n]==null?'':p[n]);
   if(h.id==='dst-local'){
     const acc=p.access?p.access:tr('mh.access_none');
-    return tr('mh.dst-local').replace('{ip}',p.ip).replace('{ifname}',p.ifname).replace('{access}',acc)+(p.trust?' '+tr('mh.trust_'+p.trust):'');
+    const m=p.mgmt, mt=m?' '+tr('mh.mgmt_'+String(m.by).replace(/-/g,'_')+'_'+m.verdict).replace(/\{(\w+)\}/g,(x,n)=>m[n]==null?'':m[n]):'';
+    return tr('mh.dst-local').replace('{ip}',p.ip).replace('{ifname}',p.ifname).replace('{access}',acc)+(p.trust?' '+tr('mh.trust_'+p.trust):'')+mt;
   }
   if(h.id==='intf-rematch') return tr('mh.intf-rematch').replace('{inIf}',p.inIf).replace('{outIf}',p.outIf).replace('{result}',_mhResult(p.action))
     .replace('{rule}',p.ruleId?tr('mh.rule').replace('{id}',p.ruleId).replace('{name}',p.rule||''):'');
@@ -813,6 +821,8 @@ function buildMismatchHintsHtml(parsed, q, res, opts){
   const fw=MH_CMDS[parsed&&parsed.vendor];
   if(fw){
     const vpre=parsed.vendor==='FortiGate'&&v.vdom?`config vdom\nedit ${v.vdom}\n`:'';
+    const lc=hints.some(h=>h.id==='dst-local')&&MH_LOCAL_CMDS[parsed.vendor];
+    if(lc) cmds+=`<div style="font-size:12px">${esc(tr('mh.cmd_local'))}</div>`+pre(vpre+lc);
     cmds+=`<div style="font-size:12px">${esc(tr('mh.cmd_fw'))}</div>`+fw.map((c,i)=>pre((i===0?vpre:'')+_mhFill(c,v))).join('');
   }
   const open=o.open||hints.some(h=>h.id==='src-onlink'||h.id==='dst-local'||h.id==='intf-rematch');

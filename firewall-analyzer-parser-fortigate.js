@@ -421,6 +421,25 @@ const FortigateParser = (() => {
     });
   }
 
+  // 本機流量規則（XN103）：config firewall local-in-policy，欄位依 Fortinet CLI 與 fortios_firewall_local_in_policy
+  // 模組（intf／srcaddr／dstaddr／service／action accept|deny／schedule／status）；依序比對、第一筆符合者生效，
+  // 都沒符合時照介面 allowaccess 處理。action 未寫時 FortiOS 預設 deny。只收 IPv4（local-in-policy6 另一段，不解析）
+  function parseLocalIn(lines, vdomName) {
+    const { sectionLines } = extractSection(lines, 'firewall local-in-policy');
+    return parseEdits(sectionLines).map(e => {
+      const t = e.text;
+      return {
+        id: e.name, intf: gvs(t, 'intf') || 'any',
+        srcAddr: gvs(t, 'srcaddr') || 'all', dstAddr: gvs(t, 'dstaddr') || 'all',
+        service: gvs(t, 'service') || 'ALL', schedule: gv(t, 'schedule') || 'always',
+        action: gv(t, 'action') || 'deny',
+        status: gv(t, 'status') === 'disable' ? 'disable' : 'enable',
+        srcNegate: gv(t, 'srcaddr-negate') === 'enable', dstNegate: gv(t, 'dstaddr-negate') === 'enable', svcNegate: gv(t, 'service-negate') === 'enable',
+        _vdom: vdomName,
+      };
+    });
+  }
+
   // 官方 CLI Reference 確認 firewall policy6 欄位名稱與 IPv4 firewall policy 完全相同（無 6
   // 後綴），故直接沿用同一套欄位擷取邏輯；因整張表天生只會引用 IPv6 位址物件，不透過
   // _splitAddr() 反查（該函式是為了「同一份 srcaddr 可能混合引用 v4/v6 物件」的情境設計，
@@ -1307,6 +1326,7 @@ const FortigateParser = (() => {
       name: vb.name, zones,
       interfaces: parseInterfaces(vb.lines, vb.name),
       policies:   pols,
+      localIn:    parseLocalIn(vb.lines, vb.name),
       routes:     parseRoutes(vb.lines, vb.name),
       vpn:        parseVPN(vb.lines, vb.name),
       addresses,
@@ -1397,6 +1417,7 @@ const FortigateParser = (() => {
     });
     const all = {
       policies:  perVdom.flatMap(v => v.policies),
+      localIn:   perVdom.flatMap(v => v.localIn),
       routes:    perVdom.flatMap(v => v.routes),
       vpn:       perVdom.flatMap(v => v.vpn),
       addresses: perVdom.flatMap(v => v.addresses),

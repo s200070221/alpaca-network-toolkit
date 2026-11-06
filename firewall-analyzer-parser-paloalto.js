@@ -97,12 +97,21 @@ const PaloAltoParser = (() => {
     const profiles = Object.create(null), gp = [];
     const unq = v => String(v || '').replace(/^"|"$/g, '');
     xva(text, 'interface-management-profile').filter(b => /<entry\s/.test(b)).forEach(b => xentriesTop(b).forEach(e => {
-      profiles[e._name] = { https: /<https>yes<\/https>/.test(e._inner), http: /<http>yes<\/http>/.test(e._inner), ssh: /<ssh>yes<\/ssh>/.test(e._inner), telnet: /<telnet>yes<\/telnet>/.test(e._inner) };
+      // permitted-ip（XN103）：允許管理的來源，空清單＝不限來源（PAN-OS 管理手冊）
+      const perm = ((e._inner.match(/<permitted-ip>([\s\S]*?)<\/permitted-ip>/) || [])[1] || '');
+      profiles[e._name] = { https: /<https>yes<\/https>/.test(e._inner), http: /<http>yes<\/http>/.test(e._inner), ssh: /<ssh>yes<\/ssh>/.test(e._inner), telnet: /<telnet>yes<\/telnet>/.test(e._inner),
+        permitted: [...perm.matchAll(/<(?:entry\s+name|member)[^>]*?(?:="([^"]+)"[^>]*\/?>|>([^<]+)<)/g)].map(m => (m[1] || m[2] || '').trim()).filter(Boolean) };
     }));
     for (const m of text.matchAll(/^set\s+(?:template\s+\S+\s+config\s+)?network\s+profiles\s+interface-management-profile\s+("[^"]+"|\S+)\s+(https|http|ssh|telnet)\s+yes\b/gm)) {
       const n = unq(m[1]);
-      profiles[n] = profiles[n] || { https: false, http: false, ssh: false, telnet: false };
+      profiles[n] = profiles[n] || { https: false, http: false, ssh: false, telnet: false, permitted: [] };
       profiles[n][m[2]] = true;
+    }
+    // set 格式的 permitted-ip：單一值或 [ a b ] 清單
+    for (const m of text.matchAll(/^set\s+(?:template\s+\S+\s+config\s+)?network\s+profiles\s+interface-management-profile\s+("[^"]+"|\S+)\s+.*?\bpermitted-ip\s+(\[[^\]]*\]|\S+)/gm)) {
+      const n = unq(m[1]);
+      profiles[n] = profiles[n] || { https: false, http: false, ssh: false, telnet: false, permitted: [] };
+      profiles[n].permitted.push(...m[2].replace(/^\[|\]$/g, '').trim().split(/\s+/).map(unq).filter(Boolean));
     }
     ['portal', 'gateway'].forEach(kind => {
       xva(text, 'global-protect-' + kind).forEach(b => xentriesTop(b).forEach(e => {

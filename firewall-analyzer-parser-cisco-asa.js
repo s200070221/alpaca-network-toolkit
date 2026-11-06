@@ -566,7 +566,10 @@ const CiscoASAParser = (() => {
       mgmtPlane: { httpServer: /^http\s+server\s+enable\b/m.test(text),
         webvpnIfs: ((text.match(/^webvpn\s*\n((?:[ \t]+.*\n?)*)/m) || [])[1] || '').split('\n').map(l => (l.match(/^\s+enable\s+(\S+)/) || [])[1]).filter(Boolean),
         // tunnel-group … general-attributes 的 secondary-authentication-server-group（XN66，CVE-2026-76418 的觸發條件）
-        secondaryAuth: /^\s+secondary-authentication-server-group\s+\S/m.test(text) },
+        secondaryAuth: /^\s+secondary-authentication-server-group\s+\S/m.test(text),
+        // 管理存取允許來源（XN103）：http／ssh／telnet <ip> <mask> <nameif>，只有列出的來源能從該 nameif 管理
+        mgmtSources: [...text.matchAll(/^(http|ssh|telnet)\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\S+)\s*$/gm)]
+          .map(m => ({ svc: m[1], net: m[2], mask: m[3], nameif: m[4] })) },
       addresses,
       services:    parseServiceObjects(text),
       nat:         parseNAT(text),
