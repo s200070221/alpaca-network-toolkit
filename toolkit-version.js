@@ -3,8 +3,19 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.05.1';
+  const TOOLKIT_VERSION = '2026.11.06';
   const CHANGELOG = [
+    {
+      version: '2026.11.06',
+      items: {
+        zhTW: [
+          '維護版：程式註解與測試範例改用文件專用位址與通用名稱，功能與 2026.11.05.1 相同',
+        ],
+        en: [
+          'Maintenance release: code comments and test samples now use documentation addresses and generic names; features are the same as 2026.11.05.1',
+        ],
+      },
+    },
     {
       version: '2026.11.05.1',
       items: {
