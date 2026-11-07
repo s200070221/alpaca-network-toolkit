@@ -715,7 +715,8 @@ function buildSumCards(){
     ...(parsed.vxlan?.vnis?.length?[['VXLAN VNI',parsed.vxlan.vnis.length,'var(--purple)','vxlan']]:[]),
     ...((parsed.lacp||[]).length?[['LACP/LAG',(parsed.lacp||[]).length,'var(--accent)','lacp']]:[]),
     ...((parsed.dhcp||[]).length?[['DHCP Pool',(parsed.dhcp||[]).length,'var(--teal)','dhcp']]:[]),
-  ].map(([l,v,c,nav])=>{const cl=nav?' clickable':'';const oc=nav?` onclick="navGo('${nav}')"`:'';;return`<div class="sum-card${cl}"${oc}><div class="sl">${l}</div><div class="sv" style="color:${c}">${v}</div></div>`;}).join('');
+  // UX32：數值為 0 的卡片排到後面並淡化（例如單機的堆疊成員、沒用到的 Hybrid／VRF），先看到有內容的項目
+  ].map((c,i)=>[c,i]).sort((a,b)=>((a[0][1]===0)-(b[0][1]===0))||a[1]-b[1]).map(([[l,v,c,nav]])=>{const cl=(nav?' clickable':'')+(v===0?' sum-zero':'');const oc=nav?` onclick="navGo('${nav}')"`:'';return`<div class="sum-card${cl}"${oc}><div class="sl">${l}</div><div class="sv" style="color:${c}">${v}</div></div>`;}).join('');
 }
 function navGo(view){
   currentView=view;

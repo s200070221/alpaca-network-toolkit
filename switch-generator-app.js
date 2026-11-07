@@ -5653,14 +5653,53 @@ function discardDraft(){try{localStorage.removeItem(DRAFT_KEY);}catch(e){}_close
     }
   }
   window.applyGlossary=applyGlossary;
+  // UX34：表格列內的輸入欄沒有可讀名稱（螢幕報讀只念「編輯文字」），依同一欄的表頭文字補 aria-label；
+  // 自己補的標 data-auto-aria，切換語言後表頭重繪時一併更新，不覆蓋原本就有的 aria-label
+  function labelRowInputs(){
+    var tbls=document.querySelectorAll('table');
+    for(var i=0;i<tbls.length;i++){
+      var t=tbls[i],head=t.tHead&&t.tHead.rows.length?t.tHead.rows[t.tHead.rows.length-1]:null;
+      if(!head)continue;
+      var names=[];for(var c=0;c<head.cells.length;c++)names.push((head.cells[c].textContent||'').replace(/ⓘ/g,'').trim());
+      for(var b=0;b<t.tBodies.length;b++){
+        var rows=t.tBodies[b].rows;
+        for(var r=0;r<rows.length;r++){
+          var cells=rows[r].cells;
+          for(var k=0;k<cells.length;k++){
+            var n=names[k];if(!n)continue;
+            var els=cells[k].querySelectorAll('input:not([type=hidden]),select,textarea');
+            for(var e=0;e<els.length;e++){
+              var el=els[e];
+              if(el.hasAttribute('aria-label')&&!el.hasAttribute('data-auto-aria'))continue;
+              if(el.getAttribute('aria-label')!==n){el.setAttribute('aria-label',n);el.setAttribute('data-auto-aria','1');}
+            }
+          }
+        }
+      }
+    }
+  }
   var timer=null;
-  function schedule(){clearTimeout(timer);timer=setTimeout(applyGlossary,150);}
+  function schedule(){clearTimeout(timer);timer=setTimeout(function(){applyGlossary();labelRowInputs();},150);}
   if(document.body)new MutationObserver(schedule).observe(document.body,{childList:true,subtree:true,characterData:true});
   schedule();
 })();
 
 // 入口頁「看範例」（第二十九輪 NU4）：網址帶 ?demo=1 時開頁即載入範例並分析
-window.addEventListener('load', function () { if (/[?&]demo=1(?:&|$)/.test(location.search)) setTimeout(function () { loadExampleData(); if (typeof generate === 'function') generate(); }, 0); });
+window.addEventListener('load', function () { if (/[?&]demo=1(?:&|$)/.test(location.search)) setTimeout(function () { loadExampleData(); if (typeof generate === 'function') generate(); showDemoBanner(); }, 0); });
+// UX30：範例模式第一屏是空白的匯入區，看不出範例已帶入表單；在頂端提示並提供跳到表單／產生結果
+function showDemoBanner(){
+  if(document.getElementById('demo-banner'))return;
+  const notice=document.querySelector('.notice');
+  const bar=document.createElement('div');
+  bar.id='demo-banner';bar.className='notice';
+  bar.style.cssText='display:flex;align-items:center;gap:10px;flex-wrap:wrap';
+  const txt=document.createElement('span');txt.id='demo-banner-text';
+  const go=(id,key,target)=>{const b=document.createElement('button');b.className='add-btn';b.id=id;b.setAttribute('data-i18n',key);b.textContent=tr(key);
+    b.onclick=()=>{const t=target();if(t)t.scrollIntoView({behavior:'smooth',block:'start'});};return b;};
+  txt.setAttribute('data-i18n','demo.loaded');txt.textContent=tr('demo.loaded');
+  bar.append(txt,go('demo-go-form','demo.go_form',()=>document.querySelector('[data-i18n="sec.sys"]')),go('demo-go-output','demo.go_output',()=>document.getElementById('output')));
+  if(notice&&notice.parentNode)notice.parentNode.insertBefore(bar,notice.nextSibling);else document.body.prepend(bar);
+}
 
 // ── 跨廠牌轉換（XN39）：目標型號埠對應＋轉換摘要（XN40 交換器部分）──────────────────────
 // 純函式在 switch-generator-portmap.js（SwPortMap）；本段只處理畫面。對應與轉換前的 model 只存記憶體 _swc

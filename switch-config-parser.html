@@ -184,6 +184,7 @@ input[type=file]{display:none}
    導致卡片沒有 flex/gap 排列、疊成一直排純文字（唯讀稽核發現的既有 bug） */
 .sum-cards{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
 .sum-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px}
+.sum-card.sum-zero{opacity:.45}
 .sum-card.clickable{cursor:pointer;transition:border-color .15s,opacity .15s}.sum-card.clickable:hover{border-color:var(--accent);opacity:.85}
 .sum-card .sl{font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.6px;font-family:'JetBrains Mono',monospace;margin-bottom:3px}
 .sum-card .sv{font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace}

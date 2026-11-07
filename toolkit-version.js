@@ -3,8 +3,23 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.06';
+  const TOOLKIT_VERSION = '2026.11.07';
   const CHANGELOG = [
+    {
+      version: '2026.11.07',
+      items: {
+        zhTW: [
+          '防火牆：目的是防火牆自己的位址時，依設定判斷管理來源限制（FortiGate local-in-policy、Palo Alto 允許來源、ASA http／ssh）',
+          '隱私：交換器產生器的表單草稿不再暫存密碼、認證金鑰與 SNMP community；入口頁新增「本機儲存資料」，列出這個瀏覽器存了哪些資料並可清除',
+          '易用性：去識別化依廠牌預設送往的工具；log 問題清單在手機改成卡片；手機寬度按鈕加大；產生器範例模式提示表單與結果位置；log 篩選與抑制收合；交換器分析 0 的統計卡排後',
+        ],
+        en: [
+          'Firewall: when the destination is the firewall itself, management source restrictions are checked from the config (FortiGate local-in-policy, Palo Alto permitted IPs, ASA http/ssh)',
+          'Privacy: the switch generator no longer keeps passwords, auth keys or SNMP communities in form drafts; the hub has a new "Data stored in this browser" panel to review and clear stored data',
+          'Usability: the anonymizer sends to the matching analyzer by default; the log issue list shows as cards on phones; larger buttons on phones; generator sample mode points to the form and output; log filters and suppression are collapsed; zero-value switch summary cards move to the end',
+        ],
+      },
+    },
     {
       version: '2026.11.06',
       items: {
