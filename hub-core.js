@@ -63,6 +63,7 @@ function setLang(lang) {
   renderTasks();
   renderCards();
   window.renderCertCard && renderCertCard();
+  window.renderDevCheckCard && renderDevCheckCard();
   renderRecentAnonHistory();
   renderActivityTimeline();
   renderAchievements();
@@ -114,6 +115,8 @@ const TASKS = [
   { id: 'breach', links: [['log-analyzer.html', 'nav.tool_log'], ['config-anonymizer.html', 'nav.tool_ca']], howto: ['log'], steps: 4 },
   // 檢查網站憑證（XN101）：連到本頁的憑證檢查卡片，取得檔案由卡片內的腳本教學說明
   { id: 'cert', links: [['#certcheck', 'task.cert_go']], howto: [], steps: 3 },
+  // 設備版本快速比對（XN107）：連到本頁卡片
+  { id: 'devcheck', links: [['#devcheck', 'task.devcheck_go']], howto: [] },
 ];
 function renderTasks() {
   const grid = document.getElementById('tasks-grid');

@@ -7,6 +7,7 @@
 //   ios 15.2(7)E8（train 字母不同視為無法比較）、iosxe 17.9.4a、nxos 9.3(10)／10.2(5)M、eos 4.30.2F（train 字母不比）、aoscx 10.11.1020、
 //   routeros 7.23.3（beta／rc 視為無法比較）、os10 10.5.6.13（Dell SmartFabric OS10）、
 //   sonicos 6.5.4.14-109n／7.0.1-5035（點分補足 4 段＋build，結尾字母不比；範圍的 - 前後須有空白，以免與 build 混淆）
+//   netscaler 14.1-43.50（ns.conf 檔頭 #NS14.1 Build 43.50、show version 的 NS14.1: Build 43.50.nc 也接受；train＋build，範圍規則同 sonicos）
 // affected：以 ; 或 | 分隔多段，任一段符合即受影響。每段可寫
 //   「7.2.0-7.2.6」（含頭尾；右側須以數字開頭，因此 10.2.9-h1、21.4R3-S5 不會被當成範圍）、
 //   「<7.4.3」「<=7.0.13」「>=7.4.0 <7.4.3」（空白分隔的條件須同時成立）、「7.2.*」（前綴）或單一版本（相等）
@@ -19,8 +20,9 @@ const VulnCheck = (function () {
     [/^(cisco )?nx-?os$/, 'nxos'], [/^(arista|eos|arista eos)$/, 'eos'], [/^(aruba ?cx|aos-?cx|arubaos-?cx)$/, 'aoscx'],
     [/^(mikrotik|routeros|mikrotik routeros)$/, 'routeros'], [/^(dell ?os10|os10|dell-os10|smartfabric os10)$/, 'os10'],
     [/^(check ?point|gaia|check ?point gaia)$/, 'gaia'], [/^(sonicwall|sonicos|sonicwall sonicos)$/, 'sonicos'],
+    [/^(citrix|netscaler|citrix adc|netscaler adc|netscaler gateway|citrix netscaler|netscaler adc and gateway)$/, 'netscaler'],
   ];
-  const SCHEMES = ['fortios', 'panos', 'asa', 'ftd', 'junos', 'ios', 'iosxe', 'nxos', 'eos', 'aoscx', 'routeros', 'os10', 'gaia', 'sonicos'];
+  const SCHEMES = ['fortios', 'panos', 'asa', 'ftd', 'junos', 'ios', 'iosxe', 'nxos', 'eos', 'aoscx', 'routeros', 'os10', 'gaia', 'sonicos', 'netscaler'];
   function scheme(v) {
     const s = String(v || '').trim().toLowerCase();
     if (SCHEMES.includes(s)) return s;
@@ -66,6 +68,7 @@ const VulnCheck = (function () {
       case 'sonicos': m = s.match(/(\d+(?:\.\d+)+)(?:-(\d+)[a-z]*)?/i);
         if (!m) return null;
         { const d = m[1].split('.').map(Number).slice(0, 4); while (d.length < 4) d.push(0); return { nums: d.concat(+(m[2] || 0)) }; }
+      case 'netscaler': m = s.match(/(\d+)\.(\d+)(?:\s*-\s*|:?\s*build\s*)(\d+)\.(\d+)/i); return m ? { nums: m.slice(1, 5).map(Number) } : null;
       default: return null;
     }
   }
@@ -92,7 +95,7 @@ const VulnCheck = (function () {
     const star = p.match(/^([\d.]+)\.\*$/);
     if (star) { const pre = star[1].split('.').map(Number); return pre.every((x, i) => v.nums[i] === x); }
     // SonicOS 版本本身含 -build，範圍須寫成「a - b」（前後空白）
-    const rg = p.match(sch === 'sonicos' ? /^(.+?)\s+-\s+(\d.*)$/ : /^(.+?)\s*-\s*(\d.*)$/);
+    const rg = p.match(sch === 'sonicos' || sch === 'netscaler' ? /^(.+?)\s+-\s+(\d.*)$/ : /^(.+?)\s*-\s*(\d.*)$/);
     if (rg) { const lo = parse(sch, rg[1]), hi = parse(sch, rg[2]); const a = cmp(v, lo), b = cmp(v, hi); return a === null || b === null || !lo || !hi ? null : a >= 0 && b <= 0; }
     const conds = p.split(/\s+(?=[<>=])/).filter(Boolean);
     let ok = true;

@@ -506,6 +506,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="openwrt">OpenWrt (UCI)</option>
                 <option value="watchguard">WatchGuard Firebox</option>
                 <option value="nps_export">Windows NPS 設定匯出（netsh nps export）</option>
+                <option value="netscaler">Citrix NetScaler ADC／Gateway（ns.conf）</option>
                 <option value="appenv">應用程式環境變數（.env／docker-compose）</option>
                 <option value="wlc">Wireless LAN Controller (Cisco 9800 / AireOS · Aruba · H3C WX)</option>
               </optgroup>
@@ -1410,6 +1411,9 @@ const VENDOR_SIGS = {
   watchguard:  { p:[/<abs-policy-list/, /<interface-list/, /<address-group-list/], min:3 },
   // Windows NPS 設定匯出（netsh nps export，XN72）
   nps_export:  { p:[/<Microsoft_Internet_Authentication_Service\b/, /<Microsoft_Radius_Protocol\b/], min:1 },
+  // Citrix NetScaler ADC／Gateway ns.conf（XN105）：檔頭 #NSxx.x Build、set ns config -IPAddress、add ns ip、set ns hostName
+  netscaler:   { p:[/^#NS\d+\.\d+ Build /m, /^set ns config -IPAddress /m, /^add ns ip6? /m, /^set ns hostName /m,
+    /^(?:add|bind) (?:lb|cs|gslb|vpn|authentication) vserver /m, /^add ssl certKey /m, /^add (?:service|serviceGroup) \S+ /m], min:2 },
   // 應用程式環境變數（XN93）：.env 至少 3 行「大寫名稱=值」（中間可夾空行與註解），或 docker-compose 的 services: 加 environment:；
   // 排在 VENDOR_ORDER 最後，其他廠牌都沒命中時才採用（與入口頁 detectTool() 相同）
   appenv:      { p:[ENV_FILE_RE, /^services:\s*$[\s\S]*^\s+environment:\s*$/m], min:1 }
@@ -1418,7 +1422,7 @@ const VENDOR_SIGS = {
 // "Sophos"/"Aruba" 文字比對），故刻意排在最後——讓其他更具結構特徵的廠牌訊號優先判定，
 // 只有在都沒命中時才輪到這兩家，降低誤判機率
 const VENDOR_ORDER = [
-  'nps_export','checkpoint_api','cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','netgearsmart','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
+  'nps_export','netscaler','checkpoint_api','cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','netgearsmart','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
   'checkpoint','pfsense','sonicwall','watchguard','mikrotik','fsos','arista',
   'extreme','alcatel','brocade','procurve','dell_os10','planet','ruijie','netgear','edgeswitch','sonic',
   'ciscoasa','cisco_biz','cisco_ios',
@@ -1434,7 +1438,7 @@ const VENDOR_LABELS = {
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
   edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',checkpoint_api:'Check Point Management API (JSON)',cumulus:'NVIDIA Cumulus Linux (NVUE)',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',netgearsmart:'Netgear Smart Managed Pro',awplus:'Allied Telesis AlliedWare Plus',
   planet:'Planet Technology',ruijie:'Ruijie (RGOS)',netgear:'Netgear M4300 (ICOS)',
-  edgeswitch:'Ubiquiti EdgeSwitch',sonic:'SONiC (config_db.json)',watchguard:'WatchGuard Firebox',nps_export:'Windows NPS 設定匯出（netsh nps export）',
+  edgeswitch:'Ubiquiti EdgeSwitch',sonic:'SONiC (config_db.json)',watchguard:'WatchGuard Firebox',nps_export:'Windows NPS 設定匯出（netsh nps export）',netscaler:'Citrix NetScaler ADC／Gateway（ns.conf）',
   appenv:'應用程式環境變數（.env／docker-compose）',
   unknown:''
 };
@@ -3787,6 +3791,33 @@ function anonNpsExport(text, opts) {
   });
   return anonGeneric(red, opts);
 }
+// Citrix NetScaler ns.conf（XN105）：語法依 NetScaler CLI（set/add/bind 物件 名稱 -參數 值），範例依 f5devcentral/vscode-f5-flipper
+// 測試資料（Apache-2.0）。設備加密存放的值一律寫成「值 -encrypted」，該值整段換成 REDACTED_SECRET（系統帳號為 REDACTED_HASH）；
+// 未加密的金鑰參數（LDAP 綁定密碼、RADIUS 金鑰、憑證私鑰密碼等）同樣遮蔽；LDAP 綁定 DN 與搜尋基底含帳號與網域，換成 REDACTED_DN；
+// SNMP community 遮蔽；本機帳號換假名（預設帳號 nsroot 保留，供稽核判斷）；憑證與私鑰的檔名不是機密，不處理。其餘交給 anonGeneric()
+const NS_SECRET_FLAG_RE = /(-(?:ldapBindDnPassword|radKey|passcrypt|password|sharedSecret|secret|tacacsSecret|serverKey|authPassword|privPassword|clientSecret|preSharedKey|psk|keyValue)\s+)("[^"]*"|\S+)/gi;
+function anonNetScaler(text, opts) {
+  const red = text.split('\n').map(line => {
+    if (/^\s*#/.test(line)) return line;
+    let l = line;
+    // 系統帳號：set|add system user 名稱 雜湊 -encrypted
+    l = l.replace(/^((?:set|add) system user )(\S+)(\s+)(\S+)(\s+-encrypted\b)/, (m, p, name, sp, hash, enc) => {
+      stats.password++;
+      return p + (opts.user && name !== 'nsroot' ? anonUser(name) : name) + sp + 'REDACTED_HASH' + enc;
+    });
+    // 其餘「值 -encrypted」：值是設備加密後的字串
+    l = l.replace(/(\s)("[^"]*"|[0-9A-Fa-f]{16,})(\s+-encrypted\b)/g, (m, sp, v, enc) => { if (/REDACTED/.test(v)) return m; stats.password++; return sp + 'REDACTED_SECRET' + enc; });
+    l = l.replace(NS_SECRET_FLAG_RE, (m, p, v) => { if (/REDACTED/.test(v)) return m; stats.password++; return p + 'REDACTED_SECRET'; });
+    l = l.replace(/(-ldap(?:BindDn|Base)\s+)("[^"]*"|\S+)/gi, (m, p, v) => { if (/REDACTED/.test(v)) return m; stats.user++; return p + 'REDACTED_DN'; });
+    l = l.replace(/^(add snmp community )(\S+)/, (m, p, v) => { stats.community++; return p + 'REDACTED_COMMUNITY'; });
+    l = l.replace(/(-communityName\s+)(\S+)/, (m, p, v) => { stats.community++; return p + 'REDACTED_COMMUNITY'; });
+    if (opts.user) l = l.replace(/^((?:set|add|bind|rm) system user )(\S+)/, (m, p, name) => name === 'nsroot' || /REDACTED|^user-\d+$/.test(name) ? m : p + anonUser(name));
+    if (opts.hostname) l = l.replace(/^(set ns hostName )(\S+)/, (m, p, n) => p + anonHostname(n, 'ns', opts));
+    if (opts.comments) l = l.replace(/(-comment\s+)("[^"]*"|\S+)/g, (m, p, v) => { stats.comment++; return p + '"REDACTED_COMMENT"'; });
+    return l;
+  }).join('\n');
+  return anonGeneric(red, opts);
+}
 // 應用程式環境變數（XN93）：.env（KEY=值、export KEY=值）與 docker-compose environment（- KEY=值 清單或 KEY: 值 對應）。
 // 名稱含密碼、金鑰、權杖等字樣的值，或值本身是常見權杖格式（GitHub ghp_／gho_、GitLab glpat-、Slack xox?-、AWS AKIA／ASIA、Stripe sk_live_、JWT）
 // 一律換成 REDACTED_KEY；${變數} 參照與空值保留。連線字串內的帳密由 anonymize() 最後的 anonUrlCredentials() 處理，位址與網域走 anonGeneric()
@@ -4235,7 +4266,7 @@ const VENDOR_FNS = {
   brocade: anonBrocade, ciscoasa: anonCiscoASA, zyxel: anonZyxel,
   edgerouter: anonEdgeRouter, openwrt: anonOpenWrt, vyos: anonVyOS, netfilter: anonNetfilter, cloudsg: anonCloudSG, checkpoint_api: anonCheckPointApi, cumulus: anonCumulus, voss: anonVOSS, efos: anonEFOS, netgearsmart: anonNetgearSmart, awplus: anonAlliedWare,
   planet: anonPlanet, ruijie: anonRuijie, netgear: anonNetgear,
-  edgeswitch: anonEdgeSwitch, sonic: anonSonic, watchguard: anonWatchGuard, nps_export: anonNpsExport, appenv: anonAppEnv,
+  edgeswitch: anonEdgeSwitch, sonic: anonSonic, watchguard: anonWatchGuard, nps_export: anonNpsExport, netscaler: anonNetScaler, appenv: anonAppEnv,
   unknown: anonGeneric
 };
 
@@ -5649,12 +5680,12 @@ const STRUCT_LABELS = { vlans:'VLAN', interfaces:'Interface', routes:'Route', us
 // NPS 設定與應用程式環境變數沒有對應的分析工具，回傳 -1 維持原選擇
 function defaultSendTool(vendor, text) {
   if (vendor === 'wlc') return 0;
-  if (vendor === 'nps_export' || vendor === 'appenv') return -1;
+  if (vendor === 'nps_export' || vendor === 'appenv' || vendor === 'netscaler') return -1;
   const page = structCheckTool(vendor, text);
   return page ? TOOL_HREFS.indexOf(page) : -1;
 }
 function structCheckTool(vendor, text) {
-  if (!vendor || vendor === 'unknown') return null;
+  if (!vendor || vendor === 'unknown' || vendor === 'nps_export' || vendor === 'appenv' || vendor === 'netscaler') return null;
   if (STRUCT_FW_VENDORS.has(vendor)) return 'firewall-analyzer-fixed.html';
   if (vendor === 'mikrotik') return /^\/ip\s+firewall\s+(?:filter|nat)\b/m.test(text) ? 'firewall-analyzer-fixed.html' : 'switch-config-parser.html';
   if (vendor === 'juniper') return /^\s*security\s*\{|^set\s+security\s/m.test(text) ? 'firewall-analyzer-fixed.html' : 'switch-config-parser.html';

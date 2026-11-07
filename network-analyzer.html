@@ -94,6 +94,12 @@ a{text-decoration:none;color:inherit}
 .cert-tls-no,.cert-tls-untested{color:var(--text-dim)}
 .cert-empty{font-size:13px;color:var(--text-mid)}
 @media(max-width:720px){.cert-card{margin:0 16px 16px}}
+/* 設備版本快速比對（XN107） */
+.dc-verdict{font-size:13px;margin:4px 0}.dc-verdict.dc-bad{color:var(--red,#ef4444);font-weight:600}
+.dc-table-wrap{overflow-x:auto}.dc-table{width:100%;border-collapse:collapse;font-size:12px}.dc-table th,.dc-table td{text-align:left;padding:4px 6px;border-bottom:1px solid var(--border);vertical-align:top}
+.dc-table code{white-space:nowrap}
+@media(max-width:720px){.dc-table .dc-note{display:none}}.dc-table .dc-cve{white-space:nowrap}.dc-kev{color:#fff;background:var(--red,#ef4444);border-radius:4px;padding:0 5px;font-size:11px}
+.dc-sub{font-size:14px;margin:8px 0 4px}.dc-findings{margin:4px 0 0 18px;font-size:13px;line-height:1.6}.dc-sev-high{color:var(--red,#ef4444)}.dc-sev-medium{color:var(--yellow,#f59e0b)}
 /* UX35：本機儲存資料面板 */
 .ls-table .ls-col-size{white-space:nowrap;word-break:normal!important}
 @media(max-width:720px){.ls-table .ls-col-tool{display:none}}
@@ -398,6 +404,23 @@ a{text-decoration:none;color:inherit}
   <p class="cert-hint" id="cert-note"></p>
 </section>
 
+<!-- 設備版本快速比對（XN107）：選產品、輸入版本，以內建清單離線比對；貼上 NetScaler ns.conf 另做曝險檢查（XN105） -->
+<section class="cert-card" id="devcheck" aria-labelledby="dc-title">
+  <h2 class="tasks-title" id="dc-title"></h2>
+  <p class="cert-intro" id="dc-intro"></p>
+  <div class="cert-row">
+    <label class="cert-field cert-inline"><span id="dc-product-lbl"></span><select id="dc-product"></select></label>
+    <label class="cert-field cert-inline"><span id="dc-version-lbl"></span><input type="text" id="dc-version" spellcheck="false" autocomplete="off"></label>
+    <button type="button" class="cert-primary" id="dc-run"></button>
+  </div>
+  <div class="cert-sub" id="dc-paste-lbl"></div>
+  <textarea id="dc-paste" rows="3" spellcheck="false"></textarea>
+  <div class="cert-row"><button type="button" class="cert-primary" id="dc-paste-run"></button></div>
+  <div id="dc-audit"></div>
+  <div id="dc-result"></div>
+  <p class="cert-hint" id="dc-note"></p>
+</section>
+
 <div class="recent-anon-card" id="recent-anon-card">
   <div class="recent-anon-title" id="recent-anon-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
     <span id="recent-anon-title-text"></span>
@@ -499,6 +522,9 @@ a{text-decoration:none;color:inherit}
 <script src="cert-roots.js"></script>
 <script src="cert-scripts.js"></script>
 <script src="hub-cert.js"></script>
+<script src="vuln-check.js"></script>
+<script src="vuln-seed.js"></script>
+<script src="hub-devcheck.js"></script>
 <script src="hub-init.js"></script>
 
 <div id="drop-overlay" class="drop-overlay">

@@ -126,6 +126,7 @@ const FILES = [
   'cert-roots.js',
   'cert-scripts.js',
   'hub-cert.js',
+  'hub-devcheck.js',
   'hub-init.js',
   'https://cdn.jsdelivr.net/npm/docx@8.6.0/build/index.umd.js',
 ];

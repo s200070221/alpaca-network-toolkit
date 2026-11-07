@@ -204,6 +204,18 @@ function _showDropResult(name, detected, text, entry) {
     document.getElementById('drop-cert-open').addEventListener('click', _openDropCert);
     manualBtn.textContent = tr('drop.manual');
     manualBtn.style.display = '';
+  } else if (window.isNsConf && isNsConf(text)) {
+    // NetScaler ns.conf（XN105／XN107）：沒有對應的分析工具，在本頁做版本比對與曝險檢查，或交給去識別化
+    chip.textContent = tr('drop.ns_found');
+    chip.removeAttribute('data-drop-kind');
+    actions.innerHTML = `<button class="da-primary" type="button" id="drop-dc-open">🛡 ${_glEsc(tr('drop.ns_open'))}</button>
+      <button class="da-secondary" onclick="_dispatchWithPending(2,'netscaler')">🔒 ${tr('drop.to_anon')}</button>`;
+    document.getElementById('drop-dc-open').addEventListener('click', () => {
+      document.getElementById('drop-overlay').classList.remove('active');
+      if (window.devCheckLoad) devCheckLoad(text);
+    });
+    manualBtn.textContent = tr('drop.manual');
+    manualBtn.style.display = '';
   } else if (detected) {
     const vname = detected.vendor ? VENDOR_NAMES[detected.vendor] : null;
     chip.innerHTML = vname

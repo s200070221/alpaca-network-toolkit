@@ -375,7 +375,7 @@
 
   // 各工具支援廠牌數（XN52）：唯一來源是入口頁 TOOLS[].vendors 的清單長度（qa test_hub_tasks 比對），
   // 頁面文字寫 {n}，元素加 data-vendor-count="fw|sw|ca|gen|log" 後由 fillVendorCounts() 填入
-  const TOOLKIT_VENDOR_COUNTS = { fw: 28, sw: 25, ca: 50, gen: 19, log: 56 };
+  const TOOLKIT_VENDOR_COUNTS = { fw: 28, sw: 25, ca: 51, gen: 19, log: 58 };
   function fillVendorCounts() {
     if (typeof document === 'undefined') return;
     document.querySelectorAll('[data-vendor-count]').forEach(el => {
