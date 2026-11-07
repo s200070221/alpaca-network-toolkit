@@ -3,8 +3,23 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.07';
+  const TOOLKIT_VERSION = '2026.11.07.1';
   const CHANGELOG = [
+    {
+      version: '2026.11.07.1',
+      items: {
+        zhTW: [
+          '入口頁新增「設備版本快速比對」：沒有設定檔也能輸入 NetScaler、FortiGate、Palo Alto 等 15 種韌體版本，與已遭利用漏洞清單離線比對；貼上 NetScaler ns.conf 會讀出版本並檢查管理介面與 Gateway 是否對外',
+          'log 分析支援 WatchGuard Firebox（流量、IPS、管理與使用者認證、設定變更）與 Citrix NetScaler（VPN 登入、管理指令；新增同一工作階段從多個位址使用的偵測）',
+          '去識別化支援 NetScaler ns.conf；內建漏洞清單新增 NetScaler 13 筆（CitrixBleed 系列等）',
+        ],
+        en: [
+          'New device version quick check on the hub: without a config file, enter one of 15 firmware version formats (NetScaler, FortiGate, Palo Alto, etc.) and compare it offline with the exploited-vulnerability list; pasting a NetScaler ns.conf reads the version and checks whether management and Gateway are exposed',
+          'Log analyzer supports WatchGuard Firebox (traffic, IPS, admin and user authentication, config changes) and Citrix NetScaler (VPN logins, admin commands; new detection for one session used from multiple addresses)',
+          'Anonymizer supports NetScaler ns.conf; the built-in vulnerability list adds 13 NetScaler entries (CitrixBleed family and others)',
+        ],
+      },
+    },
     {
       version: '2026.11.07',
       items: {
