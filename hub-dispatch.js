@@ -42,8 +42,10 @@ function _dispatchWithAnon(toolIdx, vendor) {
 // 過檔案但流程中斷（例如上面的彈出視窗攔截偵測補上之前就已發生過的舊資料、或其他分頁開了但
 // 使用者沒有理它），繞回首頁時不需要專屬處理程序也能清掉殘留，縮小明碼內容的曝險窗口。本頁本身
 // 是這些 key 的生產端、不消費任何一個，故只做過期即清，不讀取 .text 內容。
+// 一次性交接 key 與存活時間（ms）；入口頁「本機儲存資料」面板（XN104，hub-workspace.js）也用這份清單
+const HANDOFF_TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000, _netAnalyzer_swPortQuery:30000, _netAnalyzer_route:30000};
 (function(){
-  var TTL = {_netAnalyzer_pending:10000, _netAnalyzer_anonThenOpen:30000, _netAnalyzer_anonResult:30000, _netAnalyzer_swParsedModel:30000, _netAnalyzer_fwQuery:30000, _netAnalyzer_swPortQuery:30000, _netAnalyzer_route:30000};
+  var TTL = HANDOFF_TTL;
   // 瀏覽器封鎖儲存區時 localStorage 存取本身會丟錯，整段包起來避免中斷後續腳本
   try {
     Object.keys(TTL).forEach(function(k){

@@ -381,6 +381,29 @@ function draftModelHasContent(model){
   return Object.values(model).some(v=>Array.isArray(v)&&v.length>0);
 }
 
+// 草稿不存機密欄位（XN104）：自動暫存寫在瀏覽器 localStorage、沒有到期，使用者不一定知道，
+// 故把密碼雜湊、認證金鑰、AAA 金鑰、SNMP community 清空後才存。依欄位名稱遞迴處理
+// （users[].password、ospf[]／bgp[].peers[]／vrrp[] 的 authKey、aaaKey、snmpCommunity），
+// 新增同名欄位也會自動涵蓋。回傳 {model: 複本, n: 清空的欄位數}，不修改傳入的物件。純函式
+const DRAFT_SECRET_FIELDS=['password','authKey','aaaKey','snmpCommunity'];
+function stripDraftSecrets(model){
+  let n=0;
+  const walk=v=>{
+    if(Array.isArray(v))return v.map(walk);
+    if(!v||typeof v!=='object')return v;
+    const out={};
+    Object.keys(v).forEach(k=>{
+      if(DRAFT_SECRET_FIELDS.includes(k)&&typeof v[k]==='string'){
+        if(v[k]!=='')n++;
+        out[k]='';
+      }else out[k]=walk(v[k]);
+    });
+    return out;
+  };
+  const m=walk(model);
+  return {model:m,n};
+}
+
 // 匯入原始設定 vs 產生結果比對前的正規化（2026-09-24 新增）：去掉每行首尾空白、空白行與整行註解
 // （! 或 # 開頭；Comware 的區塊結尾 # 本身不帶設定內容，一併略過不影響比對），避免縮排、空行與
 // 產生器自己加的免責註解讓真正的設定差異被格式差異淹沒。純函式，回傳行陣列

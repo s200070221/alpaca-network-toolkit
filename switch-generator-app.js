@@ -5576,7 +5576,9 @@ function saveDraftNow(){
     if(_draftExportedSnapshot!==null&&JSON.stringify(model)===_draftExportedSnapshot)return;
     _draftExportedSnapshot=null;
     if(!draftModelHasContent(model)){localStorage.removeItem(DRAFT_KEY);return;}
-    localStorage.setItem(DRAFT_KEY,JSON.stringify({ts:Date.now(),model}));
+    // 密碼與金鑰類欄位不存進草稿（XN104，stripDraftSecrets() 在 validate.js）
+    const st=stripDraftSecrets(model);
+    localStorage.setItem(DRAFT_KEY,JSON.stringify({ts:Date.now(),model:st.model,secretsOmitted:st.n}));
   }catch(e){/* localStorage 不可用或表單狀態異常時略過，不影響操作 */}
 }
 function saveDraftSoon(){clearTimeout(_draftTimer);_draftTimer=setTimeout(saveDraftNow,1000);}
@@ -5597,6 +5599,13 @@ function discardDraft(){try{localStorage.removeItem(DRAFT_KEY);}catch(e){}_close
 (function(){
   let d=null;
   try{d=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');}catch(e){d=null;}
+  // 舊版草稿可能含機密欄位（XN104 之前）：讀到時先清空並寫回，之後只留去除後的內容
+  if(d&&d.model){
+    try{
+      const st=stripDraftSecrets(d.model);
+      if(st.n){d.model=st.model;d.secretsOmitted=(d.secretsOmitted||0)+st.n;localStorage.setItem(DRAFT_KEY,JSON.stringify(d));}
+    }catch(e){/* 略過 */}
+  }
   if(d&&d.model&&draftModelHasContent(d.model)&&!window._cwHandoffImported){
     _draftPending=true;
     const notice=document.querySelector('.notice');
@@ -5604,7 +5613,8 @@ function discardDraft(){try{localStorage.removeItem(DRAFT_KEY);}catch(e){}_close
     bar.id='draft-banner';bar.className='notice';
     bar.style.cssText='display:flex;align-items:center;gap:10px;flex-wrap:wrap';
     const txt=document.createElement('span');
-    txt.textContent=tr('draft.found').replace('{time}',new Date(d.ts).toLocaleString()).replace('{name}',d.model.sysname||'-');
+    txt.textContent=tr('draft.found').replace('{time}',new Date(d.ts).toLocaleString()).replace('{name}',d.model.sysname||'-')
+      +(d.secretsOmitted>0?' '+tr('draft.secrets_omitted').replace('{n}',d.secretsOmitted):'');
     const bR=document.createElement('button');bR.className='add-btn';bR.textContent=tr('draft.restore');bR.onclick=restoreDraft;
     const bD=document.createElement('button');bD.className='add-btn';bD.textContent=tr('draft.discard');bD.onclick=discardDraft;
     bar.append(txt,bR,bD);

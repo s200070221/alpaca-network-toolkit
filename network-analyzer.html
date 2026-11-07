@@ -446,6 +446,17 @@ a{text-decoration:none;color:inherit}
     <div id="ws-attach-hint" style="color:var(--yellow,#f59e0b);margin-top:2px"></div>
   </div>
   <div id="ws-result" style="font-size:12px;margin-top:6px"></div>
+  <!-- 本機儲存資料盤點與清除（XN104）：只列 key 與大小，不顯示內容 -->
+  <details id="ls-panel" style="margin-top:8px;font-size:12px" ontoggle="if(this.open)renderLsPanel()">
+    <summary id="ls-summary" style="cursor:pointer"></summary>
+    <div id="ls-desc" style="color:var(--text-dim,#94a3b8);margin:4px 0"></div>
+    <div id="ls-body" style="overflow-x:auto"></div>
+    <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+      <button type="button" id="ls-clear-sel" style="font-size:12px" onclick="lsClearSelected()"></button>
+      <button type="button" id="ls-clear-all" style="font-size:12px" onclick="lsClearAll()"></button>
+      <span id="ls-status" style="color:var(--green,#22c55e)"></span>
+    </div>
+  </details>
 </div>
 
 
