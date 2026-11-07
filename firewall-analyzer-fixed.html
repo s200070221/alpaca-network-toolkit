@@ -494,6 +494,14 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
 .tb-menu-panel button:hover,.tb-menu-panel button:focus-visible{background:var(--surface2)}
 .tb-menu-panel b{display:block;font-size:12px;font-weight:600}
 .tb-menu-panel small{display:block;font-size:11px;color:var(--text-dim);margin-top:2px}
+/* UX29：手機寬度加大點擊目標（至少 32px）；7 頁相同，只影響 ≤720px */
+@media (max-width:720px){
+  .lang-btn,.theme-btn,#theme-btn,.tools-nav-btn,#tools-nav-btn,.sb-toggle,.howto-copy,.rm-btn,.note-btn,.btn-sm,#t-back,#t-intel-builder,#send-to-tool-select,#filter-preset-select{min-height:32px;min-width:32px}
+  .actor-link,.fwq-btn,#t-intel-builder,.tag-more,#ws-export-btn,#ws-import-btn{display:inline-block;padding:6px 4px;min-height:32px;box-sizing:border-box}
+  #gl-search{min-height:32px}
+  .fwq-btn{min-width:32px;text-align:center}
+  #issues-card select,#ls-panel button{min-height:32px}
+}
 </style>
 <script src="toolkit-version.js"></script>
 <script src="payload-sniff.js"></script>

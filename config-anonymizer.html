@@ -316,6 +316,14 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
 .tour-title{font-weight:600;color:var(--accent)}
 .tour-steps{margin:4px 0 8px;padding-left:22px}
 .tour-ok{font-size:12px;padding:3px 10px;border:1px solid var(--border);border-radius:5px;background:none;color:var(--text);cursor:pointer}
+/* UX29：手機寬度加大點擊目標（至少 32px）；7 頁相同，只影響 ≤720px */
+@media (max-width:720px){
+  .lang-btn,.theme-btn,#theme-btn,.tools-nav-btn,#tools-nav-btn,.sb-toggle,.howto-copy,.rm-btn,.note-btn,.btn-sm,#t-back,#t-intel-builder,#send-to-tool-select,#filter-preset-select{min-height:32px;min-width:32px}
+  .actor-link,.fwq-btn,#t-intel-builder,.tag-more,#ws-export-btn,#ws-import-btn{display:inline-block;padding:6px 4px;min-height:32px;box-sizing:border-box}
+  #gl-search{min-height:32px}
+  .fwq-btn{min-width:32px;text-align:center}
+  #issues-card select,#ls-panel button{min-height:32px}
+}
 </style>
 <script src="toolkit-version.js"></script>
 <script src="payload-sniff.js"></script>
@@ -448,7 +456,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
       <button class="topbar-btn" id="btn-export-map" onclick="exportMapping()" disabled data-tip-key="tip.export_map"><span data-i18n="btn.export_map">匯出對照表</span></button>
       <button class="topbar-btn" id="btn-export-encrypted" onclick="showEncryptModal()" disabled data-i18n-title="btn.encrypt_title" title="下載加密還原包（.acmap），日後可用密碼還原 IP / 主機名稱">🔐 <span data-i18n="btn.encrypt">加密還原包</span></button>
       <button class="topbar-btn primary" id="btn-download" onclick="downloadAnonymized()" disabled><span data-i18n="btn.download">下載檔案</span></button>
-      <select id="send-to-tool-select" style="display:none">
+      <select id="send-to-tool-select" style="display:none" onchange="this.dataset.touched='1'">
         <option value="0" data-i18n="nav.tool_fw">防火牆分析</option>
         <option value="1" data-i18n="nav.tool_switch">交換器解析</option>
         <option value="2" data-i18n="nav.tool_gen">交換器產生器</option>
@@ -5599,6 +5607,10 @@ function runAnonymize() {
     if (_anonChainTarget) {
       var _idx = TOOL_HREFS.indexOf(_anonChainTarget.href);
       if (_idx >= 0) _chainSel.value = String(_idx);
+    } else if (!_chainSel.dataset.touched) {
+      // UX27：依偵測到的廠牌預設送往的工具（沿用結構保持度自檢的判斷）；使用者改過就不再覆蓋
+      var _def = defaultSendTool(vendor, STATE.original);
+      if (_def >= 0) _chainSel.value = String(_def);
     }
   }
 
@@ -5633,6 +5645,14 @@ function runAnonymize() {
 const STRUCT_FW_VENDORS = new Set(['fortigate','sophos','checkpoint','paloalto','pfsense','sonicwall','ciscoasa','zyxel','edgerouter','openwrt','watchguard','vyos','netfilter','cloudsg','checkpoint_api','h3c_secpath','tnsr']);
 const STRUCT_LABELS = { vlans:'VLAN', interfaces:'Interface', routes:'Route', users:'User', acls:'ACL', lacp:'LACP', vrrp:'VRRP', dhcp:'DHCP', policies:'Policy', addresses:'Address', services:'Service', nat:'NAT', vpn:'VPN' };
 // MikroTik／Juniper 兩個分析工具都支援：有防火牆規則／security 區塊時交給防火牆分析，否則交給交換器解析
+// UX27：去識別化後「送往分析工具」的預設目標（TOOL_HREFS 索引）；無線控制器交給防火牆分析（WiFi 頁），
+// NPS 設定與應用程式環境變數沒有對應的分析工具，回傳 -1 維持原選擇
+function defaultSendTool(vendor, text) {
+  if (vendor === 'wlc') return 0;
+  if (vendor === 'nps_export' || vendor === 'appenv') return -1;
+  const page = structCheckTool(vendor, text);
+  return page ? TOOL_HREFS.indexOf(page) : -1;
+}
 function structCheckTool(vendor, text) {
   if (!vendor || vendor === 'unknown') return null;
   if (STRUCT_FW_VENDORS.has(vendor)) return 'firewall-analyzer-fixed.html';

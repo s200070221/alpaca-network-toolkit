@@ -188,8 +188,10 @@ function renderLsPanel() {
   tbl.className = 'ls-table';
   tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
   const head = document.createElement('tr');
-  ['', tr('ls.col_tool'), tr('ls.col_key'), tr('ls.col_size'), tr('ls.col_risk')].forEach(t => {
-    const th = document.createElement('th'); th.textContent = t; th.style.cssText = 'text-align:left;padding:2px 6px;border-bottom:1px solid var(--border,#334155)'; head.appendChild(th);
+  // UX35：工具欄在手機寬度隱藏（ls-col-tool，CSS 在入口頁），大小欄不換行
+  const colCls = ['', 'ls-col-tool', '', 'ls-col-size', ''];
+  ['', tr('ls.col_tool'), tr('ls.col_key'), tr('ls.col_size'), tr('ls.col_risk')].forEach((t, i) => {
+    const th = document.createElement('th'); th.textContent = t; th.className = colCls[i]; th.style.cssText = 'text-align:left;padding:2px 6px;border-bottom:1px solid var(--border,#334155)'; head.appendChild(th);
   });
   tbl.appendChild(head);
   rows.forEach(r => {
@@ -199,7 +201,7 @@ function renderLsPanel() {
     const tool = r.tool === 'common' ? tr('ws.tool_common') : r.tool === 'other' ? tr('ls.tool_other') : tr('activity.tool_' + r.tool);
     const cells = [cb, tool, r.key, _lsSize(r.size), r.risk === 'none' ? '' : tr('ls.risk_' + r.risk)];
     cells.forEach((c, i) => {
-      const td = document.createElement('td'); td.style.cssText = 'padding:2px 6px;word-break:break-all';
+      const td = document.createElement('td'); td.className = colCls[i]; td.style.cssText = 'padding:2px 6px;word-break:break-all';
       if (typeof c === 'string') td.textContent = c; else td.appendChild(c);
       if (i === 4 && r.risk !== 'none') { td.style.color = r.risk === 'secret' ? 'var(--red,#ef4444)' : 'var(--yellow,#f59e0b)'; td.setAttribute('data-ls-risk', r.risk); }
       tr_.appendChild(td);

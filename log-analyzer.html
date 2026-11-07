@@ -86,6 +86,19 @@ th{color:var(--text-muted);font-weight:600;text-transform:uppercase;font-size:11
 th.sortable-col{cursor:pointer;user-select:none}
 th.sortable-col:hover{color:var(--accent)}
 .tbl-wrap{max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:8px}
+/* UX28：問題清單表頭不斷行、範例欄保留寬度；手機寬度改成一個問題一張卡片 */
+#issues-table th,#issues-table .badge,#issues-table .conf-tag{white-space:nowrap}
+#issues-table td.is-sample{min-width:260px}
+@media (max-width:720px){
+  #issues-table thead{display:none}
+  #issues-table,#issues-table tbody,#issues-table tr{display:block;width:100%}
+  #issues-table tr{border-bottom:1px solid var(--border);padding:8px 6px}
+  #issues-table td{display:block;border:0;padding:2px 0;min-width:0}
+  #issues-table td.is-cat{font-weight:600}
+  #issues-table td.is-inl{display:inline-block;margin-right:10px;vertical-align:middle}
+  #issues-table td[data-label]::before{content:attr(data-label) "："; color:var(--text-dim); font-size:11px}
+  #issues-table td.empty{text-align:left}
+}
 .badge{display:inline-block;padding:1px 7px;border-radius:20px;font-size:11px;font-weight:700}
 .badge.Critical{background:rgba(239,68,68,.18);color:var(--red)}
 .badge.High{background:rgba(251,146,60,.18);color:var(--orange)}
@@ -163,6 +176,14 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
 .tour-title{font-weight:600;color:var(--accent)}
 .tour-steps{margin:4px 0 8px;padding-left:22px}
 .tour-ok{font-size:12px;padding:3px 10px;border:1px solid var(--border);border-radius:5px;background:none;color:var(--text);cursor:pointer}
+/* UX29：手機寬度加大點擊目標（至少 32px）；7 頁相同，只影響 ≤720px */
+@media (max-width:720px){
+  .lang-btn,.theme-btn,#theme-btn,.tools-nav-btn,#tools-nav-btn,.sb-toggle,.howto-copy,.rm-btn,.note-btn,.btn-sm,#t-back,#t-intel-builder,#send-to-tool-select,#filter-preset-select{min-height:32px;min-width:32px}
+  .actor-link,.fwq-btn,#t-intel-builder,.tag-more,#ws-export-btn,#ws-import-btn{display:inline-block;padding:6px 4px;min-height:32px;box-sizing:border-box}
+  #gl-search{min-height:32px}
+  .fwq-btn{min-width:32px;text-align:center}
+  #issues-card select,#ls-panel button{min-height:32px}
+}
 </style>
 <script src="toolkit-version.js"></script>
 <script src="payload-sniff.js"></script>
@@ -13483,9 +13504,13 @@ function renderIssues() {
   renderIssuesSuppressPanel();
   renderCasePicker();
 
-  thead.innerHTML = `<tr><th>${tr('issues.col_category')}</th><th>${tr('issues.col_severity')}</th><th>${tr('issues.col_count')}</th><th>${tr('issues.col_confidence')}</th><th>${tr('issues.col_source')}</th><th>${tr('issues.col_basis')}</th><th>${tr('issues.col_sample')}</th><th>${tr('issues.col_note')}</th><th>${tr('issues.col_status')}</th></tr>`;
   const statusMode = document.getElementById('issues-status-filter').value;
   const visible = filterIssuesByStatus(filterIssuesBySuppressed(filterIssuesBySource(ISSUES, ISSUES_SOURCE_FILTER), SUPPRESSED_CATEGORIES), is => issueStatusOf(_baselineDiffKey(is)), statusMode);
+  // UX28：沒有任何問題帶情資來源時不顯示「情資來源」欄（未匯入情資時整欄都是 -）；
+  // 每格帶 data-label，手機寬度以 CSS 改成一個問題一張卡片（#issues-table 的 @media 規則）
+  const hasSource = visible.some(is => getIssueIntelSources(is).length > 0);
+  const L = k => esc(tr('issues.col_' + k));
+  thead.innerHTML = `<tr><th>${L('category')}</th><th>${L('severity')}</th><th>${L('count')}</th><th>${L('confidence')}</th>${hasSource ? `<th>${L('source')}</th>` : ''}<th>${L('basis')}</th><th>${L('sample')}</th><th>${L('note')}</th><th>${L('status')}</th></tr>`;
   // 問題清單搜尋框（比照 #results-search／filterEvents() 既有樣板）：對分類標籤/來源/判斷依據/
   // 樣本原始文字做不分大小寫子字串比對，僅影響表格顯示，不重新計算分析結果
   const searchQuery = document.getElementById('issues-search').value.trim().toLowerCase();
@@ -13516,19 +13541,19 @@ function renderIssues() {
     const statusCell = `<select onchange="onIssueStatusChange(${noteKeyArg}, this.value)">${ISSUE_STATUS_VALUES.map(v => `<option value="${v}"${v === status ? ' selected' : ''}>${esc(tr('status.' + v))}</option>`).join('')}</select>`;
     const searchText = `${catLabel} ${sourceCell} ${basisText} ${issueSample(is)} ${noteText} ${tr('status.' + status)}`.toLowerCase();
     const html = `<tr${status === 'falsePositive' ? ' style="opacity:.55"' : ''}>
-      <td>${catLabel}${mitreBadge}${nextStepHtml(baseCat)}</td>
-      <td><span class="badge ${sevClass(is.severityNorm)}">${tr(SEV_KEY_MAP[is.severityNorm])}</span></td>
-      <td>${is.count}</td>
-      <td><span class="conf-tag ${is.confidence}">${tr('conf.' + is.confidence)}</span></td>
-      <td>${esc(sourceCell)}</td>
-      <td>${esc(basisText)}</td>
-      <td>${swPortBtn(is)}${issueActorLink(is)}${esc(issueSample(is))}</td>
-      <td>${noteCell}</td>
-      <td>${statusCell}</td></tr>`;
+      <td class="is-cat">${catLabel}${mitreBadge}${nextStepHtml(baseCat)}</td>
+      <td class="is-inl" data-label="${L('severity')}"><span class="badge ${sevClass(is.severityNorm)}">${tr(SEV_KEY_MAP[is.severityNorm])}</span></td>
+      <td class="is-inl" data-label="${L('count')}">${is.count}</td>
+      <td class="is-inl" data-label="${L('confidence')}"><span class="conf-tag ${is.confidence}">${tr('conf.' + is.confidence)}</span></td>
+      ${hasSource ? `<td data-label="${L('source')}">${esc(sourceCell)}</td>` : ''}
+      <td data-label="${L('basis')}">${esc(basisText)}</td>
+      <td class="is-sample" data-label="${L('sample')}">${swPortBtn(is)}${issueActorLink(is)}${esc(issueSample(is))}</td>
+      <td class="is-inl">${noteCell}</td>
+      <td class="is-inl">${statusCell}</td></tr>`;
     return { html, searchText };
   }).filter(r => !searchQuery || r.searchText.includes(searchQuery));
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="empty">${tr('issues.empty')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${hasSource ? 9 : 8}" class="empty">${tr('issues.empty')}</td></tr>`;
     return;
   }
   tbody.innerHTML = rows.map(r => r.html).join('');
