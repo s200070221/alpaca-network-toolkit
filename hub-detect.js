@@ -43,6 +43,8 @@ function _isLogJsonObj(o) {
   if ((o.winlog && typeof o.winlog === 'object' && o.winlog.event_id !== undefined) || (o.EventID !== undefined && typeof o.Channel === 'string' && (o.SourceName !== undefined || o.ProviderGuid !== undefined))) return true;
   // Cloudflare Logpush（第二十六輪 SE，與 log_analyzer isCloudflareEvent() 一致）
   if (typeof o.RayID === 'string' && typeof o.ClientIP === 'string' && ('EdgeStartTimestamp' in o || 'Datetime' in o)) return true;
+  // Zscaler Internet Access NSS JSON（XN113，與 log_analyzer isZscalerNss() 一致）
+  if (typeof o.sourcetype === 'string' && /^zscalernss-(?:web|fw|dns|audit)$/i.test(o.sourcetype) && o.event && typeof o.event === 'object') return true;
   // CrowdStrike Falcon Streaming API 事件（第十八輪 TJ）
   if (o.metadata && typeof o.metadata.eventType === 'string' && o.event && typeof o.event === 'object') return true;
   // Zeek JSON log（第十八輪 TI，與 log_analyzer isZeekLog() 一致）

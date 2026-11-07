@@ -507,6 +507,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="watchguard">WatchGuard Firebox</option>
                 <option value="nps_export">Windows NPS 設定匯出（netsh nps export）</option>
                 <option value="netscaler">Citrix NetScaler ADC／Gateway（ns.conf）</option>
+                <option value="bigip">F5 BIG-IP（bigip.conf／tmsh list）</option>
                 <option value="appenv">應用程式環境變數（.env／docker-compose）</option>
                 <option value="wlc">Wireless LAN Controller (Cisco 9800 / AireOS · Aruba · H3C WX)</option>
               </optgroup>
@@ -1414,6 +1415,9 @@ const VENDOR_SIGS = {
   // Citrix NetScaler ADC／Gateway ns.conf（XN105）：檔頭 #NSxx.x Build、set ns config -IPAddress、add ns ip、set ns hostName
   netscaler:   { p:[/^#NS\d+\.\d+ Build /m, /^set ns config -IPAddress /m, /^add ns ip6? /m, /^set ns hostName /m,
     /^(?:add|bind) (?:lb|cs|gslb|vpn|authentication) vserver /m, /^add ssl certKey /m, /^add (?:service|serviceGroup) \S+ /m], min:2 },
+  // F5 BIG-IP（XN106）：bigip.conf、tmsh list 輸出或 Oxidized 錄製，tmsh 頂層區塊至少 2 項（與入口頁 isBigipConf() 相同）
+  bigip:       { p:[/^#TMSH-VERSION: /m, /^ltm (?:virtual|pool|node) \S+ \{/m, /^net self \S+ \{/m, /^net vlan \S+ \{/m, /^sys global-settings \{/m,
+    /^auth user \S+ \{/m, /^sys (?:httpd|sshd|snmp) \{/m, /^sys management-ip /m, /Sys::Version/], min:2 },
   // 應用程式環境變數（XN93）：.env 至少 3 行「大寫名稱=值」（中間可夾空行與註解），或 docker-compose 的 services: 加 environment:；
   // 排在 VENDOR_ORDER 最後，其他廠牌都沒命中時才採用（與入口頁 detectTool() 相同）
   appenv:      { p:[ENV_FILE_RE, /^services:\s*$[\s\S]*^\s+environment:\s*$/m], min:1 }
@@ -1422,7 +1426,7 @@ const VENDOR_SIGS = {
 // "Sophos"/"Aruba" 文字比對），故刻意排在最後——讓其他更具結構特徵的廠牌訊號優先判定，
 // 只有在都沒命中時才輪到這兩家，降低誤判機率
 const VENDOR_ORDER = [
-  'nps_export','netscaler','checkpoint_api','cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','netgearsmart','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
+  'nps_export','netscaler','bigip','checkpoint_api','cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','netgearsmart','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
   'checkpoint','pfsense','sonicwall','watchguard','mikrotik','fsos','arista',
   'extreme','alcatel','brocade','procurve','dell_os10','planet','ruijie','netgear','edgeswitch','sonic',
   'ciscoasa','cisco_biz','cisco_ios',
@@ -1438,7 +1442,7 @@ const VENDOR_LABELS = {
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
   edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',checkpoint_api:'Check Point Management API (JSON)',cumulus:'NVIDIA Cumulus Linux (NVUE)',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',netgearsmart:'Netgear Smart Managed Pro',awplus:'Allied Telesis AlliedWare Plus',
   planet:'Planet Technology',ruijie:'Ruijie (RGOS)',netgear:'Netgear M4300 (ICOS)',
-  edgeswitch:'Ubiquiti EdgeSwitch',sonic:'SONiC (config_db.json)',watchguard:'WatchGuard Firebox',nps_export:'Windows NPS 設定匯出（netsh nps export）',netscaler:'Citrix NetScaler ADC／Gateway（ns.conf）',
+  edgeswitch:'Ubiquiti EdgeSwitch',sonic:'SONiC (config_db.json)',watchguard:'WatchGuard Firebox',nps_export:'Windows NPS 設定匯出（netsh nps export）',netscaler:'Citrix NetScaler ADC／Gateway（ns.conf）',bigip:'F5 BIG-IP（bigip.conf／tmsh list）',
   appenv:'應用程式環境變數（.env／docker-compose）',
   unknown:''
 };
@@ -3818,6 +3822,30 @@ function anonNetScaler(text, opts) {
   }).join('\n');
   return anonGeneric(red, opts);
 }
+// F5 BIG-IP tmsh 設定（XN106）：語法依 tmsh（區塊「模組 類型 名稱 {」、屬性「名稱 值」一行一項），範例依 Oxidized tmos 錄製與
+// f5devcentral/vscode-f5-flipper 測試資料。密碼雜湊、金鑰、LDAP 綁定密碼、RADIUS／TACACS 金鑰、SNMPv3 密碼、IPsec 預先共用金鑰一律遮蔽；
+// LDAP 綁定 DN 與搜尋基底換 REDACTED_DN；SNMP community-name 遮蔽；本機帳號（auth user 名稱與 partition-access 不變）換假名，
+// 預設帳號 admin／root 保留；hostname 換假主機名稱；description 依「遮蔽備註」選項。其餘（位址、網域）交給 anonGeneric()
+const F5_SECRET_ATTR_RE = /^(\s*)(encrypted-password|password|passphrase|secret|bind-pw|preshared-key(?:-encrypted)?|shared-secret|auth-password(?:-encrypted)?|privacy-password(?:-encrypted)?|key-secret|client-secret|api-key|secret-key|psk)(\s+)(\S.*)$/;
+const F5_KEEP_USERS = new Set(['admin', 'root']);
+function anonBigip(text, opts) {
+  const red = text.split('\n').map(line => {
+    let l = line;
+    if (/^\s*#/.test(l) && !/^#\s+\S/.test(l)) return l;
+    const sm = l.match(F5_SECRET_ATTR_RE);
+    if (sm && !/REDACTED|^none$|^""$/.test(sm[4].trim())) { stats.password++; return sm[1] + sm[2] + sm[3] + (/encrypted-password/.test(sm[2]) ? 'REDACTED_HASH' : 'REDACTED_SECRET'); }
+    l = l.replace(/^(\s*(?:bind-dn|search-base-dn|user-template)\s+)("[^"]*"|\S+)\s*$/, (m, p, v) => { if (/REDACTED|^none$/.test(v)) return m; stats.user++; return p + 'REDACTED_DN'; });
+    l = l.replace(/^(\s*community-name\s+)(\S+)/, (m, p, v) => { stats.community++; return p + 'REDACTED_COMMUNITY'; });
+    if (opts.user) l = l.replace(/^(auth user )(\S+)( \{)/, (m, p, name, b) => F5_KEEP_USERS.has(name) || /^user-\d+$/.test(name) ? m : p + anonUser(name) + b);
+    if (opts.hostname) l = l.replace(/^(\s*hostname\s+)(\S+)\s*$/, (m, p, n) => p + anonHostname(n, 'f5', opts));
+    if (opts.comments) l = l.replace(/^(\s*description\s+)("[^"]*"|\S+)\s*$/, (m, p, v) => { stats.comment++; return p + '"REDACTED_COMMENT"'; });
+    return l;
+  }).join('\n');
+  // 版本號（17.1.1.4）長得像 IPv4，先換成佔位字串，anonGeneric() 之後再還原
+  const vers = [];
+  const kept = red.replace(/^(#TMSH-VERSION: |#?\s*(?:Version|Build)\s+)(\d+(?:\.\d+)+)\s*$/gm, (m, p, v) => { vers.push(v); return p + `__F5VER${vers.length - 1}__`; });
+  return anonGeneric(kept, opts).replace(/__F5VER(\d+)__/g, (m, i) => vers[+i]);
+}
 // 應用程式環境變數（XN93）：.env（KEY=值、export KEY=值）與 docker-compose environment（- KEY=值 清單或 KEY: 值 對應）。
 // 名稱含密碼、金鑰、權杖等字樣的值，或值本身是常見權杖格式（GitHub ghp_／gho_、GitLab glpat-、Slack xox?-、AWS AKIA／ASIA、Stripe sk_live_、JWT）
 // 一律換成 REDACTED_KEY；${變數} 參照與空值保留。連線字串內的帳密由 anonymize() 最後的 anonUrlCredentials() 處理，位址與網域走 anonGeneric()
@@ -4266,7 +4294,7 @@ const VENDOR_FNS = {
   brocade: anonBrocade, ciscoasa: anonCiscoASA, zyxel: anonZyxel,
   edgerouter: anonEdgeRouter, openwrt: anonOpenWrt, vyos: anonVyOS, netfilter: anonNetfilter, cloudsg: anonCloudSG, checkpoint_api: anonCheckPointApi, cumulus: anonCumulus, voss: anonVOSS, efos: anonEFOS, netgearsmart: anonNetgearSmart, awplus: anonAlliedWare,
   planet: anonPlanet, ruijie: anonRuijie, netgear: anonNetgear,
-  edgeswitch: anonEdgeSwitch, sonic: anonSonic, watchguard: anonWatchGuard, nps_export: anonNpsExport, netscaler: anonNetScaler, appenv: anonAppEnv,
+  edgeswitch: anonEdgeSwitch, sonic: anonSonic, watchguard: anonWatchGuard, nps_export: anonNpsExport, netscaler: anonNetScaler, bigip: anonBigip, appenv: anonAppEnv,
   unknown: anonGeneric
 };
 
@@ -5680,12 +5708,12 @@ const STRUCT_LABELS = { vlans:'VLAN', interfaces:'Interface', routes:'Route', us
 // NPS 設定與應用程式環境變數沒有對應的分析工具，回傳 -1 維持原選擇
 function defaultSendTool(vendor, text) {
   if (vendor === 'wlc') return 0;
-  if (vendor === 'nps_export' || vendor === 'appenv' || vendor === 'netscaler') return -1;
+  if (vendor === 'nps_export' || vendor === 'appenv' || vendor === 'netscaler' || vendor === 'bigip') return -1;
   const page = structCheckTool(vendor, text);
   return page ? TOOL_HREFS.indexOf(page) : -1;
 }
 function structCheckTool(vendor, text) {
-  if (!vendor || vendor === 'unknown' || vendor === 'nps_export' || vendor === 'appenv' || vendor === 'netscaler') return null;
+  if (!vendor || vendor === 'unknown' || vendor === 'nps_export' || vendor === 'appenv' || vendor === 'netscaler' || vendor === 'bigip') return null;
   if (STRUCT_FW_VENDORS.has(vendor)) return 'firewall-analyzer-fixed.html';
   if (vendor === 'mikrotik') return /^\/ip\s+firewall\s+(?:filter|nat)\b/m.test(text) ? 'firewall-analyzer-fixed.html' : 'switch-config-parser.html';
   if (vendor === 'juniper') return /^\s*security\s*\{|^set\s+security\s/m.test(text) ? 'firewall-analyzer-fixed.html' : 'switch-config-parser.html';

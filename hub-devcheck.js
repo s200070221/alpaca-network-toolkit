@@ -1,7 +1,8 @@
 // hub-devcheck.js — 入口頁「設備版本快速比對」卡片（XN107）：沒有設定檔時選產品、輸入版本，直接以 vuln-check.js 的
 // 內建清單（vuln-seed.js，CISA KEV＋挑選的廠商公告）比對；貼上或拖放 NetScaler ns.conf 時另讀出檔頭版本並做幾項
 // 對外曝險檢查（XN105）。純前端、不連網。新模組包 IIFE，給其他檔案呼叫的以 window 掛出：
-//   renderDevCheckCard()（setLang 呼叫）、devCheckLoad(text)（拖放）、nsConfAudit(text)（純函式，測試用）、isNsConf(text)
+//   renderDevCheckCard()（setLang 呼叫）、devCheckLoad(text)（拖放）、nsConfAudit(text)（純函式，測試用）、isNsConf(text)、
+//   F5 BIG-IP（XN106）bigipConfAudit(text)／isBigipConf(text)
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -14,7 +15,7 @@
     ['iosxe', 'Cisco IOS XE', '17.9.4a'], ['ios', 'Cisco IOS', '15.2(7)E8'], ['nxos', 'Cisco NX-OS', '9.3(10)'],
     ['junos', 'Juniper Junos', '21.4R3-S5'], ['sonicos', 'SonicWall SonicOS', '7.0.1-5035'], ['gaia', 'Check Point Gaia', 'R81.20 Take 141'],
     ['eos', 'Arista EOS', '4.30.2F'], ['aoscx', 'HPE Aruba AOS-CX', '10.11.1020'], ['routeros', 'MikroTik RouterOS', '7.15.2'],
-    ['os10', 'Dell SmartFabric OS10', '10.5.6.13'],
+    ['os10', 'Dell SmartFabric OS10', '10.5.6.13'], ['bigip', 'F5 BIG-IP', '17.1.1.4'],
   ];
   const st = { audit: null };
   // VulnCheck 是 vuln-check.js 的頂層 const，不在 window 上，以 typeof 判斷
@@ -54,6 +55,56 @@
     const comm = [...t.matchAll(/^add snmp community (\S+)/gm)].map(m => m[1]).filter(c => /^(public|private)$/i.test(c));
     if (comm.length) findings.push({ id: 'snmp_default', sev: 'medium', p: { list: comm.join(', ') } });
     return { version: vm ? `${vm[1]}-${vm[2]}` : '', findings };
+  }
+  // F5 BIG-IP 設定（XN106）：bigip.conf、tmsh list 輸出或 Oxidized 錄製；以 tmsh 頂層區塊判斷，至少 2 項
+  const F5_SIGS = [/^#TMSH-VERSION: /m, /^ltm (?:virtual|pool|node) \S+ \{/m, /^net self \S+ \{/m, /^net vlan \S+ \{/m, /^sys global-settings \{/m,
+    /^auth user \S+ \{/m, /^sys (?:httpd|sshd|snmp) \{/m, /^sys management-ip /m, /Sys::Version/];
+  function isBigipConf(text) { const t = String(text || ''); return F5_SIGS.filter(r => r.test(t)).length >= 2; }
+  // tmsh 頂層區塊：以「標頭 {」開始的行起算，依大括號深度找到結尾；回傳 [{head, body}]（body 不含頭尾行）
+  function f5Blocks(t, headRe) {
+    const lines = t.split('\n'), out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(headRe);
+      if (!m) continue;
+      if (/\{\s*\}\s*$/.test(lines[i])) { out.push({ m, body: '' }); continue; }
+      let depth = 0, j = i;
+      for (; j < lines.length; j++) { depth += (lines[j].match(/\{/g) || []).length - (lines[j].match(/\}/g) || []).length; if (depth <= 0) break; }
+      out.push({ m, body: lines.slice(i + 1, j).join('\n') });
+      i = j;
+    }
+    return out;
+  }
+  // 項目依 F5 文件（K17333 port lockdown、K13309 管理介面 httpd／sshd allow、tmsh sys snmp communities）：
+  //   self IP allow-service all（所有服務，含 TMUI／iControl REST）、明列 tcp:https／443／ssh／22（管理服務開在資料面）；
+  //   allow-service default 依版本內容不同，不評估；httpd／sshd allow 為 All；SNMP community public／private；本機帳號 shell bash
+  function bigipConfAudit(text) {
+    const t = String(text || '').replace(/\r\n/g, '\n');
+    const vm = t.match(/^#?\s*Version\s+(\d+(?:\.\d+){2,3})\s*$/m);
+    const bm = t.match(/^#?\s*Build\s+(\d+(?:\.\d+)+)\s*$/m);
+    const findings = [];
+    const all = [], mgmt = [];
+    let pubAll = false, pubMgmt = false;
+    for (const b of f5Blocks(t, /^net self (\S+) \{/)) {
+      const addr = ((b.body.match(/^\s*address (\S+)/m) || [])[1] || '').replace(/%\d+/, '');
+      const ip = addr.split('/')[0], pub = isPublicV4(ip);
+      const label = `${b.m[1]} ${addr}`.trim();
+      const svc = b.body.match(/^\s*allow-service (?:\{([^}]*)\}|(\S+))/m);
+      if (!svc) continue;
+      if (svc[2] === 'all') { all.push(label); pubAll = pubAll || pub; continue; }
+      const list = (svc[1] || '').trim().split(/\s+/).filter(Boolean);
+      const hit = list.filter(x => /^tcp:(?:https|443|ssh|22)$/i.test(x));
+      if (hit.length) { mgmt.push(`${label} (${hit.join(' ')})`); pubMgmt = pubMgmt || pub; }
+    }
+    if (all.length) findings.push({ id: 'selfip_allow_all', sev: pubAll ? 'high' : 'medium', p: { list: all.join(', ') } });
+    if (mgmt.length) findings.push({ id: 'selfip_mgmt', sev: pubMgmt ? 'high' : 'medium', p: { list: mgmt.join(', ') } });
+    const allowAll = re => f5Blocks(t, re).some(b => /^\s*allow \{[^}]*\b(?:all|0\.0\.0\.0\/0(?:\.0\.0\.0)?)\b/im.test(b.body) || /^\s*allow (?:all|ALL)\s*$/m.test(b.body));
+    if (allowAll(/^sys httpd \{/)) findings.push({ id: 'httpd_allow_all', sev: 'medium', p: {} });
+    if (allowAll(/^sys sshd \{/)) findings.push({ id: 'sshd_allow_all', sev: 'medium', p: {} });
+    const comm = [...t.matchAll(/^\s*community-name (\S+)/gm)].map(m => m[1].replace(/"/g, '')).filter(c => /^(public|private)$/i.test(c));
+    if (comm.length) findings.push({ id: 'snmp_default', sev: 'medium', p: { list: [...new Set(comm)].join(', ') } });
+    const shell = f5Blocks(t, /^auth user (\S+) \{/).filter(b => /^\s*shell bash\s*$/m.test(b.body)).map(b => b.m[1]);
+    if (shell.length) findings.push({ id: 'bigip_shell', sev: 'low', p: { list: shell.join(', ') } });
+    return { kind: 'bigip', version: vm ? vm[1] : '', build: bm ? bm[1] : '', findings };
   }
   // 比對內建清單：回傳 {status, hits:[entry], unknown:[entry]}；status：affected｜ok｜unknown｜noVersion｜noRules
   function compare(sch, version) {
@@ -100,11 +151,12 @@
     if (!box) return;
     const a = st.audit;
     if (!a) { box.innerHTML = ''; return; }
-    let h = `<h3 class="dc-sub">${esc(tr('dc.audit_title'))}</h3>`;
-    h += `<p class="cert-hint">${esc(a.version ? fmt('dc.version_found', { v: a.version }) : tr('dc.version_missing'))}</p>`;
+    const f5 = a.kind === 'bigip';
+    let h = `<h3 class="dc-sub">${esc(tr(f5 ? 'dc.f5_audit_title' : 'dc.audit_title'))}</h3>`;
+    h += `<p class="cert-hint">${esc(a.version ? fmt('dc.version_found', { v: a.version + (a.build ? ' Build ' + a.build : '') }) : tr(f5 ? 'dc.f5_version_missing' : 'dc.version_missing'))}</p>`;
     h += a.findings.length
       ? '<ul class="dc-findings">' + a.findings.map(f => `<li class="dc-sev-${f.sev}">${esc(fmt('dc.f_' + f.id, f.p))}</li>`).join('') + '</ul>'
-      : `<p class="cert-hint">${esc(tr('dc.audit_clean'))}</p>`;
+      : `<p class="cert-hint">${esc(tr(f5 ? 'dc.f5_audit_clean' : 'dc.audit_clean'))}</p>`;
     box.innerHTML = h;
   }
   function run() {
@@ -118,10 +170,14 @@
     if (!sec) return;
     const pa = $('dc-paste');
     if (pa && pa.value !== t) pa.value = t;
-    st.audit = isNsConf(t) ? nsConfAudit(t) : null;
+    st.audit = isNsConf(t) ? nsConfAudit(t) : isBigipConf(t) ? bigipConfAudit(t) : null;
+    const prod = st.audit && st.audit.kind === 'bigip' ? 'bigip' : 'netscaler';
     let ver = st.audit ? st.audit.version : '';
-    if (!ver && VC()) { const p = VC().parse('netscaler', t); const m = t.match(/NS(\d+\.\d+):?\s*Build\s*(\d+\.\d+)/i); if (p && m) ver = `${m[1]}-${m[2]}`; }
-    if (ver) { $('dc-product').value = 'netscaler'; $('dc-version').value = ver; }
+    if (!st.audit && VC()) {
+      const m = t.match(/NS(\d+\.\d+):?\s*Build\s*(\d+\.\d+)/i);
+      if (m) ver = `${m[1]}-${m[2]}`;
+    }
+    if (st.audit || ver) { $('dc-product').value = prod; if (ver) $('dc-version').value = ver; renderDevCheckCard(); }
     renderAudit();
     run();
     sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -148,5 +204,5 @@
     renderDevCheckCard();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
-  Object.assign(window, { renderDevCheckCard, devCheckLoad, nsConfAudit, isNsConf });
+  Object.assign(window, { renderDevCheckCard, devCheckLoad, nsConfAudit, isNsConf, bigipConfAudit, isBigipConf });
 })();
