@@ -139,16 +139,16 @@ const VyOSParser = (() => {
     const fw = child(tree, 'firewall');
     const chains = [];
     const rulesOf = n => Object.entries(childrenPrefixed(n, 'rule'));
-    Object.entries(childrenPrefixed(fw, 'name')).forEach(([k, n]) => chains.push({ name: k.replace(/^name\s+/, ''), fam: 4, base: false, rules: rulesOf(n) }));
-    Object.entries(childrenPrefixed(fw, 'ipv6-name')).forEach(([k, n]) => chains.push({ name: k.replace(/^ipv6-name\s+/, ''), fam: 6, base: false, rules: rulesOf(n) }));
+    Object.entries(childrenPrefixed(fw, 'name')).forEach(([k, n]) => chains.push({ name: k.replace(/^name\s+/, ''), fam: 4, base: false, rules: rulesOf(n), node: n }));
+    Object.entries(childrenPrefixed(fw, 'ipv6-name')).forEach(([k, n]) => chains.push({ name: k.replace(/^ipv6-name\s+/, ''), fam: 6, base: false, rules: rulesOf(n), node: n }));
     [['ipv4', 4], ['ipv6', 6]].forEach(([fk, fam]) => {
       const f = child(fw, fk);
       if (!f) return;
       ['forward', 'input', 'output'].forEach(hook => {
         const flt = child(child(f, hook), 'filter');
-        if (flt) chains.push({ name: `${fk}-${hook}`, fam, base: true, hook, rules: rulesOf(flt) });
+        if (flt) chains.push({ name: `${fk}-${hook}`, fam, base: true, hook, rules: rulesOf(flt), node: flt, v14: true });
       });
-      Object.entries(childrenPrefixed(f, 'name')).forEach(([k, n]) => chains.push({ name: k.replace(/^name\s+/, ''), fam, base: false, rules: rulesOf(n) }));
+      Object.entries(childrenPrefixed(f, 'name')).forEach(([k, n]) => chains.push({ name: k.replace(/^name\s+/, ''), fam, base: false, rules: rulesOf(n), node: n, v14: true }));
     });
     return chains;
   }
@@ -161,13 +161,10 @@ const VyOSParser = (() => {
     chains.filter(c => c.base).forEach(c => c.rules.forEach(([, r]) => { if (val(r, 'action') === 'jump' && val(r, 'jump-target')) (jumps[val(r, 'jump-target')] = jumps[val(r, 'jump-target')] || []).push(r); }));
     const out = [];
     let idx = 0;
-    chains.forEach(c => c.rules.forEach(([rk, r]) => {
+    // 單條規則 → 政策物件（j：自訂鏈唯一的 jump 來源，規則表沿用其條件；鏈評估用的 nf 規則傳 null）
+    const mk = (c, rk, r, j, id) => {
       const actionRaw = (val(r, 'action') || 'drop').toLowerCase();
-      // jump／return／continue 只是流程控制，跳入的自訂鏈規則另外列出（srcIntf 取自 jump 規則的介面條件）
-      if (['jump', 'return', 'continue', 'goto'].includes(actionRaw)) return;
       const num = rk.replace(/^rule\s+/, '');
-      const js = jumps[c.name] || [];
-      const j = js.length === 1 ? js[0] : null;
       const src = L.parseAddrOrPort(child(r, 'source'), portGroupMap);
       const dst = L.parseAddrOrPort(child(r, 'destination'), portGroupMap);
       if (j) {
@@ -183,9 +180,8 @@ const VyOSParser = (() => {
       const srcIntf = ifRef(r, 'inbound-interface') || (bind[c.name] || []).join(',') || (c.hook === 'output' ? 'local' : '-');
       const dstIntf = ifRef(r, 'outbound-interface') || (c.hook === 'input' ? 'local' : '-');
       const sa = _splitAddr(src.addr, addrTypeMap), da = _splitAddr(dst.addr, addrTypeMap);
-      idx++;
-      out.push({
-        id: idx, name: desc || `${c.name}-${num}`,
+      return {
+        id, name: desc || `${c.name}-${num}`,
         srcIntf, dstIntf, srcAddr: src.addr, dstAddr: dst.addr,
         srcAddr4: sa.v4, srcAddr6: sa.v6, dstAddr4: da.v4, dstAddr6: da.v6,
         service: dst.port ? `${protocol}/${dst.port}` : protocol, schedule: 'always',
@@ -197,9 +193,58 @@ const VyOSParser = (() => {
         users: '-', groups: '-', comments: desc, _vdom: '', connState, chain: c.name, ruleNum: num,
         // 位址家族（2026-10-06，MC）：name／ipv4 鏈為 v4、ipv6-name／ipv6 鏈為 v6，查詢時略過家族不同的規則
         _family: c.fam === 6 ? 'v6' : 'v4',
-      });
+      };
+    };
+
+    chains.forEach(c => c.rules.forEach(([rk, r]) => {
+      const actionRaw = (val(r, 'action') || 'drop').toLowerCase();
+      // jump／return／continue 只是流程控制，跳入的自訂鏈規則另外列出（srcIntf 取自 jump 規則的介面條件）
+      if (['jump', 'return', 'continue', 'goto'].includes(actionRaw)) return;
+      const js = jumps[c.name] || [];
+      out.push(mk(c, rk, r, js.length === 1 ? js[0] : null, ++idx));
     }));
-    return out;
+    return { policies: out, nf: buildNf(tree, chains, out, mk) };
+  }
+  // netfilter 式鏈評估資料（XN127，見 core.js _nfQueryChain()）：
+  //  - 1.3（name／ipv6-name 綁在介面 in／out／local）：與 EdgeOS 相同，用 EdgeRouterParser._lib.buildVyattaNf()
+  //  - 1.4 起（firewall ipv4|ipv6 forward／input／output filter）：全部規則依序保留（含 jump／return），jump-target 指向
+  //    同家族的 name 鏈；基本鏈的 default-action 為鏈尾動作（沒寫＝accept），name 鏈結尾補 default-action（沒寫＝drop，
+  //    return 則回到呼叫的鏈）；inbound／outbound-interface group 展開 firewall group interface-group 的成員
+  function buildNf(tree, chains, policies, mk) {
+    if (!chains.some(c => c.v14)) return L.buildVyattaNf(tree, policies, L.vyattaRulesetDefaults(tree));
+    const ifGroups = new Map();
+    Object.entries(childrenPrefixed(child(child(tree, 'firewall'), 'group'), 'interface-group')).forEach(([k, n]) =>
+      ifGroups.set(k.replace(/^interface-group\s+/, ''), [...vals(n, 'interface'), ...vals(n, 'include')]));
+    const members = ref => {
+      if (!ref) return undefined;
+      const neg = ref.startsWith('!'), g = ref.replace(/^!/, '');
+      if (!g.startsWith('@')) return undefined;
+      const m = ifGroups.get(g.slice(1));
+      return m && !neg ? m.join(', ') : undefined;
+    };
+    const key = c => c.base ? c.hook : `${c.fam}:${c.name}`;
+    const rules = [], defaults = {};
+    let k = 0;
+    chains.filter(c => c.v14).forEach(c => {
+      c.rules.forEach(([rk, r]) => {
+        const act = (val(r, 'action') || 'drop').toLowerCase();
+        const o = mk(c, rk, r, null, `nf/${++k}`);
+        const inRef = ifRef(r, 'inbound-interface'), outRef = ifRef(r, 'outbound-interface');
+        rules.push(Object.assign(o, {
+          srcIntf: inRef || '-', dstIntf: outRef || '-', srcIntfMembers: members(inRef), dstIntfMembers: members(outRef),
+          _chain: key(c), _mtAct: act === 'reject' ? 'drop' : act, _nonterminal: !['accept', 'drop', 'reject'].includes(act),
+          _jumpTarget: act === 'jump' && val(r, 'jump-target') ? `${c.fam}:${val(r, 'jump-target')}` : '',
+          _mtHasMatch: !!(child(r, 'source') || child(r, 'destination') || val(r, 'protocol') || inRef || outRef || child(r, 'state') || vals(r, 'state').length),
+        }));
+      });
+      const da = (val(c.node, 'default-action') || (c.base ? 'accept' : 'drop')).toLowerCase();
+      if (c.base) { if (c.fam === 4) defaults[c.hook] = /^(drop|reject)$/.test(da) ? 'deny' : 'accept'; return; }
+      if (da === 'return') return;
+      rules.push(Object.assign(mk(c, 'rule default', { _children: {}, _values: [] }, null, `${key(c)}/default`), {
+        name: `${c.name} default-action ${da}`, action: da === 'accept' ? 'accept' : 'deny', srcIntf: '-', dstIntf: '-',
+        _chain: key(c), _mtAct: da === 'accept' ? 'accept' : 'drop', _nonterminal: false, _nfDefaultRule: true }));
+    });
+    return { rules, defaults, forward: ['forward'], input: ['input'] };
   }
 
   // ── 物件：位址群組（含 ipv6- 版本，include 的群組名稱一併列入成員）與埠群組 ─────
@@ -260,7 +305,8 @@ const VyOSParser = (() => {
       if (kind === 'destination') {
         out.push({ type: 'vip', name: `DNAT-${num}`, vipType: 'static', poolType: 'destination', extIp: val(dst, 'address') || '-', mapIp: val(tr, 'address') || '-',
           extIntf: ifRef(n, 'inbound-interface') || '-', srcIntf: '-', startIp: '-', endIp: '-',
-          portFwd: val(dst, 'port') || val(tr, 'port') ? 'enable' : 'disable', extPort: val(dst, 'port') || '-', mapPort: val(tr, 'port') || '-', proto, status, comment });
+          portFwd: val(dst, 'port') || val(tr, 'port') ? 'enable' : 'disable', extPort: val(dst, 'port') || '-', mapPort: val(tr, 'port') || '-', proto, status, comment,
+          matchSrc: val(src, 'address') || (child(src, 'group') ? '@group' : '') });
       } else {
         const t = val(tr, 'address') || '-';
         out.push({ type: 'ippool', name: `SNAT-${num}`, vipType: 'overload', poolType: t === 'masquerade' ? 'masquerade' : 'source', extIp: val(src, 'address') || '-', mapIp: t,
@@ -327,7 +373,8 @@ const VyOSParser = (() => {
       vendor: 'VyOS',
       deviceInfo: parseDeviceInfo(tree, orig),
       interfaces: parseInterfaces(tree),
-      policies: parsePolicies(tree, buildAddrTypeMap(addresses), portGroupMap),
+      ...parsePolicies(tree, buildAddrTypeMap(addresses), portGroupMap),
+      rtRouter: L.parseVyattaRouterPlane(tree),
       routes: parseRoutes(tree),
       ha: parseHa(tree), nat: parseNAT(tree), vpn: parseVPN(tree),
       addresses, services, users: L.parseUsers(tree), schedules: [],

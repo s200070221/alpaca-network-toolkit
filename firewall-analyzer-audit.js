@@ -780,24 +780,40 @@
     'mt-www':     { cves: [], risk: 'high' },
     'mt-api':     { cves: [], risk: 'high' },
     'mt-ftp':     { cves: [], risk: 'medium' },
+    // EdgeRouter／VyOS／OpenWrt（XN127）：網頁管理介面（EdgeOS GUI、VyOS https／API、OpenWrt LuCI）
+    'rt-web':     { cves: [], risk: 'high' },
     'admin-telnet': { cves: [], risk: 'high' },
     'admin-ssh':  { cves: [], risk: 'medium' },
   };
-  const EXPOSE_VENDORS = /^(FortiGate|PaloAlto|Cisco ASA|Cisco FTD|Juniper|F5 BIG-IP|MikroTik)$/;
-  // MikroTik 從 WAN 打得到的目的（XN126）：每個對外且有位址的介面，以外部來源 198.51.100.1（落在該介面網段時改用 192.0.2.1）
-  // 的新連線、指定該介面進入，用 _runPolicyQuery() 依 input／forward 鏈實際評估；dst 省略＝該介面自己的位址（input 鏈）。
+  const EXPOSE_VENDORS = /^(FortiGate|PaloAlto|Cisco ASA|Cisco FTD|Juniper|F5 BIG-IP|MikroTik|EdgeRouter|VyOS|OpenWrt)$/;
+  // 路由器類從 WAN 打得到的目的（XN126 MikroTik、XN127 EdgeRouter／VyOS／OpenWrt，需 parser 提供 nf 鏈資料）：
+  // 每個對外介面以外部來源 198.51.100.1（落在該介面網段時改用 192.0.2.1）的新連線、指定該介面進入，
+  // 用 _runPolicyQuery() 依 input／forward 鏈實際評估；dst 省略＝到設備本身（介面沒有固定位址〔DHCP／PPPoE〕時指定 input 方向）。
   // 回傳結果為 accept 的介面名稱（含鏈尾預設放行）
   const MT_PROBE_SRC = ['198.51.100.1', '192.0.2.1'];
-  function _mtWanIfaces(parsed) {
-    return (parsed.interfaces || []).filter(i => i.ip && i.ip !== '-' && _exposeExternal(parsed, i.name).ext === true);
+  function _rtWanIfaces(parsed) {
+    return (parsed.interfaces || []).filter(i => _exposeExternal(parsed, i.name).ext === true);
   }
-  function _mtReach(parsed, proto, port, dst, extra) {
-    if (typeof _runPolicyQuery !== 'function') return [];
-    return _mtWanIfaces(parsed).filter(i => {
-      const src = MT_PROBE_SRC.find(a => !_exposeSameNet(a, i.ip, i.mask)) || MT_PROBE_SRC[0];
-      const r = _runPolicyQuery(src, dst || i.ip, proto, port, '__all__', parsed, Object.assign({ newOnly: true, srcIntf: i.name }, extra || {}));
+  function _rtReach(parsed, proto, port, dst, extra) {
+    if (typeof _runPolicyQuery !== 'function' || !parsed.nf) return [];
+    return _rtWanIfaces(parsed).filter(i => {
+      const hasIp = i.ip && i.ip !== '-' && i.mask && i.mask !== '-';
+      const src = MT_PROBE_SRC.find(a => !hasIp || !_exposeSameNet(a, i.ip, i.mask)) || MT_PROBE_SRC[0];
+      const o = Object.assign({ newOnly: true, srcIntf: i.name }, extra || {});
+      let d = dst;
+      if (!d) { if (hasIp) d = i.ip; else { d = '203.0.113.254'; o.nfKind = 'input'; } }
+      const r = _runPolicyQuery(src, d, proto, port, '__all__', parsed, o);
       return r && r.action === 'accept';
     }).map(i => i.name);
+  }
+  // 服務的 listen 限制是否包含這個對外介面（listen-on／Interface 為介面或 network 名稱，listen-address 為位址；沒寫＝全部）
+  function _rtListenOn(parsed, svc, ifName) {
+    if ((svc.listenIfs || []).length) return svc.listenIfs.includes(ifName);
+    if ((svc.listenAddrs || []).length) {
+      const i = (parsed.interfaces || []).find(x => x.name === ifName);
+      return svc.listenAddrs.some(a => /^(0\.0\.0\.0|::)$/.test(a) || (i && [i.ip].concat((i.secondaryIps || []).map(s => s.ip)).includes(a)));
+    }
+    return true;
   }
   // /ip service 的 address 限制是否包含外部來源（空白＝不限）
   function _mtSvcOpen(addr) {
@@ -911,7 +927,11 @@
     } else if (vendor === 'MikroTik') {
       const svcMap = { winbox: 'mt-winbox', www: 'mt-www', 'www-ssl': 'mt-www', api: 'mt-api', 'api-ssl': 'mt-api', ftp: 'mt-ftp', ssh: 'admin-ssh', telnet: 'admin-telnet' };
       ((parsed.mtRouter && parsed.mtRouter.services) || []).filter(x => x.enabled && svcMap[x.name] && _mtSvcOpen(x.address)).forEach(x =>
-        _mtReach(parsed, 'TCP', String(x.port)).forEach(n => add(svcMap[x.name], n, { name: `${x.name}:${x.port}` })));
+        _rtReach(parsed, 'TCP', String(x.port)).forEach(n => add(svcMap[x.name], n, { name: `${x.name}:${x.port}` })));
+    } else if (/^(EdgeRouter|VyOS|OpenWrt)$/.test(vendor)) {
+      // service gui／https／ssh／telnet（EdgeOS／VyOS）、uhttpd／dropbear（OpenWrt），依 listen 限制與 input 鏈實際評估（XN127）
+      ((parsed.rtRouter && parsed.rtRouter.services) || []).filter(x => x.enabled).forEach(x =>
+        _rtReach(parsed, 'TCP', String(x.port)).filter(n => _rtListenOn(parsed, x, n)).forEach(n => add(x.kind, n, { name: `${x.name}:${x.port}` })));
     } else if (vendor === 'F5 BIG-IP') {
       // self IP 的 port lockdown（allow-service）：all＝所有服務；明列 tcp:https／443、tcp:ssh／22；default 依版本內容不同不評估
       (parsed.interfaces || []).forEach(i => { const a = toks(i.allowaccess);
@@ -1173,7 +1193,7 @@
         ['NIST 800-53 AC-6'], bash.map(u => ({ kind: 'user', name: u.name })));
     }
     // 9c3. MikroTik 目的 NAT（XN125，依 MikroTik 文件 NAT 的 Hairpin NAT 範例）：
-    //  mt-dstnat-broad：dst-nat 沒有任何入口條件（in-interface／in-interface-list／dst-address／dst-address-list／dst-address-type／
+    //  rt-dstnat-broad（MikroTik 判斷方式）：dst-nat 沒有任何入口條件（in-interface／in-interface-list／dst-address／dst-address-list／dst-address-type／
     //    src-address／src-address-list）＝連內部使用者連往網際網路任何主機的同一個埠都會被導到內部伺服器（medium，計入健康度）
     //  mt-hairpin-no-snat：內部也能命中的 dst-nat（沒有限定外部介面），伺服器與內部用戶端同一個網段，卻沒有涵蓋的 srcnat
     //    （hairpin NAT）——內部以公網位址連線時伺服器直接回給用戶端，連線失敗（low，不計健康度）。只限 WAN 介面的轉送不列
@@ -1192,7 +1212,7 @@
       const ifOf = ip => (parsed.interfaces || []).find(i => i.ip && i.ip !== '-' && i.mask && _exposeSameNet(ip, i.ip, i.mask));
       const restricted = m => !!(m.inIntf || m.inIntfList || m.dstAddr || m.dstAddrList || m.dstAddrType || m.srcAddr || m.srcAddrList);
       const broad = mtDst.filter(n => !restricted(n.mt));
-      f('mt-dstnat-broad', tr('audit.check_mt_dstnat_broad'), broad.length, 'medium',
+      f('rt-dstnat-broad', tr('audit.check_rt_dstnat_broad'), broad.length, 'medium',
         broad.length ? broad.map(n => `${n.name}（${n.mt.dstPort || 'any'} → ${n.mt.toAddr || '-'}）`).slice(0, 8).join(', ') : tr('audit.normal'),
         ['MikroTik NAT'], broad.map(n => ({ kind: 'nat', name: n.name })));
       const snat = mtNat.filter(n => n.mt.chain === 'srcnat' && /^(?:masquerade|src-nat|netmap|same)$/.test(n.mt.action));
@@ -1219,32 +1239,56 @@
           tr('audit.mt_hairpin_fix').replace('{net}', `${_netAddr(ex.lan.ip, ex.lan.mask)}/${_maskLen(ex.lan.mask)}`).replace('{srv}', ex.srv).replace('{if}', ex.lan.name) : tr('audit.normal'),
         ['MikroTik NAT (Hairpin NAT)'], miss.map(x => ({ kind: 'nat', name: x.n.name })));
     }
-    // 9c4. MikroTik 路由器面（XN126）：依 input／forward 鏈實際評估（_mtReach），設定檔沒有寫的項目不評估
-    const mr = parsed.vendor === 'MikroTik' ? parsed.mtRouter : null;
-    if (mr) {
-      const hasWan = _mtWanIfaces(parsed).length > 0;
-      if (hasWan && parsed.dns && parsed.dns.proxy) {
-        const r = _mtReach(parsed, 'UDP', '53');
-        f('mt-dns-open-resolver', tr('audit.check_mt_dns_open'), r.length, 'high', r.length ? r.join(', ') : tr('audit.normal'), ['MikroTik DNS', 'US-CERT TA13-088A'], r.map(n => ({ kind: 'intf', name: n })));
-      }
-      const px = [mr.proxy ? 'proxy' : '', mr.socks ? 'socks' : ''].filter(Boolean);
-      if (px.length) {
-        // proxy 預設 8080、socks 1080（MikroTik 文件）；WAN 打得到為 high，否則 medium
-        const reach = hasWan && ((mr.proxy && _mtReach(parsed, 'TCP', '8080').length) || (mr.socks && _mtReach(parsed, 'TCP', '1080').length));
-        f('mt-proxy-socks', tr('audit.check_mt_proxy_socks'), px.length, reach ? 'high' : 'medium', px.join(', ') + '；' + tr('audit.mt_proxy_note'), ['MikroTik IP/Proxy', 'MikroTik IP/SOCKS'], []);
+    // 9c4. 路由器面（XN126 MikroTik、XN127 EdgeRouter／VyOS／OpenWrt；netfilter 沒有介面位址與服務資料，只評估目的 NAT）：
+    // 依 input／forward 鏈實際評估（_rtReach），設定檔沒有寫的項目不評估
+    //  rt-dns-open-resolver：DNS 開放遠端查詢且 WAN 打得到 UDP 53（MikroTik allow-remote-requests；EdgeOS／VyOS dns forwarding，
+    //    listen-on／listen-address 不含對外介面或 allow-from 不含外部來源時不列）
+    //  rt-wan-new-forward：WAN 進來、未經目的 NAT 的新連線到內部網段（TCP 445 代表）
+    //  rt-dstnat-broad（EdgeRouter／VyOS／netfilter）：目的 NAT 沒有進入介面、目的位址與來源條件
+    //  rt-upnp：UPnP 啟用（內部裝置可自行開啟對外轉送）
+    const isRt = /^(MikroTik|EdgeRouter|VyOS|OpenWrt)$/.test(parsed.vendor || '') && parsed.nf;
+    const mr = parsed.vendor === 'MikroTik' ? parsed.mtRouter : null, rr = parsed.rtRouter || null;
+    if (isRt) {
+      const hasWan = _rtWanIfaces(parsed).length > 0;
+      const dnsOn = parsed.vendor === 'MikroTik' ? !!(parsed.dns && parsed.dns.proxy) : !!(rr && rr.dns);
+      if (hasWan && dnsOn) {
+        const d = rr && rr.dns;
+        const allowOk = !d || !(d.allowFrom || []).length || d.allowFrom.some(c => { const [ip, len] = c.split('/'); return MT_PROBE_SRC.some(a => _exposeSameNet(a, ip, len === undefined ? 32 : len)); });
+        const r = allowOk ? _rtReach(parsed, 'UDP', '53').filter(n => !d || _rtListenOn(parsed, { listenIfs: d.listenIfs, listenAddrs: d.listenAddrs }, n)) : [];
+        f('rt-dns-open-resolver', tr('audit.check_rt_dns_open'), r.length, 'high', r.length ? r.join(', ') : tr('audit.normal'), ['US-CERT TA13-088A'], r.map(n => ({ kind: 'intf', name: n })));
       }
       // forward：WAN 進來、未經目的 NAT 的新連線到內部網段（TCP 445 代表）
-      const lans = (parsed.interfaces || []).filter(i => i.ip && i.ip !== '-' && i.mask && _exposeExternal(parsed, i.name).ext === false);
+      const lans = (parsed.interfaces || []).filter(i => i.ip && i.ip !== '-' && i.mask && i.mask !== '-' && _exposeExternal(parsed, i.name).ext === false && !/^127\./.test(i.ip));
       if (hasWan && lans.length) {
         // 代表主機：網段第一個可用位址，與介面位址相同時取下一個
         const toInt = ip => ip.split('.').reduce((a, o) => a * 256 + Number(o), 0);
         const toIp = n => [24, 16, 8, 0].map(b => Math.floor(n / 2 ** b) % 256).join('.');
         const hostIn = i => { if (_maskLen(i.mask) > 30) return null; const net = toInt(_netAddr(i.ip, i.mask)); return toIp(net + 1 === toInt(i.ip) ? net + 2 : net + 1); };
-        const hit = lans.map(i => ({ i, h: hostIn(i) })).filter(x => x.h && _mtReach(parsed, 'TCP', '445', x.h).length);
-        f('mt-wan-new-forward', tr('audit.check_mt_wan_forward'), hit.length, 'high', hit.length ? hit.map(x => `${x.i.name} (${_netAddr(x.i.ip, x.i.mask)}/${_maskLen(x.i.mask)})`).join(', ') : tr('audit.normal'),
-          ['MikroTik Building Your First Firewall'], hit.map(x => ({ kind: 'intf', name: x.i.name })));
+        const hit = lans.map(i => ({ i, h: hostIn(i) })).filter(x => x.h && _rtReach(parsed, 'TCP', '445', x.h).length);
+        f('rt-wan-new-forward', tr('audit.check_rt_wan_forward'), hit.length, 'high', hit.length ? hit.map(x => `${x.i.name} (${_netAddr(x.i.ip, x.i.mask)}/${_maskLen(x.i.mask)})`).join(', ') : tr('audit.normal'),
+          ['MikroTik Building Your First Firewall', 'NIST 800-41'], hit.map(x => ({ kind: 'intf', name: x.i.name })));
       }
-      const rules = (parsed.mtRules || []).filter(r => r.status !== 'disable');
+      const upnp = mr ? mr.upnp : (rr ? rr.upnp : null);
+      if (upnp !== null && upnp !== undefined) f('rt-upnp', tr('audit.check_rt_upnp'), upnp ? 1 : 0, 'low', upnp ? 'UPnP' : tr('audit.normal'), ['CISA UPnP guidance'], []);
+    }
+    if (/^(EdgeRouter|VyOS|Linux netfilter)$/.test(parsed.vendor || '')) {
+      const dn = (parsed.nat || []).filter(n => n.type === 'vip' && n.status !== 'disable');
+      if (dn.length) {
+        const empty = v => !v || /^(-|any|0\.0\.0\.0\/0)$/i.test(String(v).trim());
+        const broad = dn.filter(n => empty(n.extIntf) && empty(n.extIp) && empty(n.matchSrc));
+        f('rt-dstnat-broad', tr('audit.check_rt_dstnat_broad'), broad.length, 'medium',
+          broad.length ? broad.map(n => `${n.name}（${n.extPort || 'any'} → ${n.mapIp || '-'}）`).slice(0, 8).join(', ') : tr('audit.normal'), ['NIST 800-41'], broad.map(n => ({ kind: 'nat', name: n.name })));
+      }
+    }
+    if (mr) {
+      const hasWan = _rtWanIfaces(parsed).length > 0;
+      const px = [mr.proxy ? 'proxy' : '', mr.socks ? 'socks' : ''].filter(Boolean);
+      if (px.length) {
+        // proxy 預設 8080、socks 1080（MikroTik 文件）；WAN 打得到為 high，否則 medium
+        const reach = hasWan && ((mr.proxy && _rtReach(parsed, 'TCP', '8080').length) || (mr.socks && _rtReach(parsed, 'TCP', '1080').length));
+        f('mt-proxy-socks', tr('audit.check_mt_proxy_socks'), px.length, reach ? 'high' : 'medium', px.join(', ') + '；' + tr('audit.mt_proxy_note'), ['MikroTik IP/Proxy', 'MikroTik IP/SOCKS'], []);
+      }
+      const rules = ((parsed.nf && parsed.nf.rules) || []).filter(r => r.status !== 'disable');
       if (rules.some(r => r._chain === 'input' || r._chain === 'forward')) {
         const inv = ['input', 'forward'].filter(c => !rules.some(r => r._chain === c && r._mtAct === 'drop' && (r.connState || []).includes('invalid')));
         f('mt-no-invalid-drop', tr('audit.check_mt_invalid'), inv.length, 'low', inv.length ? inv.join(', ') : tr('audit.normal'), ['MikroTik Building Your First Firewall'], []);
@@ -1253,7 +1297,6 @@
       if (jobs.length) f('mt-sched-fetch', tr('audit.check_mt_sched_fetch'), jobs.length, 'medium', jobs.map(j => `${j.kind}: ${j.name}`).join(', ') + '；' + tr('audit.mt_sched_note'), ['MITRE T1053.005', 'MikroTik Scripting'], []);
       const l2 = [mr.macServer === 'all' ? 'mac-server' : '', mr.macWinbox === 'all' ? 'mac-winbox' : '', mr.neighbor === 'all' ? 'neighbor discovery' : ''].filter(Boolean);
       if (mr.macServer !== null || mr.macWinbox !== null || mr.neighbor !== null) f('mt-l2-mgmt-all', tr('audit.check_mt_l2_mgmt'), l2.length, 'low', l2.length ? l2.join(', ') : tr('audit.normal'), ['MikroTik Securing your router'], []);
-      if (mr.upnp !== null) f('mt-upnp', tr('audit.check_mt_upnp'), mr.upnp ? 1 : 0, 'low', mr.upnp ? 'UPnP' : tr('audit.normal'), ['MikroTik UPnP'], []);
       if (mr.bwServerNoAuth) f('mt-bw-server-noauth', tr('audit.check_mt_bw_server'), 1, 'low', 'bandwidth-server authenticate=no', ['MikroTik Securing your router'], []);
     }
     // 9d. eBGP 鄰居未設定進出過濾（2026-10-28，XN41＝XN28 第二階段，交換器分析已有同名項目）：RFC 8212 要求
@@ -1973,10 +2016,10 @@
       ['admin-legacy-hash', 'health.admin_legacy_hash'],
       ['fg-private-data-enc', 'health.fg_private_data_enc'],
       ['f5-mgmt-any-source', 'health.f5_mgmt_any'],
-      ['mt-dstnat-broad', 'health.mt_dstnat_broad'],
-      ['mt-dns-open-resolver', 'health.mt_dns_open'],
+      ['rt-dstnat-broad', 'health.rt_dstnat_broad'],
+      ['rt-dns-open-resolver', 'health.rt_dns_open'],
       ['mt-proxy-socks', 'health.mt_proxy_socks'],
-      ['mt-wan-new-forward', 'health.mt_wan_forward'],
+      ['rt-wan-new-forward', 'health.rt_wan_forward'],
       ['bgp-ebgp-no-policy', 'health.bgp_ebgp_no_policy'],
       ['snmpv3-weak', 'health.snmpv3_weak'],
       ['ipv6-any-open', 'health.ipv6_any_open'],

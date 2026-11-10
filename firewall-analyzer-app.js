@@ -3086,7 +3086,8 @@ function onParsed(){
     const fqdnNote = ((res.trace.find(t=>t.result==='match'&&t.hasFqdn))
       ? ` <span style="font-size:11px;color:var(--orange)">(${tr('query.fqdn_note')})</span>` : '') +
       // RouterOS（XN126）：使用的鏈、依位址推得的進出介面；鏈尾預設放行另註明
-      (res.mtChain ? `<div style="margin-top:6px;font-size:12px;font-weight:400;color:var(--text-dim)">${esc(tr('query.mt_chain').replace('{chain}', res.mtChain).replace('{in}', res.mtIn || '-').replace('{out}', res.mtOut || '-'))}${res.mtDefault ? ' ' + esc(tr('query.mt_default_accept')) : ''}</div>` : '');
+      // 路由器類（netfilter 式鏈，XN126／XN127）：使用的鏈、依位址推得的進出介面；鏈尾預設動作另註明
+      (res.nfChain ? `<div style="margin-top:6px;font-size:12px;font-weight:400;color:var(--text-dim)">${esc(tr(res.nfPick === 'host' ? 'query.nf_chain_host' : 'query.nf_chain').replace('{chain}', res.nfChain).replace('{in}', res.nfIn || '-').replace('{out}', res.nfOut || '-'))}${res.nfDefault ? ' ' + esc(tr('query.nf_default').replace('{chain}', res.nfDefault).replace('{action}', res.nfDefaultAction === 'deny' ? 'DENY' : 'ACCEPT')) : ''}</div>` : '');
     const _mt = res.trace.find(t=>t.result==='match');
     const _rSrc = _mt&&_mt.resolvedSrc;
     const _rDst = _mt&&_mt.resolvedDst;

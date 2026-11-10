@@ -369,15 +369,22 @@ function _runAsaQuery(srcStr, dstStr, proto, port, PARSED, opts, srcInt, dstInt)
     srcAddr: 'any', dstAddr: 'any', service: 'any', comments: '-', _default: true };
   return { matched: sl, action: 'accept', trace: [], defaultRule: true, asa: Object.assign(asa, { stage: 'seclevel' }) };
 }
-// MikroTik 查詢用的規則順序（XN126）：選鏈（目的是路由器自己的介面位址＝input，否則 forward），jump 展開自訂鏈
-// （最多 8 層、不重複進入同一條鏈），展開的規則複製一份並帶上沿途 jump 規則（_mtGuards）；沒有條件的 return 結束該段
-function _mtQueryChain(pols, dstInt, isV6, PARSED) {
-  const local = !isV6 && (PARSED.interfaces || []).some(i => [i.ip].concat((i.secondaryIps || []).map(x => x.ip))
+// netfilter 式鏈評估（XN126 MikroTik、XN127 推廣到 EdgeRouter／VyOS／OpenWrt／Linux netfilter）：
+// parser 提供 PARSED.nf = { rules, defaults:{鏈:'accept'|'deny'}, forward:[鏈…], input:[鏈…], chainPick:'host'?, note? }
+//  - rules：依原順序的全部規則（含 jump／return／非終止），_chain 為所屬鏈，_mtAct 原始動作，_jumpTarget，_nonterminal
+//  - forward／input：轉送與到本機各自依序評估的鏈（EdgeRouter／VyOS 1.3 的 in 規則集放行後還要過 out 規則集）
+//  - defaults：鏈尾沒有命中時的動作（沒寫＝accept，RouterOS 與 iptables 預設）
+//  - chainPick 'host'：沒有介面位址、只有 INPUT 規則的主機防火牆（netfilter），一律看 input
+// 選鏈：目的是設備自己的介面位址＝input，否則 forward；jump 展開自訂鏈（最多 8 層、不重複進入同一條鏈），
+// 展開的規則複製一份並帶上沿途 jump 規則（_mtGuards）；沒有條件的 return 結束該段
+function _nfIsLocal(dstInt, isV6, PARSED) {
+  return !isV6 && (PARSED.interfaces || []).some(i => [i.ip].concat((i.secondaryIps || []).map(x => x.ip))
     .some(ip => _strictIpInt(String(ip || '').trim()) === dstInt));
-  const chain = local ? 'input' : 'forward';
+}
+function _nfExpand(rules, chain) {
   const out = [];
   const walk = (name, guards, depth, seen) => {
-    for (const p of pols) {
+    for (const p of rules) {
       if (p._chain !== name) continue;
       if (p._mtAct === 'jump') {
         if (p.status !== 'disable' && p._jumpTarget && depth < 8 && !seen.includes(p._jumpTarget)) walk(p._jumpTarget, guards.concat([p]), depth + 1, seen.concat([p._jumpTarget]));
@@ -389,11 +396,18 @@ function _mtQueryChain(pols, dstInt, isV6, PARSED) {
     }
   };
   walk(chain, [], 0, [chain]);
-  return { chain, pols: out };
+  return out;
 }
-// 位址所在介面（XN126，MikroTik 查詢用）：直連網段（含次要位址）最長前綴，否則預設路由的出口介面
+function _nfQueryChain(PARSED, dstInt, isV6, kindOverride) {
+  const nf = PARSED.nf;
+  // kindOverride：稽核探測「到設備本身」但對外介面沒有固定位址（DHCP／PPPoE）時指定 input
+  const kind = kindOverride || (nf.chainPick === 'host' ? 'input' : (_nfIsLocal(dstInt, isV6, PARSED) ? 'input' : 'forward'));
+  const chains = (nf[kind] && nf[kind].length ? nf[kind] : [kind]);
+  return { kind, chain: kind, stages: chains.map(c => ({ chain: c, pols: _nfExpand(nf.rules || [], c), dflt: (nf.defaults && nf.defaults[c]) || 'accept' })) };
+}
+// 位址所在介面（XN126）：直連網段（含次要位址）最長前綴，否則預設路由的出口介面
 // （route.device，或下一跳所在網段的介面）；IPv6 或判斷不出時回傳 ''（維持不限介面）
-function _mtIfFor(ipInt, isV6, PARSED) {
+function _nfIfFor(ipInt, isV6, PARSED) {
   if (isV6) return '';
   let best = '', bl = -1;
   (PARSED.interfaces || []).forEach(i => [{ ip: i.ip, mask: i.mask }].concat(i.secondaryIps || []).forEach(a => {
@@ -440,6 +454,7 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
   const trace=[];
   // jump 規則本身的條件（XN126）：介面、位址、服務、連線狀態都要符合；無法判斷（null）視為可能符合
   const _mtGuardMatch = g => {
+    if (g._family && g._family !== (isV6 ? 'v6' : 'v4')) return false;
     if (newOnly && !_ruleAppliesToNew(g)) return false;
     if (!_queryIntfMatch(g, qIntf) || !_queryIntfMatch(g, qOutIntf, 'dst')) return false;
     if (g.natState && (g.natState === 'dstnat') !== !!(opts && opts.dnat)) return false;
@@ -448,48 +463,61 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
     if (neg(_policyAddrMatches(addrField(g,'dstAddr'),dstInt,addrs,g._vdom), g.dstNegate) === false) return false;
     return _policySvcMatches(g.service,proto,port?parseInt(port):null,svcs,g._vdom) !== false;
   };
-  // MikroTik RouterOS（XN126）：防火牆是 Linux netfilter——目的為路由器本身的位址走 input 鏈、其餘走 forward 鏈，
-  // jump 依序展開自訂鏈（鏈內規則須同時符合 jump 規則的條件，_mtGuards），沒有條件的 return 結束該段；
-  // log／passthrough／add-*-to-address-list／fasttrack-connection 等非終止動作不決定結果；鏈沒有預設政策，未命中即放行
-  const mt = /^MikroTik$/.test(PARSED.vendor || '') && Array.isArray(PARSED.mtRules) ? _mtQueryChain(PARSED.mtRules, dstInt, isV6, PARSED) : null;
-  if (mt) {
-    pols = mt.pols;
-    // 沒有指定介面時依位址推得進出介面（XN126）：直連網段優先，其餘走預設路由的出口；input 鏈沒有出口介面
-    if (!qIntf) { qIntf = _mtIfFor(srcInt, isV6, PARSED); mt.inferredIn = qIntf; }
-    if (!qOutIntf && mt.chain === 'forward') { qOutIntf = _mtIfFor(dstInt, isV6, PARSED); mt.inferredOut = qOutIntf; }
+  // netfilter 式鏈評估（XN126／XN127）：見 _nfQueryChain()
+  const nfq = PARSED.nf && Array.isArray(PARSED.nf.rules) ? _nfQueryChain(PARSED, dstInt, isV6, opts && opts.nfKind) : null;
+  const nfx = {};
+  if (nfq) {
+    // 沒有指定介面時依位址推得進出介面：直連網段優先，其餘走預設路由的出口；到本機沒有出口介面
+    if (!qIntf) { qIntf = _nfIfFor(srcInt, isV6, PARSED); nfx.nfIn = qIntf; }
+    if (!qOutIntf && nfq.kind === 'forward') { qOutIntf = _nfIfFor(dstInt, isV6, PARSED); nfx.nfOut = qOutIntf; }
+    nfx.nfChain = nfq.kind;
+    if (PARSED.nf.chainPick) nfx.nfPick = PARSED.nf.chainPick;
   }
-  for (const p of pols) {
-    if (p.status==='disable') { trace.push({policy:p,result:'disabled'}); continue; }
-    // MikroTik connection-nat-state：dstnat 只適用經目的 NAT 的連線（呼叫端以 opts.dnat 告知），!dstnat 相反
-    if (mt && p.natState && (p.natState === 'dstnat') !== !!(opts && opts.dnat)) { trace.push({policy:p,result:'skip',reason:'state'}); continue; }
-    if (mt && p._mtGuards && p._mtGuards.some(g => !_mtGuardMatch(g))) { trace.push({policy:p,result:'skip',reason:'jump'}); continue; }
-    if (newOnly && !_ruleAppliesToNew(p)) { trace.push({policy:p,result:'skip',reason:'state'}); continue; }
-    if (!_queryIntfMatch(p, qIntf)) { trace.push({policy:p,result:'skip',reason:'intf'}); continue; }
-    if (!_queryIntfMatch(p, qOutIntf, 'dst')) { trace.push({policy:p,result:'skip',reason:'intf'}); continue; }
-    // 規則只適用單一位址家族（H3C security-policy ip／ipv6，2026-10-05）：家族不同直接略過，避免 ipv6 規則的 any 命中 IPv4 查詢
-    if (p._family && p._family !== (isV6 ? 'v6' : 'v4')) { trace.push({policy:p,result:'skip',reason:'src_addr'}); continue; }
-    const pSrc=addrField(p,'srcAddr'), pDst=addrField(p,'dstAddr');
-    // 取反條件（srcNegate／dstNegate／svcNegate，第十七輪 QB）：比對結果反過來，無法判斷（FQDN）仍為無法判斷
-    const neg = (v, on) => on === true && v !== null ? !v : v;
-    // 物件依規則所在 VDOM／vsys 查找（2026-10-16）
-    const sm=neg(_policyAddrMatches(pSrc,srcInt,addrs,p._vdom), p.srcNegate);
-    if (sm===false) { trace.push({policy:p,result:'skip',reason:'src_addr'}); continue; }
-    const dm=neg(_policyAddrMatches(pDst,dstInt,addrs,p._vdom), p.dstNegate);
-    if (dm===false) { trace.push({policy:p,result:'skip',reason:'dst_addr'}); continue; }
-    // 服務無法辨識（null）比照 FQDN 位址：視為可能命中並標示無法驗證（2026-10-16）
-    const svm=neg(_policySvcMatches(p.service,proto,port?parseInt(port):null,svcs,p._vdom), p.svcNegate);
-    if (svm===false) { trace.push({policy:p,result:'skip',reason:'service'}); continue; }
-    const resolvedSrc=_policyAddrResolve(pSrc,srcInt,addrs,p._vdom);
-    const resolvedDst=_policyAddrResolve(pDst,dstInt,addrs,p._vdom);
-    trace.push({policy:p,result:'match',hasFqdn:sm===null||dm===null||svm===null,svcUnknown:svm===null,resolvedSrc,resolvedDst});
-    // GCP 防火牆政策的 goto_next（第二十二輪 HG）：本層不決定，交給下一層（VPC 防火牆規則或其他政策）
-    return Object.assign({matched:p,action:p.gotoNext?'goto_next':(p.action==='accept'?'accept':'deny'),trace}, mt ? { mtChain: mt.chain, mtIn: mt.inferredIn, mtOut: mt.inferredOut } : {});
+  const evalList = list => {
+    for (const p of list) {
+      if (p.status==='disable') { trace.push({policy:p,result:'disabled'}); continue; }
+      // connection-nat-state／ctstate DNAT：dstnat 只適用經目的 NAT 的連線（呼叫端以 opts.dnat 告知），!dstnat 相反
+      if (nfq && p.natState && (p.natState === 'dstnat') !== !!(opts && opts.dnat)) { trace.push({policy:p,result:'skip',reason:'state'}); continue; }
+      if (nfq && p._mtGuards && p._mtGuards.some(g => !_mtGuardMatch(g))) { trace.push({policy:p,result:'skip',reason:'jump'}); continue; }
+      if (newOnly && !_ruleAppliesToNew(p)) { trace.push({policy:p,result:'skip',reason:'state'}); continue; }
+      if (!_queryIntfMatch(p, qIntf)) { trace.push({policy:p,result:'skip',reason:'intf'}); continue; }
+      if (!_queryIntfMatch(p, qOutIntf, 'dst')) { trace.push({policy:p,result:'skip',reason:'intf'}); continue; }
+      // 規則只適用單一位址家族（H3C security-policy ip／ipv6，2026-10-05）：家族不同直接略過，避免 ipv6 規則的 any 命中 IPv4 查詢
+      if (p._family && p._family !== (isV6 ? 'v6' : 'v4')) { trace.push({policy:p,result:'skip',reason:'src_addr'}); continue; }
+      const pSrc=addrField(p,'srcAddr'), pDst=addrField(p,'dstAddr');
+      // 取反條件（srcNegate／dstNegate／svcNegate，第十七輪 QB）：比對結果反過來，無法判斷（FQDN）仍為無法判斷
+      const neg = (v, on) => on === true && v !== null ? !v : v;
+      // 物件依規則所在 VDOM／vsys 查找（2026-10-16）
+      const sm=neg(_policyAddrMatches(pSrc,srcInt,addrs,p._vdom), p.srcNegate);
+      if (sm===false) { trace.push({policy:p,result:'skip',reason:'src_addr'}); continue; }
+      const dm=neg(_policyAddrMatches(pDst,dstInt,addrs,p._vdom), p.dstNegate);
+      if (dm===false) { trace.push({policy:p,result:'skip',reason:'dst_addr'}); continue; }
+      // 服務無法辨識（null）比照 FQDN 位址：視為可能命中並標示無法驗證（2026-10-16）
+      const svm=neg(_policySvcMatches(p.service,proto,port?parseInt(port):null,svcs,p._vdom), p.svcNegate);
+      if (svm===false) { trace.push({policy:p,result:'skip',reason:'service'}); continue; }
+      const resolvedSrc=_policyAddrResolve(pSrc,srcInt,addrs,p._vdom);
+      const resolvedDst=_policyAddrResolve(pDst,dstInt,addrs,p._vdom);
+      trace.push({policy:p,result:'match',hasFqdn:sm===null||dm===null||svm===null,svcUnknown:svm===null,resolvedSrc,resolvedDst});
+      // GCP 防火牆政策的 goto_next（第二十二輪 HG）：本層不決定，交給下一層（VPC 防火牆規則或其他政策）
+      return {matched:p,action:p.gotoNext?'goto_next':(p.action==='accept'?'accept':'deny'),trace};
+    }
+    return null;
+  };
+  if (nfq) {
+    // 依序評估各段鏈：拒絕即結束；放行或鏈尾放行才進下一段；全部放行回傳最後一段的結果
+    let last = null;
+    for (const st of nfq.stages) {
+      const r = evalList(st.pols);
+      if (r && r.action !== 'accept') return Object.assign(r, nfx);
+      if (r) { last = r; continue; }
+      const dp = { id: 'nf-default', name: `${st.chain} chain (no match → ${st.dflt})`, action: st.dflt === 'deny' ? 'deny' : 'accept', status: 'enable', srcIntf: 'any', dstIntf: 'any',
+        srcAddr: 'any', dstAddr: 'any', service: 'any', comments: '-', _default: true, _chain: st.chain };
+      last = Object.assign({ matched: dp, action: dp.action, trace, defaultRule: true, nfDefault: st.chain, nfDefaultAction: dp.action }, nfx);
+      if (dp.action !== 'accept') return last;
+    }
+    return Object.assign(last, nfx);
   }
-  if (mt) {
-    const dp = { id: 'mt-default-accept', name: `${mt.chain} chain (no match → accept)`, action: 'accept', status: 'enable', srcIntf: 'any', dstIntf: 'any',
-      srcAddr: 'any', dstAddr: 'any', service: 'any', comments: '-', _default: true, _chain: mt.chain };
-    return { matched: dp, action: 'accept', trace, defaultRule: true, mtDefault: mt.chain, mtChain: mt.chain, mtIn: mt.inferredIn, mtOut: mt.inferredOut };
-  }
+  { const r = evalList(pols); if (r) return r; }
   // 預設規則（第十八輪 TH）：Junos default-policy permit-all 時沒命中的流量放行，以合成的預設規則回傳；
   // PAN-OS 的預設規則依目的區域而定（查詢條件無目的區域），只附上 paDefault 供畫面說明
   if (PARSED.defaultPolicy === 'accept') {

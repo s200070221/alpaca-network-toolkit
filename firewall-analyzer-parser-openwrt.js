@@ -268,13 +268,78 @@ const OpenWrtParser = (() => {
     return hits >= 2;
   }
 
+  // netfilter 式鏈評估資料（XN127，見 core.js _nfQueryChain()）：依 fw4 產生規則的方式推得（近似，非逐條比對實機 nft 輸出）
+  //  - zone 的 list network／option network 為成員介面；policy 沒寫時沿用 config defaults，defaults 沒寫為拒絕
+  //  - input：來自 zone Z → src＝Z（或 *）且沒有 dest 的 rule 依序比對 → Z 的 input 政策
+  //  - forward：來自 zone Z → src＝Z（或 *）且有 dest 的 rule → config forwarding Z→D 放行 → 目的也在 Z 時套用 Z 的 forward 政策
+  //    → config defaults 的 forward 政策
+  //  - rule 的 target 只有 ACCEPT／REJECT／DROP 決定結果（MARK／NOTRACK 等不列）；沒有 src 的 rule 是 output，不列
+  function buildNf(pkgs, policies) {
+    const fw = pkgs.firewall || [];
+    const pol = v => /^(REJECT|DROP)$/i.test(v || '') ? 'deny' : /^ACCEPT$/i.test(v || '') ? 'accept' : '';
+    const defs = fw.find(s => s.type === 'defaults');
+    const dIn = (defs && pol(val(defs, 'input'))) || 'deny', dFwd = (defs && pol(val(defs, 'forward'))) || 'deny';
+    const zones = fw.filter(s => s.type === 'zone').map(s => ({
+      name: val(s, 'name', s.name || ''), nets: [...((s.lists && s.lists.network) || []), ...String(val(s, 'network', '')).split(/\s+/)].filter(Boolean),
+      input: pol(val(s, 'input')) || dIn, forward: pol(val(s, 'forward')) || dFwd })).filter(z => z.name);
+    const zm = new Map(zones.map(z => [z.name, z]));
+    const mem = zn => zn && zn !== '*' && zm.has(zn) ? (zm.get(zn).nets.join(', ') || undefined) : undefined;
+    const base = o => Object.assign({ srcIntf: '-', dstIntf: '-', srcAddr: 'any', dstAddr: 'any', srcAddr4: 'any', dstAddr4: 'any', srcAddr6: '-', dstAddr6: '-',
+      service: 'any', schedule: 'always', nat: 'disable', ippool: 'disable', poolname: '-', logtraffic: 'disable', utm: { av: '-', ips: '-', webfilter: '-', appctrl: '-' },
+      status: 'enable', users: '-', groups: '-', comments: '', _vdom: '', connState: [], _nonterminal: false }, o);
+    const rules = [];
+    const ruleSecs = fw.filter(s => s.type === 'rule');
+    zones.forEach(z => {
+      const zIn = `in:${z.name}`, zFw = `fw:${z.name}`;
+      rules.push(base({ id: `zone/${z.name}/in`, name: `zone ${z.name} → input`, action: 'deny', srcIntf: z.name, srcIntfMembers: mem(z.name), _chain: 'input', _mtAct: 'jump', _jumpTarget: zIn, _nonterminal: true, _mtHasMatch: true }));
+      rules.push(base({ id: `zone/${z.name}/fwd`, name: `zone ${z.name} → forward`, action: 'deny', srcIntf: z.name, srcIntfMembers: mem(z.name), _chain: 'forward', _mtAct: 'jump', _jumpTarget: zFw, _nonterminal: true, _mtHasMatch: true }));
+      ruleSecs.forEach((s, i) => {
+        const p = policies[i], src = val(s, 'src', ''), dest = val(s, 'dest', '');
+        if (!p || !src || (src !== '*' && src !== z.name)) return;
+        const tgt = val(s, 'target', 'REJECT').toUpperCase();
+        if (!['ACCEPT', 'REJECT', 'DROP'].includes(tgt)) return;
+        rules.push(Object.assign({}, p, { id: `${p.id}@${z.name}`, srcIntf: '-', dstIntf: dest && dest !== '*' ? dest : '-', dstIntfMembers: dest && dest !== '*' ? mem(dest) : undefined,
+          _chain: dest ? zFw : zIn, _mtAct: tgt === 'ACCEPT' ? 'accept' : 'drop', _nonterminal: false }));
+      });
+      fw.filter(s => s.type === 'forwarding' && val(s, 'src') === z.name && val(s, 'enabled', '1') !== '0').forEach(s => {
+        const d = val(s, 'dest');
+        rules.push(base({ id: `fwd/${z.name}/${d}`, name: `forwarding ${z.name} → ${d}`, action: 'accept', dstIntf: d, dstIntfMembers: mem(d), _chain: zFw, _mtAct: 'accept' }));
+      });
+      rules.push(base({ id: `zone/${z.name}/fwd-policy`, name: `zone ${z.name} forward ${z.forward.toUpperCase()}`, action: z.forward, dstIntf: z.name, dstIntfMembers: mem(z.name), _chain: zFw, _mtAct: z.forward === 'accept' ? 'accept' : 'drop', _nfDefaultRule: true }));
+      rules.push(base({ id: `zone/${z.name}/in-policy`, name: `zone ${z.name} input ${z.input.toUpperCase()}`, action: z.input, _chain: zIn, _mtAct: z.input === 'accept' ? 'accept' : 'drop', _nfDefaultRule: true }));
+    });
+    return { rules, defaults: { input: dIn, forward: dFwd }, forward: ['forward'], input: ['input'], zones };
+  }
+
+  // 路由器本身的服務（XN127）：uci export 含 dropbear／uhttpd／upnpd 時才評估（只上傳 firewall 檔案時為 null）。
+  //  dropbear：Port（預設 22）、Interface（限定的 network，沒寫＝全部）、enable '0'＝停用
+  //  uhttpd（LuCI）：list listen_http／listen_https「位址:埠」，0.0.0.0／[::]＝全部介面
+  //  upnpd：config upnpd 的 enabled '1'
+  function parseRouterPlane(pkgs) {
+    const all = Object.values(pkgs).flat();
+    const drop = all.filter(s => s.type === 'dropbear'), uh = all.filter(s => s.type === 'uhttpd'), up = all.filter(s => s.type === 'upnpd');
+    if (!drop.length && !uh.length && !up.length) return null;
+    const services = [];
+    drop.forEach(s => services.push({ name: 'dropbear', kind: 'admin-ssh', port: Number(val(s, 'Port', '22')) || 22, enabled: val(s, 'enable', '1') !== '0',
+      listenIfs: val(s, 'Interface') ? [val(s, 'Interface')] : [], listenAddrs: [] }));
+    uh.forEach(s => ['listen_https', 'listen_http'].forEach(k => ((s.lists && s.lists[k]) || (val(s, k) ? [val(s, k)] : [])).forEach(l => {
+      const m = String(l).match(/^(.*):(\d+)$/);
+      if (!m) return;
+      const addr = m[1].replace(/^\[|\]$/g, '');
+      services.push({ name: `uhttpd ${k === 'listen_https' ? 'https' : 'http'}`, kind: 'rt-web', port: Number(m[2]), enabled: true,
+        listenIfs: [], listenAddrs: /^(0\.0\.0\.0|::|\*)?$/.test(addr) ? [] : [addr] });
+    })));
+    return { services, dns: null, upnp: up.length ? up.some(s => val(s, 'enabled', '0') === '1') : null };
+  }
+
   function parse(text) {
     const pkgs = parseUCI(text);
+    const policies = parsePolicies(pkgs);
     return {
       vendor: 'OpenWrt',
       deviceInfo: parseDeviceInfo(pkgs),
       interfaces: parseInterfaces(pkgs),
-      policies: parsePolicies(pkgs),
+      policies, nf: buildNf(pkgs, policies), rtRouter: parseRouterPlane(pkgs),
       routes: parseRoutes(pkgs),
       ha: null, nat: parseNAT(pkgs), vpn: [],
       addresses: parseAddressGroups(pkgs), services: [],

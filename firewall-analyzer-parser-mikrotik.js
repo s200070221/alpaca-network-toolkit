@@ -490,9 +490,9 @@ const MikrotikParser = (() => {
     return rules;
   }
   // 規則表與查詢分開（XN126）：policies 只放終止動作（accept／deny，與 netfilter parser 相同，非終止規則不列），
-  // mtRules 保留全部規則與原順序給 _mtQueryChain() 展開 jump
+  // nf.rules 保留全部規則與原順序給 _nfQueryChain() 展開 jump；RouterOS 鏈沒有預設政策（未命中即放行）
   function splitMtRules(all) {
-    return { policies: all.filter(r => !r._nonterminal), mtRules: all };
+    return { policies: all.filter(r => !r._nonterminal), nf: { rules: all, defaults: {}, forward: ['forward'], input: ['input'] } };
   }
 
   // ── Routes ──────────────────────────────────────────────────────────────────

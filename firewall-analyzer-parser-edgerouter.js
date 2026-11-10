@@ -119,9 +119,11 @@ const EdgeRouterParser = (() => {
     return [ip, maskFromBits(parseInt(bits, 10))];
   }
 
-  function parseDeviceInfo(tree) {
+  function parseDeviceInfo(tree, text) {
     const sys = child(tree, 'system');
-    return { vendor: 'EdgeRouter', hostname: val(sys, 'host-name') || '-', firmware: '-', model: '-', serial: '-', vdom: [] };
+    // config.boot 檔尾「/* Release version: v2.0.9-hotfix.7.… */」（XN127）
+    const rel = (String(text || '').match(/\/\*\s*Release version:\s*(v?\d[\w.\-]*)\s*\*\//) || [])[1];
+    return { vendor: 'EdgeRouter', hostname: val(sys, 'host-name') || '-', firmware: rel ? `EdgeOS ${rel}` : '-', model: '-', serial: '-', vdom: [] };
   }
 
   // ruleset 名稱 → 綁定介面清單（走訪 interfaces.ethernet.*.firewall.{in,out,local}，
@@ -163,6 +165,83 @@ const EdgeRouterParser = (() => {
       });
     });
     return bind;
+  }
+
+  // netfilter 式鏈評估資料（XN127，EdgeOS 與 VyOS 1.3 共用；見 core.js _nfQueryChain()）：
+  // 介面 firewall in／out／local name X 綁定保留方向——in 進 fwd-in、out 進 fwd-out（以出口介面比對）、local 進 input，
+  // 每個綁定合成一條 jump；規則集內的規則依序比對，結尾補上 default-action（沒寫＝drop）。
+  // 轉送依序過 fwd-in 與 fwd-out（in 規則集放行後，出口介面的 out 規則集仍要判斷）；沒有綁定規則集的介面不過濾（鏈尾放行）。
+  // 介面種類：ethernet（含 vif、pppoe）、switch、bonding、bridge、openvpn、wireguard、tunnel、l2tp-client／pptp-client
+  const VYATTA_IF_TYPES = ['ethernet', 'switch', 'bonding', 'bridge', 'openvpn', 'wireguard', 'tunnel', 'l2tp-client', 'pptp-client', 'pseudo-ethernet', 'vti', 'pppoe', 'dummy'];
+  function vyattaBindings(tree) {
+    const out = [];
+    const addFw = (name, node) => {
+      const fw = child(node, 'firewall');
+      if (!fw) return;
+      ['in', 'out', 'local'].forEach(dir => [['name', 4], ['ipv6-name', 6]].forEach(([k, fam]) => {
+        const rn = val(child(fw, dir), k);
+        if (rn) out.push({ iface: name, dir, rs: rn, fam });
+      }));
+    };
+    const ifs = child(tree, 'interfaces');
+    VYATTA_IF_TYPES.forEach(t => Object.entries(childrenPrefixed(ifs, t)).forEach(([key, node]) => {
+      const name = key.slice(t.length).trim();
+      if (!name) return;
+      addFw(name, node);
+      Object.entries(childrenPrefixed(node, 'vif')).forEach(([vk, vn]) => addFw(`${name}.${vk.replace(/^vif\s+/, '')}`, vn));
+      Object.entries(childrenPrefixed(node, 'pppoe')).forEach(([pk, pn]) => addFw(`pppoe${pk.replace(/^pppoe\s+/, '')}`, pn));
+    }));
+    return out;
+  }
+  function buildVyattaNf(tree, policies, dfltOf) {
+    const anyRule = o => Object.assign({ srcIntf: '-', dstIntf: '-', srcAddr: 'any', dstAddr: 'any', srcAddr4: 'any', dstAddr4: 'any', srcAddr6: '-', dstAddr6: '-',
+      service: 'all', schedule: 'always', nat: 'disable', ippool: 'disable', poolname: '-', logtraffic: 'disable', utm: { av: '-', ips: '-', webfilter: '-', appctrl: '-' },
+      status: 'enable', users: '-', groups: '-', comments: '', _vdom: '', connState: [] }, o);
+    const rsKey = (rs, fam) => `rs:${fam === 6 ? '6:' : ''}${rs}`;
+    const rules = [];
+    vyattaBindings(tree).forEach((b, i) => rules.push(anyRule({
+      id: `bind/${i + 1}`, name: `${b.iface} firewall ${b.dir} → ${b.rs}`, action: 'deny', _family: b.fam === 6 ? 'v6' : 'v4',
+      [b.dir === 'out' ? 'dstIntf' : 'srcIntf']: b.iface, _chain: b.dir === 'in' ? 'fwd-in' : b.dir === 'out' ? 'fwd-out' : 'input',
+      _mtAct: 'jump', _jumpTarget: rsKey(b.rs, b.fam), _nonterminal: true, _mtHasMatch: true })));
+    const seen = new Set();
+    policies.forEach(p => {
+      const fam = p._family === 'v6' ? 6 : 4, key = rsKey(p.chain, fam);
+      rules.push(Object.assign({}, p, { srcIntf: '-', dstIntf: '-', _chain: key, _mtAct: p.action === 'accept' ? 'accept' : 'drop', _nonterminal: false }));
+      seen.add(p.chain + '|' + fam);
+    });
+    // 規則集結尾的 default-action（沒有規則的規則集也要補，綁定後一律由它決定）
+    (dfltOf || []).forEach(d => rules.push(anyRule({ id: `${rsKey(d.rs, d.fam)}/default`, name: `${d.rs} default-action ${d.act}`, action: d.act === 'accept' ? 'accept' : 'deny',
+      _family: d.fam === 6 ? 'v6' : 'v4', _chain: rsKey(d.rs, d.fam), _mtAct: d.act === 'accept' ? 'accept' : 'drop', _nonterminal: false, _nfDefaultRule: true })));
+    return { rules, defaults: {}, forward: ['fwd-in', 'fwd-out'], input: ['input'] };
+  }
+  // 路由器本身的服務（XN127，EdgeOS 與 VyOS 共用）：service 區塊有寫才算啟用（兩者的設定檔都會列出啟用中的服務）。
+  //  EdgeOS：gui（https-port 預設 443、listen-address）、ssh（port 預設 22、listen-address）、telnet（port 預設 23）、
+  //          dns forwarding（listen-on 介面）、upnp／upnp2
+  //  VyOS：https（listen-address；API 也在這裡）、ssh（port、listen-address）、telnet、dns forwarding（listen-address、allow-from）、upnp
+  function parseVyattaRouterPlane(tree) {
+    const svc = child(tree, 'service');
+    if (!svc) return null;
+    const services = [];
+    const add = (node, name, kind, dport, portKey) => {
+      if (!node) return;
+      const p = val(node, portKey || 'port') || dport;
+      services.push({ name, kind, port: Number(p) || dport, enabled: !hasFlag(node, 'disable'), listenAddrs: vals(node, 'listen-address') });
+    };
+    add(child(svc, 'gui'), 'gui', 'rt-web', 443, 'https-port');
+    add(child(svc, 'https'), 'https', 'rt-web', 443);
+    add(child(svc, 'ssh'), 'ssh', 'admin-ssh', 22);
+    add(child(svc, 'telnet'), 'telnet', 'admin-telnet', 23);
+    const df = child(child(svc, 'dns'), 'forwarding');
+    const dns = df ? { listenIfs: vals(df, 'listen-on'), listenAddrs: vals(df, 'listen-address'), allowFrom: vals(df, 'allow-from') } : null;
+    const upnp = child(svc, 'upnp') || child(svc, 'upnp2') ? true : null;
+    return { services, dns, upnp };
+  }
+
+  // 規則集的 default-action（EdgeOS／VyOS 1.3：firewall name X／ipv6-name X 的 default-action，沒寫＝drop）
+  function vyattaRulesetDefaults(tree) {
+    const fwNode = child(tree, 'firewall');
+    return [...Object.entries(childrenPrefixed(fwNode, 'name')).map(([k, n]) => ({ rs: k.replace(/^name\s+/, ''), fam: 4, act: (val(n, 'default-action') || 'drop').toLowerCase() })),
+      ...Object.entries(childrenPrefixed(fwNode, 'ipv6-name')).map(([k, n]) => ({ rs: k.replace(/^ipv6-name\s+/, ''), fam: 6, act: (val(n, 'default-action') || 'drop').toLowerCase() }))];
   }
 
   function inferRole(desc, boundRulesets) {
@@ -392,6 +471,7 @@ const EdgeRouterParser = (() => {
           extIntf: val(node, 'inbound-interface') || '-', srcIntf: '-', startIp: '-', endIp: '-',
           portFwd: (val(dst, 'port') || val(inside, 'port')) ? 'enable' : 'disable',
           extPort: val(dst, 'port') || '-', mapPort: val(inside, 'port') || '-', proto, status, comment,
+          matchSrc: val(child(node, 'source'), 'address') || '',  // 來源條件（XN127 rt-dstnat-broad 判斷用）
         });
       } else if (type === 'source') {
         const src = child(node, 'source');
@@ -521,9 +601,10 @@ const EdgeRouterParser = (() => {
     services.forEach(s => { portGroupMap[s.name] = s.tcpPorts; });
     return {
       vendor: 'EdgeRouter',
-      deviceInfo: parseDeviceInfo(tree),
+      deviceInfo: parseDeviceInfo(tree, text),
       interfaces: parseInterfaces(tree, bind),
-      policies: parsePolicies(tree, bind, buildEdgeRouterAddrTypeMap(addresses), portGroupMap),
+      ...(pols => ({ policies: pols, nf: buildVyattaNf(tree, pols, vyattaRulesetDefaults(tree)) }))(parsePolicies(tree, bind, buildEdgeRouterAddrTypeMap(addresses), portGroupMap)),
+      rtRouter: parseVyattaRouterPlane(tree),
       routes: parseRoutes(tree),
       ha: null, nat: parseNAT(tree), vpn: [],
       addresses,
@@ -543,6 +624,6 @@ const EdgeRouterParser = (() => {
   }
 
   // VyOS（同為 Vyatta 語系，2026-10-02 新增）共用樹狀解析與查詢函式，見 firewall-analyzer-parser-vyos.js
-  return { parse, detect, _lib: { parseTree, unquote, child, val, vals, hasFlag, childrenPrefixed, cidrSplit, parseAddrOrPort, parseRoutes, parseUsers, parseServicesVyatta } };
+  return { parse, detect, _lib: { parseTree, unquote, child, val, vals, hasFlag, childrenPrefixed, cidrSplit, parseAddrOrPort, parseRoutes, parseUsers, parseServicesVyatta, buildVyattaNf, vyattaRulesetDefaults, vyattaBindings, parseVyattaRouterPlane } };
 })();
 

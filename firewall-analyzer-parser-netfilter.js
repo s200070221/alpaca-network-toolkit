@@ -58,6 +58,34 @@ const NetfilterParser = (() => {
     return out;
   }
 
+  // netfilter 式鏈評估資料（XN127，見 core.js _nfQueryChain()）：全部規則依原順序（含 jump／LOG／RETURN），
+  // _chain＝基本鏈的 hook（input／forward／output）或自訂鏈名稱；鏈尾動作取自 :INPUT DROP／nft policy drop（沒寫＝ACCEPT）；
+  // ctstate DNAT（ufw／docker 常見）改為 natState；設定檔沒有介面位址，FORWARD 沒有規則而 INPUT 有規則時視為主機防火牆（chainPick host）
+  function buildNf(res, addrTypeMap) {
+    const counter = {};
+    const rules = res.rules.map((r, i) => {
+      const ck = `${r.family}/${r.chain}`;
+      counter[ck] = (counter[ck] || 0) + 1;
+      const st = (r.state || []).filter(x => x !== 'dnat');
+      // -i lo：設定檔沒有介面資料，查詢不帶介面時任何規則的介面條件都視為可能符合；loopback 只會有本機來源，改以 127.0.0.0/8（IPv6 ::1）表示
+      const lo = r.inIf === 'lo';
+      const p = pol(`nf/${i + 1}`, { chain: r.chain, num: counter[ck], comment: r.comment, family: r.family, srcIntf: r.inIf || '-', dstIntf: r.outIf || '-',
+        src: r.src || (lo ? (r.family === 6 ? '::1' : '127.0.0.0/8') : 'any'), dst: r.dst || 'any', proto: r.proto, port: r.dport, action: r.action, log: r.log, state: st, addrTypeMap });
+      return Object.assign(p, {
+        _chain: r.hook || r.chain, _mtAct: r.action === 'reject' ? 'drop' : r.action, _nonterminal: !['accept', 'drop', 'reject'].includes(r.action),
+        _jumpTarget: r.action === 'jump' ? (r.target || '') : '', _mtHasMatch: !!(r.src || r.dst || r.inIf || r.outIf || r.proto || r.dport || (r.state && r.state.length)),
+        natState: (r.state || []).includes('dnat') ? 'dstnat' : '',
+      });
+    });
+    const defaults = {};
+    Object.entries(res.chainPolicy || {}).forEach(([k, v]) => {
+      const m = k.match(/^filter\/(INPUT|FORWARD|OUTPUT)$/);
+      if (m) defaults[m[1].toLowerCase()] = /^(DROP|REJECT)$/i.test(v) ? 'deny' : 'accept';
+    });
+    const has = c => rules.some(r => r._chain === c);
+    return { rules, defaults, forward: ['forward'], input: ['input'], chainPick: !has('forward') && has('input') ? 'host' : '' };
+  }
+
   // ── iptables-save ─────────────────────────────────────────
   function tokenize(line) { return line.match(/"(?:[^"\\]|\\.)*"|\S+/g) || []; }
   function parseIptables(text) {
@@ -115,6 +143,7 @@ const NetfilterParser = (() => {
   function parseNft(text) {
     const rules = [], nat = [], sets = [];
     let table = null, chain = null, set = null, depth = 0, setBuf = '';
+    const policy = {};  // 基本鏈的 policy（XN127）：'<hook>' → ACCEPT／DROP，只取 ip／inet 表（IPv4 查詢用）
     for (const raw of text.split('\n')) {
       const line = raw.trim();
       if (!line || line.startsWith('#')) continue;
@@ -128,15 +157,20 @@ const NetfilterParser = (() => {
       if ((m = line.match(/^chain\s+(\S+)\s*\{$/))) { chain = { name: m[1], hook: '', type: 'filter' }; continue; }
       if (line === '}') { if (chain) chain = null; else table = null; continue; }
       if (!chain) continue;
-      if ((m = line.match(/^type\s+(\S+)\s+hook\s+(\S+)/))) { chain.type = m[1]; chain.hook = m[2]; continue; }
-      if (/^policy\s/.test(line)) continue;
+      if ((m = line.match(/^type\s+(\S+)\s+hook\s+(\S+)/))) {
+        chain.type = m[1]; chain.hook = m[2];
+        const pm = line.match(/\bpolicy\s+(\w+)/);
+        if (pm && m[1] === 'filter' && table && table.family !== 'ip6') policy[`filter/${m[2].toUpperCase()}`] = pm[1].toUpperCase();
+        continue;
+      }
+      if ((m = line.match(/^policy\s+(\w+)/))) { if (chain.hook && table && table.family !== 'ip6') policy[`filter/${chain.hook.toUpperCase()}`] = m[1].toUpperCase(); continue; }
       const r = parseNftRule(line);
       r.chain = chain.name; r.hook = chain.hook; r.family = table && table.family === 'ip6' ? 6 : (table && table.family === 'ip' ? 4 : 0);
       if (chain.type === 'nat') { if (r.nat) nat.push(r); continue; }
       if (chain.type !== 'filter') continue;
       rules.push(r);
     }
-    return { rules, nat: nat.map((r, i) => natRow(r, i)), sets };
+    return { rules, nat: nat.map((r, i) => natRow(r, i)), sets, chainPolicy: policy };
   }
   // 單條 nft 規則：逐一比對已知運算式，其餘（counter、limit…）略過
   function parseNftRule(line) {
@@ -177,7 +211,7 @@ const NetfilterParser = (() => {
       const [ip, port] = String(r.toDst || '').split(/:(?=[^:]*$)/);
       return { type: 'vip', name: `DNAT-${i + 1}`, vipType: 'static', poolType: 'destination', extIp: r.dst || '-', mapIp: ip || '-',
         extIntf: r.inIf || '-', srcIntf: '-', startIp: '-', endIp: '-', portFwd: r.dport || port ? 'enable' : 'disable',
-        extPort: r.dport || '-', mapPort: port || '-', proto, status, comment };
+        extPort: r.dport || '-', mapPort: port || '-', proto, status, comment, matchSrc: r.src || '' };
     }
     if (tg === 'SNAT' || tg === 'MASQUERADE') {
       return { type: 'ippool', name: `SNAT-${i + 1}`, vipType: 'overload', poolType: tg === 'MASQUERADE' ? 'masquerade' : 'source', extIp: r.src || '-',
@@ -213,6 +247,7 @@ const NetfilterParser = (() => {
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
       dhcp: null, dns: null, snmp: null, logservers: null, wwan: null, wlan: null,
       _chainPolicy: res.chainPolicy || null,
+      nf: buildNf(res, addrTypeMap),
     };
   }
 
