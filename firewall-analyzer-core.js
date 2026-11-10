@@ -311,7 +311,9 @@ function _queryIntfMatch(p, name, side) {
   if (!name) return true;
   // side 'dst'：比對出口介面（多台路徑查詢 XN7 才會帶）；預設比對進入介面
   const dst = side === 'dst';
-  const raw = dst ? String(p.dstIntf || '-') : ((p._chain && p.srcIntf === p._chain) ? '-' : String(p.srcIntf || '-'));
+  // MikroTik 沒有介面條件時進出介面都回填 chain 名稱（forward／input），兩側都視同不限介面
+  const v = dst ? p.dstIntf : p.srcIntf;
+  const raw = (p._chain && v === p._chain) ? '-' : String(v || '-');
   const members = dst ? p.dstIntfMembers : p.srcIntfMembers;
   // FortiGate zone（第十八輪 TD）：srcIntfMembers／dstIntfMembers 為規則 zone 的成員介面
   const items = (raw + (members ? ', ' + members : '')).split(/\s*,\s*/).map(s => s.trim().toLowerCase());
@@ -367,11 +369,52 @@ function _runAsaQuery(srcStr, dstStr, proto, port, PARSED, opts, srcInt, dstInt)
     srcAddr: 'any', dstAddr: 'any', service: 'any', comments: '-', _default: true };
   return { matched: sl, action: 'accept', trace: [], defaultRule: true, asa: Object.assign(asa, { stage: 'seclevel' }) };
 }
+// MikroTik 查詢用的規則順序（XN126）：選鏈（目的是路由器自己的介面位址＝input，否則 forward），jump 展開自訂鏈
+// （最多 8 層、不重複進入同一條鏈），展開的規則複製一份並帶上沿途 jump 規則（_mtGuards）；沒有條件的 return 結束該段
+function _mtQueryChain(pols, dstInt, isV6, PARSED) {
+  const local = !isV6 && (PARSED.interfaces || []).some(i => [i.ip].concat((i.secondaryIps || []).map(x => x.ip))
+    .some(ip => _strictIpInt(String(ip || '').trim()) === dstInt));
+  const chain = local ? 'input' : 'forward';
+  const out = [];
+  const walk = (name, guards, depth, seen) => {
+    for (const p of pols) {
+      if (p._chain !== name) continue;
+      if (p._mtAct === 'jump') {
+        if (p.status !== 'disable' && p._jumpTarget && depth < 8 && !seen.includes(p._jumpTarget)) walk(p._jumpTarget, guards.concat([p]), depth + 1, seen.concat([p._jumpTarget]));
+        continue;
+      }
+      if (p._mtAct === 'return') { if (p.status !== 'disable' && !p._mtHasMatch) return; continue; }
+      if (p._nonterminal) continue;
+      out.push(guards.length ? Object.assign({}, p, { _mtGuards: guards }) : p);
+    }
+  };
+  walk(chain, [], 0, [chain]);
+  return { chain, pols: out };
+}
+// 位址所在介面（XN126，MikroTik 查詢用）：直連網段（含次要位址）最長前綴，否則預設路由的出口介面
+// （route.device，或下一跳所在網段的介面）；IPv6 或判斷不出時回傳 ''（維持不限介面）
+function _mtIfFor(ipInt, isV6, PARSED) {
+  if (isV6) return '';
+  let best = '', bl = -1;
+  (PARSED.interfaces || []).forEach(i => [{ ip: i.ip, mask: i.mask }].concat(i.secondaryIps || []).forEach(a => {
+    if (!a.ip || !a.mask || a.ip === '-' || _ipInSubnet(ipInt, `${a.ip} ${a.mask}`) !== true) return;
+    const l = _cidrPrefixLen(a.mask);
+    if (l !== null && l > bl) { best = i.name; bl = l; }
+  }));
+  if (best) return best;
+  const def = (PARSED.routes || []).find(r => /^0\.0\.0\.0(\/0| 0\.0\.0\.0)$/.test(String(r.dst || '').trim()) && r.status !== 'disable' && r.blackhole !== 'enable');
+  if (!def) return '';
+  if (def.device && def.device !== '-') return def.device;
+  const gw = _strictIpInt(String(def.gateway || '').trim());
+  if (gw === null) return /^[\w.-]+$/.test(String(def.gateway || '')) ? String(def.gateway) : '';  // gateway 寫介面名稱（如 pppoe-out1）
+  const gi = (PARSED.interfaces || []).find(i => i.ip && i.mask && i.ip !== '-' && _ipInSubnet(gw, `${i.ip} ${i.mask}`) === true);
+  return gi ? gi.name : '';
+}
 function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) {
   const newOnly = !opts || opts.newOnly !== false;
-  const qIntf = opts && opts.srcIntf ? String(opts.srcIntf).trim() : '';
+  let qIntf = opts && opts.srcIntf ? String(opts.srcIntf).trim() : '';
   // opts.dstIntf：選填，出口介面／區域名稱（多台路徑查詢 XN7 依路由查出的出口介面帶入）
-  const qOutIntf = opts && opts.dstIntf ? String(opts.dstIntf).trim() : '';
+  let qOutIntf = opts && opts.dstIntf ? String(opts.dstIntf).trim() : '';
   if (!PARSED||!PARSED.policies) return null;
   const srcInt=_parseQueryIp(srcStr), dstInt=_parseQueryIp(dstStr);
   if (srcInt===null||dstInt===null) return {error:'invalid_ip'};
@@ -395,8 +438,31 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
   let pols = PARSED.policies;
   if (vdomFilter&&vdomFilter!=='__all__') pols=pols.filter(p=>p._vdom===vdomFilter);
   const trace=[];
+  // jump 規則本身的條件（XN126）：介面、位址、服務、連線狀態都要符合；無法判斷（null）視為可能符合
+  const _mtGuardMatch = g => {
+    if (newOnly && !_ruleAppliesToNew(g)) return false;
+    if (!_queryIntfMatch(g, qIntf) || !_queryIntfMatch(g, qOutIntf, 'dst')) return false;
+    if (g.natState && (g.natState === 'dstnat') !== !!(opts && opts.dnat)) return false;
+    const neg = (v, on) => on === true && v !== null ? !v : v;
+    if (neg(_policyAddrMatches(addrField(g,'srcAddr'),srcInt,addrs,g._vdom), g.srcNegate) === false) return false;
+    if (neg(_policyAddrMatches(addrField(g,'dstAddr'),dstInt,addrs,g._vdom), g.dstNegate) === false) return false;
+    return _policySvcMatches(g.service,proto,port?parseInt(port):null,svcs,g._vdom) !== false;
+  };
+  // MikroTik RouterOS（XN126）：防火牆是 Linux netfilter——目的為路由器本身的位址走 input 鏈、其餘走 forward 鏈，
+  // jump 依序展開自訂鏈（鏈內規則須同時符合 jump 規則的條件，_mtGuards），沒有條件的 return 結束該段；
+  // log／passthrough／add-*-to-address-list／fasttrack-connection 等非終止動作不決定結果；鏈沒有預設政策，未命中即放行
+  const mt = /^MikroTik$/.test(PARSED.vendor || '') && Array.isArray(PARSED.mtRules) ? _mtQueryChain(PARSED.mtRules, dstInt, isV6, PARSED) : null;
+  if (mt) {
+    pols = mt.pols;
+    // 沒有指定介面時依位址推得進出介面（XN126）：直連網段優先，其餘走預設路由的出口；input 鏈沒有出口介面
+    if (!qIntf) { qIntf = _mtIfFor(srcInt, isV6, PARSED); mt.inferredIn = qIntf; }
+    if (!qOutIntf && mt.chain === 'forward') { qOutIntf = _mtIfFor(dstInt, isV6, PARSED); mt.inferredOut = qOutIntf; }
+  }
   for (const p of pols) {
     if (p.status==='disable') { trace.push({policy:p,result:'disabled'}); continue; }
+    // MikroTik connection-nat-state：dstnat 只適用經目的 NAT 的連線（呼叫端以 opts.dnat 告知），!dstnat 相反
+    if (mt && p.natState && (p.natState === 'dstnat') !== !!(opts && opts.dnat)) { trace.push({policy:p,result:'skip',reason:'state'}); continue; }
+    if (mt && p._mtGuards && p._mtGuards.some(g => !_mtGuardMatch(g))) { trace.push({policy:p,result:'skip',reason:'jump'}); continue; }
     if (newOnly && !_ruleAppliesToNew(p)) { trace.push({policy:p,result:'skip',reason:'state'}); continue; }
     if (!_queryIntfMatch(p, qIntf)) { trace.push({policy:p,result:'skip',reason:'intf'}); continue; }
     if (!_queryIntfMatch(p, qOutIntf, 'dst')) { trace.push({policy:p,result:'skip',reason:'intf'}); continue; }
@@ -417,7 +483,12 @@ function _runPolicyQuery(srcStr, dstStr, proto, port, vdomFilter, PARSED, opts) 
     const resolvedDst=_policyAddrResolve(pDst,dstInt,addrs,p._vdom);
     trace.push({policy:p,result:'match',hasFqdn:sm===null||dm===null||svm===null,svcUnknown:svm===null,resolvedSrc,resolvedDst});
     // GCP 防火牆政策的 goto_next（第二十二輪 HG）：本層不決定，交給下一層（VPC 防火牆規則或其他政策）
-    return {matched:p,action:p.gotoNext?'goto_next':(p.action==='accept'?'accept':'deny'),trace};
+    return Object.assign({matched:p,action:p.gotoNext?'goto_next':(p.action==='accept'?'accept':'deny'),trace}, mt ? { mtChain: mt.chain, mtIn: mt.inferredIn, mtOut: mt.inferredOut } : {});
+  }
+  if (mt) {
+    const dp = { id: 'mt-default-accept', name: `${mt.chain} chain (no match → accept)`, action: 'accept', status: 'enable', srcIntf: 'any', dstIntf: 'any',
+      srcAddr: 'any', dstAddr: 'any', service: 'any', comments: '-', _default: true, _chain: mt.chain };
+    return { matched: dp, action: 'accept', trace, defaultRule: true, mtDefault: mt.chain, mtChain: mt.chain, mtIn: mt.inferredIn, mtOut: mt.inferredOut };
   }
   // 預設規則（第十八輪 TH）：Junos default-policy permit-all 時沒命中的流量放行，以合成的預設規則回傳；
   // PAN-OS 的預設規則依目的區域而定（查詢條件無目的區域），只附上 paDefault 供畫面說明
@@ -708,7 +779,7 @@ function runBatchPolicyQuery(rows, vdomFilter, PARSED, opts) {
         dn = _findDestNat(d, r.proto, r.port, PARSED, qo);
         if (dn) { stage = _natStage(PARSED && PARSED.vendor); if (stage === 'post') { qd = dn.toIp; qp = dn.toPort; } }
       }
-      const res = _runPolicyQuery(s, qd, r.proto, qp, vdomFilter, PARSED, qo) || { matched: null, action: 'implicit_deny', trace: [] };
+      const res = _runPolicyQuery(s, qd, r.proto, qp, vdomFilter, PARSED, Object.assign({}, qo, { dnat: !!(dn && stage === 'post') })) || { matched: null, action: 'implicit_deny', trace: [] };
       const mt = (res.trace || []).find(t => t.result === 'match');
       results.push({ action: res.action, policy: res.matched, hasFqdn: !!(mt && mt.hasFqdn), svcUnknown: !!(mt && mt.svcUnknown) });
       if (dn && !nat) {

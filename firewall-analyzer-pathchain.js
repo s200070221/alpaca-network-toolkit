@@ -489,7 +489,7 @@ const FwPath = (function () {
       // NAT 在規則比對之前（post）以轉換後位址比對，之前或不確定（pre／unknown）以原位址比對
       const qDst = dnat && stage === 'post' ? fwdDst : dst, qPort = dnat && stage === 'post' ? fwdPort : port;
       const res = _runPolicyQuery(src, qDst, proto, qPort, vdom, parsed, {
-        srcIntf: intfLabel(parsed, ingress, 'srcIntf'), dstIntf: intfLabel(parsed, route.iface, 'dstIntf') }) || { action: 'implicit_deny', matched: null, trace: [] };
+        srcIntf: intfLabel(parsed, ingress, 'srcIntf'), dstIntf: intfLabel(parsed, route.iface, 'dstIntf'), dnat: !!(dnat && stage === 'post') }) || { action: 'implicit_deny', matched: null, trace: [] };
       const last = (res.trace || []).filter(t => t.result === 'match').pop();
       hop.rule = res.matched ? { id: res.matched.id, name: res.matched.name || '', vdom: res.matched._vdom || '', defaultRule: !!res.defaultRule } : null;
       hop.action = res.action === 'accept' ? 'accept' : (res.action === 'goto_next' ? 'unknown' : 'deny');

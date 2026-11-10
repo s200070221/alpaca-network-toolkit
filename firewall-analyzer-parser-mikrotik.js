@@ -95,9 +95,11 @@ const MikrotikParser = (() => {
     const hostnameM = text.match(/^\/system identity\s*[\r\n]+set name=([\w\-\.]+)/im)
                     || text.match(/set name=([\w\-\.]+)/i);
     const hostname  = hostnameM ? hostnameM[1] : '-';
-    // RouterOS version from comment header: "# RouterOS 7.12.1"
-    const verM      = text.match(/#\s*RouterOS\s+([\d\.]+)/i)
-                    || text.match(/#\s*software id\s*=\s*([\w\-]+)/i);
+    // 版本取自匯出檔頭：「# RouterOS 7.12.1」或「# jan/02/2024 10:00:00 by RouterOS 6.49.10」
+    // （v6 與 v7 的 /export 都是「日期 by RouterOS 版本」）；software id 是授權序號不是版本，不採用
+    const verM      = text.match(/^#[^\n]*\bRouterOS\s+(\d+\.\d+(?:\.\d+)*(?:beta\d+|rc\d+)?)/im)
+                    // Oxidized 錄製在檔頭附 /system resource print：「#   version: 7.16 (stable)」
+                    || text.match(/^#\s*(?:installed-)?version:\s*(\d+\.\d+(?:\.\d+)*(?:beta\d+|rc\d+)?)/im);
     const firmware  = verM ? `RouterOS ${verM[1]}` : '-';
     const modelM    = text.match(/#\s*model\s*=\s*(.+)/i);
     const model     = modelM ? modelM[1].trim() : '-';
@@ -206,6 +208,16 @@ const MikrotikParser = (() => {
         );
         if (isPublic && i.role === 'LAN') i.role = 'WAN';
       }
+    });
+    // /interface list member（RouterOS 預設設定以 WAN／LAN 清單區分，防火牆規則多寫 in-interface-list=WAN）：
+    // 明確的清單歸屬優先於名稱與位址的猜測（XN125）；成員也可能是 bridge 或 VLAN 介面
+    (sections['/interface list member'] || []).forEach(line => {
+      const p = parseLine(line);
+      const i = Object.prototype.hasOwnProperty.call(ifaces, p['interface'] || '') ? ifaces[p['interface']] : null;  // 名稱來自設定檔，不取原型上的鍵
+      if (!i || !p['list']) return;
+      (i.lists = i.lists || []).push(p['list']);
+      if (/^wan$/i.test(p['list'])) i.role = 'WAN';
+      else if (/^lan$/i.test(p['list']) && !(i.lists || []).some(l => /^wan$/i.test(l))) i.role = 'LAN';
     });
 
     return Object.values(ifaces);
@@ -346,9 +358,51 @@ const MikrotikParser = (() => {
     });
     return { v4: v4.join(', ') || '-', v6: v6.join(', ') || '-' };
   }
-  function parsePolicies(sections, addrTypeMap) {
+  // 介面清單 → 成員介面（XN126）：/interface list member 的歸屬，加上 /interface list 的 include=／exclude= 子清單；
+  // 內建清單 all＝全部介面、none／dynamic／static 不展開。名稱來自設定檔，一律用 Map
+  function buildIntfLists(sections, ifNames) {
+    const direct = new Map(), defs = new Map();
+    (sections['/interface list member'] || []).forEach(line => {
+      const p = parseLine(line);
+      if (!p['list'] || !p['interface'] || p['disabled'] === 'yes') return;
+      if (!direct.has(p['list'])) direct.set(p['list'], new Set());
+      direct.get(p['list']).add(p['interface']);
+    });
+    (sections['/interface list'] || []).forEach(line => {
+      const p = parseLine(line);
+      if (p['name']) defs.set(p['name'], { include: String(p['include'] || '').split(',').filter(Boolean), exclude: String(p['exclude'] || '').split(',').filter(Boolean) });
+    });
+    const memo = new Map();
+    const resolve = (name, seen) => {
+      if (name === 'all') return new Set(ifNames);
+      if (memo.has(name)) return memo.get(name);
+      if (seen.has(name)) return new Set();
+      seen.add(name);
+      const set = new Set(direct.get(name) || []);
+      const d = defs.get(name);
+      if (d) { d.include.forEach(n => resolve(n, seen).forEach(x => set.add(x))); d.exclude.forEach(n => resolve(n, seen).forEach(x => set.delete(x))); }
+      memo.set(name, set);
+      return set;
+    };
+    return name => resolve(name, new Set());
+  }
+  // 規則的介面條件 → 成員介面（逗號分隔，給 _queryIntfMatch() 比對）：清單展開成員、! 取補集；沒有條件回傳 undefined
+  function intfMembers(single, list, listOf, ifNames) {
+    let set = null, neg = false;
+    if (list) { neg = list.startsWith('!'); set = listOf(list.replace(/^!/, '')); }
+    else if (single) { neg = single.startsWith('!'); set = new Set([single.replace(/^!/, '')]); }
+    else return undefined;
+    const names = neg ? ifNames.filter(n => !set.has(n)) : [...set];
+    return names.length ? names.join(', ') : undefined;
+  }
+  // RouterOS filter 動作（XN126，與 netfilter 相同）：accept 放行；drop／reject／tarpit 拒絕；jump／return 控制流程；
+  // log、passthrough、add-src／dst-to-address-list、fasttrack-connection 不結束比對（fasttrack 只作用於既有連線）
+  const MT_TERMINAL = { accept: 'accept', drop: 'deny', reject: 'deny', tarpit: 'deny' };
+  function parsePolicies(sections, addrTypeMap, interfaces) {
     const rules = [];
     let seq = 1;
+    const ifNames = (interfaces || []).map(i => i.name);
+    const listOf = buildIntfLists(sections, ifNames);
 
     // Build interface-to-zone map for richer srcIntf/dstIntf
     const chainZone = {
@@ -369,8 +423,10 @@ const MikrotikParser = (() => {
       const chain  = p['chain']  || 'forward';
       const action = p['action'] || 'drop';
 
-      // Map action to accept/deny
-      const normAction = (action === 'accept' || action === 'passthrough') ? 'accept' : 'deny';
+      // 終止動作對應 accept／deny；非終止動作保留原名（_nonterminal，查詢不以它決定結果）
+      const normAction = MT_TERMINAL[action] || action;
+      // 是否有任何比對條件（沒有條件的 return 才確定結束該段 jump）
+      const hasMatch = Object.keys(p).some(k => !['chain', 'action', 'comment', 'disabled', 'log', 'log-prefix', 'jump-target', 'place-before'].includes(k));
 
       // Build source/destination strings
       const srcAddr = [
@@ -424,9 +480,19 @@ const MikrotikParser = (() => {
         connState: connState ? connState.split(',').map(x => x.trim().toLowerCase()).filter(Boolean) : [],
         _proto: proto, _dport: dport,
         _vdom: '',
+        // XN126：非終止動作、jump 目標、連線 NAT 狀態、介面清單成員
+        _mtAct: action, _nonterminal: !MT_TERMINAL[action], _jumpTarget: action === 'jump' ? (p['jump-target'] || '') : '', _mtHasMatch: hasMatch,
+        natState: p['connection-nat-state'] ? p['connection-nat-state'].replace(/^!/, '') === 'dstnat' ? (p['connection-nat-state'].startsWith('!') ? '!dstnat' : 'dstnat') : '' : '',
+        srcIntfMembers: intfMembers(p['in-interface'], p['in-interface-list'], listOf, ifNames),
+        dstIntfMembers: intfMembers(p['out-interface'], p['out-interface-list'], listOf, ifNames),
       });
     });
     return rules;
+  }
+  // 規則表與查詢分開（XN126）：policies 只放終止動作（accept／deny，與 netfilter parser 相同，非終止規則不列），
+  // mtRules 保留全部規則與原順序給 _mtQueryChain() 展開 jump
+  function splitMtRules(all) {
+    return { policies: all.filter(r => !r._nonterminal), mtRules: all };
   }
 
   // ── Routes ──────────────────────────────────────────────────────────────────
@@ -522,6 +588,12 @@ const MikrotikParser = (() => {
         proto: p['protocol'] || '-',
         status: p['disabled'] === 'yes' ? 'disable' : 'enable',
         comment: p['comment'] || '',
+        // 原始比對條件（XN125 hairpin NAT 檢查用）：值為空字串表示沒有這個條件
+        mt: { chain, action, inIntf: p['in-interface'] || '', inIntfList: p['in-interface-list'] || '',
+          outIntf: p['out-interface'] || '', outIntfList: p['out-interface-list'] || '',
+          srcAddr: p['src-address'] || '', srcAddrList: p['src-address-list'] || '',
+          dstAddr: p['dst-address'] || '', dstAddrList: p['dst-address-list'] || '', dstAddrType: p['dst-address-type'] || '',
+          toAddr: p['to-addresses'] || '', dstPort: p['dst-port'] || '' },
       });
     });
     return nat;
@@ -876,14 +948,49 @@ const MikrotikParser = (() => {
     return { interfaces, secProfileList: Object.values(secProfiles), capsmanEnabled, capsmanConfigs };
   }
 
+  // ── 路由器本身的服務（XN126）─────────────────────────────────────────────
+  // /ip service：匯出檔只列改過預設值的項目（v6／v7 相同），未列出者用預設值（MikroTik 文件 IP Services：
+  // www-ssl 預設停用，其餘啟用、address 不限）。其他項目只在設定檔有寫時記錄（沒寫＝null，不評估）
+  const MT_SVC_DEFAULT = [['telnet', 23, true], ['ftp', 21, true], ['www', 80, true], ['ssh', 22, true], ['www-ssl', 443, false], ['api', 8728, true], ['winbox', 8291, true], ['api-ssl', 8729, true]];
+  function parseRouterPlane(sections) {
+    const services = MT_SVC_DEFAULT.map(([name, port, enabled]) => ({ name, port, enabled, address: '' }));
+    (sections['/ip service'] || []).forEach(line => {
+      const p = parseLine(line);
+      const nm = (line.match(/^set\s+(?:\[\s*find\s+(?:default-)?name=)?([\w-]+)/) || [])[1];
+      const sv = services.find(x => x.name === nm);
+      if (!sv) return;
+      if (p['disabled']) sv.enabled = p['disabled'] !== 'yes';
+      if (p['address'] !== undefined) sv.address = p['address'];
+      if (/^\d+$/.test(p['port'] || '')) sv.port = +p['port'];
+    });
+    const flag = (sec, key, yes) => { let v = null; (sections[sec] || []).forEach(l => { const p = parseLine(l); if (p[key] !== undefined) v = p[key] === yes; }); return v; };
+    const val = (sec, key) => { let v = null; (sections[sec] || []).forEach(l => { const p = parseLine(l); if (p[key] !== undefined) v = p[key]; }); return v; };
+    // 排程與腳本含下載或匯入（/tool fetch、/import）：只記名稱，不保留內容
+    const FETCH_RE = /\/tool\s+fetch\b|\bfetch\s+(?:url|mode|address)=|\/import\b/i;
+    const fetchJobs = [];
+    [['/system scheduler', 'on-event'], ['/system script', 'source']].forEach(([sec, key]) => (sections[sec] || []).forEach(l => {
+      const p = parseLine(l);
+      if (FETCH_RE.test(p[key] || '')) fetchJobs.push({ kind: sec === '/system scheduler' ? 'scheduler' : 'script', name: p['name'] || '-', disabled: p['disabled'] === 'yes' });
+    }));
+    return {
+      services,
+      proxy: flag('/ip proxy', 'enabled', 'yes'), socks: flag('/ip socks', 'enabled', 'yes'), upnp: flag('/ip upnp', 'enabled', 'yes'),
+      bwServerNoAuth: flag('/tool bandwidth-server', 'authenticate', 'no') === true && flag('/tool bandwidth-server', 'enabled', 'no') !== true,
+      macServer: val('/tool mac-server', 'allowed-interface-list'), macWinbox: val('/tool mac-server mac-winbox', 'allowed-interface-list'),
+      neighbor: val('/ip neighbor discovery-settings', 'discover-interface-list'),
+      fetchJobs,
+    };
+  }
+
   // ── Main parse ───────────────────────────────────────────────────────────────
   function parse(text) {
     const sections = splitSections(text);
+    const interfaces = parseInterfaces(sections);
     return {
       vendor:     'MikroTik',
       deviceInfo: parseDeviceInfo(text),
-      interfaces: parseInterfaces(sections),
-      policies:   parsePolicies(sections, buildMikrotikAddrTypeMap(sections)),
+      interfaces,
+      ...splitMtRules(parsePolicies(sections, buildMikrotikAddrTypeMap(sections), interfaces)),
       routes:     parseRoutes(sections),
       ha:         parseMikrotikHa(sections),
       nat:        parseNAT(sections),
@@ -899,6 +1006,7 @@ const MikrotikParser = (() => {
       logservers: parseLogServers(sections),
       wwan:       parseMikrotikLte(sections),
       wlan:       parseMikrotikWireless(sections),
+      mtRouter:   parseRouterPlane(sections),
     };
   }
 

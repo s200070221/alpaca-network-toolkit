@@ -775,10 +775,36 @@
     'jn-jweb':    { cves: ['CVE-2023-36844', 'CVE-2023-36845', 'CVE-2023-36846', 'CVE-2023-36847', 'CVE-2023-36851'], risk: 'high' },
     // F5 BIG-IP（XN116）：self IP 開放設定公用程式（TMUI）／iControl REST
     'f5-tmui':    { cves: ['CVE-2020-5902', 'CVE-2022-1388', 'CVE-2023-46747'], risk: 'high' },
+    // MikroTik RouterOS（XN126）：/ip service 從 WAN 打得到路由器本身（依 input 鏈實際評估）
+    'mt-winbox':  { cves: ['CVE-2018-14847'], risk: 'high' },
+    'mt-www':     { cves: [], risk: 'high' },
+    'mt-api':     { cves: [], risk: 'high' },
+    'mt-ftp':     { cves: [], risk: 'medium' },
     'admin-telnet': { cves: [], risk: 'high' },
     'admin-ssh':  { cves: [], risk: 'medium' },
   };
-  const EXPOSE_VENDORS = /^(FortiGate|PaloAlto|Cisco ASA|Cisco FTD|Juniper|F5 BIG-IP)$/;
+  const EXPOSE_VENDORS = /^(FortiGate|PaloAlto|Cisco ASA|Cisco FTD|Juniper|F5 BIG-IP|MikroTik)$/;
+  // MikroTik 從 WAN 打得到的目的（XN126）：每個對外且有位址的介面，以外部來源 198.51.100.1（落在該介面網段時改用 192.0.2.1）
+  // 的新連線、指定該介面進入，用 _runPolicyQuery() 依 input／forward 鏈實際評估；dst 省略＝該介面自己的位址（input 鏈）。
+  // 回傳結果為 accept 的介面名稱（含鏈尾預設放行）
+  const MT_PROBE_SRC = ['198.51.100.1', '192.0.2.1'];
+  function _mtWanIfaces(parsed) {
+    return (parsed.interfaces || []).filter(i => i.ip && i.ip !== '-' && _exposeExternal(parsed, i.name).ext === true);
+  }
+  function _mtReach(parsed, proto, port, dst, extra) {
+    if (typeof _runPolicyQuery !== 'function') return [];
+    return _mtWanIfaces(parsed).filter(i => {
+      const src = MT_PROBE_SRC.find(a => !_exposeSameNet(a, i.ip, i.mask)) || MT_PROBE_SRC[0];
+      const r = _runPolicyQuery(src, dst || i.ip, proto, port, '__all__', parsed, Object.assign({ newOnly: true, srcIntf: i.name }, extra || {}));
+      return r && r.action === 'accept';
+    }).map(i => i.name);
+  }
+  // /ip service 的 address 限制是否包含外部來源（空白＝不限）
+  function _mtSvcOpen(addr) {
+    const list = String(addr || '').split(',').map(x => x.trim()).filter(Boolean);
+    if (!list.length) return true;
+    return list.some(c => { const [ip, len] = c.split('/'); return MT_PROBE_SRC.some(a => _exposeSameNet(a, ip, len === undefined ? 32 : len)) || /^0\.0\.0\.0\/0$/.test(c) || /^::\/0$/.test(c); });
+  }
   const _EXT_ZONE_RE = /^(untrust|outside|internet|wan|external|public|isp)/i;
   // 介面是否對外：介面角色（FortiGate WAN、ASA security-level 0）、所屬區域名稱、或預設路由的出口。
   // 回傳 {ext:true|false|null, basis}；找不到介面為 null
@@ -804,12 +830,25 @@
     return names.some(n => _EXT_ZONE_RE.test(n) || _exposeExternal(parsed, n).ext === true ||
       (parsed.interfaces || []).some(i => (i.zone === n || i._zone === n) && _exposeExternal(parsed, i.name).ext === true));
   }
+  // 只比對既有連線的規則（connection-state=established,related、ct state established 等）不會放行新連線，
+  // 不算 any-any 或管理埠開放（XN126；MikroTik、EdgeRouter、netfilter 的 connState）
+  function _forNewConn(p) { return typeof _ruleAppliesToNew !== 'function' || _ruleAppliesToNew(p); }
   function _exposeSameNet(a, b, mask) {
     const n = s => { const m = String(s || '').match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/); return m ? ((+m[1] << 24) >>> 0) + (+m[2] << 16) + (+m[3] << 8) + +m[4] : null; };
     const len = /^\d+$/.test(String(mask)) ? +mask : (n(mask) === null ? null : n(mask).toString(2).replace(/0+$/, '').length);
     if (n(a) === null || n(b) === null || len === null) return false;
     const mk = len === 0 ? 0 : (0xFFFFFFFF << (32 - len)) >>> 0;
     return ((n(a) & mk) >>> 0) === ((n(b) & mk) >>> 0);
+  }
+  // 遮罩（255.255.255.0 或 24）→ 前綴長度；網段位址（XN125 hairpin 修正指令範例用）
+  function _maskLen(mask) {
+    if (/^\d+$/.test(String(mask))) return +mask;
+    const p = String(mask || '').split('.').map(Number);
+    return p.length === 4 ? p.reduce((a, o) => a + ((o >>> 0).toString(2).match(/1/g) || []).length, 0) : 32;
+  }
+  function _netAddr(ip, mask) {
+    const a = String(ip).split('.').map(Number), len = _maskLen(mask);
+    return a.map((o, i) => { const bits = Math.max(0, Math.min(8, len - i * 8)); return o & ((0xFF << (8 - bits)) & 0xFF); }).join('.');
   }
   // FortiGate 管理者 trusthost（IPv4）：all＝每個可登入的管理者都只允許特定來源、partial＝部分、none＝都沒限制、''＝沒有管理者資料。
   // Fortinet 公告（FG-IR-24-535）：trusthost 要「所有」GUI 管理者都設定，才與 local-in-policy 限制來源等效，因此只有 all 才視為已緩解。
@@ -869,6 +908,10 @@
           if (all || sv.has('telnet')) add('admin-telnet', n, { zone: b.zone });
         });
       });
+    } else if (vendor === 'MikroTik') {
+      const svcMap = { winbox: 'mt-winbox', www: 'mt-www', 'www-ssl': 'mt-www', api: 'mt-api', 'api-ssl': 'mt-api', ftp: 'mt-ftp', ssh: 'admin-ssh', telnet: 'admin-telnet' };
+      ((parsed.mtRouter && parsed.mtRouter.services) || []).filter(x => x.enabled && svcMap[x.name] && _mtSvcOpen(x.address)).forEach(x =>
+        _mtReach(parsed, 'TCP', String(x.port)).forEach(n => add(svcMap[x.name], n, { name: `${x.name}:${x.port}` })));
     } else if (vendor === 'F5 BIG-IP') {
       // self IP 的 port lockdown（allow-service）：all＝所有服務；明列 tcp:https／443、tcp:ssh／22；default 依版本內容不同不評估
       (parsed.interfaces || []).forEach(i => { const a = toks(i.allowaccess);
@@ -987,7 +1030,7 @@
     // _isDisabledStatus 已提升為本檔案頂層共用 helper（見檔案開頭 27 行附近），此處不再
     // 重複定義
     // 1. any-to-any 允許規則
-    const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && !_hasNegate(p) &&
+    const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && !_hasNegate(p) && _forNewConn(p) &&
       /\b(all|any)\b/i.test(p.srcAddr||'') && /\b(all|any)\b/i.test(p.dstAddr||'') && /\b(all|any|ALL)\b/i.test(p.service||''));
     f('any-any', tr('audit.check_any_any'), anyAny.length, 'high',
       anyAny.length ? tr('audit.id_prefix') + anyAny.map(p => idLabel(p)).slice(0,10).join(', ') + (anyAny.length > 10 ? '…' : '') : tr('audit.none'),
@@ -1129,6 +1172,90 @@
       f('f5-admin-bash', tr('audit.check_f5_admin_bash'), bash.length, 'low', bash.length ? bash.map(u => u.name).slice(0, 8).join(', ') : tr('audit.none'),
         ['NIST 800-53 AC-6'], bash.map(u => ({ kind: 'user', name: u.name })));
     }
+    // 9c3. MikroTik 目的 NAT（XN125，依 MikroTik 文件 NAT 的 Hairpin NAT 範例）：
+    //  mt-dstnat-broad：dst-nat 沒有任何入口條件（in-interface／in-interface-list／dst-address／dst-address-list／dst-address-type／
+    //    src-address／src-address-list）＝連內部使用者連往網際網路任何主機的同一個埠都會被導到內部伺服器（medium，計入健康度）
+    //  mt-hairpin-no-snat：內部也能命中的 dst-nat（沒有限定外部介面），伺服器與內部用戶端同一個網段，卻沒有涵蓋的 srcnat
+    //    （hairpin NAT）——內部以公網位址連線時伺服器直接回給用戶端，連線失敗（low，不計健康度）。只限 WAN 介面的轉送不列
+    //  srcnat 用位址清單（src-address-list／dst-address-list）時視為可能涵蓋，不列
+    const mtNat = parsed.vendor === 'MikroTik' ? (parsed.nat || []).filter(n => n.mt && n.status !== 'disable') : [];
+    const mtDst = mtNat.filter(n => n.mt.chain === 'dstnat' && /^(?:dst-nat|netmap)$/.test(n.mt.action));
+    if (mtDst.length) {
+      const v4 = s => { const m = String(s || '').match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)/); return m ? (((+m[1] << 24) >>> 0) + (+m[2] << 16) + (+m[3] << 8) + +m[4]) : null; };
+      const inNet = (ip, cidr) => {  // cidr：a.b.c.d/len 或單一位址
+        const m = String(cidr || '').match(/^([\d.]+)(?:\/(\d+))?$/), a = v4(ip);
+        if (!m || a === null || v4(m[1]) === null) return false;
+        const len = m[2] === undefined ? 32 : +m[2], mk = len === 0 ? 0 : (0xFFFFFFFF << (32 - len)) >>> 0;
+        return ((a & mk) >>> 0) === ((v4(m[1]) & mk) >>> 0);
+      };
+      const extList = l => _EXT_ZONE_RE.test(l);
+      const ifOf = ip => (parsed.interfaces || []).find(i => i.ip && i.ip !== '-' && i.mask && _exposeSameNet(ip, i.ip, i.mask));
+      const restricted = m => !!(m.inIntf || m.inIntfList || m.dstAddr || m.dstAddrList || m.dstAddrType || m.srcAddr || m.srcAddrList);
+      const broad = mtDst.filter(n => !restricted(n.mt));
+      f('mt-dstnat-broad', tr('audit.check_mt_dstnat_broad'), broad.length, 'medium',
+        broad.length ? broad.map(n => `${n.name}（${n.mt.dstPort || 'any'} → ${n.mt.toAddr || '-'}）`).slice(0, 8).join(', ') : tr('audit.normal'),
+        ['MikroTik NAT'], broad.map(n => ({ kind: 'nat', name: n.name })));
+      const snat = mtNat.filter(n => n.mt.chain === 'srcnat' && /^(?:masquerade|src-nat|netmap|same)$/.test(n.mt.action));
+      const miss = [];
+      mtDst.filter(n => restricted(n.mt)).forEach(n => {
+        const m = n.mt;
+        // 只限外部介面（in-interface 對外或 in-interface-list 為 WAN 類）＝內部用戶端打不到這條，不需 hairpin
+        if ((m.inIntf && _exposeExternal(parsed, m.inIntf).ext === true) || (m.inIntfList && extList(m.inIntfList))) return;
+        const srv = String(m.toAddr || '').split('-')[0];
+        const lan = v4(srv) === null ? null : ifOf(srv);
+        if (!lan || _exposeExternal(parsed, lan.name).ext === true) return;  // 找不到伺服器所在的內部介面不評估
+        const covered = snat.some(x => { const s2 = x.mt;
+          if (s2.srcAddrList || s2.dstAddrList) return true;
+          if (s2.outIntf && s2.outIntf !== lan.name) return false;
+          if (s2.outIntfList && !(lan.lists || []).includes(s2.outIntfList)) return false;
+          if (s2.dstAddr && !inNet(srv, s2.dstAddr)) return false;
+          if (s2.srcAddr && !inNet(lan.ip, s2.srcAddr) && !inNet(s2.srcAddr.split('/')[0], `${lan.ip}/${_maskLen(lan.mask)}`)) return false;
+          return true; });
+        if (!covered) miss.push({ n, srv, lan });
+      });
+      const ex = miss[0];
+      f('mt-hairpin-no-snat', tr('audit.check_mt_hairpin'), miss.length, 'low',
+        miss.length ? miss.map(x => `${x.n.name} → ${x.srv}`).slice(0, 8).join(', ') + '；' +
+          tr('audit.mt_hairpin_fix').replace('{net}', `${_netAddr(ex.lan.ip, ex.lan.mask)}/${_maskLen(ex.lan.mask)}`).replace('{srv}', ex.srv).replace('{if}', ex.lan.name) : tr('audit.normal'),
+        ['MikroTik NAT (Hairpin NAT)'], miss.map(x => ({ kind: 'nat', name: x.n.name })));
+    }
+    // 9c4. MikroTik 路由器面（XN126）：依 input／forward 鏈實際評估（_mtReach），設定檔沒有寫的項目不評估
+    const mr = parsed.vendor === 'MikroTik' ? parsed.mtRouter : null;
+    if (mr) {
+      const hasWan = _mtWanIfaces(parsed).length > 0;
+      if (hasWan && parsed.dns && parsed.dns.proxy) {
+        const r = _mtReach(parsed, 'UDP', '53');
+        f('mt-dns-open-resolver', tr('audit.check_mt_dns_open'), r.length, 'high', r.length ? r.join(', ') : tr('audit.normal'), ['MikroTik DNS', 'US-CERT TA13-088A'], r.map(n => ({ kind: 'intf', name: n })));
+      }
+      const px = [mr.proxy ? 'proxy' : '', mr.socks ? 'socks' : ''].filter(Boolean);
+      if (px.length) {
+        // proxy 預設 8080、socks 1080（MikroTik 文件）；WAN 打得到為 high，否則 medium
+        const reach = hasWan && ((mr.proxy && _mtReach(parsed, 'TCP', '8080').length) || (mr.socks && _mtReach(parsed, 'TCP', '1080').length));
+        f('mt-proxy-socks', tr('audit.check_mt_proxy_socks'), px.length, reach ? 'high' : 'medium', px.join(', ') + '；' + tr('audit.mt_proxy_note'), ['MikroTik IP/Proxy', 'MikroTik IP/SOCKS'], []);
+      }
+      // forward：WAN 進來、未經目的 NAT 的新連線到內部網段（TCP 445 代表）
+      const lans = (parsed.interfaces || []).filter(i => i.ip && i.ip !== '-' && i.mask && _exposeExternal(parsed, i.name).ext === false);
+      if (hasWan && lans.length) {
+        // 代表主機：網段第一個可用位址，與介面位址相同時取下一個
+        const toInt = ip => ip.split('.').reduce((a, o) => a * 256 + Number(o), 0);
+        const toIp = n => [24, 16, 8, 0].map(b => Math.floor(n / 2 ** b) % 256).join('.');
+        const hostIn = i => { if (_maskLen(i.mask) > 30) return null; const net = toInt(_netAddr(i.ip, i.mask)); return toIp(net + 1 === toInt(i.ip) ? net + 2 : net + 1); };
+        const hit = lans.map(i => ({ i, h: hostIn(i) })).filter(x => x.h && _mtReach(parsed, 'TCP', '445', x.h).length);
+        f('mt-wan-new-forward', tr('audit.check_mt_wan_forward'), hit.length, 'high', hit.length ? hit.map(x => `${x.i.name} (${_netAddr(x.i.ip, x.i.mask)}/${_maskLen(x.i.mask)})`).join(', ') : tr('audit.normal'),
+          ['MikroTik Building Your First Firewall'], hit.map(x => ({ kind: 'intf', name: x.i.name })));
+      }
+      const rules = (parsed.mtRules || []).filter(r => r.status !== 'disable');
+      if (rules.some(r => r._chain === 'input' || r._chain === 'forward')) {
+        const inv = ['input', 'forward'].filter(c => !rules.some(r => r._chain === c && r._mtAct === 'drop' && (r.connState || []).includes('invalid')));
+        f('mt-no-invalid-drop', tr('audit.check_mt_invalid'), inv.length, 'low', inv.length ? inv.join(', ') : tr('audit.normal'), ['MikroTik Building Your First Firewall'], []);
+      }
+      const jobs = (mr.fetchJobs || []).filter(j => !j.disabled);
+      if (jobs.length) f('mt-sched-fetch', tr('audit.check_mt_sched_fetch'), jobs.length, 'medium', jobs.map(j => `${j.kind}: ${j.name}`).join(', ') + '；' + tr('audit.mt_sched_note'), ['MITRE T1053.005', 'MikroTik Scripting'], []);
+      const l2 = [mr.macServer === 'all' ? 'mac-server' : '', mr.macWinbox === 'all' ? 'mac-winbox' : '', mr.neighbor === 'all' ? 'neighbor discovery' : ''].filter(Boolean);
+      if (mr.macServer !== null || mr.macWinbox !== null || mr.neighbor !== null) f('mt-l2-mgmt-all', tr('audit.check_mt_l2_mgmt'), l2.length, 'low', l2.length ? l2.join(', ') : tr('audit.normal'), ['MikroTik Securing your router'], []);
+      if (mr.upnp !== null) f('mt-upnp', tr('audit.check_mt_upnp'), mr.upnp ? 1 : 0, 'low', mr.upnp ? 'UPnP' : tr('audit.normal'), ['MikroTik UPnP'], []);
+      if (mr.bwServerNoAuth) f('mt-bw-server-noauth', tr('audit.check_mt_bw_server'), 1, 'low', 'bandwidth-server authenticate=no', ['MikroTik Securing your router'], []);
+    }
     // 9d. eBGP 鄰居未設定進出過濾（2026-10-28，XN41＝XN28 第二階段，交換器分析已有同名項目）：RFC 8212 要求
     // 沒有政策的 eBGP 預設不收不送；Juniper 文件明載預設照收照送，FortiOS 社群範例同樣以 route-map／prefix-list
     // 限制。只評估 parser 有提供 filterIn／filterOut 的鄰居（FortiGate、Juniper SRX），沒有 eBGP 鄰居時不列
@@ -1183,7 +1310,7 @@
     // any-any 與第 11 項涵蓋，這裡只看有寫出服務的規則，避免重複計算
     const MGMT_PORTS = [22, 23, 3389];
     const anySrc = v => String(v || '').split(',').map(x => x.trim().toLowerCase()).some(x => ['all', 'any', '0.0.0.0/0', '::/0', 'internet', '0.0.0.0 0.0.0.0'].includes(x));
-    const mgmtExposed = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && anySrc(p.srcAddr) &&
+    const mgmtExposed = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && anySrc(p.srcAddr) && _forNewConn(p) &&
       !/^(all|any)$/i.test(String(p.service || 'ALL').trim()) &&
       MGMT_PORTS.some(port => _policySvcMatches(p.service, 'TCP', port, parsed.services || [], p._vdom) === true));
     f('mgmt-exposed', tr('audit.check_mgmt_exposed'), mgmtExposed.length, 'high',
@@ -1793,7 +1920,7 @@
     };
     // T1: any-any accept（需排除已停用規則，比照下方 T1b/broad-network 既有慣例；
     // 先前漏了這道防呆，已停用的 any-any/no-log 規則從未真正生效卻仍被扣分，2026-09 全功能審查發現）
-    const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && /^(all|any)$/i.test((p.srcAddr||'').trim()) && /^(all|any)$/i.test((p.dstAddr||'').trim()));
+    const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && _forNewConn(p) && /^(all|any)$/i.test((p.srcAddr||'').trim()) && /^(all|any)$/i.test((p.dstAddr||'').trim()));
     if (anyAny.length) deduct('health.any_any', 'crit', anyAny.length, anyAny.length * 20, 20);
     // T1b: broad-network（2026-08-29 新增，比照 analyzeCompliance() 的 broad-network 檢查同一套
     // 判斷邏輯，權重較 any-any 低——過寬網段風險低於完全開放，但仍值得扣分）
@@ -1846,6 +1973,10 @@
       ['admin-legacy-hash', 'health.admin_legacy_hash'],
       ['fg-private-data-enc', 'health.fg_private_data_enc'],
       ['f5-mgmt-any-source', 'health.f5_mgmt_any'],
+      ['mt-dstnat-broad', 'health.mt_dstnat_broad'],
+      ['mt-dns-open-resolver', 'health.mt_dns_open'],
+      ['mt-proxy-socks', 'health.mt_proxy_socks'],
+      ['mt-wan-new-forward', 'health.mt_wan_forward'],
       ['bgp-ebgp-no-policy', 'health.bgp_ebgp_no_policy'],
       ['snmpv3-weak', 'health.snmpv3_weak'],
       ['ipv6-any-open', 'health.ipv6_any_open'],

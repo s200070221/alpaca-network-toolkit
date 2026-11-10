@@ -7,7 +7,7 @@
 const VENDOR_NAMES = {t:'Cisco FTD',netgearsmart:'Netgear Smart Managed Pro',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',h3c:'H3C Comware',h:'H3C SecPath',e:'Netgate TNSR',b:'F5 BIG-IP',l:'Wireless LAN Controller',hpe:'HPE Comware',f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure 安全群組',awsflow:'AWS VPC Flow Logs',azureflow:'Azure NSG／VNet Flow Logs',u:'OpenWrt (UCI)',sonic:'SONiC',cumulus:'NVIDIA Cumulus Linux',awplus:'Allied Telesis AlliedWare Plus',ciscobiz:'Cisco Business (CBS/SG)',g:'WatchGuard Firebox',
   // 2026-08-19 新增：log_analyzer 拖放偵測的格式標籤（非廠牌，沿用同一份對照表顯示於拖放
   // 提示 chip），key 與 detectTool() 回傳的 vendor 字串一致
-  rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', nps:'Windows NPS', dbfile:'PostgreSQL／MySQL', pcs:'Ivanti Connect Secure', nps_export:'Windows NPS 設定匯出', appenv:'.env／docker-compose', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog',kvfw:'SonicWall／Sophos Firewall Log',pancsv:'Palo Alto PAN-OS CSV',umbrella:'Cisco Umbrella CSV',elb:'AWS ELB Access Log',s3access:'AWS S3 Access Log',dnslog:'DNS 查詢紀錄',dhcplog:'DHCP 租約紀錄',winfw:'Windows 防火牆 log',vpnauth:'OpenVPN／strongSwan／FreeRADIUS log',squid:'Squid access.log',awsnfw:'AWS Network Firewall log',azfw:'Azure Firewall log',zeek:'Zeek Log (TSV)', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log',
+  rfc5424:'Syslog RFC5424', meraki:'Cisco Meraki', stormshield:'Stormshield SNS', fortimail:'FortiMail', fortimanager:'FortiManager', cef:'CEF', leef:'LEEF', nps:'Windows NPS', dbfile:'PostgreSQL／MySQL', pcs:'Ivanti Connect Secure', nps_export:'Windows NPS 設定匯出', appenv:'.env／docker-compose', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog',kvfw:'SonicWall／Sophos Firewall Log',pancsv:'Palo Alto PAN-OS CSV',umbrella:'Cisco Umbrella CSV',elb:'AWS ELB Access Log',s3access:'AWS S3 Access Log',dnslog:'DNS 查詢紀錄',dhcplog:'DHCP 租約紀錄',winfw:'Windows 防火牆 log',vpnauth:'OpenVPN／strongSwan／FreeRADIUS log',squid:'Squid access.log',awsnfw:'AWS Network Firewall log',azfw:'Azure Firewall log',zeek:'Zeek Log (TSV)', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log',
   ciscoios:'Cisco IOS Log', comwarelog:'Comware Log', isosyslog:'Syslog（ISO 時間）', w3c:'IIS W3C Log', weblog:'Web Access Log', mikrotiklog:'MikroTik Log', ldap:'OpenLDAP／389 Directory Server log', radacct:'FreeRADIUS detail（radacct）'};
 let _dropPending = null;
 // 快速連續拖放/選檔的競態防呆：每次啟動新的 FileReader 讀取時遞增，onload 觸發時比對
@@ -43,6 +43,12 @@ function _isLogJsonObj(o) {
   if ((o.winlog && typeof o.winlog === 'object' && o.winlog.event_id !== undefined) || (o.EventID !== undefined && typeof o.Channel === 'string' && (o.SourceName !== undefined || o.ProviderGuid !== undefined))) return true;
   // Cloudflare Logpush（第二十六輪 SE，與 log_analyzer isCloudflareEvent() 一致）
   if (typeof o.RayID === 'string' && typeof o.ClientIP === 'string' && ('EdgeStartTimestamp' in o || 'Datetime' in o)) return true;
+  // F5 BIG-IP Telemetry Streaming（XN119，與 log_analyzer isF5Telemetry() 一致）
+  if (typeof o.telemetryEventCategory === 'string' && /^(?:LTM|ASM|AFM|APM)$/.test(o.telemetryEventCategory)) return true;
+  // ModSecurity 稽核 log JSON（XN118，與 log_analyzer isModsecAudit() 一致：v3 transaction.messages、v2 audit_data＋request_line）
+  if (o.transaction && typeof o.transaction === 'object' && ((o.transaction.request && 'messages' in o.transaction) || (o.audit_data && o.request && 'request_line' in o.request))) return true;
+  // HashiCorp Vault 稽核 log（XN117，與 log_analyzer isVaultAudit() 一致）
+  if ((o.type === 'request' || o.type === 'response') && o.request && typeof o.request.path === 'string' && 'auth' in o && o.time) return true;
   // Zscaler Internet Access NSS JSON（XN113，與 log_analyzer isZscalerNss() 一致）
   if (typeof o.sourcetype === 'string' && /^zscalernss-(?:web|fw|dns|audit)$/i.test(o.sourcetype) && o.event && typeof o.event === 'object') return true;
   // CrowdStrike Falcon Streaming API 事件（第十八輪 TJ）
@@ -59,6 +65,8 @@ function _isLogJsonHead(trimmed) {
   try { return trimmed.charAt(0) === '{' && _isLogJsonObj(JSON.parse(trimmed.split('\n')[0].trim())); } catch(e) { return false; }
 }
 const LOG_HEAD_SIGS = [
+  // Stormshield SNS（XN122，與 log_analyzer SNS_LINE_RE 一致）
+  [/^(?:<\d{1,3}>)?id=firewall time="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}" fw="[^"]*" tz=[+-]\d{4}\s/m, 'stormshield'],
   // 第三十輪（與 log_analyzer 一致）：FreeRADIUS detail 檔（ctime 時間行後接縮排屬性）、389 Directory Server access log、
   // 事件檢視器 CSV 與 PowerShell Export-Csv 的 Windows 事件
   [/^[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} \d{4}\s*\n[ \t]+[A-Za-z][\w-]* = /m, 'radacct'],
@@ -154,11 +162,16 @@ function detectTool(text) {
   // 掃描取代單行限定），維持兩邊判斷邏輯一致，非另外自創
   // Ivanti／Pulse Connect Secure（XN94，與 log_analyzer PCS_LINE_RE 相同）：須在 rfc5424 之前
   if (/^(?:<\d{1,3}>\d*\s?|[A-Z][a-z]{2}\s+\d{1,2} \d{2}:\d{2}:\d{2} \S+ \d+ )\d{4}-\d{2}-\d{2}[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})? \S+ PulseSecure: - - - /m.test(t)) return {idx:4, vendor:'pcs'};
+  // Cisco Meraki（XN120，與 log_analyzer MERAKI_LINE_RE 相同）：RFC5424 外殼但時間為 epoch 秒
+  if (/^<\d{1,3}>1 \d{9,11}\.\d+ \S+ [a-z][\w-]*(?: |$)/m.test(t))            return {idx:4, vendor:'meraki'};
   if (/^<\d{1,3}>1\s/m.test(t))                                              return {idx:4, vendor:'rfc5424'};
   if (/^(?:<\d{1,3}>\s*)?CEF:\d+\|/m.test(t))                                return {idx:4, vendor:'cef'};
   if (/^(?:<\d{1,3}>\s*)?LEEF:\d+(?:\.\d+)?\|/im.test(t))                    return {idx:4, vendor:'leef'};
   if (/^(?:<\d{1,3}>\s*)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+CEF:\d+\|/m.test(t)) return {idx:4, vendor:'cef-syslog'};
   if (/^(?:<\d{1,3}>\s*)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}:\s*%ASA-\d-\d+:/m.test(t)) return {idx:4, vendor:'asa'};
+  // FortiMail／FortiManager（XN123，與 log_analyzer FML_LINE_RE／FMG_LINE_RE 一致）：欄位為 log_id
+  if (/^(?:<\d{1,3}>)?date=\d{4}-\d{2}-\d{2},time=\d{2}:\d{2}:\d{2}(?:\.\d+)?,device_id=[^,]+,log_id=\d+,/m.test(t)) return {idx:4, vendor:'fortimail'};
+  if (/^(?:<\d{1,3}>)?date=\d{4}-\d{2}-\d{2} time=\d{2}:\d{2}:\d{2} tz="?[+-]\d{4}"?\s[^\n]*\blog_id="?\d{10}"?/m.test(t)) return {idx:4, vendor:'fortimanager'};
   if (/^date=\d{4}-\d{2}-\d{2}\s+time=\d{2}:\d{2}:\d{2}\b/m.test(t) && /\blogid=/.test(t)) return {idx:4, vendor:'fortigate'};
   // FortiGate 經 syslog 送出時帶 <PRI>、6.4 起可能以 devname 開頭（第十五輪 VD，與 log 工具 detectLineFormat() 同一判斷）
   if (/^(?:<\d{1,3}>)?(?=[^\n]*\bdate=\d{4}-\d{2}-\d{2}\s)(?=[^\n]*\stime=\d{2}:\d{2}:\d{2}\b)(?=[^\n]*\blogid="?\d{10}\b)[a-z_]+=/m.test(t)) return {idx:4, vendor:'fortigate'};

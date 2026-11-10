@@ -3,8 +3,23 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.07.1';
+  const TOOLKIT_VERSION = '2026.11.10';
   const CHANGELOG = [
+    {
+      version: '2026.11.10',
+      items: {
+        zhTW: [
+          '防火牆分析支援 F5 BIG-IP（介面、路由、virtual server、AFM 規則、管理介面來源限制；摘要頁列出只分析的項目）；入口頁版本比對與去識別化也支援 BIG-IP',
+          'MikroTik RouterOS 依 Linux netfilter 的方式查詢（input／forward 鏈、jump、介面清單、未命中即放行），新增路由器面檢查（WAN 打得到 Winbox／API／WebFig、DNS 開放解析、proxy／SOCKS、WAN 新連線轉送、排程下載等）與 hairpin NAT 檢查；支援 RouterOS 6.x 版本讀取與交換晶片 VLAN；只放行既有連線的規則不再算 any-any',
+          'log 分析支援 Zscaler、HashiCorp Vault、ModSecurity、F5 Telemetry Streaming、Cisco Meraki、HPE Aruba CX、Stormshield、FortiMail／FortiManager；MikroTik 管理介面從外部位址登入會列出',
+        ],
+        en: [
+          'Firewall analyzer supports F5 BIG-IP (interfaces, routes, virtual servers, AFM rules, management source restrictions; the summary page lists what is analyzed); the hub version check and the anonymizer also support BIG-IP',
+          'MikroTik RouterOS queries follow Linux netfilter semantics (input/forward chains, jump, interface lists, accept when nothing matches); new router checks (Winbox/API/WebFig reachable from WAN, open DNS resolver, proxy/SOCKS, new WAN connections forwarded inside, scheduled downloads, etc.) and hairpin NAT checks; RouterOS 6.x versions and switch-chip VLANs are read; rules that only allow established connections no longer count as any-any',
+          'Log analyzer supports Zscaler, HashiCorp Vault, ModSecurity, F5 Telemetry Streaming, Cisco Meraki, HPE Aruba CX, Stormshield and FortiMail/FortiManager; MikroTik admin logins from external addresses are listed',
+        ],
+      },
+    },
     {
       version: '2026.11.07.1',
       items: {
@@ -390,7 +405,7 @@
 
   // 各工具支援廠牌數（XN52）：唯一來源是入口頁 TOOLS[].vendors 的清單長度（qa test_hub_tasks 比對），
   // 頁面文字寫 {n}，元素加 data-vendor-count="fw|sw|ca|gen|log" 後由 fillVendorCounts() 填入
-  const TOOLKIT_VENDOR_COUNTS = { fw: 29, sw: 25, ca: 52, gen: 19, log: 61 };
+  const TOOLKIT_VENDOR_COUNTS = { fw: 29, sw: 25, ca: 52, gen: 19, log: 69 };
   function fillVendorCounts() {
     if (typeof document === 'undefined') return;
     document.querySelectorAll('[data-vendor-count]').forEach(el => {

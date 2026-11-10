@@ -2,7 +2,10 @@ function parseRouterOSSysInfo(cfg){
   const model=(cfg.match(/^\/system identity[\s\S]*?name=([^\n]+)/m)||[])[1]||'RouterOS';
   const isCCR=/CCR\d+/i.test(model);
   // 匯出檔頭「# 2024-01-01 10:00:00 by RouterOS 7.12.1」或「# RouterOS 7.12.1」
-  const version=(cfg.match(/^#[^\n]*\bRouterOS\s+(\d+\.\d+(?:\.\d+)?(?:beta\d+|rc\d+)?)/m)||[])[1]||'';
+  // v6 檔頭日期寫法不同（# jan/02/2024 10:00:00 by RouterOS 6.49.10），同一條正則涵蓋；
+  // Oxidized 錄製另附 /system resource print 的「#   version: 7.16 (stable)」
+  const version=(cfg.match(/^#[^\n]*\bRouterOS\s+(\d+\.\d+(?:\.\d+)?(?:beta\d+|rc\d+)?)/m)
+    ||cfg.match(/^#\s*(?:installed-)?version:\s*(\d+\.\d+(?:\.\d+)?(?:beta\d+|rc\d+)?)/m)||[])[1]||'';
   return{hostname:model,version,isCCR};
 }
 // 修正：原正則要求 "tagged=" 一定要在 "vlan-id=" 之前且必填，真實匯出設定檔常見「只有
@@ -68,6 +71,9 @@ function parseRouterOSInterfaces(cfg){
         const rec=old||{name:name.replace(/^"|"$/g,''),status:'up',speed,portType,description:'',desc:'',type:'physical',member:'1',mode:'',vlans:''};
         if(desc){rec.desc=desc;rec.description=desc;}
         if(disabled){rec.status='down';rec.shutdown=true;}
+        // RouterOS 6.41 前的交換晶片埠群組：master-port=ether2 表示本埠與 ether2 由晶片直接交換（XN124）
+        const mp=(rest.match(/\bmaster-port=(\S+)/)||[])[1];
+        if(mp&&mp!=='none')rec.masterPort=mp;
         if(!old)intfs.push(rec);
         continue;
       }
@@ -532,9 +538,57 @@ function _parseRouterOSBridgePorts(cfg){
     pvid:(l.match(/\bpvid=(\d+)/)||[])[1]||'',
   })).filter(p=>p.iface);
 }
+// 交換晶片 VLAN（XN124，RouterOS 6.x 常見；語法依 MikroTik 文件 Switch Chip Features 與 CRS1xx/2xx VLAN 範例）：
+//   /interface ethernet switch vlan：add ports=ether2,ether3,switch1-cpu vlan-id=10（成員埠）
+//   CRS1xx/2xx：/interface ethernet switch egress-vlan-tag add tagged-ports=ether2 vlan-id=10（送出時加標籤）
+//   QCA／Atheros 晶片：/interface ethernet switch port set ether3 vlan-header=add-if-missing（trunk）
+//     ／always-strip（access），default-vlan-id=N 為未標記封包所屬 VLAN
+// 成員埠在 egress-vlan-tag 或 vlan-header=add-if-missing（且不是該埠 default-vlan-id）時算 tagged，其餘算 untagged；
+// 晶片內部的 CPU 埠（switch1-cpu）不列。回傳形狀與 parseRouterOSVLANs() 相同
+function _parseRouterOSSwitchChipVlans(cfg){
+  const vlanLines=_routerOSCollectAddLines(cfg,'\\/interface\\s+ethernet\\s+switch\\s+vlan');
+  if(!vlanLines.length)return[];
+  const list=v=>String(v||'').split(',').map(x=>x.trim()).filter(x=>x&&!/^switch\d+-cpu$/.test(x));
+  const egress=Object.create(null);
+  _routerOSCollectAddLines(cfg,'\\/interface\\s+ethernet\\s+switch\\s+egress-vlan-tag').forEach(l=>{
+    const id=(l.match(/\bvlan-id=(\d+)/)||[])[1];
+    if(id)list((l.match(/\btagged-ports=(\S+)/)||[])[1]).forEach(pn=>{(egress[id]=egress[id]||new Set()).add(pn);});
+  });
+  const port=Object.create(null);
+  const blk=cfg.match(/^\/interface\s+ethernet\s+switch\s+port\s*\n([\s\S]*?)(?=^\/|(?![\s\S]))/m);
+  (blk?blk[1].split('\n'):[]).forEach(l=>{
+    const m=l.match(/^\s*set\s+(?:\[\s*find\s+name=)?([^\s\]]+)\s*\]?(.*)$/);
+    if(!m)return;
+    port[m[1]]={header:(m[2].match(/\bvlan-header=(\S+)/)||[])[1]||'',pvid:(m[2].match(/\bdefault-vlan-id=(\d+)/)||[])[1]||''};
+  });
+  const seen=new Map();
+  vlanLines.forEach(l=>{
+    const id=(l.match(/\bvlan-ids?=(\d+)/)||[])[1];
+    if(!id)return;
+    if(!seen.has(id))seen.set(id,{id:Number(id),name:`VLAN${id}`,ports:[],status:'active',tagged:[],untagged:[]});
+    const v=seen.get(id);
+    list((l.match(/\bports=(\S+)/)||[])[1]).forEach(pn=>{
+      const pc=port[pn];
+      const tagged=(egress[id]&&egress[id].has(pn))||(pc&&pc.header==='add-if-missing'&&pc.pvid!==id);
+      (tagged?v.tagged:v.untagged).push(pn);
+    });
+  });
+  return [...seen.values()].map(v=>({id:v.id,name:v.name,ports:v.ports,status:v.status,tagged:v.tagged.join(','),untagged:v.untagged.join(','),switchChip:true}));
+}
 function parseRouterOS(cfg){
   const sys=parseRouterOSSysInfo(cfg);
   const rosVlans=parseRouterOSVLANs(cfg), rosInterfaces=parseRouterOSInterfaces(cfg);
+  // 交換晶片 VLAN（XN124）：與 bridge VLAN 表同編號時合併成員，不重複列
+  _parseRouterOSSwitchChipVlans(cfg).forEach(sv=>{
+    const v=rosVlans.find(x=>x.id===sv.id);
+    if(!v){rosVlans.push(sv);return;}
+    if(sv.tagged)v.tagged=[v.tagged,sv.tagged].filter(Boolean).join(',');
+    if(sv.untagged)v.untagged=[v.untagged,sv.untagged].filter(Boolean).join(',');
+  });
+  // 交換晶片成員埠在 v6 匯出檔不一定出現在 /interface ethernet（未改過設定的埠不列），補成實體埠
+  rosVlans.filter(v=>v.switchChip).forEach(v=>[v.tagged,v.untagged].join(',').split(',').filter(Boolean).forEach(n=>{
+    if(!rosInterfaces.some(i=>i.name===n))rosInterfaces.push({name:n,status:'up',speed:'-',portType:'Ethernet',description:'',desc:'',type:'physical',member:'1',mode:'',vlans:''});
+  }));
   const rosLacp=parseRouterOSLACP(cfg);
   const bridgePorts=_parseRouterOSBridgePorts(cfg);
   const lagNames=new Set(rosLacp.map(l=>l.name));

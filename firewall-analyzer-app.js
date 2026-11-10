@@ -3041,7 +3041,8 @@ function onParsed(){
     const natStage = dnat ? _natStage(PARSED && PARSED.vendor) : '';
     const qDst = dnat && natStage === 'post' ? dnat.toIp : dst.trim();
     const qPort = dnat && natStage === 'post' ? dnat.toPort : port;
-    const res = _runPolicyQuery(src.trim(), qDst, proto, qPort, vdom, PARSED, _queryOpts());
+    // dnat：MikroTik connection-nat-state=dstnat／!dstnat 規則依此判斷（XN126）
+    const res = _runPolicyQuery(src.trim(), qDst, proto, qPort, vdom, PARSED, Object.assign(_queryOpts(), { dnat: !!(dnat && natStage === 'post') }));
     const altRes = dnat && natStage === 'unknown' ? _runPolicyQuery(src.trim(), dnat.toIp, proto, dnat.toPort, vdom, PARSED, _queryOpts()) : null;
     if (!res) { el.innerHTML = '<div class="nodata">'+tr('query.no_policy')+'</div>'; LAST_QUERY_TRACE = null; return; }
     if (res.error === 'invalid_ip') {
@@ -3082,8 +3083,10 @@ function onParsed(){
       + (proto && proto!=='any' ? ` ${esc(proto.toUpperCase())}` : '')
       + (port ? `:${esc(port)}` : '')
       + `</span>`;
-    const fqdnNote = (res.trace.find(t=>t.result==='match'&&t.hasFqdn))
-      ? ` <span style="font-size:11px;color:var(--orange)">(${tr('query.fqdn_note')})</span>` : '';
+    const fqdnNote = ((res.trace.find(t=>t.result==='match'&&t.hasFqdn))
+      ? ` <span style="font-size:11px;color:var(--orange)">(${tr('query.fqdn_note')})</span>` : '') +
+      // RouterOS（XN126）：使用的鏈、依位址推得的進出介面；鏈尾預設放行另註明
+      (res.mtChain ? `<div style="margin-top:6px;font-size:12px;font-weight:400;color:var(--text-dim)">${esc(tr('query.mt_chain').replace('{chain}', res.mtChain).replace('{in}', res.mtIn || '-').replace('{out}', res.mtOut || '-'))}${res.mtDefault ? ' ' + esc(tr('query.mt_default_accept')) : ''}</div>` : '');
     const _mt = res.trace.find(t=>t.result==='match');
     const _rSrc = _mt&&_mt.resolvedSrc;
     const _rDst = _mt&&_mt.resolvedDst;
