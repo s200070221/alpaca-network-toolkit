@@ -450,7 +450,9 @@
     // 4. 有 associated-interface 的地址物件：屬於介面子網（WiFi SSID / VLAN），系統隱式使用
     for (const a of (parsed.addresses || [])) {
       if (a.iface && a.iface !== '-') usedAddr.add(vk(a._vdom, a.name));
+      if (a._inUse) usedAddr.add(vk(a._vdom, a.name));   // parser 標示的使用中（F5 BIG-IP pool 成員 node 等，XN116）
     }
+    for (const sv of (parsed.services || [])) if (sv._inUse) usedSvc.add(vk(sv._vdom, sv.name));
 
     // 範圍：物件的 _vdom 與規則的 _vdom 屬同一套命名（FortiGate VDOM、Palo Alto vsys）時依範圍比對；
     // 物件範圍不在任何規則範圍內（Juniper 全域／區域通訊錄、Palo Alto shared、pfSense global 等共用物件）時只比名稱
@@ -547,7 +549,7 @@
   // parsed.vendor 實際值是 'Cisco ASA'／'SonicWall'（含空格/駝峰），且 merge() 合併多廠牌分析
   // 時會在後面加後綴，精確比對／小寫字面值比對兩者皆會恆為 false 導致排除清單完全失效。
   // Check Point 的 NAT 也是自成一表的規則（clish nat rule 與 Management API nat-rulebase），不被政策引用（第十七輪 QG）
-  const ORPHAN_NAT_EXCLUDED_VENDOR_RE = /cisco\s*asa|sonicwall|checkpoint/i;
+  const ORPHAN_NAT_EXCLUDED_VENDOR_RE = /cisco\s*asa|sonicwall|checkpoint|F5 BIG-IP/i;  // F5 BIG-IP（XN116）：virtual server 本身就是入口，不需規則參照
   const ORPHAN_NAT_TYPES = new Set(['vip', 'ippool', 'vipgrp']);
   function analyzeOrphanNAT(parsed) {
     if (ORPHAN_NAT_EXCLUDED_VENDOR_RE.test(parsed.vendor || '')) return [];
@@ -771,10 +773,12 @@
     'asa-http':   { cves: ['CVE-2024-20353'], risk: 'high' },
     'asa-webvpn': { cves: ['CVE-2020-3452', 'CVE-2023-20269', 'CVE-2025-20333', 'CVE-2025-20362'], risk: 'high' },
     'jn-jweb':    { cves: ['CVE-2023-36844', 'CVE-2023-36845', 'CVE-2023-36846', 'CVE-2023-36847', 'CVE-2023-36851'], risk: 'high' },
+    // F5 BIG-IP（XN116）：self IP 開放設定公用程式（TMUI）／iControl REST
+    'f5-tmui':    { cves: ['CVE-2020-5902', 'CVE-2022-1388', 'CVE-2023-46747'], risk: 'high' },
     'admin-telnet': { cves: [], risk: 'high' },
     'admin-ssh':  { cves: [], risk: 'medium' },
   };
-  const EXPOSE_VENDORS = /^(FortiGate|PaloAlto|Cisco ASA|Cisco FTD|Juniper)$/;
+  const EXPOSE_VENDORS = /^(FortiGate|PaloAlto|Cisco ASA|Cisco FTD|Juniper|F5 BIG-IP)$/;
   const _EXT_ZONE_RE = /^(untrust|outside|internet|wan|external|public|isp)/i;
   // 介面是否對外：介面角色（FortiGate WAN、ASA security-level 0）、所屬區域名稱、或預設路由的出口。
   // 回傳 {ext:true|false|null, basis}；找不到介面為 null
@@ -786,7 +790,8 @@
     const zone = i.zone || i._zone || (/juniper/i.test(parsed.vendor || '') ? i._vdom : '');
     if (zone && _EXT_ZONE_RE.test(zone)) return { ext: true, basis: 'zone', zone };
     const def = (parsed.routes || []).find(r => /^0\.0\.0\.0(\/0| 0\.0\.0\.0)$/.test(String(r.dst || '').trim()) && r.status !== 'disable' &&
-      ((r.device && [i.name, i.nameif].filter(Boolean).some(x => String(x).toLowerCase() === String(r.device).toLowerCase())) ||
+      // 路由有指定出口介面時以介面為準（BIG-IP 管理路由 device mgmt 的下一跳可能與資料面介面同網段）
+      (r.device && r.device !== '-' ? [i.name, i.nameif].filter(Boolean).some(x => String(x).toLowerCase() === String(r.device).toLowerCase()) :
        (r.gateway && i.ip && i.mask && _exposeSameNet(r.gateway, i.ip, i.mask))));
     if (def) return { ext: true, basis: 'defaultRoute' };
     return { ext: false, basis: '' };
@@ -864,6 +869,11 @@
           if (all || sv.has('telnet')) add('admin-telnet', n, { zone: b.zone });
         });
       });
+    } else if (vendor === 'F5 BIG-IP') {
+      // self IP 的 port lockdown（allow-service）：all＝所有服務；明列 tcp:https／443、tcp:ssh／22；default 依版本內容不同不評估
+      (parsed.interfaces || []).forEach(i => { const a = toks(i.allowaccess);
+        if (a.includes('all') || a.includes('tcp:https') || a.includes('tcp:443')) add('f5-tmui', i.name);
+        if (a.includes('all') || a.includes('tcp:ssh') || a.includes('tcp:22')) add('admin-ssh', i.name); });
     }
     return { supported: true, items: out };
   }
@@ -1104,6 +1114,20 @@
     if (pde === true || pde === false) {
       f('fg-private-data-enc', tr('audit.check_fg_private_data_enc'), pde ? 0 : 1, 'medium',
         pde ? tr('audit.normal') : tr('audit.fg_pde_off'), ['NIST 800-53 SC-28', 'CVE-2019-6693 (CISA KEV)'], []);
+    }
+    // 9c2. F5 BIG-IP 管理介面來源限制（XN116）：sys httpd／sshd 的 allow 為 All（任何來源）；沒有 allow 行的片段不評估。
+    // 本機帳號可用 bash（shell bash）：low、不計健康度，請確認是否必要
+    const mp5 = parsed.vendor === 'F5 BIG-IP' ? (parsed.mgmtPlane || {}) : null;
+    if (mp5 && (mp5.httpdAllow || mp5.sshdAllow)) {
+      const anyOf = l => (l || []).some(x => /^(?:all|0\.0\.0\.0\/0|0\.0\.0\.0\/0\.0\.0\.0)$/i.test(x));
+      const open = [anyOf(mp5.httpdAllow) ? 'httpd' : '', anyOf(mp5.sshdAllow) ? 'sshd' : ''].filter(Boolean);
+      f('f5-mgmt-any-source', tr('audit.check_f5_mgmt_any'), open.length, 'medium', open.length ? open.join(', ') : tr('audit.normal'),
+        ['CISA ED 26-01', 'NIST 800-53 AC-17'], open.map(x => ({ kind: 'mgmt', name: x })));
+    }
+    if (parsed.vendor === 'F5 BIG-IP' && (parsed.users || []).length) {
+      const bash = parsed.users.filter(u => u.shell === 'bash' && u.status !== 'disable');
+      f('f5-admin-bash', tr('audit.check_f5_admin_bash'), bash.length, 'low', bash.length ? bash.map(u => u.name).slice(0, 8).join(', ') : tr('audit.none'),
+        ['NIST 800-53 AC-6'], bash.map(u => ({ kind: 'user', name: u.name })));
     }
     // 9d. eBGP 鄰居未設定進出過濾（2026-10-28，XN41＝XN28 第二階段，交換器分析已有同名項目）：RFC 8212 要求
     // 沒有政策的 eBGP 預設不收不送；Juniper 文件明載預設照收照送，FortiOS 社群範例同樣以 route-map／prefix-list
@@ -1821,6 +1845,7 @@
       ['default-admin-name', 'health.default_admin'],
       ['admin-legacy-hash', 'health.admin_legacy_hash'],
       ['fg-private-data-enc', 'health.fg_private_data_enc'],
+      ['f5-mgmt-any-source', 'health.f5_mgmt_any'],
       ['bgp-ebgp-no-policy', 'health.bgp_ebgp_no_policy'],
       ['snmpv3-weak', 'health.snmpv3_weak'],
       ['ipv6-any-open', 'health.ipv6_any_open'],
@@ -2513,6 +2538,8 @@ function buildPriorityHtml(items, limit, title) {
     'no-2fa': /two-factor|2fa|otp|accprofile|trusthost/i,
     'default-admin-name': /accprofile|profile|level|user-type/i,
     'admin-legacy-hash': /password|accprofile/i,
+    'f5-mgmt-any-source': /allow/i,
+    'f5-admin-bash': /shell|role/i,
     'http-mgmt': /allowaccess|manage|http|telnet/i,
     'exposed-svc': /allowaccess|source-interface|webvpn|http server|enable|interface-management-profile|local-address|web-management|system-services/i,
     'weak-vpn': /proposal|dhgrp|encrypt|hash|dh-group|authentication/i,

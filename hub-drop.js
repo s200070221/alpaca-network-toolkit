@@ -204,13 +204,13 @@ function _showDropResult(name, detected, text, entry) {
     document.getElementById('drop-cert-open').addEventListener('click', _openDropCert);
     manualBtn.textContent = tr('drop.manual');
     manualBtn.style.display = '';
-  } else if ((window.isNsConf && isNsConf(text)) || (window.isBigipConf && isBigipConf(text))) {
-    // NetScaler ns.conf（XN105／XN107）、F5 BIG-IP 設定（XN106）：沒有對應的分析工具，在本頁做版本比對與曝險檢查，或交給去識別化
-    const f5 = !isNsConf(text);
-    chip.textContent = tr(f5 ? 'drop.f5_found' : 'drop.ns_found');
+  } else if (window.isNsConf && isNsConf(text)) {
+    // NetScaler ns.conf（XN105／XN107）：沒有對應的分析工具，在本頁做版本比對與曝險檢查，或交給去識別化。
+    // F5 BIG-IP（XN116）改由防火牆分析處理，走下方 detected 分支並另附本頁版本比對按鈕
+    chip.textContent = tr('drop.ns_found');
     chip.removeAttribute('data-drop-kind');
     actions.innerHTML = `<button class="da-primary" type="button" id="drop-dc-open">🛡 ${_glEsc(tr('drop.ns_open'))}</button>
-      <button class="da-secondary" onclick="_dispatchWithPending(2,'${f5 ? 'bigip' : 'netscaler'}')">🔒 ${tr('drop.to_anon')}</button>`;
+      <button class="da-secondary" onclick="_dispatchWithPending(2,'netscaler')">🔒 ${tr('drop.to_anon')}</button>`;
     document.getElementById('drop-dc-open').addEventListener('click', () => {
       document.getElementById('drop-overlay').classList.remove('active');
       if (window.devCheckLoad) devCheckLoad(text);
@@ -232,6 +232,11 @@ function _showDropResult(name, detected, text, entry) {
       <button class="da-primary" onclick='_dispatchWithPending(${detected.idx},${JSON.stringify(detected.vendor)})'>${TOOLS[detected.idx].icon} ${tr('drop.open')} ${tr(TOOLS[detected.idx].id+'.title')}</button>
       ${anonThenOpenBtn}
       <button class="da-secondary" onclick="_dispatchWithPending(2,null)">🔒 ${tr('drop.to_anon')}</button>`;
+    // F5 BIG-IP（XN116）：另提供在本頁比對版本與曝險檢查
+    if (detected.vendor === 'b' && window.devCheckLoad) {
+      actions.insertAdjacentHTML('beforeend', `<button class="da-secondary" type="button" id="drop-dc-open">🛡 ${_glEsc(tr('drop.ns_open'))}</button>`);
+      document.getElementById('drop-dc-open').addEventListener('click', () => { document.getElementById('drop-overlay').classList.remove('active'); devCheckLoad(text); });
+    }
     manualBtn.textContent = tr('drop.manual');
     manualBtn.style.display = '';
   } else {

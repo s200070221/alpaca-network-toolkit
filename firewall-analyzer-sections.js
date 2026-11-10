@@ -1389,6 +1389,11 @@ function buildChangeImpactHtml(cmp){
 // 摘要分頁（XN51）：分析完先給結論——健康度、先處理的 3 件、設備概況、下一步。
 // st：{health（computeFirewallHealth 結果）, prio（fwPriorityItems 結果）, parsed, vuln（fwVulnStatus 結果或 null）}
 // 按鈕只呼叫既有全域函式，不帶任何設定檔內容
+function buildF5ScopeHtml(box){
+  return `<div id="f5-scope" style="${box||''};border-left:3px solid var(--orange);font-size:12px"><div style="font-weight:600;margin-bottom:4px">ℹ ${esc(tr('f5.scope_title'))}</div>`
+    +`<div>${esc(tr('f5.scope_body'))}</div><div style="color:var(--text-dim);margin-top:4px">${esc(tr('f5.scope_not'))}</div></div>`;
+}
+window.buildF5ScopeHtml=buildF5ScopeHtml;
 function buildFwSummaryHtml(st){
   const h=st.health,p=st.parsed||{},info=p.deviceInfo||{},v=st.vuln;
   const box='padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);margin-bottom:14px';
@@ -1403,6 +1408,8 @@ function buildFwSummaryHtml(st){
   else o+=`<div style="${box};color:var(--green)">✓ ${esc(tr('sum.zero_note'))}</div>`;
   // 韌體版本不完整（FortiGate 檔頭只有主次版本）時提醒補填，否則已知漏洞比對不會生效
   if(v&&v.r&&(v.r.status==='noVersion'||v.r.status==='unknown')) o+=`<div style="${box};border-left:3px solid var(--orange)">⚠ ${esc(tr('sum.fill_version'))} <button class="btn btn-ghost btn-sm" data-prio-go="vuln-card">${esc(tr('prio.go'))}</button></div>`;
+  // F5 BIG-IP（XN116）：負載平衡器只分析部分項目，摘要頁明列涵蓋與不涵蓋的範圍
+  if(/F5 BIG-IP/.test(p.vendor||'')) o+=buildF5ScopeHtml(box);
   const cnt=k=>(p[k]||[]).length;
   o+=`<div style="${box};font-size:12px"><div style="font-weight:600;margin-bottom:4px">${esc(tr('sum.device'))}</div>`
     +`<div class="mono" style="color:var(--text-dim)">${esc([p.vendor,info.hostname,info.firmware].filter(x=>x&&x!=='-').join(' · '))}</div>`

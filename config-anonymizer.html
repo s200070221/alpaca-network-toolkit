@@ -5701,19 +5701,19 @@ function runAnonymize() {
 // ── 結構保持度自檢（2026-10-02，第九輪發想 YD）──
 // 以隱藏 iframe 開啟對應分析工具（?structcheck=1，該頁不碰交接 key），postMessage 送出原始檔與
 // 去識別化結果，對方各自解析後只回傳數量。不直接呼叫 iframe 內函式，離線 file:// 開啟時也能運作。
-const STRUCT_FW_VENDORS = new Set(['fortigate','sophos','checkpoint','paloalto','pfsense','sonicwall','ciscoasa','zyxel','edgerouter','openwrt','watchguard','vyos','netfilter','cloudsg','checkpoint_api','h3c_secpath','tnsr']);
+const STRUCT_FW_VENDORS = new Set(['fortigate','sophos','checkpoint','paloalto','pfsense','sonicwall','ciscoasa','zyxel','edgerouter','openwrt','watchguard','vyos','netfilter','cloudsg','checkpoint_api','h3c_secpath','tnsr','bigip']);
 const STRUCT_LABELS = { vlans:'VLAN', interfaces:'Interface', routes:'Route', users:'User', acls:'ACL', lacp:'LACP', vrrp:'VRRP', dhcp:'DHCP', policies:'Policy', addresses:'Address', services:'Service', nat:'NAT', vpn:'VPN' };
 // MikroTik／Juniper 兩個分析工具都支援：有防火牆規則／security 區塊時交給防火牆分析，否則交給交換器解析
 // UX27：去識別化後「送往分析工具」的預設目標（TOOL_HREFS 索引）；無線控制器交給防火牆分析（WiFi 頁），
 // NPS 設定與應用程式環境變數沒有對應的分析工具，回傳 -1 維持原選擇
 function defaultSendTool(vendor, text) {
   if (vendor === 'wlc') return 0;
-  if (vendor === 'nps_export' || vendor === 'appenv' || vendor === 'netscaler' || vendor === 'bigip') return -1;
+  if (vendor === 'nps_export' || vendor === 'appenv' || vendor === 'netscaler') return -1;
   const page = structCheckTool(vendor, text);
   return page ? TOOL_HREFS.indexOf(page) : -1;
 }
 function structCheckTool(vendor, text) {
-  if (!vendor || vendor === 'unknown' || vendor === 'nps_export' || vendor === 'appenv' || vendor === 'netscaler' || vendor === 'bigip') return null;
+  if (!vendor || vendor === 'unknown' || vendor === 'nps_export' || vendor === 'appenv' || vendor === 'netscaler') return null;
   if (STRUCT_FW_VENDORS.has(vendor)) return 'firewall-analyzer-fixed.html';
   if (vendor === 'mikrotik') return /^\/ip\s+firewall\s+(?:filter|nat)\b/m.test(text) ? 'firewall-analyzer-fixed.html' : 'switch-config-parser.html';
   if (vendor === 'juniper') return /^\s*security\s*\{|^set\s+security\s/m.test(text) ? 'firewall-analyzer-fixed.html' : 'switch-config-parser.html';

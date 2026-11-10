@@ -37,7 +37,7 @@ const VulnCheck = (function () {
     // Dell OS9（FTOS，9.x）與 OS10 是不同作業系統，交換器 parser 同樣標 dell-os10，OS10 公告不適用（XN58）
     if (v === 'dell-os10' && /^\s*[1-9]\./.test(String(version || ''))) return '';
     const map = { FortiGate: 'fortios', PaloAlto: 'panos', 'Cisco ASA': 'asa', 'Cisco FTD': 'ftd', Juniper: 'junos', juniper: 'junos',
-      nxos: 'nxos', arista: 'eos', aruba: 'aoscx', MikroTik: 'routeros', routeros: 'routeros', 'dell-os10': 'os10', CheckPoint: 'gaia', SonicWall: 'sonicos' };
+      nxos: 'nxos', arista: 'eos', aruba: 'aoscx', MikroTik: 'routeros', routeros: 'routeros', 'dell-os10': 'os10', CheckPoint: 'gaia', SonicWall: 'sonicos', 'F5 BIG-IP': 'bigip' };
     if (map[v]) return map[v];
     if (v === 'cisco') {
       const s = String(version || '');

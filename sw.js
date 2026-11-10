@@ -41,6 +41,7 @@ const FILES = [
   'firewall-analyzer-parser-sonicwall.js',
   'firewall-analyzer-parser-sophos.js',
   'firewall-analyzer-parser-tnsr.js',
+  'firewall-analyzer-parser-bigip.js',
   'firewall-analyzer-parser-vyos.js',
   'firewall-analyzer-parser-watchguard.js',
   'firewall-analyzer-parser-wlc.js',

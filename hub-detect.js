@@ -4,7 +4,7 @@
 // 2026-08-09 稽核修復：新增 z/r/u/sonic 對應 detectTool() 新補的訊號規則，缺這幾項會讓
 // `detected.vendor ? VENDOR_NAMES[detected.vendor] : null` 對這些 vendor code 求值出
 // undefined（非 null），下游模板可能把字面 "undefined" 顯示在畫面上
-const VENDOR_NAMES = {t:'Cisco FTD',netgearsmart:'Netgear Smart Managed Pro',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',h3c:'H3C Comware',h:'H3C SecPath',e:'Netgate TNSR',l:'Wireless LAN Controller',hpe:'HPE Comware',f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure 安全群組',awsflow:'AWS VPC Flow Logs',azureflow:'Azure NSG／VNet Flow Logs',u:'OpenWrt (UCI)',sonic:'SONiC',cumulus:'NVIDIA Cumulus Linux',awplus:'Allied Telesis AlliedWare Plus',ciscobiz:'Cisco Business (CBS/SG)',g:'WatchGuard Firebox',
+const VENDOR_NAMES = {t:'Cisco FTD',netgearsmart:'Netgear Smart Managed Pro',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',h3c:'H3C Comware',h:'H3C SecPath',e:'Netgate TNSR',b:'F5 BIG-IP',l:'Wireless LAN Controller',hpe:'HPE Comware',f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure 安全群組',awsflow:'AWS VPC Flow Logs',azureflow:'Azure NSG／VNet Flow Logs',u:'OpenWrt (UCI)',sonic:'SONiC',cumulus:'NVIDIA Cumulus Linux',awplus:'Allied Telesis AlliedWare Plus',ciscobiz:'Cisco Business (CBS/SG)',g:'WatchGuard Firebox',
   // 2026-08-19 新增：log_analyzer 拖放偵測的格式標籤（非廠牌，沿用同一份對照表顯示於拖放
   // 提示 chip），key 與 detectTool() 回傳的 vendor 字串一致
   rfc5424:'Syslog RFC5424', cef:'CEF', leef:'LEEF', nps:'Windows NPS', dbfile:'PostgreSQL／MySQL', pcs:'Ivanti Connect Secure', nps_export:'Windows NPS 設定匯出', appenv:'.env／docker-compose', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog',kvfw:'SonicWall／Sophos Firewall Log',pancsv:'Palo Alto PAN-OS CSV',umbrella:'Cisco Umbrella CSV',elb:'AWS ELB Access Log',s3access:'AWS S3 Access Log',dnslog:'DNS 查詢紀錄',dhcplog:'DHCP 租約紀錄',winfw:'Windows 防火牆 log',vpnauth:'OpenVPN／strongSwan／FreeRADIUS log',squid:'Squid access.log',awsnfw:'AWS Network Firewall log',azfw:'Azure Firewall log',zeek:'Zeek Log (TSV)', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log',
@@ -198,6 +198,9 @@ function detectTool(text) {
   // Netgate TNSR（2026-10-06，ML）：判斷式與 FW_VENDOR_SIGS.tnsr 一致（nacm＋dataplane、介面 ACL sequence、VPF、next-hop N via）
   if (/^nacm\s+(?:enable|disable|group\s)[\s\S]*^dataplane\s|^dataplane\s[\s\S]*^nacm\s+(?:enable|disable|group\s)/m.test(text) || /^[ \t]+access-list\s+(?:input|output)\s+acl\s+\S+\s+sequence\s+\d+/m.test(text) ||
       /^vpf\s+(?:filter\s+ruleset|options)\b/m.test(text) || /^[ \t]+next-hop\s+\d+\s+via\s/m.test(text)) return {idx:0, vendor:'e'};
+  // F5 BIG-IP（XN116）：tmsh 頂層區塊至少 2 項，與 FW_VENDOR_SIGS.bigip、hub-devcheck.js isBigipConf() 一致
+  if ([/^#TMSH-VERSION: /m, /^ltm (?:virtual|pool|node) \S+ \{/m, /^net self \S+ \{/m, /^net vlan \S+ \{/m, /^sys global-settings \{/m,
+    /^auth user \S+ \{/m, /^sys (?:httpd|sshd|snmp) \{/m, /^sys management-ip /m, /Sys::Version/].filter(r => r.test(text)).length >= 2) return {idx:0, vendor:'b'};
   // 無線控制器（2026-10-05，KD／KH／KI）：判斷式與 FW_VENDOR_SIGS.wlc 一致，送到防火牆分析器的 WiFi 分析；
   // 須排在 Cisco IOS／Comware 交換器判斷之前（9800 為 IOS-XE、H3C WX 為 Comware 格式）
   if (/^(?:config\s+)?wlan\s+create\s+\d+\s+\S+/m.test(text) || /^\s*wlan\s+service-template\s+\S+/m.test(text) ||
