@@ -59,6 +59,9 @@ function tr(key) {
 // [8] UI 狀態與繪製
 // ============================================================
 let RAW_TEXT = '';
+// 防火牆設定對照（XN131）：自己開啟的防火牆分析頁，與回傳的判斷結果（只存記憶體，清除時清空）
+const FW_QUERY_WINS = new Set();
+let FW_VERDICTS = new Map();
 // 本次分析無法解析的原始行（RC 回報用），重新分析或清除時重設
 let UNPARSED_LINES = [];
 let EVENTS = [];
@@ -1173,8 +1176,10 @@ function renderIssues() {
     const status = issueStatusOf(noteKey);
     const statusCell = `<select onchange="onIssueStatusChange(${noteKeyArg}, this.value)">${ISSUE_STATUS_VALUES.map(v => `<option value="${v}"${v === status ? ' selected' : ''}>${esc(tr('status.' + v))}</option>`).join('')}</select>`;
     const searchText = `${catLabel} ${sourceCell} ${basisText} ${issueSample(is)} ${noteText} ${tr('status.' + status)}`.toLowerCase();
+    // 高風險服務埠問題可把連線送到防火牆分析對照設定（XN131）
+    const fwBtn = FWV_ISSUE_CATS.has(baseCat) && issueFwBatch(is) ? ` <button class="fwq-btn" data-issue-fw="${ISSUES.indexOf(is)}" title="${esc(tr('fwv.issue_btn'))}" aria-label="${esc(tr('fwv.issue_btn'))}">🛡</button>` : '';
     const html = `<tr${status === 'falsePositive' ? ' style="opacity:.55"' : ''}>
-      <td class="is-cat">${catLabel}${mitreBadge}${nextStepHtml(baseCat)}</td>
+      <td class="is-cat">${catLabel}${mitreBadge}${fwBtn}${fwVerdictBadge(is.relatedEvents)}${nextStepHtml(baseCat)}</td>
       <td class="is-inl" data-label="${L('severity')}"><span class="badge ${sevClass(is.severityNorm)}">${tr(SEV_KEY_MAP[is.severityNorm])}</span></td>
       <td class="is-inl" data-label="${L('count')}">${is.count}</td>
       <td class="is-inl" data-label="${L('confidence')}"><span class="conf-tag ${is.confidence}">${tr('conf.' + is.confidence)}</span></td>
@@ -1185,6 +1190,12 @@ function renderIssues() {
       <td class="is-inl">${statusCell}</td></tr>`;
     return { html, searchText };
   }).filter(r => !searchQuery || r.searchText.includes(searchQuery));
+  tbody.onclick = ev => {
+    const fb = ev.target.closest('[data-issue-fw]');
+    if (!fb) return;
+    const csv = issueFwBatch(ISSUES[+fb.getAttribute('data-issue-fw')]);
+    if (csv) sendToFirewallQuery({ batch: csv.csv });
+  };
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="${hasSource ? 9 : 8}" class="empty">${tr('issues.empty')}</td></tr>`;
     return;
@@ -1452,17 +1463,32 @@ function renderChains() {
     return `<tr>
       <td><a href="#actor-card" class="actor-link" onclick="showActorProfile(${esc(JSON.stringify(c.actor))});return false;">${esc(c.actor)}</a></td>
       <td><span class="badge ${sevClass(c.severityNorm)}">${tr(SEV_KEY_MAP[c.severityNorm])}</span></td>
-      <td>${stageText}</td>
+      <td>${stageText}${fwVerdictBadge([...new Set((c.stages || []).flatMap(s => (s.issue && s.issue.relatedEvents) || []))])}</td>
       <td>${fmtTime(c.firstSeen)}</td>
       <td>${fmtTime(c.lastSeen)}</td>
       <td>${spanText(c.spanMs)}</td>
       <td>${fwBtn}</td></tr>`;
   }).join('');
 }
-// 攻擊鏈上各問題的事件中，有放行／拒絕結果的連線組成防火牆批次查詢 CSV（沒有任何可查的連線回傳 null）
+// 防火牆設定對照標記（XN131）：有對照結果的問題／攻擊鏈顯示設定放行、阻擋、無法判斷各幾組
+function fwVerdictBadge(events) {
+  if (!FW_VERDICTS.size) return '';
+  const v = fwVerdictSummary(events, FW_VERDICTS);
+  if (!(v.accept + v.deny + v.unknown)) return '';
+  const part = (n, key, cls) => n ? `<span class="fwv ${cls}">${esc(tr(key).replace('{n}', n))}</span>` : '';
+  return `<div class="fwv-row" data-fwv="${v.accept},${v.deny},${v.unknown}">${part(v.accept, 'fwv.allow', 'fwv-allow')}${part(v.deny, 'fwv.deny', 'fwv-deny')}${part(v.unknown, 'fwv.unknown', '')}`
+    + (v.reachable ? `<div class="fwv-note fwv-hot">${esc(tr('fwv.reachable').replace('{n}', v.reachable))}</div>` : '')
+    + (v.mismatch ? `<div class="fwv-note">${esc(tr('fwv.mismatch').replace('{n}', v.mismatch))}</div>` : '') + `</div>`;
+}
+const FWV_ISSUE_CATS = new Set(['riskyPortAllowed', 'riskyPortProbe', 'riskyPortSweep']);
+function issueFwBatch(is) {
+  const b = buildFwBatchCsv((is && is.relatedEvents) || [], { includeUnknown: true });
+  return b.rows ? b : null;
+}
+// 攻擊鏈上各問題事件的連線組成防火牆批次查詢 CSV（沒有任何可查的連線回傳 null）
 function chainFwBatch(c) {
   const evs = [...new Set((c.stages || []).flatMap(s => (s.issue && s.issue.relatedEvents) || []))];
-  const b = buildFwBatchCsv(evs);
+  const b = buildFwBatchCsv(evs, { includeUnknown: true });
   return b.rows ? b : null;
 }
 

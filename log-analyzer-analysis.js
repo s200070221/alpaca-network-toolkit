@@ -882,11 +882,12 @@ function eventFwOutcome(e) {
 // 依「來源、目的、協定、目的埠、實際結果」彙整，依筆數取前 FW_BATCH_MAX 組，輸出防火牆批次查詢 CSV
 // （src,dst,proto,port,expect,count；expect 為 log 的實際結果，count 只供對照）
 const FW_BATCH_MAX = 200;
-function buildFwBatchCsv(events) {
+// opts.includeUnknown（XN131）：log 看不出結果的事件也送出（expect 留空），由防火牆設定判斷
+function buildFwBatchCsv(events, opts) {
   const groups = new Map();
   (events || []).forEach(e => {
     const out = eventFwOutcome(e);
-    if (!out) return;
+    if (!out && !(opts && opts.includeUnknown)) return;
     const q = buildFwQueryPayload(getEventNetTuple(e));
     if (!q) return;
     const k = [q.src, q.dst, q.proto, q.port, out].join('|');
@@ -912,6 +913,47 @@ function sendToFirewallQuery(q) {
   try { localStorage.setItem('_netAnalyzer_fwQuery', JSON.stringify(Object.assign({}, q, { ts: Date.now() }))); } catch (e) { alert(tr('err.storage_full')); return; }
   const w = window.open('firewall-analyzer-fixed.html', '_blank');
   if (!w) { try { localStorage.removeItem('_netAnalyzer_fwQuery'); } catch (e) {} alert(tr('err.popup_blocked')); }
+  else FW_QUERY_WINS.add(w);  // 只接受自己開啟的防火牆分析頁回傳的對照結果（XN131）
+}
+// 防火牆設定對照結果（XN131）：防火牆分析算完批次查詢後以 postMessage 回傳每組連線的判斷，
+// 只含 log 自己送出的連線與 accept／deny／mixed／unknown，不含設定內容。逐欄驗證，任何一列不合格整批丟棄
+const FW_VERDICT_ACTIONS = ['accept', 'deny', 'mixed', 'unknown'];
+function fwTupleKey(q) { return [q.src, q.dst, q.proto, q.port].join('|'); }
+function parseFwBatchReply(d) {
+  if (!d || d.type !== '_naFwBatchResult' || !Array.isArray(d.rows) || !d.rows.length || d.rows.length > FW_BATCH_MAX) return null;
+  const isAddr = v => typeof v === 'string' && v.length <= 49 && /^[0-9A-Fa-f:.]+(\/\d{1,3})?$/.test(v) && /[.:]/.test(v);
+  const out = new Map();
+  for (const r of d.rows) {
+    if (!r || !isAddr(r.src) || !isAddr(r.dst)) return null;
+    if (!['any', 'TCP', 'UDP', 'ICMP'].includes(r.proto)) return null;
+    if (typeof r.port !== 'string' || !/^\d{0,5}$/.test(r.port)) return null;
+    if (!FW_VERDICT_ACTIONS.includes(r.action)) return null;
+    out.set(fwTupleKey(r), { action: r.action, nat: r.nat === true });
+  }
+  return out;
+}
+// 一組事件（某個問題或某條攻擊鏈）的對照統計，以「來源、目的、協定、目的埠」為一組：
+// accept／deny／unknown（含 mixed）／unchecked 為組數；reachable＝設定放行而 log 看不出結果（設定上打得到）；
+// mismatch＝log 的結果與設定判斷相反（設定檔可能不是當時的版本，或實際進入介面與查詢推得的不同）
+function fwVerdictSummary(events, verdicts) {
+  const sum = { accept: 0, deny: 0, unknown: 0, unchecked: 0, reachable: 0, mismatch: 0 };
+  if (!verdicts || !verdicts.size) return sum;
+  const groups = new Map();
+  (events || []).forEach(e => {
+    const q = buildFwQueryPayload(getEventNetTuple(e));
+    if (!q) return;
+    const k = fwTupleKey(q);
+    if (!groups.has(k)) groups.set(k, new Set());
+    groups.get(k).add(eventFwOutcome(e));
+  });
+  groups.forEach((outs, k) => {
+    const v = verdicts.get(k);
+    if (!v) { sum.unchecked++; return; }
+    if (v.action === 'accept') { sum.accept++; if (outs.has('deny')) sum.mismatch++; else if (!outs.has('accept')) sum.reachable++; }
+    else if (v.action === 'deny') { sum.deny++; if (outs.has('accept')) sum.mismatch++; }
+    else sum.unknown++;
+  });
+  return sum;
 }
 // log → 交換器介面對照（2026-10-02，第九輪發想 YH）：介面反覆上下線／err-disable／PoE 異常問題，
 // 帶設備名稱與介面名稱開啟交換器分析，載入該設備設定後顯示該埠的描述、VLAN、管理狀態與 LLDP 對端。

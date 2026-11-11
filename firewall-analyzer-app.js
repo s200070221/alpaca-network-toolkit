@@ -2965,7 +2965,19 @@ function onParsed(){
     LAST_TIGHTEN = analyzeObservedTraffic(LAST_BATCH_RESULTS, PARSED);
     el.innerHTML = buildBatchQueryResultHtml(LAST_BATCH_RESULTS, errors, { parsed: PARSED, vdom });
     const tg = $('tighten-result'); if (tg) tg.innerHTML = buildObservedTrafficHtml(LAST_TIGHTEN, PARSED.vendor === 'FortiGate');
+    _fwReplyBatchToLog(el);
   };
+  // 把批次查詢的判斷結果回傳給開啟本頁的 log 分析（XN131）：只送連線與 accept／deny／mixed／unknown，
+  // 不含規則名稱與設定內容；位址範圍列（展開多組）不送。file:// 的 origin 無法指定，用 '*'
+  function _fwReplyBatchToLog(el) {
+    if (!_fwBatchFromLog || !window.opener || !LAST_BATCH_RESULTS) return;
+    const rows = LAST_BATCH_RESULTS.filter(r => r.combos === 1).slice(0, 200).map(r => ({ src: String(r.src), dst: String(r.dst), proto: r.proto, port: String(r.port || ''),
+      action: (r.svcUnknown || r.hasFqdn) ? 'unknown' : r.action === 'accept' ? 'accept' : r.action === 'mixed' ? 'mixed' : /deny|drop|reject/.test(r.action || '') ? 'deny' : 'unknown', nat: !!r.nat }));
+    if (!rows.length) return;
+    const origin = (location.protocol === 'file:' || location.origin === 'null') ? '*' : location.origin;
+    try { window.opener.postMessage({ type: '_naFwBatchResult', vendor: String((PARSED && PARSED.vendor) || ''), rows }, origin); } catch (e) { return; }
+    el.insertAdjacentHTML('afterbegin', `<div data-fw-replied style="font-size:12px;color:var(--text-dim);margin-bottom:8px">↩ ${esc(tr('fwq.replied').replace('{n}', rows.length))}</div>`);
+  }
   window._fwTightenScript = function() {
     if (!PARSED || !LAST_TIGHTEN.length) return;
     const r = buildFortiGateTightenScript(PARSED, LAST_TIGHTEN);
@@ -3803,6 +3815,7 @@ function startMatrixRain(){
   // 帶來查詢條件（eggs.js 開頁時取出並清除後呼叫 _fwSetPendingQuery），先暫存在記憶體並顯示提示列；
   // 使用者載入設定檔、onParsed() 完成後切到「規則查詢」頁填入條件並自動執行。不寫回 localStorage
   let _fwPendingQuery = null;
+  let _fwBatchFromLog = false;  // 這批查詢來自 log 分析的交接：算完把判斷結果回傳（XN131）
   function renderFwqBar() {
     const b = $('fwq-bar'); if (!b) return;
     if (!_fwPendingQuery) { b.style.display = 'none'; b.innerHTML = ''; return; }
@@ -3836,6 +3849,7 @@ function startMatrixRain(){
     const set = (id, v) => { const e = $(id); if (e) e.value = v; };
     if (q.batch) {
       set('batch-input', q.batch);
+      _fwBatchFromLog = true;
       window._runBatchQuery();
       const r = $('batch-result'); if (r && r.scrollIntoView) r.scrollIntoView({ block: 'start' });
       return;

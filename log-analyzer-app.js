@@ -198,6 +198,9 @@ function renderNextBar() {
     // 0 個問題不等於安全（XN48）：只代表已支援的偵測規則沒有命中
     + (ISSUES.length ? '' : `<span data-zero-note style="font-size:12px;color:var(--text-dim)">${esc(tr('nextbar.zero_note'))}</span>`)
     + `<button class="btn" onclick="${go('issues-card')}">${esc(tr('nextbar.issues'))}</button><button class="btn" onclick="exportLogReport()">${esc(tr('nextbar.report'))}</button><button class="btn" onclick="${go('deid-card')}">${esc(tr('nextbar.share'))}</button>`
+    // 已對照防火牆設定的組數（XN131）
+    + (FW_VERDICTS.size ? (() => { let a = 0, d = 0; FW_VERDICTS.forEach(v => { if (v.action === 'accept') a++; else if (v.action === 'deny') d++; });
+      return `<span data-fwv-sum style="font-size:12px;color:var(--text-dim)" title="${esc(tr('fwv.report_note'))}">🛡 ${esc(tr('fwv.summary').replace('{a}', a).replace('{d}', d))}</span>`; })() : '')
     // 區段導覽（UX36）：結果列固定在頂端，只列目前有內容的區段
     + `<nav class="nb-nav">` + [['health-card', tr('nav.health')], ['results-card', tr('nav.events')], CHAINS.length ? ['correlation-card', tr('nav.chains') + ' ' + CHAINS.length] : null]
       .filter(Boolean).map(x => `<button data-nb-go="${x[0]}" onclick="${go(x[0])}">${esc(x[1])}</button>`).join('') + `</nav>`;
@@ -215,6 +218,7 @@ function doClear() {
   document.getElementById('file-loaded-label').textContent = '';
   document.getElementById('large-file-notice').style.display = 'none';
   PENDING_LARGE_TEXT = null;
+  FW_VERDICTS = new Map();  // 防火牆設定對照結果一併清空（XN131）
   RAW_TEXT = ''; EVENTS = []; ISSUES = []; CHAINS = []; ANON_EVENTS = null; UNPARSED_LINES = []; PARSE_CACHE = null;
   SOURCE_FILE_BOUNDARIES = []; RESULTS_FILE_FILTER = '';
   FILE_METADATA = null;
@@ -895,6 +899,10 @@ function exportLogReport(mode) {
     .sort((a, b) => SEV_RANK[a.severityNorm] - SEV_RANK[b.severityNorm] || b.count - a.count).slice(0, 5);
   const urgentHtml = urgent.length ? `<div class="card" style="border-left:4px solid #dc2626"><h2>${esc(tr('report.urgent_title'))}</h2><ol style="padding-left:20px">${urgent.map(is =>
     `<li style="margin:6px 0"><span class="badge" style="background:${REPORT_SEV_COLOR[is.severityNorm]}">${esc(tr(SEV_KEY_MAP[is.severityNorm]))}</span> ${esc(issueCategoryLabel(is.category))} (${is.count})<div class="mono" style="font-size:12px;color:#555">${esc(issueSample(is))}</div></li>`).join('')}</ol></div>` : '';
+  // 防火牆設定對照（XN131）：有對照結果時列出各問題的放行／阻擋組數
+  const fwvRows = FW_VERDICTS.size ? ISSUES.map(is => ({ is, v: fwVerdictSummary(is.relatedEvents, FW_VERDICTS) })).filter(x => x.v.accept + x.v.deny + x.v.unknown) : [];
+  const fwvReportHtml = fwvRows.length ? `<div class="card"><h2>${esc(tr('fwv.report_title'))}</h2><p style="font-size:12px;color:#555">${esc(tr('fwv.report_note'))}</p><ul style="padding-left:20px">${fwvRows.map(x =>
+    `<li style="margin:4px 0">${esc(issueCategoryLabel(x.is.category))}：${esc([x.v.accept ? tr('fwv.allow').replace('{n}', x.v.accept) : '', x.v.deny ? tr('fwv.deny').replace('{n}', x.v.deny) : '', x.v.unknown ? tr('fwv.unknown').replace('{n}', x.v.unknown) : ''].filter(Boolean).join('、'))}${x.v.reachable ? ' — ' + esc(tr('fwv.reachable').replace('{n}', x.v.reachable)) : ''}${x.v.mismatch ? ' — ' + esc(tr('fwv.mismatch').replace('{n}', x.v.mismatch)) : ''}</li>`).join('')}</ul></div>` : '';
 
   const reportHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(tr('app.title'))} — ${esc(tr('report.title'))}</title>
 <style>${REPORT_CSS}</style></head><body><div class="wrap">
@@ -902,6 +910,7 @@ function exportLogReport(mode) {
 <div class="rpt-subtitle">${esc(tr('report.generated_by'))} · ${esc(new Date().toLocaleString())} · ${esc(tr('report.total_events'))}: ${EVENTS.length} · ${esc(tr('report.formats'))}: ${esc(formats.join(', ') || '-')}</div>
 <div class="card"><h2>${esc(tr('exec.title'))}</h2>${buildLogExecSummary(ISSUES, EVENTS, is => issueStatusOf(_baselineDiffKey(is))).map(x => `<p style="margin:4px 0">${esc(x)}</p>`).join('')}<p style="margin:8px 0 0">${esc(summaryText)}</p></div>
 ${urgentHtml}
+${fwvReportHtml}
 ${rotationTableHtml(buildRotationList(ISSUES), true)}
 <div class="card"><h2>${esc(tr('report.severity_summary'))}</h2><div class="meta-grid">${metaCards}</div></div>
 <div class="card"><h2>${esc(tr('results.timeline_label'))}</h2>${buildReportTimelineSVG(EVENTS)}</div>
@@ -966,6 +975,15 @@ const INTEL_BUILDER_WINS = new Set();
 });
 const INTEL_MSG_ORIGIN = (location.protocol === 'file:' || location.origin === 'null') ? '*' : location.origin;
 if (window.opener) { try { window.opener.postMessage({ type: '_naIntelReady' }, INTEL_MSG_ORIGIN); } catch (e) { /* 開啟者已關閉 */ } }
+// 防火牆分析回傳的設定對照結果（XN131）：只接受本頁開啟的防火牆分析頁，內容經 parseFwBatchReply() 逐欄驗證
+window.addEventListener('message', e => {
+  if (!e.data || e.data.type !== '_naFwBatchResult' || !FW_QUERY_WINS.has(e.source)) return;
+  if (INTEL_MSG_ORIGIN !== '*' && e.origin !== location.origin) return;
+  const m = parseFwBatchReply(e.data);
+  if (!m || !EVENTS.length) return;
+  m.forEach((v, k) => FW_VERDICTS.set(k, v));
+  renderIssues(); renderChains(); renderNextBar();
+});
 window.addEventListener('message', e => {
   const d = e.data;
   if (!d || (d.type !== '_naIntelHello' && d.type !== '_naIntelLists')) return;
