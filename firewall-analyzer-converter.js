@@ -2770,8 +2770,76 @@ const Converter = (() => {
     });
     return changed ? { ...parsed, policies } : parsed;
   }
+  // 路由器類來源（XN128：MikroTik／EdgeRouter／VyOS／OpenWrt／Linux netfilter，parser 有 nf 鏈資料）轉成一般規則表：
+  //  - 以 core.js _nfExpand() 展開各段 forward 鏈，沿途 jump 規則（_mtGuards）的條件併入；兩邊都有寫且不同（無法用單一規則表達「且」）
+  //    輸出為停用並註記 REVIEW
+  //  - 介面等於鏈名或 '-' 改成 any；有成員介面（介面清單、介面群組、OpenWrt zone）改用成員名稱
+  //  - 只比對既有連線的規則（established／related accept、invalid drop）不輸出：目標設備本身有狀態追蹤
+  //  - connection-nat-state 規則（放行經目的 NAT 的連線）無法以位址表達，停用並註記 REVIEW
+  //  - 到設備本身（input）與 output 鏈不轉成轉送規則；鏈尾預設放行不轉成全允許（目標未命中即拒絕），都只列警語
+  //  - EdgeRouter／VyOS 1.3 的 out 規則集：放在 in 規則之前（已限定出口介面），其中的放行規則停用並註記 REVIEW（in 規則集仍須放行）
+  // 回傳 { policies, info } 或 null（不是路由器類來源）
+  function _nfFlatten(parsed) {
+    const nf = parsed && parsed.nf;
+    if (!nf || !Array.isArray(nf.rules) || typeof _nfExpand !== 'function') return null;
+    const info = { local: 0, state: 0, guard: 0, natState: 0, defaultAccept: [], stages: false };
+    const nolimit = v => !v || v === '-' || /^(any|all)$/i.test(String(v).trim());
+    const stateOnly = r => typeof _ruleAppliesToNew === 'function' && !_ruleAppliesToNew(r);
+    const ifOf = (r, side) => {
+      const m = side === 'src' ? r.srcIntfMembers : r.dstIntfMembers, v = side === 'src' ? r.srcIntf : r.dstIntf;
+      if (m) return m;
+      return nolimit(v) || v === r._chain ? '' : v;
+    };
+    const ADDR = ['srcAddr', 'dstAddr'];
+    const merge = (r) => {
+      const o = Object.assign({}, r);
+      let conflict = false;
+      let si = ifOf(r, 'src'), di = ifOf(r, 'dst');
+      (r._mtGuards || []).forEach(g => {
+        const gs = ifOf(g, 'src'), gd = ifOf(g, 'dst');
+        if (gs) { if (!si) si = gs; else if (si !== gs) conflict = true; }
+        if (gd) { if (!di) di = gd; else if (di !== gd) conflict = true; }
+        ADDR.forEach(k => {
+          if (nolimit(g[k])) return;
+          if (nolimit(o[k])) { o[k] = g[k]; o[k + '4'] = g[k + '4']; o[k + '6'] = g[k + '6']; }
+          else if (o[k] !== g[k]) conflict = true;
+        });
+        if (!nolimit(g.service)) { if (nolimit(o.service)) o.service = g.service; else if (o.service !== g.service) conflict = true; }
+      });
+      o.srcIntf = si || 'any'; o.dstIntf = di || 'any';
+      delete o._mtGuards; delete o.srcIntfMembers; delete o.dstIntfMembers;
+      if (conflict) { info.guard++; o.status = 'disable'; o.comments = `REVIEW: jump condition not convertible - rule disabled${o.comments && o.comments !== '-' ? '; ' + o.comments : ''}`; }
+      return o;
+    };
+    const fwd = (nf.forward && nf.forward.length ? nf.forward : ['forward']);
+    info.stages = fwd.length > 1;
+    const ids = new Map();
+    const take = (r) => {
+      const o = merge(r);
+      const n = (ids.get(String(o.id)) || 0) + 1;
+      ids.set(String(o.id), n);
+      if (n > 1) o.id = `${o.id}@${n}`;
+      if (o.natState) { info.natState++; o.status = 'disable'; o.comments = `REVIEW: connection-nat-state ${o.natState} not convertible - rule disabled`; }
+      return o;
+    };
+    const out = [];
+    fwd.forEach((c, i) => {
+      const list = _nfExpand(nf.rules, c).filter(r => { if (stateOnly(r)) { info.state++; return false; } return true; });
+      // 出口規則集的放行規則無法在單一規則表表達「進入規則集也放行」，輸出為停用並註記 REVIEW，讓使用者看得到
+      if (i > 0) out.unshift(...list.map(take).map(o => o.action === 'accept' && o.status !== 'disable'
+        ? Object.assign(o, { status: 'disable', comments: `REVIEW: egress rule-set accept (${c}) not convertible - rule disabled` }) : o));
+      else out.push(...list.map(take));
+    });
+    info.defaultAccept = fwd.filter(c => ((nf.defaults && nf.defaults[c]) || 'accept') === 'accept');
+    (nf.input && nf.input.length ? nf.input : ['input']).forEach(c => { info.local += _nfExpand(nf.rules, c).filter(r => !stateOnly(r)).length; });
+    return { policies: out, info };
+  }
+  function _nfApply(parsed) {
+    const fl = _nfFlatten(parsed);
+    return fl ? Object.assign({}, parsed, { policies: fl.policies }) : parsed;
+  }
   function convert(parsed, targetVendor) {
-    parsed = _guardPolicies(_applyFamilies(parsed, targetVendor));
+    parsed = _guardPolicies(_applyFamilies(_nfApply(parsed), targetVendor));
     switch(targetVendor) {
       case 'fortigate':  return toFortigate(parsed);
       case 'sophos':     return toSophos(parsed);
@@ -2829,6 +2897,12 @@ const Converter = (() => {
   // opts.portModel：已套用目標型號埠對應（XN38）時的型號名稱，第一則改為說明已對應
   // 轉換注意事項的中文原文（i18n LANG_FW.zhTW 的 cvt.* 必須與此相同，test_fw_converter_reporter 檢查）
   const CAVEAT_ZH={
+    "cvt.nf_local":"{n} 條到設備本身的規則（input 鏈／local 規則集／zone input）沒有轉成轉送規則，請在目標設備的管理存取設定（如 local-in policy、管理介面允許來源）另行設定",
+    "cvt.nf_state":"{n} 條只比對既有連線的規則（established／related 放行、invalid 丟棄）未輸出：目標設備本身會追蹤連線狀態",
+    "cvt.nf_default_accept":"來源的 {chains} 鏈沒有規則命中時放行，目標設備沒有命中規則時拒絕，轉換後未明列的流量會被擋下，請確認需要的流量都有明確的放行規則",
+    "cvt.nf_stages":"來源依進入介面與出口介面各有一組規則集，轉換後合併成單一規則表：出口規則集的規則放在最前面並限定出口介面，其中的放行規則輸出為停用並註記 REVIEW，請人工確認",
+    "cvt.nf_guard":"{n} 條自訂鏈內的規則與跳入條件（jump）不同、無法合成單一規則，已輸出為停用並註記 REVIEW",
+    "cvt.nf_natstate":"{n} 條依目的 NAT 狀態放行的規則（connection-nat-state／ctstate DNAT）無法以位址表達，已輸出為停用並註記 REVIEW，請依目標設備的 NAT 規則另行放行",
     "cvt.vdom_dup":"偵測到來源設定檔為多 VDOM／vsys 且不同 VDOM 存在同名位址或服務物件：本轉換器的具名物件查找/輸出未依 VDOM 區分，轉換結果引用到的 IP／Port 可能夾帶另一個 VDOM 的值，請務必人工核對規則實際引用的物件內容是否正確（Zyxel／EdgeRouter 目標已修復此問題，不受此提示影響）",
     "cvt.asa_nameif":"偵測到多個相同角色介面，已自動編號區分 nameif 避免命名衝突，靜態路由的介面對應為概略猜測，請人工核對",
     "cvt.mt_svcgroup":"服務群組已依協定分桶展開成對應數量的規則（同協定成員合併、跨協定成員各自一條規則）；巢狀群組（群組成員本身又是另一個群組）僅展開一層不遞迴，請人工核對是否有巢狀情形，以及個別成員若同時定義 TCP/UDP 雙協定時本轉換器僅採計其中一種",
@@ -2854,6 +2928,17 @@ const Converter = (() => {
     const add=(key,p)=>notes.push({key,p:p||{}});
     if(opts&&opts.portModel) add('cvt.port_model',{model:opts.portModel});
     else add('cvt.port_generic');
+    // 路由器類來源（XN128）：見 _nfFlatten()
+    const nfl=_nfFlatten(parsed);
+    if(nfl){
+      const I=nfl.info;
+      if(I.local) add('cvt.nf_local',{n:I.local});
+      if(I.state) add('cvt.nf_state',{n:I.state});
+      if(I.defaultAccept.length) add('cvt.nf_default_accept',{chains:I.defaultAccept.join(', ')});
+      if(I.stages) add('cvt.nf_stages');
+      if(I.guard) add('cvt.nf_guard',{n:I.guard});
+      if(I.natState) add('cvt.nf_natstate',{n:I.natState});
+    }
     const v6=_v6Report(parsed);
     if(V6_TARGETS[targetVendor]){
       // 支援 IPv6 的目標：兩族都有的規則拆成兩條（IPv6 那條名稱加 -v6），語法依廠商文件產生

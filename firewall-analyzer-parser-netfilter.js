@@ -19,6 +19,10 @@ const NetfilterParser = (() => {
 
   function hookOf(chain) { const c = chain.toLowerCase(); return ['input', 'forward', 'output', 'prerouting', 'postrouting'].includes(c) ? c : ''; }
   function pol(id, o) {
+    // ! -s／!= saddr：取反改用 srcNegate／dstNegate，位址欄位只放位址（XN128；原本把「!10.0.0.0/8」當成位址字串）
+    const neg = v => /^!/.test(String(v || ''));
+    const srcNeg = neg(o.src), dstNeg = neg(o.dst);
+    o = Object.assign({}, o, { src: srcNeg ? o.src.slice(1) : o.src, dst: dstNeg ? o.dst.slice(1) : o.dst });
     const sa = _splitAddr(o.src, o.addrTypeMap), da = _splitAddr(o.dst, o.addrTypeMap);
     return {
       id, name: o.comment || `${o.chain}-${o.num}`, srcIntf: o.srcIntf, dstIntf: o.dstIntf,
@@ -30,6 +34,7 @@ const NetfilterParser = (() => {
       users: '-', groups: '-', comments: o.comment || '', _vdom: '', connState: o.state || [], chain: o.chain, ruleNum: String(o.num), family: o.family,
       // 位址家族（2026-10-06，MC）：ip6tables／nft ip6 表為 v6、iptables／nft ip 表為 v4、nft inet 表兩者皆適用（不標）
       _family: o.family === 6 ? 'v6' : o.family === 4 ? 'v4' : undefined,
+      ...(srcNeg ? { srcNegate: true } : {}), ...(dstNeg ? { dstNegate: true } : {}),
     };
   }
   // 規則 → 政策：先找出各自訂鏈被哪些介面的 jump 跳入，再逐條轉換

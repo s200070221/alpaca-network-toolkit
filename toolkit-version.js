@@ -3,8 +3,23 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.10';
+  const TOOLKIT_VERSION = '2026.11.11';
   const CHANGELOG = [
+    {
+      version: '2026.11.11',
+      items: {
+        zhTW: [
+          'EdgeRouter、VyOS、OpenWrt、iptables／nftables 比照 MikroTik 依鏈的方式查詢（到設備本身與轉送分開、jump 展開、鏈尾預設動作），並檢查管理介面與 DNS 是否從 WAN 打得到、WAN 新連線是否可轉送到內部、UPnP 與沒有入口條件的目的 NAT',
+          '路由器類設定轉成其他廠牌時依鏈展開，不再把鏈名當成介面，到設備本身的規則與只比對既有連線的規則改以警語列出',
+          '健康度：路由器管理介面對 WAN 開放會扣分；只開放特定服務的規則不再算成 any-any；iptables 取反位址判斷修正',
+        ],
+        en: [
+          'EdgeRouter, VyOS, OpenWrt and iptables/nftables are queried by chain like MikroTik (traffic to the device and forwarded traffic evaluated separately, jump expanded, chain default actions applied), with checks for management and DNS reachable from WAN, new WAN connections forwarded inside, UPnP and destination NAT without an entry condition',
+          'Router configs are expanded by chain when converted to other vendors: chain names are no longer used as interfaces, and rules for traffic to the device and rules that only match existing connections are listed as caveats',
+          'Health score: router management open to WAN now lowers the score; rules that allow only specific services are no longer counted as any-any; negated iptables addresses fixed',
+        ],
+      },
+    },
     {
       version: '2026.11.10',
       items: {

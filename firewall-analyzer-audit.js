@@ -1128,6 +1128,15 @@
     f('exposed-svc', tr('audit.check_exposed_svc'), expSvc.length, 'high',
       expSvc.length ? expSvc.map(x => `${tr('expose.svc_' + x.svc)}@${x.iface}`).slice(0, 8).join(', ') + (expSvc.length > 8 ? '…' : '') + tr('audit.rec_exposed_svc') : tr('audit.none'),
       ['CISA KEV', 'NIST 800-53 SC-7', 'CIS v8 12.2'], expSvc.map(x => ({ kind: 'iface', name: x.iface })));
+    // 6b2. 路由器管理介面從 WAN 打得到（XN128）：MikroTik／EdgeRouter／VyOS／OpenWrt 依 input 鏈實際評估的網頁管理、SSH、Telnet、API、FTP；
+    // 沒有已遭利用 CVE（不在 exposed-svc）但管理介面不應開在網際網路（medium，計入健康度）。有 KEV CVE 的（Winbox）已在 exposed-svc，不重複
+    if (/^(MikroTik|EdgeRouter|VyOS|OpenWrt)$/.test(parsed.vendor || '')) {
+      const RT_MGMT = new Set(['rt-web', 'admin-ssh', 'admin-telnet', 'mt-www', 'mt-api', 'mt-ftp']);
+      const mg = analyzeExposedServices(parsed).items.filter(x => x.ext === true && !x.cves.length && RT_MGMT.has(x.svc));
+      f('rt-mgmt-wan', tr('audit.check_rt_mgmt_wan'), mg.length, 'medium',
+        mg.length ? mg.map(x => `${tr('expose.svc_' + x.svc)}${x.name ? '（' + x.name + '）' : ''}@${x.iface}`).slice(0, 8).join(', ') : tr('audit.normal'),
+        ['CISA BOD 23-02', 'NIST 800-53 SC-7'], mg.map(x => ({ kind: 'iface', name: x.iface })));
+    }
     // 6c. 指定來源到網際網路不限目的與服務（XN92）：來源不是 any（any-any 已另外列出）、目的 any、服務 any，且目的介面或區域對外。
     // 伺服器、CI、資料庫網段應只開必要的對外連線，避免資料被直接送出（NIST 800-53 SC-7(5)、PCI-DSS 1.3.2 限制對外流量）
     // 使用者網段的上網規則多半長這樣，設定檔看不出來源是使用者還是伺服器，因此列為 low、不計入健康度，由使用者確認
@@ -1909,8 +1918,11 @@
   // 'no-2fa'／'weak-vpn' 等固定集合），天生適合當 diff key；一行 wrapper 即可，不需要另外
   // 實作一套比對邏輯。與既有「上傳新舊設定檔比較」diffConfigs() 語意刻意區隔——那個比的是
   // 設定檔本身，這個比的是合規檢查「結果」（風險等級/命中數量隨時間的變化趨勢）。
+  // 改名過的檢查 id（XN128）：舊版存下的稽核基準線以新 id 比對，避免同一項出現一消一增
+  const RENAMED_CHECK_IDS = { 'mt-dns-open-resolver': 'rt-dns-open-resolver', 'mt-wan-new-forward': 'rt-wan-new-forward', 'mt-dstnat-broad': 'rt-dstnat-broad', 'mt-upnp': 'rt-upnp' };
   function diffCompliance(oldFindings, newFindings) {
-    return diffArrayByKey(oldFindings, newFindings, f => f.id, ['value', 'risk', 'detail']);
+    const norm = list => (list || []).map(f => f && RENAMED_CHECK_IDS[f.id] ? Object.assign({}, f, { id: RENAMED_CHECK_IDS[f.id] }) : f);
+    return diffArrayByKey(norm(oldFindings), newFindings, f => f.id, ['value', 'risk', 'detail']);
   }
   // 渲染：不比照 _buildDiffSection() 的通用 diffFields 清單顯示（那是給「任意欄位變動」用的
   // 泛用格式），改為針對合規發現的語意客製——直接顯示 old.value→new.value 與風險等級本身，
@@ -1963,7 +1975,9 @@
     };
     // T1: any-any accept（需排除已停用規則，比照下方 T1b/broad-network 既有慣例；
     // 先前漏了這道防呆，已停用的 any-any/no-log 規則從未真正生效卻仍被扣分，2026-09 全功能審查發現）
-    const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && _forNewConn(p) && /^(all|any)$/i.test((p.srcAddr||'').trim()) && /^(all|any)$/i.test((p.dstAddr||'').trim()));
+    // 服務也要是 any／all（XN128，與合規 any-any 一致）：「允許 ICMP」這類只開特定服務的規則不算全允許
+    const anyAny = policies.filter(p => p.action === 'accept' && !_isDisabledStatus(p) && _forNewConn(p) && /^(all|any)$/i.test((p.srcAddr||'').trim()) && /^(all|any)$/i.test((p.dstAddr||'').trim()) &&
+      /\b(all|any)\b/i.test(String(p.service == null || p.service === '' ? 'ALL' : p.service)));
     if (anyAny.length) deduct('health.any_any', 'crit', anyAny.length, anyAny.length * 20, 20);
     // T1b: broad-network（2026-08-29 新增，比照 analyzeCompliance() 的 broad-network 檢查同一套
     // 判斷邏輯，權重較 any-any 低——過寬網段風險低於完全開放，但仍值得扣分）
@@ -2020,6 +2034,7 @@
       ['rt-dns-open-resolver', 'health.rt_dns_open'],
       ['mt-proxy-socks', 'health.mt_proxy_socks'],
       ['rt-wan-new-forward', 'health.rt_wan_forward'],
+      ['rt-mgmt-wan', 'health.rt_mgmt_wan'],
       ['bgp-ebgp-no-policy', 'health.bgp_ebgp_no_policy'],
       ['snmpv3-weak', 'health.snmpv3_weak'],
       ['ipv6-any-open', 'health.ipv6_any_open'],

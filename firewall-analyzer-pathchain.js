@@ -577,7 +577,8 @@ const FwPath = (function () {
       const re = _runPolicyQuery(q.src, q.dst, q.proto || 'any', q.port || '', vd || '__all__', parsed, { srcIntf: sIn, dstIntf: sOut, newOnly: q.newOnly !== false });
       if (re && !re.error) {
         const a = res && res.matched, b = re.matched;
-        if ((a || null) !== (b || null) || (res && res.action) !== re.action)
+        // 以規則 id 比較（XN128：路由器類鏈評估每次查詢都會產生展開或合成的規則副本，物件不會相同）
+        if ((a ? String(a.id) : null) !== (b ? String(b.id) : null) || (res && res.action) !== re.action)
           out.push({ id: 'intf-rematch', p: { inIf: sIn, outIf: sOut, action: re.action, rule: b ? (b.name || '') : '', ruleId: b ? String(b.id) : '' } });
       }
     }
