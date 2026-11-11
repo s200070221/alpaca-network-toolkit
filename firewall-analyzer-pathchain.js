@@ -599,7 +599,8 @@ const FwPath = (function () {
     if (!parsed || s === null || !dstIf) return null;
     const vendor = String(parsed.vendor || '');
     if (/fortigate/i.test(vendor)) {
-      const li = (parsed.localIn || []).filter(r => !dstIf._vdom || !r._vdom || r._vdom === dstIf._vdom);
+      // 介面沒有寫 vdom 時 parser 記為 global，視為不分 VDOM（XN132）
+      const li = (parsed.localIn || []).filter(r => !dstIf._vdom || dstIf._vdom === 'global' || !r._vdom || r._vdom === dstIf._vdom);
       if (!li.length || typeof _runPolicyQuery !== 'function') return null;
       const pols = li.map(r => ({ id: r.id, name: 'local-in ' + r.id, srcIntf: r.intf, dstIntf: 'any', srcAddr: r.srcAddr, dstAddr: r.dstAddr,
         service: r.service, schedule: r.schedule, action: r.action, status: r.status, srcNegate: r.srcNegate, dstNegate: r.dstNegate, svcNegate: r.svcNegate, _vdom: r._vdom }));

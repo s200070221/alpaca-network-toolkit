@@ -17,6 +17,7 @@ function detectLineFormat(line) {
   if (BIND_FILE_RE.test(line) || COREDNS_RE.test(line) || WINDNS_RE.test(line)) return 'dns';
   if (WINDHCP_ROW_RE.test(line)) return 'dhcp';
   if (NPS_DTS_RE.test(line)) return 'nps';
+  if (CPPM_STD_RE.test(line) || CPPM_5424_RE.test(line)) return 'clearpass';
   if (DS389_LINE_RE.test(line) || OPENLDAP26_LINE_RE.test(line) || DS389_ERR_RE.test(line) || isOpenLdap26SvcLine(line)) return 'ldap';
   // PostgreSQL／MySQL 伺服器 log 檔（XN90）
   if (PG_FILE_RE.test(line) || MYSQL_ERR_RE.test(line) || MYSQL_GEN_RE.test(line)) return 'dbfile';
@@ -1231,6 +1232,8 @@ const COMWARE_READONLY_CMD_RE = /^\s*(dis(?:play)?|ping|tracert|quit|return|scre
 function netOpsInfo(evt) {
   if (!evt) return null;
   const f = evt.fields || {};
+  // Aruba ClearPass 稽核紀錄（XN134）：管理者對設定的新增／修改／刪除
+  if (evt.netVendor === 'clearpass') return f.cppm === 'audit' ? { kind: 'configChange', user: f.user || '', srcip: '', detail: [f.cppmAction, f.cppmCategory].filter(Boolean).join(' ') } : null;
   if (evt.format === 'fortigate') {
     if (f.logid === '0100044546' || f.logid === '0100044547') {
       const ipm = String(f.ui || '').match(/\(([\d.:a-fA-F]+)\)/);
@@ -3580,6 +3583,93 @@ function parseNpsLine(line, lineNo) {
     severityNorm: reject ? 'Medium' : 'Info', facility: null, facilityAuth: true, msg, fields: f
   };
 }
+// Aruba ClearPass Policy Manager（XN134）：Syslog Export Filter 的輸出。格式依 splunk-connect-for-syslog 測試資料的實際輸出行：
+// 標準格式「<PRI>年-月-日 時:分:秒,毫秒 主機 篩選器名稱 序號 1 0 鍵=值,鍵=值…」（篩選器名稱由管理者自訂、可含空白；值本身可含逗號），
+// 6.11 起另有 RFC5424「… ClearPass 行程 編號 [timeQuality…][origin…][clearPass@14823 eventId="…" 鍵="值" …]」。
+// 鍵依範本而定：Session Logs（Common.*／RADIUS.*／WEBAUTH.*）、Audit Records（Timestamp／Source／Category／Action／User）、
+// System Events（event_source／level／category／description 或 Timestamp／Source／Level／Category／Action／Description）、
+// CPPM_Alert（session_id／service_name／alert）、端點清單（mac_address／ip_address／hostname…）。只解析範例出現過的鍵
+const CPPM_KEY_SRC = '(?:(?:Common|RADIUS|TACACS|WEBAUTH|CppmNode)\\.[A-Za-z][\\w\\- ]*|event_source|session_id|mac_address|Timestamp)';
+const CPPM_STD_RE = new RegExp('^(?:<\\d{1,3}>)?\\s*(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})(?:,(\\d{3}))? (\\S+) (.+?) \\d+ \\d+ \\d+ (' + CPPM_KEY_SRC + '=.*)$');
+const CPPM_5424_RE = /^<\d{1,3}>1 (\S+) (\S+) ClearPass \S+ \S+ .*\[clearPass@14823 ([^\n]*)\]\s*$/;
+const CPPM_SPLIT_RE = /,(?=(?:[A-Za-z]+\.)?[A-Za-z][A-Za-z_\- ]*=)/;
+function cppmKv(body) {
+  const o = Object.create(null);
+  String(body || '').split(CPPM_SPLIT_RE).forEach(p => {
+    const i = p.indexOf('=');
+    if (i <= 0) return;
+    // 文件轉貼的輸出行會在鍵中間斷行留下空白（Common.Host-MAC-   Address），帶點號的鍵去掉空白
+    const k = p.slice(0, i).trim(), key = k.includes('.') ? k.replace(/\s+/g, '') : k;
+    if (!(key in o)) o[key] = p.slice(i + 1).replace(/,\s*$/, '').trim();
+  });
+  return o;
+}
+function cppmSd(sd) {
+  const o = Object.create(null);
+  const re = /([A-Za-z][\w.\-]*)="((?:[^"\\]|\\.)*)"/g;
+  let m;
+  while ((m = re.exec(sd))) if (!(m[1] in o)) o[m[1]] = m[2].replace(/\\([\]"\\])/g, '$1');
+  return o;
+}
+function cppmTime(v) {
+  const m = String(v || '').replace(/\s+/g, ' ').match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)([+-]\d{2})(?::?(\d{2}))?$/);
+  if (!m) return null;
+  const d = new Date(`${m[1]}T${m[2]}${m[3]}:${m[4] || '00'}`);
+  return isNaN(d.getTime()) ? null : d;
+}
+function parseClearPassLine(line, lineNo) {
+  let kv, host, hdrTime, filter = '';
+  const s = line.match(CPPM_STD_RE), r = s ? null : line.match(CPPM_5424_RE);
+  if (s) { kv = cppmKv(s[5]); host = s[3]; filter = s[4]; hdrTime = new Date(`${s[1].replace(' ', 'T')}${s[2] ? '.' + s[2] : ''}`); }
+  else if (r) { kv = cppmSd(r[3]); host = r[2]; hdrTime = new Date(r[1]); }
+  else return null;
+  const g = k => kv[k] || '';
+  const f = { cppm: 'other' };
+  if (filter) f.cppmFilter = filter;
+  const status = g('Common.Login-Status').toUpperCase();
+  let sev = 'Info', msg = '';
+  if (status || g('Common.Error-Code') || g('Common.Username')) {
+    f.cppm = 'session';
+    if (status) f.cppmStatus = status;
+    if (g('Common.Username')) f.user = g('Common.Username');
+    if (g('Common.Host-MAC-Address')) f.mac = g('Common.Host-MAC-Address');
+    // NAS（AP／交換器）不當成來源位址，避免同一台設備被當成密碼噴灑來源（與 NPS 相同）
+    if (g('Common.NAS-IP-Address')) f.nasIp = g('Common.NAS-IP-Address');
+    if (g('Common.NAS-Name')) f.nasName = g('Common.NAS-Name');
+    if (g('Common.Error-Code')) f.cppmError = g('Common.Error-Code');
+    if (g('Common.Service')) f.policy = g('Common.Service');
+    if (g('Common.Source')) f.cppmSource = g('Common.Source');
+    if (g('RADIUS.Auth-Method')) f.authMethod = g('RADIUS.Auth-Method');
+    if (g('Common.Alerts')) f.failReason = g('Common.Alerts');
+    // 網頁登入（WEBAUTH）的用戶端位址；本機 127.0.0.1 不算來源
+    const wip = g('WEBAUTH.Host-IP-Address').replace(/\s+/g, '');
+    if (wip && wip !== '127.0.0.1' && wip !== '::1') f.srcip = wip;
+    if (status === 'REJECT') sev = 'Medium';
+    msg = ['ClearPass', status || 'session', f.user || '', f.cppmError && f.cppmError !== '0' ? `(error ${f.cppmError})` : '', f.policy ? `service ${f.policy}` : '', f.nasName ? `via ${f.nasName}` : (f.nasIp ? `via ${f.nasIp}` : ''),
+      status === 'REJECT' && f.failReason ? '- ' + f.failReason : ''].filter(Boolean).join(' ');
+  } else if (g('Action') && g('User') && !g('Level')) {
+    f.cppm = 'audit'; f.user = g('User'); f.cppmAction = g('Action'); f.cppmCategory = g('Category');
+    msg = `ClearPass audit: ${g('Action')} ${g('Category')} by ${g('User')}`;
+  } else if (g('level') || g('Level')) {
+    f.cppm = 'system';
+    const lv = (g('level') || g('Level')).toUpperCase();
+    sev = lv === 'ERROR' ? 'Medium' : lv === 'WARN' || lv === 'WARNING' ? 'Low' : 'Info';
+    msg = ['ClearPass', g('event_source') || g('Source'), lv, g('category') || g('Category'), g('action_key') || g('Action'), g('description') || g('Description')].filter(Boolean).join(' | ');
+  } else if (g('alert')) {
+    f.cppm = 'alert';
+    msg = `ClearPass alert: ${g('service_name')} ${g('alert')}`.replace(/\s+/g, ' ');
+  } else if (g('mac_address')) {
+    f.cppm = 'endpoint';
+    msg = ['ClearPass endpoint', g('mac_address'), g('ip_address'), g('hostname'), g('device_category'), g('device_name')].filter(Boolean).join(' ');
+  } else msg = 'ClearPass ' + (filter || 'event');
+  const ts = cppmTime(g('Common.Request-Timestamp')) || cppmTime(g('timestamp')) || cppmTime(g('updated_at').replace(/(\.\d{3})\d+/, '$1')) || (hdrTime && !isNaN(hdrTime.getTime()) ? hdrTime : null);
+  return {
+    format: 'clearpass', raw: line, lineNo, netFields: false, netVendor: 'clearpass',
+    timestamp: ts, timestampRaw: g('Common.Request-Timestamp') || g('timestamp') || (s ? s[1] : r ? r[1] : ''),
+    host: host || '', appName: 'clearpass', procid: '', msgid: g('eventId'), severityRaw: status || g('level') || g('Level') || '',
+    severityNorm: sev, facility: null, facilityAuth: f.cppm === 'session', msg, fields: f
+  };
+}
 function parseWinDhcpLine(line, lineNo) {
   const m = line.match(WINDHCP_ROW_RE);
   if (!m) return null;
@@ -3648,7 +3738,9 @@ function npsMacUsers(events) {
   const m = new Map();
   events.forEach(e => {
     const f = e.fields;
-    if (e.format !== 'nps' || !e.timestamp || !f || f.npsPacket !== 2 || !f.user) return;
+    // ClearPass 的 ACCEPT 同樣給「終端 MAC→帳號」（XN134）
+    const ok = e.format === 'nps' ? f && f.npsPacket === 2 : e.format === 'clearpass' && f && f.cppmStatus === 'ACCEPT';
+    if (!ok || !e.timestamp || !f.user) return;
     const k = macKey(f.mac);
     if (!k) return;
     if (!m.has(k)) m.set(k, []);
@@ -4793,6 +4885,7 @@ function parseLogLine(line, lineNo) {
   if (fmt === 'dns') return parseDnsServerLine(line, lineNo);
   if (fmt === 'dhcp') return parseWinDhcpLine(line, lineNo);
   if (fmt === 'nps') return parseNpsLine(line, lineNo);
+  if (fmt === 'clearpass') return parseClearPassLine(line, lineNo);
   if (fmt === 'ldap') return parseDs389Line(line, lineNo);
   if (fmt === 'dbfile') return parseDbFileLine(line, lineNo);
   if (fmt === 'pcs') return parsePcsLine(line, lineNo);

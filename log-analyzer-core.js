@@ -92,6 +92,7 @@ const SAMPLE_ZH = {
   'sample.promptInjection': '{src} 送出的 log 欄位含有針對 AI 的提示注入字串 {n} 次（{text}），把 log 或報告交給 AI 分析時，請勿讓 AI 照其中文字行事',
   'sample.appsmithExposed': 'Appsmith 可從 {n} 個外部位址連線（{srcs}），內部工具不應對外；若是刻意公開的應用，請確認版本已更新',
   'sample.npsReject': '{user} 在 1 小時內被 NPS 拒絕 {n} 次（{reasons}；RADIUS 用戶端 {nas}）',
+  'sample.cppmReject': '{user} 在 1 小時內被 ClearPass 拒絕 {n} 次（錯誤碼 {reasons}；網路設備 {nas}）',
   'sample.fmgUnregDevice': 'FortiManager {host} 加入了未註冊設備 {items}（{n} 次），這是 CVE-2024-47575（FortiJump）公布的入侵跡象之一，請依 Fortinet 公告確認是否為授權操作',
   'sample.vaultAuditDisabled': '{who} 從 {ips} 停用了 Vault 稽核裝置 {items}（{n} 次），停用後的操作不會再留下紀錄，請確認是否為授權操作',
   'sample.vaultRootUse': 'Vault 的 root token 從 {ips} 被使用或產生 {n} 次（{items}），root token 應只在緊急時產生並在用完後撤銷，請確認用途',

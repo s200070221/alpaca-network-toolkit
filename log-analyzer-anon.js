@@ -1000,6 +1000,45 @@ function anonymizeNpsEvent(clone, opts) {
   if (re) { clone.fields = re.fields; clone.msg = re.msg; clone.host = re.host; }
   else { clone.fields = { nps: 1 }; clone.msg = ''; clone.host = clone.host ? anonHostname(clone.host) : ''; }
 }
+// Aruba ClearPass 去識別化（XN134）：以白名單逐鍵處理——CPPM_KEEP_KEYS 保留，帳號／主機／位址／MAC 換對照表假值，
+// 其餘（告警與描述文字、服務與原則名稱、角色、認證來源、指紋）一律 REDACTED；表頭主機與 RFC5424 origin 的位址一併換掉後重新解析
+const CPPM_KEEP_KEYS = new Set(['Common.Login-Status', 'Common.Error-Code', 'Common.Request-Timestamp', 'Common.Session-Log-Timestamp', 'RADIUS.Session-Log-Timestamp', 'Common.Auth-Type', 'RADIUS.Auth-Method',
+  'Common.Source', 'Common.Monitor-Mode', 'Common.Alerts-Present', 'Common.Audit-Posture-Token', 'Common.System-Posture-Token', 'Common.Connection-Status', 'Common.Request-Id', 'eventId',
+  'Timestamp', 'timestamp', 'Level', 'level', 'Category', 'category', 'Action', 'action_key', 'Source', 'event_source', 'session_id', 'service_name', 'monitor_mode', 'auth_type', 'audit_apt', 'spt',
+  'device_category', 'device_family', 'device_name', 'mac_vendor', 'updated_at', 'added_at']);
+const CPPM_USER_KEYS = new Set(['Common.Username', 'User']);
+const CPPM_HOST_KEYS = new Set(['Common.NAS-Name', 'hostname']);
+const CPPM_IP_KEYS = new Set(['Common.NAS-IP-Address', 'WEBAUTH.Host-IP-Address', 'CppmNode.CPPM-Node', 'ip_address', 'static_ip']);
+const CPPM_MAC_KEYS = new Set(['Common.Host-MAC-Address', 'mac_address']);
+function cppmAnonValue(key, v, opts) {
+  if (v === '' || CPPM_KEEP_KEYS.has(key)) return v;
+  if (CPPM_USER_KEYS.has(key)) return anonUser(v);
+  if (CPPM_HOST_KEYS.has(key)) return anonHostname(v);
+  if (CPPM_IP_KEYS.has(key)) { const t = v.replace(/\s+/g, ''); return replaceIPsInLine(t, opts); }
+  // 沒有分隔符的 12 碼 MAC 先補上冒號再換對照表假值（同一 MAC 換同一假值，同一終端多帳號的判斷才不會消失）
+  if (CPPM_MAC_KEYS.has(key)) { const c = /^[0-9a-fA-F]{12}$/.test(v) ? v.match(/../g).join(':') : v, m = replaceMACsInLine(c); return m === c ? 'REDACTED' : m; }
+  return 'REDACTED';
+}
+function anonymizeClearPassEvent(clone, opts) {
+  const raw = String(clone.raw || '');
+  let line = raw;
+  const s = raw.match(CPPM_STD_RE), r = s ? null : raw.match(CPPM_5424_RE);
+  if (s) {
+    const body = s[5].split(CPPM_SPLIT_RE).map(p => { const i = p.indexOf('='); if (i <= 0) return 'REDACTED';
+      const k = p.slice(0, i).trim(), key = k.includes('.') ? k.replace(/\s+/g, '') : k;
+      return key + '=' + cppmAnonValue(key, p.slice(i + 1).replace(/,\s*$/, '').trim(), opts); }).join(',');
+    const head = raw.slice(0, raw.length - s[5].length);
+    line = head.replace(' ' + s[3] + ' ' + s[4] + ' ', ' ' + anonHostname(s[3]) + ' ' + s[4] + ' ') + body;
+  } else if (r) {
+    const i = raw.lastIndexOf('[clearPass@14823 ');
+    const sd = raw.slice(i).replace(/([A-Za-z][\w.\-]*)="((?:[^"\\]|\\.)*)"/g, (m, k, v) => `${k}="${cppmAnonValue(k, v.replace(/\\([\]"\\])/g, '$1'), opts).replace(/(["\\\]])/g, '\\$1')}"`);
+    line = replaceIPsInLine(raw.slice(0, i), opts).replace(' ' + r[2] + ' ClearPass ', ' ' + anonHostname(r[2]) + ' ClearPass ') + sd;
+  }
+  const re = parseClearPassLine(line, clone.lineNo);
+  clone.raw = line;
+  if (re) { clone.fields = re.fields; clone.msg = re.msg; clone.host = re.host; }
+  else { clone.fields = { cppm: 'other' }; clone.msg = ''; clone.host = clone.host ? anonHostname(clone.host) : ''; }
+}
 // GitLab 結構化 log 去識別化（XN81）：深拷貝原始物件，帳號欄位與權杖訊息內的帳號換假帳號，專案路徑與主機名稱換假名，
 // 其餘字串換 IP／MAC，再以 gitlabEvent() 重建；同一帳號、專案、權杖編號換成同一組假值，偵測結果不變
 const GL_USER_KEYS = new Set(['username', 'meta.user', 'author_name', 'meta.root_namespace']);
@@ -1022,6 +1061,7 @@ function anonymizeGitlabEvent(evt, opts) {
 function anonymizeEvent(evt, opts) {
   if (evt.glRaw) return anonymizeGitlabEvent(evt, opts);
   if (evt.format === 'nps') { const c = { ...evt, fields: { ...evt.fields } }; anonymizeNpsEvent(c, opts); return c; }
+  if (evt.format === 'clearpass') { const c = { ...evt, fields: { ...evt.fields } }; anonymizeClearPassEvent(c, opts); return c; }
   if (evt.format === 'radacct') { const c = { ...evt, fields: { ...evt.fields } }; anonymizeRadacctEvent(c, opts); return c; }
   if (evt.fields && evt.fields.ldap) { const c = { ...evt, fields: { ...evt.fields } }; anonymizeLdapEvent(c, opts); return c; }
   if (evt.fields && evt.fields.haproxy) { const c = { ...evt, fields: { ...evt.fields } }; anonymizeHaproxyEvent(c, opts); return c; }
@@ -1482,6 +1522,8 @@ const COMPANION_SOURCES = [
   ['ise', e => e.netVendor === 'ciscoise', ['nas', 'ldapServer', 'dhcp']],
   // Windows NPS（XN65）：認證最終由網域控制站驗證帳號，RADIUS 用戶端是 AP／交換器
   ['nps', e => e.netVendor === 'nps', ['dcLogs', 'nas', 'dhcp']],
+  // Aruba ClearPass（XN134）：認證來源多為 AD／LDAP，RADIUS 用戶端是 AP／交換器
+  ['clearpass', e => e.netVendor === 'clearpass', ['dcLogs', 'nas', 'dhcp']],
   ['vpn', e => ['openvpn', 'strongswan', 'pcs'].includes(e.netVendor), ['aaa', 'firewall', 'dhcp']],
   // Ivanti Connect Secure（XN97）：設備韌體本工具不比對，固定提醒依官方公告確認修補
   ['pcs', e => e.netVendor === 'pcs', ['pcsFirmware']],
@@ -1504,7 +1546,7 @@ const COMPANION_SOURCES = [
 ];
 // 建議項目 → 已匯入時視為已涵蓋的來源
 const COMPANION_COVERS = { dhcp: ['dhcp'], dns: ['dns'], firewall: ['firewall'], ids: ['ids'], edr: ['edr'], winevent: ['winevent'], dcLogs: ['dcLogs'], sysmon: ['sysmon'],
-  aaa: ['radius', 'ise', 'vpn', 'nps'], ldapServer: ['ldap'], peerLdap: [], homeServer: [], nas: ['netdev'], flowlog: ['flowlog'], cloudAudit: ['cloud'], ssh: ['ssh'], fileAudit: [], appsmithOrigin: ['appsmithOrigin'], gitlab: ['gitlab'], dbAudit: ['db'], pcsFirmware: [] };
+  aaa: ['radius', 'ise', 'vpn', 'nps', 'clearpass'], ldapServer: ['ldap'], peerLdap: [], homeServer: [], nas: ['netdev'], flowlog: ['flowlog'], cloudAudit: ['cloud'], ssh: ['ssh'], fileAudit: [], appsmithOrigin: ['appsmithOrigin'], gitlab: ['gitlab'], dbAudit: ['db'], pcsFirmware: [] };
 function companionSourcesOf(events) {
   const found = new Set();
   for (const e of events) for (const [id, test] of COMPANION_SOURCES) if (!found.has(id) && test(e)) found.add(id);

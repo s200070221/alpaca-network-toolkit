@@ -876,6 +876,24 @@
     const ok = admins.filter(a => (a.trusthosts || []).length && a.trusthosts.every(h => !_FG_ANY_HOST.test(String(h).trim())));
     return ok.length === admins.length ? 'all' : ok.length ? 'partial' : 'none';
   }
+  // 管理來源限制（XN132）：設定已把管理服務的來源限制在特定位址（FortiGate local-in-policy、Palo Alto 管理設定檔的允許位址、
+  // ASA／FTD 的 http／ssh／telnet 來源網段）時，對外介面上的管理服務不算曝險。以三個不會被拿來當管理來源的公共 DNS 位址
+  // 代表「任意網際網路來源」，經 FwPath.mgmtSourceCheck() 查詢，全部被擋才回傳依據；有任何一個打得到、或無法判斷時回傳 null（照舊列為曝險）。
+  // ports 為該服務實際監聽的埠（多個時全部都要被擋）；介面沒有固定位址（DHCP／PPPoE）時以文件用位址代替目的
+  const _SRC_PROBES = ['1.1.1.1', '8.8.8.8', '9.9.9.9'];
+  function _mgmtSrcLimit(parsed, ifName, ports) {
+    if (typeof FwPath === 'undefined' || !FwPath.mgmtSourceCheck || !ports.length) return null;
+    const ifo = (parsed.interfaces || []).find(i => i.name === ifName || i.nameif === ifName);
+    if (!ifo) return null;
+    const dst = /^\d{1,3}(\.\d{1,3}){3}$/.test(String(ifo.ip || '')) && ifo.ip !== '0.0.0.0' ? ifo.ip : '192.0.2.1';
+    let first = null;
+    for (const port of ports) for (const src of _SRC_PROBES) {
+      const r = FwPath.mgmtSourceCheck(parsed, { src, dst, proto: 'tcp', port: String(port) }, ifo, ifo);
+      if (!r || r.verdict !== 'deny') return null;
+      first = first || r;
+    }
+    return first;
+  }
   // 回傳 {supported, items:[{svc, iface, ext, basis, zone, cves, risk, trust}]}；items 含對內的服務（ext false）供畫面完整列出
   // trust（只有 FortiGate 管理介面 fg-admin／admin-ssh）：見 _fgTrustState()；all 時不計入 exposed-svc 稽核
   function analyzeExposedServices(parsed) {
@@ -891,11 +909,13 @@
     const toks = v => String(v || '').toLowerCase().split(/[\s,]+/).filter(Boolean);
     if (vendor === 'FortiGate') {
       const trust = _fgTrustState(parsed), tx = trust ? { trust } : {};
+      const ap = (parsed.deviceInfo && parsed.deviceInfo.adminPorts) || { https: '443', http: '80', ssh: '22' };
+      const lim = (i, ports) => { const l = _mgmtSrcLimit(parsed, i.name, ports); return l ? { srcLimit: l } : {}; };
       (parsed.interfaces || []).forEach(i => { const a = toks(i.allowaccess);
-        if (a.includes('https') || a.includes('http')) add('fg-admin', i.name, tx);
-        if (a.includes('fgfm')) add('fg-fgfm', i.name);
-        if (a.includes('ssh')) add('admin-ssh', i.name, tx);
-        if (a.includes('telnet')) add('admin-telnet', i.name); });
+        if (a.includes('https') || a.includes('http')) add('fg-admin', i.name, Object.assign({}, tx, lim(i, [a.includes('https') ? ap.https : '', a.includes('http') ? ap.http : ''].filter(Boolean))));
+        if (a.includes('fgfm')) add('fg-fgfm', i.name, lim(i, ['541']));
+        if (a.includes('ssh')) add('admin-ssh', i.name, Object.assign({}, tx, lim(i, [ap.ssh])));
+        if (a.includes('telnet')) add('admin-telnet', i.name, lim(i, ['23'])); });
       (parsed.vpn || []).filter(v => v.type === 'ssl-vpn' && v.status !== 'disable').forEach(v => {
         const ifs = String(v.iface || '').replace(/"/g, '').split(/[\s,]+/).filter(x => x && x !== '-');
         ifs.forEach(n => n.toLowerCase() === 'any' ? (parsed.interfaces || []).forEach(i => add('fg-sslvpn', i.name)) : add('fg-sslvpn', n));
@@ -904,14 +924,16 @@
       const prof = mp.profiles || {};
       (parsed.interfaces || []).forEach(i => { const p = i.allowaccess && Object.prototype.hasOwnProperty.call(prof, i.allowaccess) ? prof[i.allowaccess] : null;
         if (!p) return;
-        if (p.https || p.http) add('pa-admin', i.name);
-        if (p.ssh) add('admin-ssh', i.name);
-        if (p.telnet) add('admin-telnet', i.name); });
+        const lim = ports => { const l = _mgmtSrcLimit(parsed, i.name, ports); return l ? { srcLimit: l } : {}; };
+        if (p.https || p.http) add('pa-admin', i.name, lim([p.https ? '443' : '', p.http ? '80' : ''].filter(Boolean)));
+        if (p.ssh) add('admin-ssh', i.name, lim(['22']));
+        if (p.telnet) add('admin-telnet', i.name, lim(['23'])); });
       (mp.gp || []).forEach(g => add('pa-gp', g.iface, { name: g.name, kind: g.kind }));
     } else if (/^Cisco (ASA|FTD)$/.test(vendor)) {
       (parsed.interfaces || []).forEach(i => { const a = toks(i.allowaccess), n = i.nameif || i.name;
-        if (mp.httpServer && a.includes('http')) add('asa-http', n);
-        if (a.includes('telnet')) add('admin-telnet', n); });
+        const lim = ports => { const l = _mgmtSrcLimit(parsed, n, ports); return l ? { srcLimit: l } : {}; };
+        if (mp.httpServer && a.includes('http')) add('asa-http', n, lim(['443']));
+        if (a.includes('telnet')) add('admin-telnet', n, lim(['23'])); });
       (mp.webvpnIfs || []).forEach(n => add('asa-webvpn', n));
     } else if (vendor === 'Juniper') {
       const jweb = mp.jweb && (mp.jweb.http || mp.jweb.https);
@@ -940,6 +962,10 @@
     }
     return { supported: true, items: out };
   }
+  // 來源限制的依據文字（XN132）：FortiGate local-in-policy 編號、Palo Alto 管理設定檔名稱、ASA 的服務與介面
+  function _srcLimitBasis(l) {
+    return l.by === 'localin' ? 'local-in-policy' + (l.rule ? ' ' + l.rule : '') : /^pa-/.test(l.by) ? 'permitted-ip (' + (l.profile || '') + ')' : l.by === 'asa' ? l.svc + ' … ' + l.nameif : String(l.by || '');
+  }
   function buildExposedServicesHtml(res) {
     let h = '<div id="expose-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('expose.title')) + '</div>';
     h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('expose.hint')) + '</div>';
@@ -949,13 +975,14 @@
     h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + esc(tr('expose.col_svc')) + '</th><th>' + esc(tr('expose.col_iface')) + '</th><th>' + esc(tr('expose.col_ext')) +
       '</th><th>' + esc(tr('expose.col_cve')) + '</th><th>' + esc(tr('expose.col_action')) + '</th></tr></thead><tbody>';
     res.items.slice().sort((a, b) => order(a) - order(b)).forEach(x => {
-      const ext = (x.ext === true ? pill(tr('expose.ext_yes') + (x.basis ? ' · ' + tr('expose.basis_' + x.basis) : ''), x.risk === 'high' && x.trust !== 'all' ? 'p-deny' : 'p-warn')
+      const ext = (x.ext === true ? pill(tr('expose.ext_yes') + (x.basis ? ' · ' + tr('expose.basis_' + x.basis) : ''), x.risk === 'high' && x.trust !== 'all' && !x.srcLimit ? 'p-deny' : 'p-warn')
         : x.ext === null ? pill(tr('expose.ext_unknown'), 'p-warn') : pill(tr('expose.ext_no'), 'p-accept')) +
-        (x.trust ? ' ' + pill(tr('expose.trust_' + x.trust), x.trust === 'all' ? 'p-accept' : 'p-warn') : '');
+        (x.trust ? ' ' + pill(tr('expose.trust_' + x.trust), x.trust === 'all' ? 'p-accept' : 'p-warn') : '') +
+        (x.srcLimit ? ' <span data-src-limit>' + pill(tr('expose.src_limit') + ' · ' + _srcLimitBasis(x.srcLimit), 'p-accept') + '</span>' : '');
       h += `<tr><td>${esc(tr('expose.svc_' + x.svc))}${x.name ? ' <span style="color:var(--text-dim)">(' + esc(x.name) + ')</span>' : ''}</td><td class="mono">${esc(x.iface)}${x.zone ? ' <span style="color:var(--text-dim)">[' + esc(x.zone) + ']</span>' : ''}</td><td>${ext}</td>` +
         `<td class="mono" style="font-size:11px">${x.cves.length ? x.cves.map(esc).join('<br>') : '-'}</td><td style="font-size:11px">${esc(tr('expose.act_' + x.svc))}</td></tr>`;
     });
-    const tnote = res.items.some(x => x.trust) ? ' ' + tr('expose.trust_note') : '';
+    const tnote = (res.items.some(x => x.trust) ? ' ' + tr('expose.trust_note') : '') + (res.items.some(x => x.srcLimit) ? ' ' + tr('expose.src_limit_note') : '');
     return h + '</tbody></table></div><div style="font-size:11px;color:var(--text-dim);margin-top:6px">' + esc(tr('expose.note') + tnote) + '</div></div>';
   }
 
@@ -1124,7 +1151,7 @@
         ['NIST 800-53 AC-18', 'CIS v8 12.6'], []);
     }
     // 6b. 高風險曝險服務（2026-10-24，XN18）：歷來被大量利用的管理介面／VPN 入口開在外部介面
-    const expSvc = analyzeExposedServices(parsed).items.filter(x => x.ext === true && x.cves.length && x.trust !== 'all');
+    const expSvc = analyzeExposedServices(parsed).items.filter(x => x.ext === true && x.cves.length && x.trust !== 'all' && !x.srcLimit);
     f('exposed-svc', tr('audit.check_exposed_svc'), expSvc.length, 'high',
       expSvc.length ? expSvc.map(x => `${tr('expose.svc_' + x.svc)}@${x.iface}`).slice(0, 8).join(', ') + (expSvc.length > 8 ? '…' : '') + tr('audit.rec_exposed_svc') : tr('audit.none'),
       ['CISA KEV', 'NIST 800-53 SC-7', 'CIS v8 12.2'], expSvc.map(x => ({ kind: 'iface', name: x.iface })));

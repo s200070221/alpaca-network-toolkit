@@ -280,6 +280,8 @@ function classifyByKeyword(evt) {
   if (netOps) return netOps.kind;
   // Windows NPS（XN65）：Access-Reject 為認證失敗，其餘（請求、允許、計費）不分類
   if (evt.format === 'nps') return evt.fields && evt.fields.npsPacket === 3 ? 'authFail' : 'other';
+  // Aruba ClearPass（XN134）：Login-Status REJECT 為認證失敗
+  if (evt.format === 'clearpass') return evt.fields && evt.fields.cppmStatus === 'REJECT' ? 'authFail' : 'other';
   if (evt.format === 'winevent' && evt.fields && evt.fields.EventID === '4776' && evt.fields.Status && evt.fields.Status !== '0x0') return 'authFail';
   if (evt.format === 'winevent' && evt.fields && evt.fields.EventID === '4768') { const rc = evt.fields.Status || evt.fields['Result Code']; if (rc && !/^0x0+$/i.test(rc)) return 'authFail'; }
   if (evt.format === 'winevent' && evt.fields && AUTH_FAIL_WINEVENT_IDS.has(evt.fields.EventID)) return 'authFail';
@@ -1423,6 +1425,39 @@ function detectNpsRejects(events) {
       category: 'npsRejectBurst', severityNorm: 'Medium', count: best.length,
       firstSeen: best[0].timestamp || null, lastSeen: best[best.length - 1].timestamp || null,
       ...sampleOf(policyMostly ? 'sample.npsRejectPolicy' : 'sample.npsReject', { user, n: best.length, reasons, nas: nas.slice(0, 3).join(', ') || '-' }),
+      relatedHosts: [user, ...nas.slice(0, 3)], relatedEvents: best, confidence: 'heuristic'
+    });
+  }
+  return issues;
+}
+// Aruba ClearPass 同一帳號短時間內多次被拒（XN134）：與 NPS 相同以帳號彙整（紀錄裡是 NAS 與終端 MAC，沒有使用者電腦的來源位址），
+// 原因以 Common.Error-Code 彙整
+function detectClearPassRejects(events) {
+  const byUser = new Map();
+  events.forEach(e => {
+    const f = e.fields;
+    if (e.format !== 'clearpass' || !f || f.cppmStatus !== 'REJECT' || !f.user) return;
+    const k = String(f.user).toLowerCase();
+    if (!byUser.has(k)) byUser.set(k, []);
+    byUser.get(k).push(e);
+  });
+  const issues = [];
+  for (const list of byUser.values()) {
+    const sorted = [...list].sort((a, b) => effectiveTime(a) - effectiveTime(b));
+    let best = null;
+    for (let i = 0, j = 0; j < sorted.length; j++) {
+      while (effectiveTime(sorted[j]) - effectiveTime(sorted[i]) > NPS_REJECT_WINDOW_MS) i++;
+      if (j - i + 1 >= NPS_REJECT_MIN && (!best || j - i + 1 > best.length)) best = sorted.slice(i, j + 1);
+    }
+    if (!best) continue;
+    const cnt = new Map();
+    best.forEach(e => { const r = e.fields.cppmError || '?'; cnt.set(r, (cnt.get(r) || 0) + 1); });
+    const reasons = [...cnt.entries()].sort((a, b) => b[1] - a[1]).map(([r, n]) => `${r}×${n}`).join(', ');
+    const user = best[0].fields.user, nas = [...new Set(best.map(e => e.fields.nasName || e.fields.nasIp).filter(Boolean))];
+    issues.push({
+      category: 'cppmRejectBurst', severityNorm: 'Medium', count: best.length,
+      firstSeen: best[0].timestamp || null, lastSeen: best[best.length - 1].timestamp || null,
+      ...sampleOf('sample.cppmReject', { user, n: best.length, reasons, nas: nas.slice(0, 3).join(', ') || '-' }),
       relatedHosts: [user, ...nas.slice(0, 3)], relatedEvents: best, confidence: 'heuristic'
     });
   }

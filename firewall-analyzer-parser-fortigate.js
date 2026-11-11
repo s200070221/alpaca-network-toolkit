@@ -303,6 +303,9 @@ const FortigateParser = (() => {
     // 已知該金鑰可解出使用者密碼、私鑰密碼、HA 密碼；沒有 config system global 區塊（片段）時為 null 不評估
     const glob = text.match(/^\s*config system global\s*\n([\s\S]*?)^\s*end\b/m);
     info.privateDataEnc = glob ? /^\s*set\s+private-data-encryption\s+enable\b/m.test(glob[1]) : null;
+    // 管理埠（XN132）：admin-sport（https，預設 443）、admin-port（http，預設 80）、admin-ssh-port（預設 22）；供曝險判斷查 local-in-policy
+    const gport = k => { const m = glob && glob[1].match(new RegExp('^\\s*set\\s+' + k + '\\s+(\\d+)', 'm')); return m ? m[1] : ''; };
+    info.adminPorts = { https: gport('admin-sport') || '443', http: gport('admin-port') || '80', ssh: gport('admin-ssh-port') || '22' };
 
     info.vdomNames = vdomNames || [];
     info.vdom = vdomNames || [];

@@ -1972,7 +1972,8 @@ function detectRadiusIssues(events) {
   const issues = [];
   const rad = events.filter(e => e.fields && e.fields.radius);
   // Windows NPS 的 Accept／Reject 一併判斷同一終端多帳號（XN70），其餘 RADIUS 檢查只看 FreeRADIUS
-  const nps = events.filter(e => e.format === 'nps' && e.fields && (e.fields.npsPacket === 2 || e.fields.npsPacket === 3) && e.fields.mac && e.fields.user);
+  const nps = events.filter(e => e.fields && e.fields.mac && e.fields.user && ((e.format === 'nps' && (e.fields.npsPacket === 2 || e.fields.npsPacket === 3))
+    || (e.format === 'clearpass' && (e.fields.cppmStatus === 'ACCEPT' || e.fields.cppmStatus === 'REJECT'))));  // ClearPass（XN134）
   if (!rad.length && !nps.length) return issues;
   const time = (a, b) => effectiveTime(a) - effectiveTime(b);
   const groupBy = (list, keyOf) => { const m = new Map(); list.forEach(e => { const k = keyOf(e); if (!k) return; if (!m.has(k)) m.set(k, []); m.get(k).push(e); }); return m; };
@@ -2242,7 +2243,7 @@ function buildIssueList(events, intelIndexes, opts) {
   const spray = detectPasswordSpray(analyzed);
   const dspray = detectDistributedSpray(analyzed, spray.map(is => is.relatedHosts[0]));
   const mfaFatigue = detectMfaFatigue(analyzed);
-  const npsRej = detectNpsRejects(analyzed);
+  const npsRej = detectNpsRejects(analyzed).concat(detectClearPassRejects(analyzed));
   const nsSess = detectNsSessionMultiIp(analyzed);
   const qnapIss = detectQnap(analyzed);
   const veeamIss = detectVeeam(analyzed);
@@ -2598,7 +2599,7 @@ const CHAIN_STAGE_MAP = {
   privEsc: 'malicious', groupRemoved: 'malicious', pwReset: 'malicious', acctDeleted: 'malicious', asrepRoastingRisk: 'malicious',
   auditPolicyChanged: 'malicious', auditCleared: 'malicious', persistence: 'malicious', sysmonRegistryPersistence: 'malicious', registryValueChange: 'malicious',
   processCreate: 'malicious', sysmonProcessCreate: 'malicious', sysmonRemoteThread: 'malicious', powershellScriptBlock: 'malicious', sysmonImageLoad: 'malicious', powershellModuleLog: 'malicious', beaconing: 'malicious',
-  dnsDga: 'malicious', dnsTunnel: 'malicious', dnsNxBurst: 'malicious', nacAuthFail: 'access', npsRejectBurst: 'access', nsSessionMultiIp: 'access', vpnSessionMultiIp: 'access', qnapSnapshotDelete: 'postActivity', qnapMassFileChange: 'postActivity', veeamMalware: 'malicious', veeamDefenseOff: 'postActivity', vaultAuditDisabled: 'postActivity', fmgUnregDevice: 'access', veeamDeleteAttempt: 'postActivity', sshBruteSuccess: 'access', adminLoginExternal: 'access', adminLoginFailExternal: 'access', ldapBruteForce: 'access', ldapEnum: 'recon', passwordSpray: 'access', distributedSpray: 'access', mfaFatigue: 'access', adSensitiveChange: 'malicious', sidHistory: 'malicious', dsrmPassword: 'malicious', dcsync: 'malicious', k8sExec: 'malicious', k8sSecretAccess: 'malicious', duoFraud: 'access',
+  dnsDga: 'malicious', dnsTunnel: 'malicious', dnsNxBurst: 'malicious', nacAuthFail: 'access', npsRejectBurst: 'access', cppmRejectBurst: 'access', nsSessionMultiIp: 'access', vpnSessionMultiIp: 'access', qnapSnapshotDelete: 'postActivity', qnapMassFileChange: 'postActivity', veeamMalware: 'malicious', veeamDefenseOff: 'postActivity', vaultAuditDisabled: 'postActivity', fmgUnregDevice: 'access', veeamDeleteAttempt: 'postActivity', sshBruteSuccess: 'access', adminLoginExternal: 'access', adminLoginFailExternal: 'access', ldapBruteForce: 'access', ldapEnum: 'recon', passwordSpray: 'access', distributedSpray: 'access', mfaFatigue: 'access', adSensitiveChange: 'malicious', sidHistory: 'malicious', dsrmPassword: 'malicious', dcsync: 'malicious', k8sExec: 'malicious', k8sSecretAccess: 'malicious', duoFraud: 'access',
   acctStatusChange: 'postActivity', auditLogFull: 'postActivity'
 };
 const CHAIN_STAGE_ORDER = ['recon', 'access', 'malicious', 'postActivity'];
