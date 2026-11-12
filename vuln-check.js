@@ -196,6 +196,34 @@ const VulnCheck = (function () {
       .map(e => Object.assign({}, e, { builtin: true }));
     return builtin.concat(user);
   }
-  const API = { scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, withBuiltin, applyFeatures, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
+  // 從 show version 類輸出讀出完整版本（XN141）。句型依 ntc-templates（Apache-2.0）tests 的真實輸出：
+  // Cisco IOS／IOS-XE show version、FortiGate get system status、ASA show version、Palo Alto show system info、Junos show version、
+  // NX-OS show version、Arista show version、Aruba CX show system、RouterOS /system resource print。
+  // ios／iosxe 兩種寫法都試（設定檔的 version 行判斷不出是哪一種），回傳能被該格式解析的版本；讀不出回傳 ''
+  const SHOW_VER_RE = {
+    iosxe: [/Cisco IOS Software\b[^\n]*?Version\s+(\d+\.\d+\.\d+[a-z]?)\s*[,\n]/, /Cisco IOS XE Software,\s*Version\s+(\d+\.\d+\.\d+[a-z]?)\s*$/m],
+    ios: [/Cisco IOS Software\b[^\n]*?Version\s+(\d+\.\d+\(\d+[^)\s]*\)[A-Za-z0-9]*)\s*[,\n]/],
+    fortios: [/^Version:\s*\S+\s+v(\d+\.\d+\.\d+)\b/m],
+    asa: [/Cisco Adaptive Security Appliance Software Version\s+(\d+\.\d+\(\d+(?:\.\d+)?\)\d*)/],
+    panos: [/^\s*sw-version:\s*(\d\S*)/m],
+    junos: [/^\s*Junos:\s*(\d\S*)/m],
+    nxos: [/NXOS:\s*version\s+(\d+\.\d+\([^)\s]+\)\S*)/, /^\s*system:\s*version\s+(\d+\.\d+\([^)\s]+\)\S*)/m],
+    eos: [/Software image version:\s*(\d\S*)/],
+    aoscx: [/(?:ArubaOS-CX|AOS-CX) Version\s*:\s*([A-Z]{2}\.\d+(?:\.\d+)+)/],
+    routeros: [/^\s*version:\s*(\d+\.\d+(?:\.\d+)?)\s*(?:\(|$)/m],
+  };
+  // 各格式要執行的指令（卡片說明用；指令本身不翻譯）
+  const SHOW_VER_CMDS = { ios: 'show version', iosxe: 'show version', fortios: 'get system status', asa: 'show version', panos: 'show system info',
+    junos: 'show version', nxos: 'show version', eos: 'show version', aoscx: 'show system', routeros: '/system resource print' };
+  function versionFromText(text, sch) {
+    const t = String(text || '').replace(/\r\n?/g, '\n');
+    const tries = sch === 'ios' || sch === 'iosxe' ? [sch, sch === 'ios' ? 'iosxe' : 'ios'] : [sch];
+    for (const k of tries) for (const re of SHOW_VER_RE[k] || []) {
+      const m = t.match(re);
+      if (m && parse(k, m[1])) return m[1];
+    }
+    return '';
+  }
+  const API = { scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, withBuiltin, applyFeatures, versionFromText, SHOW_VER_SCHEMES: Object.keys(SHOW_VER_RE), SHOW_VER_CMDS, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
   return API;
 })();

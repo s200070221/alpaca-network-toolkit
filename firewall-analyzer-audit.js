@@ -1035,6 +1035,12 @@
       `<button class="btn btn-ghost btn-sm" onclick="window._fwVulnApply()">${esc(tr('vuln.apply'))}</button>` +
       `<label class="btn btn-ghost btn-sm" style="cursor:pointer">${esc(tr('vuln.upload'))}<input type="file" accept=".csv,.txt" style="display:none" onchange="window._fwVulnFile(this)"></label>` +
       `<button class="btn btn-ghost btn-sm" onclick="window._fwVulnSample()">${esc(tr('vuln.sample'))}</button></div>`;
+    // 貼上 show version 輸出讀出完整版本（XN141）：讀出的版本寫回上方版本欄的同一份記憶體值
+    if (V.versionFromText && (V.SHOW_VER_SCHEMES || []).includes(sch)) h += `<details id="vuln-showver-box" style="margin:0 0 8px;font-size:11px"${st.showverMiss ? ' open' : ''}><summary style="cursor:pointer;color:var(--text-dim)">${esc(tr('vuln.showver_title'))}</summary>` +
+      `<div style="margin:6px 0;color:var(--text-dim)">${esc(tr('vuln.showver_hint').replace('{cmd}', (V.SHOW_VER_CMDS || {})[sch] || 'show version'))}</div>` +
+      `<textarea id="vuln-showver" spellcheck="false" style="width:100%;height:70px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;${inp}">${esc(st.showverMiss ? st.showverText || '' : '')}</textarea>` +
+      `<button class="btn btn-ghost btn-sm" style="margin-top:4px" onclick="window._fwVulnFromShow()">${esc(tr('vuln.showver_btn'))}</button>` +
+      (st.showverMiss ? `<div style="color:var(--orange,#f59e0b);margin-top:4px">${esc(tr('vuln.showver_miss'))}</div>` : '') + '</details>';
     if (!V.parse(sch, ver)) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-bottom:6px">${esc(tr(sch === 'fortios' && /^\d+\.\d{2}\b/.test(fw) ? 'vuln.version_fortios_short' : 'vuln.version_missing'))}</div>`;
     // Check Point：設定檔只有 train（R81.20），依 Jumbo Hotfix Take 判斷的漏洞需補填 Take（XN42）
     else if (sch === 'gaia' && V.parse(sch, ver).take == null) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-bottom:6px">${esc(tr('vuln.version_gaia_take'))}</div>`;

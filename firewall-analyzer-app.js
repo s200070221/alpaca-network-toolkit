@@ -1559,7 +1559,7 @@ function onParsed(){
           [buildDuplicateHtml(_dup), _dup.length], [buildUnusedHtml(_un), _un.unusedAddrs.length + _un.unusedSvcs.length], [buildDuplicateObjectsHtml(_do), _do.length],
           [buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()), 1],
           [buildExposedServicesHtml(_exp), (_exp.items || []).length],
-          [buildVulnCheckHtml({ text: _fwVulnText(), version: _fwVulnVer[_acceptedRiskHost()] || '', parsed: PARSED }), 1],
+          [buildVulnCheckHtml({ text: _fwVulnText(), version: _fwVulnVer[_acceptedRiskHost()] || '', parsed: PARSED, showverMiss: _fwShowverMiss, showverText: _fwShowverText }), 1],
           [buildDisabledPoliciesHtml(_dis), _dis.length], [buildCrossVdomHtml(_xv), _xv.length], [buildMissingCommentsHtml(_mc), _mc.length],
           [buildOversizedGroupsHtml(_og), _og.length], [buildNamingConventionHtml(_nm, _loadNamingRules()), (_nm.results || []).length + (_nm.errors || []).length],
           [buildExpiredRulesHtml(_ex, _loadExpiryKeywords()), (_ex.results || []).length],
@@ -1881,6 +1881,20 @@ function onParsed(){
     if (t) _fwVulnSave(t.value);
     if (v) _fwVulnVer[_acceptedRiskHost()] = v.value.trim();
     renderSection('audit'); renderNextBar();
+    const c = document.getElementById('vuln-card'); if (c) c.scrollIntoView({ block: 'nearest' });
+  };
+  // 貼上 show version 輸出讀出完整版本（XN141）：寫入補填版本（只存記憶體），讀不出時提示、不改原值
+  let _fwShowverMiss = false, _fwShowverText = '';
+  window._fwVulnFromShow = function() {
+    const t = document.getElementById('vuln-showver');
+    const p = PARSED || {}, fw = String((p.deviceInfo && p.deviceInfo.firmware) || '').replace(/^-$/, '');
+    const cur = _fwVulnVer[_acceptedRiskHost()] || fw;
+    const sch = VulnCheck.deviceScheme(p.vendor, cur) || VulnCheck.deviceScheme(p.vendor, '0');
+    const v = t ? VulnCheck.versionFromText(t.value, sch) : '';
+    _fwShowverMiss = !v; _fwShowverText = t ? t.value : '';
+    if (v) _fwVulnVer[_acceptedRiskHost()] = v;
+    renderSection('audit'); renderNextBar();
+    _fwShowverMiss = false; _fwShowverText = '';
     const c = document.getElementById('vuln-card'); if (c) c.scrollIntoView({ block: 'nearest' });
   };
   window._fwVulnFile = async function(input) {

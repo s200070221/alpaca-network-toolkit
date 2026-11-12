@@ -4250,7 +4250,38 @@ function renderAuditVulnCard(){
   if(!parsed)return '';
   const s=parsed.sys||{}, v=String(s.version||'').trim();
   const dev={name:s.hostname||'-',vendor:parsed.vendor||'',version:vulnAuditVer.get(parsed)||(v==='-'||v==='all'?'':v),file:'audit',features:swFeatureStates(parsed)};
-  return vulnCardHead('vuln-audit-card','vuln-audit-text','vulnAuditApply')+vulnResultTable([dev])+'</div>';
+  return vulnCardHead('vuln-audit-card','vuln-audit-text','vulnAuditApply')+vulnResultTable([dev])+swShowverBox(dev.version)+'</div>';
+}
+// 貼上 show version 輸出讀出完整版本（XN141，VulnCheck.versionFromText）：寫入補填版本（以 parsed 為鍵只存記憶體），讀不出時提示、保留貼上的內容
+let swShowverMiss=false, swShowverText='';
+function swShowverScheme(ver){
+  const v=parsed&&parsed.vendor||'';
+  // Cisco 交換器依版本寫法分 IOS／IOS-XE，版本不明時以 ios 讀（versionFromText 會兩種都試）
+  return VulnCheck.deviceScheme(v,ver)||VulnCheck.deviceScheme(v,'0')||(v==='cisco'?'ios':'');
+}
+function swShowverBox(ver){
+  if(typeof VulnCheck==='undefined'||!VulnCheck.versionFromText)return '';
+  const sch=swShowverScheme(ver);
+  if(!(VulnCheck.SHOW_VER_SCHEMES||[]).includes(sch))return '';
+  const btn2='background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;margin-top:4px';
+  return `<details id="vuln-showver-box" style="margin-top:8px;font-size:12px"${swShowverMiss?' open':''}><summary style="cursor:pointer;color:var(--text-dim)">${esc(tr('vuln.showver_title'))}</summary>
+    <div style="margin:6px 0;color:var(--text-dim)">${esc(tr('vuln.showver_hint').replace('{cmd}',(VulnCheck.SHOW_VER_CMDS||{})[sch]||'show version'))}</div>
+    <textarea id="vuln-showver" spellcheck="false" style="width:100%;height:70px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px">${esc(swShowverMiss?swShowverText:'')}</textarea>
+    <button style="${btn2}" onclick="vulnAuditFromShow()">${esc(tr('vuln.showver_btn'))}</button>
+    ${swShowverMiss?`<div style="color:var(--orange,#f59e0b);margin-top:4px">${esc(tr('vuln.showver_miss'))}</div>`:''}</details>`;
+}
+function vulnAuditFromShow(){
+  if(!parsed)return;
+  const t=document.getElementById('vuln-showver'), s=parsed.sys||{};
+  const cur=vulnAuditVer.get(parsed)||String(s.version||'').trim();
+  const v=t?VulnCheck.versionFromText(t.value,swShowverScheme(cur)):'';
+  swShowverMiss=!v; swShowverText=t?t.value:'';
+  if(v)vulnAuditVer.set(parsed,v);
+  navGo('audit');
+  renderNextBar();
+  if(v)recordSwitchSummary(parsed);
+  swShowverMiss=false; swShowverText='';
+  const c=document.getElementById('vuln-audit-card'); if(c)c.scrollIntoView({block:'nearest'});
 }
 function vulnAuditApply(){
   const t=document.getElementById('vuln-audit-text');

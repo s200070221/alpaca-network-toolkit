@@ -11,6 +11,8 @@
 //   forward＝介面 in ACL → ZBF → 出口介面 out ACL；input（目的是路由器自己）＝介面 in ACL。
 //   綁定的 ACL 有內容時結尾為隱含拒絕；綁定但沒有定義或沒有任何項目的 ACL 等同全部放行（IOS 行為）。
 //   ZBF：同區域互通；不同區域沒有 zone-pair、或區域成員與沒有區域的介面之間為拒絕；class-default 沒寫動作為 drop。
+//   self zone（XN140，依 Cisco ZBF 設計指南 98628）：到路由器本身預設放行，只受「區域 → self」的 zone-pair 限制（input → zbf-self），
+//   路由器自己發出的流量（self → 區域）不評估。class-map 的 match class-map 依序展開。
 //   class-map 所引用 ACL 裡的 deny 項目代表「不屬於這個 class」，這裡以該 policy-map 的 class-default 動作近似
 //   （只有一個 class 時相同；後面還有其他 class 會比對同一流量時可能不同，規則標 _zbfApprox）。
 // 不解析：IPv6 ACL、反射式 ACL、時間條件、IPsec／DMVPN、route-map 條件的 NAT（條件標為無法判斷）。
@@ -198,8 +200,9 @@ const CiscoIOSParser = (() => {
     bl.forEach(b => {
       let m = b.head.match(/^class-map type inspect (?:(match-any|match-all) )?(\S+)/);
       if (m) {
-        const cm = classMaps[m[2]] = { mode: m[1] || 'match-all', acls: [], protos: [] };
-        b.body.forEach(l => { let x; if ((x = l.match(/^match access-group (?:name )?(\S+)/))) cm.acls.push(x[1]); else if ((x = l.match(/^match protocol (\S+)/))) cm.protos.push(x[1]); });
+        const cm = classMaps[m[2]] = { mode: m[1] || 'match-all', acls: [], protos: [], subs: [] };
+        b.body.forEach(l => { let x; if ((x = l.match(/^match access-group (?:name )?(\S+)/))) cm.acls.push(x[1]); else if ((x = l.match(/^match protocol (\S+)/))) cm.protos.push(x[1]);
+          else if ((x = l.match(/^match class-map (\S+)/))) cm.subs.push(x[1]); });
         return;
       }
       m = b.head.match(/^policy-map type inspect (\S+)/);
@@ -217,6 +220,14 @@ const CiscoIOSParser = (() => {
       if (m) { const sp = b.body.map(l => l.match(/^service-policy type inspect (\S+)/)).find(Boolean); zonePairs.push({ name: m[1], src: m[2], dst: m[3], pm: sp ? sp[1] : '' }); }
     });
     const hasZbf = interfaces.some(i => i.zone);
+    // 巢狀 class-map（match class-map X，Cisco ZBF 設計指南的 self zone 範例）：依序併入被引用者的 ACL 與協定，深度上限 4、防循環
+    const cmFlat = (name, seen) => {
+      const cm = classMaps[name];
+      if (!cm) return null;
+      const out = { mode: cm.mode, acls: cm.acls.slice(), protos: cm.protos.slice(), nested: cm.subs.length > 0 };
+      cm.subs.forEach(sn => { if (seen.length >= 4 || seen.includes(sn)) return; const sub = cmFlat(sn, seen.concat([sn])); if (sub) { out.acls.push(...sub.acls); out.protos.push(...sub.protos); } });
+      return out;
+    };
 
     // ── 規則 ──
     const base = o => Object.assign({ srcIntf: '-', dstIntf: '-', srcAddr: 'any', dstAddr: 'any', srcAddr4: 'any', dstAddr4: 'any', srcAddr6: '-', dstAddr6: '-',
@@ -250,7 +261,8 @@ const CiscoIOSParser = (() => {
     if (hasZbf) {
       const zoneIfs = z => interfaces.filter(i => i.zone === z).map(i => i.name);
       zonePairs.forEach(zp => {
-        if (zp.src === 'self' || zp.dst === 'self') return;  // 到路由器本身的 zone-pair 不評估
+        // 路由器自己發出的流量（source self）不評估；到路由器本身（destination self）由 zbf-self 鏈處理（XN140）
+        if (zp.src === 'self') return;
         const pm = policyMaps[zp.pm], key = 'zp:' + zp.name;
         const act = a => (a === 'inspect' || a === 'pass') ? 'accept' : 'deny';
         const dflt = pm ? act((pm.classes.find(c => c.name === 'class-default') || {}).action || 'drop') : 'deny';
@@ -262,7 +274,7 @@ const CiscoIOSParser = (() => {
         };
         (pm ? pm.classes : []).forEach(c => {
           if (c.name === 'class-default') return;
-          const cm = classMaps[c.name];
+          const cm = cmFlat(c.name, [c.name]);
           if (!cm) return;
           const a = act(c.action || 'drop');
           cm.acls.forEach(an => ((acls[an] || {}).entries || []).forEach(e =>
@@ -270,6 +282,12 @@ const CiscoIOSParser = (() => {
           if (!cm.acls.length) cm.protos.forEach(pr => add({ ruleNum: `${c.name}/protocol ${pr}`, action: a, service: APP_SVC[pr.toLowerCase()] || pr }));
         });
         add({ ruleNum: 'class-default', action: dflt, comments: 'class-default' });
+        // 到路由器本身（XN140）：來源區域的介面進來即跳到該 zone-pair；沒有 zone-pair 指向 self 的區域與沒有區域的介面落到鏈尾放行
+        if (zp.dst === 'self') {
+          zoneIfs(zp.src).forEach(si => rules.push(base({ id: `zbf-self/${zp.name}/${si}`, name: `zone-pair ${zp.name}`, action: 'deny', srcIntf: si,
+            _chain: 'zbf-self', _mtAct: 'jump', _jumpTarget: key, _nonterminal: true, _mtHasMatch: true })));
+          return;
+        }
         zoneIfs(zp.src).forEach(si => zoneIfs(zp.dst).forEach(di => rules.push(base({ id: `zbf/${zp.name}/${si}/${di}`, name: `zone-pair ${zp.name}`, action: 'deny', srcIntf: si, dstIntf: di,
           _chain: 'zbf', _mtAct: 'jump', _jumpTarget: key, _nonterminal: true, _mtHasMatch: true }))));
       });
@@ -339,7 +357,7 @@ const CiscoIOSParser = (() => {
       vendor: 'Cisco IOS',
       deviceInfo: { vendor: 'Cisco IOS', hostname, firmware: verM ? verM[1] : '-', model: '-', serial: '-', vdom: [], iosXe: !!isXe },
       interfaces, policies,
-      nf: { rules, defaults: {}, forward: hasZbf ? ['fwd-in', 'zbf', 'fwd-out'] : ['fwd-in', 'fwd-out'], input: ['input'] },
+      nf: { rules, defaults: {}, forward: hasZbf ? ['fwd-in', 'zbf', 'fwd-out'] : ['fwd-in', 'fwd-out'], input: hasZbf && rules.some(r => r._chain === 'zbf-self') ? ['input', 'zbf-self'] : ['input'] },
       rtRouter, routes, ha: null, nat, vpn: [], addresses, services, users, schedules: [],
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
       snmp: null, logservers: null, dns: null, dhcp: null, wwan: null, wlan: null,
