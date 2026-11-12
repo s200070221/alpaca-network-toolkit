@@ -256,20 +256,20 @@ const EdgeRouterParser = (() => {
     const eths = childrenPrefixed(child(tree, 'interfaces'), 'ethernet');
     Object.entries(eths).forEach(([key, node]) => {
       const name = key.replace(/^ethernet\s+/, '');
-      const addr = val(node, 'address');
-      const [ip, mask] = addr && addr.includes('/') ? cidrSplit(addr) : ['-', '-'];
+      // IPv4 與 IPv6 位址分開（XN143）：IPv6 位址原本會混進主要／次要位址被當成 IPv4，改收進 ip6s（多台路徑查詢用）
+      const addr = val(node, 'address');  // 第一個 address（決定 mode）
+      const addrs = vals(node, 'address').filter(a => a && a.includes('/'));
+      const v4 = addrs.filter(a => !a.includes(':')), ip6s = addrs.filter(a => a.includes(':'));
+      const [ip, mask] = v4[0] ? cidrSplit(v4[0]) : ['-', '-'];
       // 次要IP（Secondary IP，官方 VyOS/EdgeOS 文件：同一介面可重複宣告多筆 `address`
       // statement，附加式非關鍵字機制，與 Junos 同款；2026-08-17 從「僅取第二筆」擴大為
       // 完整收集全部次要IP）
-      const secondaryIps = vals(node, 'address').slice(1).map(a => {
-        const [i, m] = a && a.includes('/') ? cidrSplit(a) : ['-', '-'];
-        return { ip: i, mask: m };
-      });
+      const secondaryIps = v4.slice(1).map(a => { const [i, m] = cidrSplit(a); return { ip: i, mask: m }; });
       const desc = val(node, 'description') || '';
       const fw = child(node, 'firewall');
       const boundRulesets = fw ? ['in', 'out', 'local'].map(d => val(child(fw, d), 'name')).filter(Boolean) : [];
       out.push({
-        name, ip, mask, secondaryIps, type: 'physical', vlanId: '-', alias: name, desc,
+        name, ip, mask, secondaryIps, ip6s, type: 'physical', vlanId: '-', alias: name, desc,
         status: hasFlag(node, 'disable') ? 'down' : 'up',
         mtu: val(node, 'mtu') || '-', speed: '-', mode: addr ? 'static' : 'dhcp',
         vdom: '-', role: inferRole(desc, boundRulesets), allowaccess: '-',

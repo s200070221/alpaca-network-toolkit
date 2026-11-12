@@ -30,13 +30,14 @@ const CiscoASAParser = (() => {
       if (!mIf) continue;
       const name = mIf[1].trim();
       let ip='-', mask='-', ip6='-', nameif='', secLevel=-1, shutdown=false, desc='';
+      const ip6s = [];  // 全部 IPv6 位址（XN143，多台路徑查詢用；ip6 保留最後一筆供既有畫面）
       for (const l of block.split('\n').slice(1)) {
         const t = l.trim();
         const mIp  = t.match(/^ip address\s+(\S+)\s+(\S+)/);
         if (mIp) { ip = mIp[1]; mask = mIp[2]; }
         // IPv6 介面位址（2026-09-18 新增）：官方單行語法 "ipv6 address <addr>/<prefix>"
         const mIp6 = t.match(/^ipv6 address\s+(\S+)/);
-        if (mIp6) ip6 = mIp6[1];
+        if (mIp6) { ip6 = mIp6[1]; if (mIp6[1].includes(':') && mIp6[1].includes('/')) ip6s.push(mIp6[1]); }
         const mNif = t.match(/^nameif\s+(\S+)/);
         if (mNif) nameif = mNif[1];
         const mSec = t.match(/^security-level\s+(\d+)/);
@@ -49,7 +50,7 @@ const CiscoASAParser = (() => {
       if (secLevel === 0) role = 'external';
       else if (secLevel > 0 && secLevel < 100) role = 'dmz';
       const allowaccess = mgmtAccess.has(nameif) ? [...mgmtAccess.get(nameif)].join(' ') : '-';
-      ifaces.push({ name, ip, ip6, mask, type:'physical', role, status:shutdown?'down':'up', desc, nameif, secLevel, allowaccess });
+      ifaces.push({ name, ip, ip6, ip6s, mask, type:'physical', role, status:shutdown?'down':'up', desc, nameif, secLevel, allowaccess });
     }
     return ifaces;
   }

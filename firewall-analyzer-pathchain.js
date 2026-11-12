@@ -4,7 +4,8 @@
 // 每台的處理順序：決定進入介面 → 目的 NAT → 以轉換後目的查路由（設定檔靜態＋介面直連網段，或使用者貼上的路由表；
 // 最長前綴）得出口介面與下一跳 → 規則比對（同時帶進入與出口介面）→ 來源 NAT（FortiGate／ASA／netfilter／MikroTik 轉換，
 // 其餘只標記）→ 下一跳等於另一台已載入設備的介面位址（含次要位址）就接到那一台，否則查手動串接對應表。
-// 只做 IPv4；HA 虛擬 IP、IPsec 通道、經 L3 交換器轉送等由使用者以對應表串接。限制由畫面以警語說明。
+// IPv4 與 IPv6（XN143：來源與目的同為 IPv6 時走 IPv6 分支，介面讀 ip6s／ip6、路由讀 routes6 與 routes 中的 IPv6 項目；
+// 貼上的路由表、來源 NAT 換算、不符原因只做 IPv4）；HA 虛擬 IP、IPsec 通道、經 L3 交換器轉送等由使用者以對應表串接。限制由畫面以警語說明。
 // 以單一全域物件 FwPath 對外，避免與其他模組的頂層識別字衝突
 // ═══════════════════════════════════════════════════════════════════════════
 const FwPath = (function () {
@@ -35,16 +36,46 @@ const FwPath = (function () {
     const len = parts[1] === undefined ? 32 : maskLen(parts[1]);
     return net === null || len === null ? null : { net, len };
   };
-  // 介面的位址清單（主要＋次要），只取 IPv4 且遮罩可解析者
-  function ifaceAddrs(i) {
+  // ── IPv6（XN143）：位址轉 BigInt（:: 縮寫、內嵌 IPv4 尾段、%區域〔link-local 介面〕先去掉），無效回傳 null ──
+  const ip6Big = s => {
+    let t = String(s || '').trim().replace(/%.*$/, '');
+    if (!t.includes(':')) return null;
+    const m4 = t.match(/^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/);
+    if (m4) { const n = ipInt(m4[2]); if (n === null) return null; t = m4[1] + (n >>> 16).toString(16) + ':' + (n & 0xffff).toString(16); }
+    const dbl = t.split('::');
+    if (dbl.length > 2) return null;
+    const head = dbl[0] ? dbl[0].split(':') : [], tail = dbl.length === 2 && dbl[1] ? dbl[1].split(':') : [];
+    const miss = 8 - head.length - tail.length;
+    if (dbl.length === 1 ? miss !== 0 : miss < 1) return null;
+    const groups = head.concat(Array(dbl.length === 2 ? miss : 0).fill('0'), tail);
+    if (groups.length !== 8 || groups.some(g => !/^[0-9a-f]{1,4}$/i.test(g))) return null;
+    return groups.reduce((a, g) => (a << 16n) | BigInt(parseInt(g, 16)), 0n);
+  };
+  const inNet6 = (ip, net, len) => ip !== null && net !== null && len !== null && (len === 0 || (ip >> BigInt(128 - len)) === (net >> BigInt(128 - len)));
+  const parseDst6 = d => {
+    const m = String(d || '').trim().match(/^([^/\s]+)\/(\d{1,3})$/);
+    const net = m ? ip6Big(m[1]) : null;
+    return net === null || +m[2] > 128 ? null : { net, len: +m[2] };
+  };
+  const LINK_LOCAL6 = ip6Big('fe80::');
+  const isLinkLocal6 = n => inNet6(n, LINK_LOCAL6, 10);
+  // 位址家族：4、6，或 0（無效）
+  const famOf = s => ipInt(s) !== null ? 4 : ip6Big(s) !== null ? 6 : 0;
+  const addrOf = (s, f) => f === 6 ? ip6Big(s) : ipInt(s);
+  const inNetF = (f, ip, net, len) => f === 6 ? inNet6(ip, net, len) : inNet(ip, net, len);
+  const parseDstF = (f, d) => f === 6 ? parseDst6(d) : parseDst(d);
+  // 介面的位址清單（主要＋次要），遮罩可解析者；f＝6 時讀 ip6s（沒有時讀單一 ip6），link-local 不算
+  function ifaceAddrs(i, f) {
+    if (f === 6) return ((i.ip6s && i.ip6s.length) ? i.ip6s : (i.ip6 && i.ip6 !== '-' ? [i.ip6] : []))
+      .map(a => parseDst6(a)).filter(a => a && !isLinkLocal6(a.net)).map(a => ({ ip: a.net, len: a.len }));
     return [{ ip: i.ip, mask: i.mask }].concat(i.secondaryIps || [])
       .map(a => ({ ip: ipInt(a && a.ip), len: maskLen(a && a.mask) }))
       .filter(a => a.ip !== null && a.len !== null);
   }
   function ifaceByIp(parsed, ip) {
-    const n = ipInt(ip);
-    if (n === null) return null;
-    return (parsed.interfaces || []).find(i => ifaceAddrs(i).some(a => a.ip === n)) || null;
+    const f = famOf(ip), n = addrOf(ip, f);
+    if (!f || n === null) return null;
+    return (parsed.interfaces || []).find(i => ifaceAddrs(i, f).some(a => a.ip === n)) || null;
   }
   function ifaceByName(parsed, name) {
     const n = String(name || '').trim().toLowerCase();
@@ -57,8 +88,9 @@ const FwPath = (function () {
   // vdom（選填）：只看該 VDOM 的路由與介面（FortiGate 多 VDOM）。
   // pasted（選填）：使用者貼上的路由表（parseRouteTable() 的 routes），有的話取代設定檔內的路由，介面直連網段仍保留
   function lookupRoute(parsed, dst, vdom, pasted) {
-    const d = ipInt(dst);
-    if (d === null) return null;
+    const f = famOf(dst), d = addrOf(dst, f);
+    if (!f || d === null) return null;
+    const full = f === 6 ? 128 : 32;
     const inV = x => !vdom || !x._vdom || x._vdom === vdom;
     let best = null;
     const consider = (len, cand) => {
@@ -69,36 +101,42 @@ const FwPath = (function () {
       }
       best = Object.assign({ len }, cand);
     };
-    (parsed.interfaces || []).filter(inV).forEach(i => ifaceAddrs(i).forEach(a => {
-      if (a.len < 32 && inNet(d, a.ip, a.len)) consider(a.len, { connected: true, iface: i, gateway: '', route: null });
+    (parsed.interfaces || []).filter(inV).forEach(i => ifaceAddrs(i, f).forEach(a => {
+      if (a.len < full && inNetF(f, d, a.ip, a.len)) consider(a.len, { connected: true, iface: i, gateway: '', route: null });
     }));
-    const list = pasted ? pasted.filter(r => ['static', 'default', 'connected', 'dynamic', 'blackhole'].includes(r.type))
+    // IPv6：貼上的路由表不支援（只取 IPv4 行），一律用設定檔的 routes6 與 routes 中目的為 IPv6 的項目（FortiGate static6、Juniper／VyOS／TNSR）
+    const list = f === 6 ? (parsed.routes || []).filter(r => /:/.test(String(r.dst || ''))).concat(parsed.routes6 || [])
+        .filter(r => inV(r) && ['static', 'default', 'static6', 'connected'].includes(r.type) && r.status !== 'disable')
+      : pasted ? pasted.filter(r => ['static', 'default', 'connected', 'dynamic', 'blackhole'].includes(r.type))
       : (parsed.routes || []).filter(r => inV(r) && ['static', 'default', 'connected'].includes(r.type) && r.status !== 'disable');
+    const usePasted = !!pasted && f === 4;
     list.forEach(r => {
-      const p = parseDst(r.dst);
-      if (!p || !inNet(d, p.net, p.len)) return;
-      const bh = isBlackhole(r), conn = !!pasted && r.type === 'connected';
-      consider(p.len, { connected: conn, blackhole: bh, iface: null, gateway: !bh && r.gateway && r.gateway !== '-' ? r.gateway : '', route: r, pasted: !!pasted });
+      const p = parseDstF(f, r.dst);
+      if (!p || !inNetF(f, d, p.net, p.len)) return;
+      const bh = isBlackhole(r), conn = usePasted && r.type === 'connected';
+      consider(p.len, { connected: conn, blackhole: bh, iface: null, gateway: !bh && r.gateway && r.gateway !== '-' ? r.gateway : '', route: r, pasted: usePasted });
     });
     if (best && best.route && !best.blackhole) {
-      best.iface = egressIface(parsed, best.route, vdom);
+      best.iface = egressIface(parsed, best.route, vdom, f);
       // 貼上的路由表的介面名稱在設定檔找不到時（例如路由表顯示 Vlan40、設定檔沒有），以名稱建立暫代的介面，讓規則比對仍可用名稱
       if (!best.iface && best.route.device && best.route.device !== '-') best.iface = { name: best.route.device, _pseudo: true };
     }
     return best;
   }
   // 路由的出口介面：route.device 對應介面名稱或 ASA nameif；沒有時用下一跳所在的直連網段
-  function egressIface(parsed, route, vdom) {
+  function egressIface(parsed, route, vdom, f) {
     const ifs = (parsed.interfaces || []).filter(i => !vdom || !i._vdom || i._vdom === vdom);
-    const dev = String((route && route.device) || '').trim().toLowerCase();
+    // IPv6 link-local 下一跳常寫成「位址%介面」（MikroTik），沒有 device 時取 % 後的介面名稱
+    const zone = (String((route && route.gateway) || '').match(/%(\S+)$/) || [])[1] || '';
+    const dev = String((route && route.device && route.device !== '-' ? route.device : zone) || '').trim().toLowerCase();
     if (dev && dev !== '-') {
       const byName = ifs.find(i => String(i.name || '').toLowerCase() === dev || String(i.nameif || '').toLowerCase() === dev);
       if (byName) return byName;
     }
-    const g = ipInt(route && route.gateway);
+    const fam = f === 6 ? 6 : 4, g = addrOf(route && route.gateway, fam);
     if (g === null) return null;
     let best = null, bl = -1;
-    ifs.forEach(i => ifaceAddrs(i).forEach(a => { if (a.len > bl && inNet(g, a.ip, a.len)) { best = i; bl = a.len; } }));
+    ifs.forEach(i => ifaceAddrs(i, fam).forEach(a => { if (a.len > bl && inNetF(fam, g, a.ip, a.len)) { best = i; bl = a.len; } }));
     return best;
   }
   // 規則比對用的介面名稱：規則可能以介面、區域（Juniper／Palo Alto／H3C）或 nameif（ASA）表示。
@@ -117,8 +155,9 @@ const FwPath = (function () {
   const natOn = p => !!p && /^(enable|enabled|yes|true)$/i.test(String(p.nat || ''));
   // 起點設備：直連網段包含來源位址的第一台
   function findStart(devices, src) {
-    const s = ipInt(src);
-    return devices.findIndex(d => (d.parsed.interfaces || []).some(i => ifaceAddrs(i).some(a => a.len < 32 && inNet(s, a.ip, a.len))));
+    const f = famOf(src), s = addrOf(src, f), full = f === 6 ? 128 : 32;
+    if (!f || s === null) return -1;
+    return devices.findIndex(d => (d.parsed.interfaces || []).some(i => ifaceAddrs(i, f).some(a => a.len < full && inNetF(f, s, a.ip, a.len))));
   }
 
   // ── 貼上的路由表（2026-10-23，XN7 第二階段）──────────────────────────────
@@ -530,7 +569,9 @@ const FwPath = (function () {
   // opts：{links（parseLinkMap() 的 links，索引對應 devices）}
   // 回傳 {error} 或 {start, hops:[…], result:{kind, …}}；kind：reached｜reachedDevice｜denied｜noRoute｜blackhole｜left｜loop｜unknown
   function trace(devices, q, opts) {
-    if (ipInt(q.src) === null || ipInt(q.dst) === null) return { error: 'invalid_ip' };
+    // 來源與目的須同一位址家族（XN143：都是 IPv6 時走 IPv6 分支）
+    const fam = famOf(q.src);
+    if (!fam || famOf(q.dst) !== fam) return { error: 'invalid_ip' };
     let cur = q.start !== undefined && q.start !== null && q.start !== '' ? +q.start : findStart(devices, q.src);
     if (!(cur >= 0 && cur < devices.length)) return { error: 'no_start' };
     const links = (opts && opts.links) || [];
@@ -570,7 +611,8 @@ const FwPath = (function () {
       if (hop.action === 'unknown') return done('unknown', { device: dev.name, rule: hop.rule });
       // 來源 NAT：支援的廠牌換算轉換後位址，之後各跳以新來源比對；其餘廠牌只在規則啟用 NAT 時標記
       hop.snat = false; hop.snatTo = '';
-      if (snatSupported(parsed.vendor)) {
+      // IPv6 不換算來源 NAT（NAT66 少見且各家寫法不同），規則啟用 NAT 時只標記
+      if (fam === 4 && snatSupported(parsed.vendor)) {
         const sn = findSourceNat(parsed, { src, dst: fwdDst, origDst: dst, ingress, egress: route.iface, rule: res.matched });
         if (sn && !sn.exempt) {
           hop.snat = true; hop.snatTo = sn.toIp; hop.snatHow = sn.how; hop.snatName = sn.name || ''; hop.snatNote = sn.note || '';
@@ -720,5 +762,5 @@ const FwPath = (function () {
     });
   }
 
-  return { trace, lookupRoute, egressIface, intfLabel, ifaceByIp, findStart, parseRouteTable, parseLinkMap, findSourceNat, snatSupported, mismatchHints, policyDstLocal, mgmtSourceCheck, MAX_HOPS };
+  return { trace, lookupRoute, egressIface, intfLabel, ifaceByIp, findStart, parseRouteTable, parseLinkMap, findSourceNat, snatSupported, mismatchHints, policyDstLocal, mgmtSourceCheck, ip6Big, MAX_HOPS };
 })();

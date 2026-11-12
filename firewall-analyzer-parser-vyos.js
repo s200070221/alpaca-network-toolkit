@@ -85,7 +85,7 @@ const VyOSParser = (() => {
     const [ip, mask] = v4[0] ? cidrSplit(v4[0]) : ['-', '-'];
     const desc = val(node, 'description') || '';
     return {
-      name, ip, mask, ip6: v6[0] || '-', secondaryIps: v4.slice(1).map(a => { const [i, m] = cidrSplit(a); return { ip: i, mask: m }; }),
+      name, ip, mask, ip6: v6[0] || '-', ip6s: v6, secondaryIps: v4.slice(1).map(a => { const [i, m] = cidrSplit(a); return { ip: i, mask: m }; }),
       type: type === 'loopback' || type === 'dummy' ? 'loopback' : type === 'ethernet' ? 'physical' : type === 'bonding' ? 'aggregate' : type === 'pppoe' ? 'pppoe' : type === 'bridge' ? 'bridge' : 'tunnel',
       vlanId: vlanId || '-', alias: name, desc, status: hasFlag(node, 'disable') ? 'down' : 'up',
       mtu: val(node, 'mtu') || '-', speed: val(node, 'speed') || '-', mode: vals(node, 'address').includes('dhcp') ? 'dhcp' : addrs.length ? 'static' : '-',

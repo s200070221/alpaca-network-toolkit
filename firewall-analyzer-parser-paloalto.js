@@ -322,6 +322,9 @@ const PaloAltoParser = (() => {
           desc: setVal(text, `${prefix} comment`) || '-',
           allowaccess: setVal(text, `${prefix} layer3 interface-management-profile`) || setVal(text, `${prefix} interface-management-profile`) || '-',
           interface:'-', gateway:'-',
+          // 介面 IPv6 位址（XN143，多台路徑查詢用）：set network interface … layer3 ipv6 address <位址/長度> …
+          ip6s: [...String(text).matchAll(new RegExp('^set\\s+network\\s+interface\\s+' + type.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s+' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s+(?:layer3\\s+)?ipv6\\s+address\\s+(\\S+)', 'gim'))]
+            .map(m => m[1]).filter((a, i, arr) => a.includes(':') && arr.indexOf(a) === i),
         });
       });
     }
@@ -542,6 +545,23 @@ const PaloAltoParser = (() => {
       }
     }
     return routes;
+  }
+
+  // IPv6 靜態路由（XN143，多台路徑查詢用；set 格式）：routing-table ipv6 static-route 名稱 destination／nexthop ipv6-address／interface，
+  // 欄位名稱同 IPv4 版（範例 paloalto_complex_test.conf 的 nexthop ipv6-address）；XML 格式沒有範例不解析
+  function parseRoutes6(text) {
+    const out = [], seen = new Set();
+    if (isXml(text)) return out;
+    for (const m of String(text).matchAll(/^set\s+network\s+virtual-router\s+(\S+)\s+routing-table\s+ipv6\s+static-route\s+(\S+)\s+/gim)) {
+      const key = m[1] + '|' + m[2];
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const gv = k => setVal(text, `network virtual-router ${m[1]} routing-table ipv6 static-route ${m[2]} ${k}`);
+      out.push({ type: 'static6', id: m[2], dst: gv('destination') || '-', gateway: gv('nexthop ipv6-address') || '-', device: gv('interface') || '-',
+        distance: gv('admin-dist') || '10', priority: '0', weight: '0', comment: '-', status: gv('disabled') === 'yes' ? 'disable' : 'enable',
+        blackhole: gv('nexthop-type') === 'discard' ? 'enable' : 'disable', vrf: m[1] });
+    }
+    return out;
   }
 
   // ─── VPN ─────────────────────────────────────────────────────────────────
@@ -1370,6 +1390,7 @@ const PaloAltoParser = (() => {
       interfaces,
       policies,
       routes,
+      routes6: parseRoutes6(text),
       vpn,
       addresses,
       services,

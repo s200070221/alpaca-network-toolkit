@@ -225,6 +225,9 @@ const JuniperParser = (() => {
       const mtu  = val(ifNode, 'mtu') || '1500';
       const link = ifNode._values.includes('disable') ? 'down' : 'up';
 
+      // 介面 IPv6 位址（XN143，多台路徑查詢用）：family inet6 的 address（值或帶屬性區塊的子節點）
+      const inet6Addrs = node => { const n = path(node, ['family inet6']); if (!n) return [];
+        return [...(n._values || []), ...Object.keys(n._children || {})].filter(v => /^address\s/.test(v)).map(v => v.replace(/^address\s+/, '').split(/\s/)[0]).filter(a => a.includes(':')); };
       // Process units
       const hasUnits = Object.keys(ifNode._children).some(k => k.startsWith('unit '));
       if (hasUnits) {
@@ -249,7 +252,7 @@ const JuniperParser = (() => {
           ifaces.push({
             name: unitName, alias: udesc || '-',
             ip: ipAddr, mask,
-            secondaryIps,
+            secondaryIps, ip6s: inet6Addrs(unode),
             type: vlanId !== '-' ? 'vlan' : ifType,
             vlanId, vdom: zone || '-',
             role: zone ? mapZoneRole(zone) : guessRole(ifName),
@@ -271,7 +274,7 @@ const JuniperParser = (() => {
         if (ip4) { const p = ip4.split('/'); ipAddr=p[0]; if(p[1])mask=prefixToMask(parseInt(p[1])); }
         ifaces.push({
           name: ifName, alias: desc||'-', ip: ipAddr, mask,
-          secondaryIps,
+          secondaryIps, ip6s: inet6Addrs(ifNode),
           type: ifType, vlanId: '-', vdom: zone||'-',
           role: zone ? mapZoneRole(zone) : guessRole(ifName),
           status: link, speed: val(ifNode,'speed')||'-', mtu,

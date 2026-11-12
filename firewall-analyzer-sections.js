@@ -649,8 +649,8 @@ function buildPathChainHtml(){
           <div id="pc-links-msg" style="font-size:11px;margin-top:4px"></div>
         </details>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">
-          <input id="pc-src" placeholder="${tr('pc.src_ph')}" style="${inp};width:150px">
-          <input id="pc-dst" placeholder="${tr('pc.dst_ph')}" style="${inp};width:150px">
+          <input id="pc-src" placeholder="${tr('pc.src_ph')}" style="${inp};width:190px">
+          <input id="pc-dst" placeholder="${tr('pc.dst_ph')}" style="${inp};width:190px">
           <select id="pc-proto" style="${inp}"><option value="any">any</option><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option></select>
           <input id="pc-port" placeholder="${tr('pc.port_ph')}" style="${inp};width:80px">
           <select id="pc-start" style="${inp}" onchange="_pcSetStart(this.value)"></select>

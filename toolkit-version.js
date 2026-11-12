@@ -3,8 +3,23 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.12';
+  const TOOLKIT_VERSION = '2026.11.12.1';
   const CHANGELOG = [
+    {
+      version: '2026.11.12.1',
+      items: {
+        zhTW: [
+          '多台路徑查詢支援 IPv6：依各台設定檔的介面 IPv6 位址與 IPv6 靜態路由串接（FortiGate、Cisco ASA、Palo Alto、Juniper SRX、MikroTik、VyOS、EdgeRouter、TNSR）',
+          'Cisco IOS 路由器的 Zone-Based Firewall 加入 self zone（到路由器本身的流量），管理介面曝險不再誤報被 self zone 擋掉的服務',
+          '防火牆與交換器分析的韌體卡片可貼上 show version 類輸出，自動讀出完整版本並比對已知漏洞',
+        ],
+        en: [
+          'Multi-device path tracing supports IPv6, chaining devices by interface IPv6 addresses and IPv6 static routes (FortiGate, Cisco ASA, Palo Alto, Juniper SRX, MikroTik, VyOS, EdgeRouter, TNSR)',
+          'Cisco IOS router Zone-Based Firewall now evaluates the self zone (traffic to the router), so management services blocked by self-zone policy are no longer reported as exposed',
+          'Firmware cards in the firewall and switch analyzers accept pasted show version output and read the full version for vulnerability matching',
+        ],
+      },
+    },
     {
       version: '2026.11.12',
       items: {

@@ -329,6 +329,8 @@ const FortigateParser = (() => {
         name: e.name, alias: gv(t, 'alias') || '-',
         ip: iparts[0] || '-', mask: iparts[1] || '-',
         secondaryIps,
+        // 介面 IPv6 位址（XN143，多台路徑查詢用）：config ipv6 內的 set ip6-address，::/0 為未設定
+        ip6s: [...t.matchAll(/^\s*set ip6-address\s+(\S+)/gm)].map(m => m[1]).filter(a => a.includes(':') && !/^::\/0$/.test(a)),
         type: gv(t, 'type') || 'physical',
         vlanId: gv(t, 'vlanid') || '-',
         vdom: explicitVdom,

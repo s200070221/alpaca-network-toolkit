@@ -523,6 +523,28 @@ const MikrotikParser = (() => {
     return routes;
   }
 
+  // IPv6（XN143，多台路徑查詢用）：/ipv6 address 依介面收進 ip6s；/ipv6 route 收進 routes6（形狀同 routes）。
+  // 下一跳可能寫成「位址%介面」（link-local），保留原文由路徑查詢處理
+  function attachIpv6Addrs(sections, interfaces) {
+    const by = Object.create(null);  // 介面名稱來自設定檔
+    (sections['/ipv6 address'] || []).forEach(line => {
+      const p = parseLine(line);
+      if (p['interface'] && /:/.test(p['address'] || '') && p['disabled'] !== 'yes') (by[p['interface']] = by[p['interface']] || []).push(p['address']);
+    });
+    interfaces.forEach(i => { i.ip6s = by[i.name] || []; });
+  }
+  function parseRoutes6(sections) {
+    let seq = 1;
+    return (sections['/ipv6 route'] || []).map(line => {
+      const p = parseLine(line);
+      const dst = p['dst-address'] || '::/0', gw = p['gateway'] || '-';
+      const bh = !p['gateway'] || p['type'] === 'blackhole' || /\bblackhole\b/.test(line);
+      return { type: dst === '::/0' ? 'default' : 'static', id: String(seq++), dst, gateway: bh ? 'blackhole' : gw,
+        device: p['interface'] || (!bh && !/:/.test(gw) ? gw : '-'), distance: p['distance'] || '1', priority: p['distance'] || '1',
+        blackhole: bh ? 'enable' : 'disable', vrf: p['routing-table'] || 'main', status: p['disabled'] === 'yes' ? 'disable' : 'enable', comment: p['comment'] || '', _vdom: '' };
+    });
+  }
+
   // ── HA/VRRP ─────────────────────────────────────────────────────────────────
   // 已查證 MikroTik RouterOS 官方文件（help.mikrotik.com）真實語法：
   // /interface vrrp 底下 add 一行含 name/interface/vrid/priority 等參數；虛擬 IP 另外在
@@ -986,12 +1008,14 @@ const MikrotikParser = (() => {
   function parse(text) {
     const sections = splitSections(text);
     const interfaces = parseInterfaces(sections);
+    attachIpv6Addrs(sections, interfaces);
     return {
       vendor:     'MikroTik',
       deviceInfo: parseDeviceInfo(text),
       interfaces,
       ...splitMtRules(parsePolicies(sections, buildMikrotikAddrTypeMap(sections), interfaces)),
       routes:     parseRoutes(sections),
+      routes6:    parseRoutes6(sections),
       ha:         parseMikrotikHa(sections),
       nat:        parseNAT(sections),
       vpn:        parseVPN(sections),

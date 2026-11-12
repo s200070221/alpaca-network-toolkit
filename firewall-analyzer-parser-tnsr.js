@@ -80,6 +80,8 @@ const TNSRParser = (() => {
       out.push({
         name, ip: ips[0] ? ips[0][1] : '-', mask: ips[0] ? lenToMask(ips[0][2]) : '-',
         secondaryIps: ips.slice(1).map(m => ({ ip: m[1], mask: lenToMask(m[2]) })),
+        // 介面 IPv6 位址（XN143，多台路徑查詢用）：ipv6 address <位址/長度>
+        ip6s: lines.map(l => (l.match(/^ipv6 address\s+([0-9A-Fa-f:.]+\/\d+)/) || [])[1]).filter(Boolean),
         type: /^loop/i.test(name) ? 'loopback' : /^BondEthernet\d+$/i.test(name) ? 'aggregate' : vlan !== '-' ? 'vlan' : 'physical',
         vlanId: vlan, alias: name, desc: kidVal(n, /^description\s+(.+)/) || '',
         status: lines.includes('enable') ? 'up' : 'down',
