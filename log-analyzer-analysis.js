@@ -383,6 +383,8 @@ function classifyByKeyword(evt) {
   if (evt.netVendor === 'paloalto' && evt.fields && evt.fields.logtype === 'THREAT' && PAN_IDS_SUBTYPES.has(evt.fields.subtype)) return /^(?:deny|drop|reset|block|sinkhole)/i.test(evt.fields.action || '') ? 'denyBlock' : 'attack';
   // GlobalProtect 登入失敗（第十五輪 VC）
   if (evt.netVendor === 'paloalto' && evt.fields && evt.fields.logtype === 'GLOBALPROTECT' && /^fail/i.test(evt.fields.status || '')) return 'authFail';
+  // PAN-OS SYSTEM 認證失敗（XN133）：管理者與使用者認證都算認證失敗
+  if (evt.netVendor === 'paloalto' && evt.fields && evt.fields.logtype === 'SYSTEM' && evt.fields.panAuth === 'fail') return 'authFail';
   // SonicWall／Sophos（第十四輪 OH）
   if ((evt.netVendor === 'sonicwall' || evt.netVendor === 'sophos') && evt.fields && evt.fields.action === 'deny') return 'denyBlock';
   // Veeam（XN112）：MFA／權杖認證失敗歸 authFail、惡意活動歸 attack，其他 Veeam 事件為 other

@@ -469,7 +469,8 @@ function anonymizeNetFields(clone, opts, ipsDone) {
     const cols = splitCSVSimple(clone.msg || '');
     // 帳號欄位依類型：TRAFFIC／THREAT 12、13；GLOBALPROTECT 12（另 14 為電腦名稱）；USERID 9（第十五輪 VC）
     const lt = cols[3], hip = /^HIP-?MATCH$/.test(lt || '');
-    const userCols = lt === 'USERID' ? [9] : (lt === 'GLOBALPROTECT' ? [12] : (hip ? [7] : (lt === 'CONFIG' ? [10] : [12, 13])));
+    // SYSTEM 的 12、13 欄是模組與嚴重度，不是帳號（XN133）
+    const userCols = lt === 'SYSTEM' ? [] : lt === 'USERID' ? [9] : (lt === 'GLOBALPROTECT' ? [12] : (hip ? [7] : (lt === 'CONFIG' ? [10] : [12, 13])));
     userCols.forEach(i => { if (cols[i]) cols[i] = anonUser(cols[i]); });
     // CONFIG 路徑為管理者帳號（mgt-config users <帳號>，XN41）：路徑、變更前後內容中的帳號一併替換
     const pm = lt === 'CONFIG' && String(cols[13] || '').match(/(?:^|\s)mgt-config\s+users\s+(\S+)/);
@@ -483,7 +484,20 @@ function anonymizeNetFields(clone, opts, ipsDone) {
     if (machineCol >= 0 && cols[machineCol]) { cols[machineCol] = anonHostname(cols[machineCol]); if (f.machine) f.machine = cols[machineCol]; }
     const devCol = { TRAFFIC: 52, THREAT: 59, GLOBALPROTECT: 33, USERID: 25 }[lt] || (hip ? 24 : -1);
     if (devCol >= 0 && cols[devCol]) { cols[devCol] = anonHostname(cols[devCol]); if (f.devname) f.devname = cols[devCol]; }
-    if (f.user) f.user = cols[userCols[0]];
+    // SYSTEM 認證事件（XN133）：描述內的帳號換假帳號，領域、EAP 身分、認證設定檔、伺服器、存取網域與回覆訊息遮蔽（admin role 與 vsys 保留）；
+    // 物件欄（9）不是位址時遮蔽，設備名稱欄（22）換假名
+    if (lt === 'SYSTEM') {
+      if (cols[9] && !/^[0-9A-Fa-f:.]+$/.test(cols[9])) cols[9] = 'REDACTED';
+      if (cols[22]) cols[22] = anonHostname(cols[22]);
+      if (cols[14] && (f.panAuth || /^Admin \S+/.test(cols[14]))) {
+        cols[14] = cols[14].replace(/(for user ')([^']*)(')/, (m, a, u, z) => a + (u ? anonUser(u) : u) + z)
+          .replace(/^(Admin )(\S+?)('s account| failed| account)/, (m, a, u, z) => a + anonUser(u) + z)
+          .replace(/\b(realm|EAP outer identity|inner identity|auth profile|server profile|server address|access domain|reply message) '[^']*'?/g, "$1 'REDACTED'");
+        const um = cols[14].match(/for user '([^']*)'/) || cols[14].match(/^Admin (\S+?)(?:'s account| failed)/);
+        if (f.user && um) f.user = um[1];
+        if (f.authProfile) f.authProfile = 'REDACTED';
+      }
+    } else if (f.user) f.user = cols[userCols[0]];
     if (lt === 'THREAT' && f.url !== undefined) f.url = cols[31];
     clone.msg = cols.map(v => /[",]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v).join(',');
     return;

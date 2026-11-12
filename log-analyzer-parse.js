@@ -963,6 +963,31 @@ function parsePaloAltoCSV(csv) {
     if (f[10]) g.user = f[10];
     return g;
   }
+  // SYSTEM（XN133）：4 子類型、7 vsys、8 事件、9 物件、12 模組、13 嚴重度、14 描述（欄位位置依 splunk-connect-for-syslog 的測試行）。
+  // 認證事件的描述依 Palo Alto 官方 System Log Reference：auth-success「authenticated for user '帳號'. …, admin role '角色', … From: 來源.」、
+  // auth-fail「failed authenticated for user '帳號'. … From: 來源.」（實機另見 failed authentication 的寫法，兩者都收）。
+  // 描述帶 admin role 才是登入防火牆管理介面；沒有角色的是 GlobalProtect／Authentication Portal 等使用者認證
+  if (f[3] === 'SYSTEM' && f.length >= 15) {
+    const g = { logtype: 'SYSTEM', subtype: f[4], vsys: f[7], eventid: f[8] };
+    if (f[4] === 'auth' && (f[8] === 'auth-success' || f[8] === 'auth-fail')) {
+      const d = String(f[14] || '');
+      // 「Admin 帳號 failed to authenticate N times…」「Admin 帳號's account is being disabled…」：帳號鎖定通知，只記帳號
+      const lock = d.match(/^Admin (\S+?)(?:'s account is being disabled| failed to authenticate \d+ times)/);
+      if (lock) g.user = lock[1];
+      const m = d.match(/^\s*(failed authenticat(?:ed|ion)|authenticated) for user '([^']*)'/);
+      if (m) {
+        g.panAuth = m[1] === 'authenticated' ? 'ok' : 'fail';
+        if (m[2]) g.user = m[2];
+        const from = d.match(/\bFrom: ([0-9A-Fa-f:.]+?)\.?\s*$/);
+        if (from && /[.:]/.test(from[1])) g.srcip = from[1];
+        const role = d.match(/\badmin role '([^']+)'/);
+        if (role) g.adminRole = role[1];
+        const ap = d.match(/\bauth profile '([^']+)'/);
+        if (ap) g.authProfile = ap[1];
+      }
+    }
+    return g;
+  }
   if (f.length < 31 || !/^(TRAFFIC|THREAT)$/.test(f[3])) return null;
   const fields = { logtype: f[3], subtype: f[4], srcip: f[7], dstip: f[8], rule: f[11], app: f[14],
     srczone: f[16], dstzone: f[17], inintf: f[18], outintf: f[19], srcport: f[24], dstport: f[25], proto: f[29], action: f[30] };
@@ -1041,7 +1066,8 @@ function parsePanCSVLine(line, lineNo) {
   const fields = parsePaloAltoCSV(line) || { logtype: f[3], subtype: f[4] };
   const t = new Date(/T/.test(f[1] || '') ? f[1] : String(f[1]).replace(/\//g, '-').replace(' ', 'T'));
   return {
-    format: 'pancsv', raw: line, lineNo, netFields: !!(fields.srcip || fields.user), netVendor: 'paloalto',
+    // SYSTEM 沒有來源或帳號時也走廠牌去識別化（設備名稱欄與描述內的管理者帳號，XN133）
+    format: 'pancsv', raw: line, lineNo, netFields: !!(fields.srcip || fields.user) || fields.logtype === 'SYSTEM', netVendor: 'paloalto',
     timestamp: isNaN(t.getTime()) ? null : t, timestampRaw: f[1] || '',
     host: '', appName: f[3] || '', procid: '', msgid: f[4] || '',
     severityRaw: '', severityNorm: 'Info', facility: null, facilityAuth: false,
@@ -1788,6 +1814,9 @@ function adminLoginOf(evt) {
     if (f.loginaction === 'logged in') return { vendor: 'mikrotik', user: f.user || '', src: f.srcip, ok: true, method: f.method };
     if (!f.loginaction && /\blogin failure for user\b/.test(evt.msg || evt.raw || '')) return { vendor: 'mikrotik', user: f.user || '', src: f.srcip, ok: false, method: f.method };
   }
+  // PAN-OS（XN133）：SYSTEM auth-success／auth-fail 且描述帶 admin role（登入防火牆管理介面）
+  if (evt.netVendor === 'paloalto' && f.logtype === 'SYSTEM' && f.panAuth && f.adminRole && f.srcip)
+    return { vendor: 'paloalto', user: f.user || '', src: f.srcip, ok: f.panAuth === 'ok', method: f.adminRole };
   if (evt.format === 'asa' && (evt.msgid === '605004' || evt.msgid === '605005') && f.auth && f.srcip) {
     return { vendor: 'asa', user: f.user || '', src: f.srcip, ok: f.auth === 'success', method: f.service || '' };
   }
