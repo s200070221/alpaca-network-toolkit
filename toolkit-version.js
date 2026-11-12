@@ -3,8 +3,25 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.11';
+  const TOOLKIT_VERSION = '2026.11.12';
   const CHANGELOG = [
+    {
+      version: '2026.11.12',
+      items: {
+        zhTW: [
+          '防火牆分析支援 Cisco IOS／IOS-XE 路由器（介面 ACL、Zone-Based Firewall、NAT、路由與管理服務）；多台路徑查詢的來源 NAT 加入 Cisco IOS、Palo Alto 與 Juniper SRX；管理介面有來源限制時不再列為對外曝險',
+          'log 分析可把可疑連線送到防火牆分析，依設定判斷放行或拒絕並標在問題清單與攻擊鏈；新增 RouterOS 入侵後行為與高風險服務埠偵測、Aruba ClearPass、PAN-OS 管理介面登入、Okta MFA 推播疲勞',
+          'log 分析版面調整：分析前隱藏結果卡片、結果列固定在上方並有區段導覽、匯出收成一個選單',
+          '交換器分析支援 Aruba CX 的介面錯誤計數器與光模組 DOM',
+        ],
+        en: [
+          'Firewall analyzer supports Cisco IOS/IOS-XE routers (interface ACLs, Zone-Based Firewall, NAT, routes and management services); multi-device path source NAT adds Cisco IOS, Palo Alto and Juniper SRX; management services restricted by source are no longer listed as exposed',
+          'Log analyzer can send suspicious connections to the firewall analyzer and mark whether the config allows or denies them in the issue list and attack chains; new RouterOS post-compromise and risky service port detections, Aruba ClearPass, PAN-OS admin logins and Okta MFA push fatigue',
+          'Log analyzer layout: result cards hidden before analysis, sticky result bar with section navigation, exports grouped in one menu',
+          'Switch analyzer supports Aruba CX interface error counters and optics DOM',
+        ],
+      },
+    },
     {
       version: '2026.11.11',
       items: {
