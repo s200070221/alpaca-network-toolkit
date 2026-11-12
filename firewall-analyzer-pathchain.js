@@ -377,7 +377,7 @@ const FwPath = (function () {
   // Linux netfilter（SNAT／MASQUERADE）、MikroTik（srcnat）。回傳 null（不做來源 NAT）、
   // {exempt:true}（命中免轉換規則）或 {toIp, how, name, note}；note：range（位址池取第一個）｜noIp（出口介面沒有位址）｜
   // cond（比對條件無法判斷，toIp 為空）
-  const SNAT_VENDOR_RE = /^(FortiGate|Cisco ASA|Cisco FTD|Linux netfilter|MikroTik)$/;
+  const SNAT_VENDOR_RE = /^(FortiGate|Cisco ASA|Cisco FTD|Linux netfilter|MikroTik|PaloAlto|Juniper)$/;
   const snatSupported = vendor => String(vendor || '').split(' + ').every(v => SNAT_VENDOR_RE.test(v.trim()));
   // 位址條件（any、單一位址、網段、範圍或位址物件）是否包含 ip；無法判斷回傳 null
   function addrHas(v, ip, addrs) {
@@ -431,6 +431,43 @@ const FwPath = (function () {
         if (single) return { toIp: single, how: 'nat', name: n.name || `NAT #${n.id}`, note: '' };
         const o = addrs.find(a => a.name === ts), f = firstIp(o ? o.subnet : ts);
         return { toIp: f, how: 'nat', name: n.name || `NAT #${n.id}`, note: f ? 'range' : 'noIp' };
+      }
+      return null;
+    }
+    // Palo Alto／Juniper SRX（XN138）：NAT 規則依序比對「進入區域→出口區域、轉換前的來源與目的位址」，第一筆符合者生效。
+    // parser 在 NAT 項目附 snat（比對條件與轉換方式）。位址條件無法判斷（群組、FQDN 等）＝可能轉換、位址不確定；
+    // 轉換成介面位址或單一位址才換算，多個位址或範圍取第一個並標 range
+    if (/^(PaloAlto|Juniper)$/.test(vendor)) {
+      const pa = vendor === 'PaloAlto';
+      const zoneOf = i => String((i && (pa ? i.zone : i._vdom)) || '').toLowerCase();
+      const inZone = (list, i) => { const l = (list || []).map(x => String(x).toLowerCase()); return !l.length || l.includes('any') || (!!zoneOf(i) && l.includes(zoneOf(i))); };
+      const inIf = (list, i) => (list || []).some(x => sameIf(x, i));
+      const anyHas = (list, ip) => { if (!list || !list.length) return true; let unk = false; for (const a of list) { const h = addrHas(a, ip, addrs); if (h === true) return true; if (h === null) unk = true; } return unk ? null : false; };
+      const odst = ctx.origDst || ctx.dst;
+      for (const n of nat) {
+        const sn = n.snat;
+        if (!sn) continue;
+        const fromOk = pa ? inZone(sn.from, ctx.ingress) : ((sn.from.zones.length || sn.from.ifaces.length) ? (inZone(sn.from.zones.length ? sn.from.zones : ['-none-'], ctx.ingress) || inIf(sn.from.ifaces, ctx.ingress)) : true);
+        const toOk = pa ? inZone(sn.to, eg) : ((sn.to.zones.length || sn.to.ifaces.length) ? (inZone(sn.to.zones.length ? sn.to.zones : ['-none-'], eg) || inIf(sn.to.ifaces, eg)) : true);
+        if (!fromOk || !toOk) continue;
+        const hs = anyHas(sn.src, ctx.src), hd = anyHas(sn.dst, odst);
+        if (hs === false || hd === false) continue;
+        if (hs === null || hd === null) return { toIp: '', how: 'nat', name: n.name, note: 'cond' };
+        if (sn.kind === 'none' || sn.kind === 'off' || !sn.kind) return { exempt: true };
+        if (sn.kind === 'interface') {
+          // Palo Alto 可指定介面上的某個位址；沒指定就用該介面（或出口介面）的位址
+          const ip = pa ? firstIp(sn.ip) || ifaceIp((parsed.interfaces || []).find(i => i.name === sn.iface)) || ifaceIp(eg) : ifaceIp(eg);
+          return { toIp: ip, how: 'iface', name: n.name, note: ip ? '' : 'noIp' };
+        }
+        if (pa) {
+          const list = sn.addrs || [];
+          const one = list.length === 1 ? _natSingleIp(list[0], addrs) : '';
+          if (one) return { toIp: one, how: 'nat', name: n.name, note: '' };
+          const o = addrs.find(a => a.name === list[0]), f = firstIp(o ? o.subnet : list[0]);
+          return { toIp: f, how: 'nat', name: n.name, note: f ? 'range' : 'noIp' };
+        }
+        if (!sn.poolStart) return { toIp: '', how: 'ippool', name: sn.pool || n.name, note: 'noIp' };
+        return { toIp: sn.poolStart, how: 'ippool', name: sn.pool, note: sn.poolEnd && sn.poolEnd !== sn.poolStart ? 'range' : '' };
       }
       return null;
     }
@@ -499,7 +536,7 @@ const FwPath = (function () {
       // 來源 NAT：支援的廠牌換算轉換後位址，之後各跳以新來源比對；其餘廠牌只在規則啟用 NAT 時標記
       hop.snat = false; hop.snatTo = '';
       if (snatSupported(parsed.vendor)) {
-        const sn = findSourceNat(parsed, { src, dst: fwdDst, ingress, egress: route.iface, rule: res.matched });
+        const sn = findSourceNat(parsed, { src, dst: fwdDst, origDst: dst, ingress, egress: route.iface, rule: res.matched });
         if (sn && !sn.exempt) {
           hop.snat = true; hop.snatTo = sn.toIp; hop.snatHow = sn.how; hop.snatName = sn.name || ''; hop.snatNote = sn.note || '';
           if (sn.toIp) src = sn.toIp;

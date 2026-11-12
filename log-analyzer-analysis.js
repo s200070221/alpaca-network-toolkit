@@ -1395,6 +1395,12 @@ function mfaDenyOf(e, ci) {
   const o = e.cloudRaw || {};
   if (ci.vendor === 'entra') return String(o.resultType) === '500121';
   if (ci.vendor === 'duo') return o.result === 'denied' && /push/i.test(String(o.factor || ''));
+  // Okta（XN135，依 Elastic detection-rules 的「MFA bombing via push notifications」）：使用者拒絕推播，或推播驗證以 INVALID_CREDENTIALS 失敗
+  if (ci.vendor === 'okta') {
+    if (o.eventType === 'user.mfa.okta_verify.deny_push') return true;
+    const dd = (o.debugContext && o.debugContext.debugData) || {};
+    return o.eventType === 'user.authentication.auth_via_mfa' && dd.factor === 'OKTA_VERIFY_PUSH' && String((o.outcome || {}).reason || '') === 'INVALID_CREDENTIALS';
+  }
   return false;
 }
 // Windows NPS 同一帳號短時間內多次被拒（XN65）：NPS 記錄沒有使用者電腦的 IP（只有 AP／交換器與 MAC），
@@ -1468,10 +1474,11 @@ function detectClearPassRejects(events) {
 function detectMfaFatigue(events) {
   const byUser = new Map();
   events.forEach(e => {
-    if (!e.cloudRaw || (e.netVendor !== 'entra' && e.netVendor !== 'duo')) return;
+    if (!e.cloudRaw || (e.netVendor !== 'entra' && e.netVendor !== 'duo' && e.netVendor !== 'okta')) return;
     const ci = cloudAuthInfo(e.cloudRaw);
-    if (!ci || !ci.login || !ci.user) return;
-    const kind = mfaDenyOf(e, ci) ? 'deny' : ci.ok ? 'ok' : null;
+    if (!ci || !ci.user) return;
+    // Okta 的拒絕推播（user.mfa.okta_verify.deny_push）不是登入事件，先判斷未通過再看是否為登入成功
+    const kind = mfaDenyOf(e, ci) ? 'deny' : (ci.login && ci.ok) ? 'ok' : null;
     if (!kind) return;
     const key = ci.vendor + '|' + String(ci.user).toLowerCase();
     if (!byUser.has(key)) byUser.set(key, []);

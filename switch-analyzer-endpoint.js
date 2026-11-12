@@ -40,6 +40,8 @@ const EP_IFACE_FAMILIES = [
   [/^(m-gigabitethernet|mgmt|mge)/, 'mgmt'],
   [/^(loopback|lo)/, 'lo'],
 ];
+// Aruba CX 實體埠名稱（XN137）：1/1/1、1/1/49:1
+const EP_CX_PORT_RE = /^\d+\/\d+\/\d+(?::\d+)?$/;
 function epNormIface(s) {
   const t = String(s || '').trim().toLowerCase().replace(/\s+/g, '');
   const m = t.match(/^([a-z][a-z\-]*)(\d.*)$/);
@@ -48,6 +50,8 @@ function epNormIface(s) {
   return t;
 }
 function epIsPhysical(port) {
+  // Aruba CX 的實體埠是純數字「成員/插槽/埠[:子埠]」（XN137）
+  if (EP_CX_PORT_RE.test(String(port || '').trim())) return true;
   const fam = (epNormIface(port).match(/^([a-z]+|\d+ge)/) || [''])[0];
   return ['ge', 'xge', '25ge', '40ge', '100ge', 'fe', 'eth'].includes(fam);
 }
@@ -70,6 +74,9 @@ function epCmdKind(cmd) {
   if (/^(sh|show) int(erfaces?)? status\b/.test(c) || /^(dis|display) int(erface)? brief\b/.test(c)) return 'status';
   // 光模組 DOM（XN5）：show interfaces transceiver [detail]（Cisco IOS／Arista）／show interface transceiver details（NX-OS）
   if (/^(sh|show) int(erfaces?)? transceiver( det(ails?)?)?$/.test(c)) return 'optics';
+  // Aruba CX（XN137）：show interface [埠] dom detail、show interface 1/1/1
+  if (/^(sh|show) int(erface)?( \d+\/\d+\/\d+(:\d+)?)? dom( detail)?$/.test(c)) return 'optics';
+  if (/^(sh|show) int(erface)? \d+\/\d+\/\d+(:\d+)?$/.test(c)) return 'counters';
   // 完整介面輸出（計數器）：show interfaces／show interface（NX-OS）／display interface，可接單一介面名稱；
   // 接 trunk／description／transceiver 等其他子指令時不算
   if (/^(sh|show) int(erfaces?)?( [a-z][a-z\-]*\d[\d\/:.]*)?$/.test(c) || /^(dis|display) int(erface)?( [a-z][a-z\-]*\d[\d\/:.]*)?$/.test(c)) return 'counters';
@@ -130,7 +137,7 @@ function epParseCounterBlock(head, body) {
 function epParseCounters(lines) {
   const out = [];
   let head = null, body = [];
-  const flush = () => { if (head) out.push(epParseCounterBlock(head, body)); head = null; body = []; };
+  const flush = () => { if (head) out.push(head.cx ? epParseCxCounterBlock(head, body) : epParseCounterBlock(head, body)); head = null; body = []; };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     let m = line.match(EP_CNT_HEAD_RE);
@@ -141,10 +148,54 @@ function epParseCounters(lines) {
     if (EP_IFACE_TOKEN_RE.test(line.trim()) && line.trim() === line.replace(/\s+$/, '') && /^\s*Current state:/i.test(lines[i + 1] || '')) {
       flush(); head = { port: line.trim(), status: '' }; continue;
     }
+    // Aruba CX（XN137）：「Interface 1/1/1 is up」，區塊內容另由 epParseCxCounterBlock() 解析
+    m = line.match(EP_CX_HEAD_RE);
+    if (m) { flush(); head = { port: m[1], status: epCounterStatus(m[2]), cx: true }; continue; }
     if (head) body.push(line);
   }
   flush();
   return out;
+}
+// Aruba CX `show interface`（XN137）：格式依 ntc-templates（Apache-2.0）aruba_aoscx/show_interface 的真實輸出，兩種版面——
+//   舊版：「 Rx」「 Tx」兩段，各有「N errors  N dropped」，Rx 另有「N CRC/FCS」、Tx 另有「N collision」
+//   新版：「Statistic  RX  TX  Total」表格，列為 Packets／Dropped／Errors／CRC/FCS／Collision／Runts／Giants（不適用的欄位為 n/a）
+// Admin state is down 視為 admin-down；vlan／lag 介面一樣解析，是否列入由 epIsPhysical() 決定
+const EP_CX_HEAD_RE = /^Interface (\d+\/\d+\/\d+(?::\d+)?|lag\d+|vlan\d+) is (up|down)\b/i;
+function epParseCxCounterBlock(head, body) {
+  const c = { port: head.port, status: head.status, desc: '', duplex: '', speed: '', lastClear: '', inPkts: null, outDrops: null };
+  for (const [k] of EP_CNT_FIELDS) c[k] = null;
+  const num = v => /^\d+$/.test(v) ? Number(v) : null;
+  let sec = '', table = false;
+  for (const line of body) {
+    const t = line.trim();
+    let m;
+    if ((m = t.match(/^Description:\s*(.*)$/))) { c.desc = m[1].trim(); continue; }
+    if (/^Admin state is down\b/i.test(t)) { c.status = 'admin-down'; continue; }
+    if ((m = t.match(/^(Full|Half)-duplex\b/i))) { c.duplex = m[1].toLowerCase(); continue; }
+    if ((m = t.match(/^Speed (\d+) Mb\/s/i))) { if (m[1] !== '0') c.speed = m[1] + 'Mb/s'; continue; }
+    if (/^Statistic\s+RX\s+TX\b/i.test(t)) { table = true; continue; }
+    if (table) {
+      if ((m = t.match(/^(Packets|Dropped|Errors|CRC\/FCS|Collision|Runts|Giants)\s+(\S+)\s+(\S+)/i))) {
+        const k = m[1].toLowerCase(), rx = num(m[2]), tx = num(m[3]);
+        if (k === 'packets') c.inPkts = rx;
+        else if (k === 'dropped') { c.inDiscards = rx; c.outDiscards = tx; }
+        else if (k === 'errors') { c.inErr = rx; c.outErr = tx; }
+        else if (k === 'crc/fcs') c.crc = rx;
+        else if (k === 'collision') c.coll = tx;
+        else if (k === 'runts') c.runts = rx;
+        else if (k === 'giants') c.giants = rx;
+      }
+      continue;
+    }
+    if (/^Rx$/i.test(t)) { sec = 'rx'; continue; }
+    if (/^Tx$/i.test(t)) { sec = 'tx'; continue; }
+    if (!sec) continue;
+    if (sec === 'rx' && c.inPkts === null && (m = t.match(/^(\d+) total packets\b/))) c.inPkts = Number(m[1]);
+    if ((m = t.match(/^(\d+) errors\s+(\d+) dropped\b/))) { if (sec === 'rx') { c.inErr = +m[1]; c.inDiscards = +m[2]; } else { c.outErr = +m[1]; c.outDiscards = +m[2]; } }
+    if (sec === 'rx' && (m = t.match(/^(\d+) CRC\/FCS\b/))) c.crc = +m[1];
+    if (sec === 'tx' && (m = t.match(/^(\d+) collision\b/))) c.coll = +m[1];
+  }
+  return c;
 }
 
 // 實體層問題：只看實體埠（聚合介面的計數是成員加總，會重複）
@@ -202,17 +253,38 @@ function epPhySummary(c) {
 //   Arista `show interfaces transceiver detail`：每個項目一張表，欄位為「目前值 高告警 高警告 低告警 低警告」（順序與 NX-OS 不同）
 // 判斷只用裝置自帶的門檻與旗標，不內建任何數值；超出告警門檻或旗標 ++／-- 為 alarm，超出警告門檻或 +／- 為 warn
 const EP_OPT_METRICS = { temperature: 'temp', voltage: 'volt', current: 'curr', 'tx power': 'tx', 'rx power': 'rx' };
+// Aruba CX 的項目名稱（Tx Bias＝雷射偏壓電流）；功率單位是 mW（其他廠牌為 dBm），顯示時用設備輸出的單位
+const EP_CX_OPT_METRICS = { temperature: 'temp', voltage: 'volt', 'tx bias': 'curr', 'rx power': 'rx', 'tx power': 'tx' };
 const EP_OPT_UNITS = { temp: '°C', volt: 'V', curr: 'mA', tx: 'dBm', rx: 'dBm' };
 const EP_OPT_FLAG = { '++': ['alarm', 'high'], '+': ['warn', 'high'], '--': ['alarm', 'low'], '-': ['warn', 'low'] };
 function _epOptNum(s) { return /^-?\d+(\.\d+)?$/.test(s) ? Number(s) : null; }
 function epParseOptics(lines) {
   const byPort = new Map(), out = [];
   const get = port => { if (!byPort.has(port)) { const o = { port }; byPort.set(port, o); out.push(o); } return byPort.get(port); };
-  let iosCols = null, nxPort = null, nxLane = '', aristaMetric = null;
+  let iosCols = null, nxPort = null, nxLane = '', aristaMetric = null, cxPort = null, cxBase = null;
   for (const raw of lines) {
     const line = raw.replace(/\s+$/, '');
     if (!line.trim()) continue;
     let m;
+    // Aruba CX `show interface dom detail`（XN137，格式依 ntc-templates aruba_aoscx/show_interface_dom_detail）：
+    // 「Transceiver in 1/1/34」開頭，每項一行目前值，另有四個旗標（high／low alarm／warning: On／Off）與四個門檻
+    if ((m = line.match(/^Transceiver in (\d+\/\d+\/\d+(?::\d+)?)\s*$/))) { cxPort = m[1]; cxBase = m[1]; nxPort = null; iosCols = null; aristaMetric = null; continue; }
+    // 多通道模組（QSFP）：「 Channel N:」之後的偏壓與功率各自一筆，溫度與電壓在通道之前、屬於整個模組
+    if (cxBase && (m = line.match(/^\s+Channel (\d+):\s*$/))) { cxPort = `${cxBase} (lane ${m[1]})`; continue; }
+    if (cxPort && (m = line.match(/^\s+(Temperature|Voltage|Tx Bias|Rx Power|Tx Power)(?: (high|low) (alarm|warning)( threshold)?)?:\s*(\S+)/i))) {
+      const k = EP_CX_OPT_METRICS[m[1].toLowerCase()], o = get(cxPort);
+      const x = o[k] || (o[k] = { v: null, flag: '', ha: null, la: null, hw: null, lw: null, unit: '' });
+      const val = m[5], nm = val.match(/^(-?\d+(?:\.\d+)?)([A-Za-z]*)$/);
+      if (!m[2]) { if (nm) { x.v = Number(nm[1]); x.unit = nm[2]; } }
+      else if (m[4]) { if (nm) x[(m[2].toLowerCase() === 'high' ? 'h' : 'l') + (m[3].toLowerCase() === 'alarm' ? 'a' : 'w')] = Number(nm[1]); }
+      else if (/^on$/i.test(val)) {
+        // 設備自己的旗標：告警優先於警告
+        const f = m[3].toLowerCase() === 'alarm' ? (m[2].toLowerCase() === 'high' ? '++' : '--') : (m[2].toLowerCase() === 'high' ? '+' : '-');
+        if (!x.flag || f.length > x.flag.length) x.flag = f;
+      }
+      continue;
+    }
+    if (cxPort && /^\S/.test(line)) { cxPort = null; cxBase = null; }
     // Cisco IOS：欄位標題列決定有沒有 Current 欄
     if (/^\s*Temperature\s+Voltage\b/i.test(line)) { iosCols = /Current/i.test(line) ? ['temp', 'volt', 'curr', 'tx', 'rx'] : ['temp', 'volt', 'tx', 'rx']; continue; }
     // Arista：每張表第二列標題「<項目> Threshold Threshold…」
@@ -256,7 +328,9 @@ function epOptLevel(x) {
   let res = null;
   const set = (level, dir) => { if (!res || (level === 'alarm' && res.level === 'warn')) res = { level, dir }; };
   if (EP_OPT_FLAG[x.flag]) set(...EP_OPT_FLAG[x.flag]);
-  if (x.v !== null && x.v !== undefined) {
+  // 四個門檻全為 0＝模組沒有提供這一項的門檻（Aruba CX 的 QSFP Tx Power 實際輸出，XN137），不拿來判斷
+  const noTh = [x.ha, x.la, x.hw, x.lw].every(n => n === 0);
+  if (!noTh && x.v !== null && x.v !== undefined) {
     if (ok(x.ha) && x.v > x.ha) set('alarm', 'high'); else if (ok(x.la) && x.v < x.la) set('alarm', 'low');
     else if (ok(x.hw) && x.v > x.hw) set('warn', 'high'); else if (ok(x.lw) && x.v < x.lw) set('warn', 'low');
   }
@@ -270,7 +344,7 @@ function epOpticsIssues(model) {
       const findings = [];
       for (const k of ['rx', 'tx', 'temp', 'volt', 'curr']) {
         const lv = epOptLevel(o[k]);
-        if (lv) findings.push(Object.assign({ metric: k, unit: EP_OPT_UNITS[k] }, lv, o[k]));
+        if (lv) findings.push(Object.assign({ metric: k }, lv, o[k], { unit: (o[k] && o[k].unit === 'C' ? '°C' : (o[k] && o[k].unit)) || EP_OPT_UNITS[k] }));
       }
       if (findings.length) rows.push({ device: d.name, port: o.port, severity: findings.some(f => f.level === 'alarm') ? 'high' : 'medium', findings });
     }
@@ -355,8 +429,9 @@ function parseEndpointText(text) {
         (/^(Ethernet|Eth)\S+$/.test(line) && /transceiver is/i.test(lines[li + 1] || ''))) {
         kind = 'optics'; (dev || getDev('device-1'))._optLines.push(line); continue;
       }
+      if (/^Transceiver in \d+\/\d+\/\d+/.test(line)) { kind = 'optics'; (dev || getDev('device-1'))._optLines.push(line); continue; }
       const hm = line.match(EP_CNT_HEAD_RE);
-      const isHead = (hm && EP_IFACE_TOKEN_RE.test(hm[1]) && /line protocol|^\s*$|\(/.test(hm[3] + ' ')) ||
+      const isHead = EP_CX_HEAD_RE.test(line) || (hm && EP_IFACE_TOKEN_RE.test(hm[1]) && /line protocol|^\s*$|\(/.test(hm[3] + ' ')) ||
         (EP_IFACE_TOKEN_RE.test(line.trim()) && /^\s*Current state:/i.test(lines[li + 1] || '')) ||
         (() => { const v = line.match(EP_CNT_HEAD_V5_RE); return !!(v && EP_IFACE_TOKEN_RE.test(v[1])); })();
       if (isHead) { kind = 'counters'; (dev || getDev('device-1'))._cntLines.push(line); continue; }

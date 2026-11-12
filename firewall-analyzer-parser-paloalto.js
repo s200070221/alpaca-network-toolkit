@@ -1007,6 +1007,14 @@ const PaloAltoParser = (() => {
     return scheds;
   }
 
+  // 來源 NAT 的比對條件與轉換方式（XN138，供多台路徑查詢使用）：m＝{from,to,src,dst}（區域與位址清單），
+  // tr()＝{kind:'interface'|'address'|'static', iface, ip, addrs} 或 null（這條規則沒有來源轉換＝命中後不轉換）
+  const _paWords = v => String(v || '').replace(/[\[\]"]/g, ' ').trim().split(/\s+/).filter(x => x && x !== '-');
+  function _paSnat(m, tr) {
+    const t = tr() || { kind: 'none' };
+    return Object.assign({ from: m.from || [], to: m.to || [], src: m.src || [], dst: m.dst || [] }, t);
+  }
+
   // ─── NAT policies ─────────────────────────────────────────────────────────
   function parseNAT(text, vsysXml, vsysName) {
     const nats = [];
@@ -1045,6 +1053,16 @@ const PaloAltoParser = (() => {
           status:  e._outer.includes('disabled="yes"') ? 'disable' : 'enable',
           srcIntf: xlist(inner,'from')[0] || '-', arpReply: 'enable',
           _vdom: vsysName || 'vsys1',
+          snat: _paSnat({ from: xlist(inner,'from'), to: xlist(inner,'to'), src: xlist(inner,'source'), dst: xlist(inner,'destination') }, srcTr => {
+            const st = xv(inner,'source-translation');
+            if (!st) return null;
+            const dipp = xv(st,'dynamic-ip-and-port'), dip = xv(st,'dynamic-ip'), sip = xv(st,'static-ip');
+            const ia = dipp ? xv(dipp,'interface-address') : '';
+            if (ia) return { kind: 'interface', iface: xv(ia,'interface') || '', ip: xv(ia,'ip') || xv(ia,'floating-ip') || '' };
+            if (sip) return { kind: 'static', addrs: [xv(sip,'translated-address')].filter(Boolean) };
+            const blk = dipp || dip;
+            return blk ? { kind: 'address', addrs: xlist(blk,'translated-address') } : null;
+          }),
         });
       });
     } else {
@@ -1071,6 +1089,14 @@ const PaloAltoParser = (() => {
           mapPort: gv('destination-translation translated-port') || '-',
           proto:'-', comment: gv('description')||'-', status:'enable',
           srcIntf: gv('from')||'-', arpReply:'enable',
+          snat: _paSnat({ from: _paWords(gv('from')), to: _paWords(gv('to')), src: _paWords(gv('source')), dst: _paWords(gv('destination')) }, () => {
+            const ifc = gv('source-translation dynamic-ip-and-port interface-address interface');
+            if (ifc) return { kind: 'interface', iface: ifc, ip: gv('source-translation dynamic-ip-and-port interface-address ip') || gv('source-translation dynamic-ip-and-port interface-address floating-ip') || '' };
+            const sip = gv('source-translation static-ip translated-address');
+            if (sip) return { kind: 'static', addrs: [sip] };
+            const dyn = gv('source-translation dynamic-ip-and-port translated-address') || gv('source-translation dynamic-ip translated-address');
+            return dyn ? { kind: 'address', addrs: _paWords(dyn) } : null;
+          }),
         });
       });
     }

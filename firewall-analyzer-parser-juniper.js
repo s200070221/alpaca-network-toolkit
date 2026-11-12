@@ -795,6 +795,17 @@ const JuniperParser = (() => {
 
     // Source NAT
     const srcNat = path(natNode,['source']);
+    // 多值欄位（方括號清單或重複出現）展開成陣列
+    const listVals = (node, key) => node ? node._values.filter(v => v === key || v.startsWith(key + ' ')).flatMap(v => v.slice(key.length).replace(/[\[\]]/g, ' ').trim().split(/\s+/).filter(Boolean)) : [];
+    // 來源 NAT 位址池（XN138）：pool 名稱 { address 位址/前綴 [to 位址/前綴]; }，只記起訖位址
+    const srcPools = Object.create(null);
+    if (srcNat) Object.entries(srcNat._children).forEach(([pkey, pnode]) => {
+      if (!pkey.startsWith('pool ')) return;
+      const addrNode = path(pnode,['address']);
+      const a = (val(pnode,'address') || (addrNode ? addrNode._values.join(' ') : '')).match(/(\d{1,3}(?:\.\d{1,3}){3})(?:\/(\d+))?(?:\s+to\s+(\d{1,3}(?:\.\d{1,3}){3}))?/);
+      // 單一位址（/32 或沒有前綴、沒有 to）才算確定；網段或範圍記起點與終點
+      if (a) srcPools[pkey.slice(5).trim()] = { start: a[1], end: a[3] || (a[2] && a[2] !== '32' ? a[1] + '/' + a[2] : a[1]) };
+    });
     if (srcNat) {
       Object.entries(srcNat._children).forEach(([rkey,rnode]) => {
         if (!rkey.startsWith('rule-set ')) return;
@@ -802,12 +813,21 @@ const JuniperParser = (() => {
         Object.entries(rnode._children).forEach(([rrkey,rrnode]) => {
           if (!rrkey.startsWith('rule ')) return;
           const rname = rrkey.replace('rule ','');
-          const thenNode = path(rrnode,['then','source-nat','pool']);
-          const poolName = thenNode ? val(thenNode,'pool-name')||'-' : '-';
+          // 來源 NAT 的比對條件與動作（XN138，供多台路徑查詢換算轉換後位址）：rule-set 的 from／to（zone 或 interface）、
+          // rule 的 match source-address／destination-address、then source-nat interface｜pool 名稱｜off
+          const snNode = path(rrnode,['then','source-nat']);
+          const snVals = snNode ? snNode._values : [];
+          const poolChild = snNode ? path(snNode,['pool']) : null;
+          const poolRef = (snVals.find(v => v.startsWith('pool ')) || '').slice(5).trim() || (poolChild ? (val(poolChild,'pool-name') || poolChild._values[0] || '') : '');
+          const kind = snVals.includes('off') ? 'off' : snVals.includes('interface') ? 'interface' : poolRef ? 'pool' : '';
+          const matchNode = path(rrnode,['match']);
+          const side = k => ({ zones: listVals(rnode, k + ' zone'), ifaces: listVals(rnode, k + ' interface') });
           nats.push({ type:'ippool', name:`${rsName}-${rname}`,
-            poolType:'overload', startIp: poolName, endIp:'-',
+            poolType:'overload', startIp: poolRef || '-', endIp:'-',
             srcIntf:val(rnode,'from zone')||val(rnode,'from interface')||'-',
-            arpReply:'enable', comment:`Source NAT ruleset: ${rsName}` });
+            arpReply:'enable', comment:`Source NAT ruleset: ${rsName}`,
+            snat: { from: side('from'), to: side('to'), src: listVals(matchNode,'source-address'), dst: listVals(matchNode,'destination-address'),
+              kind, pool: poolRef, poolStart: srcPools[poolRef] ? srcPools[poolRef].start : '', poolEnd: srcPools[poolRef] ? srcPools[poolRef].end : '' } });
         });
       });
     }
