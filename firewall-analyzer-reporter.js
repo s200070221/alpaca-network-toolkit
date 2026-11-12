@@ -783,7 +783,7 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
 
 <div class="card"><h2>${esc(tr('exec.title'))}</h2>${buildFirewallExecSummary(info.hostname, health).map(x=>`<p style="margin:4px 0">${esc(x)}</p>`).join('')}</div>
 ${urgentHtml}
-${/F5 BIG-IP/.test(parsed.vendor||'') ? `<div class="card"><h2>${esc(tr('f5.scope_title'))}</h2><p style="margin:4px 0">${esc(tr('f5.scope_body'))}</p><p style="margin:4px 0;color:#64748b">${esc(tr('f5.scope_not'))}</p></div>` : ''}
+${(()=>{ const k=/F5 BIG-IP/.test(parsed.vendor||'')?'f5':parsed.vendor==='Cisco IOS'?'ios':''; return k ? `<div class="card"><h2>${esc(tr(k+'.scope_title'))}</h2><p style="margin:4px 0">${esc(tr(k+'.scope_body'))}</p><p style="margin:4px 0;color:#64748b">${esc(tr(k+'.scope_not'))}</p></div>` : ''; })()}
 
 <div class="info-grid">
   <div class="info-item"><div class="k">${tr('rpt.vendor_label')}</div><div class="v">${esc(info.vendor)}</div></div>

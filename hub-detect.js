@@ -4,7 +4,7 @@
 // 2026-08-09 稽核修復：新增 z/r/u/sonic 對應 detectTool() 新補的訊號規則，缺這幾項會讓
 // `detected.vendor ? VENDOR_NAMES[detected.vendor] : null` 對這些 vendor code 求值出
 // undefined（非 null），下游模板可能把字面 "undefined" 顯示在畫面上
-const VENDOR_NAMES = {t:'Cisco FTD',netgearsmart:'Netgear Smart Managed Pro',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',h3c:'H3C Comware',h:'H3C SecPath',e:'Netgate TNSR',b:'F5 BIG-IP',l:'Wireless LAN Controller',hpe:'HPE Comware',f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure 安全群組',awsflow:'AWS VPC Flow Logs',azureflow:'Azure NSG／VNet Flow Logs',u:'OpenWrt (UCI)',sonic:'SONiC',cumulus:'NVIDIA Cumulus Linux',awplus:'Allied Telesis AlliedWare Plus',ciscobiz:'Cisco Business (CBS/SG)',g:'WatchGuard Firebox',
+const VENDOR_NAMES = {t:'Cisco FTD',netgearsmart:'Netgear Smart Managed Pro',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',h3c:'H3C Comware',h:'H3C SecPath',e:'Netgate TNSR',b:'F5 BIG-IP',o:'Cisco IOS router',l:'Wireless LAN Controller',hpe:'HPE Comware',f:'FortiGate',s:'Sophos XG',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense',w:'SonicWall',m:'MikroTik',a:'Cisco ASA',arista:'Arista EOS',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure 安全群組',awsflow:'AWS VPC Flow Logs',azureflow:'Azure NSG／VNet Flow Logs',u:'OpenWrt (UCI)',sonic:'SONiC',cumulus:'NVIDIA Cumulus Linux',awplus:'Allied Telesis AlliedWare Plus',ciscobiz:'Cisco Business (CBS/SG)',g:'WatchGuard Firebox',
   // 2026-08-19 新增：log_analyzer 拖放偵測的格式標籤（非廠牌，沿用同一份對照表顯示於拖放
   // 提示 chip），key 與 detectTool() 回傳的 vendor 字串一致
   rfc5424:'Syslog RFC5424', meraki:'Cisco Meraki', stormshield:'Stormshield SNS', fortimail:'FortiMail', fortimanager:'FortiManager', cef:'CEF', leef:'LEEF', nps:'Windows NPS', clearpass:'Aruba ClearPass', dbfile:'PostgreSQL／MySQL', pcs:'Ivanti Connect Secure', nps_export:'Windows NPS 設定匯出', appenv:'.env／docker-compose', 'cef-syslog':'CEF-in-Syslog', asa:'Cisco ASA Syslog',kvfw:'SonicWall／Sophos Firewall Log',pancsv:'Palo Alto PAN-OS CSV',umbrella:'Cisco Umbrella CSV',elb:'AWS ELB Access Log',s3access:'AWS S3 Access Log',dnslog:'DNS 查詢紀錄',dhcplog:'DHCP 租約紀錄',winfw:'Windows 防火牆 log',vpnauth:'OpenVPN／strongSwan／FreeRADIUS log',squid:'Squid access.log',awsnfw:'AWS Network Firewall log',azfw:'Azure Firewall log',zeek:'Zeek Log (TSV)', fortigate:'FortiGate 原生 Log', rfc3164:'Syslog RFC3164', json:'JSON/NDJSON Log', winevent:'Windows Event Log',
@@ -106,6 +106,9 @@ const K8S_NETPOL_YAML_RE = /^\s*kind:\s*NetworkPolicy\b/m;
 const CLOUD_SG_RE = /"(?:IpPermissions(?:Egress)?|(?:default)?[sS]ecurityRules)"\s*:\s*\[|"(?:destCidr|applianceIp|publicPort|NetworkAclId)"\s*:|"kind"\s*:\s*"compute#firewall"|"ruleCollections"\s*:\s*\[|"kind"\s*:\s*"compute#firewallPolicy"|"kind"\s*:\s*"NetworkPolicy"|"(?:ingress|egress)[-_]?[sS]ecurity[-_]?[rR]ules"\s*:\s*\[|"(?:source|destination)[-_]?[tT]ype"\s*:\s*"(?:CIDR_BLOCK|SERVICE_CIDR_BLOCK|NETWORK_SECURITY_GROUP)"/;
 const EDGEROUTER_SIGS = [/ethernet\s+eth\d+\s*\{/m, /default-action\s+(drop|accept)/m, /outbound-interface\s+\S+/m, /address-group\s+\S+\s*\{/m, /UBNT|EdgeRouter|EdgeOS|EdgeMax/i];
 function _isEdgeRouter(t) { return EDGEROUTER_SIGS.filter(r => r.test(t)).length >= 2; }
+// Cisco IOS 路由器當防火牆（XN139），detectTool() 與 _detectToolReasons() 共用
+const _isIosRouterFw = text => /^interface \S+/m.test(text) && !/^\s*switchport\b/m.test(text) && !/^feature \S+/m.test(text) && !/\bRGOS\b/.test(text) &&
+  /^(?:version \d|hostname \S)/m.test(text) && (/^zone(?:-pair)? security \S+/m.test(text) || /^ip nat inside source /m.test(text) || /^ip inspect name /m.test(text));
 function detectTool(text) {
   const t = text.slice(0, 8000);
   // Windows NPS 設定匯出（netsh nps export，XN72）：內含明碼 RADIUS 共用密鑰，只交給去識別化工具（與 config_anonymizer VENDOR_SIGS 相同）
@@ -248,6 +251,9 @@ function detectTool(text) {
   if (/^NGFW Version\s+\S+/m.test(t))                                         return {idx:0, vendor:'t'};
   if (/^ASA Version\s+\S+/m.test(t))                                          return {idx:0, vendor:'a'};
   if (/nameif\s+\w+/i.test(t) && /access-list/i.test(t))                    return {idx:0, vendor:'a'};
+  // Cisco IOS／IOS-XE 路由器（XN139）：沒有任何 switchport，且有 Zone-Based Firewall、inside source NAT 或 CBAC → 防火牆分析
+  // （與 CiscoIOSParser.detect() 一致，排除 NX-OS 的 feature 與 Ruijie RGOS；只有介面 ACL 的仍交給交換器分析）。用完整 text，NAT 常在檔尾
+  if (_isIosRouterFw(text))                                                   return {idx:0, vendor:'o'};
   // Sophos：原本的 /firewall-policy\s*\{/im 是從未對照過真實格式的捏造規則（該字串不存在於
   // firewall-analyzer-parser-sophos.js 支援的任何真實匯出格式），永遠不會命中；比照
   // firewall-analyzer-app.js 的 FW_VENDOR_SIGS.sophos 改用多重特徵＋最低命中數（同一份規則
@@ -437,6 +443,7 @@ function _detectToolReasons(text) {
     { reason: '命中 Cisco FTD `NGFW Version` 版本行', test: () => /^NGFW Version\s+\S+/m.test(t) },
     { reason: '命中 Cisco ASA `ASA Version` 版本行', test: () => /^ASA Version\s+\S+/m.test(t) },
     { reason: '命中 Cisco ASA `nameif` + `access-list`', test: () => /nameif\s+\w+/i.test(t) && /access-list/i.test(t) },
+    { reason: '命中 Cisco IOS 路由器（沒有 switchport，有 zone security／ip nat inside source／ip inspect）', test: () => _isIosRouterFw(text) },
     { reason: '命中 Sophos 多重特徵組合（≥2 項：Sophos 字樣／SophosFirewall 標籤／admin-settings／IPHostList 等清單標籤）', test: () => {
         const sigs = [/Sophos/i, /<Configuration[^>]*SophosFirewall/, /^set admin-settings/m, /<(?:IPHostList|FirewallRuleList|WebFilterPolicy|IPsecVPNList)>/];
         let hits = 0; for (let i = 0; i < sigs.length; i++) if (sigs[i].test(t)) hits++;

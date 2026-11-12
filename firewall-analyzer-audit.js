@@ -785,7 +785,7 @@
     'admin-telnet': { cves: [], risk: 'high' },
     'admin-ssh':  { cves: [], risk: 'medium' },
   };
-  const EXPOSE_VENDORS = /^(FortiGate|PaloAlto|Cisco ASA|Cisco FTD|Juniper|F5 BIG-IP|MikroTik|EdgeRouter|VyOS|OpenWrt)$/;
+  const EXPOSE_VENDORS = /^(FortiGate|PaloAlto|Cisco ASA|Cisco FTD|Juniper|F5 BIG-IP|MikroTik|EdgeRouter|VyOS|OpenWrt|Cisco IOS)$/;
   // 路由器類從 WAN 打得到的目的（XN126 MikroTik、XN127 EdgeRouter／VyOS／OpenWrt，需 parser 提供 nf 鏈資料）：
   // 每個對外介面以外部來源 198.51.100.1（落在該介面網段時改用 192.0.2.1）的新連線、指定該介面進入，
   // 用 _runPolicyQuery() 依 input／forward 鏈實際評估；dst 省略＝到設備本身（介面沒有固定位址〔DHCP／PPPoE〕時指定 input 方向）。
@@ -950,7 +950,7 @@
       const svcMap = { winbox: 'mt-winbox', www: 'mt-www', 'www-ssl': 'mt-www', api: 'mt-api', 'api-ssl': 'mt-api', ftp: 'mt-ftp', ssh: 'admin-ssh', telnet: 'admin-telnet' };
       ((parsed.mtRouter && parsed.mtRouter.services) || []).filter(x => x.enabled && svcMap[x.name] && _mtSvcOpen(x.address)).forEach(x =>
         _rtReach(parsed, 'TCP', String(x.port)).forEach(n => add(svcMap[x.name], n, { name: `${x.name}:${x.port}` })));
-    } else if (/^(EdgeRouter|VyOS|OpenWrt)$/.test(vendor)) {
+    } else if (/^(EdgeRouter|VyOS|OpenWrt|Cisco IOS)$/.test(vendor)) {
       // service gui／https／ssh／telnet（EdgeOS／VyOS）、uhttpd／dropbear（OpenWrt），依 listen 限制與 input 鏈實際評估（XN127）
       ((parsed.rtRouter && parsed.rtRouter.services) || []).filter(x => x.enabled).forEach(x =>
         _rtReach(parsed, 'TCP', String(x.port)).filter(n => _rtListenOn(parsed, x, n)).forEach(n => add(x.kind, n, { name: `${x.name}:${x.port}` })));
@@ -1157,7 +1157,7 @@
       ['CISA KEV', 'NIST 800-53 SC-7', 'CIS v8 12.2'], expSvc.map(x => ({ kind: 'iface', name: x.iface })));
     // 6b2. 路由器管理介面從 WAN 打得到（XN128）：MikroTik／EdgeRouter／VyOS／OpenWrt 依 input 鏈實際評估的網頁管理、SSH、Telnet、API、FTP；
     // 沒有已遭利用 CVE（不在 exposed-svc）但管理介面不應開在網際網路（medium，計入健康度）。有 KEV CVE 的（Winbox）已在 exposed-svc，不重複
-    if (/^(MikroTik|EdgeRouter|VyOS|OpenWrt)$/.test(parsed.vendor || '')) {
+    if (/^(MikroTik|EdgeRouter|VyOS|OpenWrt|Cisco IOS)$/.test(parsed.vendor || '')) {
       const RT_MGMT = new Set(['rt-web', 'admin-ssh', 'admin-telnet', 'mt-www', 'mt-api', 'mt-ftp']);
       const mg = analyzeExposedServices(parsed).items.filter(x => x.ext === true && !x.cves.length && RT_MGMT.has(x.svc));
       f('rt-mgmt-wan', tr('audit.check_rt_mgmt_wan'), mg.length, 'medium',
@@ -1282,7 +1282,7 @@
     //  rt-wan-new-forward：WAN 進來、未經目的 NAT 的新連線到內部網段（TCP 445 代表）
     //  rt-dstnat-broad（EdgeRouter／VyOS／netfilter）：目的 NAT 沒有進入介面、目的位址與來源條件
     //  rt-upnp：UPnP 啟用（內部裝置可自行開啟對外轉送）
-    const isRt = /^(MikroTik|EdgeRouter|VyOS|OpenWrt)$/.test(parsed.vendor || '') && parsed.nf;
+    const isRt = /^(MikroTik|EdgeRouter|VyOS|OpenWrt|Cisco IOS)$/.test(parsed.vendor || '') && parsed.nf;
     const mr = parsed.vendor === 'MikroTik' ? parsed.mtRouter : null, rr = parsed.rtRouter || null;
     if (isRt) {
       const hasWan = _rtWanIfaces(parsed).length > 0;

@@ -5,7 +5,7 @@
 //  Features: 4-vendor parse, 12-path convert, user permissions
 // ═══════════════════════════════════════════════════════════════
 const App = (() => {
-  const ST = { f:null, s:null, c:null, p:null, j:null, x:null, w:null, m:null, a:null, t:null, z:null, r:null, u:null, g:null, v:null, n:null, k:null, h:null, e:null, b:null, l:null, raw:{f:'',s:'',c:'',p:'',j:'',x:'',w:'',m:'',a:'',t:'',z:'',r:'',u:'',g:'',v:'',n:'',k:'',h:'',e:'',b:'',l:''} };
+  const ST = { f:null, s:null, c:null, p:null, j:null, x:null, w:null, m:null, a:null, t:null, z:null, r:null, u:null, g:null, v:null, n:null, k:null, h:null, e:null, b:null, o:null, l:null, raw:{f:'',s:'',c:'',p:'',j:'',x:'',w:'',m:'',a:'',t:'',z:'',r:'',u:'',g:'',v:'',n:'',k:'',h:'',e:'',b:'',o:'',l:''} };
   let PARSED=null, CURRENT_SECTION=null, CURRENT_DATA=[], _renderState=null, WIFI_DATA = null, FORTISWITCH_DATA = null;
   // WiFi/WLAN 解析（2026-08-19 對外查證擴大）：sophos(s)/sonicwall(w) 查無可信 CLI/config
   // 語法佐證，維持排除；其餘企業防火牆廠牌架構上無內建 WiFi，不列入（無功能可警示，非
@@ -20,7 +20,7 @@ const App = (() => {
   // （無 optional chaining guard），故 WatchGuardParser 對這三個欄位一律回傳 []（非 null），
   // 這份清單只影響「分頁顯示什麼文字」的判斷，不影響底層資料形狀
   const NAT_UNSUPPORTED=['g','k','l'];
-  const VPN_UNSUPPORTED=['g','k','l','e','b'];
+  const VPN_UNSUPPORTED=['g','k','l','e','b','o'];
   const USERS_UNSUPPORTED=['g','k','l'];
   // Query 追蹤結果快取：畫面渲染當下的查詢結果依賴使用者當時輸入的 src/dst/proto/port，
   // 無法在匯出當下重新計算，故需快取「最近一次查詢」的結果供 CSV 匯出按鈕讀取。
@@ -48,9 +48,9 @@ const App = (() => {
   const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   const ms=t=>new Promise(r=>setTimeout(r,t));
   const pill=(t,c)=>`<span class="pill ${c}">${esc(t)}</span>`;
-  const nameMap={f:'fc-name',s:'sc-name',c:'cc-name',p:'pc-name',j:'jc-name',x:'xc-name',w:'wc-name',m:'mc-name',a:'ac-name',t:'tc-name',z:'zc-name',r:'rc-name',u:'uc-name',g:'gc-name',v:'vc-name',n:'nc-name',k:'kc-name',h:'hc-name',e:'ec-name',b:'f5c-name',l:'lc-name'};
-  const chipMap={f:'fc-chip',s:'sc-chip',c:'cc-chip',p:'pc-chip',j:'jc-chip',x:'xc-chip',w:'wc-chip',m:'mc-chip',a:'ac-chip',t:'tc-chip',z:'zc-chip',r:'rc-chip',u:'uc-chip',g:'gc-chip',v:'vc-chip',n:'nfc-chip',k:'kc-chip',h:'hc-chip',e:'ec-chip',b:'f5c-chip',l:'lc-chip'};
-  const inpMap ={f:'fi',s:'si',c:'ci',p:'pi',j:'ji',x:'xi',w:'wi',m:'mi',a:'ai',t:'ti',z:'zi',r:'ri',u:'ui',g:'gi',v:'vi',n:'nfi',k:'ki',h:'hi',e:'ei',b:'f5i',l:'li'};
+  const nameMap={f:'fc-name',s:'sc-name',c:'cc-name',p:'pc-name',j:'jc-name',x:'xc-name',w:'wc-name',m:'mc-name',a:'ac-name',t:'tc-name',z:'zc-name',r:'rc-name',u:'uc-name',g:'gc-name',v:'vc-name',n:'nc-name',k:'kc-name',h:'hc-name',e:'ec-name',b:'f5c-name',o:'ioc-name',l:'lc-name'};
+  const chipMap={f:'fc-chip',s:'sc-chip',c:'cc-chip',p:'pc-chip',j:'jc-chip',x:'xc-chip',w:'wc-chip',m:'mc-chip',a:'ac-chip',t:'tc-chip',z:'zc-chip',r:'rc-chip',u:'uc-chip',g:'gc-chip',v:'vc-chip',n:'nfc-chip',k:'kc-chip',h:'hc-chip',e:'ec-chip',b:'f5c-chip',o:'ioc-chip',l:'lc-chip'};
+  const inpMap ={f:'fi',s:'si',c:'ci',p:'pi',j:'ji',x:'xi',w:'wi',m:'mi',a:'ai',t:'ti',z:'zi',r:'ri',u:'ui',g:'gi',v:'vi',n:'nfi',k:'ki',h:'hi',e:'ei',b:'f5i',o:'ioi',l:'li'};
 
   // 2026-07-17 新增：上傳廠牌特徵檢查。原本 10 個上傳欄位完全沒有內容檢查，貼錯廠牌會
   // 靜默解析出空/垃圾結果（analyze() 一律用「上傳到哪個欄位」寫死對應 parser，見下方
@@ -108,6 +108,9 @@ const App = (() => {
     tnsr:       { p:[/^nacm\s+(?:enable|disable|group\s)[\s\S]*^dataplane\s|^dataplane\s[\s\S]*^nacm\s+(?:enable|disable|group\s)/m, /^[ \t]+access-list\s+(?:input|output)\s+acl\s+\S+\s+sequence\s+\d+/m, /^vpf\s+(?:filter\s+ruleset|options)\b/m, /^[ \t]+next-hop\s+\d+\s+via\s/m], min:1 },
     // F5 BIG-IP（XN116）：tmsh 頂層區塊，與 BigipParser.detect()、入口頁 isBigipConf() 相同（至少 2 項）
     bigip:      { p:[/^#TMSH-VERSION: /m, /^ltm (?:virtual|pool|node) \S+ \{/m, /^net self \S+ \{/m, /^net vlan \S+ \{/m, /^sys global-settings \{/m, /^auth user \S+ \{/m, /^sys (?:httpd|sshd|snmp) \{/m, /^sys management-ip /m, /Sys::Version/], min:2 },
+    // Cisco IOS／IOS-XE 路由器（XN139）：Zone-Based Firewall、inside source NAT、CBAC 或介面 ACL，與 CiscoIOSParser.detect() 相同；
+    // 排在 ciscoasa 之後（ASA 的 access-group 寫在全域、NAT 為 nat (…)，不會命中）
+    ciscoios:   { p:[/^zone(?:-pair)? security \S+/m, /^ip nat inside source /m, /^ip inspect name /m, /^\s+ip access-group \S+ (?:in|out)\s*$/m], min:1 },
     // 無線控制器（2026-10-05，KD／KH／KI）：AireOS 的 wlan create、H3C WX 的 wlan service-template、
     // Aruba 的 wlan ssid-profile、Catalyst 9800 的 wlan PROFILE ID SSID，判斷式與 wifi-parser.js 的 detectWlcKind() 一致
     wlc:        { p:[/^(?:config\s+)?wlan\s+create\s+\d+\s+\S+/m, /^\s*wlan\s+service-template\s+\S+/m, /^\s*wlan\s+ssid-profile\s+\S+/m, /^wlan\s+\S+\s+\d{1,4}\s+\S+/m], min:1 },
@@ -117,7 +120,7 @@ const App = (() => {
     vyos:       { p:[/vyos-config-version/, /^#\s*Version:\s+VyOS\b/m, /^set firewall global-options /m, /^\/\/ Release version:\s*\d/m, /^set firewall ipv[46] (?:forward|input|output|name) /m, /^\s+ipv[46]\s*\{\s*\n\s+(?:forward|input|output|name)\b/m], min:1 },
   };
   // sophos 簽章相對寬鬆，排最後，讓其他更具結構特徵的廠牌訊號優先判定
-  const FW_VENDOR_ORDER = ['fortigate','cloudsg','h3c','tnsr','bigip','wlc','netfilter','vyos','edgerouter','openwrt','watchguard','paloalto','juniper','checkpoint','pfsense','sonicwall','mikrotik','ciscoasa','zyxel','sophos'];
+  const FW_VENDOR_ORDER = ['fortigate','cloudsg','h3c','tnsr','bigip','wlc','netfilter','vyos','edgerouter','openwrt','watchguard','paloalto','juniper','checkpoint','pfsense','sonicwall','mikrotik','ciscoasa','ciscoios','zyxel','sophos'];
   function detectFwVendor(text) {
     // RANCID 備份檔頭（第十七輪 QC）
     const rc = ((String(text).match(/^[!#]RANCID-CONTENT-TYPE:\s*([\w-]+)/m) || [])[1] || '').toLowerCase();
@@ -143,7 +146,7 @@ const App = (() => {
 
   // 自動偵測上傳（PC，2026-09-29 新增）：依 detectFwVendor() 結果決定放進哪個廠牌欄位；
   // ciscoasa 簽章同時涵蓋 FTD（NGFW Version banner），有該 banner 時放 FTD 欄位。認不出回傳 ''
-  const FW_DETECT_SLOT={fortigate:'f',sophos:'s',checkpoint:'c',paloalto:'p',juniper:'j',pfsense:'x',sonicwall:'w',mikrotik:'m',ciscoasa:'a',zyxel:'z',edgerouter:'r',openwrt:'u',watchguard:'g',vyos:'v',netfilter:'n',cloudsg:'k',h3c:'h',tnsr:'e',bigip:'b',wlc:'l'};
+  const FW_DETECT_SLOT={fortigate:'f',sophos:'s',checkpoint:'c',paloalto:'p',juniper:'j',pfsense:'x',sonicwall:'w',mikrotik:'m',ciscoasa:'a',zyxel:'z',edgerouter:'r',openwrt:'u',watchguard:'g',vyos:'v',netfilter:'n',cloudsg:'k',h3c:'h',tnsr:'e',bigip:'b',ciscoios:'o',wlc:'l'};
   function fwSlotForText(text){
     const v=detectFwVendor(text||'');
     if(v==='unknown')return '';
@@ -421,14 +424,14 @@ const App = (() => {
 
   function handleDrop(e,v){
     e.preventDefault();e.stopPropagation();
-    const cardMap={f:'fc',s:'sc',c:'cc',p:'pc',j:'jc',x:'xc',w:'wc',m:'mc',a:'ac',t:'tc',z:'zc',r:'rc',u:'uc',g:'gc',v:'vc',n:'nfc',k:'kc',h:'hc',e:'ec',b:'f5c',l:'lc'};
+    const cardMap={f:'fc',s:'sc',c:'cc',p:'pc',j:'jc',x:'xc',w:'wc',m:'mc',a:'ac',t:'tc',z:'zc',r:'rc',u:'uc',g:'gc',v:'vc',n:'nfc',k:'kc',h:'hc',e:'ec',b:'f5c',o:'ioc',l:'lc'};
     $(cardMap[v]).classList.remove('drag-over');
     const f=e.dataTransfer.files[0]; if(!f)return;
     ST[v]=f; $(nameMap[v]).textContent=`${f.name} (${sz(f.size)})`; $(chipMap[v]).style.display='flex'; updBtn();
   }
   window.handleDrop=handleDrop;
 
-  const FW_SLOT_NAMES={f:'FortiGate',s:'Sophos XG/XGS',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense/OPNsense',w:'SonicWall',m:'MikroTik RouterOS',a:'Cisco ASA',t:'Cisco Firepower/FTD',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',u:'OpenWrt (UCI)',g:'WatchGuard Firebox',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure / GCP / Meraki',h:'H3C SecPath',e:'Netgate TNSR',b:'F5 BIG-IP',l:'Wireless LAN Controller'};
+  const FW_SLOT_NAMES={f:'FortiGate',s:'Sophos XG/XGS',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense/OPNsense',w:'SonicWall',m:'MikroTik RouterOS',a:'Cisco ASA',t:'Cisco Firepower/FTD',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',u:'OpenWrt (UCI)',g:'WatchGuard Firebox',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure / GCP / Meraki',h:'H3C SecPath',e:'Netgate TNSR',b:'F5 BIG-IP',o:'Cisco IOS router',l:'Wireless LAN Controller'};
   let AUTO_UNKNOWN=[];
   function setSlotFile(v,f){ ST[v]=f; ST.raw[v]=''; $(nameMap[v]).textContent=`${f.name} (${sz(f.size)})`; $(chipMap[v]).style.display='flex'; }
   function renderAutoMsg(placed){
@@ -463,9 +466,9 @@ const App = (() => {
 
   function updBtn(){
     // ST.k（雲端安全群組）原本漏列，只上傳雲端 JSON 時分析按鈕一直停用（2026-10-05 修正）
-    const ok=ST.f||ST.s||ST.c||ST.p||ST.j||ST.x||ST.w||ST.m||ST.a||ST.t||ST.z||ST.r||ST.u||ST.g||ST.v||ST.n||ST.k||ST.h||ST.e||ST.b||ST.l;
+    const ok=ST.f||ST.s||ST.c||ST.p||ST.j||ST.x||ST.w||ST.m||ST.a||ST.t||ST.z||ST.r||ST.u||ST.g||ST.v||ST.n||ST.k||ST.h||ST.e||ST.b||ST.o||ST.l;
     $('btn-go').disabled=!ok;
-    $('analyze-hint').textContent=ok?tr('analyze.selected_prefix')+[ST.f?'FortiGate':'',ST.s?'Sophos':'',ST.c?'CheckPoint':'',ST.p?'PaloAlto':'',ST.j?'Juniper':'',ST.x?'pfSense':'',ST.w?'SonicWall':'',ST.m?'MikroTik':'',ST.a?'Cisco ASA':'',ST.t?'Cisco FTD':'',ST.z?'Zyxel':'',ST.r?'EdgeRouter':'',ST.u?'OpenWrt':'',ST.g?'WatchGuard':'',ST.v?'VyOS':'',ST.n?'Linux netfilter':'',ST.k?'AWS/Azure/Meraki':'',ST.h?'H3C SecPath':'',ST.e?'Netgate TNSR':'',ST.b?'F5 BIG-IP':'',ST.l?'Wireless LAN Controller':''].filter(Boolean).join(' + '):tr('analyze.hint_none');
+    $('analyze-hint').textContent=ok?tr('analyze.selected_prefix')+[ST.f?'FortiGate':'',ST.s?'Sophos':'',ST.c?'CheckPoint':'',ST.p?'PaloAlto':'',ST.j?'Juniper':'',ST.x?'pfSense':'',ST.w?'SonicWall':'',ST.m?'MikroTik':'',ST.a?'Cisco ASA':'',ST.t?'Cisco FTD':'',ST.z?'Zyxel':'',ST.r?'EdgeRouter':'',ST.u?'OpenWrt':'',ST.g?'WatchGuard':'',ST.v?'VyOS':'',ST.n?'Linux netfilter':'',ST.k?'AWS/Azure/Meraki':'',ST.h?'H3C SecPath':'',ST.e?'Netgate TNSR':'',ST.b?'F5 BIG-IP':'',ST.o?'Cisco IOS router':'',ST.l?'Wireless LAN Controller':''].filter(Boolean).join(' + '):tr('analyze.hint_none');
   }
   window.updBtn=updBtn;
 
@@ -495,6 +498,7 @@ const App = (() => {
     {key:'h3c',label:'H3C SecPath',accept:'.cfg,.txt,.conf'},
     {key:'tnsr',label:'Netgate TNSR',accept:'.cfg,.txt,.conf'},
     {key:'bigip',label:'F5 BIG-IP',accept:'.conf,.txt,.cfg,.scf'},
+    {key:'ciscoios',label:'Cisco IOS router',accept:'.cfg,.txt,.conf'},
   ];
   const FW_DIFF_PARSERS={
     fortigate:t=>FortigateParser.parse(t), sophos:t=>SophosParser.parse(t),
@@ -503,7 +507,7 @@ const App = (() => {
     sonicwall:t=>SonicWallParser.parse(t), mikrotik:t=>MikrotikParser.parse(t),
     ciscoasa:t=>CiscoASAParser.parse(t), ciscoftd:t=>CiscoFTDParser.parse(t),
     zyxel:t=>ZyxelParser.parse(t), edgerouter:t=>EdgeRouterParser.parse(t),
-    openwrt:t=>OpenWrtParser.parse(t), watchguard:t=>WatchGuardParser.parse(t), vyos:t=>VyOSParser.parse(t), netfilter:t=>NetfilterParser.parse(t), cloudsg:t=>CloudSGParser.parse(t), h3c:t=>H3CSecPathParser.parse(t), tnsr:t=>TNSRParser.parse(t), bigip:t=>BigipParser.parse(t),
+    openwrt:t=>OpenWrtParser.parse(t), watchguard:t=>WatchGuardParser.parse(t), vyos:t=>VyOSParser.parse(t), netfilter:t=>NetfilterParser.parse(t), cloudsg:t=>CloudSGParser.parse(t), h3c:t=>H3CSecPathParser.parse(t), tnsr:t=>TNSRParser.parse(t), bigip:t=>BigipParser.parse(t), ciscoios:t=>CiscoIOSParser.parse(t),
   };
   // 去識別化結構保持度自檢（2026-10-02，第九輪發想 YD）：config_anonymizer 以隱藏 iframe
   // （?structcheck=1）開啟本頁，postMessage 送來原始檔與去識別化結果，各自判斷廠牌並解析、只回傳數量
@@ -613,7 +617,7 @@ const App = (() => {
       setStep(1);
       // 警告訊息集中收集，最後一次顯示（避免大檔案警告與廠牌不符警告互相覆蓋）
       const warnMsgs=[];
-      const totalSize = ['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','b','l'].reduce((s,k)=>s+(ST[k]?.size||0),0);
+      const totalSize = ['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','b','o','l'].reduce((s,k)=>s+(ST[k]?.size||0),0);
       if(totalSize > 5*1024*1024) {
         warnMsgs.push(tr('msg.large_file').replace('{size}', (totalSize/1024/1024).toFixed(1)));
       }
@@ -637,16 +641,17 @@ const App = (() => {
       if(ST.h)ST.raw.h=await readFile(ST.h);
       if(ST.e)ST.raw.e=await readFile(ST.e);
       if(ST.b)ST.raw.b=await readFile(ST.b);
+      if(ST.o)ST.raw.o=await readFile(ST.o);
       if(ST.l)ST.raw.l=await readFile(ST.l);
       // 上傳廠牌特徵檢查：偵測結果為明確的「其他」已知廠牌時警告（只警告不阻擋，
       // 分析流程照常進行），unknown（未命中任何簽章）維持現狀不提示
-      const FW_SLOT_VENDOR={f:'fortigate',s:'sophos',c:'checkpoint',p:'paloalto',j:'juniper',x:'pfsense',w:'sonicwall',m:'mikrotik',a:'ciscoasa',t:'ciscoasa',z:'zyxel',r:'edgerouter',u:'openwrt',g:'watchguard',v:'vyos',n:'netfilter',k:'cloudsg',h:'h3c',e:'tnsr',b:'bigip',l:'wlc'};
-      const FW_SLOT_LABEL={f:'FortiGate',s:'Sophos XG/XGS',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense/OPNsense',w:'SonicWall',m:'MikroTik RouterOS',a:'Cisco ASA',t:'Cisco Firepower/FTD',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',u:'OpenWrt (UCI)',g:'WatchGuard Firebox',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure / GCP / Meraki',h:'H3C SecPath',e:'Netgate TNSR',b:'F5 BIG-IP',l:'Wireless LAN Controller'};
-      const FW_DETECTED_LABEL={fortigate:'FortiGate',paloalto:'Palo Alto',juniper:'Juniper',checkpoint:'Check Point',pfsense:'pfSense/OPNsense',sonicwall:'SonicWall',mikrotik:'MikroTik RouterOS',ciscoasa:'Cisco ASA/FTD',sophos:'Sophos XG',zyxel:'Zyxel USG/ATP',edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',watchguard:'WatchGuard Firebox',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',h3c:'H3C SecPath',tnsr:'Netgate TNSR',bigip:'F5 BIG-IP',wlc:'Wireless LAN Controller'};
+      const FW_SLOT_VENDOR={f:'fortigate',s:'sophos',c:'checkpoint',p:'paloalto',j:'juniper',x:'pfsense',w:'sonicwall',m:'mikrotik',a:'ciscoasa',t:'ciscoasa',z:'zyxel',r:'edgerouter',u:'openwrt',g:'watchguard',v:'vyos',n:'netfilter',k:'cloudsg',h:'h3c',e:'tnsr',b:'bigip',o:'ciscoios',l:'wlc'};
+      const FW_SLOT_LABEL={f:'FortiGate',s:'Sophos XG/XGS',c:'Check Point',p:'Palo Alto',j:'Juniper SRX',x:'pfSense/OPNsense',w:'SonicWall',m:'MikroTik RouterOS',a:'Cisco ASA',t:'Cisco Firepower/FTD',z:'Zyxel USG/ATP',r:'EdgeRouter (EdgeOS)',u:'OpenWrt (UCI)',g:'WatchGuard Firebox',v:'VyOS',n:'Linux iptables/nftables',k:'AWS / Azure / GCP / Meraki',h:'H3C SecPath',e:'Netgate TNSR',b:'F5 BIG-IP',o:'Cisco IOS router',l:'Wireless LAN Controller'};
+      const FW_DETECTED_LABEL={fortigate:'FortiGate',paloalto:'Palo Alto',juniper:'Juniper',checkpoint:'Check Point',pfsense:'pfSense/OPNsense',sonicwall:'SonicWall',mikrotik:'MikroTik RouterOS',ciscoasa:'Cisco ASA/FTD',sophos:'Sophos XG',zyxel:'Zyxel USG/ATP',edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',watchguard:'WatchGuard Firebox',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',h3c:'H3C SecPath',tnsr:'Netgate TNSR',bigip:'F5 BIG-IP',ciscoios:'Cisco IOS router',wlc:'Wireless LAN Controller'};
       // 可疑注入字串彩蛋（XN20，payload-sniff.js）：只提示，不影響分析
       if (typeof PayloadSniff !== 'undefined') PayloadSniff.notify(Object.values(ST.raw).join('\n'), _lang, m => showEggToast(m, 7000));
       REPORT_UNKNOWN_SLOTS = []; REPORT_FIRST_SLOT_VENDOR = '';
-      ['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','b','l'].forEach(v=>{
+      ['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','b','o','l'].forEach(v=>{
         if(!ST.raw[v])return;
         const detected=detectFwVendor(ST.raw[v]);
         if(!REPORT_FIRST_SLOT_VENDOR) REPORT_FIRST_SLOT_VENDOR=FW_SLOT_VENDOR[v];
@@ -693,6 +698,7 @@ const App = (() => {
           h3c:        () => H3CSecPathParser.parse(text),
           tnsr:       () => TNSRParser.parse(text),
           bigip:      () => BigipParser.parse(text),
+          ciscoios:   () => CiscoIOSParser.parse(text),
           wlc:        () => WlcParser.parse(text),
         };
         const result = parsers[vendor]();
@@ -719,6 +725,7 @@ const App = (() => {
       if(ST.raw.h){parsedAll.push(await parseWithYield('h3c',ST.raw.h));}
       if(ST.raw.e){parsedAll.push(await parseWithYield('tnsr',ST.raw.e));}
       if(ST.raw.b){parsedAll.push(await parseWithYield('bigip',ST.raw.b));}
+      if(ST.raw.o){parsedAll.push(await parseWithYield('ciscoios',ST.raw.o));}
       if(ST.raw.l){parsedAll.push(await parseWithYield('wlc',ST.raw.l));}
       // Audit/Query 快取：重新解析新檔案時必須清除，否則使用者若先前在舊檔案上
       // 開過 Query 分頁，切換到新檔案後直接按「查詢追蹤結果」CSV 匯出按鈕會拿到
@@ -1038,7 +1045,7 @@ function onParsed(){
     // Set converter source
     const srcRaw=ST.raw.f||ST.raw.s||ST.raw.c||ST.raw.p||'';
     $('conv-src').value=srcRaw;
-    CONV_SRC_VENDOR=ST.raw.f?'fortigate':ST.raw.s?'sophos':ST.raw.c?'checkpoint':ST.raw.p?'paloalto':ST.raw.j?'juniper':ST.raw.x?'pfsense':ST.raw.w?'sonicwall':ST.raw.m?'mikrotik':ST.raw.a?'ciscoasa':ST.raw.t?'ciscoftd':ST.raw.z?'zyxel':ST.raw.r?'edgerouter':ST.raw.u?'openwrt':ST.raw.g?'watchguard':ST.raw.v?'vyos':ST.raw.n?'netfilter':ST.raw.k?'cloudsg':ST.raw.h?'h3c':ST.raw.e?'tnsr':ST.raw.b?'bigip':ST.raw.l?'wlc':'unknown';
+    CONV_SRC_VENDOR=ST.raw.f?'fortigate':ST.raw.s?'sophos':ST.raw.c?'checkpoint':ST.raw.p?'paloalto':ST.raw.j?'juniper':ST.raw.x?'pfsense':ST.raw.w?'sonicwall':ST.raw.m?'mikrotik':ST.raw.a?'ciscoasa':ST.raw.t?'ciscoftd':ST.raw.z?'zyxel':ST.raw.r?'edgerouter':ST.raw.u?'openwrt':ST.raw.g?'watchguard':ST.raw.v?'vyos':ST.raw.n?'netfilter':ST.raw.k?'cloudsg':ST.raw.h?'h3c':ST.raw.e?'tnsr':ST.raw.b?'bigip':ST.raw.o?'ciscoios':ST.raw.l?'wlc':'unknown';
     updateConvButtons();
     buildVdomBar(PARSED);
     buildRefIndex(PARSED);
@@ -3010,7 +3017,7 @@ function onParsed(){
     bar.style.display='';
   }
   window._sendReportToAnonymizer = function(){
-    var slots=['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','b','l'];
+    var slots=['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','b','o','l'];
     var texts=slots.map(function(v){return ST.raw[v]||'';}).filter(Boolean);
     if(!texts.length||!PARSED)return;
     var trig=fwReportTrigger(PARSED,REPORT_UNKNOWN_SLOTS)||'manual';
@@ -3771,7 +3778,7 @@ function startMatrixRain(){
     // 2026-07-30 修復既有缺口：原本清單只有 f/s/c/p/j/x 六家，SonicWall/MikroTik/Cisco ASA/
     // Cisco FTD（w/m/a/t）自新增以來從未被 resetAll() 清除過，「清除」按鈕對這 4 個上傳槽
     // 完全無效果（檔案/chip 殘留），一併補上並加入新增的 Zyxel（z）／EdgeRouter（r）／OpenWrt（u）
-    ['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','b','l'].forEach(v=>{ST[v]=null;ST.raw[v]='';const inp=$(inpMap[v]);if(inp)inp.value='';$(chipMap[v]).style.display='none';});
+    ['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','b','o','l'].forEach(v=>{ST[v]=null;ST.raw[v]='';const inp=$(inpMap[v]);if(inp)inp.value='';$(chipMap[v]).style.display='none';});
     $('nav-data-group').style.display='none';$('nav-tools-group').style.display='none';
     $('tb-actions').style.display='none';$('tb-title').textContent=tr('title');$('tb-meta').textContent='';
     ACTIVE_VDOM='__all__'; const bar=$('vdom-bar'); if(bar)bar.style.display='none';
@@ -3884,7 +3891,7 @@ function startMatrixRain(){
   // 內部可見，故此函式必須定義在這裡透過 window 暴露，比照上一行 `_loadFromPending` 的既有寫法
   // 分析結果提示列（第二十九輪 NU7／NU9）：有規則時列出健康度與三個主要下一步；規則、介面、位址物件都沒有時
   //（多半是貼錯工具）提示交給入口頁判斷（一次性交接 key `_netAnalyzer_route`）
-  const _fwRawTexts = () => ['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','b','l'].map(v => ST.raw[v] || '').filter(Boolean);
+  const _fwRawTexts = () => ['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','b','o','l'].map(v => ST.raw[v] || '').filter(Boolean);
   function renderNextBar() {
     const b = $('next-bar'); if (!b) return;
     if (!PARSED) { b.style.display = 'none'; b.innerHTML = ''; if (window.AlpacaBuddy) window.AlpacaBuddy.setDuty(null); return; }
@@ -3932,7 +3939,7 @@ function startMatrixRain(){
     if (wrote && !w) { localStorage.removeItem('_netAnalyzer_route'); alert(tr('err.sendPopupBlocked')); }
   };
   window._sendToAnonymizer = function(){
-    var slots=['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','b','l'];
+    var slots=['f','s','c','p','j','x','w','m','a','t','z','r','u','g','v','n','k','h','e','b','o','l'];
     var texts=slots.map(function(v){return ST.raw[v]||'';}).filter(Boolean);
     if(!texts.length)return;
     var wrote=false;

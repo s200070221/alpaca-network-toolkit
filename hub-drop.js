@@ -237,6 +237,8 @@ function _showDropResult(name, detected, text, entry) {
       actions.insertAdjacentHTML('beforeend', `<button class="da-secondary" type="button" id="drop-dc-open">🛡 ${_glEsc(tr('drop.ns_open'))}</button>`);
       document.getElementById('drop-dc-open').addEventListener('click', () => { document.getElementById('drop-overlay').classList.remove('active'); devCheckLoad(text); });
     }
+    // Cisco IOS 路由器（XN139）：路由器也可能兼做交換（介面多為 L3），另附改用交換器分析
+    if (detected.vendor === 'o') actions.insertAdjacentHTML('beforeend', `<button class="da-secondary" onclick="_dispatchWithPending(1,null)">${TOOLS[1].icon} ${tr('drop.open')} ${tr(TOOLS[1].id+'.title')}</button>`);
     manualBtn.textContent = tr('drop.manual');
     manualBtn.style.display = '';
   } else {

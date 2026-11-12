@@ -39,6 +39,8 @@ const VulnCheck = (function () {
     const map = { FortiGate: 'fortios', PaloAlto: 'panos', 'Cisco ASA': 'asa', 'Cisco FTD': 'ftd', Juniper: 'junos', juniper: 'junos',
       nxos: 'nxos', arista: 'eos', aruba: 'aoscx', MikroTik: 'routeros', routeros: 'routeros', 'dell-os10': 'os10', CheckPoint: 'gaia', SonicWall: 'sonicos', 'F5 BIG-IP': 'bigip' };
     if (map[v]) return map[v];
+    // Cisco IOS／IOS-XE 路由器（防火牆分析 XN139）：設定檔的 version 行只有主次版本（15.7、17.9），16 以上為 IOS-XE，其餘為 IOS（需補填完整版本）
+    if (v === 'Cisco IOS') return deviceScheme('cisco', version) || (/^(\d+)\./.test(String(version || '')) && +String(version).match(/^(\d+)/)[1] >= 16 ? 'iosxe' : 'ios');
     if (v === 'cisco') {
       const s = String(version || '');
       if (/\d+\.\d+\(\d+\)/.test(s)) return 'ios';

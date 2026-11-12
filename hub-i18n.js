@@ -478,7 +478,7 @@ const TOOLS = [
     color: '#00d4ff',
     icon:  '🛡️',
     href:  'firewall-analyzer-fixed.html',
-    vendors: ['FortiGate','Sophos XG','Check Point','Palo Alto','Juniper','pfSense','OPNsense','SonicWall','MikroTik','Cisco ASA/FTD','Zyxel USG/ATP','EdgeRouter (EdgeOS)','VyOS','OpenWrt (UCI)','WatchGuard Firebox','Linux iptables/nftables','AWS Security Group','AWS Network ACL','Azure NSG','Azure Firewall Policy','GCP VPC Firewall','GCP Network Firewall Policy','Kubernetes NetworkPolicy','OCI Security List / NSG','Cisco Meraki MX','H3C SecPath','Netgate TNSR','F5 BIG-IP','Wireless LAN Controller'],
+    vendors: ['FortiGate','Sophos XG','Check Point','Palo Alto','Juniper','pfSense','OPNsense','SonicWall','MikroTik','Cisco ASA/FTD','Zyxel USG/ATP','EdgeRouter (EdgeOS)','VyOS','OpenWrt (UCI)','WatchGuard Firebox','Linux iptables/nftables','AWS Security Group','AWS Network ACL','Azure NSG','Azure Firewall Policy','GCP VPC Firewall','GCP Network Firewall Policy','Kubernetes NetworkPolicy','OCI Security List / NSG','Cisco Meraki MX','H3C SecPath','Netgate TNSR','F5 BIG-IP','Cisco IOS router','Wireless LAN Controller'],
     features: ['fw.f1','fw.f2','fw.f3','fw.f4'],
   },
   {
@@ -531,6 +531,7 @@ const VENDOR_PERSONA_KEY = {
   'Wireless LAN Controller':'wlc',
   'HPE Comware':'comware',
   'Cisco IOS/IOS-XE':'cisco',
+  'Cisco IOS router':'cisco',
   'Cisco NX-OS':'nxos',
   'Aruba CX':'aruba',
   'Aruba ProCurve':'procurve',

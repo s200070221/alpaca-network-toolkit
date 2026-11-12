@@ -5717,6 +5717,9 @@ function structCheckTool(vendor, text) {
   if (STRUCT_FW_VENDORS.has(vendor)) return 'firewall-analyzer-fixed.html';
   if (vendor === 'mikrotik') return /^\/ip\s+firewall\s+(?:filter|nat)\b/m.test(text) ? 'firewall-analyzer-fixed.html' : 'switch-config-parser.html';
   if (vendor === 'juniper') return /^\s*security\s*\{|^set\s+security\s/m.test(text) ? 'firewall-analyzer-fixed.html' : 'switch-config-parser.html';
+  // Cisco IOS 路由器（XN139）：沒有 switchport，且有 Zone-Based Firewall、inside source NAT 或 CBAC 時交給防火牆分析（與入口頁 _isIosRouterFw() 相同）
+  if (vendor === 'cisco_ios') return !/^\s*switchport\b/m.test(text) && !/^feature \S+/m.test(text) &&
+    (/^zone(?:-pair)? security \S+/m.test(text) || /^ip nat inside source /m.test(text) || /^ip inspect name /m.test(text)) ? 'firewall-analyzer-fixed.html' : 'switch-config-parser.html';
   return 'switch-config-parser.html';
 }
 // 只列出任一邊非零的項目；ok=false 代表數量不同

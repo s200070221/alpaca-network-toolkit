@@ -107,7 +107,10 @@ const FwPath = (function () {
     if (!iface) return '';
     const cands = [iface.nameif, iface.zone, iface._zone, /juniper/i.test(parsed.vendor || '') ? iface._vdom : '', iface.name].filter(Boolean).map(String);
     const used = new Set();
-    (parsed.policies || []).forEach(p => String(p[field] || '').split(/\s*,\s*/).forEach(s => used.add(s.trim().toLowerCase())));
+    // 路由器類（有 nf 鏈）查詢時比對的是鏈內規則（含 jump），名稱以 nf.rules 為準：Cisco IOS（XN139）的 ZBF 列以區域名稱顯示，
+    // 鏈內的跳轉規則用介面名稱，若依 policies 會選到區域名稱而略過 ACL 與 ZBF
+    const src = parsed.nf && Array.isArray(parsed.nf.rules) ? parsed.nf.rules : (parsed.policies || []);
+    src.forEach(p => String(p[field] || '').split(/\s*,\s*/).forEach(s => used.add(s.trim().toLowerCase())));
     return cands.find(c => used.has(c.toLowerCase())) || iface.name || '';
   }
   const isMultiVdom = parsed => /fortigate/i.test(parsed.vendor || '') && !!(parsed.deviceInfo && parsed.deviceInfo.isMultiVdom);
@@ -377,7 +380,7 @@ const FwPath = (function () {
   // Linux netfilter（SNAT／MASQUERADE）、MikroTik（srcnat）。回傳 null（不做來源 NAT）、
   // {exempt:true}（命中免轉換規則）或 {toIp, how, name, note}；note：range（位址池取第一個）｜noIp（出口介面沒有位址）｜
   // cond（比對條件無法判斷，toIp 為空）
-  const SNAT_VENDOR_RE = /^(FortiGate|Cisco ASA|Cisco FTD|Linux netfilter|MikroTik|PaloAlto|Juniper)$/;
+  const SNAT_VENDOR_RE = /^(FortiGate|Cisco ASA|Cisco FTD|Linux netfilter|MikroTik|PaloAlto|Juniper|Cisco IOS)$/;
   const snatSupported = vendor => String(vendor || '').split(' + ').every(v => SNAT_VENDOR_RE.test(v.trim()));
   // 位址條件（any、單一位址、網段、範圍或位址物件）是否包含 ip；無法判斷回傳 null
   function addrHas(v, ip, addrs) {
@@ -431,6 +434,38 @@ const FwPath = (function () {
         if (single) return { toIp: single, how: 'nat', name: n.name || `NAT #${n.id}`, note: '' };
         const o = addrs.find(a => a.name === ts), f = firstIp(o ? o.subnet : ts);
         return { toIp: f, how: 'nat', name: n.name || `NAT #${n.id}`, note: f ? 'range' : 'noIp' };
+      }
+      return null;
+    }
+    // Cisco IOS 路由器（XN139）：ip nat inside source 只在 ip nat inside 介面進、ip nat outside 介面出時轉換（進入介面不明時不排除）；
+    // static 一對一先於動態；動態依設定順序比對 NAT 用的 ACL，第一筆符合的項目為 permit 才轉換（extended ACL 的服務條件不比對）。
+    // route-map 條件、物件群組或不連續萬用遮罩＝可能轉換、位址不確定；位址池取第一個並標 range
+    if (vendor === 'Cisco IOS') {
+      if ((ctx.ingress && ctx.ingress.natSide !== 'inside') || !eg || eg.natSide !== 'outside') return null;
+      const st = nat.find(n => n.iosNat && n.iosNat.kind === 'static' && n.iosNat.local === ctx.src);
+      if (st) return { toIp: st.iosNat.global || '', how: 'nat', name: st.name, note: st.iosNat.global ? '' : 'noIp' };
+      const odst = ctx.origDst || ctx.dst;
+      for (const n of nat) {
+        const x = n.iosNat;
+        if (!x || x.kind === 'static') continue;
+        if (x.cond) return { toIp: '', how: 'nat', name: n.name, note: 'cond' };
+        if (!x.entries) continue;
+        let hit = false, unk = false;
+        for (const e of x.entries) {
+          if (e.unk) { unk = true; break; }
+          const hs = addrHas(e.src, ctx.src, addrs), hd = addrHas(e.dst, odst, addrs);
+          if (hs === false || hd === false) continue;
+          if (hs === null || hd === null) { unk = true; break; }
+          hit = e.action === 'permit';
+          break;
+        }
+        if (unk) return { toIp: '', how: 'nat', name: n.name, note: 'cond' };
+        if (!hit) continue;
+        if (x.kind === 'interface') {
+          const ip = ifaceIp((parsed.interfaces || []).find(i => i.name === x.iface)) || ifaceIp(eg);
+          return { toIp: ip, how: 'iface', name: n.name, note: ip ? '' : 'noIp' };
+        }
+        return x.start ? { toIp: x.start, how: 'ippool', name: n.name, note: x.end && x.end !== x.start ? 'range' : '' } : { toIp: '', how: 'ippool', name: n.name, note: 'noIp' };
       }
       return null;
     }
