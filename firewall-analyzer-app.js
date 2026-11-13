@@ -2189,7 +2189,10 @@ function onParsed(){
       $('conv-dst').value=CONV_RESULT;
       let convStatusHtml=`<span style="color:var(--green)">${tr('conv.done')}</span> — ${CONV_RESULT.split('\n').length} ${tr('conv.lines_unit')}  |  ${(CONV_RESULT.length/1024).toFixed(1)} KB`
         +` <button type="button" class="btn btn-ghost btn-sm" data-conv-report style="margin-left:8px">📄 ${tr('crpt.download')}</button>`
-        +(targetVendor==='fortigate'&&window.FwZip?` <button type="button" class="btn btn-ghost btn-sm" data-conv-pack style="margin-left:8px" title="${esc(tr('imp.btn_tip'))}">📦 ${tr('imp.btn')}</button>`:'');
+        +(()=>{ /* 匯入包（XN146／XN147）：逐行執行的廠牌為順序包，整份載入的廠牌為說明包 */
+          const k=window.FwZip&&Converter.importPackKind?Converter.importPackKind(targetVendor):null; if(!k) return '';
+          const bk=k==='order'?'imp.btn':'imp.btn_guide';
+          return ` <button type="button" class="btn btn-ghost btn-sm" data-conv-pack style="margin-left:8px" title="${esc(tr(bk+'_tip'))}">📦 ${tr(bk)}</button>`; })();
       const warnHtml=buildConversionWarningsHtml(srcParsed, targetVendor, _pm.applied ? { portModel: _pm.appliedModel } : null);
       if(warnHtml)convStatusHtml+='<br>'+warnHtml;
       if(convVdom)convStatusHtml+=`<br><span style="color:var(--text-dim);font-size:12px">⚠️ ${tr('conv.vdom_warn').replace('{vdom}',esc(convVdom))}</span>`;
@@ -2418,17 +2421,15 @@ function onParsed(){
 
   // FortiGate 匯入順序包（XN146）：依參照順序拆成編號檔案＋00_README_order.txt，打包成 zip
   function buildConvPack(){
-    if(!CONV_RESULT||CONV_TARGET!=='fortigate'||!window.FwZip)return null;
-    const pack=Converter.splitFortigateImport(CONV_RESULT);
+    if(!CONV_RESULT||!window.FwZip||!Converter.importPackKind(CONV_TARGET))return null;
     const src=(_CONV_NAMES[_pm.src]||_pm.src||'')+(_pm.vdom?` (VDOM ${_pm.vdom})`:'')+(_pm.applied&&_pm.appliedModel?` → ${_pm.appliedModel}`:'');
-    const readme=Converter.buildFortigateImportReadme(pack,tr,{ source:src, cycles:Converter.fortigateGroupCycles(_pm.parsed) });
-    return [{ name:'00_README_order.txt', text:readme }, ...pack.files.map(f=>({ name:f.name, text:f.text }))];
+    return Converter.buildImportPack(CONV_TARGET,CONV_RESULT,tr,{ source:src, vendorName:_CONV_NAMES[CONV_TARGET]||CONV_TARGET, parsed:_pm.parsed });
   }
   function downloadConvPack(){
     const files=buildConvPack();
     if(!files){showErr(tr('conv.no_result'));return;}
     const blob=new Blob([window.FwZip.createZip(files)],{type:'application/zip'});
-    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`fw_fortigate_import_${dateStr()}.zip`;
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`fw_${CONV_TARGET}_import_${dateStr()}.zip`;
     document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
   }
   window.buildConvPack=buildConvPack; window.downloadConvPack=downloadConvPack;

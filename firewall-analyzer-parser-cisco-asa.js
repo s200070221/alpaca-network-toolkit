@@ -160,11 +160,14 @@ const CiscoASAParser = (() => {
         const mS4 = t.match(/^subnet\s+(\S+)\s+(\S+)/);
         const mR = t.match(/^range\s+(\S+)\s+(\S+)/);
         const mN = t.match(/^network-object\s+(.+)/);
+        // 巢狀群組 group-object NAME（Cisco ASA 設定指南：子群組須先定義），成員記為 object-group NAME（XN147）
+        const mG = t.match(/^group-object\s+(\S+)/);
         if (mH) members.push(mH[1]);
         else if (mS6) members.push(mS6[1]);
         else if (mS4) members.push(`${mS4[1]}/${mS4[2]}`);
         else if (mR) members.push(`${mR[1]}-${mR[2]}`);
         else if (mN) members.push(mN[1].trim());
+        else if (mG && mGrp) members.push('object-group ' + mG[1]);
       }
       // category：ASA 語法沒有獨立的 v4/v6 物件關鍵字（host/subnet 兩者共用，格式差異只在值
       // 本身），buildAddrTypeMap()/buildCiscoASAAddrTypeMap() 對 'address'/'address6' 一視

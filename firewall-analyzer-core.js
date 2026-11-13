@@ -111,6 +111,9 @@ function _literalAddrMatch(raw, targetInt, addrList, seen, vdom) {
   const t = raw.trim();
   if (t.startsWith('!')) { const r = _addrMatchesIp(t.slice(1), targetInt, addrList, seen, vdom); return r === null ? null : !r; }
   if (t.startsWith('@')) return _addrMatchesIp(t.slice(1), targetInt, addrList, seen, vdom);
+  // Cisco ASA 群組成員「object 名稱」「object-group 名稱」：去掉前綴再查物件（XN147）
+  const mObjRef = t.match(/^object(?:-group)?\s+(\S+)$/i);
+  if (mObjRef) return _addrMatchesIp(mObjRef[1], targetInt, addrList, seen, vdom);
   const lc = t.toLowerCase();
   if (lc === 'any4') return typeof targetInt !== 'object';
   if (lc === 'any6') return typeof targetInt === 'object';

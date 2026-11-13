@@ -765,7 +765,7 @@ const Converter = (() => {
           L.push(`    <Host><Name>${esc(a.name)}</Name><IPAddress>${esc(ip)}</IPAddress><Subnet>${esc(nm)}</Subnet><Description>${esc(a.comment)}</Description></Host>`);
         }
       });
-      parsed.addresses.filter(a=>a.category==='address-group').forEach(g=>{
+      topoGroups(parsed.addresses.filter(a=>a.category==='address-group')).forEach(g=>{
         L.push(`    <HostGroup><Name>${esc(g.name)}</Name>`);
         sl(g.members).forEach(m=>L.push(`      <Host>${esc(m)}</Host>`));
         L.push(`      <Description>${esc(g.comment)}</Description></HostGroup>`);
@@ -775,7 +775,7 @@ const Converter = (() => {
         const port=p.includes('UDP')?(s.udpPorts!=='-'?s.udpPorts:s.tcpPorts):(s.tcpPorts!=='-'?s.tcpPorts:s.udpPorts);
         L.push(`    <Service><Name>${esc(s.name)}</Name><Type>${p.includes('ICMP')?'ICMP':p.includes('UDP')?'UDP':'TCP'}</Type><DestinationPort>${esc(port||'-')}</DestinationPort><Description>${esc(s.comment)}</Description></Service>`);
       });
-      parsed.services.filter(s=>s.category==='group').forEach(g=>{
+      topoGroups(parsed.services.filter(s=>s.category==='group')).forEach(g=>{
         L.push(`    <ServiceGroup><Name>${esc(g.name)}</Name>`);
         sl(g.members).forEach(m=>L.push(`      <ServiceList>${esc(m)}</ServiceList>`));
         L.push('    </ServiceGroup>');
@@ -951,7 +951,7 @@ const Converter = (() => {
         else L.push(`set network-object network "${qstr(a.name)}" ipaddr ${ip} mask-length ${sfx}`);
       }
     });
-    parsed.addresses.filter(a=>a.category==='address-group').forEach(g=>{ sl(g.members).forEach(m=>L.push(`set network-object group "${qstr(g.name)}" add "${qstr(m)}"`)); });
+    topoGroups(parsed.addresses.filter(a=>a.category==='address-group')).forEach(g=>{ sl(g.members).forEach(m=>L.push(`set network-object group "${qstr(g.name)}" add "${qstr(m)}"`)); });
     L.push('');
     // Services
     parsed.services.filter(s=>s.category==='custom').forEach(s=>{
@@ -960,7 +960,7 @@ const Converter = (() => {
       else if(p.includes('udp')) { const port=s.udpPorts!=='-'?s.udpPorts:s.tcpPorts; L.push(`set service udp "${qstr(s.name)}" port ${port||'0'}`); }
       else { L.push(`set service tcp "${qstr(s.name)}" port ${s.tcpPorts||'0'}`); }
     });
-    parsed.services.filter(s=>s.category==='group').forEach(g=>{ sl(g.members).forEach(m=>L.push(`set service group "${qstr(g.name)}" add "${qstr(m)}"`)); });
+    topoGroups(parsed.services.filter(s=>s.category==='group')).forEach(g=>{ sl(g.members).forEach(m=>L.push(`set service group "${qstr(g.name)}" add "${qstr(m)}"`)); });
     L.push('');
     // Schedules
     parsed.schedules.forEach(s=>{ L.push(`set time "${qstr(s.name)}" type ${s.type||'recurring'}`); if(s.start) L.push(`set time "${qstr(s.name)}" start ${s.start}`); if(s.end) L.push(`set time "${qstr(s.name)}" end ${s.end}`); });
@@ -1107,7 +1107,7 @@ const Converter = (() => {
       L.push('      </address>');
       if(parsed.addresses.filter(a=>a.category==='address-group'||a.category==='address-group6').length) {
         L.push('      <address-group>');
-        parsed.addresses.filter(a=>a.category==='address-group'||a.category==='address-group6').forEach(g=>{ L.push(`        <entry name="${esc(g.name)}"><static>${sl(g.members).map(m=>`<member>${esc(m)}</member>`).join('')}</static></entry>`); });
+        topoGroups(parsed.addresses.filter(a=>a.category==='address-group'||a.category==='address-group6')).forEach(g=>{ L.push(`        <entry name="${esc(g.name)}"><static>${sl(g.members).map(m=>`<member>${esc(m)}</member>`).join('')}</static></entry>`); });
         L.push('      </address-group>');
       }
     }
@@ -1119,7 +1119,7 @@ const Converter = (() => {
       L.push('      </service>');
     }
     const sgrps2=parsed.services.filter(s=>s.category==='group');
-    if(sgrps2.length) { L.push('      <service-group>'); sgrps2.forEach(g=>L.push(`        <entry name="${esc(g.name)}"><members>${sl(g.members).map(m=>`<member>${esc(m)}</member>`).join('')}</members></entry>`)); L.push('      </service-group>'); }
+    if(sgrps2.length) { L.push('      <service-group>'); topoGroups(sgrps2).forEach(g=>L.push(`        <entry name="${esc(g.name)}"><members>${sl(g.members).map(m=>`<member>${esc(m)}</member>`).join('')}</members></entry>`)); L.push('      </service-group>'); }
     // Schedules
     if(parsed.schedules.length) { L.push('      <schedule>'); parsed.schedules.forEach(s=>{ L.push(`        <entry name="${esc(s.name)}"><recurring><weekly><monday><member>${esc(s.start||'08:00')}-${esc(s.end||'18:00')}</member></monday></weekly></recurring></entry>`); }); L.push('      </schedule>'); }
     // NAT
@@ -1244,7 +1244,8 @@ const Converter = (() => {
         else { L.push(`${I(2)}protocol ${p.includes('udp')?'udp':'tcp'};`); const port2=p.includes('udp')?(s.udpPorts!=='-'?s.udpPorts:s.tcpPorts):(s.tcpPorts!=='-'?s.tcpPorts:s.udpPorts); if(port2&&port2!=='-') L.push(`${I(2)}destination-port ${port2};`); }
         L.push(`${I(1)}}`);
       });
-      parsed.services.filter(s=>s.category==='group').forEach(g=>{ L.push(`${I(1)}application-set ${g.name} {`); sl(g.members).forEach(m=>L.push(`${I(2)}application ${m};`)); L.push(`${I(1)}}`); });
+      const sgN=new Set(parsed.services.filter(s=>s.category==='group').map(g=>g.name));
+      topoGroups(parsed.services.filter(s=>s.category==='group')).forEach(g=>{ L.push(`${I(1)}application-set ${g.name} {`); sl(g.members).forEach(m=>L.push(`${I(2)}${sgN.has(m)?'application-set':'application'} ${m};`)); L.push(`${I(1)}}`); });
       L.push('}'); L.push('');
     }
 
@@ -1272,7 +1273,9 @@ const Converter = (() => {
       if(zA.length||zG.length){
         L.push(`${I(3)}address-book {`);
         zA.forEach(a=>{ if(a.type==='iprange') L.push(`${I(4)}address ${a.name} range-address ${a.startIp} to ${a.endIp};`); else if(a.type==='fqdn') L.push(`${I(4)}address ${a.name} dns-name ${a.fqdn};`); else { const s2=(a.subnet&&a.subnet!=='-')?addrCidr(a):(a.ip&&!String(a.ip).includes(':')?cidr(a.ip,a.mask):addrCidr(a)); L.push(`${I(4)}address ${a.name} ${s2};`); } });
-        zG.forEach(g=>{L.push(`${I(4)}address-set ${g.name} {`); sl(g.members).forEach(m=>L.push(`${I(5)}address ${m};`)); L.push(`${I(4)}}`);});
+        // 成員是另一個 address-set 時寫 address-set（Junos 巢狀 address-set），群組依成員排序（XN147）
+        const zGN=new Set(zG.map(g=>g.name));
+        topoGroups(zG).forEach(g=>{L.push(`${I(4)}address-set ${g.name} {`); sl(g.members).forEach(m=>L.push(`${I(5)}${zGN.has(m)?'address-set':'address'} ${m};`)); L.push(`${I(4)}}`);});
         L.push(`${I(3)}}`);
       }
       L.push(`${I(2)}}`);
@@ -1605,9 +1608,11 @@ const Converter = (() => {
         else L.push(` subnet ${ip} ${maskOf(sfx)}`);
       }
     });
-    parsed.addresses.filter(a=>a.category==='address-group').forEach(g=>{
+    // 成員是另一個群組時寫 group-object，群組依成員排序（子群組先定義，XN147）
+    const asaAG=parsed.addresses.filter(a=>a.category==='address-group'), asaAGN=new Set(asaAG.map(g=>g.name));
+    topoGroups(asaAG).forEach(g=>{
       L.push(`object-group network ${g.name}`);
-      sl(g.members).forEach(m=>L.push(` network-object object ${m}`));
+      sl(g.members).forEach(m=>L.push(asaAGN.has(m)?` group-object ${m}`:` network-object object ${m}`));
     });
     parsed.services.filter(s=>s.category==='custom').forEach(s=>{
       const p=(s.proto||'tcp').toLowerCase();
@@ -1615,9 +1620,10 @@ const Converter = (() => {
       if(p.includes('icmp')) L.push(' service icmp');
       else { const port=p.includes('udp')?(s.udpPorts!=='-'?s.udpPorts:s.tcpPorts):(s.tcpPorts!=='-'?s.tcpPorts:s.udpPorts); L.push(` service ${p.includes('udp')?'udp':'tcp'} destination eq ${port||'0'}`); }
     });
-    parsed.services.filter(s=>s.category==='group').forEach(g=>{
+    const asaSG=parsed.services.filter(s=>s.category==='group'), asaSGN=new Set(asaSG.map(g=>g.name));
+    topoGroups(asaSG).forEach(g=>{
       L.push(`object-group service ${g.name}`);
-      sl(g.members).forEach(m=>L.push(` service-object object ${m}`));
+      sl(g.members).forEach(m=>L.push(asaSGN.has(m)?` group-object ${m}`:` service-object object ${m}`));
     });
     L.push('');
 
@@ -1826,7 +1832,7 @@ const Converter = (() => {
     }
     if(addrGrps.length) {
       L.push('  <AddressGroups>');
-      addrGrps.forEach(g=>{
+      topoGroups(addrGrps).forEach(g=>{
         L.push('    <AddressGroup>');
         L.push(`      <Name>${esc(g.name)}</Name>`);
         sl(g.members).forEach(m=>L.push(`      <Member>${esc(m)}</Member>`));
@@ -1852,7 +1858,7 @@ const Converter = (() => {
     }
     if(svcGrps.length) {
       L.push('  <ServiceGroups>');
-      svcGrps.forEach(g=>{
+      topoGroups(svcGrps).forEach(g=>{
         L.push('    <ServiceGroup>');
         L.push(`      <Name>${esc(g.name)}</Name>`);
         sl(g.members).forEach(m=>L.push(`      <Member>${esc(m)}</Member>`));
@@ -2607,6 +2613,16 @@ const Converter = (() => {
       // 接受網域名稱字面值，非本輪臆測
       const neededLists=new Map(); // name -> array of literal values
       const isLiteralAddr=v=>/^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/.test(v)||/^[0-9a-f:]+:[0-9a-f:]*(\/\d{1,3})?$/i.test(v);
+      function mtExpand(name,seen){
+        if(seen.has(name)) return [];
+        seen.add(name);
+        const o=(parsed.addresses||[]).find(x=>x.name===name&&(x.category==='address'||x.category==='address-group'));
+        if(!o) return isLiteralAddr(name)?[name]:[];
+        if(o.category==='address-group') return [...new Set(sl(o.members).flatMap(m=>mtExpand(m,seen)))];
+        if(o.type==='iprange') return [`${o.startIp}-${o.endIp}`];
+        if(o.type==='fqdn') return [o.fqdn];
+        return [addrCidr(o)];
+      }
       function addrRef(val){
         const tok=sl(val)[0];
         if(!tok||/^(any|all|-)$/i.test(tok))return null;
@@ -2615,7 +2631,8 @@ const Converter = (() => {
         if(!obj)return{list:false,value:tok};
         if(!neededLists.has(obj.name)){
           let members;
-          if(obj.category==='address-group') members=sl(obj.members);
+          // 群組成員多為物件名稱（RouterOS address= 只接受位址），遞迴展開成實際位址；循環引用略過（XN147）
+          if(obj.category==='address-group') members=mtExpand(obj.name,new Set());
           else if(obj.type==='iprange') members=[`${obj.startIp}-${obj.endIp}`];
           else if(obj.type==='fqdn') members=[obj.fqdn];
           else members=[addrCidr(obj)];
@@ -2953,6 +2970,125 @@ const Converter = (() => {
     return L.join('\n')+'\n';
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  //  其他廠牌的匯入包（XN147）
+  //  order：逐行執行、遇錯即停的格式（ASA CLI、RouterOS .rsc、Zyxel .zysh），依參照順序拆成編號檔案
+  //  guide：整份載入後一次生效的格式（XML、Junos、config.boot、UCI），附 README 與完整轉換檔
+  //  Check Point、Sophos、SonicWall 的輸出不是可直接匯入的格式，不提供（null）
+  // ══════════════════════════════════════════════════════════════════════════
+  const IMPORT_SPECS={
+    ciscoasa:{ kind:'order', ext:'txt', split:'indent', comment:/^[:!]/, how:['imp.asa_how','imp.asa_apply','imp.asa_save'], stages:[
+      { id:'system_base', re:/^(hostname|domain-name|clock|dns|names?|ntp|logging|snmp-server)\b/ },
+      { id:'interfaces',  re:/^interface\b/ },
+      { id:'routing',     re:/^(route|router)\b/ },
+      { id:'objects',     re:/^(object|object-group)\b/ },
+      { id:'acl',         re:/^access-list\b/ },
+      { id:'nat',         re:/^nat\b/ },
+      { id:'vpn',         re:/^(crypto|tunnel-group|group-policy|webvpn)\b/ },
+      { id:'admins',      re:/^(username|aaa|ssh|http|telnet|enable)\b/ },
+      { id:'apply',       re:/^access-group\b/ },
+      { id:'ha',          re:/^failover\b/ } ] },
+    mikrotik:{ kind:'order', ext:'rsc', split:'path', comment:/^#/, how:['imp.mt_how','imp.mt_safe','imp.mt_iface'], stages:[
+      { id:'system_base', re:/^\/(system|snmp|ip dns|ip service)\b/ },
+      { id:'interfaces',  re:/^\/(interface|ip address|ipv6 address)\b/ },
+      { id:'objects',     re:/^\/(ip|ipv6) firewall address-list\b/ },
+      { id:'routing',     re:/^\/(ip route|ipv6 route|routing)\b/ },
+      { id:'vpn',         re:/^\/ip ipsec\b/ },
+      { id:'nat',         re:/^\/(ip|ipv6) firewall nat\b/ },
+      { id:'firewall',    re:/^\/(ip|ipv6) firewall\b/ },
+      { id:'admins',      re:/^\/user\b/ } ] },
+    zyxel:{ kind:'order', ext:'zysh', split:'indent', comment:/^!/, prefix:'configure terminal', how:['imp.zx_how','imp.zx_conf','imp.zx_save'], stages:[
+      { id:'system_base', re:/^(hostname|domainname|ntp|clock|logging|snmp-server)\b/ },
+      { id:'interfaces',  re:/^interface\b/ },
+      { id:'routing',     re:/^(ip route|router)\b/ },
+      { id:'objects',     re:/^(address-object|service-object|object-group|schedule-object)\b/ },
+      { id:'vpn',         re:/^(isakmp|crypto|ipsec|vpn|isakmp-policy)\b/ },
+      { id:'nat',         re:/^(ip virtual-server|nat)\b/ },
+      { id:'policies',    re:/^secure-policy\b/ },
+      { id:'admins',      re:/^(username|users?)\b/ } ] },
+    paloalto:  { kind:'guide', files:[{ name:'paloalto_config.xml' }], how:['imp.pa_how'] },
+    juniper:   { kind:'guide', files:[{ name:'juniper_srx.conf' }], how:['imp.jn_how'] },
+    edgerouter:{ kind:'guide', files:[{ name:'config.boot' }], how:['imp.er_how'] },
+    pfsense:   { kind:'guide', files:[{ name:'pfsense_config.xml' }], how:['imp.pf_how'] },
+    openwrt:   { kind:'guide', files:[{ name:'network.uci', pkg:'network' }, { name:'firewall.uci', pkg:'firewall' }], how:['imp.ow_how'] },
+    ciscoftd:  { kind:'guide', files:[{ name:'ftd_reference.txt' }], how:['imp.ftd_how'] },
+  };
+  function importPackKind(target){ return target==='fortigate'?'order':(IMPORT_SPECS[target]?IMPORT_SPECS[target].kind:null); }
+  // 逐行執行格式的拆檔：indent＝頂層指令＋縮排子行（與 exit）為一段；path＝RouterOS 的 /路徑 行到下一個 /路徑 行為一段
+  function splitOrderImport(target, text){
+    const sp=IMPORT_SPECS[target];
+    const lines=String(text||'').replace(/\r\n?/g,'\n').split('\n');
+    const header=[], blocks=[];
+    let cur=null;
+    lines.forEach(l=>{
+      if(sp.split==='path'){
+        if(/^\//.test(l)){ cur={ head:l.trim(), lines:[l] }; blocks.push(cur); return; }
+        if(!cur){ if(sp.comment.test(l)) header.push(l); return; }
+        if(l.trim()) cur.lines.push(l);
+        return;
+      }
+      if(!l.trim()) return;
+      if(/^\s/.test(l)||/^exit\s*$/.test(l)){ if(cur) cur.lines.push(l); return; }
+      if(sp.comment.test(l)){ if(!blocks.length) header.push(l); return; }
+      cur={ head:l.trim(), lines:[l] }; blocks.push(cur);
+    });
+    const byStage=Object.create(null);
+    blocks.forEach(b=>{ const st=(sp.stages.find(x=>x.re.test(b.head))||{id:'other'}).id; (byStage[st]||(byStage[st]=[])).push(b); });
+    const order=[...sp.stages.map(x=>x.id),'other'];
+    const files=[]; let n=0;
+    order.forEach(id=>{
+      const bl=byStage[id]; if(!bl) return;
+      n++;
+      const num=id==='other'?'98':String(n).padStart(2,'0');
+      const body=bl.map(b=>b.lines.join('\n')).join(sp.split==='path'?'\n\n':'\n');
+      files.push({ name:`${num}_${id}.${sp.ext}`, stage:id, count:bl.length, text:(sp.prefix?sp.prefix+'\n':'')+body+'\n' });
+    });
+    return { files, header };
+  }
+  // 整份載入格式：OpenWrt 依 package 行拆成 network／firewall 兩檔，其餘為單一檔案
+  function splitGuideImport(target, text){
+    const sp=IMPORT_SPECS[target], t=String(text||'').replace(/\r\n?/g,'\n');
+    if(sp.files.length===1) return { files:[{ name:sp.files[0].name, stage:'full', text:t.endsWith('\n')?t:t+'\n' }], header:[] };
+    const parts=Object.create(null); let pkg=null;
+    t.split('\n').forEach(l=>{ const m=l.match(/^package\s+(\S+)/); if(m) pkg=m[1]; if(pkg) (parts[pkg]||(parts[pkg]=[])).push(l); });
+    return { files:sp.files.filter(f=>parts[f.pkg]).map(f=>({ name:f.name, stage:f.pkg, text:parts[f.pkg].join('\n').replace(/\n+$/,'')+'\n' })), header:[] };
+  }
+  // 依目標組出 zip 內容 [{name,text}]；不支援的目標回傳 null。tr：介面翻譯函式；opts：{ source, vendorName, parsed }
+  function buildImportPack(target, text, tr, opts){
+    const o=opts||{};
+    const t=(k,p)=>{ let s=tr(k); Object.entries(p||{}).forEach(([a,b])=>{ s=s.split('{'+a+'}').join(String(b)); }); return s; };
+    if(target==='fortigate'){
+      const pack=splitFortigateImport(text);
+      return [{ name:'00_README_order.txt', text:buildFortigateImportReadme(pack,tr,{ source:o.source, cycles:fortigateGroupCycles(o.parsed) }) }, ...pack.files.map(f=>({ name:f.name, text:f.text }))];
+    }
+    const sp=IMPORT_SPECS[target]; if(!sp) return null;
+    const vn=o.vendorName||target, L=[];
+    if(sp.kind==='order'){
+      const pack=splitOrderImport(target,text);
+      L.push(t('imp.readme_title_v',{v:vn}));
+      if(o.source) L.push(t('imp.readme_source',{v:o.source}));
+      L.push(''); L.push(t('imp.readme_order'));
+      // 基本、介面、VPN、帳號的階段說明與 FortiGate 不同（FortiGate 的說明含其專屬內容），改用通用說明
+      const stKey=id=>['system_base','interfaces','vpn','admins'].includes(id)?'imp.gstage_'+id:'imp.stage_'+id;
+      pack.files.forEach(f=>L.push(`  ${f.name}  ${t(stKey(f.stage))}  (${t('imp.cmds',{n:f.count})})`));
+      L.push('');
+      ['imp.readme_backup',...sp.how,'imp.readme_review'].forEach(k=>L.push('- '+t(k)));
+      if(pack.files.some(f=>f.stage==='admins')) L.push('- '+t('imp.readme_admin'));
+      if(pack.files.some(f=>f.stage==='other')) L.push('- '+t('imp.readme_other'));
+      if(target==='zyxel'&&o.parsed&&(o.parsed.addresses||[]).some(a=>a.category==='address-group')) L.push('- '+t('imp.zx_group'));
+      if(pack.header.length){ L.push(''); L.push(t('imp.readme_header')); pack.header.forEach(h=>L.push('  '+h)); }
+      return [{ name:'00_README_order.txt', text:L.join('\n')+'\n' }, ...pack.files.map(f=>({ name:f.name, text:f.text }))];
+    }
+    const pack=splitGuideImport(target,text);
+    L.push(t('imp.guide_title',{v:vn}));
+    if(o.source) L.push(t('imp.readme_source',{v:o.source}));
+    L.push('');
+    pack.files.forEach(f=>L.push('  '+f.name));
+    L.push('');
+    ['imp.readme_backup','imp.guide_note',...sp.how,'imp.readme_review'].forEach(k=>L.push('- '+t(k)));
+    return [{ name:'00_README.txt', text:L.join('\n')+'\n' }, ...pack.files.map(f=>({ name:f.name, text:f.text }))];
+  }
+
   function convert(parsed, targetVendor) {
     parsed = _guardPolicies(_applyFamilies(_nfApply(parsed), targetVendor));
     switch(targetVendor) {
@@ -3150,7 +3286,7 @@ const Converter = (() => {
     return getConversionCaveatItems(parsed, targetVendor, opts).map(it=>caveatText(it, trFn?trFn(it.key):null));
   }
 
-  return { convert, splitFortigateImport, buildFortigateImportReadme, fortigateGroupCycles, getConversionLoss, getConversionCaveats, getConversionCaveatItems, CAVEAT_ZH, toFortigate, toSophos, toCheckpoint, toPaloAlto, toJuniper, toPfsense, toCiscoASA, toCiscoFTD, toSonicWall, toMikrotik, toZyxel, toEdgeRouter, toOpenWrt };
+  return { convert, importPackKind, buildImportPack, splitOrderImport, splitGuideImport, splitFortigateImport, buildFortigateImportReadme, fortigateGroupCycles, getConversionLoss, getConversionCaveats, getConversionCaveatItems, CAVEAT_ZH, toFortigate, toSophos, toCheckpoint, toPaloAlto, toJuniper, toPfsense, toCiscoASA, toCiscoFTD, toSonicWall, toMikrotik, toZyxel, toEdgeRouter, toOpenWrt };
 })();
 
 
