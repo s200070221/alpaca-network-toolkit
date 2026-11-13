@@ -1301,6 +1301,36 @@ const FortigateParser = (() => {
     });
   }
 
+  // 用到哪些會依型號＋版本被移除的功能（XN144，型號限制 FwModelLimits 用）。關鍵字依 FortiOS 7.4 CLI Reference：
+  // config firewall policy（inspection-mode proxy、waf／icap／ssh-filter／videofilter／casb-profile、ztna-status、wanopt）、
+  // config firewall vip（server-type http／https／imaps／pop3s／smtps／ssl 為 L7 虛擬伺服器）、config web-proxy explicit（status）、
+  // config firewall proxy-policy、config firewall access-proxy；SSL VPN 為 vpn ssl settings＋web portal 的 tunnel-mode／web-mode。
+  // 多 VDOM 時同名區段合併判斷；sslvpn 為 null＝沒有 vpn ssl settings 區塊不判斷
+  function parseFeatureUse(text) {
+    const lines = String(text).split(/\r?\n/);
+    const sec = k => extractSection(lines, k);
+    const edits = k => parseEdits(sec(k).sectionLines);
+    const setIs = (t, k, v) => new RegExp('^\\s*set\\s+' + k + '\\s+"?' + v + '"?\\s*$', 'im').test(t);
+    const setAny = (t, k) => new RegExp('^\\s*set\\s+' + k + '\\s+\\S', 'im').test(t);
+    const ssl = sec('vpn ssl settings'), sslT = ssl.sectionLines.join('\n');
+    const sslvpn = ssl.found ? !setIs(sslT, 'status', 'disable') && String(gvs(sslT, 'source-interface') || '').replace(/"/g, '').split(/[\s,]+/).some(x => x && x !== '-') : null;
+    const portals = edits('vpn ssl web portal'), pols = edits('firewall policy');
+    const PROXY_ONLY = ['waf-profile', 'icap-profile', 'ssh-filter-profile', 'videofilter-profile', 'casb-profile'];
+    return {
+      sslvpn,
+      portalTunnel: portals.filter(e => setIs(e.text, 'tunnel-mode', 'enable')).map(e => e.name),
+      portalWeb: portals.filter(e => setIs(e.text, 'web-mode', 'enable')).map(e => e.name),
+      proxyInspect: pols.filter(e => setIs(e.text, 'inspection-mode', 'proxy')).map(e => e.name),
+      proxyOnly: pols.map(e => ({ id: e.name, kinds: PROXY_ONLY.filter(k => setAny(e.text, k)) })).filter(x => x.kinds.length),
+      ztna: pols.filter(e => setIs(e.text, 'ztna-status', 'enable')).map(e => e.name),
+      accessProxy: edits('firewall access-proxy').map(e => e.name),
+      proxyPolicy: edits('firewall proxy-policy').map(e => e.name),
+      explicitProxy: setIs(sec('web-proxy explicit').sectionLines.join('\n'), 'status', 'enable'),
+      l7Vip: edits('firewall vip').filter(e => /^\s*set\s+server-type\s+(?:http|https|imaps|pop3s|smtps|ssl)\s*$/im.test(e.text)).map(e => e.name),
+      wanopt: pols.filter(e => setIs(e.text, 'wanopt', 'enable')).map(e => e.name),
+    };
+  }
+
   function parse(text) {
     const { globalLines, vdomBlocks, isMultiVdom } = splitTopLevel(text);
 
@@ -1457,7 +1487,7 @@ const FortigateParser = (() => {
 
     return {
       vendor:     'FortiGate',
-      deviceInfo: parseDeviceInfo(text, isMultiVdom, vdomNames),
+      deviceInfo: Object.assign(parseDeviceInfo(text, isMultiVdom, vdomNames), { featureUse: parseFeatureUse(text) }),
       interfaces,
       switchGroups: [...parseSwitchGroups(globalLineArr, isMultiVdom ? 'global' : 'root'),
         ...(isMultiVdom ? vdomBlocks.flatMap(vb => parseSwitchGroups(vb.lines, vb.name)) : [])],

@@ -1560,6 +1560,8 @@ function onParsed(){
           [buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()), 1],
           [buildExposedServicesHtml(_exp), (_exp.items || []).length],
           [buildVulnCheckHtml({ text: _fwVulnText(), version: _fwVulnVer[_acceptedRiskHost()] || '', parsed: PARSED, showverMiss: _fwShowverMiss, showverText: _fwShowverText }), 1],
+          // 型號與版本限制（XN144）：只有 FortiGate；有命中才放在前面，沒有時收進沒有發現的區塊
+          ...(PARSED.vendor === 'FortiGate' && window.FwModelLimits ? (() => { const _ml = window.FwModelLimits.assess(PARSED, _fwVulnVer[_acceptedRiskHost()] || ''); return [[buildModelLimitHtml(PARSED, _fwVulnVer[_acceptedRiskHost()] || ''), (_ml.items || []).length]]; })() : []),
           [buildDisabledPoliciesHtml(_dis), _dis.length], [buildCrossVdomHtml(_xv), _xv.length], [buildMissingCommentsHtml(_mc), _mc.length],
           [buildOversizedGroupsHtml(_og), _og.length], [buildNamingConventionHtml(_nm, _loadNamingRules()), (_nm.results || []).length + (_nm.errors || []).length],
           [buildExpiredRulesHtml(_ex, _loadExpiryKeywords()), (_ex.results || []).length],

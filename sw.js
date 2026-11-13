@@ -57,6 +57,7 @@ const FILES = [
   'firewall-analyzer-parser-wlc.js',
   'firewall-analyzer-parser-zyxel.js',
   'firewall-analyzer-pathchain.js',
+  'firewall-analyzer-model-limits.js',
   'firewall-analyzer-portmap.js',
   'firewall-analyzer-reporter.js',
   'firewall-analyzer-sections.js',

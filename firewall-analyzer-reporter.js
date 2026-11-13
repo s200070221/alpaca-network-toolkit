@@ -784,6 +784,13 @@ b{font-weight:600}small{color:#64748b;font-size:11px}
 <div class="card"><h2>${esc(tr('exec.title'))}</h2>${buildFirewallExecSummary(info.hostname, health).map(x=>`<p style="margin:4px 0">${esc(x)}</p>`).join('')}</div>
 ${urgentHtml}
 ${(()=>{ const k=/F5 BIG-IP/.test(parsed.vendor||'')?'f5':parsed.vendor==='Cisco IOS'?'ios':''; return k ? `<div class="card"><h2>${esc(tr(k+'.scope_title'))}</h2><p style="margin:4px 0">${esc(tr(k+'.scope_body'))}</p><p style="margin:4px 0;color:#64748b">${esc(tr(k+'.scope_not'))}</p></div>` : ''; })()}
+${(()=>{ /* 型號與版本限制（XN144）：只有命中時才放；版本以設定檔為準（補填版本只存在稽核頁記憶體） */
+  const M = typeof window !== 'undefined' && window.FwModelLimits ? window.FwModelLimits : null; if (!M) return '';
+  const a = M.assess(parsed, ''); if (!a.supported || !a.items || !a.items.length) return '';
+  return `<div class="card"><h2>${esc(tr('ml.title'))}</h2><p style="margin:4px 0">${esc(tr('ml.model').replace('{model}', a.model).replace('{series}', a.series).replace('{version}', a.version || '-'))}</p>`
+    + `<table><thead><tr><th>${esc(tr('ml.col_limit'))}</th><th>${esc(tr('ml.col_status'))}</th><th>${esc(tr('ml.col_uses'))}</th><th>${esc(tr('ml.col_src'))}</th></tr></thead><tbody>`
+    + a.items.map(it => `<tr><td>${esc(tr('ml.lim_' + it.id))}</td><td>${esc(tr('ml.st_' + it.status).replace('{since}', it.since))}</td><td>${it.uses.map(u => esc(tr('ml.f_' + u.kind) + '：' + u.refs.slice(0, 10).join(', '))).join('<br>')}</td><td><a href="${esc(it.src)}">${esc(tr('ml.src'))}</a></td></tr>`).join('')
+    + `</tbody></table><p style="margin:4px 0;color:#64748b">${esc(tr('ml.asof').replace('{date}', a.asof))}</p></div>`; })()}
 
 <div class="info-grid">
   <div class="info-item"><div class="k">${tr('rpt.vendor_label')}</div><div class="v">${esc(info.vendor)}</div></div>

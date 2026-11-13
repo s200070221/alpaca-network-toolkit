@@ -1062,6 +1062,33 @@
     return h + '<div style="font-size:11px;color:var(--text-dim);margin-top:6px">' + esc(tr('vuln.disclaimer')) + '</div></div>';
   }
 
+  // 型號與版本限制（XN144）：FwModelLimits.assess() 列出這台型號升級 FortiOS 後會被移除、而目前設定正在使用的功能；
+  // 屬升版規劃資訊，不計入健康度。version：使用者補填的完整版本（與韌體卡片共用）
+  function buildModelLimitHtml(parsed, version) {
+    const M = typeof window !== 'undefined' && window.FwModelLimits ? window.FwModelLimits : null;
+    if (!M) return '';
+    const a = M.assess(parsed, version);
+    if (!a.supported) return '';
+    let h = '<div id="model-limit-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('ml.title')) + '</div>';
+    h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('ml.hint')) + '</div>';
+    h += `<div style="font-size:11px;padding:6px 10px;margin-bottom:8px;background:var(--bg2);border-left:3px solid var(--orange,#f59e0b);border-radius:4px">${esc(tr('ml.asof').replace('{date}', a.asof))}</div>`;
+    if (!a.known) return h + '<div class="nodata" style="padding:10px 0">' + esc(tr('ml.unknown_model').replace('{model}', a.model)) + '</div></div>';
+    h += `<div style="font-size:12px;margin-bottom:8px">${esc(tr('ml.model').replace('{model}', a.model).replace('{series}', a.series).replace('{version}', a.version || '-'))}</div>`;
+    if (!a.items.length) return h + '<div class="nodata" style="padding:10px 0;color:var(--green)">' + esc(tr('ml.none')) + '</div></div>';
+    h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + ['ml.col_limit', 'ml.col_status', 'ml.col_uses', 'ml.col_src'].map(k => esc(tr(k))).join('</th><th>') + '</th></tr></thead><tbody>';
+    a.items.forEach(it => {
+      const st = tr('ml.st_' + it.status).replace('{since}', it.since);
+      const pc = it.status === 'active' ? 'p-warn' : 'p-deny';
+      const uses = it.uses.map(u => `<div><b>${esc(tr('ml.f_' + u.kind))}</b>：<span class="mono">${esc(u.refs.slice(0, 10).join(', ') + (u.refs.length > 10 ? '…' : ''))}</span></div>`).join('');
+      const notes = [it.ramCheck ? tr('ml.ram_check').replace('{cmd}', a.ramCmd) : '', it.uncertain ? tr('ml.uncertain') : ''].filter(Boolean)
+        .map(n => `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-top:4px">${esc(n)}</div>`).join('');
+      const act = it.uses.some(u => /^ssl/.test(u.kind)) ? tr('ml.action_ssl') : tr('ml.action_proxy');
+      h += `<tr><td>${esc(tr('ml.lim_' + it.id))}<div style="font-size:11px;color:var(--text-dim);margin-top:4px">${esc(act)}</div>${notes}</td><td>${pill(st, pc)}</td><td style="font-size:12px">${uses}</td>` +
+        `<td style="font-size:11px"><a href="${esc(it.src)}" target="_blank" rel="noopener noreferrer">${esc(tr('ml.src'))}</a></td></tr>`;
+    });
+    return h + '</tbody></table></div></div>';
+  }
+
   function analyzeCompliance(parsed, opts) {
     const findings = [];
     // standards：僅供參考的常見資安標準關聯條號（業界廣泛公開引用的控制編號與主題，
