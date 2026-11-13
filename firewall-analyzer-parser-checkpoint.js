@@ -829,6 +829,51 @@ const CheckpointParser = (() => {
   }
 
   // ─── Main parse ───────────────────────────────────────────────────────────
+  // ─── Management API 指令（XN148）：SmartConsole 指令列或 mgmt_cli 的 add host／network／address-range／
+  // dns-domain／group／service-tcp／service-udp／service-icmp／service-group／access-rule（寫法依 Check Point
+  // Management API Reference 官方範例；mgmt_cli 前綴可有可無，值可加引號，清單參數寫 key.N）
+  const API_CMD_RE = /^\s*(?:mgmt_cli\s+)?add\s+(host|network|address-range|dns-domain|group|service-tcp|service-udp|service-icmp|service-group|access-rule)\s+(.*)$/i;
+  function apiArgs(rest) {
+    const toks = [], re = /"((?:[^"\\]|\\.)*)"|(\S+)/g; let m;
+    while ((m = re.exec(rest)) !== null) toks.push(m[1] !== undefined ? m[1] : m[2]);
+    const one = Object.create(null), many = Object.create(null);
+    for (let i = 0; i + 1 < toks.length; i += 2) {
+      const k = toks[i].toLowerCase(), v = toks[i + 1];
+      const lm = k.match(/^(members|source|destination|service)(?:\.(\d+))?$/);
+      if (lm) (many[lm[1]] || (many[lm[1]] = [])).push(v); else one[k] = v;
+    }
+    return { one, many };
+  }
+  function parseApiCommands(text) {
+    const addresses = [], services = [], policies = [];
+    let rid = 0;
+    const maskBits = mk => String(mk || '').split('.').reduce((n, o) => n + ((+o >>> 0).toString(2).match(/1/g) || []).length, 0);
+    String(text || '').split(/\r?\n/).forEach(ln => {
+      const m = ln.match(API_CMD_RE); if (!m) return;
+      const type = m[1].toLowerCase(), { one, many } = apiArgs(m[2]), name = one.name;
+      if (!name && type !== 'access-rule') return;
+      const base = { fqdn: '-', startIp: '-', endIp: '-', wildcard: '-', iface: '-', color: '0', comment: one.comments || '-', members: '-', _vdom: '' };
+      if (type === 'host') addresses.push(Object.assign({}, base, { category: 'address', name, type: 'ipmask', subnet: `${one['ip-address'] || one['ipv4-address'] || '-'}/32` }));
+      else if (type === 'network') addresses.push(Object.assign({}, base, { category: 'address', name, type: 'ipmask', subnet: `${one.subnet || one.subnet4 || '-'}/${one['mask-length'] || one['mask-length4'] || maskBits(one['subnet-mask'])}` }));
+      else if (type === 'address-range') addresses.push(Object.assign({}, base, { category: 'address', name, type: 'iprange', subnet: '-', startIp: one['ip-address-first'] || '-', endIp: one['ip-address-last'] || '-' }));
+      else if (type === 'dns-domain') addresses.push(Object.assign({}, base, { category: 'address', name, type: 'fqdn', subnet: '-', fqdn: name.replace(/^\./, '') }));
+      else if (type === 'group') addresses.push(Object.assign({}, base, { category: 'address-group', name, type: 'group', subnet: '-', members: (many.members || [one.members].filter(Boolean)).join(', ') || '-' }));
+      else if (type === 'service-tcp' || type === 'service-udp') { const tcp = type === 'service-tcp'; services.push({ category: 'custom', name, proto: tcp ? 'TCP' : 'UDP', tcpPorts: tcp ? one.port || '-' : '-', udpPorts: tcp ? '-' : one.port || '-', icmpType: '-', icmpCode: '-', comment: one.comments || '-', color: '0', category_name: '-', members: '-' }); }
+      else if (type === 'service-icmp') services.push({ category: 'custom', name, proto: 'ICMP', tcpPorts: '-', udpPorts: '-', icmpType: one['icmp-type'] || '-', icmpCode: one['icmp-code'] || '-', comment: one.comments || '-', color: '0', category_name: '-', members: '-' });
+      else if (type === 'service-group') services.push({ category: 'group', name, proto: 'GROUP', tcpPorts: '-', udpPorts: '-', icmpType: '-', icmpCode: '-', members: (many.members || [one.members].filter(Boolean)).join(', ') || '-', comment: one.comments || '-' });
+      else if (type === 'access-rule') {
+        rid++;
+        const lst = k => (many[k] || [one[k]].filter(Boolean)).join(', ') || 'Any';
+        policies.push({ id: String(rid), name: name || `Rule-${rid}`, srcIntf: 'Any', dstIntf: 'Any', srcAddr: lst('source'), dstAddr: lst('destination'),
+          service: lst('service'), schedule: 'Any', action: mapCpAction(one.action || 'Drop'), nat: 'disable', ippool: 'disable', poolname: '-',
+          logtraffic: one['track.type'] && !/^none$/i.test(one['track.type']) ? 'enable' : 'disable', logstart: '-',
+          utm: { av: '-', webfilter: '-', ips: '-', ssl: '-', appctrl: '-' }, status: /^false$/i.test(one.enabled || '') ? 'disable' : 'enable',
+          comments: one.comments || '-', users: '-', groups: '-', layer: one.layer || '-' });
+      }
+    });
+    return { addresses, services, policies };
+  }
+
   function parse(text) {
     if (isMgmtApiJson(text)) return parseMgmtApi(text);
     // 位址物件需先解析出來，才能建 addrTypeMap 供 policies 的 source/destination 名稱反查
@@ -836,16 +881,28 @@ const CheckpointParser = (() => {
     // 專屬 Gaia clish 關鍵字（ipaddr/mask-length/first-ip/last-ip），沒有 IPv6 位址物件會被
     // 解析進來，故此反查表對 Check Point 目前仍只能正確分類 v4 物件（已知限制，非本次修法
     // 範圍——查無官方文件佐證 IPv6 對應關鍵字寫法，不可臆測 schema）
+    // Management API 指令（XN148）：與其他格式的物件同名者以先解析到的為準
+    const api = parseApiCommands(text);
     const addresses = parseAddressObjects(text);
+    const addrNames = new Set(addresses.map(a => a.name));
+    api.addresses.forEach(a => { if (!addrNames.has(a.name)) addresses.push(a); });
+    const services = parseServiceObjects(text);
+    const svcNames = new Set(services.map(x => x.name));
+    api.services.forEach(x => { if (!svcNames.has(x.name)) services.push(x); });
+    const addrTypeMap = buildAddrTypeMap(addresses);
+    const policies = parsePolicies(text, addrTypeMap).concat(api.policies.map(p => {
+      const sx = _splitAddr(p.srcAddr, addrTypeMap), dx = _splitAddr(p.dstAddr, addrTypeMap);
+      return Object.assign(p, { srcAddr4: sx.v4, srcAddr6: sx.v6, dstAddr4: dx.v4, dstAddr6: dx.v6 });
+    }));
     return {
       vendor:     'CheckPoint',
       deviceInfo: parseDeviceInfo(text),
       interfaces: parseInterfaces(text),
-      policies:   parsePolicies(text, buildAddrTypeMap(addresses)),
+      policies,
       routes:     parseRoutes(text),
       vpn:        parseVPN(text),
       addresses,
-      services:   parseServiceObjects(text),
+      services,
       schedules:  parseSchedules(text),
       nat:        parseNAT(text),
       users:      parseUsers(text),

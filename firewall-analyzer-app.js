@@ -2181,6 +2181,7 @@ function onParsed(){
       if (_pm.src !== srcVendor || _pm.target !== targetVendor || _pm.vdom !== convVdom) Object.assign(_pm, { src: srcVendor, target: targetVendor, vdom: convVdom, model: '', map: null, applied: null, appliedModel: '', csvMsg: '', verify: null, auditCmp: null });
       _pm.parsed = srcParsed;
       const convInput = _pm.applied ? FwPortMap.applyMap(srcParsed, _pm.applied, targetVendor) : srcParsed;
+      _pm.convInput = convInput;  // 匯入包（Sophos XML API）依套用埠對應後的轉換來源產生（XN148）
       CONV_RESULT=Converter.convert(convInput,targetVendor);
       const vendorNames={fortigate:'FortiGate 7.4',sophos:'Sophos XGS XML',checkpoint:'Check Point Gaia',paloalto:'Palo Alto XML',juniper:'Juniper SRX Junos',pfsense:'pfSense config.xml',sonicwall:'SonicOS <6.2 XML',mikrotik:'RouterOS script',ciscoasa:'Cisco ASA CLI',ciscoftd:'Cisco FTD CLI'};
       $('conv-src-label').textContent=`${vendorNames[srcVendor]||srcVendor} ${tr('conv.src_suffix')}`;
@@ -2423,7 +2424,7 @@ function onParsed(){
   function buildConvPack(){
     if(!CONV_RESULT||!window.FwZip||!Converter.importPackKind(CONV_TARGET))return null;
     const src=(_CONV_NAMES[_pm.src]||_pm.src||'')+(_pm.vdom?` (VDOM ${_pm.vdom})`:'')+(_pm.applied&&_pm.appliedModel?` → ${_pm.appliedModel}`:'');
-    return Converter.buildImportPack(CONV_TARGET,CONV_RESULT,tr,{ source:src, vendorName:_CONV_NAMES[CONV_TARGET]||CONV_TARGET, parsed:_pm.parsed });
+    return Converter.buildImportPack(CONV_TARGET,CONV_RESULT,tr,{ source:src, vendorName:_CONV_NAMES[CONV_TARGET]||CONV_TARGET, parsed:_pm.parsed, convParsed:_pm.convInput||_pm.parsed });
   }
   function downloadConvPack(){
     const files=buildConvPack();

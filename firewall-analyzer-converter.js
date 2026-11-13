@@ -907,6 +907,7 @@ const Converter = (() => {
   function toCheckpoint(parsed) {
     const L=[], d=parsed.deviceInfo;
     L.push(`# ${hdr(parsed.vendor||'?','Check Point R81.20 Gaia',d.hostname)}`);
+    L.push('# ===== Gaia clish（在閘道執行）=====');
     L.push(`set hostname "${qstr(d.hostname)}"`);
     L.push('');
     // Interfaces
@@ -940,30 +941,6 @@ const Converter = (() => {
     const bgp=parsed.routes.find(r=>r.type==='bgp');
     if(bgp) { L.push(''); if(bgp.as) L.push(`set bgp local-as ${bgp.as}`); if(bgp.routerId) L.push(`set bgp router-id ${bgp.routerId}`); }
     L.push('');
-    // Address objects
-    parsed.addresses.filter(a=>a.category==='address').forEach(a=>{
-      if(a.type==='fqdn') L.push(`set network-object fqdn "${qstr(a.name)}" fqdn ${a.fqdn}`);
-      else if(a.type==='iprange') L.push(`set network-object ip-range "${qstr(a.name)}" first-ip ${a.startIp} last-ip ${a.endIp}`);
-      else {
-        const sub=a.subnet||(a.ip?a.ip+'/32':'0.0.0.0/0');
-        const ip=sub.split(/[\/\s]/)[0]; const sfx=subCidr(sub).split('/')[1];
-        if(String(sfx)==='32') L.push(`set network-object host "${qstr(a.name)}" ipaddr ${ip}`);
-        else L.push(`set network-object network "${qstr(a.name)}" ipaddr ${ip} mask-length ${sfx}`);
-      }
-    });
-    topoGroups(parsed.addresses.filter(a=>a.category==='address-group')).forEach(g=>{ sl(g.members).forEach(m=>L.push(`set network-object group "${qstr(g.name)}" add "${qstr(m)}"`)); });
-    L.push('');
-    // Services
-    parsed.services.filter(s=>s.category==='custom').forEach(s=>{
-      const p=(s.proto||'TCP').toLowerCase();
-      if(p.includes('icmp')) L.push(`set service icmp "${qstr(s.name)}" type ${s.icmpType||'0'}`);
-      else if(p.includes('udp')) { const port=s.udpPorts!=='-'?s.udpPorts:s.tcpPorts; L.push(`set service udp "${qstr(s.name)}" port ${port||'0'}`); }
-      else { L.push(`set service tcp "${qstr(s.name)}" port ${s.tcpPorts||'0'}`); }
-    });
-    topoGroups(parsed.services.filter(s=>s.category==='group')).forEach(g=>{ sl(g.members).forEach(m=>L.push(`set service group "${qstr(g.name)}" add "${qstr(m)}"`)); });
-    L.push('');
-    // Schedules
-    parsed.schedules.forEach(s=>{ L.push(`set time "${qstr(s.name)}" type ${s.type||'recurring'}`); if(s.start) L.push(`set time "${qstr(s.name)}" start ${s.start}`); if(s.end) L.push(`set time "${qstr(s.name)}" end ${s.end}`); });
     // 2026-08-09 查證：規則庫（access-policy）／NAT／VPN site-to-site community 在真實 Check
     // Point Gaia clish 官方 `set` 指令清單（sc1.checkpoint.com Gaia Admin Guide）查無對應指令，
     // 這幾類物件在真實裝置只能透過 SmartConsole 或 Management API 管理，clish 僅管
@@ -980,8 +957,58 @@ const Converter = (() => {
     parsed.users.filter(u=>u.type==='admin'||u.type==='local').forEach(u=>{ L.push(`set user "${qstr(u.name)}" password-hash PLACEHOLDER`); if(u.email&&u.email!=='-') L.push(`set user "${qstr(u.name)}" email "${qstr(u.email)}"`); });
     parsed.users.filter(u=>u.type==='ldap-server').forEach(u=>{ L.push(`set ldap-account-unit "${qstr(u.name)}" server ${u.server}`); L.push(`set ldap-account-unit "${qstr(u.name)}" port ${u.port||389}`); if(u.dn&&u.dn!=='-') L.push(`set ldap-account-unit "${qstr(u.name)}" base-dn "${qstr(u.dn)}"`); });
     L.push('');
-    L.push('# 規則庫（Access Policy）／NAT／VPN site-to-site community 需透過 SmartConsole 或');
-    L.push('# Management API 管理，非 Gaia clish 可設定範圍，本工具不產生對應指令。');
+    // 物件與規則（XN148）：Gaia clish 不管理物件與規則，改輸出 Management API 指令（SmartConsole 指令列格式；
+    // 在管理伺服器執行時前面加 mgmt_cli）。指令與參數依 Check Point Management API Reference v2.2 官方範例：
+    // add host／network／address-range／dns-domain／group（members.N）／service-tcp／service-udp（port，範圍 a-b）／
+    // service-icmp（icmp-type）／service-group／access-rule（layer、position、source.N、destination.N、service.N、
+    // action Accept|Drop|Reject、track.type、enabled、comments）／publish。排程、NAT、VPN 社群不輸出
+    L.push('# ===== Management API（SmartConsole 指令列；在管理伺服器執行時每行前面加 mgmt_cli）=====');
+    const cpq=v=>`"${qstr(v)}"`;
+    // FQDN 物件在 Check Point 以 dns-domain 表示，物件名稱即網域（前面加點），群組與規則的引用一併改名
+    const cpName=Object.create(null);
+    parsed.addresses.filter(a=>a.category==='address'&&a.type==='fqdn'&&a.fqdn&&a.fqdn!=='-').forEach(a=>{ cpName[a.name]='.'+String(a.fqdn).replace(/^\./,''); });
+    const nm=n=>cpName[n]||n;
+    const list=(key,vals)=>vals.map((v,i)=>`${key}.${i+1} ${cpq(nm(v))}`).join(' ');
+    parsed.addresses.filter(a=>a.category==='address').forEach(a=>{
+      if(a.type==='fqdn'){ if(cpName[a.name]) L.push(`add dns-domain name ${cpq(cpName[a.name])} is-sub-domain false`); return; }
+      if(a.type==='iprange'){ L.push(`add address-range name ${cpq(a.name)} ip-address-first ${cpq(a.startIp)} ip-address-last ${cpq(a.endIp)}`); return; }
+      const sub=(a.subnet&&a.subnet!=='-')?a.subnet:(a.ip?a.ip+'/32':'0.0.0.0/0');
+      const ip=sub.split(/[\/\s]/)[0], sfx=subCidr(sub).split('/')[1];
+      if(String(sfx)==='32') L.push(`add host name ${cpq(a.name)} ip-address ${cpq(ip)}`);
+      else L.push(`add network name ${cpq(a.name)} subnet ${cpq(ip)} subnet-mask ${cpq(maskOf(sfx))}`);
+    });
+    topoGroups(parsed.addresses.filter(a=>a.category==='address-group')).forEach(g=>{
+      const ms=sl(g.members); L.push(`add group name ${cpq(g.name)}${ms.length?' '+list('members',ms):''}`);
+    });
+    parsed.services.filter(s=>s.category==='custom').forEach(s=>{
+      const p=(s.proto||'TCP').toLowerCase();
+      const port=v=>String(v||'').split(/[\s,]+/)[0].split(':')[0];
+      if(p.includes('icmp')) L.push(`add service-icmp name ${cpq(s.name)} icmp-type ${/^\d+$/.test(String(s.icmpType))?s.icmpType:8}`);
+      else {
+        // 同時有 TCP 與 UDP 埠的服務拆成兩個物件（UDP 名稱加 -udp）
+        const hasT=s.tcpPorts&&s.tcpPorts!=='-', hasU=s.udpPorts&&s.udpPorts!=='-';
+        if(hasT) L.push(`add service-tcp name ${cpq(s.name)} port ${cpq(port(s.tcpPorts))}`);
+        if(hasU) L.push(`add service-udp name ${cpq(s.name+(hasT?'-udp':''))} port ${cpq(port(s.udpPorts))}`);
+      }
+    });
+    topoGroups(parsed.services.filter(s=>s.category==='group')).forEach(g=>{
+      const ms=sl(g.members); L.push(`add service-group name ${cpq(g.name)}${ms.length?' '+list('members',ms):''}`);
+    });
+    const cpNames=uniqPolicyNames(parsed.policies);
+    parsed.policies.forEach((p,i)=>{
+      const act=/^(accept|allow|permit|pass)$/i.test(p.action||'')?'Accept':/reject/i.test(p.action||'')?'Reject':'Drop';
+      const parts=[`add access-rule layer "Network" position "bottom" name ${cpq(cpNames[i])}`];
+      const sa=sl(p.srcAddr), da=sl(p.dstAddr), sv=sl(p.service).filter(x=>!/^(any|all|ALL)$/i.test(x));
+      if(sa.length) parts.push(list('source',sa));
+      if(da.length) parts.push(list('destination',da));
+      if(sv.length) parts.push(sv.map((v,k)=>`service.${k+1} ${cpq(v)}`).join(' '));
+      parts.push(`action ${cpq(act)}`);
+      if(p.logtraffic&&p.logtraffic!=='disable') parts.push('track.type "Log"');
+      if(p.status==='disable') parts.push('enabled false');
+      if(p.comments&&p.comments!=='-') parts.push(`comments ${cpq(p.comments)}`);
+      L.push(parts.join(' '));
+    });
+    L.push('publish');
     return L.join('\n');
   }
 
@@ -3006,6 +3033,17 @@ const Converter = (() => {
       { id:'nat',         re:/^(ip virtual-server|nat)\b/ },
       { id:'policies',    re:/^secure-policy\b/ },
       { id:'admins',      re:/^(username|users?)\b/ } ] },
+    // Check Point（XN148）：01 在閘道 Gaia clish 執行，其餘為 Management API 指令（SmartConsole 指令列或 mgmt_cli）
+    checkpoint:{ kind:'order', ext:'txt', split:'line', comment:/^#/, how:['imp.cp_how','imp.cp_gaia','imp.cp_publish','imp.cp_svc'], stages:[
+      { id:'gaia_clish',     re:/^(set|add\s+interface|delete)\s/ },
+      { id:'addresses',      re:/^add\s+(host|network|address-range|dns-domain)\s/ },
+      { id:'groups',         re:/^add\s+group\s/ },
+      { id:'services',       re:/^add\s+service-(tcp|udp|icmp)\s/ },
+      { id:'service_groups', re:/^add\s+service-group\s/ },
+      { id:'rules',          re:/^add\s+access-rule\s/ },
+      { id:'publish',        re:/^publish\b/ } ] },
+    // Sophos（XN148）：主輸出不是原生格式，匯入包由 buildSophosApiFiles() 依轉換來源產生 XML API 請求
+    sophos:    { kind:'order', api:true, how:['imp.sp_how','imp.sp_enable','imp.sp_status','imp.sp_version'] },
     paloalto:  { kind:'guide', files:[{ name:'paloalto_config.xml' }], how:['imp.pa_how'] },
     juniper:   { kind:'guide', files:[{ name:'juniper_srx.conf' }], how:['imp.jn_how'] },
     edgerouter:{ kind:'guide', files:[{ name:'config.boot' }], how:['imp.er_how'] },
@@ -3013,6 +3051,80 @@ const Converter = (() => {
     openwrt:   { kind:'guide', files:[{ name:'network.uci', pkg:'network' }, { name:'firewall.uci', pkg:'firewall' }], how:['imp.ow_how'] },
     ciscoftd:  { kind:'guide', files:[{ name:'ftd_reference.txt' }], how:['imp.ftd_how'] },
   };
+  // Sophos Firewall XML API 請求（XN148）：格式依 Sophos Firewall API 文件（docs.sophos.com）與官方 sophos-firewall-sdk 範本
+  // （IPHost／FQDNHost／IPHostGroup／Services／ServiceGroup／FirewallRule）。每檔一個 <Request>，帳密為 PLACEHOLDER；
+  // 群組成員展開成實際物件（不依賴巢狀群組），ICMP 與其他協定的服務、群組內的 FQDN、自訂排程不轉出並回報在 skipped
+  function buildSophosApiFiles(parsed){
+    const p=parsed||{}, addrs=(p.addresses||[]), svcs=(p.services||[]);
+    const skipped={ svc:[], fqdnInGroup:[], schedule:[] };
+    const byA=new Map(addrs.map(a=>[a.name,a])), byS=new Map(svcs.map(x=>[x.name,x]));
+    const req=(ents)=>['<Request>','  <Login>','    <Username>PLACEHOLDER</Username>','    <Password>PLACEHOLDER</Password>','  </Login>','  <Set operation="add">',...ents,'  </Set>','</Request>',''].join('\n');
+    let tx=0; const tid=()=>` transactionid="${++tx}"`;
+    // 位址物件
+    const hostEnts=[];
+    addrs.filter(a=>a.category==='address').forEach(a=>{
+      if(a.type==='fqdn'){ hostEnts.push(`    <FQDNHost${tid()}>\n      <Name>${esc(a.name)}</Name>\n      <FQDN>${esc(a.fqdn)}</FQDN>\n    </FQDNHost>`); return; }
+      if(a.type==='iprange'){ hostEnts.push(`    <IPHost${tid()}>\n      <Name>${esc(a.name)}</Name>\n      <IPFamily>IPv4</IPFamily>\n      <HostType>IPRange</HostType>\n      <StartIPAddress>${esc(a.startIp)}</StartIPAddress>\n      <EndIPAddress>${esc(a.endIp)}</EndIPAddress>\n    </IPHost>`); return; }
+      const sub=(a.subnet&&a.subnet!=='-')?a.subnet:(a.ip?a.ip+'/32':'');
+      if(!sub||String(sub).includes(':')) return;
+      const ip=sub.split(/[\/\s]/)[0], sfx=subCidr(sub).split('/')[1];
+      hostEnts.push(String(sfx)==='32'
+        ?`    <IPHost${tid()}>\n      <Name>${esc(a.name)}</Name>\n      <IPFamily>IPv4</IPFamily>\n      <HostType>IP</HostType>\n      <IPAddress>${esc(ip)}</IPAddress>\n    </IPHost>`
+        :`    <IPHost${tid()}>\n      <Name>${esc(a.name)}</Name>\n      <IPFamily>IPv4</IPFamily>\n      <HostType>Network</HostType>\n      <IPAddress>${esc(ip)}</IPAddress>\n      <Subnet>${esc(maskOf(sfx))}</Subnet>\n    </IPHost>`);
+    });
+    // 群組展開成實際主機（FQDN 成員不放進 IP 主機群組）
+    const expandA=(n,seen)=>{ if(seen.has(n)) return []; seen.add(n); const o=byA.get(n); if(!o) return [n];
+      if(o.category==='address-group') return sl(o.members).flatMap(m=>expandA(m,seen)); return [n]; };
+    const grpEnts=[];
+    addrs.filter(a=>a.category==='address-group').forEach(g=>{
+      const mem=[...new Set(expandA(g.name,new Set()))].filter(m=>{ const o=byA.get(m); if(o&&o.type==='fqdn'){ skipped.fqdnInGroup.push(`${g.name}:${m}`); return false; } return true; });
+      grpEnts.push(`    <IPHostGroup${tid()}>\n      <Name>${esc(g.name)}</Name>\n      <IPFamily>IPv4</IPFamily>\n      <HostList>\n${mem.map(m=>`        <Host>${esc(m)}</Host>`).join('\n')}\n      </HostList>\n    </IPHostGroup>`);
+    });
+    // 服務：TCP／UDP（埠範圍寫 a:b；FortiGate 的「目的:來源」只取目的）
+    const portsOf=v=>String(v||'').split(/[\s,]+/).filter(x=>x&&x!=='-').map(x=>x.split(':')[0].replace('-',':'));
+    const svcOk=new Set(), svcEnts=[];
+    svcs.filter(x=>x.category==='custom').forEach(x=>{
+      const det=[];
+      portsOf(x.tcpPorts).forEach(pt=>det.push(['TCP',pt]));
+      portsOf(x.udpPorts).forEach(pt=>det.push(['UDP',pt]));
+      if(!det.length){ skipped.svc.push(x.name); return; }
+      svcOk.add(x.name);
+      svcEnts.push(`    <Services${tid()}>\n      <Name>${esc(x.name)}</Name>\n      <Type>TCPorUDP</Type>\n      <ServiceDetails>\n${det.map(([pr,pt])=>`        <ServiceDetail>\n          <SourcePort>1:65535</SourcePort>\n          <DestinationPort>${esc(pt)}</DestinationPort>\n          <Protocol>${pr}</Protocol>\n        </ServiceDetail>`).join('\n')}\n      </ServiceDetails>\n    </Services>`);
+    });
+    const expandS=(n,seen)=>{ if(seen.has(n)) return []; seen.add(n); const o=byS.get(n); if(!o) return [n];
+      if(o.category==='group') return sl(o.members).flatMap(m=>expandS(m,seen)); return [n]; };
+    const sgEnts=[];
+    svcs.filter(x=>x.category==='group').forEach(g=>{
+      const mem=[...new Set(expandS(g.name,new Set()))].filter(m=>!byS.has(m)||svcOk.has(m));
+      sgEnts.push(`    <ServiceGroup${tid()}>\n      <Name>${esc(g.name)}</Name>\n      <ServiceList>\n${mem.map(m=>`        <Service>${esc(m)}</Service>`).join('\n')}\n      </ServiceList>\n    </ServiceGroup>`);
+    });
+    // 規則：依原順序 Position Bottom；any 不寫該欄位
+    const names=uniqPolicyNames(p.policies||[]), ruleEnts=[];
+    (p.policies||[]).forEach((r,i)=>{
+      const act=/^(accept|allow|permit|pass)$/i.test(r.action||'')?'Accept':/reject/i.test(r.action||'')?'Reject':'Drop';
+      const zone=v=>{ const z=mapZone(v,'sophos'); return (!v||v==='-'||/^any$/i.test(z))?'':z; };
+      const sz=zone(r.srcIntf), dz=zone(r.dstIntf);
+      const sa=sl(r.srcAddr), da=sl(r.dstAddr), sv=sl(r.service).filter(x=>!/^(any|all)$/i.test(x));
+      if(r.schedule&&!/^(always|any|-)$/i.test(r.schedule)) skipped.schedule.push(names[i]);
+      const L2=[`    <FirewallRule${tid()}>`,`      <Name>${esc(names[i])}</Name>`];
+      if(r.comments&&r.comments!=='-') L2.push(`      <Description>${esc(r.comments)}</Description>`);
+      L2.push('      <IPFamily>IPv4</IPFamily>',`      <Status>${r.status==='disable'?'Disable':'Enable'}</Status>`,'      <Position>Bottom</Position>','      <PolicyType>Network</PolicyType>','      <NetworkPolicy>',`        <Action>${act}</Action>`);
+      if(r.logtraffic&&r.logtraffic!=='disable') L2.push('        <LogTraffic>Enable</LogTraffic>');
+      if(sz) L2.push('        <SourceZones>',`          <Zone>${esc(sz)}</Zone>`,'        </SourceZones>');
+      if(dz) L2.push('        <DestinationZones>',`          <Zone>${esc(dz)}</Zone>`,'        </DestinationZones>');
+      L2.push('        <Schedule>All The Time</Schedule>');
+      if(sa.length) L2.push('        <SourceNetworks>',...sa.map(x=>`          <Network>${esc(x)}</Network>`),'        </SourceNetworks>');
+      if(da.length) L2.push('        <DestinationNetworks>',...da.map(x=>`          <Network>${esc(x)}</Network>`),'        </DestinationNetworks>');
+      if(sv.length) L2.push('        <Services>',...sv.map(x=>`          <Service>${esc(x)}</Service>`),'        </Services>');
+      L2.push('      </NetworkPolicy>','    </FirewallRule>');
+      ruleEnts.push(L2.join('\n'));
+    });
+    const files=[];
+    [['hosts',hostEnts],['host_groups',grpEnts],['services',svcEnts],['service_groups',sgEnts],['firewall_rules',ruleEnts]].forEach(([id,ents])=>{
+      if(ents.length) files.push({ name:`${String(files.length+1).padStart(2,'0')}_${id}.xml`, stage:'sp_'+id, count:ents.length, text:req(ents) });
+    });
+    return { files, skipped };
+  }
   function importPackKind(target){ return target==='fortigate'?'order':(IMPORT_SPECS[target]?IMPORT_SPECS[target].kind:null); }
   // 逐行執行格式的拆檔：indent＝頂層指令＋縮排子行（與 exit）為一段；path＝RouterOS 的 /路徑 行到下一個 /路徑 行為一段
   function splitOrderImport(target, text){
@@ -3021,6 +3133,11 @@ const Converter = (() => {
     const header=[], blocks=[];
     let cur=null;
     lines.forEach(l=>{
+      if(sp.split==='line'){
+        if(!l.trim()) return;
+        if(sp.comment.test(l)){ header.push(l); return; }
+        blocks.push({ head:l.trim(), lines:[l] }); return;
+      }
       if(sp.split==='path'){
         if(/^\//.test(l)){ cur={ head:l.trim(), lines:[l] }; blocks.push(cur); return; }
         if(!cur){ if(sp.comment.test(l)) header.push(l); return; }
@@ -3063,6 +3180,19 @@ const Converter = (() => {
     }
     const sp=IMPORT_SPECS[target]; if(!sp) return null;
     const vn=o.vendorName||target, L=[];
+    if(sp.api){
+      const api=buildSophosApiFiles(o.convParsed||o.parsed||{});
+      L.push(t('imp.readme_title_v',{v:vn}));
+      if(o.source) L.push(t('imp.readme_source',{v:o.source}));
+      L.push(''); L.push(t('imp.readme_order'));
+      api.files.forEach(f=>L.push(`  ${f.name}  ${t('imp.stage_'+f.stage)}  (${t('imp.items',{n:f.count})})`));
+      L.push('');
+      ['imp.readme_backup',...sp.how,'imp.readme_review'].forEach(k=>L.push('- '+t(k)));
+      Object.keys(api.skipped).forEach(k=>{ if(api.skipped[k].length) L.push('- '+t('imp.sp_skip_'+k,{v:api.skipped[k].slice(0,30).join(', ')+(api.skipped[k].length>30?' …':'')})); });
+      L.push(''); L.push(t('imp.readme_cmds'));
+      L.push('  curl -k --data-urlencode "reqxml@01_hosts.xml" "https://<firewall>:<port>/webconsole/APIController"');
+      return [{ name:'00_README_order.txt', text:L.join('\n')+'\n' }, ...api.files.map(f=>({ name:f.name, text:f.text }))];
+    }
     if(sp.kind==='order'){
       const pack=splitOrderImport(target,text);
       L.push(t('imp.readme_title_v',{v:vn}));
@@ -3162,11 +3292,12 @@ const Converter = (() => {
     "cvt.zy_group":"位址群組／服務群組本轉換器不會攤平（官方 ZLD CLI Reference Guide 雖有對應章節，但本輪查無足夠信心度的逐字語法可供實作），規則若引用這類物件，輸出欄位會是不合法語法或遺漏，請人工核對（單一位址/服務物件含 FQDN 已可正確攤平，不受此提示影響）",
     "cvt.ow_fqdn":"FQDN 位址物件／服務群組本轉換器不會攤平成目標格式對應的定義，規則若引用這類物件，輸出欄位會是不合法語法或遺漏，請人工核對並改用目標裝置實際支援的表示方式（單一位址/服務物件與位址群組皆已可正確攤平，不受此提示影響）",
     "cvt.vlan":"VLAN 子介面語法為近似對應，實機匯入前請人工確認子介面設定是否完整",
-    "cvt.sonicwall":"SonicWall 僅支援 SonicOS 6.2 之前版本的 XML 匯入格式（6.2+ 已停用 XML 匯出），本輸出僅適用於舊版韌體裝置",
+    "cvt.sonicwall":"SonicWall 輸出為對照用 XML，不是 SonicOS 可直接匯入的格式；SonicWall 官方文件在本工具開發環境無法讀取，未能查證原生 CLI／API 寫法，請依此內容在裝置上手動建立",
     "cvt.zyxel":"Zyxel ZLD 語法純依官方 CLI Reference Guide 組出，無真實裝置匯出檔比對校正，信心度低於已用真實範例驗證過的廠牌；VPN／NAT／DHCP 等欄位本轉換器不支援輸出，請人工於裝置上另行設定",
     "cvt.edgerouter":"EdgeRouter 規則來源設定檔通常已按介面方向分別建立具名規則集，本轉換器無法得知原始規則應歸屬哪個介面，統一併入單一規則集 CONVERTED_IN 且未綁定任何介面，請人工在裝置上用 firewall in/out/local name 指令綁定至正確介面方向後才會生效",
     "cvt.openwrt":"OpenWrt (UCI) 語法純依官方文件組出，無真實裝置匯出檔比對校正；來源規則的介面欄位未必是 UCI 慣用的 zone 名稱，本轉換器已自動合成對應 config zone 區塊讓輸出自我一致，但實際 zone／network 對應請人工依裝置真實拓樸核對",
-    "cvt.checkpoint":"查證官方 Gaia Admin Guide 確認規則庫（Access Policy）／NAT／VPN site-to-site community 並無對應的 clish \"set\" 指令，這幾類物件僅能透過 SmartConsole 或 Management API 管理，本轉換器不產生對應輸出，僅轉換 OS 層級設定（介面/路由/hostname 等）",
+    "cvt.checkpoint":"Gaia clish 只管理 OS 層級設定（主機名稱、介面、路由），物件與規則改輸出為 Management API 指令（SmartConsole 指令列，或在管理伺服器加 mgmt_cli 前綴執行），規則放在 Network 規則層最後；排程、NAT 與 VPN 社群不轉出，請在 SmartConsole 設定",
+    "cvt.sophos_api":"主輸出 XML 為對照用格式，不是 Sophos Firewall 原生匯入格式；請下載匯入順序包，以 XML API 依序送出（主機、群組、服務、規則）",
     "cvt.mt_noip":"{n} 個無 IP 位址的介面未輸出於 /ip address（RouterOS 此區塊僅列出已指派 IP 的介面）",
     "cvt.port_model":"介面名稱已依目標型號 {model} 對應（未對應的埠保留原名），請依實際接線、速度與模組人工複核",
     "cvt.port_generic":"介面實體名稱／埠位對應皆直接沿用來源設定，未轉換為目標設備慣用命名，請依目標設備實際型號與埠數量人工核對介面清單",
@@ -3275,6 +3406,7 @@ const Converter = (() => {
     if(targetVendor==='edgerouter') add('cvt.edgerouter');
     if(targetVendor==='openwrt') add('cvt.openwrt');
     if(targetVendor==='checkpoint') add('cvt.checkpoint');
+    if(targetVendor==='sophos') add('cvt.sophos_api');
     return notes;
   }
   // 項目轉成文字：tpl 為 tr(key) 的結果（畫面），未提供時用中文原文（測試與舊呼叫端）
@@ -3286,7 +3418,7 @@ const Converter = (() => {
     return getConversionCaveatItems(parsed, targetVendor, opts).map(it=>caveatText(it, trFn?trFn(it.key):null));
   }
 
-  return { convert, importPackKind, buildImportPack, splitOrderImport, splitGuideImport, splitFortigateImport, buildFortigateImportReadme, fortigateGroupCycles, getConversionLoss, getConversionCaveats, getConversionCaveatItems, CAVEAT_ZH, toFortigate, toSophos, toCheckpoint, toPaloAlto, toJuniper, toPfsense, toCiscoASA, toCiscoFTD, toSonicWall, toMikrotik, toZyxel, toEdgeRouter, toOpenWrt };
+  return { convert, buildSophosApiFiles, importPackKind, buildImportPack, splitOrderImport, splitGuideImport, splitFortigateImport, buildFortigateImportReadme, fortigateGroupCycles, getConversionLoss, getConversionCaveats, getConversionCaveatItems, CAVEAT_ZH, toFortigate, toSophos, toCheckpoint, toPaloAlto, toJuniper, toPfsense, toCiscoASA, toCiscoFTD, toSonicWall, toMikrotik, toZyxel, toEdgeRouter, toOpenWrt };
 })();
 
 
