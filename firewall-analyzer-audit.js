@@ -1064,6 +1064,34 @@
 
   // 型號與版本限制（XN144）：FwModelLimits.assess() 列出這台型號升級 FortiOS 後會被移除、而目前設定正在使用的功能；
   // 屬升版規劃資訊，不計入健康度。version：使用者補填的完整版本（與韌體卡片共用）
+  // 數量上限（XN145）：mv＝FwModelLimits.mvAssess() 結果；opts.title 為區塊標題 key、opts.id 為外層 id
+  // 只列超過與接近的項目（本機使用者與每群組使用者數固定列出），其餘收進 details 全表
+  function buildMaxValuesHtml(mv, opts) {
+    const o = opts || {};
+    if (!mv) return '';
+    let h = `<div${o.id ? ` id="${esc(o.id)}"` : ''} data-mv style="margin-top:14px"><div style="font-size:12px;font-weight:600;margin-bottom:6px">${esc(tr(o.title || 'mv.title'))}</div>`;
+    if (!mv.supported) return h + `<div class="nodata" style="padding:6px 0">${esc(tr(mv.reason === 'model' ? 'mv.no_model' : 'mv.no_data').replace('{model}', mv.model || '-'))}</div></div>`;
+    const notes = [tr('mv.basis').replace('{model}', mv.code).replace('{version}', mv.version).replace('{date}', mv.asof)];
+    if (!mv.exact) notes.push(tr('mv.approx_model'));
+    if (!mv.trainExact) notes.push(tr('mv.approx_train').replace('{train}', mv.train));
+    h += `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${esc(notes.join(' '))} <a href="${esc(mv.src)}" target="_blank" rel="noopener noreferrer">${esc(tr('ml.src'))}</a></div>`;
+    const row = it => {
+      const lim = it.limit ? `${it.count} / ${it.limit}` : String(it.count);
+      const lv = it.level === 'over' ? pill(tr('mv.lv_over'), 'p-deny') : it.level === 'near' ? pill(tr('mv.lv_near'), 'p-warn') :
+        it.level === 'ok' ? pill(tr('mv.lv_ok'), 'p-allow') : esc(tr('mv.lv_' + it.level));
+      const where = it.scope ? tr('mv.scope_' + it.scope) + (it.where ? '：' + it.where : '') : '';
+      return `<tr><td class="mono">${esc(it.obj)}</td><td>${esc(lim)}</td><td style="font-size:11px">${esc(where)}</td><td>${lv}</td></tr>`;
+    };
+    const head = '<table class="data-tbl"><thead><tr><th>' + ['mv.col_obj', 'mv.col_count', 'mv.col_scope', 'mv.col_level'].map(k => esc(tr(k))).join('</th><th>') + '</th></tr></thead><tbody>';
+    const top = mv.items.filter(it => it.level === 'over' || it.level === 'near' || it.key);
+    h += top.some(it => it.level === 'over' || it.level === 'near') ? '' : `<div style="font-size:12px;color:var(--green);margin-bottom:6px">${esc(tr('mv.all_ok'))}</div>`;
+    if (top.length) h += '<div style="overflow-x:auto">' + head + top.map(row).join('') + '</tbody></table></div>';
+    h += `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px">${esc(tr('mv.all_rows').replace('{n}', mv.items.length))}</summary><div style="overflow-x:auto">` + head + mv.items.map(row).join('') + '</tbody></table></div></details>';
+    h += `<div style="font-size:11px;color:var(--text-dim);margin-top:6px">${esc(tr('mv.note'))}</div>`;
+    return h + '</div>';
+  }
+
+  // 型號＋版本限制卡片（XN144）＋數量上限（XN145）
   function buildModelLimitHtml(parsed, version) {
     const M = typeof window !== 'undefined' && window.FwModelLimits ? window.FwModelLimits : null;
     if (!M) return '';
@@ -1072,9 +1100,10 @@
     let h = '<div id="model-limit-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('ml.title')) + '</div>';
     h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('ml.hint')) + '</div>';
     h += `<div style="font-size:11px;padding:6px 10px;margin-bottom:8px;background:var(--bg2);border-left:3px solid var(--orange,#f59e0b);border-radius:4px">${esc(tr('ml.asof').replace('{date}', a.asof))}</div>`;
-    if (!a.known) return h + '<div class="nodata" style="padding:10px 0">' + esc(tr('ml.unknown_model').replace('{model}', a.model)) + '</div></div>';
+    const mvHtml = M.mvAssess ? buildMaxValuesHtml(M.mvAssess(parsed, { model: (parsed.deviceInfo || {}).model, version: version || (parsed.deviceInfo || {}).firmware })) : '';
+    if (!a.known) return h + '<div class="nodata" style="padding:10px 0">' + esc(tr('ml.unknown_model').replace('{model}', a.model)) + '</div>' + mvHtml + '</div>';
     h += `<div style="font-size:12px;margin-bottom:8px">${esc(tr('ml.model').replace('{model}', a.model).replace('{series}', a.series).replace('{version}', a.version || '-'))}</div>`;
-    if (!a.items.length) return h + '<div class="nodata" style="padding:10px 0;color:var(--green)">' + esc(tr('ml.none')) + '</div></div>';
+    if (!a.items.length) return h + '<div class="nodata" style="padding:10px 0;color:var(--green)">' + esc(tr('ml.none')) + '</div>' + mvHtml + '</div>';
     h += '<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>' + ['ml.col_limit', 'ml.col_status', 'ml.col_uses', 'ml.col_src'].map(k => esc(tr(k))).join('</th><th>') + '</th></tr></thead><tbody>';
     a.items.forEach(it => {
       const st = tr('ml.st_' + it.status).replace('{since}', it.since);
@@ -1086,7 +1115,7 @@
       h += `<tr><td>${esc(tr('ml.lim_' + it.id))}<div style="font-size:11px;color:var(--text-dim);margin-top:4px">${esc(act)}</div>${notes}</td><td>${pill(st, pc)}</td><td style="font-size:12px">${uses}</td>` +
         `<td style="font-size:11px"><a href="${esc(it.src)}" target="_blank" rel="noopener noreferrer">${esc(tr('ml.src'))}</a></td></tr>`;
     });
-    return h + '</tbody></table></div></div>';
+    return h + '</tbody></table></div>' + mvHtml + '</div>';
   }
 
   function analyzeCompliance(parsed, opts) {

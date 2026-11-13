@@ -80,5 +80,111 @@
     return { supported: true, model: info.model || '-', series: ms ? ms.series : '', rugged: !!(ms && ms.rugged), version: ver, versionFull: !!(parseVer(ver) || {}).full,
       known: !!ms, items, asof: ASOF, ramCmd: RAM_CHECK_CMD };
   }
-  window.FwModelLimits = { LIMITS, ASOF, RAM_CHECK_CMD, modelSeries, parseVer, relation, assess };
+
+  // ── 數量上限（XN145）：官方 Maximum Values 表（firewall-analyzer-fg-maxvalues.js，build_fg_max_values.py 產生）──
+  // 官方語意：instance＝每個物件內的項目數、vdom＝每個 VDOM、global＝整台，三者同時生效；0＝只受記憶體限制
+  const MV_NEAR = 0.8;
+  const vdomOf = x => (x && x._vdom) || 'root';
+  const memList = v => String(v || '').split(/,\s*/).map(x => x.trim()).filter(x => x && x !== '-');
+  // 每項：obj＝官方表物件名稱；vd＝依 VDOM 分組的物件清單；inst＝每個物件內項目數（取最大者）
+  const MV_ITEMS = [
+    { obj: 'firewall.address', vd: p => (p.addresses || []).filter(a => a.category === 'address') },
+    { obj: 'firewall.address6', vd: p => (p.addresses || []).filter(a => a.category === 'address6') },
+    { obj: 'firewall.addrgrp', vd: p => (p.addresses || []).filter(a => a.category === 'address-group') },
+    { obj: 'firewall.addrgrp6', vd: p => (p.addresses || []).filter(a => a.category === 'address-group6') },
+    { obj: 'firewall.addrgrp:member', inst: p => (p.addresses || []).filter(a => a.category === 'address-group').map(g => ({ name: g.name, n: memList(g.members).length })) },
+    { obj: 'firewall.policy', vd: p => (p.policies || []).filter(r => !r.platformRule && !r._implicit) },
+    { obj: 'firewall.service.custom', vd: p => (p.services || []).filter(s => s.category === 'custom') },
+    { obj: 'firewall.service.group', vd: p => (p.services || []).filter(s => s.category === 'group') },
+    { obj: 'firewall.service.group:member', inst: p => (p.services || []).filter(s => s.category === 'group').map(g => ({ name: g.name, n: memList(g.members).length })) },
+    { obj: 'firewall.vip', vd: p => (p.nat || []).filter(n => n.type === 'vip') },
+    { obj: 'firewall.vipgrp', vd: p => (p.nat || []).filter(n => n.type === 'vipgrp') },
+    { obj: 'firewall.ippool', vd: p => (p.nat || []).filter(n => n.type === 'ippool') },
+    { obj: 'firewall.schedule.recurring', vd: p => (p.schedules || []).filter(s => s.type === 'recurring') },
+    { obj: 'firewall.schedule.onetime', vd: p => (p.schedules || []).filter(s => s.type === 'onetime') },
+    { obj: 'router.static', vd: p => (p.routes || []).filter(r => r.type === 'static' || r.type === 'default') },
+    { obj: 'router.static6', vd: p => (p.routes || []).filter(r => r.type === 'static6') },
+    { obj: 'system.interface', vd: p => p.interfaces || [] },
+    { obj: 'system.zone', vd: p => (p._perVdom || []).flatMap(v => (v.zones || []).map(z => Object.assign({ _vdom: v.name }, z))) },
+    { obj: 'system.admin', vd: p => (p.users || []).filter(u => u.type === 'admin') },
+    { obj: 'user.local', vd: p => (p.users || []).filter(u => u.type === 'local'), key: true },
+    { obj: 'user.group', vd: p => (p.users || []).filter(u => u.type === 'group') },
+    { obj: 'user.group:member', inst: p => (p.users || []).filter(u => u.type === 'group').map(g => ({ name: g.name, n: memList(g.members).length })), key: true },
+    { obj: 'user.ldap', vd: p => (p.users || []).filter(u => u.type === 'ldap-server') },
+    { obj: 'user.radius', vd: p => (p.users || []).filter(u => u.type === 'radius-server') },
+    { obj: 'vpn.ipsec.phase1-interface', vd: p => (p.vpn || []).filter(v => v.type === 'ipsec-p1') },
+    { obj: 'vpn.ipsec.phase2-interface', vd: p => (p.vpn || []).flatMap(v => v.type === 'ipsec-p1' || v.type === 'ipsec-p2-orphan' ? (v.phase2 || []).map(x => Object.assign({ _vdom: v._vdom }, x)) : []) },
+  ];
+  const mvData = () => (typeof window !== 'undefined' && window.FG_MAX_VALUES) || null;
+  const normCode = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  // 檔頭型號（FGT40F、FWF60F、FGR60F、FG40F3G4G、FGT60EPOE）或轉換型號（FG-40F）→ 官方表代碼（40F、WF60F、R60F、40F_3G4G、60E_POE）
+  function mvModelCode(model, train) {
+    const D = mvData(); if (!D) return null;
+    const m = normCode(model).match(/^(FGT|FGR|FWF|FG)(\d.*)$/);
+    if (!m || /^VM/.test(m[2])) return null;
+    const want = (m[1] === 'FWF' ? 'WF' : m[1] === 'FGR' ? 'R' : '') + m[2];
+    const t = D.trains[train]; if (!t) return null;
+    const codes = Object.keys(t.models);
+    const exact = codes.find(c => normCode(c) === want);
+    if (exact) return { code: exact, exact: true };
+    // 後綴（DSL、POE 等）官方表沒有時，以同系列基本型號近似
+    const ms = modelSeries(model);
+    const base = ms && codes.find(c => normCode(c) === (m[1] === 'FWF' ? 'WF' : m[1] === 'FGR' ? 'R' : '') + ms.series);
+    return base ? { code: base, exact: false } : null;
+  }
+  // 選 train：與版本相同者；沒有就取最接近的較新 train（再沒有取最新）
+  function mvTrain(version) {
+    const D = mvData(); if (!D) return null;
+    const keys = Object.keys(D.trains).sort((a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); return x[0] - y[0] || x[1] - y[1]; });
+    const v = parseVer(version);
+    if (!v) return { train: keys[keys.length - 1], exact: false };
+    const want = v.nums[0] + '.' + v.nums[1];
+    if (D.trains[want]) return { train: want, exact: true };
+    const newer = keys.find(k => { const x = k.split('.').map(Number); return x[0] > v.nums[0] || (x[0] === v.nums[0] && x[1] > v.nums[1]); });
+    return { train: newer || keys[keys.length - 1], exact: false };
+  }
+  // 計數：opts.singleVdom（轉換後全部放進 root）時不分 VDOM
+  function mvCounts(parsed, opts) {
+    const p = parsed || {}, single = !!(opts && opts.singleVdom);
+    return MV_ITEMS.map(it => {
+      if (it.inst) {
+        const arr = it.inst(p);
+        const top = arr.reduce((a, b) => (b.n > a.n ? b : a), { name: '', n: 0 });
+        return { obj: it.obj, key: !!it.key, inst: top.n, instName: top.name, total: arr.length ? top.n : 0 };
+      }
+      const arr = it.vd(p), per = Object.create(null);
+      arr.forEach(x => { const k = single ? 'root' : vdomOf(x); per[k] = (per[k] || 0) + 1; });
+      let vmax = 0, vname = '';
+      Object.keys(per).forEach(k => { if (per[k] > vmax) { vmax = per[k]; vname = k; } });
+      return { obj: it.obj, key: !!it.key, total: arr.length, vdomMax: vmax, vdomName: vname };
+    });
+  }
+  // parsed＋{model, version, singleVdom} → { supported, code, exact, train, trainExact, version, items:[{obj,key,count,limit,scope,where,ratio,level}] }
+  // level：over（≥100%）、near（≥80%）、ok、nolimit（三層都是 0）、nodata（官方表沒有資料）
+  function mvAssess(parsed, opts) {
+    const o = opts || {}, D = mvData();
+    if (!D) return { supported: false, reason: 'nodata' };
+    const tr = mvTrain(o.version);
+    const mc = mvModelCode(o.model, tr.train);
+    if (!mc) return { supported: false, reason: 'model', model: o.model || '-' };
+    const T = D.trains[tr.train], prof = T.profiles[T.models[mc.code]];
+    const items = mvCounts(parsed, o).map(c => {
+      const i = T.objects.indexOf(c.obj);
+      if (i < 0) return Object.assign({}, c, { count: c.total, level: 'nodata' });
+      const [li, lv, lg] = prof.slice(i * 3, i * 3 + 3);
+      if (li === null && lv === null && lg === null) return Object.assign({}, c, { count: c.total, level: 'nodata' });
+      const cands = [];
+      if (c.inst !== undefined) { if (li) cands.push({ scope: 'instance', count: c.inst, limit: li, where: c.instName }); }
+      else {
+        if (lv) cands.push({ scope: 'vdom', count: c.vdomMax, limit: lv, where: c.vdomName });
+        if (lg) cands.push({ scope: 'global', count: c.total, limit: lg, where: '' });
+      }
+      if (!cands.length) return Object.assign({}, c, { count: c.inst !== undefined ? c.inst : c.total, level: 'nolimit' });
+      const worst = cands.reduce((a, b) => (b.count / b.limit > a.count / a.limit ? b : a));
+      const ratio = worst.count / worst.limit;
+      return Object.assign({ obj: c.obj, key: c.key }, worst, { ratio, level: ratio >= 1 ? 'over' : ratio >= MV_NEAR ? 'near' : 'ok' });
+    });
+    return { supported: true, code: mc.code, exact: mc.exact, train: tr.train, trainExact: tr.exact, version: T.version, asof: D.asof, src: D.src, items };
+  }
+  window.FwModelLimits = { LIMITS, ASOF, RAM_CHECK_CMD, modelSeries, parseVer, relation, assess, MV_NEAR, mvModelCode, mvTrain, mvCounts, mvAssess };
 })();

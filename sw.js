@@ -58,6 +58,8 @@ const FILES = [
   'firewall-analyzer-parser-zyxel.js',
   'firewall-analyzer-pathchain.js',
   'firewall-analyzer-model-limits.js',
+  'firewall-analyzer-fg-maxvalues.js',
+  'firewall-analyzer-zip.js',
   'firewall-analyzer-portmap.js',
   'firewall-analyzer-reporter.js',
   'firewall-analyzer-sections.js',

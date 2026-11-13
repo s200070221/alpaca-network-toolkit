@@ -239,8 +239,29 @@ const Converter = (() => {
   // ══════════════════════════════════════════════════════════════════════════
   //  → FortiGate
   // ══════════════════════════════════════════════════════════════════════════
+  // FortiGate 輸出段落順序（XN146）：基本設定 → 介面 → WWAN → 物件 → 使用者 → VPN（建立通道介面）→ 路由（可參照通道介面）→ NAT → 規則 → 管理者
+  const FG_SEC_ORDER=['base','intf','wwan','obj','users','vpn','route','nat','policy','admin'];
+  // 群組依成員排序（XN146）：成員是同一清單內的群組時，成員群組先輸出；循環參照者保持原順序並列在 _cycles
+  function topoGroups(list){
+    const byName=new Map(list.map(g=>[g.name,g])), out=[], state=new Map(), cycles=[];
+    const visit=g=>{
+      const st=state.get(g.name);
+      if(st===2) return; if(st===1){ cycles.push(g.name); return; }
+      state.set(g.name,1);
+      sl(g.members).forEach(m=>{ const c=byName.get(m); if(c&&c!==g) visit(c); });
+      state.set(g.name,2); out.push(g);
+    };
+    list.forEach(visit);
+    out._cycles=[...new Set(cycles)];
+    return out;
+  }
   function toFortigate(parsed) {
-    const L=[], d=parsed.deviceInfo;
+    // 輸出依匯入時的參照順序分段（XN146）：被參照的物件先建立，管理者帳號最後
+    // （避免匯入中途改到自己的登入）；splitFortigateImport() 依同一順序拆成匯入順序包
+    const SEC=Object.create(null); let L;
+    const sec=n=>{ L=SEC[n]||(SEC[n]=[]); };
+    sec('base');
+    const d=parsed.deviceInfo;
     L.push(`#config-version=FGT100F-7.4.0-FW-build0001:opmode=0:vdom=0`);
     L.push(`## ${hdr(parsed.vendor||'?','FortiGate 7.4',d.hostname)}`);
     L.push('');
@@ -266,6 +287,7 @@ const Converter = (() => {
     L.push('end');
     L.push('');
 
+    sec('admin');
     // admins
     const admins=parsed.users.filter(u=>u.type==='admin');
     if(admins.length) {
@@ -282,6 +304,7 @@ const Converter = (() => {
       L.push('end'); L.push('');
     }
 
+    sec('users');
     // local users
     const lusers=parsed.users.filter(u=>u.type==='local');
     if(lusers.length) {
@@ -334,6 +357,7 @@ const Converter = (() => {
       L.push('end'); L.push('');
     }
 
+    sec('intf');
     // interfaces
     if(parsed.interfaces.length) {
       L.push('config system interface');
@@ -367,6 +391,7 @@ const Converter = (() => {
       L.push('end'); L.push('');
     }
 
+    sec('obj');
     // address objects：IPv6 物件（address6 或位址含冒號）另寫 config firewall address6（XN57）
     const fam=_famMap(parsed);
     const isV6Obj=a=>a.category==='address6'||(a.category==='address'&&fam(a.name)==='v6');
@@ -408,7 +433,7 @@ const Converter = (() => {
     const grpOut=(title,list,keep,rename)=>{
       if(!list.length) return;
       L.push(title);
-      list.forEach(g=>{
+      topoGroups(list).forEach(g=>{
         L.push(`    edit "${qstr(rename(g.name))}"`);
         const mems=sl(g.members).filter(keep).map(m=>`"${qstr(rename(m))}"`).join(' ');
         if(mems) L.push(`        set member ${mems}`);
@@ -438,7 +463,7 @@ const Converter = (() => {
     const sgrps=parsed.services.filter(s=>s.category==='group');
     if(sgrps.length) {
       L.push('config firewall service group');
-      sgrps.forEach(g=>{
+      topoGroups(sgrps).forEach(g=>{
         L.push(`    edit "${qstr(g.name)}"`);
         const mems=sl(g.members).map(m=>`"${qstr(m)}"`).join(' ');
         if(mems) L.push(`        set member ${mems}`);
@@ -455,6 +480,7 @@ const Converter = (() => {
       L.push('end'); L.push('');
     }
 
+    sec('route');
     // static routes
     const sroutes=parsed.routes.filter(r=>r.type==='static'||r.type==='default');
     if(sroutes.length) {
@@ -497,6 +523,7 @@ const Converter = (() => {
     const bgp=parsed.routes.find(r=>r.type==='bgp');
     if(bgp) { L.push('config router bgp'); L.push(`    set as ${bgp.as||65000}`); if(bgp.routerId) L.push(`    set router-id ${bgp.routerId}`); L.push('end'); L.push(''); }
 
+    sec('nat');
     // NAT (IP pools)
     const ippools=parsed.nat.filter(n=>n.type==='ippool');
     if(ippools.length) {
@@ -542,6 +569,7 @@ const Converter = (() => {
       L.push('end'); L.push('');
     }
 
+    sec('vpn');
     // IPSec VPN
     const ivpns=parsed.vpn.filter(v=>v.type==='ipsec-p1');
     if(ivpns.length) {
@@ -590,6 +618,7 @@ const Converter = (() => {
       L.push('end'); L.push('');
     }
 
+    sec('policy');
     // Firewall policies
     if(parsed.policies.length) {
       L.push('config firewall policy');
@@ -621,6 +650,7 @@ const Converter = (() => {
       L.push('end');
     }
 
+    sec('wwan');
     // WWAN（2026-08-20 新增，LOSS_FIELDS 同廠牌自轉補齊）：wireless-controller wwan-profile／
     // system lte-modem／system modem／system 5g-modem 四種區塊，來源為 parseWwan()/
     // parseLteModem()/parseSystemModem()/parse5GModem() 已解析出的真實資料。密碼類欄位
@@ -683,7 +713,9 @@ const Converter = (() => {
         L.push('end');
       }
     }
-    return L.join('\n');
+    const out=[];
+    FG_SEC_ORDER.forEach(n=>{ const a=(SEC[n]||[]).slice(); while(a.length&&a[0]==='')a.shift(); while(a.length&&a[a.length-1]==='')a.pop(); if(a.length){ out.push(...a); out.push(''); } });
+    return out.join('\n').replace(/\n$/,'');
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -2838,6 +2870,89 @@ const Converter = (() => {
     const fl = _nfFlatten(parsed);
     return fl ? Object.assign({}, parsed, { policies: fl.policies }) : parsed;
   }
+  // ══════════════════════════════════════════════════════════════════════════
+  //  FortiGate 匯入順序包（XN146）：把轉換結果依頂層 config 區塊分到固定階段，每階段一個檔案，
+  //  照檔名編號依序匯入；被參照的物件（介面、位址、使用者、VPN 通道介面）在參照者之前
+  // ══════════════════════════════════════════════════════════════════════════
+  const FG_IMPORT_STAGES=[
+    { id:'system_base', blocks:['system global','system accprofile','system settings','system dns','system ntp'] },
+    { id:'interfaces',  blocks:['system interface','system zone','system virtual-switch','wireless-controller wwan-profile','system lte-modem','system modem','system 5g-modem'] },
+    { id:'objects',     blocks:['firewall address','firewall address6','firewall addrgrp','firewall addrgrp6','firewall service custom','firewall service group','firewall schedule recurring','firewall schedule onetime','firewall schedule group'] },
+    { id:'users',       blocks:['user local','user ldap','user radius','user group'] },
+    { id:'vpn',         blocks:['vpn ipsec phase1-interface','vpn ipsec phase2-interface','vpn ssl settings','vpn ssl web portal'] },
+    { id:'routing',     re:/^router\s/ },
+    { id:'nat',         blocks:['firewall ippool','firewall vip','firewall vipgrp','firewall ippool6','firewall vip6','firewall vipgrp6'] },
+    { id:'policies',    blocks:['firewall policy'] },
+    { id:'admins',      blocks:['system admin'] },
+  ];
+  function _fgStageOf(name){
+    const st=FG_IMPORT_STAGES.find(x=>x.re?x.re.test(name):x.blocks.includes(name));
+    return st?st.id:'other';
+  }
+  // text：toFortigate() 的輸出；回傳 { files:[{name,stage,blocks:[{name,count}],text}], header:[註解行] }
+  // 檔頭的 # 註解行（#config-version 等備份檔標頭，不是指令）不放進各檔，改列在 header
+  function splitFortigateImport(text){
+    const lines=String(text||'').replace(/\r\n?/g,'\n').split('\n');
+    const header=[], byStage=Object.create(null);
+    let cur=null;
+    lines.forEach(l=>{
+      if(!cur){
+        const m=l.match(/^config\s+(.+?)\s*$/);
+        if(m){ cur={ name:m[1], lines:[l], count:0 }; return; }
+        if(/^#/.test(l)) header.push(l);
+        return;
+      }
+      cur.lines.push(l);
+      if(/^    edit\s/.test(l)) cur.count++;
+      if(/^end\s*$/.test(l)){
+        const st=_fgStageOf(cur.name);
+        (byStage[st]||(byStage[st]=[])).push(cur);
+        cur=null;
+      }
+    });
+    if(cur){ const st=_fgStageOf(cur.name); (byStage[st]||(byStage[st]=[])).push(cur); }  // 沒有 end 收尾的區塊照樣保留
+    const order=[...FG_IMPORT_STAGES.map(x=>x.id),'other'];
+    const files=[]; let n=0;
+    order.forEach(id=>{
+      const bl=byStage[id]; if(!bl) return;
+      n++;
+      const num=id==='other'?'98':String(n).padStart(2,'0');
+      files.push({ name:`${num}_${id}.txt`, stage:id, blocks:bl.map(b=>({ name:b.name, count:b.count })),
+        text:bl.map(b=>b.lines.join('\n')).join('\n\n')+'\n' });
+    });
+    return { files, header };
+  }
+  // 循環參照的位址／服務群組名稱（無法排出建立順序，需人工確認）
+  function fortigateGroupCycles(parsed){
+    const p=parsed||{};
+    const ag=(p.addresses||[]).filter(a=>a.category==='address-group'||a.category==='address-group6');
+    const sg=(p.services||[]).filter(s=>s.category==='group');
+    return [...topoGroups(ag)._cycles, ...topoGroups(sg)._cycles];
+  }
+  // README（00_README_order.txt）；tr 為介面的翻譯函式（key imp.*）
+  function buildFortigateImportReadme(pack, tr, opts){
+    const o=opts||{}, L=[];
+    const t=(k,p)=>{ let s=tr(k); Object.entries(p||{}).forEach(([a,b])=>{ s=s.split('{'+a+'}').join(String(b)); }); return s; };
+    L.push(t('imp.readme_title'));
+    if(o.source) L.push(t('imp.readme_source',{v:o.source}));
+    L.push('');
+    L.push(t('imp.readme_order'));
+    pack.files.forEach(f=>{
+      L.push(`  ${f.name}  ${t('imp.stage_'+f.stage)}`);
+      f.blocks.forEach(b=>L.push(`      config ${b.name}${b.count?'  ('+t('imp.items',{n:b.count})+')':''}`));
+    });
+    L.push('');
+    ['imp.readme_backup','imp.readme_how','imp.readme_check','imp.readme_lan','imp.readme_policyid','imp.readme_review'].forEach(k=>{ L.push('- '+t(k)); });
+    if(pack.files.some(f=>f.stage==='admins')) L.push('- '+t('imp.readme_admin'));
+    if(pack.files.some(f=>f.stage==='other')) L.push('- '+t('imp.readme_other'));
+    if(o.cycles&&o.cycles.length) L.push('- '+t('imp.readme_cycles',{v:o.cycles.join(', ')}));
+    L.push('');
+    L.push(t('imp.readme_cmds'));
+    ['diagnose debug config-error-log read','show system virtual-switch','show system interface','show firewall policy'].forEach(c=>L.push('  '+c));
+    if(pack.header.length){ L.push(''); L.push(t('imp.readme_header')); pack.header.forEach(h=>L.push('  '+h)); }
+    return L.join('\n')+'\n';
+  }
+
   function convert(parsed, targetVendor) {
     parsed = _guardPolicies(_applyFamilies(_nfApply(parsed), targetVendor));
     switch(targetVendor) {
@@ -3035,7 +3150,7 @@ const Converter = (() => {
     return getConversionCaveatItems(parsed, targetVendor, opts).map(it=>caveatText(it, trFn?trFn(it.key):null));
   }
 
-  return { convert, getConversionLoss, getConversionCaveats, getConversionCaveatItems, CAVEAT_ZH, toFortigate, toSophos, toCheckpoint, toPaloAlto, toJuniper, toPfsense, toCiscoASA, toCiscoFTD, toSonicWall, toMikrotik, toZyxel, toEdgeRouter, toOpenWrt };
+  return { convert, splitFortigateImport, buildFortigateImportReadme, fortigateGroupCycles, getConversionLoss, getConversionCaveats, getConversionCaveatItems, CAVEAT_ZH, toFortigate, toSophos, toCheckpoint, toPaloAlto, toJuniper, toPfsense, toCiscoASA, toCiscoFTD, toSonicWall, toMikrotik, toZyxel, toEdgeRouter, toOpenWrt };
 })();
 
 

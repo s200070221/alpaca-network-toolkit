@@ -1561,7 +1561,11 @@ function onParsed(){
           [buildExposedServicesHtml(_exp), (_exp.items || []).length],
           [buildVulnCheckHtml({ text: _fwVulnText(), version: _fwVulnVer[_acceptedRiskHost()] || '', parsed: PARSED, showverMiss: _fwShowverMiss, showverText: _fwShowverText }), 1],
           // 型號與版本限制（XN144）：只有 FortiGate；有命中才放在前面，沒有時收進沒有發現的區塊
-          ...(PARSED.vendor === 'FortiGate' && window.FwModelLimits ? (() => { const _ml = window.FwModelLimits.assess(PARSED, _fwVulnVer[_acceptedRiskHost()] || ''); return [[buildModelLimitHtml(PARSED, _fwVulnVer[_acceptedRiskHost()] || ''), (_ml.items || []).length]]; })() : []),
+          ...(PARSED.vendor === 'FortiGate' && window.FwModelLimits ? (() => { const _v = _fwVulnVer[_acceptedRiskHost()] || '', _ml = window.FwModelLimits.assess(PARSED, _v);
+            // 數量上限（XN145）超過或接近的項目也算發現
+            const _mv = window.FwModelLimits.mvAssess ? window.FwModelLimits.mvAssess(PARSED, { model: (PARSED.deviceInfo || {}).model, version: _v || (PARSED.deviceInfo || {}).firmware }) : null;
+            const _mvN = _mv && _mv.supported ? _mv.items.filter(i => i.level === 'over' || i.level === 'near').length : 0;
+            return [[buildModelLimitHtml(PARSED, _v), (_ml.items || []).length + _mvN]]; })() : []),
           [buildDisabledPoliciesHtml(_dis), _dis.length], [buildCrossVdomHtml(_xv), _xv.length], [buildMissingCommentsHtml(_mc), _mc.length],
           [buildOversizedGroupsHtml(_og), _og.length], [buildNamingConventionHtml(_nm, _loadNamingRules()), (_nm.results || []).length + (_nm.errors || []).length],
           [buildExpiredRulesHtml(_ex, _loadExpiryKeywords()), (_ex.results || []).length],
@@ -2184,7 +2188,8 @@ function onParsed(){
       $('conv-src').value=rawMap[srcVendor]||JSON.stringify(srcParsed,null,2);
       $('conv-dst').value=CONV_RESULT;
       let convStatusHtml=`<span style="color:var(--green)">${tr('conv.done')}</span> — ${CONV_RESULT.split('\n').length} ${tr('conv.lines_unit')}  |  ${(CONV_RESULT.length/1024).toFixed(1)} KB`
-        +` <button type="button" class="btn btn-ghost btn-sm" data-conv-report style="margin-left:8px">📄 ${tr('crpt.download')}</button>`;
+        +` <button type="button" class="btn btn-ghost btn-sm" data-conv-report style="margin-left:8px">📄 ${tr('crpt.download')}</button>`
+        +(targetVendor==='fortigate'&&window.FwZip?` <button type="button" class="btn btn-ghost btn-sm" data-conv-pack style="margin-left:8px" title="${esc(tr('imp.btn_tip'))}">📦 ${tr('imp.btn')}</button>`:'');
       const warnHtml=buildConversionWarningsHtml(srcParsed, targetVendor, _pm.applied ? { portModel: _pm.appliedModel } : null);
       if(warnHtml)convStatusHtml+='<br>'+warnHtml;
       if(convVdom)convStatusHtml+=`<br><span style="color:var(--text-dim);font-size:12px">⚠️ ${tr('conv.vdom_warn').replace('{vdom}',esc(convVdom))}</span>`;
@@ -2299,7 +2304,10 @@ function onParsed(){
       }
     }
     el.innerHTML=buildConvPortMapHtml({ targetName:_CONV_NAMES[target]||target, models, modelId:_pm.model, srcModel: sm ? (FwPortMap.getModel(sm.vendor,sm.id)||{}).label || sm.id : '', sug, reserved,
-      applied:!!_pm.applied, appliedCount:_pm.applied?Object.keys(_pm.applied).filter(k=>_pm.applied[k]).length:0, csvMsg:_pm.csvMsg||'' });
+      applied:!!_pm.applied, appliedCount:_pm.applied?Object.keys(_pm.applied).filter(k=>_pm.applied[k]).length:0, csvMsg:_pm.csvMsg||'' })
+      // 目標為 FortiGate 且選了型號：以目標型號的數量上限檢查轉換來源（轉換輸出為 7.4、全部放進同一個 VDOM，XN145）
+      +(target==='fortigate'&&_pm.model&&window.FwModelLimits&&window.FwModelLimits.mvAssess&&typeof buildMaxValuesHtml==='function'
+        ?buildMaxValuesHtml(window.FwModelLimits.mvAssess(_pm.parsed,{ model:_pm.model, version:'7.4', singleVdom:true }),{ title:'mv.conv_title', id:'conv-mv' }):'');
   }
   // 轉換結果沒有韌體版本，比對時不評估韌體（否則會被當成「韌體問題消失」，XN50）
   const _fwAuditOf=p=>{ const h=computeFirewallHealth(p,{skipVuln:true}); return { health:{score:h.score,grade:h.grade},
@@ -2342,6 +2350,7 @@ function onParsed(){
     else if(k==='csvimport'){ const f=$('conv-portmap-card').querySelector('input[data-pm="csvfile"]'); if(f)f.click(); }
   });
   document.addEventListener('click',e=>{ if(e.target&&e.target.closest&&e.target.closest('[data-conv-report]'))downloadConvReport(); });
+  document.addEventListener('click',e=>{ if(e.target&&e.target.closest&&e.target.closest('[data-conv-pack]'))downloadConvPack(); });
 
   // ── 埠對應表 CSV 與轉換報告（XN44）────────────────────────────────────────────
   // 警示純文字（CSV／報告用，報告另行跳脫）
@@ -2406,6 +2415,23 @@ function onParsed(){
     Reporter.download(CONV_RESULT,`fw_converted_${CONV_TARGET}_${dateStr()}.${ext}`,'text/plain');
   }
   window.downloadConv=downloadConv;
+
+  // FortiGate 匯入順序包（XN146）：依參照順序拆成編號檔案＋00_README_order.txt，打包成 zip
+  function buildConvPack(){
+    if(!CONV_RESULT||CONV_TARGET!=='fortigate'||!window.FwZip)return null;
+    const pack=Converter.splitFortigateImport(CONV_RESULT);
+    const src=(_CONV_NAMES[_pm.src]||_pm.src||'')+(_pm.vdom?` (VDOM ${_pm.vdom})`:'')+(_pm.applied&&_pm.appliedModel?` → ${_pm.appliedModel}`:'');
+    const readme=Converter.buildFortigateImportReadme(pack,tr,{ source:src, cycles:Converter.fortigateGroupCycles(_pm.parsed) });
+    return [{ name:'00_README_order.txt', text:readme }, ...pack.files.map(f=>({ name:f.name, text:f.text }))];
+  }
+  function downloadConvPack(){
+    const files=buildConvPack();
+    if(!files){showErr(tr('conv.no_result'));return;}
+    const blob=new Blob([window.FwZip.createZip(files)],{type:'application/zip'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`fw_fortigate_import_${dateStr()}.zip`;
+    document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
+  }
+  window.buildConvPack=buildConvPack; window.downloadConvPack=downloadConvPack;
 
   // ── Export ────────────────────────────────────────────────────
   function exportSection(){

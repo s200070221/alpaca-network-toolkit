@@ -791,6 +791,14 @@ ${(()=>{ /* 型號與版本限制（XN144）：只有命中時才放；版本以
     + `<table><thead><tr><th>${esc(tr('ml.col_limit'))}</th><th>${esc(tr('ml.col_status'))}</th><th>${esc(tr('ml.col_uses'))}</th><th>${esc(tr('ml.col_src'))}</th></tr></thead><tbody>`
     + a.items.map(it => `<tr><td>${esc(tr('ml.lim_' + it.id))}</td><td>${esc(tr('ml.st_' + it.status).replace('{since}', it.since))}</td><td>${it.uses.map(u => esc(tr('ml.f_' + u.kind) + '：' + u.refs.slice(0, 10).join(', '))).join('<br>')}</td><td><a href="${esc(it.src)}">${esc(tr('ml.src'))}</a></td></tr>`).join('')
     + `</tbody></table><p style="margin:4px 0;color:#64748b">${esc(tr('ml.asof').replace('{date}', a.asof))}</p></div>`; })()}
+${(()=>{ /* 數量上限（XN145）：只有超過或接近時才放 */
+  const M = typeof window !== 'undefined' && window.FwModelLimits && window.FwModelLimits.mvAssess ? window.FwModelLimits : null; if (!M || !/fortigate/i.test(parsed.vendor || '')) return '';
+  const mv = M.mvAssess(parsed, { model: (parsed.deviceInfo || {}).model, version: (parsed.deviceInfo || {}).firmware });
+  const top = mv.supported ? mv.items.filter(i => i.level === 'over' || i.level === 'near') : []; if (!top.length) return '';
+  return `<div class="card"><h2>${esc(tr('mv.title'))}</h2><p style="margin:4px 0">${esc(tr('mv.basis').replace('{model}', mv.code).replace('{version}', mv.version).replace('{date}', mv.asof))}</p>`
+    + `<table><thead><tr><th>${esc(tr('mv.col_obj'))}</th><th>${esc(tr('mv.col_count'))}</th><th>${esc(tr('mv.col_scope'))}</th><th>${esc(tr('mv.col_level'))}</th></tr></thead><tbody>`
+    + top.map(it => `<tr><td>${esc(it.obj)}</td><td>${esc(it.count + ' / ' + it.limit)}</td><td>${esc(tr('mv.scope_' + it.scope) + (it.where ? '：' + it.where : ''))}</td><td>${esc(tr('mv.lv_' + it.level))}</td></tr>`).join('')
+    + `</tbody></table><p style="margin:4px 0;color:#64748b">${esc(tr('mv.note'))} <a href="${esc(mv.src)}">${esc(tr('ml.src'))}</a></p></div>`; })()}
 
 <div class="info-grid">
   <div class="info-item"><div class="k">${tr('rpt.vendor_label')}</div><div class="v">${esc(info.vendor)}</div></div>
