@@ -3,8 +3,29 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.12.1';
+  const TOOLKIT_VERSION = '2026.11.14';
   const CHANGELOG = [
+    {
+      version: '2026.11.14',
+      items: {
+        zhTW: [
+          'FortiGate 型號與版本限制：小記憶體機種移除 SSL VPN／proxy 類功能、各機型 SSL VPN 與 Agentless VPN 支援，依官方文件比對設定檔使用的功能',
+          'FortiGate 數量上限：依官方 Maximum Values 表比對位址、服務、規則、本機使用者等物件數量，稽核頁、報告與轉換精靈都會提示超過或接近上限',
+          '防火牆轉換結果可下載匯入順序包（zip＋說明）：FortiGate、Cisco ASA、MikroTik、Zyxel 依相依順序分檔；Palo Alto、Juniper、EdgeRouter、pfSense、OpenWrt、FTD 附整份載入說明',
+          'Check Point 轉換改輸出 Management API 指令（Gaia clish 只放系統設定），Sophos 另提供 XML API 匯入包；巢狀位址／服務群組依成員順序輸出',
+          'Cisco ASA／FTD 轉換與稽核比對各型號的 VLAN 子介面上限；交換器產生器選 Cisco Catalyst 型號時比對 VLAN、SVI、STP 實例、ACL 與聚合埠規格上限',
+          '修正：OpenWrt 規則引用未定義 zone 的查詢、Check Point／Sophos 規則中的字面位址與服務改建成物件、ASA 群組成員格式正規化',
+        ],
+        en: [
+          'FortiGate model and version limits: checks features in the config against official notes (SSL VPN / proxy features removed on 2GB models, SSL VPN and Agentless VPN support by model)',
+          'FortiGate maximum values: compares address, service, policy, local user and other object counts with the official Maximum Values table in the audit, report and conversion wizard',
+          'Firewall conversions can be downloaded as an import-order package (zip + README): FortiGate, Cisco ASA, MikroTik and Zyxel split by dependency order; Palo Alto, Juniper, EdgeRouter, pfSense, OpenWrt and FTD include load instructions',
+          'Check Point conversion now outputs Management API commands (Gaia clish only for system settings) and Sophos gets an XML API import package; nested address / service groups are ordered by membership',
+          'Cisco ASA / FTD conversion and audit check VLAN subinterface limits per model; the switch generator checks VLAN, SVI, STP instance, ACL and port-channel limits for Cisco Catalyst models',
+          'Fixes: OpenWrt queries for rules referencing undefined zones, Check Point / Sophos literal addresses and services become objects, ASA group member formats are normalized',
+        ],
+      },
+    },
     {
       version: '2026.11.12.1',
       items: {
