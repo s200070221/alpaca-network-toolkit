@@ -41,10 +41,10 @@ const NetfilterParser = (() => {
   // 自訂鏈只有一個 jump 來源時，鏈內規則未指定的條件（介面、位址、協定、埠）沿用 jump 規則的條件；
   // 多個來源時只合併進入介面（條件各不相同，無法合成單一規則）
   function buildPolicies(rules, addrTypeMap) {
-    const jumps = {};
+    const jumps = Object.create(null);
     rules.forEach(r => { if (r.action === 'jump' && r.target) (jumps[r.target] = jumps[r.target] || []).push(r); });
     const out = [];
-    const counter = {};
+    const counter = Object.create(null);
     rules.forEach(r => {
       const ck = `${r.family}/${r.chain}`;
       counter[ck] = (counter[ck] || 0) + 1;
@@ -67,7 +67,7 @@ const NetfilterParser = (() => {
   // _chain＝基本鏈的 hook（input／forward／output）或自訂鏈名稱；鏈尾動作取自 :INPUT DROP／nft policy drop（沒寫＝ACCEPT）；
   // ctstate DNAT（ufw／docker 常見）改為 natState；設定檔沒有介面位址，FORWARD 沒有規則而 INPUT 有規則時視為主機防火牆（chainPick host）
   function buildNf(res, addrTypeMap) {
-    const counter = {};
+    const counter = Object.create(null);
     const rules = res.rules.map((r, i) => {
       const ck = `${r.family}/${r.chain}`;
       counter[ck] = (counter[ck] || 0) + 1;

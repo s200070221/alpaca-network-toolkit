@@ -282,6 +282,13 @@ const OpenWrtParser = (() => {
     const zones = fw.filter(s => s.type === 'zone').map(s => ({
       name: val(s, 'name', s.name || ''), nets: [...((s.lists && s.lists.network) || []), ...String(val(s, 'network', '')).split(/\s+/)].filter(Boolean),
       input: pol(val(s, 'input')) || dIn, forward: pol(val(s, 'forward')) || dFwd })).filter(z => z.name);
+    // 規則或 forwarding 引用、但這份檔案沒有定義的 zone（只上傳部分設定時常見）：以 defaults 的政策補上，
+    // 否則這些規則不會出現在任何鏈，查詢與轉換都會被整批略過（RV1）
+    const defined = new Set(zones.map(z => z.name));
+    fw.filter(s => s.type === 'rule' || s.type === 'forwarding').forEach(s => ['src', 'dest'].forEach(k => {
+      const zn = val(s, k, '');
+      if (zn && zn !== '*' && !defined.has(zn)) { defined.add(zn); zones.push({ name: zn, nets: [], input: dIn, forward: dFwd, implicit: true }); }
+    }));
     const zm = new Map(zones.map(z => [z.name, z]));
     const mem = zn => zn && zn !== '*' && zm.has(zn) ? (zm.get(zn).nets.join(', ') || undefined) : undefined;
     const base = o => Object.assign({ srcIntf: '-', dstIntf: '-', srcAddr: 'any', dstAddr: 'any', srcAddr4: 'any', dstAddr4: 'any', srcAddr6: '-', dstAddr6: '-',

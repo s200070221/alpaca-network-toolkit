@@ -241,6 +241,37 @@ const Converter = (() => {
   // ══════════════════════════════════════════════════════════════════════════
   // FortiGate 輸出段落順序（XN146）：基本設定 → 介面 → WWAN → 物件 → 使用者 → VPN（建立通道介面）→ 路由（可參照通道介面）→ NAT → 規則 → 管理者
   const FG_SEC_ORDER=['base','intf','wwan','obj','users','vpn','route','nat','policy','admin'];
+  // 規則中的字面位址與服務（RV1）：Check Point 與 Sophos 的規則只接受物件名稱，來源廠牌（ASA、MikroTik、netfilter 等）
+  // 常直接寫 IP、網段或 tcp/443。refObjects() 把這類值換成自動建立的物件：位址 h-IP／n-網段_遮罩位元／r-起-迄，
+  // 服務 tcp_埠／udp_埠（埠範圍 a-b）；已有同名物件的維持原名；any／ip 不寫；判斷不出來的維持原值
+  function refObjects(parsed){
+    const p=parsed||{}, names=new Set([...(p.addresses||[]).map(a=>a.name),...(p.services||[]).map(x=>x.name)]);
+    const addrs=new Map(), svcs=new Map();
+    const v4='\\d{1,3}(?:\\.\\d{1,3}){3}';
+    const addr=t=>{
+      let v=String(t||'').trim(); if(!v) return null;
+      if(names.has(v)) return v;
+      if(v[0]==='@'&&names.has(v.slice(1))) return v.slice(1);
+      v=v.replace(/^(?:host|object|object-group)\s+/i,'');
+      if(names.has(v)) return v;
+      let m;
+      if((m=v.match(new RegExp(`^(${v4})$`)))){ const n='h-'+m[1]; addrs.set(n,{kind:'host',ip:m[1]}); return n; }
+      if((m=v.match(new RegExp(`^(${v4})(?:/(\\d{1,2})|[/\\s]+(${v4}))$`)))){
+        const b=m[2]!==undefined?+m[2]:bits(m[3]);
+        if(b===32){ const n='h-'+m[1]; addrs.set(n,{kind:'host',ip:m[1]}); return n; }
+        const n=`n-${m[1]}_${b}`; addrs.set(n,{kind:'net',ip:m[1],bits:b}); return n; }
+      if((m=v.match(new RegExp(`^(${v4})-(${v4})$`)))){ const n=`r-${m[1]}-${m[2]}`; addrs.set(n,{kind:'range',a:m[1],b:m[2]}); return n; }
+      return v;
+    };
+    const svc=t=>{
+      const v=String(t||'').trim(); if(!v||/^(any|all|ALL|-|ip)$/i.test(v)) return null;
+      if(names.has(v)) return v;
+      const r=resolveSvc(v,p);
+      if((r.proto==='tcp'||r.proto==='udp')&&r.port){ const n=`${r.proto}_${r.port}`; svcs.set(n,{proto:r.proto,port:r.port}); return n; }
+      return r.proto==='ip'&&!r.unresolved?null:v;
+    };
+    return { addr, svc, addrs, svcs };
+  }
   // 群組依成員排序（XN146）：成員是同一清單內的群組時，成員群組先輸出；循環參照者保持原順序並列在 _cycles
   function topoGroups(list){
     const byName=new Map(list.map(g=>[g.name,g])), out=[], state=new Map(), cycles=[];
@@ -967,8 +998,28 @@ const Converter = (() => {
     // FQDN 物件在 Check Point 以 dns-domain 表示，物件名稱即網域（前面加點），群組與規則的引用一併改名
     const cpName=Object.create(null);
     parsed.addresses.filter(a=>a.category==='address'&&a.type==='fqdn'&&a.fqdn&&a.fqdn!=='-').forEach(a=>{ cpName[a.name]='.'+String(a.fqdn).replace(/^\./,''); });
+    const ro=refObjects(parsed);
     const nm=n=>cpName[n]||n;
     const list=(key,vals)=>vals.map((v,i)=>`${key}.${i+1} ${cpq(nm(v))}`).join(' ');
+    // 規則先組好（字面位址／服務改成自動建立的物件），物件區段才能一併輸出這些物件（RV1）
+    const cpNames=uniqPolicyNames(parsed.policies);
+    const ruleLines=parsed.policies.map((p,i)=>{
+      const act=/^(accept|allow|permit|pass)$/i.test(p.action||'')?'Accept':/reject/i.test(p.action||'')?'Reject':'Drop';
+      const parts=[`add access-rule layer "Network" position "bottom" name ${cpq(cpNames[i])}`];
+      const sa=sl(p.srcAddr).map(ro.addr).filter(Boolean), da=sl(p.dstAddr).map(ro.addr).filter(Boolean), sv=[...new Set(sl(p.service).map(ro.svc).filter(Boolean))];
+      if(sa.length) parts.push(list('source',sa));
+      if(da.length) parts.push(list('destination',da));
+      if(sv.length) parts.push(sv.map((v,k)=>`service.${k+1} ${cpq(v)}`).join(' '));
+      parts.push(`action ${cpq(act)}`);
+      if(p.logtraffic&&p.logtraffic!=='disable') parts.push('track.type "Log"');
+      if(p.status==='disable') parts.push('enabled false');
+      if(p.comments&&p.comments!=='-') parts.push(`comments ${cpq(p.comments)}`);
+      return parts.join(' ');
+    });
+    const grpLines=topoGroups(parsed.addresses.filter(a=>a.category==='address-group')).map(g=>{
+      const ms=sl(g.members).map(ro.addr).filter(Boolean); return `add group name ${cpq(g.name)}${ms.length?' '+list('members',ms):''}`; });
+    const sgLines=topoGroups(parsed.services.filter(s=>s.category==='group')).map(g=>{
+      const ms=sl(g.members).map(ro.svc).filter(Boolean); return `add service-group name ${cpq(g.name)}${ms.length?' '+ms.map((v,k)=>`members.${k+1} ${cpq(v)}`).join(' '):''}`; });
     parsed.addresses.filter(a=>a.category==='address').forEach(a=>{
       if(a.type==='fqdn'){ if(cpName[a.name]) L.push(`add dns-domain name ${cpq(cpName[a.name])} is-sub-domain false`); return; }
       if(a.type==='iprange'){ L.push(`add address-range name ${cpq(a.name)} ip-address-first ${cpq(a.startIp)} ip-address-last ${cpq(a.endIp)}`); return; }
@@ -977,9 +1028,12 @@ const Converter = (() => {
       if(String(sfx)==='32') L.push(`add host name ${cpq(a.name)} ip-address ${cpq(ip)}`);
       else L.push(`add network name ${cpq(a.name)} subnet ${cpq(ip)} subnet-mask ${cpq(maskOf(sfx))}`);
     });
-    topoGroups(parsed.addresses.filter(a=>a.category==='address-group')).forEach(g=>{
-      const ms=sl(g.members); L.push(`add group name ${cpq(g.name)}${ms.length?' '+list('members',ms):''}`);
+    ro.addrs.forEach((o,n)=>{
+      if(o.kind==='host') L.push(`add host name ${cpq(n)} ip-address ${cpq(o.ip)}`);
+      else if(o.kind==='net') L.push(`add network name ${cpq(n)} subnet ${cpq(o.ip)} subnet-mask ${cpq(maskOf(o.bits))}`);
+      else L.push(`add address-range name ${cpq(n)} ip-address-first ${cpq(o.a)} ip-address-last ${cpq(o.b)}`);
     });
+    L.push(...grpLines);
     parsed.services.filter(s=>s.category==='custom').forEach(s=>{
       const p=(s.proto||'TCP').toLowerCase();
       const port=v=>String(v||'').split(/[\s,]+/)[0].split(':')[0];
@@ -991,23 +1045,8 @@ const Converter = (() => {
         if(hasU) L.push(`add service-udp name ${cpq(s.name+(hasT?'-udp':''))} port ${cpq(port(s.udpPorts))}`);
       }
     });
-    topoGroups(parsed.services.filter(s=>s.category==='group')).forEach(g=>{
-      const ms=sl(g.members); L.push(`add service-group name ${cpq(g.name)}${ms.length?' '+list('members',ms):''}`);
-    });
-    const cpNames=uniqPolicyNames(parsed.policies);
-    parsed.policies.forEach((p,i)=>{
-      const act=/^(accept|allow|permit|pass)$/i.test(p.action||'')?'Accept':/reject/i.test(p.action||'')?'Reject':'Drop';
-      const parts=[`add access-rule layer "Network" position "bottom" name ${cpq(cpNames[i])}`];
-      const sa=sl(p.srcAddr), da=sl(p.dstAddr), sv=sl(p.service).filter(x=>!/^(any|all|ALL)$/i.test(x));
-      if(sa.length) parts.push(list('source',sa));
-      if(da.length) parts.push(list('destination',da));
-      if(sv.length) parts.push(sv.map((v,k)=>`service.${k+1} ${cpq(v)}`).join(' '));
-      parts.push(`action ${cpq(act)}`);
-      if(p.logtraffic&&p.logtraffic!=='disable') parts.push('track.type "Log"');
-      if(p.status==='disable') parts.push('enabled false');
-      if(p.comments&&p.comments!=='-') parts.push(`comments ${cpq(p.comments)}`);
-      L.push(parts.join(' '));
-    });
+    ro.svcs.forEach((o,n)=>L.push(`add service-${o.proto} name ${cpq(n)} port ${cpq(o.port)}`));
+    L.push(...sgLines, ...ruleLines);
     L.push('publish');
     return L.join('\n');
   }
@@ -2578,8 +2617,9 @@ const Converter = (() => {
     // 來源為 parseLogServers() 已解析出的真實資料，name 為 parser 反查用的識別鍵須無條件輸出
     if(parsed.logservers&&parsed.logservers.syslog&&parsed.logservers.syslog.length){
       L.push('/system logging action');
-      parsed.logservers.syslog.forEach(s=>{
-        let line=`add name=${s.name} target=remote remote=${s.server}`;
+      parsed.logservers.syslog.forEach((s,i)=>{
+        // 來源沒有名稱（ASA／F5 等的 logging host）時給序號名稱，避免輸出 name=undefined（RV1）
+        let line=`add name=${s.name&&s.name!=='-'?qstr(s.name).replace(/\s+/g,'_'):'remote'+(i+1)} target=remote remote=${s.server}`;
         if(s.port&&s.port!=='514')line+=` remote-port=${s.port}`;
         if(s.facility&&s.facility!=='local7')line+=` syslog-facility=${s.facility}`;
         if(s.format==='BSD')line+=' bsd-syslog=yes';
@@ -3057,6 +3097,7 @@ const Converter = (() => {
   function buildSophosApiFiles(parsed){
     const p=parsed||{}, addrs=(p.addresses||[]), svcs=(p.services||[]);
     const skipped={ svc:[], fqdnInGroup:[], schedule:[] };
+    const ro=refObjects(p);  // 規則與群組中的字面位址／服務改成自動建立的物件（RV1）
     const byA=new Map(addrs.map(a=>[a.name,a])), byS=new Map(svcs.map(x=>[x.name,x]));
     const req=(ents)=>['<Request>','  <Login>','    <Username>PLACEHOLDER</Username>','    <Password>PLACEHOLDER</Password>','  </Login>','  <Set operation="add">',...ents,'  </Set>','</Request>',''].join('\n');
     let tx=0; const tid=()=>` transactionid="${++tx}"`;
@@ -3073,7 +3114,7 @@ const Converter = (() => {
         :`    <IPHost${tid()}>\n      <Name>${esc(a.name)}</Name>\n      <IPFamily>IPv4</IPFamily>\n      <HostType>Network</HostType>\n      <IPAddress>${esc(ip)}</IPAddress>\n      <Subnet>${esc(maskOf(sfx))}</Subnet>\n    </IPHost>`);
     });
     // 群組展開成實際主機（FQDN 成員不放進 IP 主機群組）
-    const expandA=(n,seen)=>{ if(seen.has(n)) return []; seen.add(n); const o=byA.get(n); if(!o) return [n];
+    const expandA=(n,seen)=>{ if(seen.has(n)) return []; seen.add(n); const o=byA.get(n); if(!o){ const r=ro.addr(n); return r?[r]:[]; }
       if(o.category==='address-group') return sl(o.members).flatMap(m=>expandA(m,seen)); return [n]; };
     const grpEnts=[];
     addrs.filter(a=>a.category==='address-group').forEach(g=>{
@@ -3091,11 +3132,11 @@ const Converter = (() => {
       svcOk.add(x.name);
       svcEnts.push(`    <Services${tid()}>\n      <Name>${esc(x.name)}</Name>\n      <Type>TCPorUDP</Type>\n      <ServiceDetails>\n${det.map(([pr,pt])=>`        <ServiceDetail>\n          <SourcePort>1:65535</SourcePort>\n          <DestinationPort>${esc(pt)}</DestinationPort>\n          <Protocol>${pr}</Protocol>\n        </ServiceDetail>`).join('\n')}\n      </ServiceDetails>\n    </Services>`);
     });
-    const expandS=(n,seen)=>{ if(seen.has(n)) return []; seen.add(n); const o=byS.get(n); if(!o) return [n];
+    const expandS=(n,seen)=>{ if(seen.has(n)) return []; seen.add(n); const o=byS.get(n); if(!o){ const r=ro.svc(n); return r?[r]:[]; }
       if(o.category==='group') return sl(o.members).flatMap(m=>expandS(m,seen)); return [n]; };
     const sgEnts=[];
     svcs.filter(x=>x.category==='group').forEach(g=>{
-      const mem=[...new Set(expandS(g.name,new Set()))].filter(m=>!byS.has(m)||svcOk.has(m));
+      const mem=[...new Set(expandS(g.name,new Set()))].filter(m=>!byS.has(m)||svcOk.has(m)||ro.svcs.has(m));
       sgEnts.push(`    <ServiceGroup${tid()}>\n      <Name>${esc(g.name)}</Name>\n      <ServiceList>\n${mem.map(m=>`        <Service>${esc(m)}</Service>`).join('\n')}\n      </ServiceList>\n    </ServiceGroup>`);
     });
     // 規則：依原順序 Position Bottom；any 不寫該欄位
@@ -3104,7 +3145,7 @@ const Converter = (() => {
       const act=/^(accept|allow|permit|pass)$/i.test(r.action||'')?'Accept':/reject/i.test(r.action||'')?'Reject':'Drop';
       const zone=v=>{ const z=mapZone(v,'sophos'); return (!v||v==='-'||/^any$/i.test(z))?'':z; };
       const sz=zone(r.srcIntf), dz=zone(r.dstIntf);
-      const sa=sl(r.srcAddr), da=sl(r.dstAddr), sv=sl(r.service).filter(x=>!/^(any|all)$/i.test(x));
+      const sa=sl(r.srcAddr).map(ro.addr).filter(Boolean), da=sl(r.dstAddr).map(ro.addr).filter(Boolean), sv=[...new Set(sl(r.service).map(x=>byS.has(x)?x:ro.svc(x)).filter(Boolean))];
       if(r.schedule&&!/^(always|any|-)$/i.test(r.schedule)) skipped.schedule.push(names[i]);
       const L2=[`    <FirewallRule${tid()}>`,`      <Name>${esc(names[i])}</Name>`];
       if(r.comments&&r.comments!=='-') L2.push(`      <Description>${esc(r.comments)}</Description>`);
@@ -3119,6 +3160,13 @@ const Converter = (() => {
       L2.push('      </NetworkPolicy>','    </FirewallRule>');
       ruleEnts.push(L2.join('\n'));
     });
+    // 自動建立的物件放進主機與服務檔（規則與群組已在上面引用）
+    ro.addrs.forEach((o,n)=>{
+      if(o.kind==='range') hostEnts.push(`    <IPHost${tid()}>\n      <Name>${esc(n)}</Name>\n      <IPFamily>IPv4</IPFamily>\n      <HostType>IPRange</HostType>\n      <StartIPAddress>${esc(o.a)}</StartIPAddress>\n      <EndIPAddress>${esc(o.b)}</EndIPAddress>\n    </IPHost>`);
+      else if(o.kind==='host') hostEnts.push(`    <IPHost${tid()}>\n      <Name>${esc(n)}</Name>\n      <IPFamily>IPv4</IPFamily>\n      <HostType>IP</HostType>\n      <IPAddress>${esc(o.ip)}</IPAddress>\n    </IPHost>`);
+      else hostEnts.push(`    <IPHost${tid()}>\n      <Name>${esc(n)}</Name>\n      <IPFamily>IPv4</IPFamily>\n      <HostType>Network</HostType>\n      <IPAddress>${esc(o.ip)}</IPAddress>\n      <Subnet>${esc(maskOf(o.bits))}</Subnet>\n    </IPHost>`);
+    });
+    ro.svcs.forEach((o,n)=>{ if(svcOk.has(n)) return; svcEnts.push(`    <Services${tid()}>\n      <Name>${esc(n)}</Name>\n      <Type>TCPorUDP</Type>\n      <ServiceDetails>\n        <ServiceDetail>\n          <SourcePort>1:65535</SourcePort>\n          <DestinationPort>${esc(String(o.port).replace('-',':'))}</DestinationPort>\n          <Protocol>${o.proto.toUpperCase()}</Protocol>\n        </ServiceDetail>\n      </ServiceDetails>\n    </Services>`); });
     const files=[];
     [['hosts',hostEnts],['host_groups',grpEnts],['services',svcEnts],['service_groups',sgEnts],['firewall_rules',ruleEnts]].forEach(([id,ents])=>{
       if(ents.length) files.push({ name:`${String(files.length+1).padStart(2,'0')}_${id}.xml`, stage:'sp_'+id, count:ents.length, text:req(ents) });
@@ -3219,8 +3267,32 @@ const Converter = (() => {
     return [{ name:'00_README.txt', text:L.join('\n')+'\n' }, ...pack.files.map(f=>({ name:f.name, text:f.text }))];
   }
 
+  // 位址群組成員正規化（RV1）：Cisco ASA parser 的群組成員保留原始片段（object 名稱、object-group 名稱、host 位址、
+  // 「位址 遮罩」），各目標原樣輸出會變成 network-object object object X、FortiGate member "object X" 等無效語法。
+  // 轉換前把前綴去掉、字面位址改成自動建立的位址物件（名稱規則同 refObjects()：h-位址／n-網段_位元），回傳副本
+  function _normGroupMembers(parsed){
+    const p=parsed||{}, addrs=p.addresses||[];
+    const groups=addrs.filter(a=>a.category==='address-group'||a.category==='address-group6');
+    if(!groups.some(g=>sl(g.members).some(m=>/\s/.test(m)||/^[\d.:a-f]+(\/\d+)?$/i.test(m)&&!addrs.some(a=>a.name===m)))) return p;
+    const names=new Set(addrs.map(a=>a.name)), extra=[];
+    const v4='\\d{1,3}(?:\\.\\d{1,3}){3}';
+    const mk=(name,o)=>{ if(!names.has(name)){ names.add(name); extra.push(Object.assign({ category:'address', name, fqdn:'-', startIp:'-', endIp:'-', wildcard:'-', iface:'-', color:'0', comment:'-', members:'-' },o)); } return name; };
+    const norm=m=>{
+      let v=String(m).trim().replace(/^(?:object|object-group)\s+/i,'');
+      if(names.has(v)) return v;
+      v=v.replace(/^host\s+/i,'');
+      let x;
+      if((x=v.match(new RegExp(`^(${v4})$`)))) return mk('h-'+x[1],{ type:'ipmask', subnet:x[1]+'/32' });
+      if((x=v.match(new RegExp(`^(${v4})(?:/(\\d{1,2})|[/\\s]+(${v4}))$`)))){ const b=x[2]!==undefined?+x[2]:bits(x[3]);
+        return b===32?mk('h-'+x[1],{ type:'ipmask', subnet:x[1]+'/32' }):mk(`n-${x[1]}_${b}`,{ type:'ipmask', subnet:`${x[1]}/${b}` }); }
+      if((x=v.match(/^([0-9a-f:]+:[0-9a-f:]*)(?:\/(\d{1,3}))?$/i))) return mk('h6-'+x[1]+(x[2]&&x[2]!=='128'?'_'+x[2]:''),{ category:'address6', type:'ipprefix', subnet:`${x[1]}/${x[2]||128}` });
+      return v;
+    };
+    const out=addrs.map(a=>(a.category==='address-group'||a.category==='address-group6')?Object.assign({},a,{ members:sl(a.members).map(norm).join(', ')||'-' }):a);
+    return Object.assign({},p,{ addresses:[...extra,...out] });
+  }
   function convert(parsed, targetVendor) {
-    parsed = _guardPolicies(_applyFamilies(_nfApply(parsed), targetVendor));
+    parsed = _guardPolicies(_applyFamilies(_nfApply(_normGroupMembers(parsed)), targetVendor));
     switch(targetVendor) {
       case 'fortigate':  return toFortigate(parsed);
       case 'sophos':     return toSophos(parsed);
