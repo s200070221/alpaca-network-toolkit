@@ -1566,6 +1566,10 @@ function onParsed(){
             const _mv = window.FwModelLimits.mvAssess ? window.FwModelLimits.mvAssess(PARSED, { model: (PARSED.deviceInfo || {}).model, version: _v || (PARSED.deviceInfo || {}).firmware }) : null;
             const _mvN = _mv && _mv.supported ? _mv.items.filter(i => i.level === 'over' || i.level === 'near').length : 0;
             return [[buildModelLimitHtml(PARSED, _v), (_ml.items || []).length + _mvN]]; })() : []),
+          // Cisco ASA／FTD 設定檔有型號（show version 的 Hardware）時：VLAN 子介面數與該型號上限（XN149）
+          ...(/^Cisco (ASA|FTD)/i.test(PARSED.vendor || '') && window.FwModelLimits && window.FwModelLimits.ciscoAssess ? (() => {
+            const _cr = window.FwModelLimits.ciscoAssess(PARSED, { target: /FTD/i.test(PARSED.vendor) ? 'ciscoftd' : 'ciscoasa', model: (PARSED.deviceInfo || {}).model });
+            return _cr.supported ? [['<div id="cisco-limit-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('ml.title')) + '</div>' + buildCiscoLimitHtml(_cr) + '</div>', _cr.level === 'ok' ? 0 : 1]] : []; })() : []),
           [buildDisabledPoliciesHtml(_dis), _dis.length], [buildCrossVdomHtml(_xv), _xv.length], [buildMissingCommentsHtml(_mc), _mc.length],
           [buildOversizedGroupsHtml(_og), _og.length], [buildNamingConventionHtml(_nm, _loadNamingRules()), (_nm.results || []).length + (_nm.errors || []).length],
           [buildExpiredRulesHtml(_ex, _loadExpiryKeywords()), (_ex.results || []).length],
@@ -2311,7 +2315,10 @@ function onParsed(){
       applied:!!_pm.applied, appliedCount:_pm.applied?Object.keys(_pm.applied).filter(k=>_pm.applied[k]).length:0, csvMsg:_pm.csvMsg||'' })
       // 目標為 FortiGate 且選了型號：以目標型號的數量上限檢查轉換來源（轉換輸出為 7.4、全部放進同一個 VDOM，XN145）
       +(target==='fortigate'&&_pm.model&&window.FwModelLimits&&window.FwModelLimits.mvAssess&&typeof buildMaxValuesHtml==='function'
-        ?buildMaxValuesHtml(window.FwModelLimits.mvAssess(_pm.parsed,{ model:_pm.model, version:'7.4', singleVdom:true }),{ title:'mv.conv_title', id:'conv-mv' }):'');
+        ?buildMaxValuesHtml(window.FwModelLimits.mvAssess(_pm.parsed,{ model:_pm.model, version:'7.4', singleVdom:true }),{ title:'mv.conv_title', id:'conv-mv' }):'')
+      // 目標為 Cisco ASA／FTD 且選了型號：VLAN 子介面數與型號上限（XN149）
+      +((target==='ciscoasa'||target==='ciscoftd')&&_pm.model&&window.FwModelLimits&&window.FwModelLimits.ciscoAssess&&typeof buildCiscoLimitHtml==='function'
+        ?buildCiscoLimitHtml(window.FwModelLimits.ciscoAssess(_pm.convInput||_pm.parsed,{ target, model:_pm.model }),{ id:'conv-cisco-limit' }):'');
   }
   // 轉換結果沒有韌體版本，比對時不評估韌體（否則會被當成「韌體問題消失」，XN50）
   const _fwAuditOf=p=>{ const h=computeFirewallHealth(p,{skipVuln:true}); return { health:{score:h.score,grade:h.grade},

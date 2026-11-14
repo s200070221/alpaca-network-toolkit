@@ -111,6 +111,7 @@ const FILES = [
   'switch-generator-i18n.js',
   'switch-generator-juniper.js',
   'switch-generator-models.js',
+  'switch-generator-model-limits.js',
   'switch-generator-netgear.js',
   'switch-generator-nxos.js',
   'switch-generator-planet.js',

@@ -3125,6 +3125,16 @@ function validateForm(){
     });
   }
 
+  // 15b. 型號規模上限（XN149）：所選 Cisco 型號的規格表數值（同時啟用 VLAN、SVI、STP 實例、ACL、聚合埠），超過或接近時提示
+  if(typeof window!=='undefined'&&window.SwModelLimits&&model.vendor==='cisco'){
+    const dmSel=document.getElementById('device-model');
+    const ml=dmSel&&dmSel.value?window.SwModelLimits.assess(dmSel.value,dmSel.querySelector('option:checked')?.textContent||'',model):null;
+    if(ml) ml.items.filter(it=>it.level!=='ok').forEach(it=>{
+      warnings.push((it.level==='over'?'⚠️ ':'💡 ')+tr(it.level==='over'?'val.modelLimit_over':'val.modelLimit_near')
+        .replace('{item}',tr('swml.'+it.key)).replace('{count}',it.count).replace('{limit}',it.limit).replace('{model}',ml.name));
+    });
+  }
+
   // NTP／集中認證（第十三輪 ND）：位址或主機名稱；認證伺服器須為 IPv4（Cisco address ipv4、Comware primary authentication），
   // 金鑰不可含空白與引號（會變成多個參數）；選了類型卻沒填伺服器或金鑰為錯誤
   (model.ntpServers||[]).forEach(n=>{

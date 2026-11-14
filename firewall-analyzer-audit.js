@@ -1091,6 +1091,21 @@
     return h + '</div>';
   }
 
+  // Cisco ASA／FTD 型號上限（XN149）：VLAN 子介面數與所選型號（或設定檔 Hardware 型號）的上限；r＝FwModelLimits.ciscoAssess()
+  function buildCiscoLimitHtml(r, opts) {
+    const o = opts || {};
+    if (!r || !r.supported) return '';
+    const lv = r.level === 'over' ? pill(tr('mv.lv_over'), 'p-deny') : r.level === 'near' ? pill(tr('mv.lv_near'), 'p-warn') : pill(tr('mv.lv_ok'), 'p-allow');
+    let h = `<div${o.id ? ` id="${esc(o.id)}"` : ''} data-cisco-limit style="margin-top:14px"><div style="font-size:12px;font-weight:600;margin-bottom:6px">${esc(tr('cl.title').replace('{model}', r.key))}</div>`;
+    h += `<div style="font-size:12px;margin-bottom:4px">${esc(tr(r.kind === 'ftd' ? 'cl.subif_ftd' : 'cl.subif_asa').replace('{count}', r.count).replace('{limit}', r.limit))} ${lv}</div>`;
+    const notes = [];
+    if (r.base !== null && r.base !== undefined) notes.push(tr(r.needLicense ? 'cl.need_secplus' : 'cl.base_note').replace('{base}', r.base));
+    if (r.switchPorts) notes.push(tr('cl.switchports'));
+    notes.forEach(n => { h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-top:2px">${esc(n)}</div>`; });
+    h += `<div style="font-size:11px;color:var(--text-dim);margin-top:4px">${esc(tr('cl.note'))} <a href="${esc(r.src)}" target="_blank" rel="noopener noreferrer">${esc(tr('ml.src'))}</a></div>`;
+    return h + '</div>';
+  }
+
   // 型號＋版本限制卡片（XN144）＋數量上限（XN145）
   function buildModelLimitHtml(parsed, version) {
     const M = typeof window !== 'undefined' && window.FwModelLimits ? window.FwModelLimits : null;

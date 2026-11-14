@@ -186,5 +186,43 @@
     });
     return { supported: true, code: mc.code, exact: mc.exact, train: tr.train, trainExact: tr.exact, version: T.version, asof: D.asof, src: D.src, items };
   }
-  window.FwModelLimits = { LIMITS, ASOF, RAM_CHECK_CMD, modelSeries, parseVer, relation, assess, MV_NEAR, mvModelCode, mvTrain, mvCounts, mvAssess };
+
+  // ── Cisco ASA／FTD 型號上限（XN149）：VLAN 子介面數，依 cisco.com 設定指南的機型表（手工維護，每筆附出處）──
+  //  asa：ASA 授權的 VLAN 上限（兩個值＝Base／Security Plus 授權）；ftd：Management Center 裝置設定指南的 VLAN 子介面上限
+  const CISCO_SRC = {
+    asaPak: 'https://www.cisco.com/c/en/us/td/docs/security/asa/asa912/configuration/general/asa-912-general-config/intro-license.html',
+    asaSmart: 'https://www.cisco.com/c/en/us/td/docs/security/asa/asa916/configuration/general/asa-916-general-config/intro-license-smart.html',
+    ftd: 'https://www.cisco.com/c/en/us/td/docs/security/secure-firewall/management-center/device-config/720/management-center-device-config-72/interfaces-settings-ifcs-firewall.html',
+  };
+  const CISCO_FW_LIMITS = {
+    'ASA5506-X': { asa: [5, 30] }, 'ASA5508-X': { asa: [50] }, 'ASA5512-X': { asa: [50, 100] }, 'ASA5515-X': { asa: [100] }, 'ASA5516-X': { asa: [150] },
+    'ASA5525-X': { asa: [200] }, 'ASA5545-X': { asa: [300] }, 'ASA5555-X': { asa: [500] }, 'ASA5585-X': { asa: [1024] },
+    FPR1010: { asa: [60], ftd: 60, switchPorts: true }, FPR1120: { asa: [1024], ftd: 512 }, FPR1140: { asa: [1024], ftd: 1024 }, FPR1150: { asa: [1024], ftd: 1024 },
+    FPR2110: { asa: [1024], ftd: 1024 }, FPR2120: { asa: [1024], ftd: 1024 }, FPR2130: { asa: [1024], ftd: 1024 }, FPR2140: { asa: [1024], ftd: 1024 },
+    FPR3110: { asa: [1024], ftd: 1024 }, FPR3120: { asa: [1024], ftd: 1024 }, FPR3140: { asa: [1024], ftd: 1024 },
+  };
+  // 型號字串（FW_MODELS id、show version 的 Hardware: ASA5516、FPR-1010 等）→ 表格鍵
+  function ciscoModelKey(model) {
+    const m = String(model || '').toUpperCase().replace(/[\s,]/g, '');
+    let x = m.match(/^ASA-?(55\d\d)/); if (x) return 'ASA' + x[1] + '-X';
+    x = m.match(/^(?:FPR|FIREPOWER)-?(\d{4})/); if (x) return 'FPR' + x[1];
+    return null;
+  }
+  // 帶 VLAN 的介面（子介面）數：vlanId 有值或名稱為「介面.編號」
+  function vlanIfCount(parsed) {
+    return ((parsed && parsed.interfaces) || []).filter(i => (i.vlanId && i.vlanId !== '-') || /\.\d+$/.test(String(i.name || ''))).length;
+  }
+  // target：'ciscoasa'｜'ciscoftd'；回傳 { supported, key, kind, limit, base, count, level, needLicense, switchPorts, src }
+  function ciscoAssess(parsed, opts) {
+    const o = opts || {}, key = ciscoModelKey(o.model), row = key && CISCO_FW_LIMITS[key];
+    if (!row) return { supported: false, model: o.model || '-' };
+    const ftd = o.target === 'ciscoftd';
+    const lim = ftd ? row.ftd : row.asa[row.asa.length - 1];
+    if (!lim) return { supported: false, model: o.model || '-' };
+    const base = !ftd && row.asa.length > 1 ? row.asa[0] : null;
+    const count = vlanIfCount(parsed), r = count / lim;
+    return { supported: true, key, kind: ftd ? 'ftd' : 'asa', limit: lim, base, count, level: r > 1 ? 'over' : r >= MV_NEAR ? 'near' : 'ok',
+      needLicense: base !== null && count > base, switchPorts: !!(ftd && row.switchPorts), src: ftd ? CISCO_SRC.ftd : (/^ASA/.test(key) ? CISCO_SRC.asaPak : CISCO_SRC.asaSmart), asof: ASOF };
+  }
+  window.FwModelLimits = { LIMITS, ASOF, CISCO_FW_LIMITS, ciscoModelKey, ciscoAssess, RAM_CHECK_CMD, modelSeries, parseVer, relation, assess, MV_NEAR, mvModelCode, mvTrain, mvCounts, mvAssess };
 })();
