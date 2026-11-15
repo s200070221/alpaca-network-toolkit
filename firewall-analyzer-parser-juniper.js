@@ -335,7 +335,10 @@ const JuniperParser = (() => {
             let mm;
             while((mm=mRe.exec(inlinePol))!==null) sources.push(mm[1].trim());
           }
-          return sources.length ? sources.join(', ') : 'any';
+          // 多值清單「source-address [ A B ];」（display set 多值也會轉成此寫法）拆成個別名稱，
+          // 原本整串 "[ A B ]" 當成一個名稱，查詢解析不到而誤命中（RV2）
+          const names = sources.flatMap(s => s.replace(/[\[\]]/g, ' ').trim().split(/\s+/)).filter(Boolean);
+          return names.length ? names.join(', ') : 'any';
         }
         if (srcZone === null) {
           const zl = k => extractMatchVal(k).replace(/[\[\]]/g, ' ').trim().split(/[\s,]+/).filter(Boolean).join(', ') || 'any';

@@ -228,7 +228,9 @@
   // 共用計數：規則（不含平台規則與隱含規則）、zone、位址物件／群組、服務物件／群組與群組成員
   const realRules = p => (p.policies || []).filter(r => !r.platformRule && !r._implicit);
   const isAny = s => /^(any|all|any-ipv4|any-ipv6|-|)$/i.test(String(s || '').trim());
-  const splitNames = s => String(s || '').split(/[,\s]+/).map(x => x.trim()).filter(x => x && !isAny(x));
+  // 名稱以逗號分隔（parser 一律以「, 」合併，名稱本身可含空白）；Junos 方括號清單「[ A B ]」以空白分隔
+  const splitNames = s => { const t = String(s || '').trim();
+    return (/^\[.*\]$/.test(t) ? t.slice(1, -1).trim().split(/\s+/) : t.split(/,\s*/)).map(x => x.trim()).filter(x => x && !isAny(x)); };
   function zoneNames(p) {
     const z = new Set();
     (p._perVdom || []).forEach(v => (v.zones || []).forEach(x => x && x.name && z.add(x.name)));

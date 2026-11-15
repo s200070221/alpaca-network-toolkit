@@ -55,7 +55,9 @@
     if (!f) return null;
     const m = model || {};
     const vlans = new Set((m.vlans || []).map(v => String(v.id)).filter(Boolean));
-    const svis = (m.vlans || []).filter(v => v.ip && String(v.ip).trim()).length;
+    // SVI：VLAN 表有 IP 的 VLAN，加上 VRRP 列寫了介面位址的 VLAN（用途範本有 VRRP 時 SVI 位址只寫在 VRRP 列）
+    const hasIp = v => v && v.ip && String(v.ip).trim();
+    const svis = new Set([...(m.vlans || []).filter(hasIp).map(v => String(v.id)), ...(m.vrrp || []).filter(v => hasIp(v) && v.vlanId).map(v => String(v.vlanId))]).size;
     const mode = String((m.stp && m.stp.mode) || '').toLowerCase();
     const mst = /mst/.test(mode), insts = ((m.stp && m.stp.instances) || []).length;
     const aclRules = (m.acl || []).reduce((n, a) => n + ((a.rules || []).length), 0);
