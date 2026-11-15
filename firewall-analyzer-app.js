@@ -1570,6 +1570,12 @@ function onParsed(){
           ...(/^Cisco (ASA|FTD)/i.test(PARSED.vendor || '') && window.FwModelLimits && window.FwModelLimits.ciscoAssess ? (() => {
             const _cr = window.FwModelLimits.ciscoAssess(PARSED, { target: /FTD/i.test(PARSED.vendor) ? 'ciscoftd' : 'ciscoasa', model: (PARSED.deviceInfo || {}).model });
             return _cr.supported ? [['<div id="cisco-limit-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('ml.title')) + '</div>' + buildCiscoLimitHtml(_cr) + '</div>', _cr.level === 'ok' ? 0 : 1]] : []; })() : []),
+          // Palo Alto／Juniper SRX 設定檔讀得到型號時：規則、物件、zone 等數量與該型號官方上限（XN150）
+          ...(/^(PaloAlto|Juniper)/i.test(PARSED.vendor || '') && window.FwModelLimits && window.FwModelLimits.paAssess ? (() => {
+            const _m = (PARSED.deviceInfo || {}).model;
+            const _vr = /^PaloAlto/i.test(PARSED.vendor) ? window.FwModelLimits.paAssess(PARSED, { model: _m }) : window.FwModelLimits.junosAssess(PARSED, { model: _m });
+            const _vn = _vr.supported ? _vr.items.filter(i => i.level === 'over' || i.level === 'near').length : 0;
+            return _vr.supported ? [['<div id="vendor-limit-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('ml.title')) + '</div>' + buildVendorLimitHtml(_vr) + '</div>', _vn]] : []; })() : []),
           [buildDisabledPoliciesHtml(_dis), _dis.length], [buildCrossVdomHtml(_xv), _xv.length], [buildMissingCommentsHtml(_mc), _mc.length],
           [buildOversizedGroupsHtml(_og), _og.length], [buildNamingConventionHtml(_nm, _loadNamingRules()), (_nm.results || []).length + (_nm.errors || []).length],
           [buildExpiredRulesHtml(_ex, _loadExpiryKeywords()), (_ex.results || []).length],
@@ -2318,7 +2324,10 @@ function onParsed(){
         ?buildMaxValuesHtml(window.FwModelLimits.mvAssess(_pm.parsed,{ model:_pm.model, version:'7.4', singleVdom:true }),{ title:'mv.conv_title', id:'conv-mv' }):'')
       // 目標為 Cisco ASA／FTD 且選了型號：VLAN 子介面數與型號上限（XN149）
       +((target==='ciscoasa'||target==='ciscoftd')&&_pm.model&&window.FwModelLimits&&window.FwModelLimits.ciscoAssess&&typeof buildCiscoLimitHtml==='function'
-        ?buildCiscoLimitHtml(window.FwModelLimits.ciscoAssess(_pm.convInput||_pm.parsed,{ target, model:_pm.model }),{ id:'conv-cisco-limit' }):'');
+        ?buildCiscoLimitHtml(window.FwModelLimits.ciscoAssess(_pm.convInput||_pm.parsed,{ target, model:_pm.model }),{ id:'conv-cisco-limit' }):'')
+      // 目標為 Palo Alto／Juniper 且選了型號：轉換來源的規則、物件數與目標型號官方上限（轉換輸出只有一個 vsys，XN150）
+      +((target==='paloalto'||target==='juniper')&&_pm.model&&window.FwModelLimits&&window.FwModelLimits.paAssess&&typeof buildVendorLimitHtml==='function'
+        ?buildVendorLimitHtml(target==='paloalto'?window.FwModelLimits.paAssess(_pm.convInput||_pm.parsed,{ model:_pm.model, singleVdom:true }):window.FwModelLimits.junosAssess(_pm.convInput||_pm.parsed,{ model:_pm.model }),{ id:'conv-vendor-limit' }):'');
   }
   // 轉換結果沒有韌體版本，比對時不評估韌體（否則會被當成「韌體問題消失」，XN50）
   const _fwAuditOf=p=>{ const h=computeFirewallHealth(p,{skipVuln:true}); return { health:{score:h.score,grade:h.grade},

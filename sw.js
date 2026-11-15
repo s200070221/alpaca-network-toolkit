@@ -59,6 +59,7 @@ const FILES = [
   'firewall-analyzer-pathchain.js',
   'firewall-analyzer-model-limits.js',
   'firewall-analyzer-fg-maxvalues.js',
+  'firewall-analyzer-pa-maxvalues.js',
   'firewall-analyzer-zip.js',
   'firewall-analyzer-portmap.js',
   'firewall-analyzer-reporter.js',

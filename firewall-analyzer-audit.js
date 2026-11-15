@@ -1106,6 +1106,29 @@
     return h + '</div>';
   }
 
+  // Palo Alto／Juniper SRX 型號數量上限（XN150）：r＝FwModelLimits.paAssess()／junosAssess()；
+  // 只列超過與接近的項目，其餘收進 details；不計入健康度
+  function buildVendorLimitHtml(r, opts) {
+    const o = opts || {};
+    if (!r || !r.supported) return '';
+    let h = `<div${o.id ? ` id="${esc(o.id)}"` : ''} data-vendor-limit style="margin-top:14px"><div style="font-size:12px;font-weight:600;margin-bottom:6px">${esc(tr('vl.title').replace('{model}', r.key))}</div>`;
+    h += `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${esc(tr(r.vendor === 'pa' ? 'vl.basis_pa' : 'vl.basis_jn').replace('{date}', r.asof))} <a href="${esc(r.src)}" target="_blank" rel="noopener noreferrer">${esc(tr('ml.src'))}</a></div>`;
+    const row = it => {
+      const lim = it.limit ? `${it.count} / ${it.limit}` : String(it.count);
+      const lvl = it.level === 'over' ? pill(tr('mv.lv_over'), 'p-deny') : it.level === 'near' ? pill(tr('mv.lv_near'), 'p-warn') :
+        it.level === 'ok' ? pill(tr('mv.lv_ok'), 'p-allow') : esc(tr('mv.lv_nodata'));
+      return `<tr><td>${esc(tr('vl.obj_' + it.obj))}</td><td>${esc(lim)}</td><td style="font-size:11px">${esc(it.where || '')}</td><td>${lvl}</td></tr>`;
+    };
+    const head = '<table class="data-tbl"><thead><tr><th>' + ['mv.col_obj', 'mv.col_count', 'vl.col_where', 'mv.col_level'].map(k => esc(tr(k))).join('</th><th>') + '</th></tr></thead><tbody>';
+    const top = r.items.filter(it => it.level === 'over' || it.level === 'near');
+    if (top.length) h += '<div style="overflow-x:auto">' + head + top.map(row).join('') + '</tbody></table></div>';
+    else h += `<div style="font-size:12px;color:var(--green);margin-bottom:6px">${esc(tr('mv.all_ok'))}</div>`;
+    if (r.needVsysLicense) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-top:4px">${esc(tr('vl.vsys_license').replace('{base}', r.vsysBase))}</div>`;
+    h += `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px">${esc(tr('mv.all_rows').replace('{n}', r.items.length))}</summary><div style="overflow-x:auto">` + head + r.items.map(row).join('') + '</tbody></table></div></details>';
+    h += `<div style="font-size:11px;color:var(--text-dim);margin-top:6px">${esc(tr('vl.note'))}</div>`;
+    return h + '</div>';
+  }
+
   // 型號＋版本限制卡片（XN144）＋數量上限（XN145）
   function buildModelLimitHtml(parsed, version) {
     const M = typeof window !== 'undefined' && window.FwModelLimits ? window.FwModelLimits : null;

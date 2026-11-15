@@ -224,5 +224,97 @@
     return { supported: true, key, kind: ftd ? 'ftd' : 'asa', limit: lim, base, count, level: r > 1 ? 'over' : r >= MV_NEAR ? 'near' : 'ok',
       needLicense: base !== null && count > base, switchPorts: !!(ftd && row.switchPorts), src: ftd ? CISCO_SRC.ftd : (/^ASA/.test(key) ? CISCO_SRC.asaPak : CISCO_SRC.asaSmart), asof: ASOF };
   }
-  window.FwModelLimits = { LIMITS, ASOF, CISCO_FW_LIMITS, ciscoModelKey, ciscoAssess, RAM_CHECK_CMD, modelSeries, parseVer, relation, assess, MV_NEAR, mvModelCode, mvTrain, mvCounts, mvAssess };
+  // ── Palo Alto／Juniper SRX 型號數量上限（XN150）──
+  // 共用計數：規則（不含平台規則與隱含規則）、zone、位址物件／群組、服務物件／群組與群組成員
+  const realRules = p => (p.policies || []).filter(r => !r.platformRule && !r._implicit);
+  const isAny = s => /^(any|all|any-ipv4|any-ipv6|-|)$/i.test(String(s || '').trim());
+  const splitNames = s => String(s || '').split(/[,\s]+/).map(x => x.trim()).filter(x => x && !isAny(x));
+  function zoneNames(p) {
+    const z = new Set();
+    (p._perVdom || []).forEach(v => (v.zones || []).forEach(x => x && x.name && z.add(x.name)));
+    (p.interfaces || []).forEach(i => { if (i.zone && !isAny(i.zone)) z.add(i.zone); });
+    realRules(p).forEach(r => splitNames(r.srcIntf).concat(splitNames(r.dstIntf)).forEach(n => z.add(n)));
+    return z;
+  }
+  const maxMembers = arr => arr.reduce((a, g) => { const n = memList(g.members).length; return n > a.n ? { name: g.name, n } : a; }, { name: '', n: 0 });
+  // 名稱清單展開位址群組（遞迴、避免循環）後的位址物件數
+  function expandAddrCount(p, names) {
+    const groups = Object.create(null);
+    (p.addresses || []).forEach(a => { if (/group/.test(a.category || '')) groups[a.name] = memList(a.members); });
+    const seen = new Set(), out = new Set();
+    const walk = n => { if (seen.has(n)) return; seen.add(n); if (groups[n]) groups[n].forEach(walk); else out.add(n); };
+    names.forEach(walk);
+    return out.size;
+  }
+  const lv = r => (r > 1 ? 'over' : r >= MV_NEAR ? 'near' : 'ok');
+  const item = (obj, count, limit, where) => (limit ? { obj, count, limit, where: where || '', ratio: count / limit, level: lv(count / limit) } : { obj, count, level: 'nodata' });
+
+  const paData = () => (typeof window !== 'undefined' && window.PA_MAX_VALUES) || null;
+  // FW_MODELS id、show system info 的 model（PA-440、pa-5220）→ 官方表型號；platform-family 只有系列數字（400）時不判斷
+  function paModelKey(model) {
+    const D = paData(), m = String(model || '').toUpperCase().trim().replace(/^PA\s*-?\s*/, 'PA-');
+    if (!D || !/^PA-\d{3,4}/.test(m)) return null;
+    return D.models[m] ? m : null;
+  }
+  // opts.model、opts.singleVdom（轉換輸出只有 vsys1，不比 vsys）
+  function paAssess(parsed, opts) {
+    const o = opts || {}, D = paData(), key = paModelKey(o.model);
+    if (!D || !key) return { supported: false, vendor: 'pa', model: o.model || '-' };
+    const p = parsed || {}, row = D.models[key], L = k => row[D.fields.indexOf(k)];
+    const addrs = p.addresses || [], svcs = p.services || [];
+    const ag = addrs.filter(a => /group/.test(a.category || '')), sg = svcs.filter(s => s.category === 'group');
+    const agm = maxMembers(ag), sgm = maxMembers(sg);
+    const nat = (p.nat || []).filter(n => n.type === 'vip' || n.type === 'ippool');
+    const ifs = p.interfaces || [];
+    const vsys = ((p.deviceInfo || {}).vdom || []).length || 1;
+    const items = [
+      item('rules', realRules(p).length, L('rules')), item('nat', nat.length, L('nat')), item('zones', zoneNames(p).size, L('zones')),
+      item('addr', addrs.filter(a => !/group/.test(a.category || '')).length, L('addr')), item('addrgrp', ag.length, L('addrgrp')),
+      item('addrgrpMember', agm.n, L('addrgrpMember'), agm.name), item('svc', svcs.filter(s => s.category !== 'group').length, L('svc')),
+      item('svcgrp', sg.length, L('svcgrp')), item('svcgrpMember', sgm.n, L('svcgrpMember'), sgm.name),
+      item('ifaces', ifs.length, L('ifaces')), item('ae', ifs.filter(i => /^ae\d+$/i.test(String(i.name || ''))).length, L('ae')),
+    ];
+    if (!o.singleVdom) items.push(item('vsys', vsys, L('vsys')));
+    const base = L('vsysBase');
+    return { supported: true, vendor: 'pa', key, items, needVsysLicense: !o.singleVdom && base !== null && vsys > base, vsysBase: base, src: D.src, asof: D.asof };
+  }
+
+  // Juniper SRX：Security Policies 設定頁的 Policy Object 表（依官方分組，手工維護）
+  const JUNOS_ASOF = '2026-11-15';
+  const JUNOS_SRC = 'https://networkingdocs.hpe.com/documentation/us/en/software/junos/security-policies/topics/topic-map/security-policy-configuration.html';
+  const JUNOS_LIMITS = [
+    { models: ['SRX300', 'SRX320'], addrPerPolicy: 2048, policies: 1024, contexts: 256, perContext: 1024 },
+    { models: ['SRX340'], addrPerPolicy: 2048, policies: 2048, contexts: 512, perContext: 2048 },
+    { models: ['SRX345', 'SRX380', 'SRX400', 'SRX440'], addrPerPolicy: 2048, policies: 4096, contexts: 1024, perContext: 4096 },
+    { models: ['SRX550M'], addrPerPolicy: 2048, policies: 10240, contexts: 2048, perContext: 10240 },
+    { models: ['SRX1500', 'SRX1600', 'SRX4100'], addrPerPolicy: 4096, policies: 16000, contexts: 4096, perContext: 16000 },
+    { models: ['SRX4200', 'SRX4300'], addrPerPolicy: 4096, policies: 60000, contexts: 4096, perContext: 60000 },
+    { models: ['SRX4600'], addrPerPolicy: 4096, policies: 80000, contexts: 8192, perContext: 80000 },
+    { models: ['SRX4700', 'SRX5400', 'SRX5600', 'SRX5800'], addrPerPolicy: 16384, policies: 100000, contexts: 8192, perContext: 100000 },
+  ];
+  // SRX345-DC、SRX4100-AC、srx320-poe、show version 的 Model: srx345 → 表格型號；SRX550（非 M）與 SRX440-2AC 以外的尾碼去掉
+  function junosModelKey(model) {
+    const m = String(model || '').toUpperCase().trim().match(/^(SRX\d{3,4}M?)(?:-[A-Z0-9-]+)?$/);
+    if (!m) return null;
+    return JUNOS_LIMITS.some(g => g.models.includes(m[1])) ? m[1] : null;
+  }
+  function junosAssess(parsed, opts) {
+    const o = opts || {}, key = junosModelKey(o.model), g = key && JUNOS_LIMITS.find(x => x.models.includes(key));
+    if (!g) return { supported: false, vendor: 'jn', model: o.model || '-' };
+    const p = parsed || {}, rules = realRules(p);
+    // context＝來源 zone＋目的 zone；全域政策（_vdom global）不屬於任何 context
+    const ctx = Object.create(null);
+    rules.forEach(r => { if (r._vdom === 'global') return; const k = (r.srcIntf || '-') + ' → ' + (r.dstIntf || '-'); ctx[k] = (ctx[k] || 0) + 1; });
+    const ck = Object.keys(ctx), top = ck.reduce((a, k) => (ctx[k] > a.n ? { name: k, n: ctx[k] } : a), { name: '', n: 0 });
+    // 單一規則的來源或目的位址物件數（群組展開，IPv6 一筆算一個）
+    const ap = rules.reduce((a, r) => {
+      const n = Math.max(expandAddrCount(p, splitNames(r.srcAddr)), expandAddrCount(p, splitNames(r.dstAddr)));
+      return n > a.n ? { name: r.name || r.id || '', n } : a;
+    }, { name: '', n: 0 });
+    const items = [item('rules', rules.length, g.policies), item('contexts', ck.length, g.contexts), item('perContext', top.n, g.perContext, top.name),
+      item('addrPerPolicy', ap.n, g.addrPerPolicy, ap.name)];
+    return { supported: true, vendor: 'jn', key, items, src: JUNOS_SRC, asof: JUNOS_ASOF };
+  }
+  window.FwModelLimits = { LIMITS, ASOF, CISCO_FW_LIMITS, ciscoModelKey, ciscoAssess, RAM_CHECK_CMD, modelSeries, parseVer, relation, assess, MV_NEAR, mvModelCode, mvTrain, mvCounts, mvAssess,
+    JUNOS_LIMITS, paModelKey, paAssess, junosModelKey, junosAssess };
 })();

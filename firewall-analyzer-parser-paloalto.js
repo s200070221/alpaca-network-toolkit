@@ -156,7 +156,8 @@ const PaloAltoParser = (() => {
     } else {
       info.hostname = setVal(text, 'deviceconfig system hostname') || '-';
       info.firmware  = (text.match(/sw-version\s+(\S+)/i) || [])[1] || '-';
-      info.model     = (text.match(/platform-family\s+(\S+)/i) || [])[1] || '-';
+      // show system info 一併貼上時讀「model: PA-440」（XN150 型號數量上限）
+      info.model     = (text.match(/platform-family\s+(\S+)/i) || [])[1] || (text.match(/^\s*model:\s*(PA-\S+)/im) || [])[1] || '-';
     }
     return info;
   }

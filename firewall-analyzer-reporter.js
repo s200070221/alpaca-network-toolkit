@@ -799,6 +799,14 @@ ${(()=>{ /* 數量上限（XN145）：只有超過或接近時才放 */
     + `<table><thead><tr><th>${esc(tr('mv.col_obj'))}</th><th>${esc(tr('mv.col_count'))}</th><th>${esc(tr('mv.col_scope'))}</th><th>${esc(tr('mv.col_level'))}</th></tr></thead><tbody>`
     + top.map(it => `<tr><td>${esc(it.obj)}</td><td>${esc(it.count + ' / ' + it.limit)}</td><td>${esc(tr('mv.scope_' + it.scope) + (it.where ? '：' + it.where : ''))}</td><td>${esc(tr('mv.lv_' + it.level))}</td></tr>`).join('')
     + `</tbody></table><p style="margin:4px 0;color:#64748b">${esc(tr('mv.note'))} <a href="${esc(mv.src)}">${esc(tr('ml.src'))}</a></p></div>`; })()}
+${(()=>{ /* Palo Alto／Juniper SRX 數量上限（XN150）：只有超過或接近時才放 */
+  const M = typeof window !== 'undefined' && window.FwModelLimits && window.FwModelLimits.paAssess ? window.FwModelLimits : null; if (!M || !/^(PaloAlto|Juniper)/i.test(parsed.vendor || '')) return '';
+  const m = (parsed.deviceInfo || {}).model, r = /^PaloAlto/i.test(parsed.vendor) ? M.paAssess(parsed, { model: m }) : M.junosAssess(parsed, { model: m });
+  const top = r.supported ? r.items.filter(i => i.level === 'over' || i.level === 'near') : []; if (!top.length) return '';
+  return `<div class="card"><h2>${esc(tr('vl.title').replace('{model}', r.key))}</h2><p style="margin:4px 0">${esc(tr(r.vendor === 'pa' ? 'vl.basis_pa' : 'vl.basis_jn').replace('{date}', r.asof))}</p>`
+    + `<table><thead><tr><th>${esc(tr('mv.col_obj'))}</th><th>${esc(tr('mv.col_count'))}</th><th>${esc(tr('vl.col_where'))}</th><th>${esc(tr('mv.col_level'))}</th></tr></thead><tbody>`
+    + top.map(it => `<tr><td>${esc(tr('vl.obj_' + it.obj))}</td><td>${esc(it.count + ' / ' + it.limit)}</td><td>${esc(it.where || '')}</td><td>${esc(tr('mv.lv_' + it.level))}</td></tr>`).join('')
+    + `</tbody></table><p style="margin:4px 0;color:#64748b">${esc(tr('vl.note'))} <a href="${esc(r.src)}">${esc(tr('ml.src'))}</a></p></div>`; })()}
 
 <div class="info-grid">
   <div class="info-item"><div class="k">${tr('rpt.vendor_label')}</div><div class="v">${esc(info.vendor)}</div></div>
