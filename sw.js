@@ -89,6 +89,7 @@ const FILES = [
   'switch-analyzer-parser-juniper.js',
   'switch-analyzer-parser-netgear.js',
   'switch-analyzer-parser-netgearsmart.js',
+  'switch-analyzer-parser-tplink.js',
   'switch-analyzer-parser-nxos.js',
   'switch-analyzer-parser-planet.js',
   'switch-analyzer-parser-procurve.js',

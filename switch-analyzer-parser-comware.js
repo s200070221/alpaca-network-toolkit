@@ -644,7 +644,7 @@ function parseMgmtAccess(cfg, vendor){
 // - 本專案真實範例：Comware `idle-timeout 0 0`、`info-center loghost`；ProCurve `ntp server-name "…"`；Ruijie `banner motd`、`exec-timeout 10 0`、`ntp server`
 // - 既有已查證解析：Comware hwtacacs／radius scheme 的 primary authentication（去識別化）、Junos system 區塊（junosBlock）
 // Cisco Business／AlliedWare Plus（sys.brand）語法不同，整組不評估
-const MGMT_SVC_VENDORS=['cisco','ruijie','nxos','arista','aruba','comware','juniper','procurve','efos','brocade','netgearsmart'];
+const MGMT_SVC_VENDORS=['cisco','ruijie','nxos','arista','aruba','comware','juniper','procurve','efos','brocade','netgearsmart','tplink'];
 function parseMgmtServices(cfg, vendor, brand){
   if(!MGMT_SVC_VENDORS.includes(vendor)||brand==='ciscobiz'||brand==='awplus'||brand==='fs')return null;
   const all=(re)=>{const out=[];let m;const r=new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g');while((m=r.exec(cfg))!==null)out.push(m[1]);return out;};
@@ -654,6 +654,10 @@ function parseMgmtServices(cfg, vendor, brand){
   // EFOS（第十二輪 MM）：只有 ntp server 依真實錄製確認，其餘項目語法未查證不評估
   // Netgear Smart Managed Pro（第十三輪 NC）：只有 sntp N host 依真實錄製確認，其餘未查證不評估
   if(vendor==='netgearsmart')return {ntp:[...new Set(all(/^sntp\s+\d+\s+host\s+(\S+)/m))], aaa:null, banner:null, httpPlain:null, sshV1:null, idleOff:null, syslogExtra:[], sshV2Only:null, syslogEval:false};
+  // TP-Link（XN153）：依 CLI Reference Guide 的 system-time ntp 時區 主伺服器 備援伺服器、ip http server、logging host index N 位址 等級；其餘未查證不評估
+  if(vendor==='tplink'){const nm=cfg.match(/^system-time\s+ntp\s+\S+\s+(\S+)(?:\s+(\S+))?/m);
+    return {ntp:nm?[nm[1],nm[2]].filter(x=>x&&x!=='0.0.0.0'):[], aaa:null, banner:null, httpPlain:has(/^ip\s+http\s+server\s*$/m), sshV1:null, idleOff:null,
+      syslogExtra:all(/^logging\s+host\s+index\s+\d+\s+(\d+\.\d+\.\d+\.\d+)/m), sshV2Only:null};}
   if(vendor==='efos')return {ntp:[...new Set(all(/^ntp\s+server\s+(\S+)/m))], aaa:null, banner:null, httpPlain:null, sshV1:null, idleOff:null, syslogExtra:[], sshV2Only:null};
   if(vendor==='juniper'){
     const nb=jb('ntp'); let m; const r=/^\s*server\s+([^\s;{]+)/gm; while((m=r.exec(nb))!==null)ntp.push(m[1]);
