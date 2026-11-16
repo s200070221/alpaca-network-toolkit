@@ -235,7 +235,14 @@ const VulnCheck = (function () {
   // 記住補填版本（UX38，使用者勾選才寫入 localStorage fw_vuln_ver／sw_vuln_ver）：{主機名稱: {v, ts}}，最多 VER_STORE_MAX 筆
   // 讀入時略過原型污染名稱與不合格內容；主機名稱為空、- 或 unknown 時不記
   const VER_STORE_MAX = 50, VER_OK = /^[\w.()\- ]{1,40}$/;
-  const verHostOk = h => typeof h === 'string' && h.length > 0 && h.length <= 128 && !/^(-|unknown|__proto__|constructor|prototype)$/i.test(h);
+  // Switch／Router 為 Cisco 出廠預設主機名稱，多台同名，不記也不帶入（RV4）
+  const verHostOk = h => typeof h === 'string' && h.length > 0 && h.length <= 128 && !/^(-|unknown|switch|router|__proto__|constructor|prototype)$/i.test(h);
+  // 設定檔讀得到的版本（可能只有主次版本，如 FortiGate 7.04）與記住的版本前兩段數字不同時，視為不是同一份韌體，不帶入（RV4）
+  function verCompatible(cfgVer, stored) {
+    const two = v => (String(v || '').match(/\d+/g) || []).slice(0, 2).map(Number);
+    const a = two(cfgVer), b = two(stored);
+    return a.length < 2 || b.length < 2 || (a[0] === b[0] && a[1] === b[1]);
+  }
   function verStoreParse(text) {
     const out = Object.create(null);
     let o; try { o = JSON.parse(text || '{}'); } catch (e) { return out; }
@@ -255,6 +262,6 @@ const VulnCheck = (function () {
     Object.keys(all).sort((a, b) => all[b].ts - all[a].ts).slice(0, VER_STORE_MAX).forEach(k => { out[k] = all[k]; });
     return out;
   }
-  const API = { asofAgeDays, STALE_DAYS, verStoreParse, verStorePut, verHostOk, VER_STORE_MAX, scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, withBuiltin, applyFeatures, versionFromText, SHOW_VER_SCHEMES: Object.keys(SHOW_VER_RE), SHOW_VER_CMDS, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
+  const API = { asofAgeDays, STALE_DAYS, verStoreParse, verStorePut, verHostOk, verCompatible, VER_STORE_MAX, scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, withBuiltin, applyFeatures, versionFromText, SHOW_VER_SCHEMES: Object.keys(SHOW_VER_RE), SHOW_VER_CMDS, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
   return API;
 })();

@@ -4278,7 +4278,7 @@ function swVerSave(v){
 }
 function swVerRestore(){
   if(!parsed||vulnAuditVer.get(parsed)||!swVerOn())return;
-  try{const e=VulnCheck.verStoreParse(localStorage.getItem(SW_VER_LS))[(parsed.sys||{}).hostname];if(e)vulnAuditVer.set(parsed,e.v);}catch(e){/* 同上 */}
+  try{const e=VulnCheck.verStoreParse(localStorage.getItem(SW_VER_LS))[(parsed.sys||{}).hostname];if(e&&VulnCheck.verCompatible((parsed.sys||{}).version,e.v))vulnAuditVer.set(parsed,e.v);}catch(e){/* 同上 */}
 }
 document.addEventListener('change',e=>{
   const cb=e.target&&e.target.matches&&e.target.matches('#vuln-audit-card input[data-vuln-remember]')?e.target:null;

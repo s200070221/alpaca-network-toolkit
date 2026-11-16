@@ -2598,7 +2598,12 @@ const Converter = (() => {
       L.push('/ip firewall nat');
       const nz=(v,fb)=>(v&&v!=='-')?v:fb;
       parsed.nat.forEach(n=>{
-        if(n.type==='vip'||n.type==='static') L.push(`add chain=dstnat dst-address=${nz(n.extIp,'0.0.0.0')} action=dst-nat to-addresses=${nz(n.mapIp,'0.0.0.0')} comment="${qstr(n.name)}"`);
+        // 目的 NAT（RV4）：沒有外部位址時不寫 dst-address（原本寫成 0.0.0.0，只會比對到 0.0.0.0）；
+        // 有轉埠時帶 protocol／dst-port／to-ports（原本埠號全部遺失，等於整個位址都轉給內部主機）
+        if(n.type==='vip'||n.type==='static'){
+          const ext=nz(n.extIp,''), pr=String(n.proto||'').toLowerCase(), pf=n.portFwd==='enable'&&n.extPort&&/^(tcp|udp)$/.test(pr);
+          L.push(`add chain=dstnat${ext&&ext!=='0.0.0.0'?` dst-address=${ext}`:''}${pf?` protocol=${pr} dst-port=${n.extPort}`:''} action=dst-nat to-addresses=${nz(n.mapIp,'0.0.0.0')}${pf&&n.mapPort?` to-ports=${n.mapPort}`:''} comment="${qstr(n.name)}"`);
+        }
         else L.push(`add chain=srcnat out-interface=${nz(n.srcIntf,nz(n.extIntf,'ether1'))} action=masquerade comment="${qstr(n.name)}"`);
       });
       L.push('');
@@ -3329,6 +3334,23 @@ const Converter = (() => {
   // 位址群組成員正規化（RV1）：Cisco ASA parser 的群組成員保留原始片段（object 名稱、object-group 名稱、host 位址、
   // 「位址 遮罩」），各目標原樣輸出會變成 network-object object object X、FortiGate member "object X" 等無效語法。
   // 轉換前把前綴去掉、字面位址改成自動建立的位址物件（名稱規則同 refObjects()：h-位址／n-網段_位元），回傳副本
+  // MikroTik 位址清單引用「@名稱」（MikrotikParser 讀 src/dst-address-list 的寫法）→ 物件名稱（RV4）：
+  // 原本原樣輸出成 srcaddr "@CORP_LAN"、src-address=@CORP_LAN 等目標設定裡不存在的名稱，讀回時又被當成不限位址，
+  // 造成後面的拒絕規則被放行規則搶先命中。只換有同名位址物件者；產生規則副本，不改原物件
+  function _normListRefs(parsed){
+    const p=parsed||{}, names=new Set((p.addresses||[]).map(a=>a.name));
+    const fix=v=>{
+      if(typeof v!=='string'||v.indexOf('@')<0) return v;
+      return v.split(/\s*,\s*/).map(t=>t.replace(/^(!?)@(.+)$/,(m,neg,n)=>names.has(n)?neg+n:m)).join(', ');
+    };
+    let changed=false;
+    const policies=(p.policies||[]).map(r=>{
+      const s2=fix(r.srcAddr), d2=fix(r.dstAddr);
+      if(s2===r.srcAddr&&d2===r.dstAddr) return r;
+      changed=true; return Object.assign({},r,{srcAddr:s2,dstAddr:d2});
+    });
+    return changed?Object.assign({},p,{policies}):p;
+  }
   function _normGroupMembers(parsed){
     const p=parsed||{}, addrs=p.addresses||[];
     const groups=addrs.filter(a=>a.category==='address-group'||a.category==='address-group6');
@@ -3351,7 +3373,7 @@ const Converter = (() => {
     return Object.assign({},p,{ addresses:[...extra,...out] });
   }
   function convert(parsed, targetVendor) {
-    parsed = _guardPolicies(_applyFamilies(_nfApply(_normGroupMembers(parsed)), targetVendor));
+    parsed = _guardPolicies(_applyFamilies(_normListRefs(_nfApply(_normGroupMembers(parsed))), targetVendor));
     switch(targetVendor) {
       case 'fortigate':  return toFortigate(parsed);
       case 'sophos':     return toSophos(parsed);

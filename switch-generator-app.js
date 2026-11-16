@@ -1004,6 +1004,8 @@ function updateAppliedModelNotice(){
   if(_pgSyncMsg)lines.push(_pgSyncMsg);
   notice.textContent=lines.join('\n');
   notice.style.display=lines.length?'block':'none';
+  // 換廠牌或型號時介面表不一定重建，分組分隔線跟著型號重新標記（RV4）
+  markPortGroups();
 }
 // 前面板分組（UX37）：每組最後一埠的列加 .pg-end；沒有分組的型號全部移除
 function markPortGroups(){

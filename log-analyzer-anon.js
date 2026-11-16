@@ -1216,7 +1216,8 @@ function anonymizeEvent(evt, opts) {
         // Kubernetes 內建身分（system: 開頭，含 GKE 經 Cloud Audit Logs 記錄的）保留，判斷高風險操作時要排除控制平面元件；service account 只換名稱
         const k8sSys = ci0 && (ci0.vendor === 'k8s' || ci0.vendor === 'gcpaudit') && /^system:/.test(v);
         let x = k8sSys ? v.replace(/^(system:serviceaccount:[^:]+:)(.+)$/, (m, p, n) => p + anonUser(n))
-          : (USER_KEY_RE.test(k) || (ci0 && v === ci0.user)) && v ? anonUser(v) : replaceMACsInLine(replaceIPsInLine(v, opts));
+          // type 是身分類型（CloudTrail root 沒有帳號名稱，cloudAuthInfo() 以 Root 當帳號），不是識別資料，不可因值相同被換掉（RV4）
+          : (USER_KEY_RE.test(k) || (ci0 && v === ci0.user && k !== 'type')) && v ? anonUser(v) : replaceMACsInLine(replaceIPsInLine(v, opts));
         x = x.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, m => anonUser(m));
         // AWS ARN 的帳號 ID 與 user／role 名稱、accountId 欄位（帳號 ID 比照雲端流量紀錄以主機名稱對照替換）
         if (k === 'accountId' && /^\d{12}$/.test(x)) x = anonHostname(x);

@@ -1929,7 +1929,8 @@ function onParsed(){
   function _fwVerRestore() {
     const h = _acceptedRiskHost();
     if (!_fwVerOn() || _fwVulnVer[h] || typeof VulnCheck === 'undefined') return;
-    try { const e = VulnCheck.verStoreParse(localStorage.getItem(FW_VER_LS))[h]; if (e) _fwVulnVer[h] = e.v; } catch (e) { /* 同上 */ }
+    try { const e = VulnCheck.verStoreParse(localStorage.getItem(FW_VER_LS))[h];
+      if (e && VulnCheck.verCompatible(((PARSED && PARSED.deviceInfo) || {}).firmware, e.v)) _fwVulnVer[h] = e.v; } catch (e) { /* 同上 */ }
   }
   window._fwVerRestore = _fwVerRestore;
   document.addEventListener('change', e => {
