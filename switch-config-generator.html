@@ -200,6 +200,8 @@ input.valid,select.valid{border-color:var(--green)!important}
   .fwq-btn{min-width:32px;text-align:center}
   #issues-card select,#ls-panel button{min-height:32px}
 }
+/* 前面板埠分組（UX37）：每組最後一埠加粗下框線 */
+#iface-body tr.pg-end td{border-bottom:2px solid var(--accent,#3b82f6)}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/docx@8.6.0/build/index.umd.js" integrity="sha384-4SKfH1E/s1imU9AjjNoxcGV2w4NxAzi4HDrJD7MweJJY+LZrRYDhP05DALqhQ15G" crossorigin="anonymous"></script>
 <script src="toolkit-version.js"></script>
@@ -331,6 +333,7 @@ input.valid,select.valid{border-color:var(--green)!important}
       <select id="device-model" onchange="applyDeviceModel()" data-tip="套用後會清空並重新產生 Interface 表格（含 mgmt 介面），僅供快速帶入常見機型的埠位數量與速度，之後仍可手動調整">
         <option value="" data-i18n="opt.modelNone">不套用</option>
       </select>
+      <label style="font-size:12px;display:flex;align-items:center;gap:4px"><input type="checkbox" id="device-model-keep"> <span data-i18n="model.keep">保留目前介面表，只標記型號</span></label>
     </div>
     <div class="row">
       <label data-i18n="lbl.hostname">主機名稱</label>
@@ -425,7 +428,7 @@ input.valid,select.valid{border-color:var(--green)!important}
     <div id="gen-audit-result" style="margin-top:12px"></div>
   </div>
 
-  <div id="applied-model-notice" class="notice" style="display:none;margin:16px 32px 0;padding:9px 16px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.3);color:#059669"></div>
+  <div id="applied-model-notice" class="notice" style="display:none;white-space:pre-line;margin:16px 32px 0;padding:9px 16px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.3);color:#059669"></div>
 
   <div class="card">
     <h2 data-i18n="sec.vlan">VLAN 設定</h2>

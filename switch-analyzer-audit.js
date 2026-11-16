@@ -459,6 +459,23 @@ function swFeatureStates(parsed){
     f.snmp=((p.snmp.communities||[]).length+(p.snmp.v3Users||[]).length+(p.snmp.v3Groups||0))>0;
   return f;
 }
+// 型號規模上限（UX37）：Aruba CX 依韌體版本前綴判斷系列，只收有官方依據的 PL／RL → 4100i／6000／6100
+// （AOS-CX 10.13 ACLs Guide 的 show capacities 頁以 AOSCX_PL_switches／AOSCX_RL_switches 標示「on the 4100i, 6000, or 6100」）；
+// 其他前綴（FL 同時出現在 6200 與 6300 文件）不判斷。上限資料共用產生器的 SwModelLimits（switch-generator-model-limits.js）
+const SW_LIMIT_PLATFORM={PL:'cx6100',RL:'cx6100'};
+function swModelLimitCheck(p){
+  const L=(typeof window!=='undefined'&&window.SwModelLimits)||(typeof globalThis!=='undefined'&&globalThis.SwModelLimits)||null;
+  if(!L||!L.familyById||!p||p.vendor!=='aruba')return null;
+  const pre=(String((p.sys&&p.sys.version)||'').match(/^([A-Z]{2})\./)||[])[1];
+  const fam=pre&&SW_LIMIT_PLATFORM[pre]?L.familyById(SW_LIMIT_PLATFORM[pre]):null;
+  if(!fam)return null;
+  const svi=new Set();
+  (p.interfaces||[]).forEach(i=>{ if(i.type==='svi'&&i.ip){ const m=String(i.name||'').match(/(\d+)\s*$/); if(m)svi.add(m[1]); } });
+  const vlans=(p.vlans||[]).filter(v=>!v.implied).map(v=>({id:String(v.id),ip:svi.has(String(v.id))?'svi':''}));
+  svi.forEach(v=>{ if(!vlans.some(x=>x.id===v))vlans.push({id:v,ip:'svi'}); });
+  const r=L.assessFamily(fam,{vlans,vrrp:[],stp:p.stp||{},acl:p.acls||[],lacp:p.lacp||[]});
+  return Object.assign(r,{platform:pre});
+}
 function swVulnStatus(parsed,opts){
   const V=typeof VulnCheck!=='undefined'?VulnCheck:null;
   if(!V||(opts&&opts.skipVuln)||!parsed)return null;

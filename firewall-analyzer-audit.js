@@ -1027,6 +1027,9 @@
     let h = '<div id="vuln-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('vuln.title')) + '</div>';
     h += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('vuln.hint')) + '</div>';
     if (V && V.BUILTIN_ASOF) h += `<div style="font-size:11px;padding:6px 10px;margin-bottom:8px;background:var(--bg2);border-left:3px solid var(--orange,#f59e0b);border-radius:4px">${esc(tr('vuln.builtin_asof').replace('{date}', V.BUILTIN_ASOF).replace('{n}', (V.BUILTIN || []).length))}</div>`;
+    // 內建情資超過 STALE_DAYS 天未更新：醒目提示（UX37）
+    { const _age = V && V.asofAgeDays ? V.asofAgeDays(V.BUILTIN_ASOF) : null;
+      if (_age !== null && _age > V.STALE_DAYS) h += `<div data-vuln-stale style="font-size:12px;padding:6px 10px;margin-bottom:8px;border-left:3px solid var(--red,#ef4444);color:var(--red,#ef4444);font-weight:600">${esc(tr('vuln.stale').replace('{n}', _age))}</div>`; }
     // pfSense／OPNsense 的網頁管理介面為 PHP，設定檔沒有韌體版本，只提示 PHP2Shell 修補（XN32）
     if (/^(pfsense|opnsense)$/i.test(p.vendor || '')) h += `<div style="font-size:12px;padding:8px 10px;margin-bottom:8px;background:var(--bg2);border-left:3px solid var(--red,#ef4444);border-radius:4px">${esc(tr('vuln.php2shell_note'))}</div>`;
     if (!V || !sch) return h + '<div class="nodata" style="padding:14px 0">' + esc(tr('vuln.unsupported')) + '</div></div>';

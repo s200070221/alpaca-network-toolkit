@@ -2119,7 +2119,14 @@ const Converter = (() => {
       // 位址有值卻無法表示時也停用，避免變成不限來源／目的
       const addrUnresolved=(sl(p.srcAddr).length&&!srcObj)||(sl(p.dstAddr).length&&!dstObj);
       const svcUnresolved=sv.unresolved||addrUnresolved;
-      const lines=[`secure-policy insert ${idx+1}`];
+      const lines=[];
+      // 無法轉換而停用的規則加註記（UX37）：轉換報告的「需人工確認」清單依 UNRESOLVED／REVIEW 擷取，格式比照其他目標廠牌
+      if(svcUnresolved){
+        const bad=[...sl(p.srcAddr),...sl(p.dstAddr)].filter(n=>!addrDecl(n,p._vdom,new Set()))
+          .concat(sl(p.service).filter(n=>svcDecl(n,p._vdom,new Set())===null));
+        lines.push(`! UNRESOLVED ${[...new Set(bad)].join(', ').replace(/[\r\n]/g,' ')} - rule below set inactive, please review`);
+      }
+      lines.push(`secure-policy insert ${idx+1}`);
       lines.push(` from ${nz(p.srcIntf,'any')}`);
       lines.push(` to ${nz(p.dstIntf,'any')}`);
       if(srcObj)lines.push(` sourceip ${srcObj}`);

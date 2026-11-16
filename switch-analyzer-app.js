@@ -2063,7 +2063,7 @@ function renderAudit(){
     +`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px"><button class="btn btn-ghost btn-sm" onclick="exportAuditSARIF()">🧾 ${esc(tr('audit.export_sarif'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditMarkdown()">📝 ${esc(tr('audit.export_md'))}</button><button class="btn btn-ghost btn-sm" onclick="exportAuditWorkpaper()">📋 ${esc(tr('wp.export_btn'))}</button><button class="btn btn-ghost btn-sm" onclick="saveSwitchAuditBaseline()">💾 ${esc(tr('swbase.save_btn'))}</button><label class="btn btn-ghost btn-sm" style="cursor:pointer">📂 ${esc(tr('swbase.compare_btn'))}<input type="file" accept=".json" onchange="compareSwitchAuditBaseline(this)"></label><input id="sw-audit-reviewer" value="${esc(swAuditReviewer())}" placeholder="${esc(tr('wp.reviewer_ph'))}" aria-label="${esc(tr('wp.col_reviewer'))}" onchange="swSetAuditReviewer(this.value)" style="font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);width:140px"></div><div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">${esc(tr('wp.hint'))}</div>`
     +`<div id="sw-baseline-result"></div></div>`
     +`<div style="overflow-x:auto"><div class="tbl-wrap">${html}</div></div>`+passedHtml
-    +`<div style="padding:0 18px">`+buildShutdownConfiguredCard(analyzeShutdownConfigured(parsed))+renderAuditVulnCard()+`</div>`
+    +`<div style="padding:0 18px">`+buildShutdownConfiguredCard(analyzeShutdownConfigured(parsed))+renderAuditVulnCard()+renderSwLimitCard()+`</div>`
     +`<div id="sw-health-section" style="margin-top:18px;padding:14px 18px 12px;border-top:1px solid var(--border)">
         <button id="sw-health-btn" onclick="_doSwitchHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
         <div id="sw-health-result" style="margin-top:12px"></div>
@@ -3868,12 +3868,16 @@ function _sendToGenerator(focusFindingId, convert){
 // 無法解析設定檔回報（2026-09-29 新增）：解析後若無法辨識廠牌或結果過少，在結果頁上方顯示
 // 提示列；按下回報會帶 report 中繼資料轉送 config_anonymizer（強制全開遮蔽、填寫原因、
 // 殘留警告全數審閱後才能開啟 GitHub 回報頁），沿用既有 `_netAnalyzer_pending` 交接 key
+// 依官方 CLI 手冊實作、手冊沒有完整 running-config 範例的廠牌（UX37）
+const SW_UNVERIFIED_VENDORS=['tplink','dlink'];
 function renderReportBar(){
   const bar=document.getElementById('report-bar');
   if(!bar)return;
   const trig=parsed?switchReportTrigger(parsed):'';
-  if(!trig){bar.style.display='none';bar.innerHTML='';return;}
-  bar.innerHTML=`⚠ ${esc(tr('report.bar_'+trig))} <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="_sendReportToAnonymizer()">📮 ${esc(tr('report.bar_btn'))}</button>`;
+  // 依官方手冊實作、尚無真實設定檔驗證的廠牌（UX37）：結果看起來正常也提示，回報時觸發原因為 manual
+  const unverified=!trig&&parsed&&SW_UNVERIFIED_VENDORS.includes(parsed.vendor);
+  if(!trig&&!unverified){bar.style.display='none';bar.innerHTML='';return;}
+  bar.innerHTML=`⚠ ${esc(tr('report.bar_'+(trig||'unverified')))} <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="_sendReportToAnonymizer()">📮 ${esc(tr('report.bar_btn'))}</button>`;
   bar.style.display='';
 }
 function _sendReportToAnonymizer(){
@@ -4219,6 +4223,7 @@ function vulnCardHead(cardId,textId,applyFn){
     <div style="font-size:14px;font-weight:600;margin-bottom:6px">${esc(tr('vuln.title'))}</div>
     <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('vuln.hint'))}</div>
     ${VulnCheck.BUILTIN_ASOF?`<div style="font-size:11px;padding:6px 10px;margin-bottom:8px;background:var(--surface);border-left:3px solid var(--orange,#f59e0b);border-radius:4px">${esc(tr('vuln.builtin_asof').replace('{date}',VulnCheck.BUILTIN_ASOF).replace('{n}',(VulnCheck.BUILTIN||[]).length))}</div>`:''}
+    ${(()=>{const a=VulnCheck.asofAgeDays?VulnCheck.asofAgeDays(VulnCheck.BUILTIN_ASOF):null;return a!==null&&a>VulnCheck.STALE_DAYS?`<div data-vuln-stale style="font-size:12px;padding:6px 10px;margin-bottom:8px;border-left:3px solid var(--red,#ef4444);color:var(--red,#ef4444);font-weight:600">${esc(tr('vuln.stale').replace('{n}',a))}</div>`:'';})()}
     <textarea id="${textId}" spellcheck="false" placeholder="${esc(VulnCheck.CSV_HEADER)}" style="width:100%;height:100px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px">${esc(vulnLoadText())}</textarea>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
       <button style="${btn}" onclick="${applyFn}()">${esc(tr('vuln.apply'))}</button>
@@ -4250,6 +4255,19 @@ function renderVulnCard(){
 const vulnAuditVer=new WeakMap();
 // 健康度的韌體比對選項（XN58）：使用者清單＋稽核頁補填的版本；structcheck（去識別化結構檢查、產生器讀回）改傳 skipVuln
 function _swHealthOpts(p){return {vulnText:vulnLoadText(),vulnVersion:(p&&vulnAuditVer.get(p))||''};}
+// 型號規模上限卡片（UX37）：swModelLimitCheck() 判斷得出系列時才顯示，列出每項數量、上限與狀態
+function renderSwLimitCard(){
+  const r=parsed?swModelLimitCheck(parsed):null;
+  if(!r)return '';
+  const lv={over:['swl.over','var(--red,#ef4444)'],near:['swl.near','var(--orange,#f59e0b)'],ok:['swl.ok','var(--text-dim)']};
+  const rows=r.items.map(it=>`<tr><td>${esc(tr('swl.'+it.key))}</td><td style="text-align:right">${it.count}</td><td style="text-align:right">${it.limit}</td><td style="color:${lv[it.level][1]}">${esc(tr(lv[it.level][0]))}</td></tr>`).join('');
+  const host=(String(r.src).match(/^https?:\/\/([^/]+)/)||[])[1]||'';
+  return `<div id="sw-limit-card" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:6px">${esc(tr('swl.title').replace('{name}',r.name))}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('swl.hint').replace('{platform}',r.platform).replace('{src}',host))}</div>
+    ${rows?`<table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left">${esc(tr('swl.col_item'))}</th><th style="text-align:right">${esc(tr('swl.col_count'))}</th><th style="text-align:right">${esc(tr('swl.col_limit'))}</th><th style="text-align:left">${esc(tr('swl.col_level'))}</th></tr></thead><tbody>${rows}</tbody></table>`:`<div style="font-size:12px">${esc(tr('swl.none'))}</div>`}
+  </div>`;
+}
 function renderAuditVulnCard(){
   if(!parsed)return '';
   const s=parsed.sys||{}, v=String(s.version||'').trim();

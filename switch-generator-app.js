@@ -304,6 +304,9 @@ function onSpeedChange(sel){
       const m=val(tr,'i-name').match(/^[A-Za-z-]+(\d+)\/0\/(\d+)$/);
       if(m&&m[1]===mates.member&&mates.ports.includes(+m[2]))tr.querySelector('.i-speed').value=sel.value;
     });
+    const pre=(sel.closest('tr').querySelector('.i-name').value.match(/^(.*\/)\d+$/)||[])[1]||'';
+    _pgSyncMsg=tr('pg.synced').replace('{from}',pre+mates.ports[0]).replace('{to}',pre+mates.ports[mates.ports.length-1]).replace('{speed}',sel.value);
+    updateAppliedModelNotice();
     return;
   }
   const prefixMap=SPEED_PREFIX[currentVendor()];
@@ -368,6 +371,7 @@ function updateIfaceTableDisplay(){
       cell.querySelectorAll('input').forEach(el=>{ el.disabled=!applicable; });
     });
   });
+  markPortGroups();
 }
 
 // 常用機種預設 Interface 清單：純前端 UI 便利功能，不涉及 switch_analyzer、不影響
@@ -948,13 +952,18 @@ function applyDeviceModel(){
   const vendor=currentVendor();
   const deviceModelSel=document.getElementById('device-model');
   const modelValue=deviceModelSel.value;
-  if(!modelValue)return;
+  if(!modelValue){ _pgSyncMsg=''; markPortGroups(); updateAppliedModelNotice(); return; }
   const model=findDeviceModel(vendor,modelValue);
   if(!model)return;
-  document.getElementById('iface-body').innerHTML='';
-  expandDeviceModelPorts(model).forEach(p=>addIfaceRow(p.name,'access',p.speed));
+  // 勾選「保留目前介面表」且已有介面時只標記型號（UX37：先匯入設定檔再選型號，不覆蓋匯入的介面）
+  const keep=(document.getElementById('device-model-keep')||{}).checked&&rowsOf('#iface-body tr').length>0;
+  if(!keep){
+    document.getElementById('iface-body').innerHTML='';
+    expandDeviceModelPorts(model).forEach(p=>addIfaceRow(p.name,'access',p.speed));
+  }
   // 保留選擇的值，以防後續代碼重新生成下拉選單
   deviceModelSel.value=modelValue;
+  _pgSyncMsg='';
   updateIfaceTableDisplay();
   updateAppliedModelNotice();
 }
@@ -968,22 +977,43 @@ function applyDeviceModel(){
 // 不需要另外追蹤 _breakoutEnables 狀態
 // isKnownModelPort() 已搬到 switch-generator-validate.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
 
+// 前面板分組同步速率後的提示（UX37），型號或介面表重建時清除
+let _pgSyncMsg='';
 function updateAppliedModelNotice(){
   const vendor=currentVendor();
   const modelValue=document.getElementById('device-model').value;
   const notice=document.getElementById('applied-model-notice');
   if(!notice)return;
+  const SML=(typeof window!=='undefined'&&window.SwModelLimits)||null;
+  const lines=[];
   if(modelValue){
     const model=findDeviceModel(vendor,modelValue);
     if(model){
       const vendorLabel=document.querySelector('#vendor option[value="'+vendor+'"]')?.textContent||vendor;
       const template=tr('msg.appliedModel')||'✓ 目前套用 {vendor} 的 {model} 之預設設定';
-      notice.textContent=template.replace('{vendor}',vendorLabel).replace('{model}',model.label);
-      notice.style.display='block';
+      lines.push(template.replace('{vendor}',vendorLabel).replace('{model}',model.label));
+      // 型號有官方上限資料、前面板分組限制時說明會檢查什麼（UX37）
+      const fam=SML?SML.familyOf(modelValue,model.label):null;
+      if(fam)lines.push(tr('model.limit_note').replace('{name}',fam.name).replace('{src}',(String(fam.src).match(/^https?:\/\/([^/]+)/)||[])[1]||''));
+      if(SML&&SML.PORT_GROUPS.some(g=>g.re.test(modelValue)))lines.push(tr('model.pg_note'));
     }
-  }else{
-    notice.style.display='none';
+  }else if(SML&&SML.hasVendor(vendor)&&rowsOf('#iface-body tr').length){
+    // 沒選型號（例如剛匯入設定檔）：提示選型號可檢查上限，勾選保留介面表就不會覆蓋
+    lines.push(tr('model.pick_hint'));
   }
+  if(_pgSyncMsg)lines.push(_pgSyncMsg);
+  notice.textContent=lines.join('\n');
+  notice.style.display=lines.length?'block':'none';
+}
+// 前面板分組（UX37）：每組最後一埠的列加 .pg-end；沒有分組的型號全部移除
+function markPortGroups(){
+  const SML=(typeof window!=='undefined'&&window.SwModelLimits)||null;
+  const dm=(document.getElementById('device-model')||{}).value||'';
+  rowsOf('#iface-body tr').forEach(tr=>{
+    const mt=SML&&SML.portGroupMates?SML.portGroupMates(dm,val(tr,'i-name')):null;
+    const n=+((val(tr,'i-name').match(/\/(\d+)$/)||[])[1]);
+    tr.classList.toggle('pg-end',!!mt&&n===mt.ports[mt.ports.length-1]);
+  });
 }
 
 // Breakout（QSFP 拆分子埠）：「同時輸出啟用指令」勾選時記錄的母埠清單，collectModel() 讀取後併入 model.breakouts
@@ -4186,6 +4216,7 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
 
   generate(true);
   showImportMsg(tr(fns?'msg.importSuccess':'msg.importBasicFallback'),false);
+  _pgSyncMsg=''; updateAppliedModelNotice(); markPortGroups();
 }
 
 // switch_analyzer 傳來的 parsed 物件本來就已經把 vrrp/lacp/dhcp/acls/qos/security/stp/

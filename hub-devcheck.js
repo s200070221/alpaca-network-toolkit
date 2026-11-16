@@ -144,6 +144,9 @@
         + '</tbody></table></div>';
     }
     h += `<p class="cert-hint">${esc(fmt('dc.asof', { d: (VC() && VC().BUILTIN_ASOF) || '-' }))}</p>`;
+    // 內建情資超過 STALE_DAYS 天未更新：醒目提示（UX37）
+    { const age = VC() && VC().asofAgeDays ? VC().asofAgeDays(VC().BUILTIN_ASOF) : null;
+      if (age !== null && age > VC().STALE_DAYS) h += `<p class="cert-hint" data-vuln-stale style="color:var(--red,#ef4444);font-weight:600">${esc(fmt('dc.stale', { n: age }))}</p>`; }
     box.innerHTML = h;
   }
   function renderAudit() {

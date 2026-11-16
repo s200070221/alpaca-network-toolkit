@@ -224,6 +224,14 @@ const VulnCheck = (function () {
     }
     return '';
   }
-  const API = { scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, withBuiltin, applyFeatures, versionFromText, SHOW_VER_SCHEMES: Object.keys(SHOW_VER_RE), SHOW_VER_CMDS, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
+  // 內建情資距今天數（UX37）：asof 為 YYYY-MM-DD，now 可傳 Date 或毫秒（測試用）；日期不合格回傳 null
+  function asofAgeDays(asof, now) {
+    const m = String(asof || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    const t = Date.UTC(+m[1], +m[2] - 1, +m[3]), n = now == null ? Date.now() : +now;
+    return isFinite(t) && isFinite(n) ? Math.max(0, Math.floor((n - t) / 86400000)) : null;
+  }
+  const STALE_DAYS = 30;
+  const API = { asofAgeDays, STALE_DAYS, scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, withBuiltin, applyFeatures, versionFromText, SHOW_VER_SCHEMES: Object.keys(SHOW_VER_RE), SHOW_VER_CMDS, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
   return API;
 })();

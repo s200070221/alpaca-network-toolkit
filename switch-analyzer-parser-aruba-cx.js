@@ -1,7 +1,9 @@
 function parseArubaSysInfo(cfg){
   return{
     hostname:(cfg.match(/^hostname\s+(\S+)/m)||[])[1]||'unknown',
-    version:(cfg.match(/version\s+(\S+)/)||[])[1]||'',
+    // 版本（UX37）：running-config 第一行「!Version ArubaOS-CX PL.10.13.1000」、Oxidized 錄製的「! Version : FL.10.13.1101」；
+    // 保留平台前綴（PL／FL…），韌體比對 aoscx 只取數字。都沒有時沿用原本的寫法
+    version:(cfg.match(/^!\s*Version\s+ArubaOS-CX\s+([A-Z]{2}\.\d+(?:\.\d+)+)/m)||cfg.match(/^!\s*Version\s*:\s*([A-Z]{2}\.\d+(?:\.\d+)+)/m)||cfg.match(/version\s+(?:ArubaOS-CX\s+)?(\S+)/)||[])[1]||'',
   };
 }
 

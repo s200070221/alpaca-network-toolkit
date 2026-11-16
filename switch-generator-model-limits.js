@@ -48,11 +48,11 @@
     { id: 'c9300l', name: 'Catalyst 9300L／LM', re: /^C9300LM?-/, src: DS.c9300, pvst: 300, svis: 1000, acl: 5120 },
     { id: 'c9300b', name: 'Catalyst 9300 高規格（B 機型）', re: /^C9300-\w+B$/, src: DS.c9300, pvst: 300, svis: 1000, acl: 18000 },
     { id: 'c9300', name: 'Catalyst 9300', re: /^C9300-/, src: DS.c9300, pvst: 300, svis: 1000, acl: 5120 },
-    { id: 'cx6100', name: 'Aruba CX 6000／6100（含 4100i）', full: /ARUBA[- ]?(?:CX[- ])?(?:6000|6100|4100I)(?![0-9])/, src: DS.cx6100, stpDefault: 'mst',
+    { id: 'cx6100', vendor: 'aruba', name: 'Aruba CX 6000／6100（含 4100i）', full: /ARUBA[- ]?(?:CX[- ])?(?:6000|6100|4100I)(?![0-9])/, src: DS.cx6100, stpDefault: 'mst',
       activeVlans: 512, svis: 16, mst: 16, rpvst: 16, acl: 4096, aclPerList: 1024, lagGroups: 8, lagMembers: 8 },
-    { id: 'cx6200', name: 'Aruba CX 6200', full: /ARUBA[- ]?(?:CX[- ])?6200[FM]?(?![0-9])/, src: DS.cx6200, stpDefault: 'mst',
+    { id: 'cx6200', vendor: 'aruba', name: 'Aruba CX 6200', full: /ARUBA[- ]?(?:CX[- ])?6200[FM]?(?![0-9])/, src: DS.cx6200, stpDefault: 'mst',
       activeVlans: 2048, svis: 256, acl: 14336, aclPerList: 1024 },
-    { id: 'cw5945', name: 'HPE FlexFabric 5945', full: /(?:FLEXFABRIC|HPE)[- ](?:FLEXFABRIC[- ])?5945(?![0-9])|HPE5945(?![0-9])/, src: DS.cw5945,
+    { id: 'cw5945', vendor: 'comware', name: 'HPE FlexFabric 5945', full: /(?:FLEXFABRIC|HPE)[- ](?:FLEXFABRIC[- ])?5945(?![0-9])|HPE5945(?![0-9])/, src: DS.cw5945,
       activeVlans: 4094, svis: 2048, lagMembers: 32 },
     { id: 'c9350', name: 'Catalyst 9350', re: /^C9350-/, src: DS.c9350, activeVlans: 4000, svis: 4000, acl: 5000 },
   ];
@@ -67,10 +67,17 @@
     const m = normModel(value, label), all = (String(value || '') + ' ' + String(label || '')).toUpperCase();
     return FAMILIES.find(f => f.full ? f.full.test(all) : f.re.test(m)) || null;
   }
+  // 廠牌有沒有上限資料（沒有 vendor 欄位的系列為 Cisco）、依 id 取系列（UX37：交換器分析依平台前綴直接指定系列）
+  const famVendor = f => f.vendor || 'cisco';
+  function hasVendor(v) { return FAMILIES.some(f => famVendor(f) === v); }
+  function familyById(id) { return FAMILIES.find(f => f.id === id) || null; }
   // model：產生器 collectModel() 的結果（vlans、lacp、acl、stp）
   function assess(value, label, model) {
     const f = familyOf(value, label);
     if (!f) return null;
+    return Object.assign(assessFamily(f, model), { model: normModel(value, label) });
+  }
+  function assessFamily(f, model) {
     const m = model || {};
     const vlans = new Set((m.vlans || []).map(v => String(v.id)).filter(Boolean));
     // SVI：VLAN 表有 IP 的 VLAN，加上 VRRP 列寫了介面位址的 VLAN（用途範本有 VRRP 時 SVI 位址只寫在 VRRP 列）
@@ -92,7 +99,7 @@
     add('aclPerList', aclMax, f.aclPerList);
     add('lagGroups', lags.length, f.lagGroups);
     add('lagMembers', maxMem, f.lagMembers);
-    return { family: f.id, name: f.name, src: f.src, model: normModel(value, label), items, asof: ASOF };
+    return { family: f.id, name: f.name, src: f.src, items, asof: ASOF };
   }
   // 前面板埠分組速率（XN158）：HPE FlexFabric 5945 48SFP28 8QSFP28 的 SFP28 埠每 4 個一組（1–4、5–8…45–48），同組必須同速率。
   // 依使用者現場確認；官方 Release Notes R6710 只在 LSWM124TG2H 擴充卡的已知問題寫到「each four consecutive ports are assigned to a port group」。
@@ -150,5 +157,5 @@
     return { member: m[1], ports: Array.from({ length: g.size }, (_, i) => start + i), keepName: !!g.speedCmd };
   }
   // 測試沙箱可能沒有 window（gen_test／qa round-trip 直接載入全部產生器模組）
-  (typeof window !== 'undefined' ? window : globalThis).SwModelLimits = { ASOF, NEAR, FAMILIES, normModel, familyOf, assess, PORT_GROUPS, portGroupConflicts, portGroupSpeedLines, portGroupMates };
+  (typeof window !== 'undefined' ? window : globalThis).SwModelLimits = { ASOF, NEAR, FAMILIES, normModel, familyOf, assess, assessFamily, hasVendor, familyById, PORT_GROUPS, portGroupConflicts, portGroupSpeedLines, portGroupMates };
 })();
