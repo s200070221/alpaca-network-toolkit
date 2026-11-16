@@ -16,7 +16,7 @@ function detectLineFormat(line) {
   if (S3_ACCESS_RE.test(line)) return 's3';
   if (BIND_FILE_RE.test(line) || COREDNS_RE.test(line) || WINDNS_RE.test(line)) return 'dns';
   if (WINDHCP_ROW_RE.test(line)) return 'dhcp';
-  if (NPS_DTS_RE.test(line)) return 'nps';
+  if (NPS_DTS_RE.test(line) || NPS_DB_RE.test(line)) return 'nps';
   if (CPPM_STD_RE.test(line) || CPPM_5424_RE.test(line)) return 'clearpass';
   if (DS389_LINE_RE.test(line) || OPENLDAP26_LINE_RE.test(line) || DS389_ERR_RE.test(line) || isOpenLdap26SvcLine(line)) return 'ldap';
   // PostgreSQL／MySQL 伺服器 log 檔（XN90）
@@ -3587,11 +3587,44 @@ function npsTags(line) {
   }
   return out;
 }
+// ── Windows NPS 資料庫相容格式（XN151）──
+// 依 Microsoft「Interpret NPS Database Format Log Files」（Windows Server 2008～2012）：逗號分隔、文字值加雙引號
+// （內含雙引號寫成兩個雙引號），欄位依固定順序；日期「月/日/年」、時間為 NPS 主機本地時間。只取下列欄位，
+// 版本較新的記錄檔結尾欄位較多，不影響前面的順序
+const NPS_DB_RE = /^"[^"\n]*","[^"\n]*",\d{1,2}\/\d{1,2}\/\d{4},\d{1,2}:\d{2}:\d{2},\d{0,2},/;
+const NPS_DB_COLS = { 'Computer-Name': 0, ServiceName: 1, date: 2, time: 3, 'Packet-Type': 4, 'User-Name': 5, FQDN: 6, 'Called-Station-Id': 7,
+  'Calling-Station-Id': 8, 'NAS-IP-Address': 12, 'Client-IP-Address': 15, 'Client-Friendly-Name': 16, 'NP-Policy-Name': 24, 'Reason-Code': 25 };
+// 引號 CSV 拆欄：回傳 [{v, q}]（q＝原本有引號），供去識別化依原樣重組
+function npsDbSplit(line) {
+  const out = [];
+  let i = 0;
+  const s = String(line);
+  while (i <= s.length) {
+    if (s[i] === '"') {
+      let v = '', j = i + 1;
+      while (j < s.length) { if (s[j] === '"') { if (s[j + 1] === '"') { v += '"'; j += 2; continue; } break; } v += s[j++]; }
+      out.push({ v, q: true }); i = j + 1;
+    } else { const j = s.indexOf(',', i); const e = j < 0 ? s.length : j; out.push({ v: s.slice(i, e), q: false }); i = e; }
+    if (s[i] === ',') i++; else break;
+  }
+  return out;
+}
+function npsDbTags(line) {
+  const c = npsDbSplit(line), t = Object.create(null);
+  Object.keys(NPS_DB_COLS).forEach(k => { const x = c[NPS_DB_COLS[k]]; if (x && x.v !== '') t[k] = x.v; });
+  // FQDN 欄為「網域/Users/帳號」，User-Name 空白時以最後一段補上
+  if (!t['User-Name'] && t.FQDN) t['User-Name'] = t.FQDN.split('/').pop();
+  const dm = String(t.date || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/), tm = String(t.time || '').match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+  if (dm && tm) t.Timestamp = `${dm[1].padStart(2, '0')}/${dm[2].padStart(2, '0')}/${dm[3]} ${tm[1].padStart(2, '0')}:${tm[2]}:${tm[3]}`;
+  return t;
+}
 function parseNpsLine(line, lineNo) {
-  if (!NPS_DTS_RE.test(line)) return null;
-  const t = npsTags(line);
+  const db = !NPS_DTS_RE.test(line) && NPS_DB_RE.test(line);
+  if (!db && !NPS_DTS_RE.test(line)) return null;
+  const t = db ? npsDbTags(line) : npsTags(line);
   const pk = parseInt(t['Packet-Type'], 10), rc = t['Reason-Code'] !== undefined ? parseInt(t['Reason-Code'], 10) : null;
   const f = { nps: 1 };
+  if (db) f.npsDb = 1;
   if (!isNaN(pk)) { f.npsPacket = pk; f.npsPacketName = NPS_PACKET[pk] || String(pk); }
   if (rc !== null && !isNaN(rc)) { f.npsReason = rc; f.npsReasonName = NPS_REASON[rc] || 'IAS_' + rc; }
   const user = t['SAM-Account-Name'] || t['User-Name'] || t['Fully-Qualifed-User-Name'] || '';

@@ -997,7 +997,29 @@ const NPS_KEEP_TAGS = new Set(['Timestamp', 'Packet-Type', 'Reason-Code', 'Authe
 const NPS_USER_TAGS = new Set(['User-Name', 'SAM-Account-Name', 'Fully-Qualifed-User-Name']);
 const NPS_HOST_TAGS = new Set(['Computer-Name', 'Client-Friendly-Name', 'NAS-Identifier']);
 const NPS_IP_TAGS = new Set(['Client-IP-Address', 'NAS-IP-Address', 'Framed-IP-Address']);
+// NPS 資料庫相容格式（XN151）：依欄位序號（0 起算，官方欄位順序）白名單處理，其餘有值的欄位一律 REDACTED
+const NPS_DB_KEEP_COLS = new Set([1, 2, 3, 4, 13, 14, 17, 18, 19, 21, 22, 23, 25, 27, 28, 29, 30, 31, 32, 33, 34, 36, 37, 38, 39, 40, 42, 43, 44, 45, 51, 52, 53, 55, 58, 59, 61, 64]);
+const NPS_DB_HOST_COLS = new Set([0, 11, 16, 63]);
+const NPS_DB_IP_COLS = new Set([10, 12, 15, 46, 47]);
+function npsDbAnonValue(i, v, opts) {
+  if (v === '' || NPS_DB_KEEP_COLS.has(i)) return v;
+  if (i === 5) return anonUser(v);
+  if (i === 6) { const p = v.split('/'); return p.map((x, k) => (k === p.length - 1 ? anonUser(x) : 'REDACTED')).join('/'); }
+  if (NPS_DB_HOST_COLS.has(i)) return anonHostname(v);
+  if (NPS_DB_IP_COLS.has(i)) return replaceIPsInLine(v, opts);
+  if (i === 8) return replaceMACsInLine(v) === v ? 'REDACTED' : replaceMACsInLine(v);
+  if (i === 7) { const k = v.indexOf(':', 17); const mac = k > 0 ? v.slice(0, k) : v; return (replaceMACsInLine(mac) === mac ? 'REDACTED' : replaceMACsInLine(mac)) + (k > 0 ? ':REDACTED' : ''); }
+  return 'REDACTED';
+}
 function anonymizeNpsEvent(clone, opts) {
+  if (clone.fields && clone.fields.npsDb) {
+    const line = npsDbSplit(clone.raw || '').map((c, i) => { const v = npsDbAnonValue(i, c.v, opts); return c.q ? '"' + String(v).replace(/"/g, '""') + '"' : v; }).join(',');
+    const re = parseNpsLine(line, clone.lineNo);
+    clone.raw = line;
+    if (re) { clone.fields = re.fields; clone.msg = re.msg; clone.host = re.host; }
+    else { clone.fields = { nps: 1, npsDb: 1 }; clone.msg = ''; clone.host = clone.host ? anonHostname(clone.host) : ''; }
+    return;
+  }
   const line = String(clone.raw || '').replace(/<([A-Za-z][\w-]*)( data_type="\d+">)([^<]*)<\/\1>/g, (m, tag, mid, v) => {
     let nv;
     if (NPS_KEEP_TAGS.has(tag) || v === '') nv = v;
