@@ -27,7 +27,7 @@ const FileHowto = (function () {
     ['Dell OS10', 'show running-configuration'], ['Ruckus/Brocade ICX', 'show running-config'], ['Extreme EXOS', 'show configuration'],
     ['Extreme VOSS', 'show running-config'], ['Alcatel OmniSwitch', 'show configuration snapshot'], ['MikroTik RouterOS', '/export'],
     ['Ruijie RGOS', 'show running-config'], ['Netgear / EdgeSwitch', 'show running-config'], ['Planet', 'show running-config'],
-    ['NVIDIA Cumulus', 'nv config show'], ['SONiC', 'cat /etc/sonic/config_db.json'], ['TP-Link JetStream', 'show running-config'], ['D-Link DGS', 'show running-config'],
+    ['NVIDIA Cumulus', 'nv config show'], ['SONiC', 'cat /etc/sonic/config_db.json'], ['TP-Link JetStream', 'show running-config'], ['D-Link DGS', 'show running-config'], ['Zyxel GS/XGS', 'show running-config'],
   ].map(r => [r[0], r[1], null]);
   const LOG = [
     ['FortiGate', '', { zhTW: 'Log & Report → 選擇日誌類型 → 下載', en: 'Log & Report → (log type) → Download', ja: 'Log & Report → ログ種別を選択 → ダウンロード' }],

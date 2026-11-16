@@ -504,6 +504,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
                 <option value="netgearsmart">Netgear Smart Managed Pro</option>
                 <option value="tplink">TP-Link JetStream</option>
                 <option value="dlink">D-Link DGS</option>
+                <option value="zyxelsw">Zyxel GS/XGS</option>
                 <option value="awplus">Allied Telesis AlliedWare Plus</option>
                 <option value="openwrt">OpenWrt (UCI)</option>
                 <option value="watchguard">WatchGuard Firebox</option>
@@ -1389,6 +1390,8 @@ const VENDOR_SIGS = {
   // Extreme VOSS／Fabric Engine（2026-10-05，KG）：與 switch_analyzer isVOSS() 一致
   // Broadcom EFOS（2026-10-06，MM）：與 switch_analyzer isEFOS() 一致，排在 edgeswitch／netgear 前
   netgearsmart:{ p:[/^SYSTEM CONFIG FILE ::= BEGIN\s*$/m, /^!\s*System Description:\s*NETGEAR\b/mi], min:2 },
+  // Zyxel GS／XGS（XN155，與 switch_analyzer isZyxelSw() 相同）：檔頭兩行，或 VLAN 的 fixed／forbidden／untagged
+  zyxelsw:{ p:[/^;\s*Product Name\s*=\s*\S/m, /^;\s*Firmware Version\s*=\s*\S/m, /^\s*fixed\s+[\d,\-]+\s*$/m, /^\s*forbidden\s+\S*/m], min:2 },
   // D-Link DGS（XN154，與 switch_analyzer isDLink() 相同）：檔頭版權行（單一訊號即判定）
   dlink:{ p:[/^#\s*Copyright\(C\)\s*\d{4}\s+D-Link Corporation/mi], min:1 },
   // TP-Link JetStream（XN153，與 switch_analyzer isTpLink() 相同）：介面命名＋general 埠／pvid／user name 其一
@@ -1432,7 +1435,7 @@ const VENDOR_SIGS = {
 // "Sophos"/"Aruba" 文字比對），故刻意排在最後——讓其他更具結構特徵的廠牌訊號優先判定，
 // 只有在都沒命中時才輪到這兩家，降低誤判機率
 const VENDOR_ORDER = [
-  'nps_export','netscaler','bigip','checkpoint_api','cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','netgearsmart','tplink','dlink','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
+  'nps_export','netscaler','bigip','checkpoint_api','cisco_nxos','fortiswitch','fortigate','h3c_secpath','tnsr','wlc','comware','paloalto','cloudsg','cumulus','voss','efos','netgearsmart','tplink','dlink','zyxelsw','awplus','netfilter','vyos','edgerouter','openwrt','juniper',
   'checkpoint','pfsense','sonicwall','watchguard','mikrotik','fsos','arista',
   'extreme','alcatel','brocade','procurve','dell_os10','planet','ruijie','netgear','edgeswitch','sonic',
   'ciscoasa','cisco_biz','cisco_ios',
@@ -1446,7 +1449,7 @@ const VENDOR_LABELS = {
   arista:'Arista EOS',aruba_cx:'Aruba CX',procurve:'Aruba ProCurve',
   dell_os10:'Dell OS10',extreme:'Extreme XOS',alcatel:'Alcatel OmniSwitch',
   brocade:'Brocade FastIron',ciscoasa:'Cisco ASA/FTD',zyxel:'Zyxel USG/ATP',
-  edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',checkpoint_api:'Check Point Management API (JSON)',cumulus:'NVIDIA Cumulus Linux (NVUE)',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',netgearsmart:'Netgear Smart Managed Pro',tplink:'TP-Link JetStream',dlink:'D-Link DGS',awplus:'Allied Telesis AlliedWare Plus',
+  edgerouter:'EdgeRouter (EdgeOS)',openwrt:'OpenWrt (UCI)',vyos:'VyOS',netfilter:'Linux iptables/nftables',cloudsg:'AWS / Azure / Meraki',checkpoint_api:'Check Point Management API (JSON)',cumulus:'NVIDIA Cumulus Linux (NVUE)',voss:'Extreme VOSS / Fabric Engine',efos:'Broadcom EFOS',netgearsmart:'Netgear Smart Managed Pro',tplink:'TP-Link JetStream',dlink:'D-Link DGS',zyxelsw:'Zyxel GS/XGS',awplus:'Allied Telesis AlliedWare Plus',
   planet:'Planet Technology',ruijie:'Ruijie (RGOS)',netgear:'Netgear M4300 (ICOS)',
   edgeswitch:'Ubiquiti EdgeSwitch',sonic:'SONiC (config_db.json)',watchguard:'WatchGuard Firebox',nps_export:'Windows NPS 設定匯出（netsh nps export）',netscaler:'Citrix NetScaler ADC／Gateway（ns.conf）',bigip:'F5 BIG-IP（bigip.conf／tmsh list）',
   appenv:'應用程式環境變數（.env／docker-compose）',
@@ -3741,6 +3744,27 @@ function anonNetgearSmart(text, opts) {
   }).join('\n');
 }
 
+// ---- Zyxel GS／XGS 交換器（ZyNOS 式 CLI，XN155）----
+// 語法依官方 Ethernet Switch CLI Reference Guide：hostname、admin-password [cipher] 密碼、logins username 名稱 password [cipher] 密碼 …、
+// snmp-server get-community／set-community [cipher] 名稱、VLAN 與埠的 name、ip route … name 名稱
+function anonZyxelSw(text, opts) {
+  return text.split('\n').map(line => {
+    if (opts.hostname) line = line.replace(/^(\s*hostname\s+)(\S+)\s*$/, (m, p, n) => p + anonHostname(n, 'sw', opts));
+    line = line.replace(/^(\s*admin-password\s+(?:cipher\s+)?)(\S+)/, (m, p) => { stats.password++; return p + 'REDACTED_HASH'; });
+    line = line.replace(/^(\s*logins\s+username\s+)(\S+)(\s+password\s+(?:cipher\s+)?)(\S+)/, (m, p, n, mid) => { stats.password++; return p + (opts.user ? anonUser(n) : n) + mid + 'REDACTED_HASH'; });
+    line = line.replace(/^(\s*snmp-server\s+(?:get|set|trap)-community\s+(?:cipher\s+)?)(\S+)/, (m, p) => { stats.community++; return p + 'REDACTED_COMMUNITY'; });
+    // 埠名稱（interface port-channel 子模式的 name）與 VLAN 名稱比照描述處理
+    if (opts.comments) line = line.replace(/^(\s+name\s+)(?!\d+\s*$)(.+)$/, (m, p) => { stats.comment++; return p + 'REDACTED_DESC'; });
+    line = line.replace(/^(\s*ip\s+route\s+.*\bname\s+)(\S+)/, (m, p) => p + 'REDACTED_NAME');
+    // 檔頭韌體版本（V4.90(ABPL.0)b3）不是位址
+    if (/^;\s*Firmware Version/i.test(line)) return line;
+    line = replaceDescLine(line, opts);
+    if (opts.ip) line = replaceIPsInLine(line, opts);
+    if (opts.mac) line = replaceMACsInLine(line, opts);
+    return line;
+  }).join('\n');
+}
+
 // ---- D-Link DGS（Cisco 風格 CLI，XN154）----
 // 語法依官方 DGS-1510 CLI Reference Guide：snmp-server name／location、username 帳號 [privilege N] [nopassword | password [0|7|15] 密碼]、
 // enable password [level N] [0|7|15] 密碼、snmp-server community [0|7] 名稱 …、snmp-server host 位址 [version …] 名稱、description
@@ -4336,7 +4360,7 @@ const VENDOR_FNS = {
   procurve: anonProCurve,
   dell_os10: anonDellOS10, extreme: anonExtreme, alcatel: anonAlcatel,
   brocade: anonBrocade, ciscoasa: anonCiscoASA, zyxel: anonZyxel,
-  edgerouter: anonEdgeRouter, openwrt: anonOpenWrt, vyos: anonVyOS, netfilter: anonNetfilter, cloudsg: anonCloudSG, checkpoint_api: anonCheckPointApi, cumulus: anonCumulus, voss: anonVOSS, efos: anonEFOS, netgearsmart: anonNetgearSmart, tplink: anonTpLink, dlink: anonDLink, awplus: anonAlliedWare,
+  edgerouter: anonEdgeRouter, openwrt: anonOpenWrt, vyos: anonVyOS, netfilter: anonNetfilter, cloudsg: anonCloudSG, checkpoint_api: anonCheckPointApi, cumulus: anonCumulus, voss: anonVOSS, efos: anonEFOS, netgearsmart: anonNetgearSmart, tplink: anonTpLink, dlink: anonDLink, zyxelsw: anonZyxelSw, awplus: anonAlliedWare,
   planet: anonPlanet, ruijie: anonRuijie, netgear: anonNetgear,
   edgeswitch: anonEdgeSwitch, sonic: anonSonic, watchguard: anonWatchGuard, nps_export: anonNpsExport, netscaler: anonNetScaler, bigip: anonBigip, appenv: anonAppEnv,
   unknown: anonGeneric
