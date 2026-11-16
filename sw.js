@@ -92,6 +92,7 @@ const FILES = [
   'switch-analyzer-parser-tplink.js',
   'switch-analyzer-parser-dlink.js',
   'switch-analyzer-parser-zyxelsw.js',
+  'switch-analyzer-parser-onyx.js',
   'switch-analyzer-parser-nxos.js',
   'switch-analyzer-parser-planet.js',
   'switch-analyzer-parser-procurve.js',

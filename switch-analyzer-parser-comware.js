@@ -644,7 +644,7 @@ function parseMgmtAccess(cfg, vendor){
 // - 本專案真實範例：Comware `idle-timeout 0 0`、`info-center loghost`；ProCurve `ntp server-name "…"`；Ruijie `banner motd`、`exec-timeout 10 0`、`ntp server`
 // - 既有已查證解析：Comware hwtacacs／radius scheme 的 primary authentication（去識別化）、Junos system 區塊（junosBlock）
 // Cisco Business／AlliedWare Plus（sys.brand）語法不同，整組不評估
-const MGMT_SVC_VENDORS=['cisco','ruijie','nxos','arista','aruba','comware','juniper','procurve','efos','brocade','netgearsmart','tplink','dlink','zyxelsw'];
+const MGMT_SVC_VENDORS=['cisco','ruijie','nxos','arista','aruba','comware','juniper','procurve','efos','brocade','netgearsmart','tplink','dlink','zyxelsw','onyx'];
 function parseMgmtServices(cfg, vendor, brand){
   if(!MGMT_SVC_VENDORS.includes(vendor)||brand==='ciscobiz'||brand==='awplus'||brand==='fs')return null;
   const all=(re)=>{const out=[];let m;const r=new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g');while((m=r.exec(cfg))!==null)out.push(m[1]);return out;};
@@ -665,6 +665,9 @@ function parseMgmtServices(cfg, vendor, brand){
   if(vendor==='zyxelsw'){const ts=cfg.match(/^\s*timesync\s+server\s+([^\n]+)$/m);
     return {ntp:ts?ts[1].trim().split(/\s+/):[], aaa:null, banner:null, httpPlain:/^\s*service-control\s+http\b/m.test(cfg)&&!/^\s*no\s+service-control\s+http\b/m.test(cfg), sshV1:null, idleOff:null,
       syslogExtra:all(/^\s*syslog\s+server\s+(\d+\.\d+\.\d+\.\d+)/m), sshV2Only:null};}
+  // NVIDIA Onyx（XN156）：依 User Manual 的 ntp server、web http enable、logging [vrf 名稱] 位址；其餘未查證不評估
+  if(vendor==='onyx')return {ntp:[...new Set(all(/^\s*ntp\s+server\s+(\d+\.\d+\.\d+\.\d+)/m))], aaa:null, banner:null, httpPlain:has(/^\s*web\s+http\s+enable\s*$/m), sshV1:null, idleOff:null,
+    syslogExtra:all(/^\s*logging\s+(?:vrf\s+\S+\s+)?(\d+\.\d+\.\d+\.\d+)\s*$/m), sshV2Only:null};
   if(vendor==='efos')return {ntp:[...new Set(all(/^ntp\s+server\s+(\S+)/m))], aaa:null, banner:null, httpPlain:null, sshV1:null, idleOff:null, syslogExtra:[], sshV2Only:null};
   if(vendor==='juniper'){
     const nb=jb('ntp'); let m; const r=/^\s*server\s+([^\s;{]+)/gm; while((m=r.exec(nb))!==null)ntp.push(m[1]);
