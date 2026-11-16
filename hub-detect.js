@@ -152,6 +152,8 @@ function detectTool(text) {
   if (/<Event[\s>][\s\S]*?xmlns=["']http:\/\/schemas\.microsoft\.com\/win\/2004\/08\/events\/event["']/.test(text)) return {idx:4, vendor:'winevent'};
   // Windows NPS DTS XML（XN65，與 log_analyzer NPS_DTS_RE 相同）：每行一筆 <Event><Timestamp data_type=…>，含 Packet-Type 或 Event-Source
   if (/^<Event><Timestamp data_type="\d+">[^<]*<\/Timestamp>.*<(?:Packet-Type|Event-Source) data_type=/m.test(t)) return {idx:4, vendor:'nps'};
+  // NPS 資料庫相容格式（XN151，與 log 工具 NPS_DB_RE 相同）：至少 2 行符合才判斷，避免誤認其他引號 CSV
+  if ((t.match(/^"[^"\n]*","[^"\n]*",\d{1,2}\/\d{1,2}\/\d{4},\d{1,2}:\d{2}:\d{2},\d{0,2},/gm) || []).length >= 2) return {idx:4, vendor:'nps'};
   // Aruba ClearPass Syslog Export（XN134，與 log_analyzer CPPM_STD_RE／CPPM_5424_RE 相同）
   if (/^(?:<\d{1,3}>)?\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:,\d{3})? \S+ .+? \d+ \d+ \d+ (?:(?:Common|RADIUS|TACACS|WEBAUTH|CppmNode)\.[A-Za-z][\w\- ]*|event_source|session_id|mac_address|Timestamp)=/m.test(t) || /^<\d{1,3}>1 \S+ \S+ ClearPass .*\[clearPass@14823 /m.test(t)) return {idx:4, vendor:'clearpass'};
   // PostgreSQL／MySQL 伺服器 log 與 MySQL Enterprise Audit JSON（XN90，與 log_analyzer PG_FILE_RE／MYSQL_ERR_RE／MYSQL_GEN_RE／isMysqlAuditEvent 相同）
@@ -410,6 +412,7 @@ function _detectToolReasons(text) {
     { reason: '命中 Windows NPS 設定匯出（netsh nps export）的 Microsoft_Internet_Authentication_Service／Microsoft_Radius_Protocol 元素，內含明碼 RADIUS 共用密鑰，交給去識別化', test: () => /<Microsoft_Internet_Authentication_Service\b|<Microsoft_Radius_Protocol\b/.test(t) },
     { reason: '命中 Windows Event Log XML 匯出的 xmlns 屬性簽章', test: () => /<Event[\s>][\s\S]*?xmlns=["']http:\/\/schemas\.microsoft\.com\/win\/2004\/08\/events\/event["']/.test(text) },
     { reason: '命中 Windows NPS DTS XML 記錄（<Event><Timestamp data_type=…> 與 Packet-Type）', test: () => /^<Event><Timestamp data_type="\d+">[^<]*<\/Timestamp>.*<(?:Packet-Type|Event-Source) data_type=/m.test(t) },
+    { reason: '命中 Windows NPS 資料庫相容格式記錄（引號欄位，第 3～5 欄為日期、時間與 Packet-Type，至少 2 行）', test: () => (t.match(/^"[^"\n]*","[^"\n]*",\d{1,2}\/\d{1,2}\/\d{4},\d{1,2}:\d{2}:\d{2},\d{0,2},/gm) || []).length >= 2 },
     { reason: '命中 Aruba ClearPass Syslog Export 的輸出（「篩選器名稱 序號 1 0」後接 Common.*／event_source 等鍵，或 RFC5424 的 clearPass@14823 結構化資料）', test: () => /^(?:<\d{1,3}>)?\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:,\d{3})? \S+ .+? \d+ \d+ \d+ (?:(?:Common|RADIUS|TACACS|WEBAUTH|CppmNode)\.[A-Za-z][\w\- ]*|event_source|session_id|mac_address|Timestamp)=/m.test(t) || /^<\d{1,3}>1 \S+ \S+ ClearPass .*\[clearPass@14823 /m.test(t) },
     { reason: '命中 Ivanti Connect Secure／Pulse Secure 事件 log（PulseSecure: - - - 開頭的 syslog）', test: () => /^(?:<\d{1,3}>\d*\s?|[A-Z][a-z]{2}\s+\d{1,2} \d{2}:\d{2}:\d{2} \S+ \d+ )\d{4}-\d{2}-\d{2}[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})? \S+ PulseSecure: - - - /m.test(t) },
     { reason: '命中 Syslog RFC5424 表頭格式 `<PRI>1 `', test: () => /^<\d{1,3}>1\s/m.test(t) },
