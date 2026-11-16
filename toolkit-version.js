@@ -3,8 +3,29 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.14';
+  const TOOLKIT_VERSION = '2026.11.16';
   const CHANGELOG = [
+    {
+      version: '2026.11.16',
+      items: {
+        zhTW: [
+          '交換器分析新增 4 家：TP-Link JetStream、D-Link DGS、Zyxel GS／XGS、NVIDIA Onyx（依官方 CLI 手冊；入口頁判斷與去識別化同步支援）',
+          '型號數量上限：Palo Alto 依官方型號比較頁、Juniper SRX 依官方 Policy Object 表；交換器產生器加入 Aruba CX 6000／6100／6200 與 HPE FlexFabric 5945（依官方文件）',
+          '交換器產生器：5945 48SFP28 前面板每 4 個 SFP28 埠一組須同速率，改速率時同組連動並以 interface range 下 speed，介面名稱不變',
+          'log 工具支援 Windows NPS 資料庫相容格式 log（逗號分隔），沿用 NPS 拒絕次數、同一終端多帳號等偵測與去識別化',
+          'Zyxel 防火牆轉換依官方 CLI 手冊改用 object-group 位址／服務群組、FQDN 物件與 description，轉換結果可讀回驗證',
+          '修正：Juniper 規則中「[ A B ]」多值清單未展開造成查詢誤判、型號上限名稱切割、產生器 SVI 計數未含 VRRP 列',
+        ],
+        en: [
+          'Switch analyzer adds 4 vendors: TP-Link JetStream, D-Link DGS, Zyxel GS/XGS, NVIDIA Onyx (per official CLI references; hub detection and anonymizer updated)',
+          'Model capacity limits: Palo Alto per the official model comparison data, Juniper SRX per the official policy object table; switch generator adds Aruba CX 6000/6100/6200 and HPE FlexFabric 5945 (per official documents)',
+          'Switch generator: on the 5945 48SFP28, every 4 front-panel SFP28 ports form a group that must share one speed; changing speed updates the whole group and emits speed via interface range without renaming interfaces',
+          'Log analyzer supports Windows NPS database-compatible (comma-separated) logs, reusing NPS reject burst, multi-account endpoint detection and anonymization',
+          'Zyxel firewall conversion now uses object-group address/service groups, FQDN objects and description per the official CLI reference, and can be read back for verification',
+          'Fixes: Juniper "[ A B ]" multi-value lists not expanded in queries, model-limit name splitting, generator SVI count missing VRRP rows',
+        ],
+      },
+    },
     {
       version: '2026.11.14',
       items: {
