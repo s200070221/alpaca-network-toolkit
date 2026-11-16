@@ -505,6 +505,10 @@ function assembleComwareConfig(model){
   // 會被判定屬性不符而拒絕加入（見上方 comwareL2Lines() 說明）
   const lacpExtra=renderComwareLACPExtra(model.lacp,model.interfaces);
   if(lacpExtra)blocks.push(lacpExtra);
+  // 前面板分組速率（XN158）：介面名稱不變，以 interface range 對整組下 speed，排在各介面設定之前
+  const SML=(typeof window!=='undefined'&&window.SwModelLimits)||globalThis.SwModelLimits;
+  const pgLines=SML&&SML.portGroupSpeedLines?SML.portGroupSpeedLines(model.deviceModel,model.interfaces):[];
+  if(pgLines.length)blocks.push(pgLines.join('\n'));
   if(model.interfaces&&model.interfaces.length)blocks.push(renderComwareInterfaces(model.interfaces,model.lacp,model.acl,model.security,model.stp,model.breakouts,model.ospf6,model.qosApply));
   if(model.vrrp&&model.vrrp.length)blocks.push(renderComwareVRRP(model.vrrp));
   if(model.dhcp&&model.dhcp.length)blocks.push(renderComwareDHCP(model.dhcp));

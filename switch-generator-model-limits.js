@@ -94,6 +94,61 @@
     add('lagMembers', maxMem, f.lagMembers);
     return { family: f.id, name: f.name, src: f.src, model: normModel(value, label), items, asof: ASOF };
   }
+  // 前面板埠分組速率（XN158）：HPE FlexFabric 5945 48SFP28 8QSFP28 的 SFP28 埠每 4 個一組（1–4、5–8…45–48），同組必須同速率。
+  // 依使用者現場確認；官方 Release Notes R6710 只在 LSWM124TG2H 擴充卡的已知問題寫到「each four consecutive ports are assigned to a port group」。
+  const PORT_GROUPS = [
+    { re: /^(?:nb:FlexFabric-5945-48SFP28-8QSFP28|hpe5945-48sfp28-8qsfp28)$/i, size: 4, from: 1, to: 48, prefix: 'Twenty-FiveGigE', native: '25G',
+      // 改速率時介面名稱不變，以 interface range 對整組下 speed（使用者確認）
+      speedCmd: { '10G': 'speed 10000', '1G': 'speed 1000' } },
+  ];
+  // ifaces：[{name, speed}]；名稱取「成員/0/埠」（前綴不論，產生器改速率時會換前綴），回傳速率不一致的組
+  function portGroupConflicts(value, ifaces) {
+    const g = PORT_GROUPS.find(x => x.re.test(String(value || '')));
+    if (!g) return [];
+    const groups = new Map();
+    (ifaces || []).forEach(i => {
+      const m = String(i.name || '').match(/^[A-Za-z-]+(\d+)\/0\/(\d+)$/);
+      if (!m) return;
+      const n = +m[2];
+      if (n < g.from || n > g.to) return;
+      const start = g.from + Math.floor((n - g.from) / g.size) * g.size;
+      const k = m[1] + '/' + start;
+      if (!groups.has(k)) groups.set(k, { member: m[1], from: start, to: start + g.size - 1, speeds: new Set() });
+      groups.get(k).speeds.add(String(i.speed || ''));
+    });
+    return [...groups.values()].filter(x => x.speeds.size > 1).map(x => ({ member: x.member, from: x.from, to: x.to, speeds: [...x.speeds].sort() }));
+  }
+  // 同組速率一致且不是原生速率時，輸出 interface range … speed（速率不一致的組另有警告，不輸出）
+  function portGroupSpeedLines(value, ifaces) {
+    const g = PORT_GROUPS.find(x => x.re.test(String(value || '')));
+    if (!g || !g.speedCmd) return [];
+    const groups = new Map();
+    (ifaces || []).forEach(i => {
+      const m = String(i.name || '').match(/^[A-Za-z-]+(\d+)\/0\/(\d+)$/);
+      if (!m) return;
+      const n = +m[2];
+      if (n < g.from || n > g.to) return;
+      const start = g.from + Math.floor((n - g.from) / g.size) * g.size, k = m[1] + '/' + start;
+      if (!groups.has(k)) groups.set(k, { member: m[1], start, speeds: new Set() });
+      groups.get(k).speeds.add(String(i.speed || g.native));
+    });
+    const out = [];
+    [...groups.values()].sort((a, b) => a.member - b.member || a.start - b.start).forEach(x => {
+      if (x.speeds.size !== 1) return;
+      const cmd = g.speedCmd[[...x.speeds][0]];
+      if (!cmd) return;
+      out.push(`interface range ${g.prefix}${x.member}/0/${x.start} to ${g.prefix}${x.member}/0/${x.start + g.size - 1}`, ` ${cmd}`, '#');
+    });
+    return out;
+  }
+  // 速率改變時同組其他埠一併跟著改：回傳同組的埠號（同一成員），不在分組內回傳 null
+  function portGroupMates(value, name) {
+    const g = PORT_GROUPS.find(x => x.re.test(String(value || '')));
+    const m = String(name || '').match(/^[A-Za-z-]+(\d+)\/0\/(\d+)$/);
+    if (!g || !m || +m[2] < g.from || +m[2] > g.to) return null;
+    const start = g.from + Math.floor((+m[2] - g.from) / g.size) * g.size;
+    return { member: m[1], ports: Array.from({ length: g.size }, (_, i) => start + i), keepName: !!g.speedCmd };
+  }
   // 測試沙箱可能沒有 window（gen_test／qa round-trip 直接載入全部產生器模組）
-  (typeof window !== 'undefined' ? window : globalThis).SwModelLimits = { ASOF, NEAR, FAMILIES, normModel, familyOf, assess };
+  (typeof window !== 'undefined' ? window : globalThis).SwModelLimits = { ASOF, NEAR, FAMILIES, normModel, familyOf, assess, PORT_GROUPS, portGroupConflicts, portGroupSpeedLines, portGroupMates };
 })();

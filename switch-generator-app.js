@@ -295,6 +295,17 @@ const SPEED_PREFIX={
   juniper:{'1G':'ge-','10G':'xe-','25G':'xe-','40G':'et-','100G':'et-'},
 };
 function onSpeedChange(sel){
+  // 前面板分組機型（XN158，5945 48SFP28）：名稱不變、同組 4 埠一起改速率，由 interface range 下 speed
+  const SML=(typeof window!=='undefined'&&window.SwModelLimits)||null;
+  const dm=(document.getElementById('device-model')||{}).value||'';
+  const mates=SML&&SML.portGroupMates?SML.portGroupMates(dm,sel.closest('tr').querySelector('.i-name').value):null;
+  if(mates&&mates.keepName){
+    rowsOf('#iface-body tr').forEach(tr=>{
+      const m=val(tr,'i-name').match(/^[A-Za-z-]+(\d+)\/0\/(\d+)$/);
+      if(m&&m[1]===mates.member&&mates.ports.includes(+m[2]))tr.querySelector('.i-speed').value=sel.value;
+    });
+    return;
+  }
   const prefixMap=SPEED_PREFIX[currentVendor()];
   if(!prefixMap)return;
   const nameInput=sel.closest('tr').querySelector('.i-name');
@@ -2104,6 +2115,7 @@ function collectModel(){
 
   return {
     vendor:currentVendor(), brand:document.getElementById('vendor').value==='h3c'?'h3c':'',
+    deviceModel:(document.getElementById('device-model')||{}).value||'',
     sysname:document.getElementById('hostname').value.replace(/[\r\n]/g,'').trim()||'Switch',
     snmpTrapHost:document.getElementById('snmp-trap-host').value.trim(),
     syslogServer:document.getElementById('syslog-server').value.trim(),
@@ -3132,6 +3144,14 @@ function validateForm(){
     if(ml) ml.items.filter(it=>it.level!=='ok').forEach(it=>{
       warnings.push((it.level==='over'?'⚠️ ':'💡 ')+tr(it.level==='over'?'val.modelLimit_over':'val.modelLimit_near')
         .replace('{item}',tr('swml.'+it.key)).replace('{count}',it.count).replace('{limit}',it.limit).replace('{model}',ml.name));
+    });
+  }
+
+  // 15c. 前面板埠分組速率（XN158）：5945 48SFP28 每 4 個 SFP28 埠一組，同組須同速率
+  if(typeof window!=='undefined'&&window.SwModelLimits){
+    const dmSel=document.getElementById('device-model');
+    if(dmSel&&dmSel.value) window.SwModelLimits.portGroupConflicts(dmSel.value,model.interfaces).forEach(g=>{
+      warnings.push('⚠️ '+tr('val.portGroupSpeed').replace('{from}',g.member+'/0/'+g.from).replace('{to}',g.member+'/0/'+g.to).replace('{speeds}',g.speeds.join(' / ')));
     });
   }
 

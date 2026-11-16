@@ -139,6 +139,8 @@ function parseInterfaces(cfg){
   for(const blk of raw.slice(1)){
     const lines=blk.split('\n');
     const name=lines[0].trim();
+    // interface range A to B（批次設定，如 5945 前面板分組的 speed）不是單一介面，略過（XN158）
+    if(/^range\s/i.test(name))continue;
     let body=lines.slice(1).join('\n');
     // 每個 interface 區塊在 Comware 語法中都以獨立一行 "#" 終止；naive split('\ninterface ')
     // 對「檔案中最後一次出現的區塊」沒有下一個 "interface " 可以自然定界，body 會一路延伸
