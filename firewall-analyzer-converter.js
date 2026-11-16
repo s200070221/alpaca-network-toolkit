@@ -1987,89 +1987,130 @@ const Converter = (() => {
 
     // address-object/service-object 皆需在 secure-policy 之前先宣告（ZLD 語法要求物件
     // 先建立才能被規則引用），逐規則依 srcAddr/dstAddr/service 動態合成物件名稱
-    const addrNames={};
-    const svcNames={};
-    let addrSeq=1, svcSeq=1;
-    const addrObjLines=[], svcObjLines=[];
+    // 物件語法依 ZyWALL ZLD CLI Reference Guide（ATP／USG FLEX，download.zyxel.com）（XN152）：
+    //   Table 263 address-object 名稱 {IP | 起-迄 | 網段/長度 | fqdn 網域}（fqdn 為關鍵字，與 geography 同型；手冊未附 FQDN 範例）
+    //   Table 264 object-group address 名稱 → 子模式「address-object 成員」「object-group 子群組」→ exit
+    //   service-object 名稱 {tcp|udp} {eq 埠 | range 起 迄}；Table 268 object-group service 名稱 → 「service-object 成員」「object-group 子群組」→ exit
+    //   Table 114 secure-policy 子指令 from／to／sourceip／destinationip／service／action／description／[no] activate
+    // 規則的位址或服務有多個時另建群組（ADDR_GRP_N／SVC_GRP_N），原本依笛卡兒積拆成多條規則
+    const addrNames={}, svcNames={};
+    let addrSeq=1, svcSeq=1, aGrpSeq=1, sGrpSeq=1;
+    const addrObjLines=[], svcObjLines=[], addrGrpLines=[], svcGrpLines=[];
     const nz=(v,fb)=>(v&&v!=='-'&&!/^(any|all)$/i.test(v))?v:fb;
-    // 2026-09-22 修復：addrObjFor()/svcObjFor() 查找加入 VDOM 隔離（比照 firewall-analyzer-
-    // audit.js 既有 `(x._vdom?x._vdom+'/':'')+name` 慣例）。多 VDOM FortiGate 來源若不同 VDOM
-    // 剛好有同名位址/服務物件，原本 .find() 只比對 name，會取到第一個命中的 VDOM 的值，導致
-    // 轉出的 Zyxel 設定檔夾帶錯誤 VDOM 的 IP/Port（靜默資料錯置）。cache key 與輸出物件名稱
-    // 皆一併帶 vdom 後綴避免撞名；單一 VDOM（無 _vdom）來源時後綴為空字串，行為與修復前相同。
+    // 2026-09-22：查找加入 VDOM 隔離（多 VDOM 來源同名物件不互相取錯），輸出名稱帶 vdom 後綴
     const zVk=(vdom,name)=>(vdom?vdom+'/':'')+name;
-    function addrObjFor(val,vdom){
-      if(!val||/^(any|all|-)$/i.test(val))return null;
-      const first=sl(val)[0]||val;
-      const key=zVk(vdom,first);
-      if(addrNames[key])return addrNames[key];
-      // 2026-09-10 修正：先查 first 是否命中 parsed.addresses 裡的具名物件（host/subnet/
-      // range 三型態皆為已查證的 address-object 官方語法涵蓋範圍），命中則沿用該物件
-      // 原本的名稱＋真實值，而非把物件「名稱」本身誤當成物件「內容」寫入（先前寫法對任何
-      // 引用具名物件的規則都會產生 `address-object ADDR_N <物件名稱字串>` 這種不合法語法）。
-      // address-group 因查無官方語法佐證，比照既有「不猜測」原則維持原本行為（原樣當字面值
-      // 處理，非本輪劣化）。2026-09-10（續）擴大：fqdn 型別已查證——ZyxelParser 的型別判斷式
-      // 本身（val.includes('/')?'ipmask':/[a-zA-Z]/.test(val)?'fqdn':...）證實 address-object
-      // 語法就是唯一的位址物件指令，FQDN 只是 value 恰好是網域名稱字串，非獨立語法，故一併攤平。
-      const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===first&&(a._vdom||null)===(vdom||null)&&(a.type==='ipmask'||a.type==='iprange'||a.type==='fqdn'));
-      const name=obj?(vdom?`${obj.name}_${vdom}`:obj.name):`ADDR_${addrSeq++}`;
-      let value=first;
+    const vName=(name,vdom)=>vdom?`${name}_${vdom}`:name;
+    // 單一位址名稱或字面值 → 宣告後的物件名稱（null＝無法表示）；kind 記錄是物件還是群組（群組成員行寫法不同）
+    const addrKind={};
+    function addrDecl(n,vdom,seen){
+      const key=zVk(vdom,n);
+      if(addrNames[key]!==undefined) return addrNames[key];
+      const grp=(parsed.addresses||[]).find(a=>a.category==='address-group'&&a.name===n&&(a._vdom||null)===(vdom||null));
+      if(grp){
+        if(seen.has(n)) return null;   // 循環參照
+        seen.add(n);
+        const mem=sl(grp.members).map(m=>addrDecl(m,vdom,seen)).filter(Boolean);
+        seen.delete(n);
+        if(!mem.length){ addrNames[key]=null; return null; }
+        const name=vName(grp.name,vdom);
+        addrGrpLines.push(`object-group address ${name}`,...mem.map(m=>addrKind[m]==='grp'?` object-group ${m}`:` address-object ${m}`),'exit');
+        addrNames[key]=name; addrKind[name]='grp'; return name;
+      }
+      const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===n&&(a._vdom||null)===(vdom||null)&&(a.type==='ipmask'||a.type==='iprange'||a.type==='fqdn'));
+      let name, value;
       if(obj){
+        name=vName(obj.name,vdom);
         if(obj.type==='iprange') value=`${obj.startIp}-${obj.endIp}`;
-        else if(obj.type==='fqdn') value=obj.fqdn;
+        else if(obj.type==='fqdn') value=`fqdn ${obj.fqdn}`;
         else { const c=addrCidr(obj); value=c.endsWith('/32')?c.slice(0,-3):c; }
-      }
-      addrNames[key]=name;
+      } else if(/^\d{1,3}(?:\.\d{1,3}){3}(?:\/\d{1,2}|-\d{1,3}(?:\.\d{1,3}){3})?$/.test(n)){
+        name=`ADDR_${addrSeq++}`; value=n.endsWith('/32')?n.slice(0,-3):n;
+      } else { addrNames[key]=null; return null; }   // 查不到的具名物件（ISDB、地理位置等）不猜測
       addrObjLines.push(`address-object ${name} ${value}`);
-      return name;
+      addrNames[key]=name; addrKind[name]='obj'; return name;
     }
-    function svcObjFor(val,vdom){
-      if(!val||/^(any|all|-)$/i.test(val))return null;
-      const svc=sl(val)[0]||val;
-      const litM=svc.match(/^(tcp|udp)\/(\d+)$/i);
-      if(litM){
-        const key=svc.toLowerCase();
-        if(svcNames[key])return svcNames[key];
+    function addrObjFor(val,vdom){
+      const names=sl(val);
+      if(!names.length) return null;
+      const decl=names.map(n=>addrDecl(n,vdom,new Set())).filter(Boolean);
+      if(!decl.length) return null;
+      if(decl.length===1) return decl[0];
+      const key=zVk(vdom,'#grp:'+decl.join(','));
+      if(addrNames[key]) return addrNames[key];
+      const name=`ADDR_GRP_${aGrpSeq++}`;
+      addrGrpLines.push(`object-group address ${name}`,...decl.map(m=>addrKind[m]==='grp'?` object-group ${m}`:` address-object ${m}`),'exit');
+      addrNames[key]=name; addrKind[name]='grp'; return name;
+    }
+    const svcKind={};
+    // 單一服務名稱 → 宣告後的物件名稱（null＝無法表示）
+    function svcDecl(n,vdom,seen){
+      const key=zVk(vdom,n);
+      if(svcNames[key]!==undefined) return svcNames[key];
+      const lit=n.match(/^(tcp|udp)\/(\d+)(?:-(\d+))?$/i);
+      if(lit){
         const name=`SVC_${svcSeq++}`;
-        svcNames[key]=name;
-        svcObjLines.push(`service-object ${name} ${litM[1].toLowerCase()} eq ${litM[2]}`);
-        return name;
+        svcObjLines.push(`service-object ${name} ${lit[1].toLowerCase()} ${lit[3]?`range ${lit[2]} ${lit[3]}`:`eq ${lit[2]}`}`);
+        svcNames[key]=name; svcKind[name]='obj'; return name;
       }
-      // 2026-09-10 新增：非字面 tcp/port 格式時，查 svc 是否命中 parsed.services 具名物件——
-      // 僅支援單一 tcp/udp port（`service-object <name> {tcp|udp} eq <port>` 已查證語法），
-      // 多埠/range/icmp 查無逐字語法佐證不處理（回傳 null，該規則的 service 行維持既有
-      // 「查無法解析時省略」行為，非本輪引入的新缺口）
-      const key=zVk(vdom,svc);
-      const obj=(parsed.services||[]).find(s=>s.category==='service'&&s.name===svc&&(s._vdom||null)===(vdom||null));
-      if(!obj)return null;
-      if(svcNames[key])return svcNames[key];
-      const proto=(obj.proto||'TCP').toLowerCase();
-      if(!proto.includes('tcp')&&!proto.includes('udp'))return null;
-      const p2=proto.includes('udp')&&!proto.includes('tcp')?'udp':'tcp';
-      const portField=p2==='udp'?obj.udpPorts:obj.tcpPorts;
-      const firstPort=(portField&&portField!=='-'?portField:(p2==='udp'?obj.tcpPorts:obj.udpPorts)||'').split(/[,-]/)[0].trim();
-      if(!firstPort)return null;
-      const name=vdom?`${obj.name}_${vdom}`:obj.name;
-      svcNames[key]=name;
-      svcObjLines.push(`service-object ${name} ${p2} eq ${firstPort}`);
-      return name;
+      const grp=(parsed.services||[]).find(x=>x.category==='group'&&x.name===n&&(x._vdom||null)===(vdom||null));
+      if(grp){
+        if(seen.has(n)) return null;
+        seen.add(n);
+        const mem=sl(grp.members).map(m=>svcDecl(m,vdom,seen)).filter(Boolean);
+        seen.delete(n);
+        if(!mem.length){ svcNames[key]=null; return null; }
+        const name=vName(grp.name,vdom);
+        svcGrpLines.push(`object-group service ${name}`,...mem.map(m=>svcKind[m]==='grp'?` object-group ${m}`:` service-object ${m}`),'exit');
+        svcNames[key]=name; svcKind[name]='grp'; return name;
+      }
+      // 具名服務只取單一 tcp／udp 埠或埠範圍（官方語法）；ICMP 等其他協定不處理
+      const obj=(parsed.services||[]).find(x=>x.category!=='group'&&x.name===n&&(x._vdom||null)===(vdom||null));
+      let proto, port;
+      if(obj){
+        const pr=(obj.proto||'TCP').toLowerCase();
+        if(!pr.includes('tcp')&&!pr.includes('udp')){ svcNames[key]=null; return null; }
+        proto=pr.includes('udp')&&!pr.includes('tcp')?'udp':'tcp';
+        const pf=proto==='udp'?obj.udpPorts:obj.tcpPorts;
+        port=String((pf&&pf!=='-'?pf:(proto==='udp'?obj.tcpPorts:obj.udpPorts))||'').split(/[,\s]+/)[0].trim();
+      } else {
+        // 設定檔沒有對應物件的常見服務名稱（HTTP、HTTPS…）改用常見服務埠
+        const sv=resolveSvc(n, parsed);
+        if((sv.proto==='tcp'||sv.proto==='udp')&&sv.port){ proto=sv.proto; port=sv.port; }
+        else if(sv.proto==='ip'&&!sv.unresolved){ svcNames[key]=''; return ''; }   // 任何協定＝不限服務
+      }
+      const pm=String(port||'').match(/^(\d+)(?:-(\d+))?$/);
+      if(!pm){ svcNames[key]=null; return null; }
+      const name=obj?vName(obj.name,vdom):`SVC_${svcSeq++}`;
+      svcObjLines.push(`service-object ${name} ${proto} ${pm[2]?`range ${pm[1]} ${pm[2]}`:`eq ${pm[1]}`}`);
+      svcNames[key]=name; svcKind[name]='obj'; return name;
+    }
+    // 回傳 {name, unresolved}：有任何服務無法表示時停用規則（避免變成不限服務）
+    function svcObjFor(val,vdom){
+      const names=sl(val);
+      if(!names.length) return { name:null, unresolved:false };
+      const decl=names.map(n=>svcDecl(n,vdom,new Set()));
+      if(decl.includes('')) return { name:null, unresolved:false };
+      const ok=decl.filter(Boolean);
+      const unresolved=ok.length<decl.length;
+      if(!ok.length) return { name:null, unresolved };
+      if(ok.length===1) return { name:ok[0], unresolved };
+      const key=zVk(vdom,'#grp:'+ok.join(','));
+      if(!svcNames[key]){
+        const name=`SVC_GRP_${sGrpSeq++}`;
+        svcGrpLines.push(`object-group service ${name}`,...ok.map(m=>svcKind[m]==='grp'?` object-group ${m}`:` service-object ${m}`),'exit');
+        svcNames[key]=name; svcKind[name]='grp';
+      }
+      return { name:svcNames[key], unresolved };
     }
     const ruleBlocks=[];
-    splitPolicies(parsed.policies).forEach((p,idx)=>{
+    // 多值的位址／服務以群組表示，一條來源規則對應一條 secure-policy（不再依笛卡兒積拆成多條）
+    (parsed.policies||[]).forEach((p,idx)=>{
       const srcObj=addrObjFor(p.srcAddr,p._vdom);
       const dstObj=addrObjFor(p.dstAddr,p._vdom);
-      let svcObj=svcObjFor(p.service,p._vdom);
-      // 設定檔沒有對應物件的常見服務名稱（HTTP、HTTPS…）原本省略 service 行，規則變成不限服務；
-      // 改用常見服務埠建立物件，仍查不到時停用規則
-      let svcUnresolved=false;
-      if(!svcObj&&p.service&&!/^(any|all|-)$/i.test(String(p.service).trim())){
-        const sv=resolveSvc(sl(p.service)[0], parsed);
-        if((sv.proto==='tcp'||sv.proto==='udp')&&sv.port&&!sv.port.includes('-')){
-          const key=`${sv.proto}/${sv.port}`;
-          if(!svcNames[key]){ svcNames[key]=`SVC_${svcSeq++}`; svcObjLines.push(`service-object ${svcNames[key]} ${sv.proto} eq ${sv.port}`); }
-          svcObj=svcNames[key];
-        } else if(sv.proto!=='ip'||sv.unresolved) svcUnresolved=true;
-      }
+      const sv=svcObjFor(p.service,p._vdom), svcObj=sv.name;
+      // 位址有值卻無法表示時也停用，避免變成不限來源／目的
+      const addrUnresolved=(sl(p.srcAddr).length&&!srcObj)||(sl(p.dstAddr).length&&!dstObj);
+      const svcUnresolved=sv.unresolved||addrUnresolved;
       const lines=[`secure-policy insert ${idx+1}`];
       lines.push(` from ${nz(p.srcIntf,'any')}`);
       lines.push(` to ${nz(p.dstIntf,'any')}`);
@@ -2077,13 +2118,17 @@ const Converter = (() => {
       if(dstObj)lines.push(` destinationip ${dstObj}`);
       if(svcObj)lines.push(` service ${svcObj}`);
       lines.push(` action ${mapAction(p.action,'zyxel')}`);
-      if(p.name)lines.push(` name ${p.name.replace(/\s+/g,'_')}`);
+      // 規則名稱放 description（Table 114：最多 60 個可列印 ASCII 字元）；子指令沒有 name
+      if(p.name)lines.push(` description ${String(p.name).replace(/[^\x20-\x7e]/g,'_').slice(0,60)}`);
       if(p.status==='disable'||svcUnresolved)lines.push(' no activate');
       lines.push('exit');
       ruleBlocks.push(lines.join('\n'));
     });
+    // 物件先宣告、群組在後（群組成員須已存在；巢狀群組在遞迴時已先輸出子群組）
     if(addrObjLines.length){L.push(...addrObjLines);L.push('');}
+    if(addrGrpLines.length){L.push(...addrGrpLines);L.push('');}
     if(svcObjLines.length){L.push(...svcObjLines);L.push('');}
+    if(svcGrpLines.length){L.push(...svcGrpLines);L.push('');}
     if(ruleBlocks.length){L.push(...ruleBlocks);L.push('');}
 
     return L.join('\n');
@@ -3253,7 +3298,6 @@ const Converter = (() => {
       ['imp.readme_backup',...sp.how,'imp.readme_review'].forEach(k=>L.push('- '+t(k)));
       if(pack.files.some(f=>f.stage==='admins')) L.push('- '+t('imp.readme_admin'));
       if(pack.files.some(f=>f.stage==='other')) L.push('- '+t('imp.readme_other'));
-      if(target==='zyxel'&&o.parsed&&(o.parsed.addresses||[]).some(a=>a.category==='address-group')) L.push('- '+t('imp.zx_group'));
       if(pack.header.length){ L.push(''); L.push(t('imp.readme_header')); pack.header.forEach(h=>L.push('  '+h)); }
       return [{ name:'00_README_order.txt', text:L.join('\n')+'\n' }, ...pack.files.map(f=>({ name:f.name, text:f.text }))];
     }

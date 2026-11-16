@@ -24,7 +24,10 @@ const ZyxelParser = (() => {
   // key-value/關鍵字行，無進一步巢狀子模式），故用單一狀態機一次掃描即可正確歸屬
   function splitBlocks(text) {
     const interfaces = {}, zones = {}, policies = [];
-    let mode = null; // {type:'interface'|'zone'|'secure-policy', key, rule}
+    // 位址／服務群組（XN152）：依 ZLD CLI Reference Guide Table 264／268，「object-group address|service 名稱」進入子模式，
+    // 成員為「address-object 名稱」／「service-object 名稱」與巢狀「object-group 名稱」，exit 結束
+    const addrGroups = Object.create(null), svcGroups = Object.create(null);
+    let mode = null; // {type:'interface'|'zone'|'secure-policy'|'addr-group'|'svc-group', key, rule}
     for (const raw of text.split('\n')) {
       const line = raw.trim();
       if (!line) continue;
@@ -33,14 +36,22 @@ const ZyxelParser = (() => {
         if (mode.type === 'interface') interfaces[mode.key].push(line);
         else if (mode.type === 'zone') zones[mode.key].push(line);
         else if (mode.type === 'secure-policy') mode.rule.lines.push(line);
+        else if (mode.type === 'addr-group' || mode.type === 'svc-group') {
+          const mm = line.match(mode.type === 'addr-group' ? /^(?:address-object|object-group)\s+(\S+)\s*$/ : /^(?:service-object|object-group)\s+(\S+)\s*$/);
+          if (mm) (mode.type === 'addr-group' ? addrGroups : svcGroups)[mode.key].push(mm[1]);
+        }
         continue;
       }
       let m;
       if ((m = line.match(/^interface\s+(\S+)/))) { interfaces[m[1]] = interfaces[m[1]] || []; mode = { type: 'interface', key: m[1] }; continue; }
       if ((m = line.match(/^zone\s+(\S+)/))) { zones[m[1]] = zones[m[1]] || []; mode = { type: 'zone', key: m[1] }; continue; }
+      if ((m = line.match(/^object-group\s+(address|service)\s+(\S+)\s*$/))) {
+        const g = m[1] === 'address' ? addrGroups : svcGroups;
+        g[m[2]] = g[m[2]] || []; mode = { type: m[1] === 'address' ? 'addr-group' : 'svc-group', key: m[2] }; continue;
+      }
       if ((m = line.match(/^secure-policy\s+(?:insert\s+)?(\d+)/))) { const rule = { num: m[1], lines: [] }; policies.push(rule); mode = { type: 'secure-policy', rule }; continue; }
     }
-    return { interfaces, zones, policies };
+    return { interfaces, zones, policies, addrGroups, svcGroups };
   }
 
   function parseDeviceInfo(text) {
@@ -71,10 +82,14 @@ const ZyxelParser = (() => {
 
   function parseAddressObjects(text) {
     const out = [];
-    const re = /^address-object\s+(\S+)\s+(\S+)/gm;
+    // 「address-object 名稱 fqdn 網域」依 Table 263 語法（fqdn 為關鍵字，與 geography 同型）；舊寫法（直接寫網域）仍接受。
+    // geography／interface-ip／interface-subnet／interface-gateway 依國家或介面動態取得位址，無法表示，不列入
+    // 只用空白與 tab 分隔（\s 會跨行，把下一行或群組成員行當成值）
+    const re = /^address-object[ \t]+(\S+)[ \t]+(\S+)(?:[ \t]+(\S+))?/gm;
     let m;
     while ((m = re.exec(text)) !== null) {
-      const name = m[1], val = m[2];
+      if (/^(?:geography|interface-ip|interface-subnet|interface-gateway|rename)$/.test(m[2]) || m[1] === 'rename') continue;
+      const name = m[1], val = m[2] === 'fqdn' && m[3] ? m[3] : m[2];
       // 2026-08-09 稽核修復：原判斷順序 "/" → "-" → 字母，含連字號的 FQDN（如
       // backup-server.corp.com，網域命名極常見）會被 "-" 判斷式先攔截誤判為 iprange，
       // 再被 split('-') 切成無意義字串；改為字母判斷優先於連字號判斷
@@ -91,7 +106,7 @@ const ZyxelParser = (() => {
     // 使用獨立關鍵字 address6-object（非 address-object 加冒號值），語法：
     // address6-object object_name {ipv6_address | ipv6_range | ipv6_subnet}
     // 先前完全沒有對應解析路徑，這批物件從未被解析出來（非型別判斷順序錯誤）
-    const re6 = /^address6-object\s+(\S+)\s+(\S+)/gm;
+    const re6 = /^address6-object[ \t]+(\S+)[ \t]+(\S+)/gm;
     let m6;
     while ((m6 = re6.exec(text)) !== null) {
       const name = m6[1], val = m6[2];
@@ -109,7 +124,7 @@ const ZyxelParser = (() => {
 
   function parseServiceObjects(text) {
     const out = [];
-    const re = /^service-object\s+(\S+)\s+(tcp|udp)\s+(?:eq\s+(\d+)|range\s+(\d+)\s+(\d+))/gim;
+    const re = /^service-object[ \t]+(\S+)[ \t]+(tcp|udp)[ \t]+(?:eq[ \t]+(\d+)|range[ \t]+(\d+)[ \t]+(\d+))/gim;
     let m;
     while ((m = re.exec(text)) !== null) {
       const name = m[1], proto = m[2].toUpperCase();
@@ -226,7 +241,9 @@ const ZyxelParser = (() => {
   function parse(text) {
     const blocks = splitBlocks(text);
     const staticRoutes = parseRoutes(text);
-    const addresses = parseAddressObjects(text);
+    const groupList = (g, mk) => Object.keys(g).map(name => mk(name, g[name].join(', ') || '-'));
+    const addresses = parseAddressObjects(text).concat(groupList(blocks.addrGroups, (name, members) => ({ category: 'address-group', name, type: 'group', subnet: '-', fqdn: '-',
+      startIp: '-', endIp: '-', iface: '-', members, comment: '' })));
     const addrTypeMap = buildAddrTypeMap(addresses);
     return {
       vendor: 'Zyxel',
@@ -236,7 +253,8 @@ const ZyxelParser = (() => {
       routes: staticRoutes.concat(parseInterfaceGateways(blocks, staticRoutes.length + 1)),
       ha: null, nat: [], vpn: [],
       addresses,
-      services: parseServiceObjects(text),
+      services: parseServiceObjects(text).concat(groupList(blocks.svcGroups, (name, members) => ({ category: 'group', name, proto: 'GROUP', members,
+        tcpPorts: '-', udpPorts: '-', icmpType: '-', comment: '' }))),
       users: parseUsers(text), schedules: [],
       sdwan: { enabled: false, lbMode: '-', zones: [], members: [], healthChecks: [], services: [], neighbors: [] },
       // 2026-08-01 瀏覽器端到端測試意外抓到既有的「新增廠牌未同步 onParsed() 資料形狀」bug：
