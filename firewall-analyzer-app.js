@@ -788,6 +788,7 @@ const App = (() => {
       PARSED=parsedAll.length===1?parsedAll[0]:parsedAll.reduce((a,b)=>merge(a,b));
       // WiFi 安全評等併入稽核與健康度（XN73）：gradeVap() 的結果掛在解析結果上，analyzeCompliance() 才讀得到
       if (PARSED) PARSED.wifiVaps = WIFI_DATA ? WIFI_DATA.vaps : [];
+      if (window._fwVerRestore) window._fwVerRestore();
       window._PARSED = PARSED; // 供 console 診斷：_PARSED._perVdom.map(v=>({name:v.name,routes:v.routes.length,policies:v.policies.length}))
       $('prog-overlay').classList.remove('show');
       onParsed();
@@ -1585,7 +1586,7 @@ function onParsed(){
           [buildDuplicateHtml(_dup), _dup.length], [buildUnusedHtml(_un), _un.unusedAddrs.length + _un.unusedSvcs.length], [buildDuplicateObjectsHtml(_do), _do.length],
           [buildComplianceHtml(_co, buildFirewallAuditEvidence(_fwEvidenceSources(), _co), PARSED.vendor, _fwAuditMarks(), _fwAuditReviewer()), 1],
           [buildExposedServicesHtml(_exp), (_exp.items || []).length],
-          [buildVulnCheckHtml({ text: _fwVulnText(), version: _fwVulnVer[_acceptedRiskHost()] || '', parsed: PARSED, showverMiss: _fwShowverMiss, showverText: _fwShowverText }), 1],
+          [buildVulnCheckHtml({ text: _fwVulnText(), version: _fwVulnVer[_acceptedRiskHost()] || '', parsed: PARSED, showverMiss: _fwShowverMiss, showverText: _fwShowverText, remember: _fwVerOn() }), 1],
           // 型號與版本限制（XN144）：只有 FortiGate；有命中才放在前面，沒有時收進沒有發現的區塊
           ...(PARSED.vendor === 'FortiGate' && window.FwModelLimits ? (() => { const _v = _fwVulnVer[_acceptedRiskHost()] || '', _ml = window.FwModelLimits.assess(PARSED, _v);
             // 數量上限（XN145）超過或接近的項目也算發現
@@ -1918,10 +1919,31 @@ function onParsed(){
   function _fwHealthOpts() {
     return { acceptedRisks: _loadAcceptedRisks(), expiryKeywords: _loadExpiryKeywords(), vulnText: _fwVulnText(), vulnVersion: _fwVulnVer[_acceptedRiskHost()] || '' };
   }
+  // 記住補填版本（UX38）：key 存在＝已啟用；分析時記憶體沒有補填值才依主機名稱帶入
+  const FW_VER_LS = 'fw_vuln_ver';
+  function _fwVerOn() { try { return localStorage.getItem(FW_VER_LS) !== null; } catch (e) { return false; } }
+  function _fwVerSave(host, v) {
+    if (!_fwVerOn() || !v) return;
+    try { localStorage.setItem(FW_VER_LS, JSON.stringify(VulnCheck.verStorePut(VulnCheck.verStoreParse(localStorage.getItem(FW_VER_LS)), host, v))); } catch (e) { /* 儲存空間不可用時只存記憶體 */ }
+  }
+  function _fwVerRestore() {
+    const h = _acceptedRiskHost();
+    if (!_fwVerOn() || _fwVulnVer[h] || typeof VulnCheck === 'undefined') return;
+    try { const e = VulnCheck.verStoreParse(localStorage.getItem(FW_VER_LS))[h]; if (e) _fwVulnVer[h] = e.v; } catch (e) { /* 同上 */ }
+  }
+  window._fwVerRestore = _fwVerRestore;
+  document.addEventListener('change', e => {
+    const cb = e.target && e.target.matches && e.target.matches('#vuln-card input[data-vuln-remember]') ? e.target : null;
+    if (!cb) return;
+    try {
+      if (cb.checked) { localStorage.setItem(FW_VER_LS, localStorage.getItem(FW_VER_LS) || '{}'); _fwVerSave(_acceptedRiskHost(), _fwVulnVer[_acceptedRiskHost()]); }
+      else localStorage.removeItem(FW_VER_LS);
+    } catch (err) { cb.checked = false; }
+  });
   window._fwVulnApply = function() {
     const t = document.getElementById('vuln-text'), v = document.getElementById('vuln-version');
     if (t) _fwVulnSave(t.value);
-    if (v) _fwVulnVer[_acceptedRiskHost()] = v.value.trim();
+    if (v) { _fwVulnVer[_acceptedRiskHost()] = v.value.trim(); _fwVerSave(_acceptedRiskHost(), v.value.trim()); }
     renderSection('audit'); renderNextBar();
     const c = document.getElementById('vuln-card'); if (c) c.scrollIntoView({ block: 'nearest' });
   };
@@ -1934,7 +1956,7 @@ function onParsed(){
     const sch = VulnCheck.deviceScheme(p.vendor, cur) || VulnCheck.deviceScheme(p.vendor, '0');
     const v = t ? VulnCheck.versionFromText(t.value, sch) : '';
     _fwShowverMiss = !v; _fwShowverText = t ? t.value : '';
-    if (v) _fwVulnVer[_acceptedRiskHost()] = v;
+    if (v) { _fwVulnVer[_acceptedRiskHost()] = v; _fwVerSave(_acceptedRiskHost(), v); }
     renderSection('audit'); renderNextBar();
     _fwShowverMiss = false; _fwShowverText = '';
     const c = document.getElementById('vuln-card'); if (c) c.scrollIntoView({ block: 'nearest' });

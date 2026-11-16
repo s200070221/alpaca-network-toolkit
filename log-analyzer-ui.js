@@ -394,6 +394,7 @@ function renderStatic() {
   document.getElementById('opt-sysmon-imageload-watchlist').placeholder = tr('opt.sysmonImageLoadWatchlist');
   document.getElementById('lbl-enable-ps-modulelog').textContent = tr('opt.enablePsModuleLog');
   document.getElementById('opt-ps-modulelog-watchlist').placeholder = tr('opt.psModuleLogWatchlist');
+  document.querySelectorAll('[data-watch-example]').forEach(b => { b.textContent = tr('opt.watch_example'); b.title = tr('opt.watch_example_tip'); });
   document.getElementById('lbl-enable-offhours').textContent = tr('opt.enableOffHours');
   document.getElementById('lbl-work-time').textContent = tr('opt.workTime');
   document.getElementById('lbl-work-days').textContent = tr('opt.workDays');

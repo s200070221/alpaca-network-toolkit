@@ -283,6 +283,7 @@ function doAnalyze(){
   // 可疑注入字串彩蛋（XN20，payload-sniff.js）：只提示，不影響分析
   if(typeof PayloadSniff!=='undefined')PayloadSniff.notify(cfg,_lang,m=>showEggToast(m,7000));
   parsed=parseAny(cfg,forceVendor);
+  if(typeof swVerRestore==='function')swVerRestore();
   const lldpText=(document.getElementById('lldp-area')?.value||'').trim();
   parsed.lldp=lldpText?LLDPParser.parse(lldpText,parsed.vendor):[];
   showResultViews();
@@ -4268,11 +4269,32 @@ function renderSwLimitCard(){
     ${rows?`<table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left">${esc(tr('swl.col_item'))}</th><th style="text-align:right">${esc(tr('swl.col_count'))}</th><th style="text-align:right">${esc(tr('swl.col_limit'))}</th><th style="text-align:left">${esc(tr('swl.col_level'))}</th></tr></thead><tbody>${rows}</tbody></table>`:`<div style="font-size:12px">${esc(tr('swl.none'))}</div>`}
   </div>`;
 }
+// 記住補填版本（UX38）：localStorage sw_vuln_ver 存在＝已啟用，依主機名稱；只在記憶體沒有補填值時帶入
+const SW_VER_LS='sw_vuln_ver';
+function swVerOn(){try{return localStorage.getItem(SW_VER_LS)!==null;}catch(e){return false;}}
+function swVerSave(v){
+  if(!swVerOn()||!v||!parsed)return;
+  try{localStorage.setItem(SW_VER_LS,JSON.stringify(VulnCheck.verStorePut(VulnCheck.verStoreParse(localStorage.getItem(SW_VER_LS)),(parsed.sys||{}).hostname,v)));}catch(e){/* 儲存空間不可用時只存記憶體 */}
+}
+function swVerRestore(){
+  if(!parsed||vulnAuditVer.get(parsed)||!swVerOn())return;
+  try{const e=VulnCheck.verStoreParse(localStorage.getItem(SW_VER_LS))[(parsed.sys||{}).hostname];if(e)vulnAuditVer.set(parsed,e.v);}catch(e){/* 同上 */}
+}
+document.addEventListener('change',e=>{
+  const cb=e.target&&e.target.matches&&e.target.matches('#vuln-audit-card input[data-vuln-remember]')?e.target:null;
+  if(!cb)return;
+  try{
+    if(cb.checked){localStorage.setItem(SW_VER_LS,localStorage.getItem(SW_VER_LS)||'{}');swVerSave(parsed?vulnAuditVer.get(parsed):'');}
+    else localStorage.removeItem(SW_VER_LS);
+  }catch(err){cb.checked=false;}
+});
 function renderAuditVulnCard(){
   if(!parsed)return '';
+  swVerRestore();
   const s=parsed.sys||{}, v=String(s.version||'').trim();
   const dev={name:s.hostname||'-',vendor:parsed.vendor||'',version:vulnAuditVer.get(parsed)||(v==='-'||v==='all'?'':v),file:'audit',features:swFeatureStates(parsed)};
-  return vulnCardHead('vuln-audit-card','vuln-audit-text','vulnAuditApply')+vulnResultTable([dev])+swShowverBox(dev.version)+'</div>';
+  const remember=`<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);margin:6px 0"><input type="checkbox" data-vuln-remember${swVerOn()?' checked':''}>${esc(tr('vuln.remember'))}</label>`;
+  return vulnCardHead('vuln-audit-card','vuln-audit-text','vulnAuditApply')+remember+vulnResultTable([dev])+swShowverBox(dev.version)+'</div>';
 }
 // 貼上 show version 輸出讀出完整版本（XN141，VulnCheck.versionFromText）：寫入補填版本（以 parsed 為鍵只存記憶體），讀不出時提示、保留貼上的內容
 let swShowverMiss=false, swShowverText='';
@@ -4298,7 +4320,7 @@ function vulnAuditFromShow(){
   const cur=vulnAuditVer.get(parsed)||String(s.version||'').trim();
   const v=t?VulnCheck.versionFromText(t.value,swShowverScheme(cur)):'';
   swShowverMiss=!v; swShowverText=t?t.value:'';
-  if(v)vulnAuditVer.set(parsed,v);
+  if(v){vulnAuditVer.set(parsed,v);swVerSave(v);}
   navGo('audit');
   renderNextBar();
   if(v)recordSwitchSummary(parsed);
@@ -4309,7 +4331,7 @@ function vulnAuditApply(){
   const t=document.getElementById('vuln-audit-text');
   if(t)vulnSave(t.value);
   const el=document.querySelector('#vuln-audit-card input[data-vuln-file]');
-  if(el&&parsed){if(el.value.trim())vulnAuditVer.set(parsed,el.value.trim());else vulnAuditVer.delete(parsed);}
+  if(el&&parsed){if(el.value.trim()){vulnAuditVer.set(parsed,el.value.trim());swVerSave(el.value.trim());}else vulnAuditVer.delete(parsed);}
   navGo('audit');
   // 補填版本或更新清單後，結果列與入口頁摘要跟著重算（XN58）
   renderNextBar();

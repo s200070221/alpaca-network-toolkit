@@ -1037,7 +1037,9 @@
       `<input id="vuln-version" class="mono" value="${esc(ver)}" placeholder="${esc(tr('vuln.version_ph_' + sch))}" style="width:200px;${inp}"></label>` +
       `<button class="btn btn-ghost btn-sm" onclick="window._fwVulnApply()">${esc(tr('vuln.apply'))}</button>` +
       `<label class="btn btn-ghost btn-sm" style="cursor:pointer">${esc(tr('vuln.upload'))}<input type="file" accept=".csv,.txt" style="display:none" onchange="window._fwVulnFile(this)"></label>` +
-      `<button class="btn btn-ghost btn-sm" onclick="window._fwVulnSample()">${esc(tr('vuln.sample'))}</button></div>`;
+      `<button class="btn btn-ghost btn-sm" onclick="window._fwVulnSample()">${esc(tr('vuln.sample'))}</button></div>` +
+      // 記住補填版本（UX38）：勾選才存到這個瀏覽器，依主機名稱
+      `<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);margin-bottom:8px"><input type="checkbox" data-vuln-remember${st.remember ? ' checked' : ''}>${esc(tr('vuln.remember'))}</label>`;
     // 貼上 show version 輸出讀出完整版本（XN141）：讀出的版本寫回上方版本欄的同一份記憶體值
     if (V.versionFromText && (V.SHOW_VER_SCHEMES || []).includes(sch)) h += `<details id="vuln-showver-box" style="margin:0 0 8px;font-size:11px"${st.showverMiss ? ' open' : ''}><summary style="cursor:pointer;color:var(--text-dim)">${esc(tr('vuln.showver_title'))}</summary>` +
       `<div style="margin:6px 0;color:var(--text-dim)">${esc(tr('vuln.showver_hint').replace('{cmd}', (V.SHOW_VER_CMDS || {})[sch] || 'show version'))}</div>` +

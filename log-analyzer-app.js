@@ -1220,3 +1220,14 @@ renderAll();
 function setTheme(t){document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';localStorage.setItem('cw_theme',t);}
 function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
 (function(){const s=localStorage.getItem('cw_theme');const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
+
+// 關鍵字框「帶入範例」（UX38）：只補上還沒有的範例，不覆蓋、不勾選啟用開關；觸發 input 讓設定照常保存
+document.addEventListener('click', e => {
+  const b = e.target && e.target.closest ? e.target.closest('button[data-watch-example]') : null;
+  if (!b) return;
+  const id = b.getAttribute('data-watch-example'), key = WATCHLIST_EXAMPLE_TARGETS[id], ta = key ? document.getElementById(id) : null;
+  if (!ta) return;
+  ta.value = mergeWatchlistExamples(ta.value, key);
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  ta.dispatchEvent(new Event('change', { bubbles: true }));
+});

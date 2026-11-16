@@ -232,6 +232,29 @@ const VulnCheck = (function () {
     return isFinite(t) && isFinite(n) ? Math.max(0, Math.floor((n - t) / 86400000)) : null;
   }
   const STALE_DAYS = 30;
-  const API = { asofAgeDays, STALE_DAYS, scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, withBuiltin, applyFeatures, versionFromText, SHOW_VER_SCHEMES: Object.keys(SHOW_VER_RE), SHOW_VER_CMDS, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
+  // 記住補填版本（UX38，使用者勾選才寫入 localStorage fw_vuln_ver／sw_vuln_ver）：{主機名稱: {v, ts}}，最多 VER_STORE_MAX 筆
+  // 讀入時略過原型污染名稱與不合格內容；主機名稱為空、- 或 unknown 時不記
+  const VER_STORE_MAX = 50, VER_OK = /^[\w.()\- ]{1,40}$/;
+  const verHostOk = h => typeof h === 'string' && h.length > 0 && h.length <= 128 && !/^(-|unknown|__proto__|constructor|prototype)$/i.test(h);
+  function verStoreParse(text) {
+    const out = Object.create(null);
+    let o; try { o = JSON.parse(text || '{}'); } catch (e) { return out; }
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return out;
+    for (const k of Object.keys(o)) {
+      const e = o[k];
+      if (verHostOk(k) && e && typeof e.v === 'string' && VER_OK.test(e.v)) out[k] = { v: e.v, ts: +e.ts || 0 };
+    }
+    return out;
+  }
+  function verStorePut(map, host, v, now) {
+    if (!verHostOk(host) || !VER_OK.test(String(v || ''))) return map;
+    const all = Object.create(null);
+    Object.keys(map || {}).forEach(k => { all[k] = map[k]; });
+    all[host] = { v: String(v), ts: now == null ? Date.now() : +now };
+    const out = Object.create(null);
+    Object.keys(all).sort((a, b) => all[b].ts - all[a].ts).slice(0, VER_STORE_MAX).forEach(k => { out[k] = all[k]; });
+    return out;
+  }
+  const API = { asofAgeDays, STALE_DAYS, verStoreParse, verStorePut, verHostOk, VER_STORE_MAX, scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, withBuiltin, applyFeatures, versionFromText, SHOW_VER_SCHEMES: Object.keys(SHOW_VER_RE), SHOW_VER_CMDS, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
   return API;
 })();

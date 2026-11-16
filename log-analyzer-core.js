@@ -271,3 +271,31 @@ function normGenericSeverity(sevRaw) {
   return 'Info';
 }
 
+
+// 兩段式關鍵字偵測的「帶入範例」（UX38）：字串一律取自 SigmaHQ/sigma（commit 54967d6，2026-11-13）規則原文，
+// 只收「單一欄位 contains／endswith、單一條件就成立」的值，可直接當不分大小寫的子字串比對；
+// 多條件（contains|all、需搭配 Image 或排除條件）的規則不收。只填進文字框，不會勾選啟用開關
+const WATCHLIST_EXAMPLES = {
+  // process_creation：hktl_mimikatz_command_line、powershell_frombase64string、powershell_susp_download_patterns、
+  // hktl_wmiexec_default_powershell、susp_etw_modification_cmdline、registry_logon_script、susp_inline_base64_mz_header、tscon_rdp_redirect
+  proc: ['mimikatz', 'sekurlsa::', 'lsadump::', 'kerberos::', '::FromBase64String(', 'IEX (New-Object Net.WebClient).DownloadString',
+    '-NoP -NoL -sta -NonI -W Hidden -Exec Bypass -Enc', 'COMPlus_ETWEnabled', 'UserInitMprLogonScript', 'TVqQAAMAAAAEAAAA', '/dest:rdp-tcp#'],
+  // create_remote_thread：win_keepass（TargetImage 以 \KeePass.exe 結尾）
+  thread: ['\\KeePass.exe'],
+  // powershell_script：susp_getprocess_lsass、request_kerberos_ticket、prompt_credentials、potential_invoke_mimikatz（selection_2）、
+  // dsinternals_cmdlets、shellintel_malicious_commandlets、psasyncshell
+  ps: ['Get-Process lsass', 'System.IdentityModel.Tokens.KerberosRequestorSecurityToken', 'PromptForCredential', 'sekurlsa::logonpasswords',
+    'Add-ADDBSidHistory', 'Invoke-SMBAutoBrute', 'PSAsyncShell'],
+  // image_load：dll_tttracer_module_load（Time Travel Debugging 載入，可用來傾印行程記憶體）
+  imageload: ['\\ttdrecord.dll', '\\ttdwriter.dll', '\\ttdloader.dll'],
+};
+// 文字框 → 範例組（4688 與 Sysmon 1 同為程序建立、4104 與 4103 同為 PowerShell）
+const WATCHLIST_EXAMPLE_TARGETS = { 'opt-proc-watchlist': 'proc', 'opt-sysmon-proc-watchlist': 'proc', 'opt-sysmon-thread-watchlist': 'thread',
+  'opt-ps-scriptblock-watchlist': 'ps', 'opt-ps-modulelog-watchlist': 'ps', 'opt-sysmon-imageload-watchlist': 'imageload' };
+// 合併：保留原有內容與順序，只補上還沒有的範例（不分大小寫比對）；回傳新文字
+function mergeWatchlistExamples(text, key) {
+  const cur = String(text || '').split(/[\n,]/).map(s => s.trim()).filter(Boolean);
+  const have = new Set(cur.map(s => s.toLowerCase()));
+  const add = (WATCHLIST_EXAMPLES[key] || []).filter(s => !have.has(s.toLowerCase()));
+  return cur.concat(add).join('\n');
+}
