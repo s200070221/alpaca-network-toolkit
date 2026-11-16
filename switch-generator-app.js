@@ -3125,8 +3125,8 @@ function validateForm(){
     });
   }
 
-  // 15b. 型號規模上限（XN149／XN157）：所選 Cisco／Aruba CX 型號的官方文件數值（同時啟用 VLAN、SVI、STP 實例、ACL、聚合埠），超過或接近時提示
-  if(typeof window!=='undefined'&&window.SwModelLimits&&(model.vendor==='cisco'||model.vendor==='aruba')){
+  // 15b. 型號規模上限（XN149／XN157）：所選 Cisco／Aruba CX／Comware 型號的官方文件數值（同時啟用 VLAN、SVI、STP 實例、ACL、聚合埠），超過或接近時提示
+  if(typeof window!=='undefined'&&window.SwModelLimits&&(model.vendor==='cisco'||model.vendor==='aruba'||model.vendor==='comware')){
     const dmSel=document.getElementById('device-model');
     const ml=dmSel&&dmSel.value?window.SwModelLimits.assess(dmSel.value,dmSel.querySelector('option:checked')?.textContent||'',model):null;
     if(ml) ml.items.filter(it=>it.level!=='ok').forEach(it=>{

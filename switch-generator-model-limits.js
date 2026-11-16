@@ -2,6 +2,8 @@
 // switch-generator-model-limits.js — 交換器型號上限（XN149）：Cisco Catalyst 各系列規格表「規模」表格的數值
 // 手工維護，每個系列附 cisco.com 規格表網址；只收表格內明列的數值，沒有的欄位不填（不推算）。
 // Aruba CX（XN157）：AOS-CX 10.13「ACLs and Classifier Policies Guide」show capacities 頁中標明 4100i／6000／6100 的完整輸出；
+// Comware 5945（XN157）：官方 Release Notes R6710（HPE5945-CMW710-R6710RN）附錄 A Table 6 Software features：
+//   Port-based VLANs 4094、VLAN virtual interface 2K、聚合每組最多 32 埠；組數 1024 原文限定「When stacked」（IRF），單機未寫，不收。
 //   同頁未標機型的範例（MSTP 64、VLAN 4094）與 Aruba Central UI 群組的 LAG 數（管理介面限制，與 QuickSpecs 不一致）不採用。
 // 產生器 validateForm() 依所選型號比對表單內容（VLAN 數、SVI、STP 實例、ACL 項目、聚合埠），超過或接近時提示。
 // 以 window.SwModelLimits 對外
@@ -18,6 +20,7 @@
     c9200: 'https://www.cisco.com/c/en/us/products/collateral/switches/catalyst-9200-series-switches/nb-06-cat9200-ser-data-sheet-cte-en.html',
     c9300: 'https://www.cisco.com/c/en/us/products/collateral/switches/catalyst-9300-series-switches/nb-06-cat9300-ser-data-sheet-cte-en.html',
     cx6100: 'https://arubanetworking.hpe.com/techdocs/AOS-CX/10.13/HTML/acls_4100i-6000-6100/Content/Chp_ACLs/ACLs_cmds/sho-cap.htm',
+    cw5945: 'https://arubanetworking.hpe.com/techdocs/comware/RN/HPE5945-CMW710-R6710RN.pdf',
     c9350: 'https://www.cisco.com/site/us/en/products/collateral/networking/switches/c9350-series-smart-switches/c9350-series-smart-switches-ds.html',
   };
   // 欄位：activeVlans（同時啟用 VLAN）、pvst（PVST 實例）、mst（MST 實例）、stp（STP 實例，不分模式）、svis、ipIfs（IP 介面）、
@@ -42,6 +45,8 @@
     { id: 'c9300', name: 'Catalyst 9300', re: /^C9300-/, src: DS.c9300, pvst: 300, svis: 1000, acl: 5120 },
     { id: 'cx6100', name: 'Aruba CX 6000／6100（含 4100i）', full: /ARUBA[- ]?(?:CX[- ])?(?:6000|6100|4100I)(?![0-9])/, src: DS.cx6100, stpDefault: 'mst',
       activeVlans: 512, svis: 16, mst: 16, rpvst: 16, acl: 4096, aclPerList: 1024, lagGroups: 8, lagMembers: 8 },
+    { id: 'cw5945', name: 'HPE FlexFabric 5945', full: /(?:FLEXFABRIC|HPE)[- ](?:FLEXFABRIC[- ])?5945(?![0-9])|HPE5945(?![0-9])/, src: DS.cw5945,
+      activeVlans: 4094, svis: 2048, lagMembers: 32 },
     { id: 'c9350', name: 'Catalyst 9350', re: /^C9350-/, src: DS.c9350, activeVlans: 4000, svis: 4000, acl: 5000 },
   ];
   // 型號值（NetBox nb:SKU）或顯示名稱 → 正規化型號（C9200L-24P-4G）
