@@ -644,7 +644,7 @@ function parseMgmtAccess(cfg, vendor){
 // - 本專案真實範例：Comware `idle-timeout 0 0`、`info-center loghost`；ProCurve `ntp server-name "…"`；Ruijie `banner motd`、`exec-timeout 10 0`、`ntp server`
 // - 既有已查證解析：Comware hwtacacs／radius scheme 的 primary authentication（去識別化）、Junos system 區塊（junosBlock）
 // Cisco Business／AlliedWare Plus（sys.brand）語法不同，整組不評估
-const MGMT_SVC_VENDORS=['cisco','ruijie','nxos','arista','aruba','comware','juniper','procurve','efos','brocade','netgearsmart','tplink'];
+const MGMT_SVC_VENDORS=['cisco','ruijie','nxos','arista','aruba','comware','juniper','procurve','efos','brocade','netgearsmart','tplink','dlink'];
 function parseMgmtServices(cfg, vendor, brand){
   if(!MGMT_SVC_VENDORS.includes(vendor)||brand==='ciscobiz'||brand==='awplus'||brand==='fs')return null;
   const all=(re)=>{const out=[];let m;const r=new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g');while((m=r.exec(cfg))!==null)out.push(m[1]);return out;};
@@ -658,6 +658,9 @@ function parseMgmtServices(cfg, vendor, brand){
   if(vendor==='tplink'){const nm=cfg.match(/^system-time\s+ntp\s+\S+\s+(\S+)(?:\s+(\S+))?/m);
     return {ntp:nm?[nm[1],nm[2]].filter(x=>x&&x!=='0.0.0.0'):[], aaa:null, banner:null, httpPlain:has(/^ip\s+http\s+server\s*$/m), sshV1:null, idleOff:null,
       syslogExtra:all(/^logging\s+host\s+index\s+\d+\s+(\d+\.\d+\.\d+\.\d+)/m), sshV2Only:null};}
+  // D-Link DGS（XN154）：依 CLI Reference Guide 的 ntp server／sntp server、ip http server、logging server；其餘未查證不評估
+  if(vendor==='dlink')return {ntp:[...new Set([...all(/^ntp\s+server\s+(\S+)/m),...all(/^sntp\s+server\s+(\S+)/m)])], aaa:null, banner:null, httpPlain:has(/^ip\s+http\s+server\s*$/m), sshV1:null, idleOff:null,
+    syslogExtra:all(/^logging\s+server\s+(\d+\.\d+\.\d+\.\d+)/m), sshV2Only:null};
   if(vendor==='efos')return {ntp:[...new Set(all(/^ntp\s+server\s+(\S+)/m))], aaa:null, banner:null, httpPlain:null, sshV1:null, idleOff:null, syslogExtra:[], sshV2Only:null};
   if(vendor==='juniper'){
     const nb=jb('ntp'); let m; const r=/^\s*server\s+([^\s;{]+)/gm; while((m=r.exec(nb))!==null)ntp.push(m[1]);

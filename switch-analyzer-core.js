@@ -148,6 +148,8 @@ function detectVendor(cfg){
   if(typeof isNetgearSmart==='function'&&isNetgearSmart(cfg))return'netgearsmart';
   // TP-Link JetStream／Omada（XN153）：介面命名「interface gigabitEthernet 1/0/1」（小寫、與編號間有空白）＋general 埠或 user name 帳號語法
   if(typeof isTpLink==='function'&&isTpLink(cfg))return'tplink';
+  // D-Link DGS（XN154）：running-config 檔頭「Copyright(C) … D-Link Corporation」，或「# 名稱 START／END」區段＋configure terminal＋「# … Switch」
+  if(typeof isDLink==='function'&&isDLink(cfg))return'dlink';
   // Cumulus Linux NVUE（2026-10-02）：nv config show／startup.yaml 的 YAML，或 nv set 指令（見 parser-cumulus.js）
   if(typeof isCumulusNVUE==='function'&&isCumulusNVUE(cfg))return'cumulus';
   // Extreme VOSS／Fabric Engine（2026-10-05，KG）：config.cfg 檔頭 `# box type`、`vlan create … type port-mstprstp`（見 parser-voss.js）
@@ -2225,7 +2227,7 @@ const LLDPParser = (() => {
 //  ARISTA EOS PARSER
 // ════════════════════════════════════════════════════
 // 依官方 CLI 手冊新增的獨立解析廠牌（XN153～）：自行產生 lacp／stp／snmp／dns／mgmtAccess 等欄位，下方共用 dispatcher 一律略過
-const SW_SELF_PARSED=new Set(['tplink']);
+const SW_SELF_PARSED=new Set(['tplink','dlink']);
 function parseAny(cfg,forceVendor){
   // 統一在此正規化 CRLF，避免各廠牌逐行正則（如 stack unit 區塊）因 \r 悄悄比對失敗
   // 行尾空白去掉（2026-10-16）：多個解析器以行尾錨點比對，貼上的設定常帶行尾空白，原本整段 VLAN／介面讀不到
@@ -2265,6 +2267,7 @@ function parseAny(cfg,forceVendor){
   else if(vendor==='efos') res=parseEFOS(cfg);
   else if(vendor==='netgearsmart') res=parseNetgearSmart(cfg);
   else if(vendor==='tplink') res=parseTpLink(cfg);
+  else if(vendor==='dlink') res=parseDLink(cfg);
   else res={vendor:'unknown',sys:{hostname:'unknown',version:''},irf:null,stack:null,vlans:[],interfaces:[],routes:[],vrfs:[],users:[],ospf:[],bgp:[],rip:[],vrrp:[],vxlan:null,acls:[]};
 
   res.vendor=vendor;
