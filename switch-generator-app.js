@@ -3789,7 +3789,8 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
 
   (parsed.interfaces||[]).forEach(i=>{
     if(!['trunk','access','hybrid'].includes(i.mode))return; // SVI/loopback/routed 不在本工具 Interface 表單範圍內
-    addIfaceRow(i.name,i.mode,inferSpeedFromName(i.name,vendor));
+    // 設定檔有寫 speed（如 Comware interface range … speed 10000，RV3）優先，否則依介面名稱推測
+    addIfaceRow(i.name,i.mode,/^(1|10|25|40|100)G$/.test(i.speed||"")?i.speed:inferSpeedFromName(i.name,vendor));
     const rows=rowsOf('#iface-body tr'); const row=rows[rows.length-1];
     row.querySelector('.i-desc').value=i.desc||'';
     if(i.mode==='trunk'){

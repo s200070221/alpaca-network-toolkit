@@ -96,6 +96,9 @@ const Converter = (() => {
     }
     const wk=WELL_KNOWN_SVC[first];
     if(wk) return {proto:wk[0],port:wk[1]};
+    // 各廠牌預先定義的服務（Juniper junos-*、Palo Alto service-http 等）沿用核心查詢的 _BUILTIN_SVC（RV3）
+    const bi=typeof _BUILTIN_SVC!=='undefined'&&Object.prototype.hasOwnProperty.call(_BUILTIN_SVC,first)?String(_BUILTIN_SVC[first]).match(/^(tcp|udp)\/(\d+(?:-\d+)?)$/):null;
+    if(bi) return {proto:bi[1],port:bi[2]};
     return {proto:'ip',port:null,unresolved:raw};
   }
   // 規則的來源／目的／服務有多個值時，對只接受單一值的目標廠牌逐一展開成多條規則（原本只取
@@ -2000,26 +2003,31 @@ const Converter = (() => {
     // 2026-09-22：查找加入 VDOM 隔離（多 VDOM 來源同名物件不互相取錯），輸出名稱帶 vdom 後綴
     const zVk=(vdom,name)=>(vdom?vdom+'/':'')+name;
     const vName=(name,vdom)=>vdom?`${name}_${vdom}`:name;
+    // 依範圍找物件（RV3）：先找規則所在 vdom，其次共用範圍（無 _vdom、global、shared、predefined、default），最後第一個同名者；
+    // 比照核心 _objByName()。Juniper 規則的 _vdom 是區域配對、位址簿是 global，嚴格比對會查不到而把規則停用
+    const zShared=v=>!v||/^(?:global|shared|predefined|default)$/i.test(v);
+    const zFind=(list,pred,n,vdom)=>{ let sh=null,first=null; for(const o of list||[]){ if(o.name!==n||!pred(o))continue; if(vdom&&o._vdom===vdom)return o; if(!first)first=o; if(!sh&&zShared(o._vdom))sh=o; } return sh||first; };
+    const zScope=o=>zShared(o._vdom)?null:o._vdom;
     // 單一位址名稱或字面值 → 宣告後的物件名稱（null＝無法表示）；kind 記錄是物件還是群組（群組成員行寫法不同）
     const addrKind={};
     function addrDecl(n,vdom,seen){
       const key=zVk(vdom,n);
       if(addrNames[key]!==undefined) return addrNames[key];
-      const grp=(parsed.addresses||[]).find(a=>a.category==='address-group'&&a.name===n&&(a._vdom||null)===(vdom||null));
+      const grp=zFind(parsed.addresses,a=>a.category==='address-group',n,vdom);
       if(grp){
         if(seen.has(n)) return null;   // 循環參照
         seen.add(n);
         const mem=sl(grp.members).map(m=>addrDecl(m,vdom,seen)).filter(Boolean);
         seen.delete(n);
         if(!mem.length){ addrNames[key]=null; return null; }
-        const name=vName(grp.name,vdom);
+        const name=vName(grp.name,zScope(grp));
         addrGrpLines.push(`object-group address ${name}`,...mem.map(m=>addrKind[m]==='grp'?` object-group ${m}`:` address-object ${m}`),'exit');
         addrNames[key]=name; addrKind[name]='grp'; return name;
       }
-      const obj=(parsed.addresses||[]).find(a=>a.category==='address'&&a.name===n&&(a._vdom||null)===(vdom||null)&&(a.type==='ipmask'||a.type==='iprange'||a.type==='fqdn'));
+      const obj=zFind(parsed.addresses,a=>a.category==='address'&&(a.type==='ipmask'||a.type==='iprange'||a.type==='fqdn'),n,vdom);
       let name, value;
       if(obj){
-        name=vName(obj.name,vdom);
+        name=vName(obj.name,zScope(obj));
         if(obj.type==='iprange') value=`${obj.startIp}-${obj.endIp}`;
         else if(obj.type==='fqdn') value=`fqdn ${obj.fqdn}`;
         else { const c=addrCidr(obj); value=c.endsWith('/32')?c.slice(0,-3):c; }
@@ -2052,19 +2060,19 @@ const Converter = (() => {
         svcObjLines.push(`service-object ${name} ${lit[1].toLowerCase()} ${lit[3]?`range ${lit[2]} ${lit[3]}`:`eq ${lit[2]}`}`);
         svcNames[key]=name; svcKind[name]='obj'; return name;
       }
-      const grp=(parsed.services||[]).find(x=>x.category==='group'&&x.name===n&&(x._vdom||null)===(vdom||null));
+      const grp=zFind(parsed.services,x=>x.category==='group',n,vdom);
       if(grp){
         if(seen.has(n)) return null;
         seen.add(n);
         const mem=sl(grp.members).map(m=>svcDecl(m,vdom,seen)).filter(Boolean);
         seen.delete(n);
         if(!mem.length){ svcNames[key]=null; return null; }
-        const name=vName(grp.name,vdom);
+        const name=vName(grp.name,zScope(grp));
         svcGrpLines.push(`object-group service ${name}`,...mem.map(m=>svcKind[m]==='grp'?` object-group ${m}`:` service-object ${m}`),'exit');
         svcNames[key]=name; svcKind[name]='grp'; return name;
       }
       // 具名服務只取單一 tcp／udp 埠或埠範圍（官方語法）；ICMP 等其他協定不處理
-      const obj=(parsed.services||[]).find(x=>x.category!=='group'&&x.name===n&&(x._vdom||null)===(vdom||null));
+      const obj=zFind(parsed.services,x=>x.category!=='group',n,vdom);
       let proto, port;
       if(obj){
         const pr=(obj.proto||'TCP').toLowerCase();
@@ -2080,7 +2088,7 @@ const Converter = (() => {
       }
       const pm=String(port||'').match(/^(\d+)(?:-(\d+))?$/);
       if(!pm){ svcNames[key]=null; return null; }
-      const name=obj?vName(obj.name,vdom):`SVC_${svcSeq++}`;
+      const name=obj?vName(obj.name,zScope(obj)):`SVC_${svcSeq++}`;
       svcObjLines.push(`service-object ${name} ${proto} ${pm[2]?`range ${pm[1]} ${pm[2]}`:`eq ${pm[1]}`}`);
       svcNames[key]=name; svcKind[name]='obj'; return name;
     }

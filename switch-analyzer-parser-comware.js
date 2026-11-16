@@ -132,15 +132,43 @@ function parseHybrid(blk){
   };
 }
 
+// speed N（Mbps）→ '1G'／'10G'／'25G'…；沒有寫或為 auto 回傳空字串（RV3）
+function comwareSpeed(body){
+  const m=String(body||'').match(/^\s*speed\s+(\d+)\s*$/m);
+  if(!m)return '';
+  const n=+m[1];
+  return n>=1000&&n%1000===0?(n/1000)+'G':n+'M';
+}
+// interface range 的成員：「A to B」（同前綴、同成員/槽位，展開埠號）與單一名稱，以空白分隔（RV3）
+function comwareRangeNames(spec){
+  const t=String(spec||'').trim().split(/\s+/), out=[];
+  for(let i=0;i<t.length;i++){
+    if(t[i+1]&&/^to$/i.test(t[i+1])&&t[i+2]){
+      const a=t[i].match(/^(.*\/)(\d+)$/), b=t[i+2].match(/^(.*\/)(\d+)$/);
+      if(a&&b&&a[1].toLowerCase()===b[1].toLowerCase()&&+b[2]>=+a[2]&&+b[2]-+a[2]<=512){
+        for(let n=+a[2];n<=+b[2];n++)out.push(a[1]+n);
+      }
+      i+=2;
+    } else out.push(t[i]);
+  }
+  return out;
+}
+
 function parseInterfaces(cfg){
   // Merge duplicate interface blocks (same name can appear twice in Comware)
   const raw=cfg.split('\ninterface ');
   const merged={};  // name → combined body
+  const rangeSpeed=new Map();  // 介面名稱 → interface range 區塊設定的速率（RV3）
   for(const blk of raw.slice(1)){
     const lines=blk.split('\n');
     const name=lines[0].trim();
-    // interface range A to B（批次設定，如 5945 前面板分組的 speed）不是單一介面，略過（XN158）
-    if(/^range\s/i.test(name))continue;
+    // interface range A to B（批次設定，如 5945 前面板分組的 speed）不是單一介面：不列為介面，只記下 speed 給範圍內各埠（XN158／RV3）
+    if(/^range\s/i.test(name)){
+      const rb=lines.slice(1).join('\n'), hi=rb.search(/\n#\s*(\n|$)/);
+      const sp=comwareSpeed(hi===-1?rb:rb.slice(0,hi));
+      if(sp)comwareRangeNames(name.replace(/^range\s+/i,'')).forEach(n=>rangeSpeed.set(n,sp));
+      continue;
+    }
     let body=lines.slice(1).join('\n');
     // 每個 interface 區塊在 Comware 語法中都以獨立一行 "#" 終止；naive split('\ninterface ')
     // 對「檔案中最後一次出現的區塊」沒有下一個 "interface " 可以自然定界，body 會一路延伸
@@ -235,7 +263,11 @@ function parseInterfaces(cfg){
     const bkMatch=name.match(/^Ten-GigabitEthernet(\d+\/\d+\/\d+):([1-4])$/i);
     const breakoutChild=!!bkMatch;
     const breakoutParent=bkMatch?`FortyGigE${bkMatch[1]}`:'';
-    ifaces.push({name,type:isStack?'stack':'physical',desc,mode,vlans:vlans.trim(),nativeVlan,vrf,ip,ip6,shutdown,member:mem,hybrid,vrrp:[],breakoutChild,breakoutParent,breakoutMode});
+    const ifo={name,type:isStack?'stack':'physical',desc,mode,vlans:vlans.trim(),nativeVlan,vrf,ip,ip6,shutdown,member:mem,hybrid,vrrp:[],breakoutChild,breakoutParent,breakoutMode};
+    // 速率：介面自己的 speed 優先，其次 interface range 設定的（只在有寫時才帶 speed 欄位）
+    const spd=comwareSpeed(blk)||rangeSpeed.get(name);
+    if(spd)ifo.speed=spd;
+    ifaces.push(ifo);
   }
   return ifaces;
 }
