@@ -3,8 +3,29 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.16';
+  const TOOLKIT_VERSION = '2026.11.16.1';
   const CHANGELOG = [
+    {
+      version: '2026.11.16.1',
+      items: {
+        zhTW: [
+          '型號上限更好用：產生器可只標記型號不重建介面表並說明上限與分組限制；防火牆讀不到型號時可手動選；交換器分析依 Aruba CX 版本前綴比對上限',
+          '記住補填的韌體版本（選用，依主機名稱）；內建漏洞情資超過 30 天提醒；Aruba CX 自動讀取設定檔中的韌體版本',
+          '去識別化：下載後提醒另外保存對照表；批次 zip 不再夾帶對照表（改為單獨匯出），避免整包寄出時原始資料外流',
+          'log 工具兩段式關鍵字偵測可「帶入範例」（取自 SigmaHQ 規則）；TP-Link／D-Link 結果標示尚未以真實設定檔驗證',
+          '防火牆轉換：Zyxel 依範圍查找物件並認得各廠牌內建服務；MikroTik 位址清單引用與目的 NAT 正確轉換；無法轉換而停用的規則加註記',
+          '修正：匯入 5945 設定檔保留速率、CloudTrail root 去識別化後仍可偵測；新增防火牆轉換讀回與 log 去識別化前後比對的自動測試',
+        ],
+        en: [
+          'Model limits are easier to use: the generator can tag a model without rebuilding the interface table and explains limits and port groups; the firewall audit lets you pick a model when none is found; the switch analyzer checks Aruba CX limits from the firmware prefix',
+          'Remember filled-in firmware versions (optional, by hostname); warn when built-in vulnerability data is over 30 days old; Aruba CX firmware version is read from the config',
+          'Anonymizer: reminds you to keep the mapping after downloading; the batch ZIP no longer bundles the mapping (export it separately) so original data is not sent along',
+          'Log analyzer keyword watchlists can "Add examples" taken from SigmaHQ rules; TP-Link/D-Link results note they are not yet verified against real configs',
+          'Firewall conversion: Zyxel resolves objects by scope and knows vendor built-in services; MikroTik address-list references and destination NAT convert correctly; rules disabled because they cannot be converted are annotated',
+          'Fixes: importing a 5945 config keeps port speeds, CloudTrail root is still detected after anonymization; new automated tests for firewall conversion readback and log anonymization',
+        ],
+      },
+    },
     {
       version: '2026.11.16',
       items: {
