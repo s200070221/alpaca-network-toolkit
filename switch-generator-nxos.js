@@ -218,6 +218,12 @@ function renderNXOSLACPExtra(lacpList,ifaces){
       lines.push(...nxosSwitchportLines(refIface));
       blocks.push(lines.join('\n'));
     }
+    // 不在介面表的成員埠（RV6，比照 renderCiscoLACPExtra()）：原本整組成員遺失
+    (l.members||[]).forEach(mem=>{
+      if(existingNames.has(mem))return;
+      const modeWord=l.mode==='active'?'active':l.mode==='passive'?'passive':'on';
+      blocks.push(`interface ${mem}\n channel-group ${l.id} mode ${modeWord}`);
+    });
   });
   return blocks.length?blocks.join('\n!\n'):'';
 }

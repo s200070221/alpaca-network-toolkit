@@ -1241,9 +1241,10 @@ function addBgpPeerRow(ip='',as='',desc='',authKey=''){
   document.getElementById('bgp-peer-body').appendChild(tr);
 }
 
-function addRouteRow(dst='',gw='',metric=''){
+// vrf（RV6）：原本表單沒有 VRF 欄位，匯入的 VRF 路由會被寫回成全域路由
+function addRouteRow(dst='',gw='',metric='',vrf=''){
   const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input class="rt-dst" value="${escAttr(dst)}" placeholder="10.0.0.0/24"></td><td><input class="rt-gw" value="${escAttr(gw)}"></td><td><input class="rt-metric" value="${escAttr(metric)}"></td>${RM_BTN_TD}`;
+  tr.innerHTML=`<td><input class="rt-dst" value="${escAttr(dst)}" placeholder="10.0.0.0/24"></td><td><input class="rt-gw" value="${escAttr(gw)}"></td><td><input class="rt-vrf" value="${escAttr(vrf)}"></td><td><input class="rt-metric" value="${escAttr(metric)}"></td>${RM_BTN_TD}`;
   document.getElementById('route-body').appendChild(tr);
 }
 
@@ -1946,12 +1947,14 @@ function collectModel(){
   }
 
   const routes=rowsOf('#route-body tr').map(tr=>({
-    dst:val(tr,'rt-dst'), gw:val(tr,'rt-gw'), metric:val(tr,'rt-metric'),
+    dst:val(tr,'rt-dst'), gw:val(tr,'rt-gw'), metric:val(tr,'rt-metric'), vrf:val(tr,'rt-vrf'),
+    // 下一跳不是位址就是介面（RV6：Netgear 須輸出 interface 關鍵字）
+    gwIsInterface:!!val(tr,'rt-gw')&&!isValidIPv4(val(tr,'rt-gw'))&&!isValidIPv6(val(tr,'rt-gw')),
   })).filter(r=>r.dst&&r.gw);
 
   const lacp=rowsOf('#lacp-body tr').map(tr=>({
     id:val(tr,'lg-id'), mode:val(tr,'lg-mode'),
-    members:val(tr,'lg-members').split(/\s+/).filter(Boolean),
+    members:parseLacpMembers(val(tr,'lg-members')),
   })).filter(l=>l.id);
 
   const vrrp=rowsOf('#vrrp-body tr').map(tr=>({
@@ -2273,9 +2276,9 @@ function applyModelToForm(model){
   document.getElementById('rip-summary').checked=!!r?.autoSummary;
   document.getElementById('rip-default-cost').value=r?.defaultMetric||'';
 
-  (model.routes||[]).forEach(rt=>addRouteRow(rt.dst,rt.gw,rt.metric));
+  (model.routes||[]).forEach(rt=>addRouteRow(rt.dst,rt.gw,rt.metric,rt.vrf||''));
 
-  (model.lacp||[]).forEach(l=>addLacpRow(l.id,l.mode,(l.members||[]).join(' ')));
+  (model.lacp||[]).forEach(l=>addLacpRow(l.id,l.mode,lacpMembersText(l.members)));
 
   (model.vrrp||[]).forEach(v=>addVrrpRow(v.vlanId,v.ip,v.vrid,v.vip,v.priority,!!v.preempt,v.authMode,v.authKey,v.trackIf,v.trackReduced,v.vip6));
 
@@ -2957,6 +2960,9 @@ function validateForm(){
       errors.push(`⚠️ ${tr('val.static_route')} ${i+1}：${tr('val.format_invalid').replace('{item}','Gateway IP')}`);
       markInvalid(routeRows[i]?.querySelector('.rt-gw'));
     }
+    if(r.vrf&&!routeVrfSupported(model.vendor)){
+      warnings.push(`⚠️ ${tr('val.static_route')} ${i+1}：${tr('val.route_vrf_unsupported').replace('{vrf}',r.vrf)}`);
+    }
   });
 
   // 7. LACP 驗證
@@ -3259,7 +3265,11 @@ function tourDone(){const el=document.getElementById('tour');if(el)el.hidden=tru
 if(typeof document!=='undefined'){if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',tourInit);else tourInit();}
 // 依廠牌組出設定文字（generate()、批次產生、跨廠牌轉換讀回共用；model 需先經 withSviInterfaces()）
 const ASSEMBLE_BY_VENDOR={'fortiswitch':assembleFortiSwitchConfig,'aruba':assembleArubaConfig,'cisco':assembleCiscoConfig,'cisco_nxos':assembleNXOSConfig,'juniper':assembleJuniperConfig,'dell-os10':assembleDellOS10Config,'arista':assembleAristaConfig,'brocade':assembleBrocadeConfig,'alcatel':assembleAlcatelConfig,'extreme':assembleExtremeConfig,'procurve':assembleProCurveConfig,'routeros':assembleRouterOSConfig,'ruijie':assembleRuijieConfig,'netgear':assembleNetgearConfig,'edgeswitch':assembleEdgeSwitchConfig,'sonic':assembleSONiCConfig,'planet':assemblePlanetConfig};
-function assembleConfigFor(model){ return (ASSEMBLE_BY_VENDOR[model.vendor]||assembleComwareConfig)(model); }
+// 不支援 VRF 路由的廠牌不輸出 VRF 路由（RV6：寧可少一條並提示，也不能寫成全域路由）
+function assembleConfigFor(model){
+  if(!routeVrfSupported(model.vendor)&&(model.routes||[]).some(r=>r.vrf))model={...model,routes:model.routes.filter(r=>!r.vrf)};
+  return (ASSEMBLE_BY_VENDOR[model.vendor]||assembleComwareConfig)(model);
+}
 function generate(fromImport=false,quiet=false){
   // 驗證表單
   const validation=validateForm();
@@ -3939,7 +3949,7 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
     document.getElementById('rip-default-cost').value=r?.defaultMetric||'';
   }
 
-  (parsed.routes||[]).forEach(rt=>addRouteRow(rt.dst,rt.gw,rt.metric));
+  (parsed.routes||[]).forEach(rt=>addRouteRow(rt.dst,rt.gw,rt.metric,rt.vrf||''));
 
   // VXLAN（2026-08-20 新增）：僅 Comware/Aruba CX/NX-OS 三家 switch_analyzer 的 parseVXLAN()
   // 會回傳非 null 資料，其餘廠牌固定 vxlan:null。三家 evpn[]↔vnis[] 的配對方式不同（見
@@ -3988,7 +3998,7 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
     // 陣列形狀，直接 .map() 會拋錯（TypeError: members.map is not a function）並中止整個匯入
     // 流程；統一先正規化成陣列再處理，陣列輸入行為完全不變
     const memberList=Array.isArray(l.members)?l.members:String(l.members||'').split(/[,\s]+/).filter(Boolean);
-    addLacpRow(gid,mode,memberList.map(m=>typeof m==='string'?m:m.name).join(' '));
+    addLacpRow(gid,mode,lacpMembersText(memberList));
   });
 
   // DHCP：BasicParser 未涵蓋此欄位，只有完整版（fns）才映射；Brocade 通用 dispatcher
@@ -5475,7 +5485,7 @@ function applyRolePreset(){
     }else ospfManual=true;
   }
   // LACP 成員以空白分隔，埠名本身含空白的廠牌（如 Ruijie、Planet）不填
-  if(_cardUsable('lacp-body')&&!_unsupported('lacp')&&upNames.every(n=>!/\s/.test(n)))addLacpRow('1','active',upNames.join(' '));
+  if(_cardUsable('lacp-body')&&!_unsupported('lacp'))addLacpRow('1','active',lacpMembersText(upNames));
   updateIfaceTableDisplay();
   applyI18n(document.getElementById('lacp-body')||document);
   generate();

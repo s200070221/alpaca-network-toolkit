@@ -388,6 +388,19 @@ function draftModelHasContent(model){
 const DRAFT_SECRET_FIELDS=['password','authKey','aaaKey','snmpCommunity'];
 // 匯入既有設定檔時清理文字欄位（RV5d）：部分廠牌以雙引號包住描述／名稱（FS.com `description "TRUNK"`），
 // 交換器分析讀到的值含引號；產生器各廠牌都不能輸出雙引號，所以去掉頭尾成對的引號，其餘換成單引號
+// LACP 成員清單與表單文字互轉（RV6）：Ruijie／Planet／Ruckus／Dell OS9 的成員名稱含空白
+// （GigabitEthernet 0/4），任一名稱含空白時以逗號分隔，否則沿用空白分隔
+function lacpMembersText(list){
+  const names=(list||[]).map(m=>String(typeof m==='string'?m:(m&&m.name)||'').trim()).filter(Boolean);
+  return names.join(names.some(n=>/\s/.test(n))?', ':' ');
+}
+function parseLacpMembers(s){
+  const t=String(s||'');
+  return (t.includes(',')?t.split(','):t.split(/\s+/)).map(x=>x.trim()).filter(Boolean);
+}
+// 路由 render 會輸出 vrf 的廠牌（RV6）；Arista／Ruijie 共用 renderCiscoRoute()，Dell OS10／Brocade 共用 renderArubaRoute()
+const ROUTE_VRF_VENDORS=['cisco','arista','ruijie','aruba','dell-os10','brocade','comware','h3c','juniper','sonic'];
+function routeVrfSupported(v){ return ROUTE_VRF_VENDORS.includes(v); }
 function importText(s){
   const t=String(s==null?'':s);
   const m=/^"([\s\S]*)"$/.exec(t);
