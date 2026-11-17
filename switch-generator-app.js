@@ -2872,7 +2872,10 @@ function validateForm(){
   // 4. OSPF 驗證
   if(model.ospf.length>0){
     model.ospf.forEach((ospf,idx)=>{
-      if(!isValidIPv4(ospf.routerId)){
+      // Router ID 選填（RV5c，比照 BGP）：空白只提示，有填才檢查格式；各廠牌 render 空白時不輸出
+      if(!ospf.routerId){
+        warnings.push(`⚠️ ${tr('val.ospf_no_rid').replace('{n}',idx+1)}`);
+      }else if(!isValidIPv4(ospf.routerId)){
         errors.push(`⚠️ OSPF ${idx+1}：${tr('val.format_invalid').replace('{item}','Router ID')}`);
         markInvalid(document.getElementById('ospf-rid'));
       }
@@ -4818,7 +4821,7 @@ function buildDocData(){
   if(model.ospf.length>0){
     routingInfo+='🔹 OSPF：\n';
     model.ospf.forEach((o,idx)=>{
-      routingInfo+=`  • Process ${o.pid}: ${tr('lbl.ospfRid')} ${o.routerId}, ${tr('doc.areaCount')}: ${o.areas.length}\n`;
+      routingInfo+=`  • Process ${o.pid}: ${tr('lbl.ospfRid')} ${o.routerId||'-'}, ${tr('doc.areaCount')}: ${o.areas.length}\n`;
     });
   }
   if(model.bgp.length>0){
