@@ -2923,7 +2923,10 @@ function validateForm(){
       }
       const peerIps=new Set();
       bgp.peers.forEach((p,pi)=>{
-        if(!isValidIPv4(p.ip)){
+        if(isValidIPv6(p.ip)&&!BGP_V6_PEER_VENDORS.includes(model.vendor)){
+          errors.push(`⚠️ BGP ${idx+1} Peer ${pi+1}：${tr('val.bgp_peer_v6_unsupported')}`);
+          markInvalid(peerRows[pi]?.querySelector('.p-ip'));
+        }else if(!isValidIPv4(p.ip)&&!isValidIPv6(p.ip)){
           errors.push(`⚠️ BGP ${idx+1} Peer ${pi+1}：${tr('val.format_invalid').replace('{item}','IP')}`);
           markInvalid(peerRows[pi]?.querySelector('.p-ip'));
         }else if(peerIps.has(p.ip)){

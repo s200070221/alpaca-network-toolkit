@@ -242,6 +242,8 @@ function renderNXOSBGPPeer(p){
   const lines=[` neighbor ${p.ip}`];
   if(p.as)lines.push(`  remote-as ${p.as}`);
   if(p.desc)lines.push(`  description ${p.desc}`);
+  // IPv6 鄰居（RV7）：依 Nexus 9000 Unicast Routing Configuration Guide，位址家族須設在鄰居下才會建立 session
+  if(String(p.ip).includes(':'))lines.push('  address-family ipv6 unicast');
   return lines.join('\n');
 }
 // Networks（2026-07-17 對外查證官方 NX-OS Unicast Routing Configuration Guide 確認）：

@@ -371,6 +371,8 @@ function renderJuniperBGPBlock(bgpList){
       // （該正則要求裸 "set protocols bgp" 子字串，巢狀大括號輸出永不含此字串，
       // 與稍早 OSPF 認證金鑰那輪遇到的既有限制一致），僅以輸出字串內容斷言測試
       if(p.authKey)lines.push(`                authentication-key "${p.authKey}";`);
+      // IPv6 鄰居（RV7）：BGP 預設只帶 inet unicast，IPv6 路由須設 family inet6 unicast（Junos Multiprotocol BGP 範例）
+      if(String(p.ip).includes(':'))lines.push('                family inet6 {','                    unicast;','                }');
       lines.push('            }');
     });
     lines.push('        }');
@@ -383,6 +385,8 @@ function renderJuniperBGPBlock(bgpList){
       if(p.as)lines.push(`                peer-as ${p.as};`);
       if(p.desc)lines.push(`                description "${p.desc}";`);
       if(p.authKey)lines.push(`                authentication-key "${p.authKey}";`);
+      // IPv6 鄰居（RV7）：BGP 預設只帶 inet unicast，IPv6 路由須設 family inet6 unicast（Junos Multiprotocol BGP 範例）
+      if(String(p.ip).includes(':'))lines.push('                family inet6 {','                    unicast;','                }');
       lines.push('            }');
     });
     lines.push('        }');

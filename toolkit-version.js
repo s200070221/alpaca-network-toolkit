@@ -3,8 +3,25 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.17';
+  const TOOLKIT_VERSION = '2026.11.17.1';
   const CHANGELOG = [
+    {
+      version: '2026.11.17.1',
+      items: {
+        zhTW: [
+          '修正：產生器匯入的 VRF 靜態路由會變成全域路由；路由表新增 VRF 欄位，不支援 VRF 路由的廠牌改為不輸出並提示',
+          '修正：LACP 成員名稱含空白（Ruijie、Planet、Ruckus、Dell OS9）時被拆開；NX-OS 不在介面表的成員埠遺失；Netgear 介面下一跳少了 interface 關鍵字',
+          '產生器支援 IPv6 BGP 鄰居（Cisco、Arista、Ruijie、NX-OS、Juniper、Comware），依官方文件在 IPv6 位址家族啟用鄰居',
+          '「匯入→產生→讀回」自動比對擴大到靜態路由、OSPF、BGP、LACP、VRRP 與 SVI 位址',
+        ],
+        en: [
+          'Fix: VRF static routes imported into the generator became global routes; the route table now has a VRF column, and vendors that cannot output VRF routes leave them out with a tip',
+          'Fix: LACP member names containing spaces (Ruijie, Planet, Ruckus, Dell OS9) were split apart; NX-OS members not in the interface table were lost; Netgear interface next hops lacked the interface keyword',
+          'The generator supports IPv6 BGP neighbors (Cisco, Arista, Ruijie, NX-OS, Juniper, Comware), activating them in the IPv6 address family per the vendor documentation',
+          'The automated import → generate → read-back comparison now also covers static routes, OSPF, BGP, LACP, VRRP and SVI addresses',
+        ],
+      },
+    },
     {
       version: '2026.11.17',
       items: {

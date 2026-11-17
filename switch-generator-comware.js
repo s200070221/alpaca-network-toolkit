@@ -310,9 +310,12 @@ function renderComwareBGP(b){
   // IPv6（2026-08-23 新增）：官方 H3C BGP Commands 手冊確認 network 巢狀在獨立的
   // address-family ipv6 子模式內，語法為空格分隔的 "network ADDR PREFIXLEN"（非 slash-CIDR），
   // 子模式以自己的一行 '#' 自我終結，比照本檔其餘 Comware 巢狀子模式慣例
-  if(b.networks6&&b.networks6.length){
+  // IPv6 鄰居（RV7）：H3C BGP 配置指南——預設不與 peer 交換 IPv6 單播路由，須在 address-family ipv6 下 peer X enable
+  const v6peers=(b.peers||[]).filter(p=>String(p.ip).includes(':'));
+  if((b.networks6&&b.networks6.length)||v6peers.length){
     lines.push(' address-family ipv6');
-    b.networks6.forEach(n=>{
+    v6peers.forEach(p=>lines.push(`  peer ${p.ip} enable`));
+    (b.networks6||[]).forEach(n=>{
       const [addr,len]=n.split('/');
       lines.push(`  network ${addr} ${len}`);
     });

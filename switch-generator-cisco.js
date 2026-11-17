@@ -205,9 +205,13 @@ function renderCiscoBGP(b){
   // IPv6（2026-08-23 新增，Cisco/Arista/Ruijie 共用）：官方 Cisco BGP Configuration Guide
   // 確認 network 巢狀在獨立的 address-family ipv6 [unicast] 子模式內，slash-CIDR 直接輸出
   // （不需 mask 換算），子模式以官方 exit-address-family 關鍵字結尾
-  if(b.networks6&&b.networks6.length){
+  // IPv6 鄰居（RV7）：remote-as 定義的鄰居預設只交換 IPv4，須在 address-family ipv6 下 activate
+  // （Cisco IOS XE Multiprotocol BGP Extensions for IPv6、Arista EOS BGP、Ruijie RGOS BGP 配置指南範例皆同）
+  const v6peers=(b.peers||[]).filter(p=>String(p.ip).includes(':'));
+  if((b.networks6&&b.networks6.length)||v6peers.length){
     lines.push(' address-family ipv6');
-    b.networks6.forEach(n=>lines.push(`  network ${n}`));
+    v6peers.forEach(p=>lines.push(`  neighbor ${p.ip} activate`));
+    (b.networks6||[]).forEach(n=>lines.push(`  network ${n}`));
     lines.push(' exit-address-family');
   }
   return lines.join('\n');

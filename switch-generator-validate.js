@@ -401,6 +401,8 @@ function parseLacpMembers(s){
 // 路由 render 會輸出 vrf 的廠牌（RV6）；Arista／Ruijie 共用 renderCiscoRoute()，Dell OS10／Brocade 共用 renderArubaRoute()
 const ROUTE_VRF_VENDORS=['cisco','arista','ruijie','aruba','dell-os10','brocade','comware','h3c','juniper','sonic'];
 function routeVrfSupported(v){ return ROUTE_VRF_VENDORS.includes(v); }
+// IPv6 BGP 鄰居（RV7）：只收 render 會在 IPv6 address-family 下啟用鄰居、且語法有官方範例的廠牌
+const BGP_V6_PEER_VENDORS=['cisco','arista','ruijie','cisco_nxos','juniper','comware','h3c'];
 function importText(s){
   const t=String(s==null?'':s);
   const m=/^"([\s\S]*)"$/.exec(t);
