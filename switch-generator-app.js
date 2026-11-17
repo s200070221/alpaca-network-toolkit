@@ -2906,7 +2906,11 @@ function validateForm(){
       }
       // SONiC 的 BGP_NEIGHBOR 表無 router-id 對應欄位（傳統模式下這是 FRR frr.conf/vtysh
       // 範疇，不在 config_db.json 內），routerId 天生空值非缺漏，不可比照其餘廠牌強制要求
-      if(model.vendor!=='sonic'&&!isValidIPv4(bgp.routerId)){
+      // Router ID 選填（RV5b）：真實設定檔常省略、由設備自動選用，空白只提示；有填才檢查格式。
+      // Planet 產生器不輸出 router-id，同樣不提示
+      if(!bgp.routerId){
+        if(model.vendor!=='sonic'&&model.vendor!=='planet')warnings.push(`⚠️ ${tr('val.bgp_no_rid').replace('{n}',idx+1)}`);
+      }else if(model.vendor!=='sonic'&&!isValidIPv4(bgp.routerId)){
         errors.push(`⚠️ BGP ${idx+1}：${tr('val.format_invalid').replace('{item}','Router ID')}`);
         markInvalid(document.getElementById('bgp-rid'));
       }
@@ -4820,7 +4824,7 @@ function buildDocData(){
   if(model.bgp.length>0){
     routingInfo+='🔹 BGP：\n';
     model.bgp.forEach((b,idx)=>{
-      routingInfo+=`  • AS ${b.asn}: ${tr('lbl.bgpRid')} ${b.routerId}, ${tr('doc.peerCount')}: ${b.peers.length}\n`;
+      routingInfo+=`  • AS ${b.asn}: ${tr('lbl.bgpRid')} ${b.routerId||'-'}, ${tr('doc.peerCount')}: ${b.peers.length}\n`;
     });
   }
   if(model.routes.length>0){
