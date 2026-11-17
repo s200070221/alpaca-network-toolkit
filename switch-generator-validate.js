@@ -386,6 +386,13 @@ function draftModelHasContent(model){
 // （users[].password、ospf[]／bgp[].peers[]／vrrp[] 的 authKey、aaaKey、snmpCommunity），
 // 新增同名欄位也會自動涵蓋。回傳 {model: 複本, n: 清空的欄位數}，不修改傳入的物件。純函式
 const DRAFT_SECRET_FIELDS=['password','authKey','aaaKey','snmpCommunity'];
+// 匯入既有設定檔時清理文字欄位（RV5d）：部分廠牌以雙引號包住描述／名稱（FS.com `description "TRUNK"`），
+// 交換器分析讀到的值含引號；產生器各廠牌都不能輸出雙引號，所以去掉頭尾成對的引號，其餘換成單引號
+function importText(s){
+  const t=String(s==null?'':s);
+  const m=/^"([\s\S]*)"$/.exec(t);
+  return (m?m[1]:t).replace(/"/g,"'");
+}
 function stripDraftSecrets(model){
   let n=0;
   const walk=v=>{

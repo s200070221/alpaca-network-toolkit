@@ -1,5 +1,6 @@
 function parseRouterOSSysInfo(cfg){
-  const model=(cfg.match(/^\/system identity[\s\S]*?name=([^\n]+)/m)||[])[1]||'RouterOS';
+  // 名稱可加引號（RV5d：產生器對含 + 等字元的名稱以引號輸出）
+  const model=((cfg.match(/^\/system identity[\s\S]*?name=([^\n]+)/m)||[])[1]||'RouterOS').trim().replace(/^"([\s\S]*)"$/,'$1');
   const isCCR=/CCR\d+/i.test(model);
   // 匯出檔頭「# 2024-01-01 10:00:00 by RouterOS 7.12.1」或「# RouterOS 7.12.1」
   // v6 檔頭日期寫法不同（# jan/02/2024 10:00:00 by RouterOS 6.49.10），同一條正則涵蓋；

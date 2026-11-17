@@ -3,8 +3,23 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.16.1';
+  const TOOLKIT_VERSION = '2026.11.17';
   const CHANGELOG = [
+    {
+      version: '2026.11.17',
+      items: {
+        zhTW: [
+          '修正：ProCurve 與 RouterOS 產生器遺失 trunk 埠的 native VLAN（ProCurve 改為該 VLAN 的 untagged，RouterOS 改為 bridge port pvid＋untagged）',
+          '產生器匯入既有設定檔更順：BGP／OSPF Router ID 改為選填（空白只提示）；描述與名稱頭尾的雙引號自動去除；RouterOS 主機名稱可含 + 與 .',
+          '使用說明補上近期功能；新增「交換器分析範例匯入產生器後重新產生並讀回」的自動比對測試',
+        ],
+        en: [
+          'Fix: the ProCurve and RouterOS generators lost the native VLAN of trunk ports (ProCurve now uses untagged in that VLAN, RouterOS uses bridge port pvid plus untagged)',
+          'Smoother config import in the generator: BGP/OSPF Router ID is now optional (blank only shows a tip); surrounding double quotes in descriptions and names are removed; RouterOS hostnames may contain + and .',
+          'User guides cover recent features; new automated test that imports switch analyzer samples into the generator, regenerates and reads them back',
+        ],
+      },
+    },
     {
       version: '2026.11.16.1',
       items: {

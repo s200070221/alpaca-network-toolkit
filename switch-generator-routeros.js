@@ -436,7 +436,7 @@ function renderRouterOSQoS(routerosQos){
 }
 
 function assembleRouterOSConfig(model){
-  const blocks=[`# ${tr('notice.disclaimer')}`,`/system identity\nset name=${model.sysname||'Switch'}`];
+  const blocks=[`# ${tr('notice.disclaimer')}`,`/system identity\nset name=${routerOSQuote(model.sysname||'Switch')}`];
   const ifaceBlock=renderRouterOSInterfaceDeclarations(model.interfaces);
   if(ifaceBlock)blocks.push(ifaceBlock);
   // LACP 區塊移到 bridge member／VLAN 之前（2026-08-08）：bond 介面若要被當成 bridge port／

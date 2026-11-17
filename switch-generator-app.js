@@ -2791,7 +2791,8 @@ function validateForm(){
   if(!model.sysname||!model.sysname.trim()){
     errors.push('❌ '+tr('val.required').replace('{item}',tr('lbl.hostname')));
     markInvalid(document.getElementById('hostname'));
-  }else if(!/^[a-zA-Z0-9\-_]{1,32}$/.test(model.sysname)){
+  }else if(!(model.vendor==='routeros'?/^[a-zA-Z0-9\-_.+]{1,32}$/:/^[a-zA-Z0-9\-_]{1,32}$/).test(model.sysname)){
+    // RouterOS identity 另收 . 與 +（RV5d；render 以 routerOSQuote() 輸出）
     errors.push('⚠️ '+tr('val.hostname_format'));
     markInvalid(document.getElementById('hostname'));
   }
@@ -3794,7 +3795,7 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
   // 解析結果標為 H3C 時選 H3C 選項（第十一輪 KE）
   document.getElementById('vendor').value=genVendor==='comware'&&parsed.sys&&parsed.sys.brand==='h3c'?'h3c':genVendor;
   updateModeOptions();
-  document.getElementById('hostname').value=parsed.sys?.hostname||'';
+  document.getElementById('hostname').value=importText(parsed.sys?.hostname||'');
 
   // SNMP 社群/Trap Host/Syslog Server 回填（2026-09-21 修復既有缺口）：parseAny() 對每個廠牌
   // （除 SONiC）皆會 res.snmp=parseSNMP()／res.syslog=parseSyslog()，但此函式先前從未讀取過，
@@ -3808,7 +3809,7 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
 
   // VLAN 表格的 IP 欄位只收 IPv4 CIDR；IPv6 SVI 位址不填入（填入會被判為格式錯誤）
   // 「位址/點分遮罩」（ProCurve 等解析器的寫法）轉成表單用的 CIDR，否則驗證會擋下產生（2026-10-16）
-  (parsed.vlans||[]).forEach(v=>addVlanRow(v.id,v.name,/:/.test(v.ip||'')?'':(/\/\d+\.\d+\.\d+\.\d+$/.test(v.ip||'')?dhcpNetworkToCidr(v.ip.replace('/',' ')):v.ip)));
+  (parsed.vlans||[]).forEach(v=>addVlanRow(v.id,importText(v.name||''),/:/.test(v.ip||'')?'':(/\/\d+\.\d+\.\d+\.\d+$/.test(v.ip||'')?dhcpNetworkToCidr(v.ip.replace('/',' ')):v.ip)));
 
   // VLAN IP 回填（2026-09-08 新增，withSviInterfaces()／switch-generator-core.js 的反向邏輯）：
   // switch_analyzer 的 parser 早就把這批介面解析成 type:'svi'，但下面 Interface 表格的回填
@@ -3831,7 +3832,7 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
     // 設定檔有寫 speed（如 Comware interface range … speed 10000，RV3）優先，否則依介面名稱推測
     addIfaceRow(i.name,i.mode,/^(1|10|25|40|100)G$/.test(i.speed||"")?i.speed:inferSpeedFromName(i.name,vendor));
     const rows=rowsOf('#iface-body tr'); const row=rows[rows.length-1];
-    row.querySelector('.i-desc').value=i.desc||'';
+    row.querySelector('.i-desc').value=importText(i.desc||'');
     if(i.mode==='trunk'){
       row.querySelector('.i-trunk-vlans').value=i.vlans||'';
       row.querySelector('.i-native-vlan').value=i.nativeVlan||'';
