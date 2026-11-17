@@ -3,7 +3,14 @@ function renderProCurveVLANs(vlans,interfaces,ospf,dhcp,ospf6){
   (interfaces||[]).forEach(iface=>{
     if(!iface.name)return;
     if(iface.mode==='trunk'){
+      // native VLAN 在 ProCurve 以該 VLAN 的 untagged 表示（RV5：原本遺失，讀回後 native 消失）
+      const nat=String(iface.nativeVlan||'').trim();
+      if(nat){
+        if(!untaggedMap[nat])untaggedMap[nat]=[];
+        untaggedMap[nat].push(iface.name);
+      }
       (iface.trunkVlans||'').split(/[,\s]+/).map(s=>s.trim()).filter(Boolean).forEach(vid=>{
+        if(vid===nat)return;
         if(!taggedMap[vid])taggedMap[vid]=[];
         taggedMap[vid].push(iface.name);
       });

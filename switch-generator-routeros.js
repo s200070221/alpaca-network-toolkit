@@ -21,7 +21,11 @@ function renderRouterOSVLANs(vlans,interfaces,lacpList,vrrpList){
   });
   effective.forEach(iface=>{
     if(iface.mode==='trunk'){
+      // native VLAN（RV5：原本遺失）：該 VLAN 的 untagged 成員，bridge port 另以 pvid= 指定
+      const nat=String(iface.nativeVlan||'').trim();
+      if(/^\d+$/.test(nat)&&nat!=='1')(untaggedMap[nat]=untaggedMap[nat]||[]).push(iface.name);
       (iface.trunkVlans||'').split(/[,\s]+/).map(s=>s.trim()).filter(Boolean).forEach(vid=>{
+        if(vid===nat)return;
         (taggedMap[vid]=taggedMap[vid]||[]).push(iface.name);
       });
     }else if(iface.mode==='access'&&iface.accessVlan){
@@ -103,7 +107,8 @@ function renderRouterOSBridgeMembers(ifaces,lacpList){
   if(!ports.length)return '';
   const lines=['/interface bridge port'];
   ports.forEach(p=>{
-    const pvid=p.ref&&p.ref.mode==='access'&&/^\d+$/.test(String(p.ref.accessVlan||''))?` pvid=${p.ref.accessVlan}`:'';
+    const nat=p.ref&&p.ref.mode==='trunk'?String(p.ref.nativeVlan||'').trim():'';
+    const pvid=p.ref&&p.ref.mode==='access'&&/^\d+$/.test(String(p.ref.accessVlan||''))?` pvid=${p.ref.accessVlan}`:/^\d+$/.test(nat)&&nat!=='1'?` pvid=${nat}`:'';
     lines.push(`add bridge=${ROUTEROS_BRIDGE} interface=${p.name}${pvid}`);
   });
   return lines.join('\n');
