@@ -65,6 +65,14 @@ const Converter = (() => {
   // 換算（產生 255.255.255.254），目標廠牌會拒絕或解讀成錯誤網段
   // 靜態路由目的網段：來源可能是「位址 遮罩」「位址/遮罩」或 default，原本只把空白換成斜線，
   // 輸出 0.0.0.0/0.0.0.0 這種目標廠牌不接受的寫法
+  // XN164：轉換時自動建立的位址物件名稱只用英數與底線（Zyxel、pfSense 不接受 . : -，首字為字母），IPv4 不超過 31 字：
+  // h_主機、n_網段_長度、r_起_迄（前三段相同時縮成 r_a_b_c_起_迄）、h6_IPv6（: 換成 _，只輸出到支援 IPv6 的目標）
+  function autoName(kind,a,b){
+    const u=x=>String(x).replace(/[.:]/g,'_');
+    if(kind==='r'){ const pa=String(a).split('.'), pb=String(b).split('.');
+      return pa.slice(0,3).join('.')===pb.slice(0,3).join('.')?`r_${u(a)}_${pb[3]}`:`r_${u(a)}_${u(b)}`; }
+    return `${kind}_${u(a)}${b!==undefined&&b!==''?'_'+b:''}`;
+  }
   function routeCidr(dst){ return String(dst||'').trim()==='default' ? '0.0.0.0/0' : subCidr(dst); }
   // FortiGate 等「位址 遮罩」寫法：原本把斜線換成遮罩卻留下前綴數字（192.168.1.0 255.255.255.024）
   function addrMask(sub){ const c=subCidr(sub); const [ip,b]=c.split('/'); return ip.includes(':')?c:ip+' '+maskOf(b); }
@@ -258,12 +266,12 @@ const Converter = (() => {
       v=v.replace(/^(?:host|object|object-group)\s+/i,'');
       if(names.has(v)) return v;
       let m;
-      if((m=v.match(new RegExp(`^(${v4})$`)))){ const n='h-'+m[1]; addrs.set(n,{kind:'host',ip:m[1]}); return n; }
+      if((m=v.match(new RegExp(`^(${v4})$`)))){ const n=autoName('h',m[1]); addrs.set(n,{kind:'host',ip:m[1]}); return n; }
       if((m=v.match(new RegExp(`^(${v4})(?:/(\\d{1,2})|[/\\s]+(${v4}))$`)))){
         const b=m[2]!==undefined?+m[2]:bits(m[3]);
-        if(b===32){ const n='h-'+m[1]; addrs.set(n,{kind:'host',ip:m[1]}); return n; }
-        const n=`n-${m[1]}_${b}`; addrs.set(n,{kind:'net',ip:m[1],bits:b}); return n; }
-      if((m=v.match(new RegExp(`^(${v4})-(${v4})$`)))){ const n=`r-${m[1]}-${m[2]}`; addrs.set(n,{kind:'range',a:m[1],b:m[2]}); return n; }
+        if(b===32){ const n=autoName('h',m[1]); addrs.set(n,{kind:'host',ip:m[1]}); return n; }
+        const n=autoName('n',m[1],b); addrs.set(n,{kind:'net',ip:m[1],bits:b}); return n; }
+      if((m=v.match(new RegExp(`^(${v4})-(${v4})$`)))){ const n=autoName('r',m[1],m[2]); addrs.set(n,{kind:'range',a:m[1],b:m[2]}); return n; }
       return v;
     };
     const svc=t=>{
@@ -3457,10 +3465,10 @@ const Converter = (() => {
       if(names.has(v)) return v;
       v=v.replace(/^host\s+/i,'');
       let x;
-      if((x=v.match(new RegExp(`^(${v4})$`)))) return mk('h-'+x[1],{ type:'ipmask', subnet:x[1]+'/32' });
+      if((x=v.match(new RegExp(`^(${v4})$`)))) return mk(autoName('h',x[1]),{ type:'ipmask', subnet:x[1]+'/32' });
       if((x=v.match(new RegExp(`^(${v4})(?:/(\\d{1,2})|[/\\s]+(${v4}))$`)))){ const b=x[2]!==undefined?+x[2]:bits(x[3]);
-        return b===32?mk('h-'+x[1],{ type:'ipmask', subnet:x[1]+'/32' }):mk(`n-${x[1]}_${b}`,{ type:'ipmask', subnet:`${x[1]}/${b}` }); }
-      if((x=v.match(/^([0-9a-f:]+:[0-9a-f:]*)(?:\/(\d{1,3}))?$/i))) return mk('h6-'+x[1]+(x[2]&&x[2]!=='128'?'_'+x[2]:''),{ category:'address6', type:'ipprefix', subnet:`${x[1]}/${x[2]||128}` });
+        return b===32?mk(autoName('h',x[1]),{ type:'ipmask', subnet:x[1]+'/32' }):mk(autoName('n',x[1],b),{ type:'ipmask', subnet:`${x[1]}/${b}` }); }
+      if((x=v.match(/^([0-9a-f:]+:[0-9a-f:]*)(?:\/(\d{1,3}))?$/i))) return mk(autoName('h6',x[1],x[2]&&x[2]!=='128'?x[2]:''),{ category:'address6', type:'ipprefix', subnet:`${x[1]}/${x[2]||128}` });
       return v;
     };
     const out=addrs.map(a=>(a.category==='address-group'||a.category==='address-group6')?Object.assign({},a,{ members:sl(a.members).map(norm).join(', ')||'-' }):a);
