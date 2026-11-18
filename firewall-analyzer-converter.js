@@ -2600,9 +2600,15 @@ const Converter = (() => {
       parsed.nat.forEach(n=>{
         // 目的 NAT（RV4）：沒有外部位址時不寫 dst-address（原本寫成 0.0.0.0，只會比對到 0.0.0.0）；
         // 有轉埠時帶 protocol／dst-port／to-ports（原本埠號全部遺失，等於整個位址都轉給內部主機）
+        // 進入介面（extIntf）一併帶出；埠號 '-' 視為沒有值（RV9：原本輸出 dst-port=-／to-ports=-）。
+        // 沒有目的位址也沒有進入介面時，規則會比對到所有新連線（含 LAN 上網流量），輸出為停用並註記 REVIEW
         if(n.type==='vip'||n.type==='static'){
-          const ext=nz(n.extIp,''), pr=String(n.proto||'').toLowerCase(), pf=n.portFwd==='enable'&&n.extPort&&/^(tcp|udp)$/.test(pr);
-          L.push(`add chain=dstnat${ext&&ext!=='0.0.0.0'?` dst-address=${ext}`:''}${pf?` protocol=${pr} dst-port=${n.extPort}`:''} action=dst-nat to-addresses=${nz(n.mapIp,'0.0.0.0')}${pf&&n.mapPort?` to-ports=${n.mapPort}`:''} comment="${qstr(n.name)}"`);
+          const ext=nz(n.extIp,''), inIf=nz(n.extIntf,''), pr=String(n.proto||'').toLowerCase();
+          const hasExt=/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(ext)&&ext!=='0.0.0.0';
+          const pf=n.portFwd==='enable'&&/^(tcp|udp)$/.test(pr), ep=pf?nz(n.extPort,''):'', mp=pf?nz(n.mapPort,''):'';
+          const open=!hasExt&&!inIf;
+          const cmt=open?`REVIEW: no destination address or in-interface - rule disabled; ${n.name||''}`:(n.name||'');
+          L.push(`add chain=dstnat${hasExt?` dst-address=${ext}`:''}${inIf?` in-interface=${inIf}`:''}${ep||mp?` protocol=${pr}`:''}${ep?` dst-port=${ep}`:''} action=dst-nat to-addresses=${nz(n.mapIp,'0.0.0.0')}${mp?` to-ports=${mp}`:''}${open?' disabled=yes':''} comment="${qstr(cmt)}"`);
         }
         else L.push(`add chain=srcnat out-interface=${nz(n.srcIntf,nz(n.extIntf,'ether1'))} action=masquerade comment="${qstr(n.name)}"`);
       });
