@@ -788,6 +788,8 @@ body[data-theme="light"] .p-orange{background:rgba(251,146,60,.2);color:#9a3412;
           <label class="conv-wz-lbl" for="conv-wz-model" id="conv-wz-model-lbl" data-i18n="wz.model_label">目標型號</label>
           <select id="conv-wz-model" data-wz="model"></select>
           <button type="button" class="btn btn-sm" id="conv-wz-go" data-wz="go" data-i18n="wz.go">開始轉換</button>
+          <!-- 多 VDOM 一次轉完打包（XN161）：來源有多個 VDOM 時由 buildConvVdomSelector() 顯示 -->
+          <button type="button" class="btn btn-ghost btn-sm" id="conv-vdom-all" style="display:none" onclick="window.downloadAllVdomPack()" data-i18n="vdall.btn">📦 全部 VDOM 各轉一份（zip）</button>
           <span id="conv-wz-dl" style="display:none;gap:8px">
             <button type="button" class="btn btn-ghost btn-sm" data-wz="dl-conf">⬇ <span data-i18n="btn.download_conv">下載轉換結果</span></button>
             <button type="button" class="btn btn-ghost btn-sm" data-wz="dl-report">📄 <span data-i18n="crpt.download">下載轉換報告</span></button>

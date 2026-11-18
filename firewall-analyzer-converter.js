@@ -3614,7 +3614,47 @@ const Converter = (() => {
     return getConversionCaveatItems(parsed, targetVendor, opts).map(it=>caveatText(it, trFn?trFn(it.key):null));
   }
 
-  return { convert, buildSophosApiFiles, importPackKind, buildImportPack, splitOrderImport, splitGuideImport, splitFortigateImport, buildFortigateImportReadme, fortigateGroupCycles, getConversionLoss, getConversionCaveats, getConversionCaveatItems, CAVEAT_ZH, toFortigate, toSophos, toCheckpoint, toPaloAlto, toJuniper, toPfsense, toCiscoASA, toCiscoFTD, toSonicWall, toMikrotik, toZyxel, toEdgeRouter, toOpenWrt };
+  // 多 VDOM 來源取出單一 VDOM 當成一台設備（XN38 逐一轉換；XN161 一次轉完共用），回傳副本
+  function vdomSlice(parsed, vdom){
+    const vd = parsed && parsed._perVdom ? parsed._perVdom.find(v=>v.name===vdom) : null;
+    if(!vd) return parsed;
+    return {
+      ...parsed,
+      vendor: `${parsed.vendor} (VDOM: ${vdom})`,
+      deviceInfo: { ...parsed.deviceInfo, hostname: `${(parsed.deviceInfo||{}).hostname}-${vdom}` },
+      policies: vd.policies, routes: vd.routes, vpn: vd.vpn, addresses: vd.addresses, services: vd.services,
+      nat: vd.nat, schedules: vd.schedules, users: vd.users,
+      interfaces: (parsed.interfaces||[]).filter(i => i._vdom===vdom || i.vdom===vdom),
+      switchGroups: (parsed.switchGroups || []).filter(g => g.vdom===vdom),
+      _perVdom: undefined, _isMultiVdom: false, _vdomNames: [],
+    };
+  }
+  // 多 VDOM 一次轉完打包（XN161）：每個 VDOM 一個資料夾（轉換結果＋caveats.txt），加 00_README.txt 總表。
+  // 不套用埠對應、型號與轉換驗證（各 VDOM 介面不同，需逐一轉換時處理）。非多 VDOM 來源回傳 null。
+  // trFn(key)：i18n 文字（vdall.*、cvt.*）；opts {ext, vendorName, srcName}
+  function buildVdomPack(parsed, target, trFn, opts){
+    const names = parsed && parsed._isMultiVdom ? (parsed._vdomNames||[]) : [];
+    if(names.length < 2) return null;
+    const o = opts||{}, t = k => (trFn ? trFn(k) : k), safe = v => String(v).replace(/[^A-Za-z0-9._-]/g,'_');
+    const files = [], rows = [];
+    names.forEach((v, i) => {
+      const dir = `${String(i+1).padStart(2,'0')}_${safe(v)}`;
+      const one = vdomSlice(parsed, v);
+      try{
+        const out = String(convert(one, target));
+        const cav = getConversionCaveats(one, target, null, trFn);
+        files.push({ name: `${dir}/${safe((one.deviceInfo||{}).hostname||v)}.${o.ext||'txt'}`, text: out });
+        files.push({ name: `${dir}/caveats.txt`, text: cav.map(c=>'- '+c).join('\n')+'\n' });
+        rows.push(t('vdall.row').replace('{dir}',dir).replace('{vdom}',v).replace('{rules}',(one.policies||[]).length).replace('{lines}',out.split('\n').length).replace('{n}',cav.length));
+      }catch(e){
+        rows.push(t('vdall.row_fail').replace('{dir}',dir).replace('{vdom}',v).replace('{err}',e && e.message || String(e)));
+      }
+    });
+    const readme = [t('vdall.readme_title'), '', t('vdall.readme_src').replace('{src}',o.srcName||parsed.vendor||'').replace('{target}',o.vendorName||target).replace('{n}',names.length),
+      '', ...rows, '', t('vdall.readme_note')].join('\n') + '\n';
+    return [{ name: '00_README.txt', text: readme }, ...files];
+  }
+  return { convert, vdomSlice, buildVdomPack, buildSophosApiFiles, importPackKind, buildImportPack, splitOrderImport, splitGuideImport, splitFortigateImport, buildFortigateImportReadme, fortigateGroupCycles, getConversionLoss, getConversionCaveats, getConversionCaveatItems, CAVEAT_ZH, toFortigate, toSophos, toCheckpoint, toPaloAlto, toJuniper, toPfsense, toCiscoASA, toCiscoFTD, toSonicWall, toMikrotik, toZyxel, toEdgeRouter, toOpenWrt };
 })();
 
 

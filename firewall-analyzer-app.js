@@ -2109,11 +2109,14 @@ function onParsed(){
     const sel = $('conv-vdom-sel');
     if (!sel) return;
     const names = parsed?._vdomNames || [];
+    const allBtn = $('conv-vdom-all');
     if (!parsed?._isMultiVdom || names.length <= 1) {
       sel.style.display = 'none';
+      if (allBtn) allBtn.style.display = 'none';
       return;
     }
     sel.style.display = '';
+    if (allBtn) allBtn.style.display = '';
     // 2026-09 資安審查修復：VDOM 名稱未跳脫即塞進 <option value="...">，見 buildVdomBar() 同批修復
     // 多 VDOM 必須逐一轉換（XN38）：各 VDOM 的網段與路由表可能重疊，合併成一台會衝突
     sel.innerHTML = `<option value="">${tr('conv.vdom_pick')}</option>`
@@ -2222,27 +2225,7 @@ function onParsed(){
         _pmRender(null); _vfRender(null);
         return;
       }
-      if (convVdom && srcParsed._perVdom) {
-        const vd = srcParsed._perVdom.find(v=>v.name===convVdom);
-        if (vd) {
-          srcParsed = {
-            ...srcParsed,
-            vendor: `${srcParsed.vendor} (VDOM: ${convVdom})`,
-            deviceInfo: { ...srcParsed.deviceInfo, hostname: `${srcParsed.deviceInfo.hostname}-${convVdom}` },
-            policies:  vd.policies,
-            routes:    vd.routes,
-            vpn:       vd.vpn,
-            addresses: vd.addresses,
-            services:  vd.services,
-            nat:       vd.nat,
-            schedules: vd.schedules,
-            users:     vd.users,
-            interfaces: srcParsed.interfaces.filter(i => i._vdom===convVdom || i.vdom===convVdom),
-            switchGroups: (srcParsed.switchGroups || []).filter(g => g.vdom===convVdom),
-            _perVdom: undefined, _isMultiVdom: false, _vdomNames: [],
-          };
-        }
-      }
+      if (convVdom) srcParsed = Converter.vdomSlice(srcParsed, convVdom);
       // 目標型號埠對應（XN38）：來源或目標換了就重設；對應只存記憶體
       if (_pm.src !== srcVendor || _pm.target !== targetVendor || _pm.vdom !== convVdom) Object.assign(_pm, { src: srcVendor, target: targetVendor, vdom: convVdom, model: '', map: null, applied: null, appliedModel: '', csvMsg: '', verify: null, auditCmp: null });
       _pm.parsed = srcParsed;
@@ -2485,9 +2468,11 @@ function onParsed(){
   }
   window.downloadConvReport=downloadConvReport;
 
+  // 轉換結果副檔名（downloadConv 與全部 VDOM 打包共用）
+  const CONV_EXT={fortigate:'conf',sophos:'xml',checkpoint:'txt',paloalto:'xml',juniper:'conf',pfsense:'xml',sonicwall:'xml',mikrotik:'rsc',ciscoasa:'txt',ciscoftd:'txt'};
   function downloadConv(){
     if(!CONV_RESULT){showErr(tr('conv.no_result'));return;}
-    const ext={fortigate:'conf',sophos:'xml',checkpoint:'txt',paloalto:'xml',juniper:'conf',pfsense:'xml',sonicwall:'xml',mikrotik:'rsc',ciscoasa:'txt',ciscoftd:'txt'}[CONV_TARGET]||'txt';
+    const ext=CONV_EXT[CONV_TARGET]||'txt';
     Reporter.download(CONV_RESULT,`fw_converted_${CONV_TARGET}_${dateStr()}.${ext}`,'text/plain');
   }
   window.downloadConv=downloadConv;
@@ -2506,6 +2491,20 @@ function onParsed(){
     document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
   }
   window.buildConvPack=buildConvPack; window.downloadConvPack=downloadConvPack;
+  // 多 VDOM 一次轉完打包（XN161）：每個 VDOM 各轉一份（沿用逐一轉換的 VDOM 切分），附各自的轉換警語與總表；
+  // 埠對應、型號與轉換驗證仍要逐一轉換時處理（各 VDOM 的介面不同）
+  function downloadAllVdomPack(){
+    const src=CONV_SRC_VENDOR, target=_wz.target||CONV_TARGET;
+    if(!PARSED||!src){showErr(tr('err.upload_first'));return;}
+    if(!target){showErr(tr('vdall.need_target'));return;}
+    const srcParsed=_resolveSrcParsed(src);
+    const files=Converter.buildVdomPack(srcParsed,target,tr,{ ext:CONV_EXT[target]||'txt', vendorName:_CONV_NAMES[target]||target, srcName:_CONV_NAMES[src]||src });
+    if(!files){showErr(tr('conv.vdom_required'));return;}
+    const blob=new Blob([window.FwZip.createZip(files)],{type:'application/zip'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`fw_${target}_all_vdoms_${dateStr()}.zip`;
+    document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
+  }
+  window.downloadAllVdomPack=downloadAllVdomPack;
 
   // ── Export ────────────────────────────────────────────────────
   function exportSection(){
