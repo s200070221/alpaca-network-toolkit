@@ -323,6 +323,35 @@
   const cnt = (p, k) => Array.isArray(p && p[k]) ? p[k].length : 0;
   const VERIFY_MAX = 300;
 
+  // 目的 NAT 內容比對（XN163）：轉換驗證原本只比筆數，條件變寬（外部位址或轉埠遺失→比對到更多連線）看不出來。
+  // 以內部位址找讀回的對應項目：missing＝讀回沒有；widened＝來源有外部位址或轉埠而讀回沒有（比對範圍變大）；
+  // changed＝外部位址、協定或埠號不同。來源沒寫的條件不算差異
+  const _natAny = v => { const t = String(v == null ? '' : v).trim().toLowerCase(); return !t || t === '-' || t === 'any' || t === '0.0.0.0' || t === '0.0.0.0/0' || t === 'all'; };
+  const _natAddr = v => _natAny(v) ? '' : String(v).trim().replace(/\/32$/, '');
+  const _natPort = v => { const t = String(v == null ? '' : v).trim(); return !t || t === '-' || t === '0' ? '' : t; };
+  function natEntries(parsed) {
+    return (parsed && parsed.nat || []).filter(n => (n.type === 'vip' || n.type === 'static') && !_natAny(n.mapIp)).map(n => {
+      const pf = n.portFwd === 'enable' && !!_natPort(n.extPort);
+      return { name: n.name || '', ext: _natAddr(n.extIp), map: _natAddr(n.mapIp), proto: pf ? String(n.proto || '').toLowerCase() : '', extPort: pf ? _natPort(n.extPort) : '', mapPort: pf ? _natPort(n.mapPort) : '' };
+    });
+  }
+  function compareNat(srcParsed, dstParsed) {
+    const a = natEntries(srcParsed), b = natEntries(dstParsed), used = new Set(), diffs = [];
+    let same = 0;
+    a.forEach(s => {
+      const cands = b.map((d, i) => ({ d, i })).filter(x => x.d.map === s.map && !used.has(x.i));
+      // 優先取外部位址與埠都相同者，其次外部位址相同者
+      const pick = cands.find(x => x.d.ext === s.ext && x.d.extPort === s.extPort) || cands.find(x => x.d.ext === s.ext) || cands[0];
+      if (!pick) { diffs.push({ kind: 'missing', src: s }); return; }
+      used.add(pick.i);
+      const d = pick.d;
+      if ((s.ext && !d.ext) || (s.extPort && !d.extPort)) diffs.push({ kind: 'widened', src: s, dst: d });
+      else if (s.ext !== d.ext || s.extPort !== d.extPort || s.mapPort !== d.mapPort || (s.proto && d.proto && s.proto !== d.proto)) diffs.push({ kind: 'changed', src: s, dst: d });
+      else same++;
+    });
+    return { total: a.length, same, diffs };
+  }
+
   // 以來源規則產生代表性查詢（每條啟用中、IPv4 的規則一組），在來源與轉換結果各跑一次比對動作
   function verifyConversion(srcParsed, dstParsed, opts) {
     const max = (opts && opts.max) || VERIFY_MAX;
@@ -348,7 +377,7 @@
       diffs.push({ q, src: { action: actOf(a), rule: a && a.matched ? (a.matched.name || a.matched.id) : '' },
         dst: { action: actOf(b), rule: b && b.matched ? (b.matched.name || b.matched.id) : '' } });
     });
-    return { counts, total: queries.length, same, unsure, diffs, skipped, truncated: queries.length >= max };
+    return { counts, total: queries.length, same, unsure, diffs, skipped, truncated: queries.length >= max, nat: compareNat(srcParsed, dstParsed) };
   }
 
   // ── 埠對應表 CSV（XN44）：匯出給現場接線、同型號換多台時匯入重用 ─────────────────────────
@@ -449,7 +478,7 @@
     return { health: { before: before && before.health || null, after: after && after.health || null }, rows, same };
   }
 
-  const api = { vendorKey, modelsOf, getModel, sourcePorts, portUsage, detectSourceModel, reservedOf, suggestMap, portMapWarnings, applyMap, verifyConversion, sampleIp, sampleSvc, VERIFY_MAX, buildMapCsv, parseMapCsv, applyMapRows, compareAudit };
+  const api = { natEntries, compareNat, vendorKey, modelsOf, getModel, sourcePorts, portUsage, detectSourceModel, reservedOf, suggestMap, portMapWarnings, applyMap, verifyConversion, sampleIp, sampleSvc, VERIFY_MAX, buildMapCsv, parseMapCsv, applyMapRows, compareAudit };
   if (typeof window !== 'undefined') window.FwPortMap = api;
   return api;
 })();
