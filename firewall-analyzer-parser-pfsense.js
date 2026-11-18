@@ -526,38 +526,40 @@ const PfsenseParser = (() => {
     const natXml = xv(xml,'nat');
     if (!natXml) return nats;
 
-    // Outbound NAT rules
-    xblks(natXml,'rule').forEach((b,i) => {
+    // XN163：依 pfSense 原始碼（firewall_nat.inc／firewall_nat_out.inc）——轉埠在 nat/rule
+    // （destination address|network＋port、protocol、target、local-port、interface、disabled、nordr），
+    // 來源 NAT 在 nat/outbound/rule（target 空白＝介面位址、nonat＝不轉換）
+    const outXml = xv(natXml,'outbound');
+    xblks(outXml,'rule').forEach((b,i) => {
       const inner = b._inner;
       const ifname = xv(inner,'interface')||'wan';
-      const src = xv(inner,'source');
-      const srcNet = src ? xv(src,'network')||xv(src,'address')||'-' : '-';
       const target = xv(inner,'target');
-      const nat2   = xv(inner,'nataddr')||'-';
-      const isManual = xv(inner,'associated-rule-id')==='' ? false : true;
-      if (target || nat2) {
-        nats.push({ type:'ippool', name: xv(inner,'descr')||`Outbound-NAT-${i+1}`,
-          poolType:'overload', startIp: target||nat2||'-', endIp:'-',
-          srcIntf: resolveIf(ifMap,ifname), arpReply:'enable',
-          comment: xv(inner,'descr')||'-', _vdom:'default' });
-      }
+      if (!target || hasTag(inner,'nonat')) return;
+      nats.push({ type:'ippool', name: xv(inner,'descr')||`Outbound-NAT-${i+1}`,
+        poolType:'overload', startIp: target, endIp:'-',
+        srcIntf: resolveIf(ifMap,ifname), arpReply:'enable',
+        comment: xv(inner,'descr')||'-', _vdom:'default', status: hasTag(inner,'disabled') ? 'disable' : 'enable' });
     });
 
-    // Port-forward (DNAT) rules
-    xblks(natXml,'servernat').concat(xblks(natXml,'forward')).forEach((b,i) => {
+    const topXml = natXml.replace(/<outbound(?:\s[^>]*)?>[\s\S]*?<\/outbound>/i, '').replace(/<onetoone(?:\s[^>]*)?>[\s\S]*?<\/onetoone>/gi, '');
+    xblks(topXml,'rule').forEach((b,i) => {
       const inner = b._inner;
-      const extIface = xv(inner,'interface')||'wan';
-      const extPort  = xv(inner,'local-port') || xv(inner,'dstport')||'-';
-      const intIp    = xv(inner,'target')||xv(inner,'local-ip')||'-';
-      const intPort  = xv(inner,'local-port')||xv(inner,'targetport')||extPort;
-      const proto    = xv(inner,'protocol')||'tcp';
+      if (hasTag(inner,'nordr')) return;
+      const ifname = xv(inner,'interface')||'wan';
+      const dst = xv(inner,'destination');
+      const dAddr = dst ? xv(dst,'address') : '';
+      const dPort = dst ? xv(dst,'port') : '';
+      const proto = (xv(inner,'protocol')||'').toLowerCase();
+      const lport = xv(inner,'local-port');
+      // 範圍 a-b 的本機埠由 local-port 起算
+      const mapPort = !lport ? (dPort||'-') : (/^\d+-\d+$/.test(dPort) ? (() => { const [x,y] = dPort.split('-').map(Number); return `${lport}-${+lport + (y - x)}`; })() : lport);
       nats.push({ type:'vip', name: xv(inner,'descr')||`PortFwd-${i+1}`,
         vipType:'static-nat',
-        extIp:   '-',
-        extIntf: resolveIf(ifMap,extIface),
-        mapIp:   intIp,
-        portFwd: 'enable', extPort, mapPort: intPort, proto,
-        comment: xv(inner,'descr')||'-', status:'enable', _vdom:'default' });
+        extIp:   dAddr || '-',
+        extIntf: resolveIf(ifMap,ifname),
+        mapIp:   xv(inner,'target')||'-',
+        portFwd: dPort ? 'enable' : 'disable', extPort: dPort||'-', mapPort, proto: proto||'-',
+        comment: xv(inner,'descr')||'-', status: hasTag(inner,'disabled') ? 'disable' : 'enable', _vdom:'default' });
     });
 
     return nats;

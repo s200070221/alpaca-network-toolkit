@@ -885,7 +885,9 @@ const Converter = (() => {
     const nats=parsed.nat;
     if(nats.length) {
       L.push('  <NATConfiguration>');
-      nats.filter(n=>n.type==='vip').forEach(n=>{ L.push(`    <DNAT><Name>${esc(n.name)}</Name><ExternalIP>${esc(n.extIp||'-')}</ExternalIP><InboundInterface>${esc(n.extIntf||'Port1')}</InboundInterface><TranslatedDestination>${esc(n.mapIp||'-')}</TranslatedDestination><ExternalPort>${esc(n.extPort||'-')}</ExternalPort><TranslatedPort>${esc(n.mapPort||'-')}</TranslatedPort><Status>Enable</Status></DNAT>`); });
+      // XN163：轉埠寫出 PortForwarding／Protocol；有埠號但協定不明時停用並註記 REVIEW（避免讀回成整個位址轉送）
+      nats.filter(n=>n.type==='vip').forEach(n=>{ const pf=n.portFwd==='enable'&&/^\d/.test(String(n.extPort||'')); const pr=String(n.proto||'').toLowerCase(); const okPr=pr==='tcp'||pr==='udp'; const bad=pf&&!okPr;
+        L.push(`    <DNAT><Name>${esc(n.name)}</Name>${bad?`<Description>${esc(`REVIEW: port ${n.extPort} without a known protocol - rule disabled`)}</Description>`:''}<ExternalIP>${esc(n.extIp||'-')}</ExternalIP><InboundInterface>${esc(n.extIntf||'Port1')}</InboundInterface><TranslatedDestination>${esc(n.mapIp||'-')}</TranslatedDestination><PortForwarding>${pf?'Enable':'Disable'}</PortForwarding>${pf&&okPr?`<Protocol>${pr.toUpperCase()}</Protocol>`:''}<ExternalPort>${esc(pf?n.extPort:'-')}</ExternalPort><TranslatedPort>${esc(pf?(n.mapPort||n.extPort):'-')}</TranslatedPort><Status>${bad?'Disable':'Enable'}</Status></DNAT>`); });
       nats.filter(n=>n.type==='ippool').forEach(n=>{ L.push(`    <SNAT><Name>${esc(n.name)}</Name><TranslatedSource>${esc(n.startIp||'-')}</TranslatedSource><OutboundInterface>${esc(n.srcIntf||'Port1')}</OutboundInterface></SNAT>`); });
       L.push('  </NATConfiguration>');
     }
@@ -1383,7 +1385,28 @@ const Converter = (() => {
     const sn=parsed.nat.filter(n=>n.type==='ippool');
     if(dn.length||sn.length){
       L.push(`${I(1)}nat {`);
-      if(dn.length){L.push(`${I(2)}destination { rule-set dnat-rs { from zone untrust;`); dn.forEach((n,i2)=>{L.push(`${I(3)}rule r${i2+1} { match { ${n.extIp&&n.extIp!=='-'?`destination-address ${n.extIp};`:''} } then { destination-nat { pool { dp${i2+1}; } } } }`); L.push(`${I(3)}pool dp${i2+1} { address ${n.mapIp||'0.0.0.0'}; }`); }); L.push(`${I(2)}} }`); }
+      // XN163：pool 放在 destination 下（不可在 rule-set 內）；轉埠寫 destination-port／pool port；
+      // 沒有外部位址、埠號不是單一數字時輸出 inactive: 並註記 REVIEW（Junos 目的 NAT 規則必須有目的位址）
+      if(dn.length){
+        const h32=a=>{const v=String(a||'').trim();return !v||v==='-'?'':(v.includes('/')?v:(v.includes(':')?v+'/128':v+'/32'));};
+        L.push(`${I(2)}destination {`);
+        const rules=[];
+        dn.forEach((n,i2)=>{
+          const ext=h32(n.extIp), map=h32(n.mapIp);
+          const pf=n.portFwd==='enable'&&n.extPort&&n.extPort!=='-';
+          const ep=String(n.extPort||''), mp=String(n.mapPort&&n.mapPort!=='-'?n.mapPort:ep);
+          const pr=String(n.proto||'').toLowerCase();
+          const why=!ext?'no external address':!map?'no mapped address':pf&&!(/^\d+$/.test(ep)&&/^\d+$/.test(mp))?`port ${ep} is not a single port`:pf&&pr!=='tcp'&&pr!=='udp'?`port ${ep} without a known protocol`:'';
+          L.push(`${I(3)}pool dp${i2+1} { address ${map||'0.0.0.0/32'}${pf&&!why?` port ${mp}`:''}; }`);
+          rules.push({n,i2,ext,pf:pf&&!why,ep,pr,why});
+        });
+        L.push(`${I(3)}rule-set dnat-rs {`,`${I(4)}from zone untrust;`);
+        rules.forEach(({n,i2,ext,pf,ep,pr,why})=>{
+          if(why) L.push(`${I(4)}/* REVIEW: ${why} - rule set inactive - ${String(n.name||'').replace(/[;{}"'#]|\*\/|\/\*/g,'')} */`);
+          L.push(`${I(4)}${why?'inactive: ':''}rule r${i2+1} { match { destination-address ${ext||'0.0.0.0/0'};${pf?` destination-port ${ep}; protocol ${pr};`:''} } then { destination-nat { pool { dp${i2+1}; } } } }`);
+        });
+        L.push(`${I(3)}}`,`${I(2)}}`);
+      }
       if(sn.length){L.push(`${I(2)}source { rule-set snat-rs { from zone trust; to zone untrust;`); sn.forEach((n,i2)=>{L.push(`${I(3)}rule r${i2+1} { match { source-address 0.0.0.0/0; } then { source-nat { ${n.startIp&&n.startIp!=='-'?`pool { sp${i2+1}; }`:'interface;'} } } }`); if(n.startIp&&n.startIp!=='-') L.push(`${I(3)}pool sp${i2+1} { address ${n.startIp}${n.endIp&&n.endIp!=='-'?' to '+n.endIp:''}; }`); }); L.push(`${I(2)}} }`); }
       L.push(`${I(1)}}`);L.push('');
     }
@@ -1570,8 +1593,22 @@ const Converter = (() => {
     const snat2=parsed.nat.filter(n=>n.type==='ippool');
     if(dnat2.length||snat2.length){
       L.push('  <nat>');
-      snat2.forEach(n=>L.push(`    <rule><interface>wan</interface><target>${esc(n.startIp||'-')}</target><descr>${esc(n.name)}</descr></rule>`));
-      dnat2.forEach(n=>{ if(n.portFwd==='enable'||n.mapIp) L.push(`    <forward><interface>wan</interface><protocol>${esc(n.proto||'tcp')}</protocol><local-ip>${esc(n.mapIp||'-')}</local-ip><local-port>${esc(n.mapPort||n.extPort||'-')}</local-port><dstport>${esc(n.extPort||'-')}</dstport><descr>${esc(n.name)}</descr></forward>`); });
+      // XN163：格式依 pfSense 原始碼——來源 NAT 在 <outbound>（mode hybrid＝自動規則＋手動規則），轉埠為 <nat><rule>
+      if(snat2.length){
+        L.push('    <outbound>','      <mode>hybrid</mode>');
+        snat2.forEach(n=>{ const t=n.startIp&&n.startIp!=='-'?n.startIp:''; L.push(`      <rule><interface>wan</interface><source><network>lan</network></source><destination><any></any></destination><target>${esc(t)}</target><descr>${esc(n.name)}</descr></rule>`); });
+        L.push('    </outbound>');
+      }
+      dnat2.forEach(n=>{
+        const ext=String(n.extIp||'').trim().replace(/\/32$/,''), map=String(n.mapIp||'').trim();
+        const pf=n.portFwd==='enable'&&n.extPort&&n.extPort!=='-';
+        const ep=String(n.extPort||'').replace(':','-'), mp=String(n.mapPort&&n.mapPort!=='-'?n.mapPort:ep).split('-')[0];
+        const pr=String(n.proto||'').toLowerCase();
+        // pfSense 轉埠必須指定 TCP／UDP 類協定與埠；沒有埠（整個位址轉送＝1:1 NAT）或協定不明時停用並註記 REVIEW
+        const why=!map||map==='-'?'no mapped address':!pf?'no port (1:1 NAT not converted)':!/^\d+(-\d+)?$/.test(ep)?`port ${ep} is not a port or range`:!['tcp','udp','tcp/udp'].includes(pr)?`port ${ep} without a known protocol`:'';
+        const dst=ext&&ext!=='-'&&/^[\d.]+$/.test(ext)?`<address>${esc(ext)}</address>`:'<network>wanip</network>';
+        L.push(`    <rule><source><any></any></source><destination>${dst}${pf?`<port>${esc(ep)}</port>`:''}</destination><protocol>${esc(why?(['tcp','udp','tcp/udp'].includes(pr)?pr:'tcp'):pr)}</protocol><target>${esc(map)}</target>${pf?`<local-port>${esc(mp)}</local-port>`:''}<interface>wan</interface><descr>${esc((why?`REVIEW: ${why} - rule disabled; `:'')+(n.name||''))}</descr>${why?'<disabled></disabled>':''}</rule>`);
+      });
       L.push('  </nat>');
     }
 
@@ -1731,9 +1768,26 @@ const Converter = (() => {
     L.push('');
 
     // NAT
+    // XN163：目的 NAT（vip／帶 mapIp 的 static）改用 object NAT（Command Reference：object network 下
+    // nat (real_ifc,mapped_ifc) static {mapped_inline_host_ip|interface} [service {tcp|udp} real_port mapped_port]）；
+    // twice NAT 不接受字面位址。外部位址不是單一主機、沒有外部位址、埠號不是單一數字或協定不明時整段註解並標 REVIEW
+    const asaIp=v=>/^\d{1,3}(\.\d{1,3}){3}$/.test(String(v||'').trim().replace(/\/32$/,''));
+    let dnIdx=0;
     parsed.nat.forEach(n=>{
       const inIf=n.srcIf||intfOf(n.srcIntf||'LAN'), outIf=n.dstIf||intfOf(n.extIntf||'WAN');
-      if(n.type==='static'||n.type==='vip') L.push(`nat (${inIf},${outIf}) source static ${n.mapIp||n.origSrc||'any'} ${n.extIp||n.transSrc||'interface'}`);
+      if(n.type==='vip'||(n.type==='static'&&n.mapIp&&!n.origSrc)){
+        dnIdx++;
+        const map=String(n.mapIp||'').trim().replace(/\/32$/,''), ext=String(n.extIp||'').trim().replace(/\/32$/,'');
+        const pf=n.portFwd==='enable'&&n.extPort&&n.extPort!=='-';
+        const ep=String(n.extPort||''), mp=String(n.mapPort&&n.mapPort!=='-'?n.mapPort:ep), pr=String(n.proto||'').toLowerCase();
+        const why=!asaIp(map)?'mapped address is not a single host':!ext||ext==='-'?'no external address':!asaIp(ext)?'external address is not a single host':pf&&!(/^\d+$/.test(ep)&&/^\d+$/.test(mp))?`port ${ep} is not a single port`:pf&&pr!=='tcp'&&pr!=='udp'?`port ${ep} without a known protocol`:'';
+        const oname=(`dnat-${dnIdx}-`+String(n.name||'').replace(/[^A-Za-z0-9_.\-]/g,'_')).slice(0,64);
+        const body=[`object network ${oname}`,` host ${map||'0.0.0.0'}`,` nat (${inIf},${outIf}) static ${ext&&ext!=='-'?ext:'interface'}${pf&&!why?` service ${pr} ${mp} ${ep}`:''}`];
+        if(why){ L.push(`! REVIEW: ${why} - NAT not applied, please review: ${String(n.name||'').replace(/[\r\n]/g,' ')}`); body.forEach(b=>L.push('! '+b.trim())); }
+        else body.forEach(b=>L.push(b));
+        return;
+      }
+      if(n.type==='static') L.push(`nat (${inIf},${outIf}) source static ${n.origSrc||'any'} ${n.transSrc||'interface'}`);
       else L.push(`nat (${inIf},${outIf}) source dynamic ${n.origSrc||'any'} ${n.transSrc||'interface'}`);
     });
     L.push('');
@@ -3460,8 +3514,11 @@ const Converter = (() => {
       if(vendor.startsWith('PaloAlto')&&targetVendor==='paloalto'&&f.key==='ha')return false;
       if(vendor.startsWith('Juniper')&&targetVendor==='juniper'&&f.key==='ha')return false;
       return true;
-    }).map(f=>f.label).concat((()=>{if(V6_TARGETS[targetVendor])return [];const r=_v6Report(parsed);return r.dual.length||r.only.length?['IPv6']:[];})());
+    }).map(f=>f.label).concat((()=>{if(V6_TARGETS[targetVendor])return [];const r=_v6Report(parsed);return r.dual.length||r.only.length?['IPv6']:[];})())
+      // XN163：這幾家的轉換器不輸出目的 NAT（SonicWall 寫成來源欄位，讀回不是轉送），來源有轉埠／目的 NAT 時列為遺失
+      .concat(NAT_DST_LOST[targetVendor]&&(parsed.nat||[]).some(n=>n&&n.status!=='disable'&&(n.type==='vip'||(n.type==='static'&&(n.mapIp||n.origSrc))))?['NAT (destination / port forward)']:[]);
   }
+  const NAT_DST_LOST={zyxel:1,checkpoint:1,sonicwall:1};
 
   // 2026-07-24 新增：轉換警語——回答「不同 port 數量/型號能否轉換」的疑慮：能跑，但介面
   // 實體命名/埠位對應本質上無法從來源設定檔自動判斷目標設備的真實硬體規格，10 個 to*()

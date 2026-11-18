@@ -844,18 +844,29 @@ const JuniperParser = (() => {
       Object.entries(dstNat._children).forEach(([rkey,rnode]) => {
         if (!rkey.startsWith('rule-set ')) return;
         const rsName = rkey.replace('rule-set ','');
-        Object.entries(rnode._children).forEach(([rrkey,rrnode]) => {
+        Object.entries(rnode._children).forEach(([rrkey0,rrnode]) => {
+          // XN163：inactive: 前綴＝停用；pool 名稱解析成 destination pool 的位址與埠；比對 destination-port／protocol
+          const inactive = /^inactive:\s*/.test(rrkey0);
+          const rrkey = rrkey0.replace(/^inactive:\s*/, '');
           if (!rrkey.startsWith('rule ')) return;
           const rname = rrkey.replace('rule ','');
           const matchNode = path(rrnode,['match']);
           const thenNode  = path(rrnode,['then','destination-nat','pool']);
+          const poolName = thenNode ? (val(thenNode,'pool-name') || thenNode._values[0] || '') : '';
+          const poolNode = poolName ? dstNat._children['pool ' + poolName] : null;
+          const pAddr = poolNode ? val(poolNode,'address') : '';
+          const pm = pAddr.match(/^(\S+?)(?:\/(?:32|128))?(?:\s+port\s+(\d+))?$/);
+          const listOf = (n,k) => { if (!n) return ''; const c = n._children[k]; return c ? c._values.join(',') : val(n,k); };
+          const dport = listOf(matchNode,'destination-port').replace(/\s+to\s+/g,'-');
+          const strip = a => String(a||'').replace(/\/(32|128)$/,'') || '-';
           nats.push({ type:'vip', name:`${rsName}-${rname}`,
             vipType:'static-nat',
-            extIp:   matchNode ? val(matchNode,'destination-address')||'-':'-',
+            extIp:   matchNode ? strip(val(matchNode,'destination-address')) : '-',
             extIntf: val(rnode,'from interface')||'-',
-            mapIp:   thenNode ? val(thenNode,'pool-name')||'-' : '-',
-            portFwd: 'disable', extPort:'-', mapPort:'-', proto:'-',
-            comment:`Destination NAT ruleset: ${rsName}`, status:'enable' });
+            mapIp:   pm ? pm[1] : (poolName || '-'),
+            portFwd: dport ? 'enable' : 'disable', extPort: dport || '-', mapPort: (pm && pm[2]) || (dport || '-'),
+            proto: matchNode ? (val(matchNode,'protocol') || '-') : '-',
+            comment:`Destination NAT ruleset: ${rsName}`, status: inactive ? 'disable' : 'enable' });
         });
       });
     }

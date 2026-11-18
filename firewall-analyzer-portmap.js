@@ -327,10 +327,18 @@
   // 以內部位址找讀回的對應項目：missing＝讀回沒有；widened＝來源有外部位址或轉埠而讀回沒有（比對範圍變大）；
   // changed＝外部位址、協定或埠號不同。來源沒寫的條件不算差異
   const _natAny = v => { const t = String(v == null ? '' : v).trim().toLowerCase(); return !t || t === '-' || t === 'any' || t === '0.0.0.0' || t === '0.0.0.0/0' || t === 'all'; };
-  const _natAddr = v => _natAny(v) ? '' : String(v).trim().replace(/\/32$/, '');
+  // 不是位址（介面名稱、interface、wanip 等）＝設備介面位址，視為沒有指定外部位址
+  const _natAddr = v => _natAny(v) || !/^[\d.:a-f\/-]+$/i.test(String(v).trim()) || !/[.:]/.test(String(v)) ? '' : String(v).trim().replace(/\/32$/, '');
   const _natPort = v => { const t = String(v == null ? '' : v).trim(); return !t || t === '-' || t === '0' ? '' : t; };
+  // Cisco ASA 的 static NAT 形狀為 origSrc（實際）／transSrc（對外，可能是物件名稱）＋ realPort／mappedPort，先換成共用欄位
+  const _asaNat = (n, addrs) => {
+    if (!(n && n.type === 'static' && n.origSrc && n.transSrc && !n.mapIp) || n.twiceDst) return n;
+    const one = v => (typeof _natSingleIp === 'function' ? _natSingleIp(v, addrs) : null) || v;
+    return { ...n, mapIp: one(n.origSrc), extIp: n.transSrc === 'interface' ? '' : one(n.transSrc), portFwd: n.mappedPort ? 'enable' : 'disable', extPort: n.mappedPort || '', mapPort: n.realPort || '' };
+  };
   function natEntries(parsed) {
-    return (parsed && parsed.nat || []).filter(n => (n.type === 'vip' || n.type === 'static') && !_natAny(n.mapIp)).map(n => {
+    const addrs = (parsed && parsed.addresses) || [];
+    return (parsed && parsed.nat || []).map(n => _asaNat(n, addrs)).filter(n => (n.type === 'vip' || n.type === 'static') && !_natAny(n.mapIp)).map(n => {
       const pf = n.portFwd === 'enable' && !!_natPort(n.extPort);
       return { name: n.name || '', off: n.status === 'disable', ext: _natAddr(n.extIp), map: _natAddr(n.mapIp), proto: pf ? String(n.proto || '').toLowerCase() : '', extPort: pf ? _natPort(n.extPort) : '', mapPort: pf ? _natPort(n.mapPort) : '' };
     });
@@ -339,13 +347,17 @@
   function compareNat(srcParsed, dstParsed) {
     const a = natEntries(srcParsed).filter(x => !x.off), b = natEntries(dstParsed), used = new Set(), diffs = [];
     let same = 0;
-    a.forEach(s => {
-      const cands = b.map((d, i) => ({ d, i })).filter(x => x.d.map === s.map && !used.has(x.i));
-      // 優先取外部位址與埠都相同者，其次外部位址相同者
-      const pick = cands.find(x => x.d.ext === s.ext && x.d.extPort === s.extPort) || cands.find(x => x.d.ext === s.ext) || cands[0];
-      if (!pick) { diffs.push({ kind: 'missing', src: s }); return; }
-      used.add(pick.i);
-      const d = pick.d;
+    // 分三輪配對（外部位址與埠都相同 → 外部位址相同 → 同內部位址任一筆），避免先處理的項目搶走別筆的完全相符項目
+    const tiers = [(s, d) => d.ext === s.ext && d.extPort === s.extPort, (s, d) => d.ext === s.ext, () => true];
+    const picks = new Map();
+    tiers.forEach(ok => a.forEach((s, si) => {
+      if (picks.has(si)) return;
+      const i = b.findIndex((d, di) => !used.has(di) && d.map === s.map && ok(s, d));
+      if (i >= 0) { used.add(i); picks.set(si, i); }
+    }));
+    a.forEach((s, si) => {
+      if (!picks.has(si)) { diffs.push({ kind: 'missing', src: s }); return; }
+      const d = b[picks.get(si)];
       if (d.off) diffs.push({ kind: 'flagged', src: s, dst: d });
       else if ((s.ext && !d.ext) || (s.extPort && !d.extPort)) diffs.push({ kind: 'widened', src: s, dst: d });
       else if (s.ext !== d.ext || s.extPort !== d.extPort || s.mapPort !== d.mapPort || (s.proto && d.proto && s.proto !== d.proto)) diffs.push({ kind: 'changed', src: s, dst: d });
