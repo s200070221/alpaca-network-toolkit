@@ -3714,6 +3714,8 @@ const Converter = (() => {
         files.push({ name: `${dir}/${safe((one.deviceInfo||{}).hostname||v)}.${o.ext||'txt'}`, text: out });
         files.push({ name: `${dir}/caveats.txt`, text: cav.map(c=>'- '+c).join('\n')+'\n' });
         rows.push(t('vdall.row').replace('{dir}',dir).replace('{vdom}',v).replace('{rules}',(one.policies||[]).length).replace('{lines}',out.split('\n').length).replace('{n}',cav.length));
+        // XN168：o.verify(來源切片, 轉換文字) 由畫面端提供（目標 parser 讀回＋FwPortMap.verifyConversion），回傳一行驗證摘要
+        if(typeof o.verify==='function'){ let line; try{ line=o.verify(one,out); }catch(e){ line=t('vdall.verify_fail').replace('{err}',e && e.message || String(e)); } if(line) rows.push('    '+line); }
       }catch(e){
         rows.push(t('vdall.row_fail').replace('{dir}',dir).replace('{vdom}',v).replace('{err}',e && e.message || String(e)));
       }

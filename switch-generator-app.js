@@ -736,7 +736,7 @@ const DEVICE_MODELS={
     {value:'icx7150-48p',label:'Ruckus ICX7150-48P (48×1G PoE+ + 4×10G Uplink)',ports:[
       {prefix:'1/1/',from:1,to:48,speed:'1G'},
       {prefix:'1/1/',from:49,to:52,speed:'10G'},
-      {name:'mgmt',speed:'1G',mgmt:true}],poe:true},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'icx7250-48',label:'Ruckus ICX7250-48 (48×1G + 8×10G Uplink)',ports:[
       {prefix:'1/1/',from:1,to:48,speed:'1G'},
       {prefix:'1/1/',from:49,to:56,speed:'10G'},
@@ -749,7 +749,7 @@ const DEVICE_MODELS={
     {value:'icx7650-48p',label:'Ruckus ICX7650-48P (48×1G/10G PoE+ + 8×25G Uplink)',ports:[
       {prefix:'1/1/',from:1,to:48,speed:'10G'},
       {prefix:'1/1/',from:49,to:56,speed:'25G'},
-      {name:'mgmt',speed:'1G',mgmt:true}],poe:true},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'icx8200-24',label:'Ruckus ICX8200-24 (24×1G + 4×25G SFP28 Uplink，ICX7150 後繼機)',ports:[
       {prefix:'1/1/',from:1,to:24,speed:'1G'},
       {prefix:'1/1/',from:25,to:28,speed:'25G'},
@@ -757,17 +757,17 @@ const DEVICE_MODELS={
     {value:'icx8200-48p',label:'Ruckus ICX8200-48PF2 (48×1G PoE+ 740W + 4×25G SFP28 Uplink)',ports:[
       {prefix:'1/1/',from:1,to:48,speed:'1G'},
       {prefix:'1/1/',from:49,to:52,speed:'25G'},
-      {name:'mgmt',speed:'1G',mgmt:true}],poe:true},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
   ],
   alcatel:[
     {value:'os6560-p24',label:'Alcatel OmniSwitch 6560-P24 (24×1G PoE+ + 4×10G Uplink)',ports:[
       {prefix:'1/1/',from:1,to:24,speed:'1G'},
       {prefix:'1/1/',from:25,to:28,speed:'10G'},
-      {name:'mgmt',speed:'1G',mgmt:true}],poe:true},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,24]},
     {value:'os6860-24',label:'Alcatel OmniSwitch 6860-24 (24×1G/10G + 4×10G Uplink)',ports:[
       {prefix:'1/1/',from:1,to:24,speed:'1G'},
       {prefix:'1/1/',from:25,to:28,speed:'10G'},
-      {name:'mgmt',speed:'1G',mgmt:true}],poe:true},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
     {value:'os6900-x20',label:'Alcatel OmniSwitch 6900-X20 (20×10G + 4×40G Uplink)',ports:[
       {prefix:'1/1/',from:1,to:20,speed:'10G'},
       {prefix:'1/1/',from:21,to:24,speed:'40G'},
@@ -789,7 +789,7 @@ const DEVICE_MODELS={
     {value:'x440-g2-48p',label:'Extreme Summit X440-G2-48p (48×1G PoE+ + 4×10G Uplink)',ports:[
       {prefix:'1:',from:1,to:48,speed:'1G'},
       {prefix:'1:',from:49,to:52,speed:'10G'},
-      {name:'mgmt',speed:'1G',mgmt:true}],poe:true},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'x670-g2-48x',label:'Extreme Summit X670-G2-48x (48×10G + 4×40G Uplink)',ports:[
       {prefix:'1:',from:1,to:48,speed:'10G'},
       {prefix:'1:',from:49,to:52,speed:'40G'},
@@ -807,18 +807,18 @@ const DEVICE_MODELS={
     {value:'aruba2530-24g',label:'Aruba 2530-24G (J9776A)',ports:[
       {prefix:'',from:1,to:24,speed:'1G'},
       {prefix:'',from:25,to:28,speed:'1G'}],poe:false},
-    {value:'aruba2930f-24g',label:'Aruba 2930F-24G-4SFP+ (JL258A)',ports:[
+    {value:'aruba2930f-24g',label:'Aruba 2930F-24G-4SFP+ (JL253A)',ports:[
       {prefix:'',from:1,to:24,speed:'1G'},
-      {prefix:'',from:25,to:28,speed:'10G'}],poe:true},
-    {value:'aruba2930f-48g',label:'Aruba 2930F-48G-4SFP+ (JL256A)',ports:[
+      {prefix:'',from:25,to:28,speed:'10G'}],poe:false},
+    {value:'aruba2930f-48g',label:'Aruba 2930F-48G-4SFP+ (JL254A)',ports:[
       {prefix:'',from:1,to:48,speed:'1G'},
-      {prefix:'',from:49,to:52,speed:'10G'}],poe:true},
+      {prefix:'',from:49,to:52,speed:'10G'}],poe:false},
     {value:'aruba2540-24g',label:'Aruba 2540 24G 4SFP+ (JL354A)',ports:[
       {prefix:'',from:1,to:24,speed:'1G'},
-      {prefix:'',from:25,to:28,speed:'10G'}],poe:true},
+      {prefix:'',from:25,to:28,speed:'10G'}],poe:false},
     {value:'aruba2540-48g',label:'Aruba 2540 48G 4SFP+ (JL355A)',ports:[
       {prefix:'',from:1,to:48,speed:'1G'},
-      {prefix:'',from:49,to:52,speed:'10G'}],poe:true},
+      {prefix:'',from:49,to:52,speed:'10G'}],poe:false},
   ],
   routeros:[
     {value:'rb4011',label:'MikroTik RB4011iGS+ (10×1G + 1×SFP+)',ports:[
@@ -829,7 +829,7 @@ const DEVICE_MODELS={
       {prefix:'sfp-sfpplus',from:1,to:8,speed:'10G'}],poe:false},
     {value:'crs328-24p',label:'MikroTik CRS328-24P-4S+RM (24×1G PoE+ + 4×SFP+ 10G)',ports:[
       {prefix:'ether',from:1,to:24,speed:'1G'},
-      {prefix:'sfp-sfpplus',from:1,to:4,speed:'10G'}],poe:true},
+      {prefix:'sfp-sfpplus',from:1,to:4,speed:'10G'}],poe:true,poeRange:[1,24]},
     {value:'rb5009',label:'MikroTik RB5009UG+S+IN (7×1G + 1×2.5G + 1×SFP+ 10G)',ports:[
       {prefix:'ether',from:1,to:7,speed:'1G'},
       {name:'ether8',speed:'2.5G'},
@@ -866,11 +866,11 @@ const DEVICE_MODELS={
   edgeswitch:[
     {value:'es-24-250w',label:'Ubiquiti EdgeSwitch ES-24-250W (24×1G PoE+ + 2×SFP)',ports:[
       {prefix:'0/',from:1,to:24,speed:'1G'},
-      {prefix:'0/',from:25,to:26,speed:'1G'}],poe:true},
+      {prefix:'0/',from:25,to:26,speed:'1G'}],poe:true,poeRange:[1,24]},
     {value:'es-48-500w',label:'Ubiquiti EdgeSwitch ES-48-500W (48×1G PoE+ + 2×SFP + 2×SFP+ 10G)',ports:[
       {prefix:'0/',from:1,to:48,speed:'1G'},
       {prefix:'0/',from:49,to:50,speed:'1G'},
-      {prefix:'0/',from:51,to:52,speed:'10G'}],poe:true},
+      {prefix:'0/',from:51,to:52,speed:'10G'}],poe:true,poeRange:[1,48]},
   ],
   planet:[
     {value:'sgs-6341-24t4x',label:'Planet SGS-6341-24T4X (24×1G + 4×SFP+ 10G)',ports:[
@@ -5860,7 +5860,8 @@ function _swcPoe(targetModelValue){
   const srcVal=(document.getElementById('device-model')||{}).value||'';
   const src=srcVal?findDeviceModel(currentVendor(),srcVal):null;
   const tv=_swcVendor(_swc.target), dst=tv&&targetModelValue?findDeviceModel(tv,targetModelValue):null;
-  return {src:pf(src),dst:pf(dst)};
+  const dp=dst?poePortNames(dst):null;
+  return {src:pf(src),dst:pf(dst),dstPorts:dp?new Set(dp):null};
 }
 function swcRender(){
   const body=document.getElementById('swconv-body');

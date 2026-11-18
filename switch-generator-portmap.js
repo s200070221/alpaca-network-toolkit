@@ -96,8 +96,8 @@
     return { map, ports: src, targets: tp.ports, info, warnings: switchMapWarnings(model, tp.ports, map, info) };
   }
 
-  // poe（XN162）：{src, dst} 為來源／目標型號是否支援 PoE（true／false／未知 null，取自型號資料的整台 poe 旗標；
-  // 型號資料的 poeRange 有缺有不一致，不逐埠判斷目標埠）。來源埠設定了供電而目標型號沒有 PoE → poeLost；
+  // poe（XN162）：{src, dst} 為來源／目標型號是否支援 PoE（true／false／未知 null，取自型號資料的整台 poe 旗標）；
+  // dstPorts（XN167，選填）為目標型號 PoE 埠名稱的 Set（validate.js poePortNames()），有時逐埠判斷。來源埠設定了供電而目標型號沒有 PoE → poeLost；
   // 來源型號是 PoE 機種而目標不是 → poeModel（設定檔看不出哪些埠接了 AP／電話等用電設備）
   function switchMapWarnings(model, targets, map, info, poe) {
     const W = [], seen = Object.create(null);
@@ -111,6 +111,8 @@
       if (t && t.mgmt && !s.mgmt) W.push({ code: 'mgmtUsed', port: s.name, dst: d });
       if (t && SPEED_MBPS(t.speed) < SPEED_MBPS(s.speed)) W.push({ code: 'speedDown', port: s.name, dst: d, from: s.speed, to: t.speed });
       if (s.poe && poe && poe.dst === false) W.push({ code: 'poeLost', port: s.name, dst: d });
+      // XN167：目標型號有 PoE 埠清單（poe.dstPorts）時逐埠判斷：對應到的埠不在清單內 → poePort
+      else if (s.poe && poe && poe.dst === true && poe.dstPorts && !poe.dstPorts.has(d)) W.push({ code: 'poePort', port: s.name, dst: d });
     });
     if (info && info.members > 1 && !info.replicated) W.push({ code: 'stackNoReplicate', n: info.members });
     if (poe && poe.src === true && poe.dst === false) W.push({ code: 'poeModel' });

@@ -2498,7 +2498,14 @@ function onParsed(){
     if(!PARSED||!src){showErr(tr('err.upload_first'));return;}
     if(!target){showErr(tr('vdall.need_target'));return;}
     const srcParsed=_resolveSrcParsed(src);
-    const files=Converter.buildVdomPack(srcParsed,target,tr,{ ext:CONV_EXT[target]||'txt', vendorName:_CONV_NAMES[target]||target, srcName:_CONV_NAMES[src]||src });
+    // XN168：每個 VDOM 轉完以目標廠牌 parser 讀回、跑轉換驗證（同 _vfRender0），結果寫進 README
+    const fn=FW_DIFF_PARSERS[target];
+    const verify=(one,out)=>{
+      if(!fn||typeof FwPortMap==='undefined') return tr('vdall.verify_na');
+      const v=FwPortMap.verifyConversion(one, fn(out)), n=v.nat||{total:0,same:0};
+      return tr('vdall.verify').replace('{same}',v.same).replace('{total}',v.total).replace('{diff}',(v.diffs||[]).length).replace('{nsame}',n.same).replace('{ntotal}',n.total);
+    };
+    const files=Converter.buildVdomPack(srcParsed,target,tr,{ ext:CONV_EXT[target]||'txt', vendorName:_CONV_NAMES[target]||target, srcName:_CONV_NAMES[src]||src, verify });
     if(!files){showErr(tr('conv.vdom_required'));return;}
     const blob=new Blob([window.FwZip.createZip(files)],{type:'application/zip'});
     const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`fw_${target}_all_vdoms_${dateStr()}.zip`;

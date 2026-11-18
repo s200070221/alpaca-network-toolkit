@@ -72,6 +72,21 @@ function expandDeviceModelPorts(model){
   return out;
 }
 
+// XN167：型號的 PoE 埠名稱。poeRange [起,迄] 是存取埠的埠號；從第一個埠群組起依序取號碼落在範圍內的埠，
+// 取到迄號為止，因此後面的上行埠（如 TenGigabitEthernet1/1/1-2）即使號碼落在範圍內也不算。
+// 型號不是 PoE 或沒有 poeRange 時回傳 null（不逐埠判斷）
+function poePortNames(model){
+  if(!model||model.poe!==true||!Array.isArray(model.poeRange))return null;
+  const a=model.poeRange[0], b=model.poeRange[1], out=[];
+  for(const p of model.ports||[]){
+    if(p.name||p.from==null)continue;
+    let hit=false;
+    for(let n=p.from;n<=p.to;n++) if(n>=a&&n<=b){ out.push(p.prefix+n+(p.suffix||'')); hit=true; if(n===b) return out; }
+    if(!hit)break;
+  }
+  return out;
+}
+
 function getModelPortSet(vendor,modelValue){
   const model=findDeviceModel(vendor,modelValue);
   if(!model)return null;
