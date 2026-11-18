@@ -3,8 +3,19 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.18';
+  const TOOLKIT_VERSION = '2026.11.18.1';
   const CHANGELOG = [
+    {
+      version: '2026.11.18.1',
+      items: {
+        zhTW: [
+          '內建漏洞清單更新至 2026-11-18：新增 Check Point Quantum Security Gateway 已遭利用漏洞 CVE-2026-123039（R81.20 Take 173 以前、R82 Take 130 以前、R82.10 Take 50 以前、R82.20 Take 10 以前）',
+        ],
+        en: [
+          'Built-in vulnerability list updated to 2026-11-18: adds the exploited Check Point Quantum Security Gateway vulnerability CVE-2026-123039 (R81.20 up to Take 173, R82 up to Take 130, R82.10 up to Take 50, R82.20 up to Take 10)',
+        ],
+      },
+    },
     {
       version: '2026.11.18',
       items: {
