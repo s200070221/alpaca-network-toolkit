@@ -52,7 +52,8 @@
         else if (i.accessVlan) use.push('access ' + i.accessVlan);
       }
       if (lacpOf[name]) use.push('LAG ' + lacpOf[name]);
-      out.push({ name, speed, mgmt: isMgmtName(name), member: memberOf(name), use: use.join('; ') });
+      // poe：來源埠明確設定供電（poeMode 不是 none／never，XN162）
+      out.push({ name, speed, mgmt: isMgmtName(name), member: memberOf(name), use: use.join('; '), poe: !!(i && i.poeMode && i.poeMode !== 'none' && i.poeMode !== 'never') });
     };
     (model.interfaces || []).forEach(i => add(i.name, i));
     Object.keys(lacpOf).forEach(n => add(n, null));
@@ -95,7 +96,10 @@
     return { map, ports: src, targets: tp.ports, info, warnings: switchMapWarnings(model, tp.ports, map, info) };
   }
 
-  function switchMapWarnings(model, targets, map, info) {
+  // poe（XN162）：{src, dst} 為來源／目標型號是否支援 PoE（true／false／未知 null，取自型號資料的整台 poe 旗標；
+  // 型號資料的 poeRange 有缺有不一致，不逐埠判斷目標埠）。來源埠設定了供電而目標型號沒有 PoE → poeLost；
+  // 來源型號是 PoE 機種而目標不是 → poeModel（設定檔看不出哪些埠接了 AP／電話等用電設備）
+  function switchMapWarnings(model, targets, map, info, poe) {
     const W = [], seen = Object.create(null);
     const tByName = Object.create(null);
     targets.forEach(p => { tByName[p.name] = p; });
@@ -106,8 +110,10 @@
       const t = tByName[d];
       if (t && t.mgmt && !s.mgmt) W.push({ code: 'mgmtUsed', port: s.name, dst: d });
       if (t && SPEED_MBPS(t.speed) < SPEED_MBPS(s.speed)) W.push({ code: 'speedDown', port: s.name, dst: d, from: s.speed, to: t.speed });
+      if (s.poe && poe && poe.dst === false) W.push({ code: 'poeLost', port: s.name, dst: d });
     });
     if (info && info.members > 1 && !info.replicated) W.push({ code: 'stackNoReplicate', n: info.members });
+    if (poe && poe.src === true && poe.dst === false) W.push({ code: 'poeModel' });
     return W;
   }
 

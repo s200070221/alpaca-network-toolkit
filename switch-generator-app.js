@@ -5854,6 +5854,14 @@ function swcSummaryHtml(s){
   h+=swcAuditHtml(s);
   return h+'</div>';
 }
+// PoE 需求警示（XN162）：來源型號取表單目前選的型號（轉換前），目標為轉換卡片選的型號；型號資料沒有 poe 旗標時為 null（不判斷）
+function _swcPoe(targetModelValue){
+  const pf=m=>m&&typeof m.poe==='boolean'?m.poe:null;
+  const srcVal=(document.getElementById('device-model')||{}).value||'';
+  const src=srcVal?findDeviceModel(currentVendor(),srcVal):null;
+  const tv=_swcVendor(_swc.target), dst=tv&&targetModelValue?findDeviceModel(tv,targetModelValue):null;
+  return {src:pf(src),dst:pf(dst)};
+}
 function swcRender(){
   const body=document.getElementById('swconv-body');
   if(!body)return;
@@ -5880,7 +5888,7 @@ function swcRender(){
   if(dm){
     sug=SwPortMap.suggestSwitchMap(model,expandDeviceModelPorts(dm));
     if(!_swc.map)_swc.map=Object.assign(Object.create(null),sug.map);
-    sug.warnings=SwPortMap.switchMapWarnings(model,sug.targets,_swc.map,sug.info);
+    sug.warnings=SwPortMap.switchMapWarnings(model,sug.targets,_swc.map,sug.info,_swcPoe(_swc.model));
     h+=`<button type="button" class="act-btn" data-swpm="reset">${esc(tr('swpm.reset'))}</button><button type="button" class="gen-btn" data-swpm="apply" style="padding:6px 14px">${esc(tr('swpm.apply'))}</button>`
       +`<button type="button" class="act-btn" data-swpm="csvexport">⬇ ${esc(tr('swpm.csv_export'))}</button><button type="button" class="act-btn" data-swpm="csvimport">⬆ ${esc(tr('swpm.csv_import'))}</button>`
       +`<input type="file" accept=".csv,text/csv" data-swpm="csvfile" style="display:none">`;
@@ -5907,6 +5915,8 @@ function swcApply(){
   const target=_swc.target; if(!target)return;
   const tv=_swcVendor(target);
   const before=collectModel();
+  const poeInfo=_swcPoe(_swc.model);  // 套用後表單換成目標廠牌與型號，來源型號要先取
+
   const nbBefore=_swcNeighbors(before);
   const renamed=_swc.map?SwPortMap.renameSwitchModel(before,_swc.map):before;
   const ad=SwPortMap.adaptModelForVendor(renamed,target);
@@ -5952,7 +5962,7 @@ function swcApply(){
   const sg=dm?SwPortMap.suggestSwitchMap(before,expandDeviceModelPorts(dm)):null;
   const map=Object.assign(Object.create(null),_swc.map||{});
   _swc.last={ srcVendor:_swcVendorLabel(before.brand==='h3c'?'h3c':before.vendor), dstVendor:_swcVendorLabel(target), modelId:_swc.model, modelLabel:dm?dm.label:'',
-    rows:sg?_swcRows(before,map,sg.targets,SwPortMap.switchMapWarnings(before,sg.targets,map,sg.info)):null, summary, time:new Date().toLocaleString(), target };
+    rows:sg?_swcRows(before,map,sg.targets,SwPortMap.switchMapWarnings(before,sg.targets,map,sg.info,poeInfo)):null, summary, time:new Date().toLocaleString(), target };
   // 鄰居跟著埠改名，復原時還原
   if(nbBefore&&_swc.map)window._swcNb={map:SwPortMap.renameNeighbors(nbBefore,_swc.map),prev:window._swcNb};
   _swc.summary=summary; _swc.map=null; _swc.target=''; _swc.model=''; _swc.csvMsg='';
@@ -5989,7 +5999,7 @@ function swcExportCurrentCsv(){
   const tv=_swcVendor(_swc.target), dm=tv&&_swc.model?findDeviceModel(tv,_swc.model):null;
   if(!dm||!_swc.map)return;
   const model=collectModel(), sg=SwPortMap.suggestSwitchMap(model,expandDeviceModelPorts(dm));
-  const r=_swcRows(model,_swc.map,sg.targets,SwPortMap.switchMapWarnings(model,sg.targets,_swc.map,sg.info));
+  const r=_swcRows(model,_swc.map,sg.targets,SwPortMap.switchMapWarnings(model,sg.targets,_swc.map,sg.info,_swcPoe(_swc.model)));
   downloadFile(swcMapCsv(r,{target_vendor:_swc.target,target_model:_swc.model,source_vendor:document.getElementById('vendor').value}),`sw_portmap_${_swc.target}_${_swc.model.replace(/^nb:/,'')}.csv`,'text/csv');
 }
 function swcImportCsv(text){
