@@ -2607,8 +2607,11 @@ const Converter = (() => {
           const hasExt=/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(ext)&&ext!=='0.0.0.0';
           const pf=n.portFwd==='enable'&&/^(tcp|udp)$/.test(pr), ep=pf?nz(n.extPort,''):'', mp=pf?nz(n.mapPort,''):'';
           const open=!hasExt&&!inIf;
-          const cmt=open?`REVIEW: no destination address or in-interface - rule disabled; ${n.name||''}`:(n.name||'');
-          L.push(`add chain=dstnat${hasExt?` dst-address=${ext}`:''}${inIf?` in-interface=${inIf}`:''}${ep||mp?` protocol=${pr}`:''}${ep?` dst-port=${ep}`:''} action=dst-nat to-addresses=${nz(n.mapIp,'0.0.0.0')}${mp?` to-ports=${mp}`:''}${open?' disabled=yes':''} comment="${qstr(cmt)}"`);
+          // 有轉埠但協定不明（來源沒寫，如 Check Point 以服務名稱表示）：RouterOS 的 dst-port 必須搭配 protocol，不能只轉位址（XN163）
+          const noProto=n.portFwd==='enable'&&!!nz(n.extPort,'')&&!pf;
+          const why=open?'no destination address or in-interface':noProto?`port ${nz(n.extPort,'')} without a known protocol`:'';
+          const cmt=why?`REVIEW: ${why} - rule disabled; ${n.name||''}`:(n.name||'');
+          L.push(`add chain=dstnat${hasExt?` dst-address=${ext}`:''}${inIf?` in-interface=${inIf}`:''}${ep||mp?` protocol=${pr}`:''}${ep?` dst-port=${ep}`:''} action=dst-nat to-addresses=${nz(n.mapIp,'0.0.0.0')}${mp?` to-ports=${mp}`:''}${why?' disabled=yes':''} comment="${qstr(cmt)}"`);
         }
         else L.push(`add chain=srcnat out-interface=${nz(n.srcIntf,nz(n.extIntf,'ether1'))} action=masquerade comment="${qstr(n.name)}"`);
       });

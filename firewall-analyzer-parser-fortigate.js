@@ -692,7 +692,8 @@ const FortigateParser = (() => {
       nats.push({ type: 'vip', name: e.name, vipType: gv(t, 'type') || 'static-nat',
         extIp: gv(t, 'extip') || '-', extIntf: gv(t, 'extintf') || '-', mapIp: gv(t, 'mappedip') || '-',
         portFwd: gv(t, 'portforward') || 'disable', extPort: gv(t, 'extport') || '-',
-        mapPort: gv(t, 'mappedport') || '-', proto: gv(t, 'protocol') || '-',
+        // protocol 預設 tcp（CLI Reference config firewall vip；show 不輸出預設值），轉埠時沒寫即為 tcp（XN163）
+        mapPort: gv(t, 'mappedport') || '-', proto: gv(t, 'protocol') || (gv(t, 'portforward') === 'enable' ? 'tcp' : '-'),
         comment: gv(t, 'comment') || '-', status: gv(t, 'status') || 'enable', _vdom: vdomName });
     });
     const { sectionLines: vgl } = extractSection(lines, 'firewall vipgrp');

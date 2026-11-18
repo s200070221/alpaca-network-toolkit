@@ -1071,7 +1071,8 @@ const PaloAltoParser = (() => {
           extPort: xv(dstTr||inner,'original-port') || '-',
           mapPort: xv(dstTr||inner,'translated-port') || '-',
           proto:   '-', comment: xv(inner,'description') || '-',
-          status:  e._outer.includes('disabled="yes"') ? 'disable' : 'enable',
+          // 停用以 <disabled>yes</disabled> 元素表示（比照安全規則）；原本只認屬性寫法，停用的 NAT 被當成啟用（XN163）
+          status:  e._outer.includes('disabled="yes"') || xv(inner,'disabled') === 'yes' ? 'disable' : 'enable',
           srcIntf: xlist(inner,'from')[0] || '-', arpReply: 'enable',
           _vdom: vsysName || 'vsys1',
           snat: _paSnat({ from: xlist(inner,'from'), to: xlist(inner,'to'), src: xlist(inner,'source'), dst: xlist(inner,'destination') }, srcTr => {
@@ -1108,7 +1109,7 @@ const PaloAltoParser = (() => {
           portFwd: gv('destination-translation translated-port') ? 'enable' : 'disable',
           extPort: gv('destination-translation original-port') || '-',
           mapPort: gv('destination-translation translated-port') || '-',
-          proto:'-', comment: gv('description')||'-', status:'enable',
+          proto:'-', comment: gv('description')||'-', status: gv('disabled') === 'yes' ? 'disable' : 'enable',
           srcIntf: gv('from')||'-', arpReply:'enable',
           snat: _paSnat({ from: _paWords(gv('from')), to: _paWords(gv('to')), src: _paWords(gv('source')), dst: _paWords(gv('destination')) }, () => {
             const ifc = gv('source-translation dynamic-ip-and-port interface-address interface');

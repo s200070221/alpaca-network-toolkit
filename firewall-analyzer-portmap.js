@@ -332,11 +332,12 @@
   function natEntries(parsed) {
     return (parsed && parsed.nat || []).filter(n => (n.type === 'vip' || n.type === 'static') && !_natAny(n.mapIp)).map(n => {
       const pf = n.portFwd === 'enable' && !!_natPort(n.extPort);
-      return { name: n.name || '', ext: _natAddr(n.extIp), map: _natAddr(n.mapIp), proto: pf ? String(n.proto || '').toLowerCase() : '', extPort: pf ? _natPort(n.extPort) : '', mapPort: pf ? _natPort(n.mapPort) : '' };
+      return { name: n.name || '', off: n.status === 'disable', ext: _natAddr(n.extIp), map: _natAddr(n.mapIp), proto: pf ? String(n.proto || '').toLowerCase() : '', extPort: pf ? _natPort(n.extPort) : '', mapPort: pf ? _natPort(n.mapPort) : '' };
     });
   }
+  // 讀回項目是停用的＝轉換器無法完整表達而停用待人工確認（flagged），不算放寬；來源本身停用的不比
   function compareNat(srcParsed, dstParsed) {
-    const a = natEntries(srcParsed), b = natEntries(dstParsed), used = new Set(), diffs = [];
+    const a = natEntries(srcParsed).filter(x => !x.off), b = natEntries(dstParsed), used = new Set(), diffs = [];
     let same = 0;
     a.forEach(s => {
       const cands = b.map((d, i) => ({ d, i })).filter(x => x.d.map === s.map && !used.has(x.i));
@@ -345,7 +346,8 @@
       if (!pick) { diffs.push({ kind: 'missing', src: s }); return; }
       used.add(pick.i);
       const d = pick.d;
-      if ((s.ext && !d.ext) || (s.extPort && !d.extPort)) diffs.push({ kind: 'widened', src: s, dst: d });
+      if (d.off) diffs.push({ kind: 'flagged', src: s, dst: d });
+      else if ((s.ext && !d.ext) || (s.extPort && !d.extPort)) diffs.push({ kind: 'widened', src: s, dst: d });
       else if (s.ext !== d.ext || s.extPort !== d.extPort || s.mapPort !== d.mapPort || (s.proto && d.proto && s.proto !== d.proto)) diffs.push({ kind: 'changed', src: s, dst: d });
       else same++;
     });
