@@ -2945,6 +2945,37 @@ const Converter = (() => {
   }
   // 規則名稱清單，最多 10 條
   const _nameList = a => a.slice(0, 10).join(', ') + (a.length > 10 ? ` … (+${a.length - 10})` : '');
+  // 目標廠牌的名稱長度與字元限制（XN160）：轉換器原樣輸出名稱，超過或含不允許的字元時匯入會失敗；只提示、不自動改名。
+  // 只收官方文件寫明的限制（查不到的廠牌與項目不檢查）：
+  //  FortiGate：FortiOS 7.4 CLI Reference config firewall address name 79、config firewall policy name 35
+  //  Palo Alto：PAN-OS 11.2 Web Interface Help Objects > Addresses，名稱最多 63 字（字元清單與實際接受的不一致，不檢查字元）
+  //  Cisco ASA：Command Reference object network，1～64 字，英數與 _ - , / .
+  //  Zyxel：ZLD CLI Reference address-object，1～31 字，英數與 _ -，第一個字不可為數字
+  //  pfSense：Netgate 文件 Alias Configuration 只允許英數與 _；pf 載入別名表時上限 31 字（官方 redmine 的 pfctl 錯誤訊息）
+  const NAME_LIMITS = {
+    fortigate: { addr: { max: 79 }, policy: { max: 35 } },
+    paloalto: { addr: { max: 63 } },
+    ciscoasa: { addr: { max: 64, re: /^[A-Za-z0-9_\-,/.]+$/, allowed: 'A-Z a-z 0-9 _ - , / .' } },
+    zyxel: { addr: { max: 31, re: /^[A-Za-z_-][A-Za-z0-9_-]*$/, allowed: 'A-Z a-z 0-9 _ -' } },
+    pfsense: { addr: { max: 31, re: /^[A-Za-z0-9_]+$/, allowed: 'A-Z a-z 0-9 _' }, svc: { max: 31, re: /^[A-Za-z0-9_]+$/, allowed: 'A-Z a-z 0-9 _' } },
+  };
+  function _nameLimitReport(p, target) {
+    const L = NAME_LIMITS[target], long = [], chars = [], seen = new Set();
+    if (!L) return { long, chars, allowed: '' };
+    const check = (name, rule) => {
+      const n = String(name || '');
+      if (!rule || !n || n === '-' || seen.has(n)) return;
+      seen.add(n);
+      const len = [...n].length;
+      if (len > rule.max) long.push(`${n} (${len}/${rule.max})`);
+      if (rule.re && !rule.re.test(n)) chars.push(n);
+    };
+    (p.addresses || []).forEach(a => check(a.name, L.addr));
+    (p.services || []).forEach(s => check(s.name, L.svc));
+    (p.policies || []).forEach(r => check(r.name, L.policy));
+    const allowed = (L.addr && L.addr.allowed) || '';
+    return { long, chars, allowed };
+  }
   function _guardPolicies(parsed) {
     if (!parsed || !Array.isArray(parsed.policies)) return parsed;
     let changed = false;
@@ -3461,6 +3492,8 @@ const Converter = (() => {
     "cvt.port_model":"介面名稱已依目標型號 {model} 對應（未對應的埠保留原名），請依實際接線、速度與模組人工複核",
     "cvt.port_generic":"介面實體名稱／埠位對應皆直接沿用來源設定，未轉換為目標設備慣用命名，請依目標設備實際型號與埠數量人工核對介面清單",
     "cvt.v6_dual":"{n} 條規則同時有 IPv4 與 IPv6 位址，只轉換了 IPv4 部分；IPv6 部分（{list}）需在目標設備另行建立",
+    "cvt.name_long":"{n} 個名稱超過目標廠牌的長度上限（{list}，括號內為字數／上限），匯入時會被拒絕或截斷：請先在來源或轉換結果中改短",
+    "cvt.name_chars":"{n} 個名稱含目標廠牌不允許的字元（{list}；只允許 {allowed}），匯入時會失敗：請先改名，並同步修改引用該名稱的群組與規則",
     "cvt.v6_only":"{n} 條僅 IPv6 的規則（{list}）未輸出：轉換器尚未支援 IPv6 位址物件與 IPv6 規則語法，請在目標設備另行建立",
     "cvt.v6_split":"{n} 條同時有 IPv4 與 IPv6 位址的規則（{list}）已拆成 IPv4、IPv6 各一條（IPv6 那條名稱加 -v6）；IPv6 語法依廠商文件產生，未以實機驗證"
   };
@@ -3488,6 +3521,10 @@ const Converter = (() => {
       if(v6.dual.length) add('cvt.v6_dual',{n:v6.dual.length,list:_nameList(v6.dual)});
       if(v6.only.length) add('cvt.v6_only',{n:v6.only.length,list:_nameList(v6.only)});
     }
+    // 名稱長度與字元（XN160）：以 convert() 同樣的前處理後會輸出的名稱檢查（含自動建立的 h-／n- 物件；不支援 IPv6 的目標先移除 IPv6 物件）
+    const nl=_nameLimitReport(_applyFamilies(_normListRefs(_nfApply(_normGroupMembers(parsed))),targetVendor),targetVendor);
+    if(nl.long.length) add('cvt.name_long',{n:nl.long.length,list:_nameList(nl.long)});
+    if(nl.chars.length) add('cvt.name_chars',{n:nl.chars.length,allowed:nl.allowed,list:_nameList(nl.chars)});
     const ifs=parsed.interfaces||[];
     // 2026-09-22 新增：跨 VDOM 同名具名物件警語。toZyxel()/toEdgeRouter() 的具名物件查找已
     // 直接修復為 VDOM 感知（見各自函式內 _vdom 比對邏輯）；toMikrotik()/toOpenWrt() 的具名
