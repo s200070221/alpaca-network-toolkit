@@ -1121,8 +1121,12 @@ function onParsed(){
       + `<label>${esc(tr('vl.pick').replace('{model}', cur && cur !== '-' ? cur : '-'))} <select data-fw-limit-pick="${esc(kind)}"><option value="">${esc(tr('vl.pick_none'))}</option>`
       + _fwLimitModels(kind).slice().sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('') + '</select></label></div>';
   }
-  function _fwLimitPickedNote() {
-    return (PARSED.deviceInfo || {}).modelPicked ? `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${esc(tr('vl.picked').replace('{model}', PARSED.deviceInfo.model))}</div>` : '';
+  // 使用者選的型號：註明並保留選單可改選（RV9：原本選完選單消失、無法更正）
+  function _fwLimitPickedNote(kind) {
+    if (!(PARSED.deviceInfo || {}).modelPicked) return '';
+    const cur = PARSED.deviceInfo.model;
+    return `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${esc(tr('vl.picked').replace('{model}', cur))} <select data-fw-limit-pick="${esc(kind)}" aria-label="${esc(tr('ml.title'))}">`
+      + _fwLimitModels(kind).slice().sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(m => `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc(m)}</option>`).join('') + '</select></div>';
   }
   document.addEventListener('change', e => {
     const sel = e.target && e.target.closest ? e.target.closest('select[data-fw-limit-pick]') : null;
@@ -1132,6 +1136,9 @@ function onParsed(){
     PARSED.deviceInfo = PARSED.deviceInfo || {};
     PARSED.deviceInfo.model = v; PARSED.deviceInfo.modelPicked = true;
     showSection('audit');
+    // 選完捲到結果卡片（RV9）
+    const card = document.getElementById('cisco-limit-card') || document.getElementById('vendor-limit-card');
+    if (card) card.scrollIntoView({ block: 'nearest' });
   });
   function showSection(section){
     if(!PARSED)return;
@@ -1596,13 +1603,13 @@ function onParsed(){
           // Cisco ASA／FTD 設定檔有型號（show version 的 Hardware）時：VLAN 子介面數與該型號上限（XN149）
           ...(/^Cisco (ASA|FTD)/i.test(PARSED.vendor || '') && window.FwModelLimits && window.FwModelLimits.ciscoAssess ? (() => {
             const _cr = window.FwModelLimits.ciscoAssess(PARSED, { target: /FTD/i.test(PARSED.vendor) ? 'ciscoftd' : 'ciscoasa', model: (PARSED.deviceInfo || {}).model });
-            return _cr.supported ? [['<div id="cisco-limit-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('ml.title')) + '</div>' + _fwLimitPickedNote() + buildCiscoLimitHtml(_cr) + '</div>', _cr.level === 'ok' ? 0 : 1]] : [[_fwLimitPickHtml(/FTD/i.test(PARSED.vendor) ? 'ftd' : 'asa'), 1]]; })() : []),
+            return _cr.supported ? [['<div id="cisco-limit-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('ml.title')) + '</div>' + _fwLimitPickedNote(/FTD/i.test(PARSED.vendor) ? 'ftd' : 'asa') + buildCiscoLimitHtml(_cr) + '</div>', _cr.level === 'ok' && !(PARSED.deviceInfo || {}).modelPicked ? 0 : 1]] : [[_fwLimitPickHtml(/FTD/i.test(PARSED.vendor) ? 'ftd' : 'asa'), 1]]; })() : []),
           // Palo Alto／Juniper SRX 設定檔讀得到型號時：規則、物件、zone 等數量與該型號官方上限（XN150）
           ...(/^(PaloAlto|Juniper)/i.test(PARSED.vendor || '') && window.FwModelLimits && window.FwModelLimits.paAssess ? (() => {
             const _m = (PARSED.deviceInfo || {}).model;
             const _vr = /^PaloAlto/i.test(PARSED.vendor) ? window.FwModelLimits.paAssess(PARSED, { model: _m }) : window.FwModelLimits.junosAssess(PARSED, { model: _m });
             const _vn = _vr.supported ? _vr.items.filter(i => i.level === 'over' || i.level === 'near').length : 0;
-            return _vr.supported ? [['<div id="vendor-limit-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('ml.title')) + '</div>' + _fwLimitPickedNote() + buildVendorLimitHtml(_vr) + '</div>', _vn]] : [[_fwLimitPickHtml(/^PaloAlto/i.test(PARSED.vendor) ? 'pa' : 'jn'), 1]]; })() : []),
+            return _vr.supported ? [['<div id="vendor-limit-card" style="margin-bottom:24px"><div style="font-size:13px;font-weight:600;color:var(--teal);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(tr('ml.title')) + '</div>' + _fwLimitPickedNote(/^PaloAlto/i.test(PARSED.vendor) ? 'pa' : 'jn') + buildVendorLimitHtml(_vr) + '</div>', _vn || ((PARSED.deviceInfo || {}).modelPicked ? 1 : 0)]] : [[_fwLimitPickHtml(/^PaloAlto/i.test(PARSED.vendor) ? 'pa' : 'jn'), 1]]; })() : []),
           [buildDisabledPoliciesHtml(_dis), _dis.length], [buildCrossVdomHtml(_xv), _xv.length], [buildMissingCommentsHtml(_mc), _mc.length],
           [buildOversizedGroupsHtml(_og), _og.length], [buildNamingConventionHtml(_nm, _loadNamingRules()), (_nm.results || []).length + (_nm.errors || []).length],
           [buildExpiredRulesHtml(_ex, _loadExpiryKeywords()), (_ex.results || []).length],

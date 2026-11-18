@@ -1163,6 +1163,12 @@ function showMapRemind(batch) {
   b.textContent = tr(batch ? 'batch.export_map' : 'map.remind_btn'); b.onclick = () => (batch ? exportBatchMapping() : exportMapping());
   el.dataset.batch = batch ? '1' : '';
   el.append(sp, b); el.hidden = false;
+  placeMapRemind();
+}
+// 各 .view 為 absolute 填滿 #content，提醒放在 #content 會被蓋住（RV9）：顯示時移到目前頁面的最上方，切換頁面時跟著移
+function placeMapRemind() {
+  const el = document.getElementById('map-remind'), v = document.querySelector('#content > .view.active');
+  if (el && v && !el.hidden && el.parentElement !== v) v.prepend(el);
 }
 function hideMapRemind() { const el = document.getElementById('map-remind'); if (el) { el.hidden = true; el.textContent = ''; } }
 function markMappingSaved() { STATE.mappingExported = true; hideMapRemind(); }
@@ -5173,6 +5179,7 @@ function showView(name) {
   document.getElementById('view-' + name).classList.add('active');
   const navEl = document.getElementById('nav-' + name);
   if (navEl) navEl.classList.add('active');
+  placeMapRemind();
   // 回報流程（2026-09-29 新增）：開過差異頁即記為已查看；回報區塊顯示中才在差異頁顯示返回按鈕
   if (name === 'preview' && STATE.anonymized) { STATE.reportDiffViewed = true; updateReportState(); }
   const back = document.getElementById('report-back-btn');

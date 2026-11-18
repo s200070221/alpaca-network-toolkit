@@ -4261,12 +4261,14 @@ function renderSwLimitCard(){
   const r=parsed?swModelLimitCheck(parsed):null;
   if(!r)return '';
   const lv={over:['swl.over','var(--red,#ef4444)'],near:['swl.near','var(--orange,#f59e0b)'],ok:['swl.ok','var(--text-dim)']};
-  const rows=r.items.map(it=>`<tr><td>${esc(tr('swl.'+it.key))}</td><td style="text-align:right">${it.count}</td><td style="text-align:right">${it.limit}</td><td style="color:${lv[it.level][1]}">${esc(tr(lv[it.level][0]))}</td></tr>`).join('');
+  // 欄位間距（RV9：手機寬度下「上限」與「狀態」原本黏在一起）
+  const P='padding:3px 8px';
+  const rows=r.items.map(it=>`<tr><td style="${P} 3px 0">${esc(tr('swl.'+it.key))}</td><td style="text-align:right;${P}">${it.count}</td><td style="text-align:right;${P}">${it.limit}</td><td style="color:${lv[it.level][1]};${P};white-space:nowrap">${esc(tr(lv[it.level][0]))}</td></tr>`).join('');
   const host=(String(r.src).match(/^https?:\/\/([^/]+)/)||[])[1]||'';
   return `<div id="sw-limit-card" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px">
     <div style="font-size:14px;font-weight:600;margin-bottom:6px">${esc(tr('swl.title').replace('{name}',r.name))}</div>
     <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(tr('swl.hint').replace('{platform}',r.platform).replace('{src}',host))}</div>
-    ${rows?`<table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left">${esc(tr('swl.col_item'))}</th><th style="text-align:right">${esc(tr('swl.col_count'))}</th><th style="text-align:right">${esc(tr('swl.col_limit'))}</th><th style="text-align:left">${esc(tr('swl.col_level'))}</th></tr></thead><tbody>${rows}</tbody></table>`:`<div style="font-size:12px">${esc(tr('swl.none'))}</div>`}
+    ${rows?`<table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left;${P} 3px 0">${esc(tr('swl.col_item'))}</th><th style="text-align:right;${P};white-space:nowrap">${esc(tr('swl.col_count'))}</th><th style="text-align:right;${P};white-space:nowrap">${esc(tr('swl.col_limit'))}</th><th style="text-align:left;${P};white-space:nowrap">${esc(tr('swl.col_level'))}</th></tr></thead><tbody>${rows}</tbody></table>`:`<div style="font-size:12px">${esc(tr('swl.none'))}</div>`}
   </div>`;
 }
 // 記住補填版本（UX38）：localStorage sw_vuln_ver 存在＝已啟用，依主機名稱；只在記憶體沒有補填值時帶入
