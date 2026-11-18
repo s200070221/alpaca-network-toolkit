@@ -67,6 +67,19 @@ function applyIfaceBulk(){
   msg.textContent=text;
   msg.style.color=(!indexes.length||invalid.length)?'var(--warn,#d97706)':'var(--text-dim,#64748b)';
 }
+// 未使用埠一鍵 shutdown（XN159）：判斷交給 validate.js 的 findUnusedPorts()／findUnusedVlans()；
+// VLAN 只列出不刪除（設定檔看不出是否保留給之後使用）
+function shutdownUnusedPorts(){
+  const model=collectModel();
+  const names=new Set(findUnusedPorts(model));
+  rowsOf('#iface-body tr').forEach(r=>{ if(names.has(val(r,'i-name')))r.querySelector('.i-shutdown').checked=true; });
+  const vl=findUnusedVlans(model);
+  let text=names.size?tr('unused.done').replace('{n}',names.size):tr('unused.none');
+  if(vl.length)text+=' '+tr('unused.vlans').replace('{list}',vl.join(', '));
+  const msg=document.getElementById('bulkif-msg');
+  msg.textContent=text;
+  msg.style.color=names.size?'var(--text-dim,#64748b)':'var(--warn,#d97706)';
+}
 
 // 配線表 CSV 匯入（2026-10-14，第二十四輪 JG）：解析交給 validate.js 的 parsePortMapCsv()；同名介面列（不分大小寫）
 // 更新有填的欄位，沒有的新增一列；結果訊息顯示更新／新增／錯誤數

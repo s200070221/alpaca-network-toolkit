@@ -344,6 +344,32 @@ function parseVlanRangeSpec(spec){
   return {ids:[...ids].sort((x,y)=>x-y).map(String),invalid};
 }
 
+// 未使用埠與 VLAN（XN159，第三十八輪「之後視需要」）：model 為 collectModel() 的結果，純函式。
+// 未使用埠＝access 模式、沒有描述、Access VLAN 空白或 1、尚未 shutdown、不是 LACP 成員、名稱不像管理埠；
+// trunk／hybrid、有描述或指定 VLAN 的埠一律視為使用中（設定檔看不出實際接線，寧可少關）
+const UNUSED_MGMT_RE=/^(m-|mgmt|management|me\d|fxp\d|em\d|eth0$|vme|ma\d|out-?of-?band|oob)/i;
+function findUnusedPorts(model){
+  const m=model||{}, lag=new Set();
+  (m.lacp||[]).forEach(l=>(l.members||[]).forEach(n=>lag.add(String(n).trim())));
+  return (m.interfaces||[]).filter(i=>i&&i.name&&i.mode==='access'&&!String(i.desc||'').trim()&&
+    ['','1'].includes(String(i.accessVlan||'').trim())&&!i.shutdown&&!lag.has(i.name)&&!UNUSED_MGMT_RE.test(i.name)).map(i=>i.name);
+}
+// 沒有任何埠、SVI 位址或 VRRP 用到的 VLAN（VLAN 1 不列）；任一 trunk 寫 all 時無法判斷，回傳空陣列
+function findUnusedVlans(model){
+  const m=model||{}, used=new Set(['1']);
+  const add=s=>parseVlanRangeSpec(String(s||'').replace(/\s*-\s*/g,'-')).ids.forEach(v=>used.add(v));
+  let all=false;
+  (m.interfaces||[]).forEach(i=>{
+    if(!i)return;
+    if(i.mode==='access')add(i.accessVlan);
+    if(i.mode==='trunk'){ if(/\ball\b/i.test(String(i.trunkVlans||'')))all=true; add(i.trunkVlans); add(i.nativeVlan); }
+    if(i.mode==='hybrid'&&i.hybrid){ add(i.hybrid.pvid); add((i.hybrid.tagged||[]).join(',')); add((i.hybrid.untagged||[]).join(',')); }
+  });
+  if(all)return [];
+  (m.vrrp||[]).forEach(v=>add(v&&v.vlanId));
+  return (m.vlans||[]).filter(v=>v&&v.id&&!String(v.ip||'').trim()&&!used.has(String(v.id).trim())).map(v=>String(v.id).trim());
+}
+
 // 介面批次套用選取（2026-09-24 新增）：spec 以逗號／空白分隔多個片段，每段為「名稱結尾」加上
 // 編號或編號範圍，例如 1/0/1-24、port1-8、ge-0/0/3。介面名稱需以「前綴＋編號」結尾，且前綴前
 // 一個字元不是數字（避免 1/0/1 誤中 11/0/1），才算命中。回傳命中的索引（依表格順序）與無法

@@ -569,6 +569,11 @@ end</pre>
         <button class="add-btn" data-i18n="bulkIf.apply" onclick="applyIfaceBulk()">套用</button>
       </div>
       <div style="font-size:12px;color:var(--text-dim,#64748b);margin-top:4px" data-i18n="bulkIf.hint">依介面名稱結尾的編號選取，例如 1/0/1-24 選中 GigabitEthernet1/0/1～24；只輸入數字範圍則比對名稱最後的編號。欄位留空即維持原值。</div>
+      <!-- 未使用埠（XN159）：一鍵勾選 shutdown，並列出沒用到的 VLAN -->
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px">
+        <button class="add-btn" id="unused-ports-btn" data-i18n="unused.btn" onclick="shutdownUnusedPorts()">關閉未使用的埠</button>
+        <span style="font-size:12px;color:var(--text-dim,#64748b)" data-i18n="unused.tip">把 access 模式、沒有描述、Access VLAN 空白或 1、不是 LACP 成員的埠勾選 shutdown（管理埠除外）；不刪除任何設定，可再手動取消</span>
+      </div>
       <div id="bulkif-msg" style="font-size:12px;margin-top:4px"></div>
     </details>
     <details id="iface-portmap" style="margin-top:8px">
