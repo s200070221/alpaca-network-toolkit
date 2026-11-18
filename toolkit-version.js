@@ -3,8 +3,25 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.17.1';
+  const TOOLKIT_VERSION = '2026.11.18';
   const CHANGELOG = [
+    {
+      version: '2026.11.18',
+      items: {
+        zhTW: [
+          '修正：防火牆轉成 MikroTik 時，沒有目的位址的目的 NAT 會變成沒有任何條件、把所有新連線導到內部主機；現在帶上來源的進入介面，連進入介面也沒有時輸出為停用並標註需人工確認；埠號不再輸出成 dst-port=-',
+          '修正：去識別化下載結果後的「另外保存對照表」提醒被頁面蓋住看不到',
+          '防火牆讀不到型號時選擇的型號，結果卡片固定顯示在稽核頁前面，並可改選',
+          '修正：log 分析「建議一併匯入」的 ClearPass 來源標籤；交換器分析型號上限表在手機上的欄位間距',
+        ],
+        en: [
+          'Fix: when converting a firewall to MikroTik, destination NAT without a destination address became a rule with no conditions that sent every new connection to the internal host; the source in-interface is now kept, rules with neither are output disabled and marked for review, and ports are no longer written as dst-port=-',
+          'Fix: the anonymizer reminder to keep the mapping after downloading was hidden behind the page',
+          'A firewall model picked manually (when the config has none) keeps its result card at the top of the audit page and can be changed',
+          'Fix: ClearPass source label in the log analyzer\'s suggested logs; column spacing of the switch analyzer model-limit table on phones',
+        ],
+      },
+    },
     {
       version: '2026.11.17.1',
       items: {
