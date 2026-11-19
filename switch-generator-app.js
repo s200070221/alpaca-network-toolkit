@@ -746,9 +746,11 @@ const DEVICE_MODELS={
       {prefix:'1/1/',from:49,to:56,speed:'25G'},
       {prefix:'1/1/',from:57,to:58,speed:'100G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
-    {value:'icx7650-48p',label:'Ruckus ICX7650-48P (48×1G/10G PoE+ + 8×25G Uplink)',ports:[
-      {prefix:'1/1/',from:1,to:48,speed:'10G'},
-      {prefix:'1/1/',from:49,to:56,speed:'25G'},
+    // ICX7650-48P：依官方 datasheet，前方 48×1G RJ-45（40 埠 PoE+、8 埠另支援 UPoE／PoH），48P 只支援後方 2×40G 上行；
+    // 後方模組在 FastIron 編號為 1/3/x（實際 show interfaces stack-ports 輸出）。前方選購模組只在後方用於堆疊時啟用，不列入
+    {value:'icx7650-48p',label:'Ruckus ICX7650-48P (48×1G PoE+ + 2×40G Rear Uplink)',ports:[
+      {prefix:'1/1/',from:1,to:48,speed:'1G'},
+      {prefix:'1/3/',from:1,to:2,speed:'40G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'icx8200-24',label:'Ruckus ICX8200-24 (24×1G + 4×25G SFP28 Uplink，ICX7150 後繼機)',ports:[
       {prefix:'1/1/',from:1,to:24,speed:'1G'},
