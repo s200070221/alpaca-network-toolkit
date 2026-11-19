@@ -629,8 +629,8 @@ const DEVICE_MODELS={
       {prefix:'Ethernet',from:1,to:48,speed:'1G'},
       {name:'Management1',speed:'1G',mgmt:true}],poe:false},
     // 720XP-48ZC2：依 Arista datasheet／快速安裝指南，40×2.5G PoE+＋8×5G PoE（60W）＋4×25G SFP＋2×100G QSFP；
-    // 各速度埠的編號順序與 QSFP 名稱指南未寫明（未查證），QSFP 依 EOS 慣例以 EthernetN/1 表示
-    {value:'720xp-48zc2',label:'Arista 720XP-48ZC2 (40×2.5G + 8×5G PoE + 4×25G SFP + 2×100G QSFP；埠號分組未查證)',ports:[
+    // 埠號分組與 QSFP 名稱與 NetBox devicetype-library（CCS-720XP-48ZC2-F）相同（XN176）
+    {value:'720xp-48zc2',label:'Arista 720XP-48ZC2 (40×2.5G + 8×5G PoE + 4×25G SFP + 2×100G QSFP)',ports:[
       {prefix:'Ethernet',from:1,to:40,speed:'2.5G'},
       {prefix:'Ethernet',from:41,to:48,speed:'5G'},
       {prefix:'Ethernet',from:49,to:52,speed:'25G'},
@@ -638,14 +638,16 @@ const DEVICE_MODELS={
       {name:'Management1',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'7050sx3-48yc8',label:'Arista 7050SX3-48YC8 (48×25G+8×100G)',ports:[{prefix:'Ethernet',from:1,to:48,speed:'25G'},{prefix:'Ethernet',from:49,to:56,speed:'100G',suffix:'/1'},{name:'Management1',speed:'1G',mgmt:true}],poe:false},
     {value:'7060cx2-32s',label:'Arista 7060CX2-32S (32×100G + 2×10G)',ports:[{prefix:'Ethernet',from:1,to:32,speed:'100G',suffix:'/1'},{prefix:'Ethernet',from:33,to:34,speed:'10G'},{name:'Management1',speed:'1G',mgmt:true}],poe:false},
-    {value:'arista750-48-1g',label:'Arista 750 Series 校園存取 (模組化 線卡，48×1G PoE 30W + 25G SFP28 Uplink；模組化機箱介面名稱依插槽，未查證)',ports:[
-      {prefix:'Ethernet',from:1,to:48,speed:'1G'},
-      {prefix:'Ethernet',from:49,to:50,speed:'25G'},
-      {name:'Management1',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
-    {value:'arista750-48-10g',label:'Arista 750 Series 校園存取 (模組化 線卡，48×2.5/5/10G Multi-Gig PoE 90W + 25G SFP28 Uplink；模組化機箱介面名稱依插槽，未查證)',ports:[
-      {prefix:'Ethernet',from:1,to:48,speed:'10G'},
-      {prefix:'Ethernet',from:49,to:50,speed:'25G'},
-      {name:'Management1',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
+    // 750X 模組化機箱（XN176，依 NetBox devicetype-library CCS-755：插槽 1／2 為監控引擎〔CCS-750-SUP25：Ethernet{插槽}/1-4 SFP28、
+    // Management{插槽}/1〕、插槽 3 起為線卡〔Ethernet{插槽}/1-48〕）；以插槽 1 的監控引擎＋插槽 3 的線卡示意
+    {value:'arista750-48-1g',label:'Arista 750X 校園存取 (模組化，插槽 3 線卡 48×1G PoE + 插槽 1 監控引擎 4×25G SFP28)',ports:[
+      {prefix:'Ethernet3/',from:1,to:48,speed:'1G'},
+      {prefix:'Ethernet1/',from:1,to:4,speed:'25G'},
+      {name:'Management1/1',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
+    {value:'arista750-48-10g',label:'Arista 750X 校園存取 (模組化，插槽 3 線卡 48×Multi-Gig 10G PoE + 插槽 1 監控引擎 4×25G SFP28)',ports:[
+      {prefix:'Ethernet3/',from:1,to:48,speed:'10G'},
+      {prefix:'Ethernet1/',from:1,to:4,speed:'25G'},
+      {name:'Management1/1',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
   ],
   brocade:[
     // ICX 埠號為 單元/槽/埠（XN169，依 Ruckus 硬體安裝手冊）：前方存取埠在 slot 1，上行／堆疊埠在 slot 2、3
@@ -680,10 +682,11 @@ const DEVICE_MODELS={
       {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
   ],
   alcatel:[
-    // OmniSwitch：依 ALE 官方 datasheet（XN169）。OS6560-P24X4 另有 2×1G SFP，datasheet 未列埠號順序，只列 4×SFP+（編號未查證）
-    {value:'os6560-p24',label:'Alcatel OmniSwitch 6560-P24X4 (24×1G PoE+ + 4×10G SFP+；另 2×1G SFP 未列，上行埠編號未查證)',ports:[
+    // OmniSwitch：依 ALE 官方 datasheet（XN169）。OS6560-P24X4 的上行埠順序依 NetBox devicetype-library（XN176）：25-26 為 1G SFP、27-30 為 SFP+
+    {value:'os6560-p24',label:'Alcatel OmniSwitch 6560-P24X4 (24×1G PoE+ + 2×1G SFP + 4×10G SFP+)',ports:[
       {prefix:'1/1/',from:1,to:24,speed:'1G'},
-      {prefix:'1/1/',from:25,to:28,speed:'10G'},
+      {prefix:'1/1/',from:25,to:26,speed:'1G'},
+      {prefix:'1/1/',from:27,to:30,speed:'10G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,24]},
     {value:'os6860-24',label:'Alcatel OmniSwitch 6860-24 (24×1G + 4×10G SFP+)',ports:[
       {prefix:'1/1/',from:1,to:24,speed:'1G'},

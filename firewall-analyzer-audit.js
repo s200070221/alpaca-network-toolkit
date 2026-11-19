@@ -3408,3 +3408,40 @@ function buildPriorityHtml(items, limit, title) {
     const head = String(tr('reorder.script_header')).split('\n').map(l => '# ' + l);
     return [...head, '', ...body, ''].join('\n');
   }
+
+// ── 使用者自備的可疑帳號清單（XN174）──────────────────
+// 公告常列出攻擊者建立的帳號名稱；依「不內建 IOC」原則不內建名單，由使用者貼上。清單只存記憶體。
+// 比對規則：不分大小寫；「網域\帳號」與「帳號@網域」另以帳號部分比對；# 之後為註解。命中只代表名稱相同，需人工確認
+function parseAccountList(text) {
+  const out = [], seen = new Set();
+  String(text || '').split(/[\r\n,，]+/).forEach(l => {
+    const v = l.replace(/#.*$/, '').trim().toLowerCase();
+    if (v && !seen.has(v) && out.length < 1000) { seen.add(v); out.push(v); }
+  });
+  return out;
+}
+function _acctKeys(name) {
+  const n = String(name || '').trim().toLowerCase();
+  if (!n) return [];
+  return [...new Set([n, n.replace(/^[^\\]*\\/, ''), n.replace(/@.*$/, '')])];
+}
+function matchSuspectAccounts(parsed, list) {
+  const set = new Set(list || []);
+  if (!set.size) return [];
+  return ((parsed && parsed.users) || []).filter(u => u && u.name && u.type !== 'group' && !/-server$/.test(u.type || '') && _acctKeys(u.name).some(k => set.has(k)))
+    .map(u => ({ name: u.name, type: u.type || '-', vdom: u._vdom || '', status: u.status || 'enable' }));
+}
+function buildSuspectAcctHtml(parsed, text) {
+  const list = parseAccountList(text), hits = matchSuspectAccounts(parsed, list);
+  let h = '<div id="suspect-acct-card" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">' +
+    '<div style="font-size:13px;font-weight:600;margin-bottom:6px">🔎 ' + esc(tr('sacct.title')) + '</div>' +
+    '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('sacct.hint')) + '</div>' +
+    '<textarea id="fw-suspect-accts" spellcheck="false" placeholder="' + esc(tr('sacct.ph')) + '" style="width:100%;height:70px;box-sizing:border-box;font-family:Menlo,\'Courier New\',monospace;font-size:11px">' + esc(text || '') + '</textarea>' +
+    '<button class="btn btn-ghost btn-sm" style="margin-top:4px" onclick="window._fwSuspectRun()">' + esc(tr('sacct.btn')) + '</button>';
+  if (list.length) {
+    h += '<div data-sacct-result style="margin-top:8px;font-size:12px">' + esc(tr(hits.length ? 'sacct.hit' : 'sacct.none').replace('{n}', hits.length).replace('{m}', list.length)) + '</div>';
+    if (hits.length) h += '<table class="data-tbl" style="margin-top:6px"><thead><tr><th>' + esc(tr('sacct.col_acct')) + '</th><th>' + esc(tr('sacct.col_kind')) + '</th><th>VDOM</th></tr></thead><tbody>' +
+      hits.map(x => '<tr><td>' + esc(x.name) + (x.status === 'disable' ? ' <span style="color:var(--text-dim)">(disable)</span>' : '') + '</td><td>' + esc(x.type) + '</td><td>' + esc(x.vdom || '-') + '</td></tr>').join('') + '</tbody></table>';
+  }
+  return h + '</div>';
+}

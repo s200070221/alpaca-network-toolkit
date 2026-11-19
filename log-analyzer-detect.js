@@ -973,6 +973,46 @@ function parseRmmList(text) {
   return out;
 }
 // DNS 查詢、proxy／web 紀錄的網域落在 RMM 清單（完全相同或子網域）：依工具＋用戶端合併；允許清單（工具名稱或網域）排除公司自用的 RMM
+// 使用者自備的可疑帳號清單（XN174）：公告列出的攻擊者帳號名稱，依「不內建 IOC」原則由使用者貼上（只存記憶體）。
+// 不分大小寫，「網域\帳號」與「帳號@網域」另以帳號部分比對；# 之後為註解。命中只代表名稱相同，需人工確認
+function parseSuspectAccountList(text) {
+  const out = [], seen = new Set();
+  String(text || '').split(/[\r\n,，]+/).forEach(l => {
+    const v = l.replace(/#.*$/, '').trim().toLowerCase();
+    if (v && !seen.has(v) && out.length < 1000) { seen.add(v); out.push(v); }
+  });
+  return out;
+}
+function suspectAcctKeys(name) {
+  const n = String(name || '').trim().toLowerCase();
+  if (!n || n === '-' || n === 'n/a') return [];
+  return [...new Set([n, n.replace(/^[^\\]*\\/, ''), n.replace(/@.*$/, '')])];
+}
+function detectSuspectAccounts(events, list) {
+  const set = new Set(list || []);
+  if (!set.size) return [];
+  const groups = new Map();
+  events.forEach(e => {
+    const f = e.fields || {}, a = netAdminChangeOf(e);
+    const cands = [f.user, f.TargetUserName, f.SubjectUserName, pickField(f, JSON_USER_KEYS), a && a.acct];
+    let hit = '';
+    for (const c of cands) { const k = suspectAcctKeys(c).find(x => set.has(x)); if (k) { hit = k; break; } }
+    if (!hit) return;
+    if (!groups.has(hit)) groups.set(hit, []);
+    groups.get(hit).push(e);
+  });
+  const issues = [];
+  for (const [acct, list2] of groups) {
+    const ev = list2.sort((x, y) => effectiveTime(x) - effectiveTime(y)), hosts = [...new Set(ev.map(e => e.host).filter(Boolean))];
+    issues.push({
+      category: 'suspectAccount', severityNorm: 'High', count: ev.length,
+      firstSeen: ev[0].timestamp || null, lastSeen: ev[ev.length - 1].timestamp || null, suspectAcct: acct, suspectHosts: hosts.length,
+      ...sampleOf('sample.suspectAccount', { acct, n: ev.length, hosts: hosts.slice(0, 5).join(', ') || '-' }),
+      relatedHosts: [acct, ...hosts.slice(0, 5)], relatedEvents: ev, confidence: 'heuristic'
+    });
+  }
+  return issues;
+}
 function detectRmmTools(events, rmmList, allow) {
   const byDom = new Map((rmmList || []).filter(x => x && x.domain).map(x => [x.domain, x.tool || x.domain]));
   if (!byDom.size) return [];
@@ -1548,6 +1588,7 @@ function formatIssueBasis(is) {
   if (is.category === 'distributedSpray') {
     return `srcs=${is.spraySrcs} | users=${is.sprayUsers} | fails=${is.count} @ 24h`;
   }
+  if (is.category === 'suspectAccount') return `acct=${is.suspectAcct} | hosts=${is.suspectHosts} | list=user`;
   if (is.category === 'rmmTool') {
     return `tool=${is.rmmTool} | domain=${is.rmmDomains.join(',')} | client=${is.rmmClient}`;
   }
@@ -2325,6 +2366,7 @@ function buildIssueList(events, intelIndexes, opts) {
   const vpnHosting = detectVpnFromHosting(analyzed, o.asnIndexes || [], o.hostingAsns || []);
   const vpnAnon = detectVpnFromAnonVpn(analyzed, o.anonVpn || []);
   const rmmIss = detectRmmTools(analyzed, o.rmm || [], o.rmmAllow || []);
+  const suspectAcct = detectSuspectAccounts(analyzed, o.suspectAccts || []);
   const acctAudit = detectAccountAuditEvents(analyzed);
   const passTheHash = detectPassTheHash(analyzed);
   const kerberoasting = detectKerberoasting(analyzed);
@@ -2342,7 +2384,7 @@ function buildIssueList(events, intelIndexes, opts) {
   const psModuleLog = detectPowerShellModuleLogging(analyzed, { enablePsModuleLog: o.enablePsModuleLog, psModuleLogWatchlist: o.psModuleLogWatchlist });
   const timeGap = detectTimeGaps(analyzed, { gapThresholdMs: o.gapThresholdMs });
   const custom = detectCustomRules(analyzed, o.customRules);
-  const all = [...vpnHosting, ...vpnAnon, ...rmmIss, ...dspray, ...mfaFatigue, ...npsRej, ...nsSess, ...qnapIss, ...veeamIss, ...vaultIss, ...mtTamper, ...riskyPorts, ...fortiMgmtIss, ...appsmith, ...appsmithIntr, ...credTheft, ...gitlabIss, ...awsAcct, ...dbAuth, ...webshell, ...esxi, ...promptInj, ...intel, ...hashIntel, ...freq, ...scanCef, ...scanSys, ...scanWeb, ...exploitWeb, ...dnsAnom, ...nacFail, ...sshBrute, ...adminLogins, ...vpnSpray, ...winFail, ...ldapIss, ...spray, ...rdpIss, ...adIss, ...radIss, ...svcIss, ...ldapSign, ...dcsync, ...crossDom, ...idsAlerts, ...netOps, ...netAdmin, ...volume, ...geo, ...geoIP, ...beaconing, ...lateral, ...privEsc, ...geoVelocity, ...asnRisk, ...acctAudit, ...passTheHash, ...kerberoasting, ...asrepRoasting, ...asrepRoastingRisk, ...lsassAccess, ...sysmonRegPersist, ...adminShare, ...procCreate, ...asnVelocity, ...sysmonProcCreate, ...sysmonRemoteThread, ...psScriptBlock, ...sysmonImageLoad, ...psModuleLog, ...timeGap, ...custom];
+  const all = [...suspectAcct, ...vpnHosting, ...vpnAnon, ...rmmIss, ...dspray, ...mfaFatigue, ...npsRej, ...nsSess, ...qnapIss, ...veeamIss, ...vaultIss, ...mtTamper, ...riskyPorts, ...fortiMgmtIss, ...appsmith, ...appsmithIntr, ...credTheft, ...gitlabIss, ...awsAcct, ...dbAuth, ...webshell, ...esxi, ...promptInj, ...intel, ...hashIntel, ...freq, ...scanCef, ...scanSys, ...scanWeb, ...exploitWeb, ...dnsAnom, ...nacFail, ...sshBrute, ...adminLogins, ...vpnSpray, ...winFail, ...ldapIss, ...spray, ...rdpIss, ...adIss, ...radIss, ...svcIss, ...ldapSign, ...dcsync, ...crossDom, ...idsAlerts, ...netOps, ...netAdmin, ...volume, ...geo, ...geoIP, ...beaconing, ...lateral, ...privEsc, ...geoVelocity, ...asnRisk, ...acctAudit, ...passTheHash, ...kerberoasting, ...asrepRoasting, ...asrepRoastingRisk, ...lsassAccess, ...sysmonRegPersist, ...adminShare, ...procCreate, ...asnVelocity, ...sysmonProcCreate, ...sysmonRemoteThread, ...psScriptBlock, ...sysmonImageLoad, ...psModuleLog, ...timeGap, ...custom];
   all.push(...detectOffHours(all, analyzed, o.offHours));
   all.push(...detectUnusualHours(analyzed, o.actorHourBaseline));
   all.push(...detectNewSources(analyzed, o.actorSourceBaseline, o));

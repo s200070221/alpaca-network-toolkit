@@ -1622,6 +1622,7 @@ function onParsed(){
           + (PARSED.vendor === 'FortiGate' ? _fwCleanupCardHtml() : '')
           + (_HIT_VENDOR_SUFFIX[PARSED.vendor] !== undefined ? _fwHitCardHtml() : '')
           + _fwRecertCardHtml()
+          + buildSuspectAcctHtml(PARSED, window._fwSuspectText || '')
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
               <div id="health-result" style="margin-top:12px"></div>
@@ -1957,6 +1958,13 @@ function onParsed(){
   };
   // 貼上 show version 輸出讀出完整版本（XN141）：寫入補填版本（只存記憶體），讀不出時提示、不改原值
   let _fwShowverMiss = false, _fwShowverText = '';
+  // 可疑帳號清單（XN174）：只存記憶體，比對後重繪稽核頁
+  window._fwSuspectRun = function() {
+    const t = document.getElementById('fw-suspect-accts');
+    window._fwSuspectText = t ? t.value : '';
+    renderSection('audit');
+    const c = document.getElementById('suspect-acct-card'); if (c) c.scrollIntoView({ block: 'nearest' });
+  };
   window._fwVulnFromShow = function() {
     const t = document.getElementById('vuln-showver');
     const p = PARSED || {}, fw = String((p.deviceInfo && p.deviceInfo.firmware) || '').replace(/^-$/, '');
