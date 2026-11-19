@@ -503,7 +503,8 @@ const DEVICE_MODELS={
       {prefix:'port',from:25,to:28,speed:'10G'},
       {name:'mgmt',speed:'1G',mgmt:true},
     ],poe:false},
-    {value:'fs-224f',label:'FortiSwitch 224F (2xM.2+24xG)',ports:[{prefix:'port',from:1,to:24,speed:'1G'},{prefix:'port',from:25,to:26,speed:'2.5G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    // XN169：原「FortiSwitch 224F (2xM.2+24xG)」查無此型號（Fortinet 只有 224D／224E），改為 FS-224E（24×GE RJ45＋4×GE SFP，NetBox 同）
+    {value:'fs-224e',label:'FortiSwitch 224E (24×1G + 4×1G SFP)',ports:[{prefix:'port',from:1,to:28,speed:'1G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
     {value:'fs-1048e',label:'FortiSwitch 1048E (48×1/10G SFP+ + 4×100G + 2×40G)',ports:[{prefix:'port',from:1,to:48,speed:'1G'},{prefix:'port',from:49,to:52,speed:'100G'},{prefix:'port',from:53,to:54,speed:'40G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
     {value:'fs-3032g',label:'FortiSwitch 3032G (32×100G + 2×10G)',ports:[{prefix:'port',from:1,to:32,speed:'100G'},{prefix:'port',from:33,to:34,speed:'10G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
     {value:'fs-124f-poe',label:'FortiSwitch 124F-POE (24x802.3af 95W)',ports:[
@@ -601,25 +602,14 @@ const DEVICE_MODELS={
     {value:'ex4000-48mp',label:'Juniper EX4000-48MP (Wi-Fi 7 UPOE++，EX2300 後繼機，40×1G+8×2.5G PoE++ + 2×1/10G SFP+ Uplink)',ports:[{prefix:'mge-0/0/',from:0,to:7,speed:'2.5G'},{prefix:'ge-0/0/',from:8,to:47,speed:'1G'},{prefix:'xe-0/1/',from:0,to:3,speed:'10G'},{name:'me0',speed:'1G',mgmt:true}],poe:true,poeRange:[0,47]},
   ],
   cisco_nxos:[
-    {value:'n3k-c3064pq-10ge',label:'Nexus 3064-PQ (48×10G)',ports:[
-      {prefix:'Ethernet1/',from:1,to:48,speed:'10G'},
-      {prefix:'Ethernet1/',from:49,to:52,speed:'40G'},
-      {name:'mgmt0',speed:'1G',mgmt:true},
-    ],poe:false},
-    {value:'n3k-c3048pq',label:'Nexus 3048-PQ (48×10G)',ports:[{prefix:'Ethernet1/',from:1,to:48,speed:'10G'},{prefix:'Ethernet1/',from:49,to:52,speed:'40G'},{name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
-    {value:'n5k-c5596up',label:'Nexus 5596UP (高端)',ports:[{prefix:'Ethernet1/',from:1,to:96,speed:'10G'},{prefix:'Ethernet1/',from:97,to:104,speed:'40G'},{name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
-    {value:'n7k-c7018',label:'Nexus 7018 (模組化)',ports:[{prefix:'Ethernet1/',from:1,to:48,speed:'10G'},{prefix:'Ethernet1/',from:49,to:56,speed:'40G'},{name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
-    {value:'n9k-c9396tx',label:'Nexus 9396TX (96×100G)',ports:[{prefix:'Ethernet1/',from:1,to:96,speed:'100G'},{name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
-    {value:'n5k-c5548p-10ge',label:'Nexus 5548 (48×10G)',ports:[
-      {prefix:'Ethernet1/',from:1,to:48,speed:'10G'},
-      {prefix:'Ethernet1/',from:49,to:52,speed:'40G'},
-      {name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
-    {value:'n7k-c7010',label:'Nexus 7010 (模組化)',ports:[
-      {prefix:'Ethernet1/',from:1,to:48,speed:'10G'},
-      {name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
-    {value:'n9k-c9372px',label:'Nexus 9372PX (72×10G)',ports:[
-      {prefix:'Ethernet1/',from:1,to:72,speed:'10G'},
-      {name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
+    {value:'n3k-c3064pq-10ge',label:'Nexus 3064-PQ (48×10G SFP+ + 4×40G QSFP+)',ports:[{prefix:'Ethernet1/',from:1,to:48,speed:'10G'},{prefix:'Ethernet1/',from:49,to:52,speed:'40G'},{name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
+    {value:'n3k-c3048pq',label:'Nexus 3048TP-1GE (48×1G + 4×10G SFP+)',ports:[{prefix:'Ethernet1/',from:1,to:48,speed:'1G'},{prefix:'Ethernet1/',from:49,to:52,speed:'10G'},{name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
+    {value:'n5k-c5596up',label:'Nexus 5596UP (48 個固定 unified 埠；3 個擴充槽模組未列)',ports:[{prefix:'Ethernet1/',from:1,to:48,speed:'10G'},{name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
+    {value:'n7k-c7018',label:'Nexus 7018 (模組化機箱；以插槽 1 的 48×10G 線卡示意，依實際線卡調整)',ports:[{prefix:'Ethernet1/',from:1,to:48,speed:'10G'},{name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
+    {value:'n9k-c9396tx',label:'Nexus 9396TX (48×1/10GBASE-T；Eth2/1-12 為 N9K-M12PQ 上行模組 12×40G)',ports:[{prefix:'Ethernet1/',from:1,to:48,speed:'10G'},{prefix:'Ethernet2/',from:1,to:12,speed:'40G'},{name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
+    {value:'n5k-c5548p-10ge',label:'Nexus 5548P (32×1/10G SFP+；擴充模組未列)',ports:[{prefix:'Ethernet1/',from:1,to:32,speed:'10G'},{name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
+    {value:'n7k-c7010',label:'Nexus 7010 (模組化機箱；以插槽 1 的 48×10G 線卡示意，依實際線卡調整)',ports:[{prefix:'Ethernet1/',from:1,to:48,speed:'10G'},{name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
+    {value:'n9k-c9372px',label:'Nexus 9372PX (48×10G SFP+ + 6×40G QSFP+)',ports:[{prefix:'Ethernet1/',from:1,to:48,speed:'10G'},{prefix:'Ethernet1/',from:49,to:54,speed:'40G'},{name:'mgmt0',speed:'1G',mgmt:true}],poe:false},
     {value:'n9k-c93180yc-ex',label:'Nexus 93180YC-EX (48x10/25G+6x100G，現行世代)',ports:[
       {prefix:'Ethernet1/',from:1,to:48,speed:'25G'},
       {prefix:'Ethernet1/',from:49,to:54,speed:'100G'},
@@ -637,11 +627,12 @@ const DEVICE_MODELS={
       {prefix:'ethernet1/1/',from:1,to:48,speed:'10G'},
       {prefix:'ethernet1/1/',from:49,to:54,speed:'40G'},
       {name:'management1/1/1',speed:'1G',mgmt:true}],poe:false},
-    {value:'s5248f-on',label:'Dell PowerSwitch S5248F-ON (48x25G+6x100G)',ports:[
+    // S5248F-ON：埠 49-52 為 2 個 QSFP28-DD（各 2 埠），53-56 為 4 個 QSFP28（Dell 部署指南與社群官方回覆，XN169）
+    {value:'s5248f-on',label:'Dell PowerSwitch S5248F-ON (48×25G SFP28 + 2×QSFP28-DD〔49-52〕+ 4×100G QSFP28〔53-56〕)',ports:[
       {prefix:'ethernet1/1/',from:1,to:48,speed:'25G'},
-      {prefix:'ethernet1/1/',from:49,to:54,speed:'100G'},
+      {prefix:'ethernet1/1/',from:49,to:56,speed:'100G'},
       {name:'management1/1/1',speed:'1G',mgmt:true}],poe:false},
-    {value:'z9332f-on',label:'Dell PowerSwitch Z9332F-ON (32x400G，以100G表示，光纖骨幹)',ports:[
+    {value:'z9332f-on',label:'Dell PowerSwitch Z9332F-ON (32×400G QSFP56-DD，以 100G 表示；另 2×SFP+ 未列)',ports:[
       {prefix:'ethernet1/1/',from:1,to:32,speed:'100G'},
       {name:'management1/1/1',speed:'1G',mgmt:true}],poe:false},
   ],
@@ -649,17 +640,21 @@ const DEVICE_MODELS={
     {value:'7010tx-48',label:'Arista 7010TX-48 (48×1G)',ports:[
       {prefix:'Ethernet',from:1,to:48,speed:'1G'},
       {name:'Management1',speed:'1G',mgmt:true}],poe:false},
-    {value:'720xp-48zc2',label:'Arista 720XP-48ZC2 (48×1G/10G+2×100G)',ports:[
-      {prefix:'Ethernet',from:1,to:48,speed:'10G'},
-      {prefix:'Ethernet',from:49,to:50,speed:'100G'},
-      {name:'Management1',speed:'1G',mgmt:true}],poe:false},
+    // 720XP-48ZC2：依 Arista datasheet／快速安裝指南，40×2.5G PoE+＋8×5G PoE（60W）＋4×25G SFP＋2×100G QSFP；
+    // 各速度埠的編號順序與 QSFP 名稱指南未寫明（未查證），QSFP 依 EOS 慣例以 EthernetN/1 表示
+    {value:'720xp-48zc2',label:'Arista 720XP-48ZC2 (40×2.5G + 8×5G PoE + 4×25G SFP + 2×100G QSFP；埠號分組未查證)',ports:[
+      {prefix:'Ethernet',from:1,to:40,speed:'2.5G'},
+      {prefix:'Ethernet',from:41,to:48,speed:'5G'},
+      {prefix:'Ethernet',from:49,to:52,speed:'25G'},
+      {prefix:'Ethernet',from:53,to:54,speed:'100G',suffix:'/1'},
+      {name:'Management1',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'7050sx3-48yc8',label:'Arista 7050SX3-48YC8 (48×25G+8×100G)',ports:[{prefix:'Ethernet',from:1,to:48,speed:'25G'},{prefix:'Ethernet',from:49,to:56,speed:'100G',suffix:'/1'},{name:'Management1',speed:'1G',mgmt:true}],poe:false},
     {value:'7060cx2-32s',label:'Arista 7060CX2-32S (32×100G + 2×10G)',ports:[{prefix:'Ethernet',from:1,to:32,speed:'100G',suffix:'/1'},{prefix:'Ethernet',from:33,to:34,speed:'10G'},{name:'Management1',speed:'1G',mgmt:true}],poe:false},
-    {value:'arista750-48-1g',label:'Arista 750 Series 校園存取 (模組化 線卡，Wi-Fi 7，48×1G PoE 30W + 25G SFP28 Uplink)',ports:[
+    {value:'arista750-48-1g',label:'Arista 750 Series 校園存取 (模組化 線卡，48×1G PoE 30W + 25G SFP28 Uplink；模組化機箱介面名稱依插槽，未查證)',ports:[
       {prefix:'Ethernet',from:1,to:48,speed:'1G'},
       {prefix:'Ethernet',from:49,to:50,speed:'25G'},
       {name:'Management1',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
-    {value:'arista750-48-10g',label:'Arista 750 Series 校園存取 (模組化 線卡，48×2.5/5/10G Multi-Gig PoE 90W + 25G SFP28 Uplink)',ports:[
+    {value:'arista750-48-10g',label:'Arista 750 Series 校園存取 (模組化 線卡，48×2.5/5/10G Multi-Gig PoE 90W + 25G SFP28 Uplink；模組化機箱介面名稱依插槽，未查證)',ports:[
       {prefix:'Ethernet',from:1,to:48,speed:'10G'},
       {prefix:'Ethernet',from:49,to:50,speed:'25G'},
       {name:'Management1',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
@@ -729,13 +724,15 @@ const DEVICE_MODELS={
   extreme:[
     {value:'x440-g2-48p',label:'Extreme Summit X440-G2-48p (48×1G PoE+ + 4×10G Uplink)',ports:[{prefix:'',from:1,to:48,speed:'1G'},{prefix:'',from:49,to:52,speed:'10G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'x670-g2-48x',label:'Extreme Summit X670-G2-48x (48×10G + 4×40G Uplink)',ports:[{prefix:'',from:1,to:48,speed:'10G'},{prefix:'',from:49,to:52,speed:'40G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
-    {value:'x5420-24',label:'ExtremeSwitching 5420F-24 (Universal Edge，取代 Summit X440-G2)',ports:[
-      {prefix:'1:',from:1,to:24,speed:'1G'},
-      {prefix:'1:',from:25,to:28,speed:'10G'},
+    // 5420F（documentation.extremenetworks.com 5420 Series Installation Guide）：另有 2×SFP-DD 堆疊埠未列；
+    // 單機埠號不帶「單元:」前綴（同 X440／X670，NetBox 同）
+    {value:'x5420-24',label:'ExtremeSwitching 5420F-24T-4XE (24×1G + 4×1/10G SFP+；2×SFP-DD 堆疊埠未列)',ports:[
+      {prefix:'',from:1,to:24,speed:'1G'},
+      {prefix:'',from:25,to:28,speed:'10G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
-    {value:'x5420-48p',label:'ExtremeSwitching 5420F-48P (48×802.3bt PoE+ + 4×1/10G SFP+ Uplink)',ports:[
-      {prefix:'1:',from:1,to:48,speed:'1G'},
-      {prefix:'1:',from:49,to:52,speed:'10G'},
+    {value:'x5420-48p',label:'ExtremeSwitching 5420F-48P-4XE (48×1G 802.3at PoE+ + 4×1/10G SFP+；2×SFP-DD 堆疊埠未列)',ports:[
+      {prefix:'',from:1,to:48,speed:'1G'},
+      {prefix:'',from:49,to:52,speed:'10G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
   ],
   procurve:[
@@ -782,22 +779,22 @@ const DEVICE_MODELS={
   // （RG-S2928G-E V3，官方確認支援 VSU）／中階 aggregation（RG-S5750C-28GT4XS-H）／
   // 高階資料中心（RG-S6220-48XS6QXS-H，官方確認支援 VSU 2.0）三款代表機型
   ruijie:[
-    {value:'s2928g-e',label:'Ruijie RG-S2928G-E V3 (入門級，24×1G + 4×SFP 1G，支援VSU)',ports:[
+    {value:'s2928g-e',label:'Ruijie RG-S2928G-E V3 (入門級，24×1G + 4×SFP 1G，支援VSU；介面編號未查證)',ports:[
       {prefix:'GigabitEthernet 0/',from:1,to:28,speed:'1G'}],poe:false},
-    {value:'s5750c-28gt4xs',label:'Ruijie RG-S5750C-28GT4XS-H (中階匯聚，28×1G + 4×SFP+ 10G)',ports:[
+    {value:'s5750c-28gt4xs',label:'Ruijie RG-S5750C-28GT4XS-H (中階匯聚，28×1G + 4×SFP+ 10G；介面編號未查證)',ports:[
       {prefix:'GigabitEthernet 0/',from:1,to:28,speed:'1G'},
       {prefix:'TenGigabitEthernet 0/',from:1,to:4,speed:'10G'}],poe:false},
-    {value:'s6220-48xs6qxs',label:'Ruijie RG-S6220-48XS6QXS-H (高階資料中心，48×10GBASE-T + 6×40G QSFP+，支援VSU 2.0)',ports:[
+    {value:'s6220-48xs6qxs',label:'Ruijie RG-S6220-48XS6QXS-H (高階資料中心，48×10G SFP+ + 6×40G QSFP+，支援VSU 2.0；介面編號未查證)',ports:[
       {prefix:'TenGigabitEthernet 0/',from:1,to:48,speed:'10G'},
       {prefix:'FortyGigabitEthernet 0/',from:1,to:6,speed:'40G'}],poe:false},
   ],
   netgear:[
     {value:'m4300-28g',label:'Netgear M4300-28G (24×1G + 2×10GBASE-T + 2×SFP+ 10G)',ports:[
-      {prefix:'0/',from:1,to:24,speed:'1G'},
-      {prefix:'0/',from:25,to:28,speed:'10G'}],poe:false},
+      {prefix:'1/0/',from:1,to:24,speed:'1G'},
+      {prefix:'1/0/',from:25,to:28,speed:'10G'}],poe:false},  // M4300 介面為 unit/slot/port（固定埠 slot 0，Netgear M4300 CLI 手冊）
     {value:'m4300-52g',label:'Netgear M4300-52G (48×1G + 2×10GBASE-T + 2×SFP+ 10G)',ports:[
-      {prefix:'0/',from:1,to:48,speed:'1G'},
-      {prefix:'0/',from:49,to:52,speed:'10G'}],poe:false},
+      {prefix:'1/0/',from:1,to:48,speed:'1G'},
+      {prefix:'1/0/',from:49,to:52,speed:'10G'}],poe:false},
   ],
   edgeswitch:[
     {value:'es-24-250w',label:'Ubiquiti EdgeSwitch ES-24-250W (24×1G PoE+ + 2×SFP)',ports:[
