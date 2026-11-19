@@ -351,7 +351,9 @@ const CiscoIOSParser = (() => {
       svc('ip http secure-server', 'rt-web', 443, has(/^ip http secure-server\b/), has(/^ip http access-class\b/)),
       svc('vty ssh', 'admin-ssh', 22, tin.some(x => /\b(ssh|all)\b/.test(x)), vtyAcl),
       svc('vty telnet', 'admin-telnet', 23, tin.some(x => /\b(telnet|all)\b/.test(x)), vtyAcl),
-    ].filter(s => s.enabled && !s.limited), dns: null, upnp: null };
+    ].filter(s => s.enabled && !s.limited), dns: null, upnp: null,
+      // 設備本身當 TFTP 伺服器（XN173，Cisco IOS Command Reference：tftp-server 檔名 [alias 名稱] [access-list-number]）
+      tftp: bl.map(b => b.head.match(/^tftp-server\s+(\S+)(?:\s+alias\s+\S+)?(?:\s+(\d+))?\s*$/)).filter(Boolean).map(m => ({ file: m[1], acl: m[2] || '' })) };
 
     return {
       vendor: 'Cisco IOS',

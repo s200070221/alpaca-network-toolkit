@@ -306,6 +306,27 @@ const FortigateParser = (() => {
     // 管理埠（XN132）：admin-sport（https，預設 443）、admin-port（http，預設 80）、admin-ssh-port（預設 22）；供曝險判斷查 local-in-policy
     const gport = k => { const m = glob && glob[1].match(new RegExp('^\\s*set\\s+' + k + '\\s+(\\d+)', 'm')); return m ? m[1] : ''; };
     info.adminPorts = { https: gport('admin-sport') || '443', http: gport('admin-port') || '80', ssh: gport('admin-ssh-port') || '22' };
+    // 登入失敗鎖定（XN171，FortiOS 7.4 CLI Reference）：system global admin-lockout-threshold（預設 3，範圍 1–10）／
+    // admin-lockout-duration（預設 60 秒）；vpn ssl settings login-attempt-limit（預設 2）／login-block-time（預設 60 秒）。
+    // 只記設定檔明寫的值（沒寫＝預設，null）；SSL VPN 只讀第一個 settings 區塊的頂層選項（不含 authentication-rule 等子表）
+    const sslTop = (() => {
+      const lines = text.split(/\r?\n/), out = [];
+      let i = lines.findIndex(l => /^\s*config vpn ssl settings\s*$/.test(l));
+      if (i < 0) return null;
+      for (let d = 0, k = i + 1; k < lines.length; k++) {
+        const t = lines[k].trim();
+        if (/^config\s/.test(t)) d++;
+        else if (t === 'end') { if (d === 0) break; d--; }
+        else if (d === 0) out.push(t);
+      }
+      return out.join('\n');
+    })();
+    const num = (src, k) => { const m = src && src.match(new RegExp('^set\\s+' + k + '\\s+(\\d+)\\s*$', 'm')); return m ? +m[1] : null; };
+    info.lockout = {
+      adminThreshold: glob ? num(glob[1].split('\n').map(l => l.trim()).join('\n'), 'admin-lockout-threshold') : null,
+      adminDuration: glob ? num(glob[1].split('\n').map(l => l.trim()).join('\n'), 'admin-lockout-duration') : null,
+      sslAttempt: num(sslTop, 'login-attempt-limit'), sslBlock: num(sslTop, 'login-block-time'),
+    };
 
     info.vdomNames = vdomNames || [];
     info.vdom = vdomNames || [];

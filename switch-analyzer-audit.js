@@ -382,6 +382,10 @@ function analyzeSwitchAudit(parsed){
     // 已知遭利用漏洞相關（2026-10-24，XN18，Cisco IOS／IOS-XE）：Smart Install 可能啟用、IOS-XE Web UI 開啟
     if(ms.smartInstall!==null&&ms.smartInstall!==undefined)f('smart-install', tr('audit.check_smart_install'), ms.smartInstall?1:0, 'medium',
       ms.smartInstall?tr('audit.smart_install_detail'):none, ['CISA KEV','NIST 800-53 CM-7','CIS v8 4.8'], ms.smartInstall?['vstack']:[]);
+    // XN173：設備本身提供 TFTP 下載（沒有 ACL＝任何連得到的人可下載，medium；有 ACL＝low）
+    if(Array.isArray(ms.tftpServer)){const open=ms.tftpServer.filter(x=>!x.acl);
+      f('tftp-server', tr('audit.check_tftp_server'), ms.tftpServer.length, open.length?'medium':'low',
+        ms.tftpServer.length?ms.tftpServer.map(x=>x.file+(x.acl?` (ACL ${x.acl})`:'')).join(', '):none, ['NIST 800-53 CM-7','CIS v8 4.8','NSA router hardening 2026'], ms.tftpServer.map(x=>x.file));}
     if(ms.webUi!==null&&ms.webUi!==undefined)f('iosxe-webui', tr('audit.check_iosxe_webui'), ms.webUi?1:0, 'high',
       ms.webUi?tr('audit.iosxe_webui_detail'):none, ['CISA KEV','NIST 800-53 SC-7','CIS v8 4.8'], ms.webUi?['http']:[]);
     if(ms.sshV1!==null&&ms.sshV1!==undefined)f('ssh-v1', tr('audit.check_ssh_v1'), ms.sshV1?1:0, 'high',
@@ -785,7 +789,7 @@ const EVIDENCE_KIND={
   'snmp-weak':'snmp','snmp-default-name':'snmp','telnet-mgmt':'telnet','routing-no-auth':'routing',
   'acl-any-any':'acl','acl-shadowed':'acl','acl-exact-duplicate':'acl','unused-vlan-trunk':'vlan',
   'http-mgmt':'line','ssh-v1':'line','idle-timeout-off':'line',
-  'smart-install':'line','iosxe-webui':'line',
+  'smart-install':'line','iosxe-webui':'line','tftp-server':'line',
   'vty-no-acl':'line','aaa-no-cmd-accounting':'line','config-change-log':'line','bgp-ebgp-no-policy':'line',
   'ssh-nondefault-port':'line','acl-actor-pattern':'line',
   'dhcp-snooping-off':'line','dai-off':'line','ipsg-off':'iface','storm-control-off':'iface','loop-protect-off':'iface',
@@ -796,6 +800,7 @@ const EVIDENCE_LINE_RE={
   'ssh-v1':/^\s*(ip\s+ssh\b|ssh\s+server\s+compatible-ssh1x\b|line\s+vty\b|\s*transport\s+input\b)/i,
   'idle-timeout-off':/^\s*(exec-timeout|idle-timeout)\s+0(\s+0)?\s*$/i,
   'smart-install':/^\s*(no\s+)?vstack\b/i,
+  'tftp-server':/^\s*tftp-server\b/i,
   'iosxe-webui':/^\s*ip\s+http\s+(server|secure-server|access-class|authentication)\b/i,
   // XN24：列出管理連線區塊與既有的記帳／archive 設定行（看得出哪些區塊沒有來源限制、記帳只設了哪幾種）
   'vty-no-acl':/^\s*(line\s+vty\b|user-interface\s+vty\b|management\s+ssh\s*$|transport\s+input\b|(ipv6\s+)?access-class\b|(ssh|telnet)\s+server\s+(ipv6\s+)?acl\b)/i,
@@ -948,6 +953,7 @@ const SW_FIX_CMDS={
     'http-mgmt':()=>['no ip http server','ip http secure-server'],
     'ssh-v1':()=>['ip ssh version 2'],
     'smart-install':()=>['no vstack'],
+    'tftp-server':it=>(it||[]).slice(0,FIX_MAX_ITEMS).map(x=>`no tftp-server ${x}`),
     'iosxe-webui':()=>['no ip http server','no ip http secure-server'],
     'vty-no-acl':it=>['ip access-list standard MGMT-ONLY',' permit <mgmt-subnet> <wildcard>',' deny any log',...(it||[]).slice(0,FIX_MAX_ITEMS).flatMap(b=>[b,' access-class MGMT-ONLY in'])],
     'aaa-no-cmd-accounting':()=>['aaa accounting commands 1 default start-stop group tacacs+','aaa accounting commands 15 default start-stop group tacacs+'],

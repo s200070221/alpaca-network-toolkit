@@ -1343,6 +1343,18 @@
         list.length ? list.map(u => u.name).slice(0,8).join(', ') + (list.length > 8 ? '…' : '') : tr('audit.normal'),
         ['NIST 800-53 IA-2(1)', 'CIS v8 6.4', 'CISA FortiBleed'], list.map(u => ({ kind: 'user', name: u.name, vdom: u._vdom })));
     }
+    // 9c3. FortiGate 登入失敗鎖定比預設寬鬆（XN171）：只看設定檔明寫的值，與官方預設比較——管理者失敗次數門檻 > 3、
+    // 鎖定時間 < 60 秒；SSL VPN 失敗次數 > 2、封鎖時間 < 60 秒。login-attempt-limit 為 0 的意義文件未說明，不評估。low、不計健康度
+    const lk = parsed.vendor === 'FortiGate' && parsed.deviceInfo ? parsed.deviceInfo.lockout : null;
+    if (lk && [lk.adminThreshold, lk.adminDuration, lk.sslAttempt, lk.sslBlock].some(v => v !== null)) {
+      const loose = [];
+      if (lk.adminThreshold !== null && lk.adminThreshold > 3) loose.push(`admin-lockout-threshold ${lk.adminThreshold} (> 3)`);
+      if (lk.adminDuration !== null && lk.adminDuration < 60) loose.push(`admin-lockout-duration ${lk.adminDuration} (< 60)`);
+      if (lk.sslAttempt !== null && lk.sslAttempt > 2) loose.push(`login-attempt-limit ${lk.sslAttempt} (> 2)`);
+      if (lk.sslBlock !== null && lk.sslBlock < 60) loose.push(`login-block-time ${lk.sslBlock} (< 60)`);
+      f('fg-lockout-loose', tr('audit.check_fg_lockout_loose'), loose.length, 'low',
+        loose.length ? loose.join(', ') : tr('audit.normal'), ['NIST 800-53 AC-7', 'CIS v8 6.2'], []);
+    }
     // 9c2. F5 BIG-IP 管理介面來源限制（XN116）：sys httpd／sshd 的 allow 為 All（任何來源）；沒有 allow 行的片段不評估。
     // 本機帳號可用 bash（shell bash）：low、不計健康度，請確認是否必要
     const mp5 = parsed.vendor === 'F5 BIG-IP' ? (parsed.mgmtPlane || {}) : null;
@@ -1433,6 +1445,10 @@
         f('rt-wan-new-forward', tr('audit.check_rt_wan_forward'), hit.length, 'high', hit.length ? hit.map(x => `${x.i.name} (${_netAddr(x.i.ip, x.i.mask)}/${_maskLen(x.i.mask)})`).join(', ') : tr('audit.normal'),
           ['MikroTik Building Your First Firewall', 'NIST 800-41'], hit.map(x => ({ kind: 'intf', name: x.i.name })));
       }
+      // XN173：Cisco IOS tftp-server（沒有 ACL＝medium，全部有 ACL＝low，比照交換器分析；不計健康度）
+      if (rr && Array.isArray(rr.tftp)) { const open = rr.tftp.filter(x => !x.acl);
+        f('tftp-server', tr('audit.check_tftp_server'), rr.tftp.length, open.length ? 'medium' : 'low',
+          rr.tftp.length ? rr.tftp.map(x => x.file + (x.acl ? ` (ACL ${x.acl})` : '')).join(', ') : tr('audit.normal'), ['NIST 800-53 CM-7', 'CIS v8 4.8', 'NSA router hardening 2026'], []); }
       const upnp = mr ? mr.upnp : (rr ? rr.upnp : null);
       if (upnp !== null && upnp !== undefined) f('rt-upnp', tr('audit.check_rt_upnp'), upnp ? 1 : 0, 'low', upnp ? 'UPnP' : tr('audit.normal'), ['CISA UPnP guidance'], []);
     }
@@ -3002,6 +3018,7 @@ function buildPriorityHtml(items, limit, title) {
     'default-admin-name': it => ['config system admin', '    edit "<new-admin-name>"', '        set accprofile "super_admin"', '        set password <new-password>', '    next', ...(it || []).slice(0, FW_FIX_MAX).map(x => `    delete ${_fgQuote(x.name)}`), 'end'],
     'admin-legacy-hash': it => _fgEdit('system admin', it, ['set password <new-password>']),
     'fg-sslvpn-no2fa': it => _fgEdit('user local', it, ['set two-factor fortitoken', 'set fortitoken <token-serial>']),
+    'fg-lockout-loose': () => ['config system global', '    set admin-lockout-threshold 3', '    set admin-lockout-duration 60', 'end', 'config vpn ssl settings', '    set login-attempt-limit 2', '    set login-block-time 60', 'end'],
     'fg-private-data-enc': () => ['config system global', '    set private-data-encryption enable', 'end'],
     'bgp-ebgp-no-policy': it => ['config router bgp', '    config neighbor', ...(it || []).slice(0, FW_FIX_MAX).flatMap(x => [`        edit ${_fgQuote(x.name)}`,
       ...((x.missing || ['in', 'out']).includes('in') ? ['            set route-map-in "<IN-POLICY>"'] : []), ...((x.missing || ['in', 'out']).includes('out') ? ['            set route-map-out "<OUT-POLICY>"'] : []), '        next']), '    end', 'end'],

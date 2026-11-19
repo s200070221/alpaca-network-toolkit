@@ -684,7 +684,7 @@ function parseMgmtServices(cfg, vendor, brand){
   const all=(re)=>{const out=[];let m;const r=new RegExp(re.source,re.flags.includes('g')?re.flags:re.flags+'g');while((m=r.exec(cfg))!==null)out.push(m[1]);return out;};
   const has=re=>re.test(cfg);
   const jb=n=>typeof junosBlock==='function'?junosBlock(cfg,n):'';
-  let ntp=[], aaa=[], banner=null, httpPlain=null, sshV1=null, idleOff=null, syslogExtra=[], smartInstall=null, webUi=null;
+  let ntp=[], aaa=[], banner=null, httpPlain=null, sshV1=null, idleOff=null, syslogExtra=[], smartInstall=null, webUi=null, tftpServer=null;
   // EFOS（第十二輪 MM）：只有 ntp server 依真實錄製確認，其餘項目語法未查證不評估
   // Netgear Smart Managed Pro（第十三輪 NC）：只有 sntp N host 依真實錄製確認，其餘未查證不評估
   if(vendor==='netgearsmart')return {ntp:[...new Set(all(/^sntp\s+\d+\s+host\s+(\S+)/m))], aaa:null, banner:null, httpPlain:null, sshV1:null, idleOff:null, syslogExtra:[], sshV2Only:null, syslogEval:false};
@@ -741,6 +741,9 @@ function parseMgmtServices(cfg, vendor, brand){
       // no vstack 即可能啟用（CVE-2018-0171）；IOS-XE（version 16 起）的 Web UI 由 ip http server／secure-server 開啟
       // （CVE-2023-20198／20273），傳統 IOS 不受影響不評估
       smartInstall=!has(/^no\s+vstack\b/m);
+      // 設備本身當 TFTP 伺服器（XN173，NSA 2026-07 路由器強化公告建議封鎖 TFTP）：Cisco IOS Command Reference 的
+      // tftp-server {flash:|bootflash:|slot0:…}檔名 [alias 名稱] [access-list-number]；結尾數字＝以標準 ACL 限制來源
+      tftpServer=[...cfg.matchAll(/^tftp-server\s+(\S+)(?:\s+alias\s+\S+)?(?:\s+(\d+))?\s*$/gm)].map(m=>({file:m[1],acl:m[2]||''}));
       webUi=has(/^version\s+1[6-9]\./m)||/\bIOS[- ]XE\b/i.test(cfg)?has(/^ip\s+http\s+(?:server|secure-server)\s*$/m):null;
       sshV1=null; // 由 parseAny() 依 mgmtAccess.ssh 判斷（未限定 ip ssh version 2 時 IOS 預設 1.99 相容 v1）
       // 舊式 `logging 10.1.1.1`（無 host 關鍵字）也是遠端 syslog
@@ -758,7 +761,7 @@ function parseMgmtServices(cfg, vendor, brand){
   }
   const mp=parseMgmtPlane(cfg, vendor);
   return {ntp:[...new Set(ntp)], aaa:[...new Set(aaa)], banner, httpPlain, sshV1, idleOff, syslogExtra:[...new Set(syslogExtra)],
-    sshV2Only:vendor==='cisco'?has(/^\s*ip\s+ssh\s+version\s+2\b/m):null, smartInstall, webUi,
+    sshV2Only:vendor==='cisco'?has(/^\s*ip\s+ssh\s+version\s+2\b/m):null, smartInstall, webUi, tftpServer,
     vtyOpen:mp.vtyOpen, cmdAcct:mp.cmdAcct, cfgLog:mp.cfgLog, sshPort:mp.sshPort, aclPublic:mp.aclPublic};
 }
 
