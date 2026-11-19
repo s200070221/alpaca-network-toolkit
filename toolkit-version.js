@@ -3,8 +3,29 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.18.1';
+  const TOOLKIT_VERSION = '2026.11.19';
   const CHANGELOG = [
+    {
+      version: '2026.11.19',
+      items: {
+        zhTW: [
+          '交換器產生器：「批次套用」新增一鍵關閉未使用的埠（只關閉 access、沒有描述、VLAN 空白或 1 的埠），並列出沒有埠使用的 VLAN（只列出不刪除）',
+          '交換器跨廠牌轉換：來源埠有 PoE 而目標型號或對應的埠沒有 PoE 時提示；常用機種的埠名稱、上行埠與 PoE 範圍已對照 NetBox 與原廠文件修正，無法查證者在標籤註明「未查證」',
+          '防火牆轉換：依官方文件檢查物件與規則名稱長度、可用字元（FortiGate、Palo Alto、Cisco ASA、Zyxel、pfSense），只提示不自動改名；規則中的字面位址自動建成物件（h_／n_／r_ 開頭）',
+          '防火牆轉換：多 VDOM 設定可一次轉完全部 VDOM，下載 zip（每個 VDOM 一個資料夾＋說明檔），並逐一讀回驗證規則結果',
+          '防火牆轉換：目的 NAT（轉埠）修正 Juniper、Cisco ASA、pfSense、Sophos、Palo Alto、FortiGate、MikroTik 的輸出；無法表達者一律停用並註記待確認，轉換驗證會比對 NAT 是否遺失或範圍變大',
+          '設定檔去識別化：修正沒有交接內容時頂端出現空白提示列',
+        ],
+        en: [
+          'Switch generator: one-click shutdown of unused ports in batch apply (access ports with no description and VLAN blank or 1 only), plus a list of VLANs no port uses (listed, not deleted)',
+          'Switch cross-vendor conversion: warns when a PoE source port maps to a target model or port without PoE; common models\' port names, uplinks and PoE ranges checked against NetBox and vendor documentation, unverifiable ones labeled "unverified"',
+          'Firewall conversion: checks object and rule name length and allowed characters per vendor documentation (FortiGate, Palo Alto, Cisco ASA, Zyxel, pfSense), warning only; literal addresses in rules become objects automatically (h_/n_/r_ prefixes)',
+          'Firewall conversion: multi-VDOM configs can convert every VDOM at once into a zip (one folder per VDOM plus a README), each read back and verified',
+          'Firewall conversion: destination NAT (port forwarding) output fixed for Juniper, Cisco ASA, pfSense, Sophos, Palo Alto, FortiGate and MikroTik; anything inexpressible is disabled and marked for review, and verification checks for lost or widened NAT',
+          'Config anonymizer: fixed an empty banner shown at the top when nothing was handed over',
+        ],
+      },
+    },
     {
       version: '2026.11.18.1',
       items: {
