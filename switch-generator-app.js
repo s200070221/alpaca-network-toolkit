@@ -665,18 +665,21 @@ const DEVICE_MODELS={
       {name:'Management1',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
   ],
   brocade:[
-    {value:'icx7150-48p',label:'Ruckus ICX7150-48P (48×1G PoE+ + 4×10G Uplink)',ports:[
+    // ICX 埠號為 單元/槽/埠（XN169，依 Ruckus 硬體安裝手冊）：前方存取埠在 slot 1，上行／堆疊埠在 slot 2、3
+    // ICX7150-48P：2×1G RJ-45 上行在 slot 2、4×10G SFP+ 上行／堆疊在 slot 3
+    {value:'icx7150-48p',label:'Ruckus ICX7150-48P (48×1G PoE+ + 2×1G RJ-45 + 4×10G SFP+ Uplink)',ports:[
       {prefix:'1/1/',from:1,to:48,speed:'1G'},
-      {prefix:'1/1/',from:49,to:52,speed:'10G'},
+      {prefix:'1/2/',from:1,to:2,speed:'1G'},
+      {prefix:'1/3/',from:1,to:4,speed:'10G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
-    {value:'icx7250-48',label:'Ruckus ICX7250-48 (48×1G + 8×10G Uplink)',ports:[
+    {value:'icx7250-48',label:'Ruckus ICX7250-48 (48×1G + 8×10G SFP+ Uplink)',ports:[
       {prefix:'1/1/',from:1,to:48,speed:'1G'},
-      {prefix:'1/1/',from:49,to:56,speed:'10G'},
+      {prefix:'1/2/',from:1,to:8,speed:'10G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
-    {value:'icx7550-48',label:'Ruckus ICX7550-48 (48×10G + 8×25G + 2×100G)',ports:[
-      {prefix:'1/1/',from:1,to:48,speed:'10G'},
-      {prefix:'1/1/',from:49,to:56,speed:'25G'},
-      {prefix:'1/1/',from:57,to:58,speed:'100G'},
+    // ICX7550-48：2×QSFP（40G／100G）上行／堆疊在 slot 2；選購上行模組另佔一槽，未列
+    {value:'icx7550-48',label:'Ruckus ICX7550-48 (48×1G + 2×40/100G QSFP；選購上行模組未列)',ports:[
+      {prefix:'1/1/',from:1,to:48,speed:'1G'},
+      {prefix:'1/2/',from:1,to:2,speed:'100G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
     // ICX7650-48P：依官方 datasheet，前方 48×1G RJ-45（40 埠 PoE+、8 埠另支援 UPoE／PoH），48P 只支援後方 2×40G 上行；
     // 後方模組在 FastIron 編號為 1/3/x（實際 show interfaces stack-ports 輸出）。前方選購模組只在後方用於堆疊時啟用，不列入
@@ -686,38 +689,42 @@ const DEVICE_MODELS={
       {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'icx8200-24',label:'Ruckus ICX8200-24 (24×1G + 4×25G SFP28 Uplink，ICX7150 後繼機)',ports:[
       {prefix:'1/1/',from:1,to:24,speed:'1G'},
-      {prefix:'1/1/',from:25,to:28,speed:'25G'},
+      {prefix:'1/2/',from:1,to:4,speed:'25G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
     {value:'icx8200-48p',label:'Ruckus ICX8200-48PF2 (48×1G PoE+ 740W + 4×25G SFP28 Uplink)',ports:[
       {prefix:'1/1/',from:1,to:48,speed:'1G'},
-      {prefix:'1/1/',from:49,to:52,speed:'25G'},
+      {prefix:'1/2/',from:1,to:4,speed:'25G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
   ],
   alcatel:[
-    {value:'os6560-p24',label:'Alcatel OmniSwitch 6560-P24 (24×1G PoE+ + 4×10G Uplink)',ports:[
+    // OmniSwitch：依 ALE 官方 datasheet（XN169）。OS6560-P24X4 另有 2×1G SFP，datasheet 未列埠號順序，只列 4×SFP+（編號未查證）
+    {value:'os6560-p24',label:'Alcatel OmniSwitch 6560-P24X4 (24×1G PoE+ + 4×10G SFP+；另 2×1G SFP 未列，上行埠編號未查證)',ports:[
       {prefix:'1/1/',from:1,to:24,speed:'1G'},
       {prefix:'1/1/',from:25,to:28,speed:'10G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,24]},
-    {value:'os6860-24',label:'Alcatel OmniSwitch 6860-24 (24×1G/10G + 4×10G Uplink)',ports:[
+    {value:'os6860-24',label:'Alcatel OmniSwitch 6860-24 (24×1G + 4×10G SFP+)',ports:[
       {prefix:'1/1/',from:1,to:24,speed:'1G'},
       {prefix:'1/1/',from:25,to:28,speed:'10G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
-    {value:'os6900-x20',label:'Alcatel OmniSwitch 6900-X20 (20×10G + 4×40G Uplink)',ports:[
+    // OS6900-X20：20×SFP+ 加一個選購擴充模組槽（已停售，現行 datasheet 未收），模組埠未列
+    {value:'os6900-x20',label:'Alcatel OmniSwitch 6900-X20 (20×10G SFP+；選購擴充模組未列)',ports:[
       {prefix:'1/1/',from:1,to:20,speed:'10G'},
-      {prefix:'1/1/',from:21,to:24,speed:'40G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
     {value:'os6900-x24c2',label:'Alcatel OmniSwitch 6900-X24C2 (26×SFP+ 1G/10G + 2×QSFP28 100G)',ports:[
       {prefix:'1/1/',from:1,to:26,speed:'10G'},
       {prefix:'1/1/',from:27,to:28,speed:'100G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
-    {value:'os2360-p24',label:'Alcatel OmniSwitch 2360-P24 (SMB/分公司 入門 堆疊式，24×802.3at PoE+)',ports:[
+    // OS2360-P24：24×PoE＋2×1G SFP 上行＋2×SFP+（1G 上行或 10G 堆疊）
+    {value:'os2360-p24',label:'Alcatel OmniSwitch 2360-P24 (24×1G PoE + 2×1G SFP + 2×SFP+ 1G 上行／10G 堆疊)',ports:[
       {prefix:'1/1/',from:1,to:24,speed:'1G'},
       {prefix:'1/1/',from:25,to:28,speed:'1G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,24]},
-    {value:'os6870-24',label:'Alcatel OmniSwitch 6870-24 (中階，24×2.5/5/10G Multi-Gig PoE 95W，信心中等)',ports:[
-      {prefix:'1/1/',from:1,to:24,speed:'10G'},
+    // OS6870-24：24×1G RJ-45（無 PoE）＋4×SFP28＋2×QSFP28（40/100G VFL／堆疊）
+    {value:'os6870-24',label:'Alcatel OmniSwitch 6870-24 (24×1G + 4×25G SFP28 + 2×40/100G QSFP28；QSFP28 編號未查證)',ports:[
+      {prefix:'1/1/',from:1,to:24,speed:'1G'},
       {prefix:'1/1/',from:25,to:28,speed:'25G'},
-      {name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,24]},
+      {prefix:'1/1/',from:29,to:30,speed:'100G'},
+      {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
   ],
   extreme:[
     {value:'x440-g2-48p',label:'Extreme Summit X440-G2-48p (48×1G PoE+ + 4×10G Uplink)',ports:[{prefix:'',from:1,to:48,speed:'1G'},{prefix:'',from:49,to:52,speed:'10G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
@@ -765,10 +772,11 @@ const DEVICE_MODELS={
     {value:'ccr2216',label:'MikroTik CCR2216-1G-12XS-2XQ (1×1G + 12×SFP28 up to 25G + 2×QSFP28 100G)',ports:[
       {name:'ether1',speed:'1G'},
       {prefix:'sfp28-',from:1,to:12,speed:'25G'},
-      {prefix:'qsfp28-',from:1,to:2,speed:'100G'}],poe:false},
+      // RouterOS 的 QSFP28 介面為 qsfp28-<cage>-<子埠>，100G 單一連線設定在第一個子埠（help.mikrotik.com MTU 頁、wired interface compatibility）
+      {name:'qsfp28-1-1',speed:'100G'},{name:'qsfp28-2-1',speed:'100G'}],poe:false},
     {value:'crs112-8g4s',label:'MikroTik CRS112-8G-4S-IN (入門級，8×1G + 4×SFP 1G)',ports:[
       {prefix:'ether',from:1,to:8,speed:'1G'},
-      {prefix:'sfp',from:1,to:4,speed:'1G'}],poe:false},
+      {prefix:'sfp',from:9,to:12,speed:'1G'}],poe:false},  // CRS112 的 SFP 預設名稱為 sfp9-sfp12（help.mikrotik.com MTU 頁）
   ],
   // 2026-07-29 對外查證官方 Ruijie Networks 產品頁/datasheet 後新增：入門 access
   // （RG-S2928G-E V3，官方確認支援 VSU）／中階 aggregation（RG-S5750C-28GT4XS-H）／
