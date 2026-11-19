@@ -392,33 +392,23 @@ function updateIfaceTableDisplay(){
 // 埠位，展開成 prefix+N）要嘛是 {name,speed,mgmt:true}（單一命名的 mgmt 介面）
 const DEVICE_MODELS={
   comware:[
-    {value:'hpe5130-24',label:'HPE 5130-24S-2GT-2SFP+ (JG932A)',ports:[
-      {prefix:'GigabitEthernet1/0/',from:1,to:24,speed:'1G'},
-      {prefix:'Ten-GigabitEthernet1/0/',from:25,to:26,speed:'10G'},
-      {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true},
-    ],poe:false},
-    {value:'hpe5130-48',label:'HPE 5130-48S (48×1G)',ports:[{prefix:'GigabitEthernet1/0/',from:1,to:48,speed:'1G'},{prefix:'Ten-GigabitEthernet1/0/',from:49,to:52,speed:'10G'},{name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
-    {value:'hpe5210',label:'HPE 5210-24 (中端模組)',ports:[{prefix:'GigabitEthernet1/0/',from:1,to:24,speed:'1G'},{prefix:'Ten-GigabitEthernet1/0/',from:25,to:28,speed:'10G'},{name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
-    {value:'hpe12900',label:'HPE 12900 (高端模組化)',ports:[{prefix:'HundredGigE1/0/',from:1,to:4,speed:'100G'},{name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
-    {value:'hpe5140-24',label:'HPE 5140-24G-2SFP+',ports:[
-      {prefix:'GigabitEthernet1/0/',from:1,to:24,speed:'1G'},
-      {prefix:'Ten-GigabitEthernet1/0/',from:25,to:26,speed:'10G'},
-      {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
+    {value:'hpe5130-24',label:'HPE 5130 24G 4SFP+ EI (JG932A)',ports:[{prefix:'GigabitEthernet1/0/',from:1,to:24,speed:'1G'},{prefix:'Ten-GigabitEthernet1/0/',from:25,to:28,speed:'10G'},{name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
+    {value:'hpe5130-48',label:'HPE 5130 48G 4SFP+ EI (JG934A)',ports:[{prefix:'GigabitEthernet1/0/',from:1,to:48,speed:'1G'},{prefix:'Ten-GigabitEthernet1/0/',from:49,to:52,speed:'10G'},{name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
+    
+    {value:'hpe12900',label:'HPE 12900 (模組化機箱；以插槽 1 的 100G 線卡示意，依實際線卡調整)',ports:[{prefix:'HundredGigE1/0/',from:1,to:4,speed:'100G'},{name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
+    {value:'hpe5140-24',label:'HPE 5140 24G 2SFP+ 2XGT EI (R8J41A，2×SFP+ 與 2×10GBASE-T 共 4 個 10G 上行)',ports:[{prefix:'GigabitEthernet1/0/',from:1,to:24,speed:'1G'},{prefix:'Ten-GigabitEthernet1/0/',from:25,to:28,speed:'10G'},{name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
     {value:'hpe5140-48',label:'HPE 5140-48G-4SFP+',ports:[
       {prefix:'GigabitEthernet1/0/',from:1,to:48,speed:'1G'},
       {prefix:'Ten-GigabitEthernet1/0/',from:49,to:52,speed:'10G'},
       {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
-    {value:'hpe5710-48',label:'HPE 5710-48G-4SFP+',ports:[
-      {prefix:'GigabitEthernet1/0/',from:1,to:48,speed:'1G'},
-      {prefix:'Ten-GigabitEthernet1/0/',from:49,to:52,speed:'10G'},
-      {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
-    {value:'hpe5945',label:'HPE FlexFabric 5945 (模組化核心)',ports:[
+    {value:'hpe5710-48',label:'HPE FlexFabric 5710 48SFP+ 6QSFP+ or 2QSFP28 (JL585A；原「5710 48G 4SFP+」非實際型號)',ports:[{prefix:'Ten-GigabitEthernet1/0/',from:1,to:48,speed:'10G'},{prefix:'FortyGigE1/0/',from:49,to:54,speed:'40G'},{name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
+    {value:'hpe5945',label:'HPE FlexFabric 5945 (模組化；埠依所裝模組，以 2×100G 示意)',ports:[
       {prefix:'HundredGigE1/0/',from:1,to:2,speed:'100G'},
       {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
-    {value:'hpe5945-2slot',label:'HPE FlexFabric 5945 2-slot (模組化核心)',ports:[
+    {value:'hpe5945-2slot',label:'HPE FlexFabric 5945 2-slot (模組槽；埠依所裝模組，以 2×100G 示意)',ports:[
       {prefix:'HundredGigE1/0/',from:1,to:2,speed:'100G'},
       {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
-    {value:'hpe5945-4slot',label:'HPE FlexFabric 5945 4-slot (模組化核心)',ports:[
+    {value:'hpe5945-4slot',label:'HPE FlexFabric 5945 4-slot (模組槽；埠依所裝模組，以 8×100G 示意)',ports:[
       {prefix:'HundredGigE1/0/',from:1,to:8,speed:'100G'},
       {name:'M-GigabitEthernet0/0/0',speed:'1G',mgmt:true}],poe:false},
     {value:'hpe5945-48sfp28-8qsfp28',label:'HPE FlexFabric 5945 48SFP28 8QSFP28',ports:[
@@ -459,7 +449,7 @@ const DEVICE_MODELS={
     {value:'c2960-48',label:'Catalyst 2960X-48TD-L (48×1G + 2×10G SFP+)',ports:[{prefix:'GigabitEthernet1/0/',from:1,to:48,speed:'1G'},{prefix:'TenGigabitEthernet1/0/',from:1,to:2,speed:'10G'},{name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:false},
     {value:'c3650-24',label:'Catalyst 3650-24PD (24×1G PoE+ + 2×1G SFP + 2×10G SFP+)',ports:[{prefix:'GigabitEthernet1/0/',from:1,to:24,speed:'1G'},{prefix:'GigabitEthernet1/1/',from:1,to:2,speed:'1G'},{prefix:'TenGigabitEthernet1/1/',from:3,to:4,speed:'10G'},{name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,24]},
     {value:'c9500-40',label:'Catalyst 9500-40X (40×10G)',ports:[{prefix:'TenGigabitEthernet1/0/',from:1,to:40,speed:'10G'},{name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:false},
-    {value:'c9600-48',label:'Catalyst 9600-48LX (高性能)',ports:[{prefix:'TwentyFiveGigE1/0/',from:1,to:48,speed:'25G'},{prefix:'HundredGigE1/1/',from:1,to:2,speed:'100G'},{name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:false},
+    {value:'c9600-48',label:'Catalyst 9600 (模組化；以插槽 1 的 C9600-LC-48YL 線卡示意，48×25G SFP28)',ports:[{prefix:'TwentyFiveGigE1/0/',from:1,to:48,speed:'25G'},{name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:false},
     {value:'c9300-48',label:'Catalyst 9300-48P (48×1G PoE+，含選購 C9300-NM-4X 上行模組 Te1/1/1-4)',ports:[{prefix:'GigabitEthernet1/0/',from:1,to:48,speed:'1G'},{prefix:'TenGigabitEthernet1/1/',from:1,to:4,speed:'10G'},{name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'c9300x-48hx',label:'Catalyst 9300X-48HX (48×mGig 10G UPOE+；上行為選購 C9300X-NM 模組，未列)',ports:[{prefix:'TenGigabitEthernet1/0/',from:1,to:48,speed:'10G'},{name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'c9500-24y4c',label:'Catalyst 9500-24Y4C (光纖骨幹，不支援 Breakout)',ports:[{prefix:'TwentyFiveGigE1/0/',from:1,to:24,speed:'25G'},{prefix:'HundredGigE1/0/',from:25,to:28,speed:'100G'},{name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:false},
@@ -474,23 +464,21 @@ const DEVICE_MODELS={
       {prefix:'GigabitEthernet1/0/',from:1,to:48,speed:'1G'},
       {prefix:'TenGigabitEthernet1/1/',from:1,to:4,speed:'10G'},
       {name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
-    {value:'c9400-lc-48ux',label:'Catalyst 9400 (C9400-LC-48UX 線卡，模組化核心)',ports:[
-      {prefix:'GigabitEthernet1/0/',from:1,to:48,speed:'10G'},
-      {name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
+    {value:'c9400-lc-48ux',label:'Catalyst 9400 (模組化；以插槽 1 的 C9400-LC-48UX 線卡示意：埠 1-24 為 1G UPOE、25-48 為 mGig 10G UPOE)',ports:[{prefix:'GigabitEthernet1/0/',from:1,to:24,speed:'1G'},{prefix:'TenGigabitEthernet1/0/',from:25,to:48,speed:'10G'},{name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'c9350-24',label:'Catalyst 9350-24P (24×1G PoE+；上行為選購模組，未列)',ports:[{prefix:'GigabitEthernet1/0/',from:1,to:24,speed:'1G'},{name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,24]},
     {value:'c9350-48',label:'Catalyst 9350-48HX (48×mGig 10G UPOE+；上行為選購模組，未列)',ports:[{prefix:'TenGigabitEthernet1/0/',from:1,to:48,speed:'10G'},{name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'c9200cx-12p',label:'Catalyst 9200CX-12P-2X2G (12×1G PoE+ + 2×1G SFP + 2×10G SFP+)',ports:[{prefix:'GigabitEthernet1/0/',from:1,to:12,speed:'1G'},{prefix:'GigabitEthernet1/1/',from:1,to:2,speed:'1G'},{prefix:'TenGigabitEthernet1/1/',from:3,to:4,speed:'10G'},{name:'GigabitEthernet0/0',speed:'1G',mgmt:true}],poe:true,poeRange:[1,12]},
   ],
   aruba:[
     {value:'aruba6300m-24',label:'Aruba CX 6300M-24G-4SFP56',ports:[{prefix:'1/1/',from:1,to:24,speed:'1G'},{prefix:'1/1/',from:25,to:28,speed:'50G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
-    {value:'aruba6300-48',label:'Aruba CX 6300-48G',ports:[{prefix:'1/1/',from:1,to:48,speed:'1G'},{prefix:'1/1/',from:49,to:52,speed:'10G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'aruba6300-48',label:'Aruba CX 6300M-48G-4SFP56',ports:[{prefix:'1/1/',from:1,to:48,speed:'1G'},{prefix:'1/1/',from:49,to:52,speed:'50G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
     {value:'aruba6200f-48',label:'Aruba CX 6200F-48G-4SFP+',ports:[{prefix:'1/1/',from:1,to:48,speed:'1G'},{prefix:'1/1/',from:49,to:52,speed:'10G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
-    {value:'aruba8300',label:'Aruba CX 8300 (模組化)',ports:[{prefix:'1/',from:1,to:32,speed:'25G'},{prefix:'1/',from:33,to:40,speed:'100G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
+    {value:'aruba8300',label:'Aruba CX 8320-48XF6Q (48×10G SFP+ + 6×40G QSFP+；原「8300 模組化」非實際型號)',ports:[{prefix:'1/1/',from:1,to:48,speed:'10G'},{prefix:'1/1/',from:49,to:54,speed:'40G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
     {value:'aruba8325',label:'Aruba CX 8325-48Y8C (48×25G + 8×100G)',ports:[{prefix:'1/1/',from:1,to:48,speed:'25G'},{prefix:'1/1/',from:49,to:56,speed:'100G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
     {value:'aruba6200f-24',label:'Aruba CX 6200F-24G-4SFP+',ports:[{prefix:'1/1/',from:1,to:24,speed:'1G'},{prefix:'1/1/',from:25,to:28,speed:'10G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
     {value:'aruba6300f-48',label:'Aruba CX 6300F-48G-PoE4-4SFP56 (PoE Class 4)',ports:[{prefix:'1/1/',from:1,to:48,speed:'1G'},{prefix:'1/1/',from:49,to:52,speed:'50G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:true,poeRange:[1,48]},
     {value:'aruba8360-24xf',label:'Aruba CX 8360-24XF2C (24×10G + 2×100G)',ports:[{prefix:'1/1/',from:1,to:24,speed:'10G'},{prefix:'1/1/',from:25,to:26,speed:'100G'},{name:'mgmt',speed:'1G',mgmt:true}],poe:false},
-    {value:'aruba9300-32d',label:'Aruba CX 9300-32D (新一代 400G 資料中心 leaf/spine)',ports:[
+    {value:'aruba9300-32d',label:'Aruba CX 9300-32D (32×400G QSFP-DD，以 100G 表示 + 2×10G SFP+)',ports:[
       {prefix:'1/1/',from:1,to:32,speed:'100G'},
       {prefix:'1/1/',from:33,to:34,speed:'10G'},
       {name:'mgmt',speed:'1G',mgmt:true}],poe:false},
