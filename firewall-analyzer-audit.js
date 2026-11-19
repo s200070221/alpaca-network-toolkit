@@ -1319,6 +1319,30 @@
       f('fg-private-data-enc', tr('audit.check_fg_private_data_enc'), pde ? 0 : 1, 'medium',
         pde ? tr('audit.normal') : tr('audit.fg_pde_off'), ['NIST 800-53 SC-28', 'CVE-2019-6693 (CISA KEV)'], []);
     }
+    // 9c1. FortiGate SSL VPN 本機使用者未啟用雙因素（XN170）：FortiBleed（FBI／USSS 聯合公告 JCSA-20261006-01）以外洩密碼做憑證填充
+    // 與密碼噴灑登入對外的 SSL VPN。SSL VPN 啟用（featureUse.sslvpn）時，SSL VPN 認證規則或來源介面為 ssl.<vdom> 的政策所引用的
+    // 使用者與群組成員中，user local 的 type 為 password（預設）且 two-factor 為 disable（預設）者列出；
+    // type 為 radius／tacacs+／ldap 的使用者與遠端伺服器群組，MFA 可能在認證伺服器端，設定檔看不出來不列
+    const _fgSsl = parsed.vendor === 'FortiGate' && parsed.deviceInfo && parsed.deviceInfo.featureUse ? parsed.deviceInfo.featureUse.sslvpn : null;
+    if (_fgSsl === true) {
+      const vk = x => x._vdom || '';
+      const local = new Map(), groups = new Map(), refs = [];
+      (parsed.users || []).forEach(u => {
+        if (u.type === 'local') local.set(vk(u) + '|' + u.name, u);
+        else if (u.type === 'group') groups.set(vk(u) + '|' + u.name, String(u.members || '').split(', ').filter(x => x && x !== '-'));
+      });
+      (parsed.vpn || []).filter(v => v.type === 'ssl-vpn' && v.status !== 'disable').forEach(v =>
+        (v.authRules || []).forEach(r => refs.push({ vd: vk(v), users: r.users, groups: r.groups })));
+      (parsed.policies || []).filter(p => p.status !== 'disable' && String(p.srcIntf || '').split(', ').some(i => /^ssl\./i.test(i))).forEach(p =>
+        refs.push({ vd: vk(p), users: String(p.users || '').split(', ').filter(x => x && x !== '-'), groups: String(p.groups || '').split(', ').filter(x => x && x !== '-') }));
+      const hit = new Map();
+      const addUser = (vd, n) => { const u = local.get(vd + '|' + n); if (u && u.status !== 'disable' && (u.authType || 'password') === 'password' && (!u.twoFactor || u.twoFactor === 'disable')) hit.set(vd + '|' + n, u); };
+      refs.forEach(r => { r.users.forEach(n => addUser(r.vd, n)); r.groups.forEach(g => (groups.get(r.vd + '|' + g) || []).forEach(n => addUser(r.vd, n))); });
+      const list = [...hit.values()];
+      f('fg-sslvpn-no2fa', tr('audit.check_fg_sslvpn_no2fa'), list.length, 'high',
+        list.length ? list.map(u => u.name).slice(0,8).join(', ') + (list.length > 8 ? '…' : '') : tr('audit.normal'),
+        ['NIST 800-53 IA-2(1)', 'CIS v8 6.4', 'CISA FortiBleed'], list.map(u => ({ kind: 'user', name: u.name, vdom: u._vdom })));
+    }
     // 9c2. F5 BIG-IP 管理介面來源限制（XN116）：sys httpd／sshd 的 allow 為 All（任何來源）；沒有 allow 行的片段不評估。
     // 本機帳號可用 bash（shell bash）：low、不計健康度，請確認是否必要
     const mp5 = parsed.vendor === 'F5 BIG-IP' ? (parsed.mgmtPlane || {}) : null;
@@ -2161,6 +2185,7 @@
       ['default-admin-name', 'health.default_admin'],
       ['admin-legacy-hash', 'health.admin_legacy_hash'],
       ['fg-private-data-enc', 'health.fg_private_data_enc'],
+      ['fg-sslvpn-no2fa', 'health.fg_sslvpn_no2fa'],
       ['f5-mgmt-any-source', 'health.f5_mgmt_any'],
       ['rt-dstnat-broad', 'health.rt_dstnat_broad'],
       ['rt-dns-open-resolver', 'health.rt_dns_open'],
@@ -2976,6 +3001,7 @@ function buildPriorityHtml(items, limit, title) {
     'vpn-no-pfs': () => ['config vpn ipsec phase2-interface', '    edit "<phase2-name>"', '        set pfs enable', '        set dhgrp 14', '    next', 'end'],
     'default-admin-name': it => ['config system admin', '    edit "<new-admin-name>"', '        set accprofile "super_admin"', '        set password <new-password>', '    next', ...(it || []).slice(0, FW_FIX_MAX).map(x => `    delete ${_fgQuote(x.name)}`), 'end'],
     'admin-legacy-hash': it => _fgEdit('system admin', it, ['set password <new-password>']),
+    'fg-sslvpn-no2fa': it => _fgEdit('user local', it, ['set two-factor fortitoken', 'set fortitoken <token-serial>']),
     'fg-private-data-enc': () => ['config system global', '    set private-data-encryption enable', 'end'],
     'bgp-ebgp-no-policy': it => ['config router bgp', '    config neighbor', ...(it || []).slice(0, FW_FIX_MAX).flatMap(x => [`        edit ${_fgQuote(x.name)}`,
       ...((x.missing || ['in', 'out']).includes('in') ? ['            set route-map-in "<IN-POLICY>"'] : []), ...((x.missing || ['in', 'out']).includes('out') ? ['            set route-map-out "<OUT-POLICY>"'] : []), '        next']), '    end', 'end'],

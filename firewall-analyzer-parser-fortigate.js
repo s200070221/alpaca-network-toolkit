@@ -661,7 +661,10 @@ const FortigateParser = (() => {
         algorithm: gv(t, 'algorithm') || 'high', dtls: gv(t, 'dtls-tunnel') || 'enable',
         authTimeout: gv(t, 'auth-timeout') || '28800',
         ikeVer: '-', authMethod: 'ssl', proposal: gv(t, 'algorithm') || 'high',
-        dhgrp: '-', phase2: [], status: gv(t, 'status') === 'disable' ? 'disable' : 'enable', _vdom: vdomName });
+        dhgrp: '-', phase2: [], status: gv(t, 'status') === 'disable' ? 'disable' : 'enable', _vdom: vdomName,
+        // 認證規則（XN170，FortiOS CLI Reference：vpn ssl settings 下的 config authentication-rule，edit <id>，users／groups／portal）
+        authRules: parseEdits(extractSection(sslL, 'authentication-rule').sectionLines).map(r => ({
+          users: (gvs(r.text, 'users') || '').split(', ').filter(Boolean), groups: (gvs(r.text, 'groups') || '').split(', ').filter(Boolean) })) });
     }
     const { sectionLines: portalL } = extractSection(lines, 'vpn ssl web portal');
     parseEdits(portalL).forEach(e => {

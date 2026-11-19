@@ -783,6 +783,46 @@ function vpnLoginSuccessOf(e, raSaKeys) {
   }
   return null;
 }
+// FortiGate SSL VPN 失敗後登入成功（XN172，FortiBleed：FBI／USSS 聯合公告 JCSA-20261006-01 描述以外洩密碼做憑證填充與
+// 密碼噴灑登入對外的 SSL VPN，再建立管理者帳號）：同設備、同一外部 remip 在 1 小時內失敗 ≥ VPN_BRUTE_MIN 次後 tunnel-up 成功
+// → High；成功後 24 小時內同設備新增管理者帳號（netAdminChangeOf）→ Critical。門檻比照 sshBruteSuccess；需人工確認
+const VPN_BRUTE_MIN = 5, VPN_BRUTE_WINDOW_MS = 60 * 60 * 1000, VPN_ADMIN_AFTER_MS = 24 * 60 * 60 * 1000;
+function detectVpnSprayLogin(events) {
+  const byKey = new Map(), adminAdds = new Map();
+  events.forEach(e => {
+    if (!e.timestamp) return;
+    const host = e.host || '-';
+    const a = netAdminChangeOf(e);
+    if (a && a.kind === 'add') { if (!adminAdds.has(host)) adminAdds.set(host, []); adminAdds.get(host).push({ e, a }); return; }
+    const fail = fgSslVpnFailOf(e), ok = !fail && vpnLoginSuccessOf(e);
+    const ip = fail ? fail.ip : (ok && ok.src === 'fortigate' ? ok.ip : '');
+    if (!ip || iocIsInternalIP(ip)) return;
+    const key = host + '|' + ip;
+    if (!byKey.has(key)) byKey.set(key, { host, ip, list: [] });
+    byKey.get(key).list.push({ e, fail, user: fail ? fail.user : ok.user });
+  });
+  const issues = [];
+  for (const g of byKey.values()) {
+    const fails = [];
+    g.list.sort((x, y) => x.e.timestamp - y.e.timestamp).forEach(x => {
+      if (x.fail) { fails.push(x); return; }
+      const t = x.e.timestamp.getTime(), recent = fails.filter(y => t - y.e.timestamp.getTime() <= VPN_BRUTE_WINDOW_MS);
+      if (recent.length < VPN_BRUTE_MIN) return;
+      const users = [...new Set(recent.map(y => y.user).filter(Boolean))];
+      const adds = (adminAdds.get(g.host) || []).filter(y => { const d = y.e.timestamp.getTime() - t; return d >= 0 && d <= VPN_ADMIN_AFTER_MS; });
+      const accts = [...new Set(adds.map(y => y.a.acct))];
+      issues.push({
+        category: 'vpnSprayLogin', severityNorm: adds.length ? 'Critical' : 'High', count: recent.length + 1,
+        firstSeen: recent[0].e.timestamp, lastSeen: (adds.length ? adds[adds.length - 1].e : x.e).timestamp,
+        vpnSrc: g.ip, vpnUser: x.user || '-', vpnFails: recent.length, ...(accts.length ? { adminAcct: accts.join(', ') } : {}),
+        ...sampleOf(adds.length ? 'sample.vpnSprayAdmin' : 'sample.vpnSprayLogin', { host: g.host !== '-' ? g.host + ' ' : '', src: g.ip, n: recent.length, users: users.slice(0, 5).join(', ') || '-', user: x.user || '-', acct: accts.join(', ') }),
+        relatedHosts: [g.ip, x.user, ...accts, g.host !== '-' ? g.host : ''].filter(Boolean), relatedEvents: [...recent.map(y => y.e), x.e, ...adds.map(y => y.e)], confidence: 'heuristic'
+      });
+      fails.length = 0;
+    });
+  }
+  return issues;
+}
 // 代管業者 ASN 清單：情資整理頁輸出的 JSON Lines（形狀同 ASN-DROP）交給 parseAsnDropList()；其餘逐行讀
 // 「AS123 # 名稱」（X4BNet lists_vpn 的 datacenter/ASN.txt）或「123,"名稱"」（bad-asn-list，表頭 ASN,Entity 略過）
 function parseHostingAsnList(text) {
@@ -1500,6 +1540,7 @@ function formatIssueBasis(is) {
   if (is.category === 'cloudKeyMultiSource' || is.category === 'sshKeyMultiSource') return `key=${is.credKey} | src=${(is.relatedHosts || []).join(', ')}`;
   if (is.category === 'appCredentialAdded') return `app=${is.credApp} | ${(is.relatedEvents[0] && is.relatedEvents[0].msgid) || ''}`;
   if (is.category === 'adminLoginExternal') return `src=${is.adminSrc} | user=${is.adminAcct}${is.adminMethod ? ' | ' + is.adminMethod : ''} | fails=${is.adminFails}`;
+  if (is.category === 'vpnSprayLogin') return `src=${is.vpnSrc} | user=${is.vpnUser} | fails=${is.vpnFails} @ 1h` + (is.adminAcct ? ` | admin+=${is.adminAcct} @ 24h` : '');
   if (is.category === 'adminLoginFailExternal') return `srcs=${is.adminSrcs} | users=${is.adminUsers} | fails=${is.count} @ 24h`;
   if (is.category === 'netAdminAdd') {
     return `acct=${is.adminAcct}${is.adminPriv ? ' | priv=' + is.adminPriv : ''}${is.adminBy ? ' | by=' + is.adminBy : ''}`;
@@ -1705,6 +1746,8 @@ function authFailActor(e) {
   let src = f.srcip || f.src || f.IpAddress || f.ipAddress || '';
   // FortiGate 管理登入舊版只有 ui="ssh(位址)"（XN48）
   if (!src) { const al = adminLoginOf(e); if (al) src = al.src; }
+  // FortiGate SSL VPN 登入失敗的用戶端位址在 remip（XN172）
+  if (!src) { const v = fgSslVpnFailOf(e); if (v) src = v.ip; }
   src = String(src).replace(/^::ffff:/i, '');
   if (!src || src === '-' || src === '::1' || src === '127.0.0.1') return null;
   const t = f.TargetUserName && f.TargetUserName !== '-' ? f.TargetUserName : '';
@@ -2238,6 +2281,7 @@ function buildIssueList(events, intelIndexes, opts) {
   const nacFail = detectNacAuthFail(analyzed);
   const sshBrute = detectSshBruteSuccess(analyzed);
   const adminLogins = detectAdminLogins(analyzed);
+  const vpnSpray = detectVpnSprayLogin(analyzed);
   const winFail = detectWinFailReasons(analyzed);
   const ldapIss = detectLdapIssues(analyzed);
   const spray = detectPasswordSpray(analyzed);
@@ -2298,7 +2342,7 @@ function buildIssueList(events, intelIndexes, opts) {
   const psModuleLog = detectPowerShellModuleLogging(analyzed, { enablePsModuleLog: o.enablePsModuleLog, psModuleLogWatchlist: o.psModuleLogWatchlist });
   const timeGap = detectTimeGaps(analyzed, { gapThresholdMs: o.gapThresholdMs });
   const custom = detectCustomRules(analyzed, o.customRules);
-  const all = [...vpnHosting, ...vpnAnon, ...rmmIss, ...dspray, ...mfaFatigue, ...npsRej, ...nsSess, ...qnapIss, ...veeamIss, ...vaultIss, ...mtTamper, ...riskyPorts, ...fortiMgmtIss, ...appsmith, ...appsmithIntr, ...credTheft, ...gitlabIss, ...awsAcct, ...dbAuth, ...webshell, ...esxi, ...promptInj, ...intel, ...hashIntel, ...freq, ...scanCef, ...scanSys, ...scanWeb, ...exploitWeb, ...dnsAnom, ...nacFail, ...sshBrute, ...adminLogins, ...winFail, ...ldapIss, ...spray, ...rdpIss, ...adIss, ...radIss, ...svcIss, ...ldapSign, ...dcsync, ...crossDom, ...idsAlerts, ...netOps, ...netAdmin, ...volume, ...geo, ...geoIP, ...beaconing, ...lateral, ...privEsc, ...geoVelocity, ...asnRisk, ...acctAudit, ...passTheHash, ...kerberoasting, ...asrepRoasting, ...asrepRoastingRisk, ...lsassAccess, ...sysmonRegPersist, ...adminShare, ...procCreate, ...asnVelocity, ...sysmonProcCreate, ...sysmonRemoteThread, ...psScriptBlock, ...sysmonImageLoad, ...psModuleLog, ...timeGap, ...custom];
+  const all = [...vpnHosting, ...vpnAnon, ...rmmIss, ...dspray, ...mfaFatigue, ...npsRej, ...nsSess, ...qnapIss, ...veeamIss, ...vaultIss, ...mtTamper, ...riskyPorts, ...fortiMgmtIss, ...appsmith, ...appsmithIntr, ...credTheft, ...gitlabIss, ...awsAcct, ...dbAuth, ...webshell, ...esxi, ...promptInj, ...intel, ...hashIntel, ...freq, ...scanCef, ...scanSys, ...scanWeb, ...exploitWeb, ...dnsAnom, ...nacFail, ...sshBrute, ...adminLogins, ...vpnSpray, ...winFail, ...ldapIss, ...spray, ...rdpIss, ...adIss, ...radIss, ...svcIss, ...ldapSign, ...dcsync, ...crossDom, ...idsAlerts, ...netOps, ...netAdmin, ...volume, ...geo, ...geoIP, ...beaconing, ...lateral, ...privEsc, ...geoVelocity, ...asnRisk, ...acctAudit, ...passTheHash, ...kerberoasting, ...asrepRoasting, ...asrepRoastingRisk, ...lsassAccess, ...sysmonRegPersist, ...adminShare, ...procCreate, ...asnVelocity, ...sysmonProcCreate, ...sysmonRemoteThread, ...psScriptBlock, ...sysmonImageLoad, ...psModuleLog, ...timeGap, ...custom];
   all.push(...detectOffHours(all, analyzed, o.offHours));
   all.push(...detectUnusualHours(analyzed, o.actorHourBaseline));
   all.push(...detectNewSources(analyzed, o.actorSourceBaseline, o));
@@ -2599,7 +2643,7 @@ const CHAIN_STAGE_MAP = {
   privEsc: 'malicious', groupRemoved: 'malicious', pwReset: 'malicious', acctDeleted: 'malicious', asrepRoastingRisk: 'malicious',
   auditPolicyChanged: 'malicious', auditCleared: 'malicious', persistence: 'malicious', sysmonRegistryPersistence: 'malicious', registryValueChange: 'malicious',
   processCreate: 'malicious', sysmonProcessCreate: 'malicious', sysmonRemoteThread: 'malicious', powershellScriptBlock: 'malicious', sysmonImageLoad: 'malicious', powershellModuleLog: 'malicious', beaconing: 'malicious',
-  dnsDga: 'malicious', dnsTunnel: 'malicious', dnsNxBurst: 'malicious', nacAuthFail: 'access', npsRejectBurst: 'access', cppmRejectBurst: 'access', nsSessionMultiIp: 'access', vpnSessionMultiIp: 'access', qnapSnapshotDelete: 'postActivity', qnapMassFileChange: 'postActivity', veeamMalware: 'malicious', veeamDefenseOff: 'postActivity', vaultAuditDisabled: 'postActivity', fmgUnregDevice: 'access', veeamDeleteAttempt: 'postActivity', sshBruteSuccess: 'access', adminLoginExternal: 'access', adminLoginFailExternal: 'access', ldapBruteForce: 'access', ldapEnum: 'recon', passwordSpray: 'access', distributedSpray: 'access', mfaFatigue: 'access', adSensitiveChange: 'malicious', sidHistory: 'malicious', dsrmPassword: 'malicious', dcsync: 'malicious', k8sExec: 'malicious', k8sSecretAccess: 'malicious', duoFraud: 'access',
+  dnsDga: 'malicious', dnsTunnel: 'malicious', dnsNxBurst: 'malicious', nacAuthFail: 'access', vpnSprayLogin: 'access', npsRejectBurst: 'access', cppmRejectBurst: 'access', nsSessionMultiIp: 'access', vpnSessionMultiIp: 'access', qnapSnapshotDelete: 'postActivity', qnapMassFileChange: 'postActivity', veeamMalware: 'malicious', veeamDefenseOff: 'postActivity', vaultAuditDisabled: 'postActivity', fmgUnregDevice: 'access', veeamDeleteAttempt: 'postActivity', sshBruteSuccess: 'access', adminLoginExternal: 'access', adminLoginFailExternal: 'access', ldapBruteForce: 'access', ldapEnum: 'recon', passwordSpray: 'access', distributedSpray: 'access', mfaFatigue: 'access', adSensitiveChange: 'malicious', sidHistory: 'malicious', dsrmPassword: 'malicious', dcsync: 'malicious', k8sExec: 'malicious', k8sSecretAccess: 'malicious', duoFraud: 'access',
   acctStatusChange: 'postActivity', auditLogFull: 'postActivity'
 };
 const CHAIN_STAGE_ORDER = ['recon', 'access', 'malicious', 'postActivity'];
