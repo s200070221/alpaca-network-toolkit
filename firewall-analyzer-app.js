@@ -1973,6 +1973,8 @@ function onParsed(){
   const SACCT_LS = 'suspect_accts';
   function _fwSuspectOn() { try { return localStorage.getItem(SACCT_LS) !== null; } catch (e) { return false; } }
   function _fwSuspectText() {
+    // 記住時以 localStorage 為準，log 工具改了清單這裡也會跟著更新（RV10-U3）
+    if (_fwSuspectOn()) { try { window._fwSuspectText = localStorage.getItem(SACCT_LS) || ''; } catch (e) {} }
     if (window._fwSuspectText === undefined) { try { window._fwSuspectText = localStorage.getItem(SACCT_LS) || ''; } catch (e) { window._fwSuspectText = ''; } }
     return window._fwSuspectText;
   }
@@ -3823,17 +3825,8 @@ function onParsed(){
   // 零 closure 風險；呼叫端下方第 382 行左右仍是裸 `checkAnalyzeEggs(PARSED)`，
   // 執行期靠全域作用域鏈找到 eggs.js 定義的版本，不需要改呼叫寫法）
 
-  // ── 彩蛋 2：Konami Code → Matrix Policy Rain ────────────
-  (function setupKonami(){
-    const SEQ=[38,38,40,40,37,39,37,39,66,65]; // ↑↑↓↓←→←→BA
-    let idx=0;
-    document.addEventListener('keydown',e=>{
-      idx=(e.keyCode===SEQ[idx])?idx+1:0;
-      if(idx===SEQ.length){idx=0;startMatrixRain();}
-    });
-  })();
+  // Konami Code → Matrix Rain 彩蛋只保留 firewall-analyzer-eggs.js 那份（RV10-C1，原本兩份各自註冊 keydown）
 
-  
 // ── 彩蛋：Rage quit（連按 Esc 三次）────────────────────────
 (function(){
   var _rq=0,_rqT;
@@ -3846,36 +3839,6 @@ function onParsed(){
   });
 })();
 
-function startMatrixRain(){
-    if(document.querySelector('.matrix-overlay'))return;
-    const overlay=document.createElement('div');
-    overlay.className='matrix-overlay';
-    document.body.appendChild(overlay);
-    const words=['ALLOW','DENY','DROP','REJECT','VDOM','POLICY','INTERFACE','ROUTE','VPN','NAT','IPSEC','SSL-VPN','BGP','OSPF','ZONE','UTM','IPS','REDACTED_PSK','REDACTED_HASH','192.0.2.x','10.x.x.x','██████████','░░░░░░░░░░'];
-    const cols=Math.floor(window.innerWidth/96)+2;
-    for(let i=0;i<cols;i++){
-      const col=document.createElement('div');
-      col.className='matrix-col';
-      col.style.left=(i*96)+'px';
-      const dur=5+Math.random()*6;
-      col.style.animation=`matrixDrop ${dur}s linear forwards`;
-      col.style.animationDelay=(Math.random()*2.5)+'s';
-      const lines=12+Math.floor(Math.random()*10);
-      for(let j=0;j<lines;j++){
-        const span=document.createElement('span');
-        span.textContent=words[Math.floor(Math.random()*words.length)];
-        const br=0.25+Math.random()*0.75;
-        span.style.color=j===lines-1?'#ffffff':`rgba(0,200,240,${br})`;
-        span.style.textShadow=j===lines-1?'0 0 8px #00c8f0':'none';
-        col.appendChild(span);
-      }
-      overlay.appendChild(col);
-    }
-    const close=()=>overlay.remove();
-    overlay.addEventListener('click',close);
-    setTimeout(close,9000);
-  }
-  window.startMatrixRain=startMatrixRain;
 
   // ── 廠牌擬人化：tb-meta 連點 3 下 → 廠牌個性 ──────────────
   // ── 廠牌擬人化（3下）+ 羊駝核可（7下）共用同一計數器 ──────────────

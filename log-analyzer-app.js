@@ -197,6 +197,9 @@ function renderNextBar() {
   b.innerHTML = `<span style="font-weight:600">${esc(tr('nextbar.log_summary').replace('{events}', EVENTS.length).replace('{issues}', ISSUES.length))}${high ? ` · <span style="color:var(--red)">${esc(tr('nextbar.crit').replace('{n}', high))}</span>` : ''}</span>`
     // 0 個問題不等於安全（XN48）：只代表已支援的偵測規則沒有命中
     + (ISSUES.length ? '' : `<span data-zero-note style="font-size:12px;color:var(--text-dim)">${esc(tr('nextbar.zero_note'))}</span>`)
+    // 已套用的可疑帳號清單（RV10-U2）：清單在收合的選用來源區，記住後會自動套用，結果列註明避免忘記它在生效
+    + (() => { const n = parseSuspectAccountList((document.getElementById('opt-suspect-accts') || {}).value).length;
+      return n ? `<span data-sacct-active style="font-size:12px;color:var(--text-dim)">🔎 ${esc(tr('sacct.active').replace('{n}', n))}</span>` : ''; })()
     + `<button class="btn" onclick="${go('issues-card')}">${esc(tr('nextbar.issues'))}</button><button class="btn" onclick="exportLogReport()">${esc(tr('nextbar.report'))}</button><button class="btn" onclick="${go('deid-card')}">${esc(tr('nextbar.share'))}</button>`
     // 已對照防火牆設定的組數（XN131）
     + (FW_VERDICTS.size ? (() => { let a = 0, d = 0; FW_VERDICTS.forEach(v => { if (v.action === 'accept') a++; else if (v.action === 'deny') d++; });
@@ -1058,6 +1061,8 @@ document.getElementById('btn-rmm-add').onclick = () => document.getElementById('
   try { const v = localStorage.getItem(KEY); if (v !== null) { ta.value = v; cb.checked = true; } } catch (e) {}
   const save = () => { try { if (cb.checked) localStorage.setItem(KEY, ta.value); else localStorage.removeItem(KEY); } catch (e) {} };
   cb.onchange = save;
+  // 另一個分頁（防火牆分析）改了記住的清單時同步（RV10-U3）
+  window.addEventListener('storage', e => { if (e.key !== KEY) return; if (e.newValue === null) cb.checked = false; else { ta.value = e.newValue; cb.checked = true; } });
   ta.addEventListener('change', () => { if (cb.checked) save(); });
   document.getElementById('btn-sacct-file').onclick = () => document.getElementById('sacct-file-input').click();
   document.getElementById('sacct-file-input').onchange = e => {
