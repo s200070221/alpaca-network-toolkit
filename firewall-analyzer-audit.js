@@ -3460,7 +3460,8 @@ function buildSuspectAcctHtml(parsed, text, remember) {
 // 比對列：廠牌＝本頁顯示的廠牌名稱（parsed.vendor）、型號＝deviceInfo.model、版本＝deviceInfo.firmware
 function fwEolRow(parsed) {
   const di = (parsed && parsed.deviceInfo) || {}, clean = v => (v && v !== '-' ? String(v) : '');
-  return { hostname: clean(di.hostname), file: '', vendor: (parsed && parsed.vendor) || '', model: clean(di.model), version: clean(di.firmware) };
+  // FortiGate 韌體寫成「7.4.7 (build 2731)」，去掉 build 註記才能與清單的「7.4.7」或「7.4.*」比對（RV10）
+  return { hostname: clean(di.hostname), file: '', vendor: (parsed && parsed.vendor) || '', model: clean(di.model), version: clean(di.firmware).replace(/\s*\(build\s*\d+\)\s*$/i, '') };
 }
 function fwEolStatus(parsed, text) {
   if (typeof invParseEolCsv !== 'function' || !String(text || '').trim()) return null;
