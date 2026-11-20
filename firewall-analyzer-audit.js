@@ -3420,6 +3420,10 @@ function parseAccountList(text) {
   });
   return out;
 }
+// 讀檔時每行只取第一欄（CSV 其他欄常是建立時間、備註）（XN179）
+function accountListFromFile(text) {
+  return String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/).map(l => l.split(/[,\t]/)[0].replace(/^"|"$/g, '').trim()).filter(Boolean).join('\n');
+}
 function _acctKeys(name) {
   const n = String(name || '').trim().toLowerCase();
   if (!n) return [];
@@ -3431,17 +3435,58 @@ function matchSuspectAccounts(parsed, list) {
   return ((parsed && parsed.users) || []).filter(u => u && u.name && u.type !== 'group' && !/-server$/.test(u.type || '') && _acctKeys(u.name).some(k => set.has(k)))
     .map(u => ({ name: u.name, type: u.type || '-', vdom: u._vdom || '', status: u.status || 'enable' }));
 }
-function buildSuspectAcctHtml(parsed, text) {
+function buildSuspectAcctHtml(parsed, text, remember) {
   const list = parseAccountList(text), hits = matchSuspectAccounts(parsed, list);
   let h = '<div id="suspect-acct-card" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">' +
     '<div style="font-size:13px;font-weight:600;margin-bottom:6px">🔎 ' + esc(tr('sacct.title')) + '</div>' +
     '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">' + esc(tr('sacct.hint')) + '</div>' +
     '<textarea id="fw-suspect-accts" spellcheck="false" placeholder="' + esc(tr('sacct.ph')) + '" style="width:100%;height:70px;box-sizing:border-box;font-family:Menlo,\'Courier New\',monospace;font-size:11px">' + esc(text || '') + '</textarea>' +
-    '<button class="btn btn-ghost btn-sm" style="margin-top:4px" onclick="window._fwSuspectRun()">' + esc(tr('sacct.btn')) + '</button>';
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:4px">' +
+    '<button class="btn btn-ghost btn-sm" onclick="window._fwSuspectRun()">' + esc(tr('sacct.btn')) + '</button>' +
+    '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'fw-suspect-file\').click()">' + esc(tr('sacct.file')) + '</button>' +
+    '<input type="file" id="fw-suspect-file" accept=".txt,.csv" style="display:none" onchange="window._fwSuspectFile(this)">' +
+    '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim)"><input type="checkbox" data-sacct-remember' + (remember ? ' checked' : '') + ' onchange="window._fwSuspectRemember(this)">' + esc(tr('sacct.remember')) + '</label></div>';
   if (list.length) {
     h += '<div data-sacct-result style="margin-top:8px;font-size:12px">' + esc(tr(hits.length ? 'sacct.hit' : 'sacct.none').replace('{n}', hits.length).replace('{m}', list.length)) + '</div>';
     if (hits.length) h += '<table class="data-tbl" style="margin-top:6px"><thead><tr><th>' + esc(tr('sacct.col_acct')) + '</th><th>' + esc(tr('sacct.col_kind')) + '</th><th>VDOM</th></tr></thead><tbody>' +
       hits.map(x => '<tr><td>' + esc(x.name) + (x.status === 'disable' ? ' <span style="color:var(--text-dim)">(disable)</span>' : '') + '</td><td>' + esc(x.type) + '</td><td>' + esc(x.vdom || '-') + '</td></tr>').join('') + '</tbody></table>';
   }
+  return h + '</div>';
+}
+
+// ── 設備支援期限（XN178，使用者自備清單）───────────────
+// CISA BOD 26-02 要求汰換停止支援的邊界設備。不內建廠牌資料，比對規則與交換器分析資產清冊相同：
+// 共用 switch-analyzer-inventory.js 的 invParseEolCsv()／invEolCheck()（頁面另行載入；沒有時不顯示卡片）。
+// 比對列：廠牌＝本頁顯示的廠牌名稱（parsed.vendor）、型號＝deviceInfo.model、版本＝deviceInfo.firmware
+function fwEolRow(parsed) {
+  const di = (parsed && parsed.deviceInfo) || {}, clean = v => (v && v !== '-' ? String(v) : '');
+  return { hostname: clean(di.hostname), file: '', vendor: (parsed && parsed.vendor) || '', model: clean(di.model), version: clean(di.firmware) };
+}
+function fwEolStatus(parsed, text) {
+  if (typeof invParseEolCsv !== 'function' || !String(text || '').trim()) return null;
+  const p = invParseEolCsv(text);
+  return { parse: p, row: p.entries.length ? invEolCheck([fwEolRow(parsed)], p.entries, new Date())[0] : null };
+}
+function buildFwEolHtml(parsed, text) {
+  if (typeof invParseEolCsv !== 'function') return '';
+  const r = fwEolRow(parsed), st = fwEolStatus(parsed, text);
+  let h = '<div id="fw-eol-card" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">' +
+    '<div style="font-size:13px;font-weight:600;margin-bottom:6px">📅 ' + esc(tr('eol.title')) + '</div>' +
+    '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;white-space:pre-line">' + esc(tr('eol.hint')) + '</div>' +
+    '<div style="font-size:11px;margin-bottom:6px">' + esc([r.vendor, r.model || '-', r.version || '-'].join(' / ')) + '</div>' +
+    '<textarea id="fw-eol-text" spellcheck="false" placeholder="vendor,model,version,end_of_sale,end_of_support,note" style="width:100%;height:70px;box-sizing:border-box;font-family:Menlo,\'Courier New\',monospace;font-size:11px">' + esc(text || '') + '</textarea>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">' +
+    '<button class="btn btn-ghost btn-sm" onclick="window._fwEolRun()">' + esc(tr('eol.run_btn')) + '</button>' +
+    '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'fw-eol-file\').click()">' + esc(tr('eol.upload_btn')) + '</button>' +
+    '<input type="file" id="fw-eol-file" accept=".csv,.txt" style="display:none" onchange="window._fwEolFile(this)">' +
+    '<button class="btn btn-ghost btn-sm" onclick="window._fwEolSample()">' + esc(tr('eol.sample_btn')) + '</button></div>';
+  if (!st) return h + '</div>';
+  if (st.parse.errors.length) h += '<div style="font-size:11px;color:var(--red);margin-top:6px">' + st.parse.errors.map(e => esc(tr('eol.err_' + e.reason).replace('{n}', e.line))).join('<br>') + '</div>';
+  if (!st.row) return h + '<div style="font-size:12px;margin-top:6px">' + esc(tr('eol.no_entries')) + '</div></div>';
+  const m = st.row.match, d = x => (x ? x.toISOString().slice(0, 10) : '-');
+  const color = { expired: 'var(--red)', soon: 'var(--amber,#d97706)', eos: 'var(--amber,#d97706)' }[st.row.status] || 'var(--text)';
+  h += '<div data-fw-eol="' + esc(st.row.status) + '" style="font-size:12px;margin-top:8px;color:' + color + ';font-weight:600">' + esc(tr('eol.st_' + st.row.status).replace('{d}', typeof INV_EOL_SOON_DAYS === 'number' ? INV_EOL_SOON_DAYS : 180)) +
+    (m ? '</div><div style="font-size:11px;color:var(--text-dim)">' + esc(tr('eol.col_sale') + ' ' + d(m.endOfSale) + '／' + tr('eol.col_support') + ' ' + d(m.endOfSupport) +
+      (st.row.daysLeft == null ? '' : '／' + tr('eol.col_days') + ' ' + st.row.daysLeft) + '／' + tr('eol.match_line').replace('{n}', m.line) + (m.note ? '：' + m.note : '')) : '') + '</div>';
   return h + '</div>';
 }

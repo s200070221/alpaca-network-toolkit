@@ -1622,7 +1622,8 @@ function onParsed(){
           + (PARSED.vendor === 'FortiGate' ? _fwCleanupCardHtml() : '')
           + (_HIT_VENDOR_SUFFIX[PARSED.vendor] !== undefined ? _fwHitCardHtml() : '')
           + _fwRecertCardHtml()
-          + buildSuspectAcctHtml(PARSED, window._fwSuspectText || '')
+          + buildSuspectAcctHtml(PARSED, _fwSuspectText(), _fwSuspectOn())
+          + buildFwEolHtml(PARSED, _fwEolText())
           + `<div id="health-section" style="margin-top:18px;padding:14px 0 0;border-top:1px solid var(--border)">
               <button id="health-btn" onclick="_doHealthCheck()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:13px;cursor:pointer">${tr('health.run')}</button>
               <div id="health-result" style="margin-top:12px"></div>
@@ -1959,9 +1960,38 @@ function onParsed(){
   // 貼上 show version 輸出讀出完整版本（XN141）：寫入補填版本（只存記憶體），讀不出時提示、不改原值
   let _fwShowverMiss = false, _fwShowverText = '';
   // 可疑帳號清單（XN174）：只存記憶體，比對後重繪稽核頁
+  // 設備支援期限清單（XN178）：localStorage `fw_eol_list`（入口頁 WS_KEYS），格式與交換器分析 sw_eol_list 相同
+  const FW_EOL_LS = 'fw_eol_list';
+  function _fwEolText() { try { return localStorage.getItem(FW_EOL_LS) || ''; } catch (e) { return ''; } }
+  function _fwEolSave(t) { try { localStorage.setItem(FW_EOL_LS, t || ''); } catch (e) {} renderSection('audit'); const c = document.getElementById('fw-eol-card'); if (c) c.scrollIntoView({ block: 'nearest' }); }
+  window._fwEolRun = function() { const t = document.getElementById('fw-eol-text'); _fwEolSave(t ? t.value : ''); };
+  window._fwEolFile = async function(input) { const f = input.files && input.files[0]; input.value = ''; if (f) _fwEolSave((await readFile(f)).replace(/^\uFEFF/, '')); };
+  window._fwEolSample = function() {
+    Reporter.download(tr('eol.sample_comment') + '\nvendor,model,version,end_of_sale,end_of_support,note\nFortiGate,FGT-EXAMPLE-*,,2024-01-31,2029-01-31,example\nPaloAlto,EXAMPLE-*,10.1.*,,2026-06-30,example\n', 'firewall_lifecycle_sample.csv', 'text/csv');
+  };
+  // 記住清單（XN179，選用）：與 log 工具共用 localStorage `suspect_accts`（入口頁 WS_KEYS），勾選＝寫入、取消＝刪除
+  const SACCT_LS = 'suspect_accts';
+  function _fwSuspectOn() { try { return localStorage.getItem(SACCT_LS) !== null; } catch (e) { return false; } }
+  function _fwSuspectText() {
+    if (window._fwSuspectText === undefined) { try { window._fwSuspectText = localStorage.getItem(SACCT_LS) || ''; } catch (e) { window._fwSuspectText = ''; } }
+    return window._fwSuspectText;
+  }
+  window._fwSuspectRemember = function(cb) {
+    const t = document.getElementById('fw-suspect-accts');
+    try { if (cb.checked) localStorage.setItem(SACCT_LS, t ? t.value : ''); else localStorage.removeItem(SACCT_LS); } catch (e) {}
+  };
+  window._fwSuspectFile = async function(input) {
+    const f = input.files && input.files[0]; input.value = '';
+    if (!f) return;
+    window._fwSuspectText = accountListFromFile(await readFile(f));
+    if (_fwSuspectOn()) try { localStorage.setItem(SACCT_LS, window._fwSuspectText); } catch (e) {}
+    renderSection('audit');
+    const c = document.getElementById('suspect-acct-card'); if (c) c.scrollIntoView({ block: 'nearest' });
+  };
   window._fwSuspectRun = function() {
     const t = document.getElementById('fw-suspect-accts');
     window._fwSuspectText = t ? t.value : '';
+    if (_fwSuspectOn()) try { localStorage.setItem(SACCT_LS, window._fwSuspectText); } catch (e) {}
     renderSection('audit');
     const c = document.getElementById('suspect-acct-card'); if (c) c.scrollIntoView({ block: 'nearest' });
   };

@@ -1052,6 +1052,19 @@ document.getElementById('btn-asn-hosting-add').onclick = () => document.getEleme
 document.getElementById('btn-anonvpn-add').onclick = () => document.getElementById('anonvpn-file-input').click();
 document.getElementById('anonvpn-file-input').onchange = e => { if (e.target.files[0]) doAnonVpnUpload(e.target.files[0]); e.target.value = ''; };
 document.getElementById('btn-rmm-add').onclick = () => document.getElementById('rmm-file-input').click();
+// 可疑帳號清單記住與讀檔（XN179）：與防火牆分析共用 localStorage `suspect_accts`（入口頁 WS_KEYS），勾選＝寫入、取消＝刪除
+(() => {
+  const KEY = 'suspect_accts', ta = document.getElementById('opt-suspect-accts'), cb = document.getElementById('opt-sacct-remember');
+  try { const v = localStorage.getItem(KEY); if (v !== null) { ta.value = v; cb.checked = true; } } catch (e) {}
+  const save = () => { try { if (cb.checked) localStorage.setItem(KEY, ta.value); else localStorage.removeItem(KEY); } catch (e) {} };
+  cb.onchange = save;
+  ta.addEventListener('change', () => { if (cb.checked) save(); });
+  document.getElementById('btn-sacct-file').onclick = () => document.getElementById('sacct-file-input').click();
+  document.getElementById('sacct-file-input').onchange = e => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (f) readTextFile(f).then(t => { ta.value = suspectAccountsFromFile(t); if (cb.checked) save(); });
+  };
+})();
 document.getElementById('rmm-file-input').onchange = e => { if (e.target.files[0]) doRmmUpload(e.target.files[0]); e.target.value = ''; };
 document.getElementById('asn-hosting-file-input').onchange = e => {
   if (e.target.files[0]) doAsnHostingUpload(e.target.files[0]);

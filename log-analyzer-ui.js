@@ -479,6 +479,8 @@ function renderStatic() {
   document.getElementById('t-sacct-title').textContent = tr('sacct.title');
   document.getElementById('t-sacct-hint').textContent = tr('sacct.hint');
   document.getElementById('opt-suspect-accts').placeholder = tr('sacct.ph');
+  document.getElementById('btn-sacct-file').textContent = tr('sacct.file');
+  document.getElementById('lbl-sacct-remember').textContent = tr('sacct.remember');
   renderRmmList();
   renderAsnHostingList();
   document.getElementById('btn-asn-risk-add').textContent = tr('asn.risk_import_add_btn');

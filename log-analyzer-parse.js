@@ -1490,9 +1490,14 @@ function netAdminChangeOf(evt) {
   const f = evt.fields || {}, t = evt.msg || '';
   let m;
   if (evt.format === 'fortigate') {
-    if (f.logid !== '0100044547' || f.cfgpath !== 'system.admin' || f.action !== 'Add' || !f.cfgobj) return null;
+    if (f.logid !== '0100044547' || f.cfgpath !== 'system.admin' || !f.cfgobj) return null;
     const ipm = String(f.ui || '').match(/\(([\d.:a-fA-F]+)\)/), pm = String(f.cfgattr || '').match(/accprofile\[([^\]]*)\]/);
-    return { acct: f.cfgobj, priv: pm ? pm[1] : '', by: f.user || '', srcip: ipm ? ipm[1] : '', kind: 'add' };
+    if (f.action === 'Add') return { acct: f.cfgobj, priv: pm ? pm[1] : '', by: f.user || '', srcip: ipm ? ipm[1] : '', kind: 'add' };
+    // 既有管理者改成 super_admin（XN182）：cfgattr「accprofile[舊->super_admin]」，句型依公開的真實 FortiGate log；
+    // 只認內建最高權限設定檔 super_admin，自訂設定檔權限看不出來不列。刪除管理者（Delete）查無真實樣本，不評估
+    const em = f.action === 'Edit' && pm && pm[1].match(/^(.*?)->(.+)$/);
+    if (em && em[2] === 'super_admin' && em[1] !== 'super_admin') return { acct: f.cfgobj, priv: em[1] + '→' + em[2], by: f.user || '', srcip: ipm ? ipm[1] : '', kind: 'priv' };
+    return null;
   }
   // HPE Aruba CX（XN121）：4609（REST）／4701「User 帳號 added 新帳號 with role 角色」，只列 administrators／admin 角色
   if (evt.netVendor === 'arubacx' && (f.cx === '4609' || f.cx === '4701') && (m = String(f.cxText || '').match(/^User (\S+) added (\S+) with role (\S+?)\.?$/)) && /^admin/i.test(m[3]))

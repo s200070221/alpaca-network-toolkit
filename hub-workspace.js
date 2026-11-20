@@ -15,6 +15,8 @@ const WS_KEYS = [
   { key: 'fw_vuln_list', tool: 'firewall_analyzer', group: 'settings' },
   // 使用者勾選「記住補填的版本」才會出現（UX38），內容含主機名稱
   { key: 'fw_vuln_ver', tool: 'firewall_analyzer', group: 'settings', json: true },
+  { key: 'suspect_accts', tool: 'firewall_analyzer', group: 'settings' },
+  { key: 'fw_eol_list', tool: 'firewall_analyzer', group: 'settings' },
   { key: 'sw_vuln_ver', tool: 'switch_analyzer', group: 'settings', json: true },
   { key: 'fw_log_retention_days', tool: 'firewall_analyzer', group: 'settings' },
   { key: 'fw_audit_marks', tool: 'firewall_analyzer', group: 'settings', json: true }, { key: 'fw_audit_reviewer', tool: 'firewall_analyzer', group: 'settings' },
@@ -154,7 +156,7 @@ function renderWorkspaceCard() {
 // ── 本機儲存資料盤點與清除（XN104）────────────────────────────────────
 // 各工具共用同一個瀏覽器儲存區；這裡只列 key、所屬工具與大小（不顯示內容），標出可能含設定原文、
 // 帳密（content 群組、一次性交接 key）或檔名／設備名稱（歷史類）的項目，讓使用者在共用電腦上清除。
-const LS_NAME_KEYS = ['_netAnalyzer_anonHistory', '_netAnalyzer_summaries', '_netAnalyzer_activityHistory', 'fw_vuln_ver', 'sw_vuln_ver'];
+const LS_NAME_KEYS = ['_netAnalyzer_anonHistory', '_netAnalyzer_summaries', '_netAnalyzer_activityHistory', 'fw_vuln_ver', 'sw_vuln_ver', 'suspect_accts'];
 // entries：[{key,size}]；回傳依風險（secret → names → none）、工具、key 排序的列。純函式
 function lsInventory(entries) {
   const handoff = Object.keys(typeof HANDOFF_TTL === 'object' ? HANDOFF_TTL : {});

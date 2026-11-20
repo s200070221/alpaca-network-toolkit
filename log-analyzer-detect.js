@@ -1022,6 +1022,10 @@ function parseSuspectAccountList(text) {
   });
   return out;
 }
+// 讀檔時每行只取第一欄（XN179）
+function suspectAccountsFromFile(text) {
+  return String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/).map(l => l.split(/[,\t]/)[0].replace(/^"|"$/g, '').trim()).filter(Boolean).join('\n');
+}
 function suspectAcctKeys(name) {
   const n = String(name || '').trim().toLowerCase();
   if (!n || n === '-' || n === 'n/a') return [];
