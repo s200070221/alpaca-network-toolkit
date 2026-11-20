@@ -901,8 +901,8 @@ function parseAnonVpnList(text) {
   return out;
 }
 // VPN 成功登入（vpnLoginSuccessOf()）的來源位址落在商用 VPN 清單：依帳號合併；使用商用 VPN 不等於惡意，需人工確認
-function detectVpnFromAnonVpn(events, anonList) {
-  const ranges = (anonList || []).map(x => {
+function anonVpnRanges(anonList) {
+  return (anonList || []).map(x => {
     const [base, bits] = String(x.cidr || '').split('/');
     const b = ipToInt(base), n = Number(bits);
     if (b === null || !(n >= 0 && n <= 32)) return null;
@@ -910,15 +910,54 @@ function detectVpnFromAnonVpn(events, anonList) {
     const lo = (b & mask) >>> 0;
     return { lo, hi: (lo + (~mask >>> 0)) >>> 0, cidr: x.cidr, source: x.source || '' };
   }).filter(Boolean);
+}
+function anonVpnHit(ranges, ipStr) {
+  if (!ranges.length || !isValidIPv4(ipStr)) return null;
+  const ip = ipToInt(ipStr);
+  return ranges.find(r => ip >= r.lo && ip <= r.hi) || null;
+}
+// 管理介面登入來自商用 VPN 位址（XN177，CISA AA26-293A SafePay：攻擊者經 Mullvad 等 VPN 位址登入）：
+// adminLoginOf() 成功登入的來源在清單內 → adminAnonLogin（High，T1078），依設備＋帳號合併，同來源的失敗次數一併記錄
+function detectAdminFromAnonVpn(events, anonList) {
+  const ranges = anonVpnRanges(anonList);
+  if (!ranges.length) return [];
+  const fails = new Map(), groups = new Map();
+  events.forEach(e => {
+    const a = adminLoginOf(e);
+    if (!a || !a.src) return;
+    const hit = anonVpnHit(ranges, a.src);
+    if (!hit) return;
+    const host = e.host || '-';
+    if (!a.ok) { const k = host + '|' + a.src; fails.set(k, (fails.get(k) || 0) + 1); return; }
+    const key = host + '|' + String(a.user || '').toLowerCase();
+    if (!groups.has(key)) groups.set(key, { host, user: a.user || '?', ips: [], lists: [], list: [] });
+    const g = groups.get(key);
+    if (!g.ips.includes(a.src)) g.ips.push(a.src);
+    hit.source.split(',').filter(Boolean).forEach(x => { if (!g.lists.includes(x)) g.lists.push(x); });
+    g.list.push(e);
+  });
+  return [...groups.values()].map(g => {
+    const ev = g.list.sort((x, y) => effectiveTime(x) - effectiveTime(y));
+    const nFail = g.ips.reduce((n, ip) => n + (fails.get(g.host + '|' + ip) || 0), 0);
+    return {
+      category: 'adminAnonLogin', severityNorm: 'High', count: ev.length,
+      firstSeen: ev[0].timestamp || null, lastSeen: ev[ev.length - 1].timestamp || null,
+      adminAcct: g.user, vpnIps: g.ips, anonLists: g.lists, adminFails: nFail,
+      ...sampleOf('sample.adminAnonLogin', { host: g.host !== '-' ? g.host + ' ' : '', user: g.user, ip: g.ips.join(', '), n: ev.length, fails: nFail, list: g.lists.join(', ') || '-' }),
+      relatedHosts: [g.user, ...g.ips, g.host !== '-' ? g.host : ''].filter(Boolean), relatedEvents: ev, confidence: 'heuristic'
+    };
+  });
+}
+function detectVpnFromAnonVpn(events, anonList) {
+  const ranges = anonVpnRanges(anonList);
   if (!ranges.length) return [];
   const raSaKeys = new Set();
   events.forEach(e => { const f = e.fields || {}; if (f.ipsec === 'assign' && f.saId) raSaKeys.add(`${e.host}|${f.saName}|${f.saId}`); });
   const byUser = new Map();
   events.forEach(e => {
     const v = vpnLoginSuccessOf(e, raSaKeys);
-    if (!v || !isValidIPv4(v.ip)) return;
-    const ip = ipToInt(v.ip);
-    const hit = ranges.find(r => ip >= r.lo && ip <= r.hi);
+    if (!v) return;
+    const hit = anonVpnHit(ranges, v.ip);
     if (!hit) return;
     const key = String(v.user || '').toLowerCase() + '|' + v.src;
     let is = byUser.get(key);
@@ -1580,7 +1619,8 @@ function formatIssueBasis(is) {
   if (is.category === 'cloudKeyMultiSource' || is.category === 'sshKeyMultiSource') return `key=${is.credKey} | src=${(is.relatedHosts || []).join(', ')}`;
   if (is.category === 'appCredentialAdded') return `app=${is.credApp} | ${(is.relatedEvents[0] && is.relatedEvents[0].msgid) || ''}`;
   if (is.category === 'adminLoginExternal') return `src=${is.adminSrc} | user=${is.adminAcct}${is.adminMethod ? ' | ' + is.adminMethod : ''} | fails=${is.adminFails}`;
-  if (is.category === 'vpnSprayLogin') return `src=${is.vpnSrc} | user=${is.vpnUser} | fails=${is.vpnFails} @ 1h` + (is.adminAcct ? ` | admin+=${is.adminAcct} @ 24h` : '');
+  if (is.category === 'vpnSprayLogin') return `src=${is.vpnSrc} | user=${is.vpnUser} | fails=${is.vpnFails} @ 1h` + (is.adminAcct ? ` | admin+=${is.adminAcct} @ 24h` : '') + (is.anonVpn ? ` | anonvpn=${is.anonVpn}` : '');
+  if (is.category === 'adminAnonLogin') return `${is.vpnIps.join(', ')} | user=${is.adminAcct} | fails=${is.adminFails} | list=${is.anonLists.join(',') || '-'}`;
   if (is.category === 'adminLoginFailExternal') return `srcs=${is.adminSrcs} | users=${is.adminUsers} | fails=${is.count} @ 24h`;
   if (is.category === 'netAdminAdd') {
     return `acct=${is.adminAcct}${is.adminPriv ? ' | priv=' + is.adminPriv : ''}${is.adminBy ? ' | by=' + is.adminBy : ''}`;
@@ -2365,6 +2405,9 @@ function buildIssueList(events, intelIndexes, opts) {
   const asnRisk = detectAsnRisk(analyzed, o.asnIndexes || [], o.riskAsns || []);
   const vpnHosting = detectVpnFromHosting(analyzed, o.asnIndexes || [], o.hostingAsns || []);
   const vpnAnon = detectVpnFromAnonVpn(analyzed, o.anonVpn || []);
+  const adminAnon = detectAdminFromAnonVpn(analyzed, o.anonVpn || []);
+  // XN177：SSL VPN 失敗後成功的來源也在商用 VPN 清單時加註
+  { const rg = anonVpnRanges(o.anonVpn || []); vpnSpray.forEach(is => { const h = anonVpnHit(rg, is.vpnSrc); if (h) is.anonVpn = h.source || h.cidr; }); }
   const rmmIss = detectRmmTools(analyzed, o.rmm || [], o.rmmAllow || []);
   const suspectAcct = detectSuspectAccounts(analyzed, o.suspectAccts || []);
   const acctAudit = detectAccountAuditEvents(analyzed);
@@ -2384,7 +2427,7 @@ function buildIssueList(events, intelIndexes, opts) {
   const psModuleLog = detectPowerShellModuleLogging(analyzed, { enablePsModuleLog: o.enablePsModuleLog, psModuleLogWatchlist: o.psModuleLogWatchlist });
   const timeGap = detectTimeGaps(analyzed, { gapThresholdMs: o.gapThresholdMs });
   const custom = detectCustomRules(analyzed, o.customRules);
-  const all = [...suspectAcct, ...vpnHosting, ...vpnAnon, ...rmmIss, ...dspray, ...mfaFatigue, ...npsRej, ...nsSess, ...qnapIss, ...veeamIss, ...vaultIss, ...mtTamper, ...riskyPorts, ...fortiMgmtIss, ...appsmith, ...appsmithIntr, ...credTheft, ...gitlabIss, ...awsAcct, ...dbAuth, ...webshell, ...esxi, ...promptInj, ...intel, ...hashIntel, ...freq, ...scanCef, ...scanSys, ...scanWeb, ...exploitWeb, ...dnsAnom, ...nacFail, ...sshBrute, ...adminLogins, ...vpnSpray, ...winFail, ...ldapIss, ...spray, ...rdpIss, ...adIss, ...radIss, ...svcIss, ...ldapSign, ...dcsync, ...crossDom, ...idsAlerts, ...netOps, ...netAdmin, ...volume, ...geo, ...geoIP, ...beaconing, ...lateral, ...privEsc, ...geoVelocity, ...asnRisk, ...acctAudit, ...passTheHash, ...kerberoasting, ...asrepRoasting, ...asrepRoastingRisk, ...lsassAccess, ...sysmonRegPersist, ...adminShare, ...procCreate, ...asnVelocity, ...sysmonProcCreate, ...sysmonRemoteThread, ...psScriptBlock, ...sysmonImageLoad, ...psModuleLog, ...timeGap, ...custom];
+  const all = [...suspectAcct, ...vpnHosting, ...vpnAnon, ...adminAnon, ...rmmIss, ...dspray, ...mfaFatigue, ...npsRej, ...nsSess, ...qnapIss, ...veeamIss, ...vaultIss, ...mtTamper, ...riskyPorts, ...fortiMgmtIss, ...appsmith, ...appsmithIntr, ...credTheft, ...gitlabIss, ...awsAcct, ...dbAuth, ...webshell, ...esxi, ...promptInj, ...intel, ...hashIntel, ...freq, ...scanCef, ...scanSys, ...scanWeb, ...exploitWeb, ...dnsAnom, ...nacFail, ...sshBrute, ...adminLogins, ...vpnSpray, ...winFail, ...ldapIss, ...spray, ...rdpIss, ...adIss, ...radIss, ...svcIss, ...ldapSign, ...dcsync, ...crossDom, ...idsAlerts, ...netOps, ...netAdmin, ...volume, ...geo, ...geoIP, ...beaconing, ...lateral, ...privEsc, ...geoVelocity, ...asnRisk, ...acctAudit, ...passTheHash, ...kerberoasting, ...asrepRoasting, ...asrepRoastingRisk, ...lsassAccess, ...sysmonRegPersist, ...adminShare, ...procCreate, ...asnVelocity, ...sysmonProcCreate, ...sysmonRemoteThread, ...psScriptBlock, ...sysmonImageLoad, ...psModuleLog, ...timeGap, ...custom];
   all.push(...detectOffHours(all, analyzed, o.offHours));
   all.push(...detectUnusualHours(analyzed, o.actorHourBaseline));
   all.push(...detectNewSources(analyzed, o.actorSourceBaseline, o));
@@ -2681,7 +2724,7 @@ const CHAIN_STAGE_MAP = {
   possibleScan: 'recon', 'freq:denyBlock': 'recon', idsAlert: 'malicious', exploitAttempt: 'access', appsmithOriginReset: 'access', appsmithResetFlow: 'access', appsmithResetBurst: 'recon', appsmithExternalRisky: 'access', appsmithScriptedApi: 'malicious', credFileExposed: 'access', appCredentialAdded: 'postActivity', gitlabCiVarRead: 'malicious', webshellCmd: 'postActivity', webshellUpload: 'postActivity', webshellNewScript: 'postActivity', esxiRemoteAccess: 'access', esxiDefenseOff: 'postActivity', esxiAccountChange: 'postActivity', esxiVmImpact: 'postActivity', dbAdminRemote: 'access', dbExternalLogin: 'access', dbAuthFailBurst: 'access', gitlabMassClone: 'postActivity', gitlabTokenCreated: 'postActivity',
   'freq:authFail': 'access', knownIOC: 'malicious', knownHashIOC: 'malicious', volumeAnomaly: 'postActivity',
   passTheHash: 'access', kerberoasting: 'access', asrepRoasting: 'access', lsassAccess: 'access', lateralMovement: 'access', adminShareAccess: 'access', acctLockout: 'access', tokenPrivAdjust: 'access',
-  geoVelocity: 'access', asnVelocity: 'access', vpnHostingLogin: 'access', vpnAnonLogin: 'access', rmmTool: 'malicious', netAdminAdd: 'malicious',
+  geoVelocity: 'access', asnVelocity: 'access', vpnHostingLogin: 'access', vpnAnonLogin: 'access', adminAnonLogin: 'access', rmmTool: 'malicious', netAdminAdd: 'malicious',
   privEsc: 'malicious', groupRemoved: 'malicious', pwReset: 'malicious', acctDeleted: 'malicious', asrepRoastingRisk: 'malicious',
   auditPolicyChanged: 'malicious', auditCleared: 'malicious', persistence: 'malicious', sysmonRegistryPersistence: 'malicious', registryValueChange: 'malicious',
   processCreate: 'malicious', sysmonProcessCreate: 'malicious', sysmonRemoteThread: 'malicious', powershellScriptBlock: 'malicious', sysmonImageLoad: 'malicious', powershellModuleLog: 'malicious', beaconing: 'malicious',

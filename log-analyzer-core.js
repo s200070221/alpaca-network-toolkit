@@ -31,6 +31,7 @@ const SAMPLE_ZH = {
   'sample.adminLoginExternal': '{host}管理介面從外部位址 {src} 以 {user} 登入成功（{method}，之前失敗 {fails} 次）',
   'sample.adminLoginFailExternal': '{host}管理介面從外部位址登入失敗 {n} 次（來源 {srcs}；帳號 {users}）',
   'sample.vpnHostingLogin': '{user} 從代管業者網段 {asn} {name}（{ip}）成功登入 VPN（{src}）{n} 次',
+  'sample.adminAnonLogin': '{host}管理介面帳號 {user} 從商用 VPN 位址 {ip} 登入成功 {n} 次（同來源失敗 {fails} 次；清單：{list}）',
   'sample.vpnAnonLogin': '{user} 從商用 VPN 位址 {ip} 成功登入 VPN（{src}）{n} 次（清單：{list}）',
   'sample.suspectAccount': '帳號 {acct} 與使用者提供的可疑帳號清單同名，出現 {n} 次（{hosts}）',
   'sample.rmmTool': '{client} 連線遠端管理工具 {tool}（{list}）{n} 次',

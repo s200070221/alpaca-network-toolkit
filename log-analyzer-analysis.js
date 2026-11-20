@@ -514,7 +514,7 @@ function detectFrequencyIssues(events, opts) {
 // days（上班的星期，0=日）, tzOffsetMin（UTC 位移分鐘）, holidays（YYYY-MM-DD 集合）}；以設定的時區換算時間
 // （ts＋位移後讀 UTC 欄位），不受瀏覽器所在時區影響。取既有敏感類問題的事件，再加 sudo 指令與 4672 特殊權限登入，
 // 依行為者（帳號優先）彙整；只標記時間，不判斷操作本身好壞
-const OFF_HOURS_ISSUE_CATS = new Set(['adminLoginExternal', 'vpnSprayLogin', 'dbAdminRemote', 'dbExternalLogin', 'appsmithResetFlow', 'appsmithExternalRisky', 'appCredentialAdded', 'sshKeyMultiSource', 'gitlabTokenCreated', 'gitlabMassClone', 'awsRootUsage', 'adminLoginFailExternal', 'dcsync', 'rdpLogon', 'adSensitiveChange', 'sidHistory', 'dsrmPassword', 'privEsc', 'pwReset', 'groupRemoved', 'acctDeleted', 'auditPolicyChanged', 'auditCleared', 'persistence', 'configChange', 'netAdminAdd', 'k8sExec', 'k8sSecretAccess']);
+const OFF_HOURS_ISSUE_CATS = new Set(['adminLoginExternal', 'adminAnonLogin', 'vpnSprayLogin', 'dbAdminRemote', 'dbExternalLogin', 'appsmithResetFlow', 'appsmithExternalRisky', 'appCredentialAdded', 'sshKeyMultiSource', 'gitlabTokenCreated', 'gitlabMassClone', 'awsRootUsage', 'adminLoginFailExternal', 'dcsync', 'rdpLogon', 'adSensitiveChange', 'sidHistory', 'dsrmPassword', 'privEsc', 'pwReset', 'groupRemoved', 'acctDeleted', 'auditPolicyChanged', 'auditCleared', 'persistence', 'configChange', 'netAdminAdd', 'k8sExec', 'k8sSecretAccess']);
 function parseWorkTime(v, def) {
   const m = String(v || '').trim().match(/^(\d{1,2}):?(\d{2})?$/);
   if (!m || +m[1] > 24 || +(m[2] || 0) > 59) return def;

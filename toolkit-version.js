@@ -3,8 +3,29 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.19';
+  const TOOLKIT_VERSION = '2026.11.20';
   const CHANGELOG = [
+    {
+      version: '2026.11.20',
+      items: {
+        zhTW: [
+          'log：FortiGate SSL VPN 登入失敗改依官方 log 編號辨識並取得來源位址；同一外部位址多次失敗後登入成功列為 High，之後 24 小時內新增管理者帳號升為 Critical（FBI FortiBleed 公告樣式）',
+          'log：匯入商用 VPN 位址清單後，也比對管理介面登入與上述 SSL VPN 登入的來源',
+          '防火牆：FortiGate SSL VPN 本機使用者未啟用雙因素認證（High）、登入失敗鎖定比官方預設寬鬆（Low）',
+          '交換器分析與防火牆（Cisco IOS 路由器）：設備本身以 tftp-server 提供檔案下載時列出',
+          '防火牆與 log：可貼上公告列出的可疑帳號清單進行比對（不內建名單，只存在分頁記憶體）',
+          '交換器產生器：Arista 720XP／750X、Alcatel OS6560 的埠資料依 NetBox 型號資料庫修正',
+        ],
+        en: [
+          'Log: FortiGate SSL VPN login failures are recognised by their official log ID with the client address; repeated failures from one external address followed by a successful login are High, and Critical if an administrator account is added within 24 hours (FBI FortiBleed pattern)',
+          'Log: an imported commercial VPN address list is also checked against admin interface logins and those SSL VPN logins',
+          'Firewall: FortiGate SSL VPN local users without two-factor authentication (High) and login lockout looser than the vendor default (Low)',
+          'Switch analyzer and firewall (Cisco IOS router): flags the device serving files with tftp-server',
+          'Firewall and log: paste an advisory\'s suspicious account list to compare (no built-in list; kept only in tab memory)',
+          'Switch generator: Arista 720XP/750X and Alcatel OS6560 port data corrected per the NetBox device-type library',
+        ],
+      },
+    },
     {
       version: '2026.11.19',
       items: {
