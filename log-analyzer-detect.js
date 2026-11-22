@@ -2590,6 +2590,10 @@ function eventsTimeRange(events) {
 // 設備自己的主機名 e.host 分組；detectScanHeuristicCEF／detectVolumeAnomalies 用實際攻擊來源
 // IP），不可直接當關聯鍵，改為對 relatedEvents 逐筆呼叫既有 getEventNetTuple() 重新推導。
 function deriveIssueActor(issue) {
+  return issueActorIp(issue) || (issue.relatedHosts && issue.relatedHosts[0]) || null;
+}
+// deriveIssueActor() 的投票部分：只看 relatedEvents 的位址，不 fallback 到 relatedHosts（回報設備）
+function issueActorIp(issue) {
   const counts = new Map();
   (issue.relatedEvents || []).forEach(e => {
     const t = getEventNetTuple(e);
@@ -2598,8 +2602,30 @@ function deriveIssueActor(issue) {
   });
   let best = null, bestN = -1;
   for (const [ip, n] of counts) { if (n > bestN) { best = ip; bestN = n; } }
-  if (best) return best;
-  return (issue.relatedHosts && issue.relatedHosts[0]) || null;
+  return best;
+}
+
+// 同一行為者的其他高風險問題（RV10-U1）：同一起事件常由多個偵測各產生一筆 High 以上的問題，
+// 表格逐列看像互不相關。行為者取帳號（deriveIssueActorByUser，不分大小寫）優先、否則事件位址
+// （issueActorIp，不用回報設備，避免同一台防火牆的所有問題都被串在一起）。
+// 回傳 Map(issue → {actor, n})，n＝同一行為者「其他」Critical／High 問題數，只收 n ≥ 1。
+function relatedHighIssues(issues) {
+  const isHigh = is => is.severityNorm === 'Critical' || is.severityNorm === 'High';
+  const actorOf = new Map(), groups = new Map();
+  (issues || []).forEach(is => {
+    const u = deriveIssueActorByUser(is);
+    const a = u || issueActorIp(is);
+    if (!a) return;
+    const key = (u ? 'u:' : 'i:') + String(a).toLowerCase();
+    actorOf.set(is, { key, actor: a });
+    if (isHigh(is)) groups.set(key, (groups.get(key) || 0) + 1);
+  });
+  const out = new Map();
+  for (const [is, { key, actor }] of actorOf) {
+    const n = (groups.get(key) || 0) - (isHigh(is) ? 1 : 0);
+    if (n >= 1) out.set(is, { actor, n });
+  }
+  return out;
 }
 
 // deriveIssueActor() 的「帳號」版本（攻擊鏈關聯分組軸，2026-09 新增）：投票邏輯與既有函式

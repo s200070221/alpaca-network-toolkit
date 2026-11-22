@@ -169,6 +169,7 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
 .note-btn{background:none;border:none;cursor:pointer;font-size:13px;opacity:.35;padding:0 2px}
 .fwq-btn{background:none;border:none;cursor:pointer;font-size:12px;opacity:.45;padding:0 2px}
 .fwq-btn:hover{opacity:1}
+.rel-btn{background:var(--surface2,transparent);border:1px solid var(--border,#888);border-radius:10px;cursor:pointer;font-size:11px;padding:0 6px;color:inherit}
 .note-btn:hover{opacity:.8}
 .note-btn.has-note{opacity:1;filter:drop-shadow(0 0 2px var(--accent))}
 .tour{box-sizing:border-box;width:100%;max-width:860px;margin:8px auto;padding:10px 14px;border:1px solid var(--accent);border-radius:8px;background:var(--surface2);color:var(--text);font-size:12.5px;line-height:1.6;text-align:left}
@@ -199,7 +200,7 @@ section.card{scroll-margin-top:64px}
 /* UX29：手機寬度加大點擊目標（至少 32px）；7 頁相同，只影響 ≤720px */
 @media (max-width:720px){
   .lang-btn,.theme-btn,#theme-btn,.tools-nav-btn,#tools-nav-btn,.sb-toggle,.howto-copy,.rm-btn,.note-btn,.btn-sm,#t-back,#t-intel-builder,#send-to-tool-select,#filter-preset-select{min-height:32px;min-width:32px}
-  .actor-link,.fwq-btn,#t-intel-builder,.tag-more,#ws-export-btn,#ws-import-btn{display:inline-block;padding:6px 4px;min-height:32px;box-sizing:border-box}
+  .actor-link,.fwq-btn,.rel-btn,#t-intel-builder,.tag-more,#ws-export-btn,#ws-import-btn{display:inline-block;padding:6px 4px;min-height:32px;box-sizing:border-box}
   #gl-search{min-height:32px}
   .fwq-btn{min-width:32px;text-align:center}
   #issues-card select,#ls-panel button{min-height:32px}

@@ -15,7 +15,7 @@ const WS_KEYS = [
   { key: 'fw_vuln_list', tool: 'firewall_analyzer', group: 'settings' },
   // 使用者勾選「記住補填的版本」才會出現（UX38），內容含主機名稱
   { key: 'fw_vuln_ver', tool: 'firewall_analyzer', group: 'settings', json: true },
-  { key: 'suspect_accts', tool: 'firewall_analyzer', group: 'settings' },
+  { key: 'suspect_accts', tool: 'firewall_analyzer', group: 'content' },
   { key: 'fw_eol_list', tool: 'firewall_analyzer', group: 'settings' },
   { key: 'sw_vuln_ver', tool: 'switch_analyzer', group: 'settings', json: true },
   { key: 'fw_log_retention_days', tool: 'firewall_analyzer', group: 'settings' },

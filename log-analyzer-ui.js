@@ -1126,6 +1126,7 @@ function importSigmaFiles(files) {
   }).catch(() => alert(tr('msg.file_read_error')));
 }
 
+let _relIssuesCache = { arr: null, map: new Map() };
 function renderIssues() {
   const thead = document.querySelector('#issues-table thead');
   const tbody = document.querySelector('#issues-table tbody');
@@ -1156,6 +1157,9 @@ function renderIssues() {
   // 問題清單搜尋框（比照 #results-search／filterEvents() 既有樣板）：對分類標籤/來源/判斷依據/
   // 樣本原始文字做不分大小寫子字串比對，僅影響表格顯示，不重新計算分析結果
   const searchQuery = document.getElementById('issues-search').value.trim().toLowerCase();
+  // 同一行為者另有高風險問題的提示（RV10-U1），以 ISSUES 陣列身分快取，搜尋時不重算
+  if (_relIssuesCache.arr !== ISSUES) _relIssuesCache = { arr: ISSUES, map: relatedHighIssues(ISSUES) };
+  const relMap = _relIssuesCache.map;
   const rows = visible.map(is => {
     const baseCat = is.category.startsWith('freq:') ? is.category.slice(5) : is.category;
     // 2026-09-22 資安修復：issueCategoryLabel() 對 custom: 類別會直接回傳使用者可匯入的
@@ -1184,6 +1188,8 @@ function renderIssues() {
     const searchText = `${catLabel} ${sourceCell} ${basisText} ${issueSample(is)} ${noteText} ${tr('status.' + status)}`.toLowerCase();
     // 高風險服務埠問題可把連線送到防火牆分析對照設定（XN131）
     const fwBtn = FWV_ISSUE_CATS.has(baseCat) && issueFwBatch(is) ? ` <button class="fwq-btn" data-issue-fw="${ISSUES.indexOf(is)}" title="${esc(tr('fwv.issue_btn'))}" aria-label="${esc(tr('fwv.issue_btn'))}">🛡</button>` : '';
+    const rel = relMap.get(is);
+    const relBtn = rel ? `<button class="rel-btn" data-issue-rel="${ISSUES.indexOf(is)}" title="${esc(tr('issues.related_tip'))}">🔗 ${esc(tr('issues.related').replace('{n}', rel.n))}</button> ` : '';
     const html = `<tr${status === 'falsePositive' ? ' style="opacity:.55"' : ''}>
       <td class="is-cat">${catLabel}${mitreBadge}${fwBtn}${fwVerdictBadge(is.relatedEvents)}${nextStepHtml(baseCat)}</td>
       <td class="is-inl" data-label="${L('severity')}"><span class="badge ${sevClass(is.severityNorm)}">${tr(SEV_KEY_MAP[is.severityNorm])}</span></td>
@@ -1191,12 +1197,18 @@ function renderIssues() {
       <td class="is-inl" data-label="${L('confidence')}"><span class="conf-tag ${is.confidence}">${tr('conf.' + is.confidence)}</span></td>
       ${hasSource ? `<td data-label="${L('source')}">${esc(sourceCell)}</td>` : ''}
       <td data-label="${L('basis')}">${esc(basisText)}</td>
-      <td class="is-sample" data-label="${L('sample')}">${swPortBtn(is)}${issueActorLink(is)}${esc(issueSample(is))}</td>
+      <td class="is-sample" data-label="${L('sample')}">${swPortBtn(is)}${issueActorLink(is)}${relBtn}${esc(issueSample(is))}</td>
       <td class="is-inl">${noteCell}</td>
       <td class="is-inl">${statusCell}</td></tr>`;
     return { html, searchText };
   }).filter(r => !searchQuery || r.searchText.includes(searchQuery));
   tbody.onclick = ev => {
+    const rb = ev.target.closest('[data-issue-rel]');
+    if (rb) {
+      const r = relMap.get(ISSUES[+rb.getAttribute('data-issue-rel')]);
+      if (r) { showActorProfile(String(r.actor)); const c = document.getElementById('actor-card'); if (c) c.scrollIntoView({ block: 'start' }); }
+      return;
+    }
     const fb = ev.target.closest('[data-issue-fw]');
     if (!fb) return;
     const csv = issueFwBatch(ISSUES[+fb.getAttribute('data-issue-fw')]);
