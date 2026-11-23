@@ -8,14 +8,13 @@
 (function () {
   'use strict';
   const PANEL_PER_ROW = 16;
-  const W = 34, H = 26, GAP = 8, PAD = 16, LABEL_H = 14;
+  
   const dash = v => v == null || v === '' || v === '-';
   const lc = s => String(s || '').toLowerCase();
   const xesc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const T = (k, p) => { let s = typeof tr === 'function' ? tr(k) : k; Object.keys(p || {}).forEach(n => { s = s.split('{' + n + '}').join(String(p[n])); }); return s; };
   const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}/;
-  // 遮蔽位址（下載給他人時）：IPv4／IPv6 換成固定字樣
-  const maskIp = s => String(s).replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?:\/\d{1,3}(?:\.\d{1,3}){3}|\/\d{1,2})?\b/g, 'x.x.x.x').replace(/\b[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}(?:\/\d{1,3})?\b/gi, m => (m.includes('::') || m.split(':').length > 3 ? 'x:x::x' : m));
+  const maskIp = s => (window.PanelSvg ? window.PanelSvg.maskIp(s) : String(s));
 
   // 預設路由：0.0.0.0/0 或 0.0.0.0 0.0.0.0（FortiGate）
   const isDefault = r => { const d = String((r && (r.dst || r.dest || r.prefix)) || '').trim(); return /^0\.0\.0\.0(?:\/0|\s+0\.0\.0\.0)$/.test(d) || d === 'default'; };
@@ -86,58 +85,25 @@
   const VDOM_COLORS = ['#22d3ee', '#f472b6', '#a3e635', '#fb923c', '#c084fc', '#facc15'];
   const colorOf = p => (p.wan || p.role === 'wan' ? COLORS.wan : p.role === 'mgmt' || p.role === 'ha' ? COLORS.mgmt : p.fortilink ? COLORS.fortilink : p.used ? COLORS.used : COLORS.unused);
 
-  // 前面板 SVG：opts.mask＝遮蔽位址（下載給他人時）
+  // 前面板 SVG：opts.mask＝遮蔽位址（下載給他人時）。繪圖交給共用的 PanelSvg（panel-svg.js）
   function panelSvg(pn, opts) {
     const o = opts || {}, show = s => (o.mask ? maskIp(s) : String(s));
-    const all = pn.ports;
-    const rows = Math.max(1, Math.ceil(all.length / PANEL_PER_ROW)), cols = Math.min(PANEL_PER_ROW, Math.max(all.length, 1));
-    const wanBoxH = pn.wan.length ? 90 : 0;
-    const panelW = PAD * 2 + cols * (W + GAP) - GAP, panelY = wanBoxH + 10;
-    const rowH = H + LABEL_H + 18;
-    const panelH = PAD * 2 + rows * rowH;
-    const boxW = 230, width = Math.max(panelW + 20, pn.wan.length * (boxW + 10) + 10);
-    const pos = Object.create(null);
-    all.forEach((p, i) => { const r = Math.floor(i / PANEL_PER_ROW), c = i % PANEL_PER_ROW; pos[lc(p.name)] = { x: 10 + PAD + c * (W + GAP), y: panelY + PAD + r * rowH, r }; });
-    let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${panelY + panelH + 10}" viewBox="0 0 ${width} ${panelY + panelH + 10}" font-family="sans-serif" font-size="10">`;
-    s += `<rect x="10" y="${panelY}" width="${panelW}" height="${panelH}" rx="6" fill="#1f2937" stroke="#4b5563"/>`;
-    s += `<text x="${10 + PAD}" y="${panelY + 11}" fill="#d1d5db" font-size="10">${xesc(pn.model || pn.modelRaw || '')}</text>`;
-    // 群組外框：同一列連續的成員各畫一框
-    pn.groups.forEach((g, gi) => {
-      const col = GROUP_COLORS[gi % GROUP_COLORS.length];
-      const pts = g.members.map(m => ({ m, p: pos[lc(m)], i: all.findIndex(x => lc(x.name) === lc(m)) })).filter(x => x.p).sort((a, b) => a.i - b.i);
-      let run = [];
-      const flush = () => {
-        if (!run.length) return;
-        const a = run[0].p, b = run[run.length - 1].p;
-        s += `<rect x="${a.x - 4}" y="${a.y - 4}" width="${b.x - a.x + W + 8}" height="${H + LABEL_H + 10}" rx="4" fill="none" stroke="${col}" stroke-width="2"${g.bridged ? '' : ' stroke-dasharray="4 2"'}/>`;
-        s += `<text x="${a.x - 2}" y="${a.y + H + LABEL_H + 14}" fill="${col}" font-size="9">${xesc(g.name)}</text>`;
-        run = [];
-      };
-      pts.forEach(x => { const prev = run[run.length - 1]; if (prev && (x.i !== prev.i + 1 || x.p.r !== prev.p.r)) flush(); run.push(x); });
-      flush();
-    });
-    all.forEach(p => {
-      const q = pos[lc(p.name)], c = colorOf(p), fiber = /fiber|sfp|qsfp/i.test(p.media);
-      s += `<rect x="${q.x}" y="${q.y}" width="${W}" height="${H}" rx="${fiber ? 1 : 3}" fill="${c}" fill-opacity="${p.used || p.wan ? 0.9 : 0.35}" stroke="#e5e7eb" stroke-width="${fiber ? 2 : 1}" data-port="${xesc(p.name)}"><title>${xesc(p.name + (p.ips.length ? ' ' + show(p.ips.join(', ')) : '') + (p.zones.length ? ' [' + p.zones.join(', ') + ']' : ''))}</title></rect>`;
-      // 多 VDOM：埠上方色條代表所屬 VDOM
-      if (pn.vdoms.length > 1 && p.vdom) s += `<rect x="${q.x}" y="${q.y - 3}" width="${W}" height="3" fill="${VDOM_COLORS[pn.vdoms.indexOf(p.vdom) % VDOM_COLORS.length]}"><title>VDOM ${xesc(p.vdom)}</title></rect>`;
-      if (p.speed) s += `<text x="${q.x + W / 2}" y="${q.y + 16}" fill="#fff" font-size="8" text-anchor="middle">${xesc(p.speed)}</text>`;
-      s += `<text x="${q.x + W / 2}" y="${q.y + H + 11}" fill="#e5e7eb" font-size="9" text-anchor="middle">${xesc(p.name.length > 9 ? p.name.slice(0, 8) + '…' : p.name)}</text>`;
-    });
-    // WAN 外框與連線
-    pn.wan.forEach((w, i) => {
-      const bx = 10 + i * (boxW + 10), q = pos[lc(w.port)];
+    const multi = pn.vdoms.length > 1;
+    const ports = pn.ports.map(p => ({ id: lc(p.name), name: p.name, color: colorOf(p), dim: !(p.used || p.wan), fiber: /fiber|sfp|qsfp/i.test(p.media), text: p.speed,
+      tip: p.name + (p.ips.length ? ' ' + show(p.ips.join(', ')) : '') + (p.zones.length ? ' [' + p.zones.join(', ') + ']' : ''),
+      stripe: multi && p.vdom ? { color: VDOM_COLORS[pn.vdoms.indexOf(p.vdom) % VDOM_COLORS.length], tip: 'VDOM ' + p.vdom } : null }));
+    const groups = pn.groups.map((g, gi) => ({ members: g.members.map(lc), color: GROUP_COLORS[gi % GROUP_COLORS.length], dashed: !g.bridged, label: g.name }));
+    const callouts = pn.wan.map(w => {
       const lines = [w.port + (w.ips.length ? '  ' + show(w.ips.join(', ')) : '')];
       if (w.gw.length) lines.push(T('pnl.gw') + ' ' + show(w.gw.join(', ')));
       w.vpns.slice(0, 2).forEach(v => lines.push('VPN ' + v.name + ' → ' + show(v.remote)));
       if (w.vpns.length > 2) lines.push(T('pnl.more', { n: w.vpns.length - 2 }));
       if (w.exposed.length) lines.push('⚠ ' + w.exposed.map(x => T('expose.svc_' + x)).join(', '));
-      s += `<rect x="${bx}" y="4" width="${boxW}" height="${wanBoxH - 14}" rx="4" fill="#fff7ed" stroke="${COLORS.wan}"/>`;
-      lines.slice(0, 5).forEach((l, k) => { s += `<text x="${bx + 6}" y="${18 + k * 13}" fill="#7c2d12" font-size="${k ? 9 : 10}">${xesc(l.length > 44 ? l.slice(0, 43) + '…' : l)}</text>`; });
-      if (q) s += `<line x1="${bx + boxW / 2}" y1="${wanBoxH - 10}" x2="${q.x + W / 2}" y2="${q.y}" stroke="${COLORS.wan}" stroke-width="2"/>`;
+      return { port: lc(w.port), lines, color: COLORS.wan };
     });
-    return s + '</svg>';
+    return window.PanelSvg.render({ title: pn.model || pn.modelRaw || '', rows: [{ ports }], groups, callouts });
   }
+
 
   const esc2 = s => (typeof esc === 'function' ? esc(s) : xesc(s));
   function legendHtml(pn) {

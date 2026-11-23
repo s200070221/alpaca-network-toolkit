@@ -907,7 +907,8 @@ function renderOverview(){
       <div class="ov-row" style="flex-wrap:wrap;gap:3px">${p.vxlan.vnis.slice(0,8).map(v=>`${pill('p-vlan','VNI '+v.vni+(v.vlan?' →V'+v.vlan:'')+(v.name?' '+v.name.substring(0,10):''))}`).join(' ')}</div>
     </div>`;
   }
-  return renderOverviewVerdict()+`<div class="ov-grid">${ovCards}</div>`;
+  // 實體接線示意圖（XN191）
+  return renderOverviewVerdict()+`<div class="ov-grid">${ovCards}</div>`+(window.SwPanel?window.SwPanel.panelHtml(p):'');
 }
 function renderBrocadeStack(){
   const stk=parsed.stack;
