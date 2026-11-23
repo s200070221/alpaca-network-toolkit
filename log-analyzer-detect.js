@@ -855,7 +855,7 @@ function detectAsaUnexpectedReload(events) {
       const clues = before.filter(x => (x.msgid === '199021' || x.msgid === '199010') && t - x.timestamp.getTime() <= ASA_RELOAD_LOOKBACK_MS);
       const why = [...new Set(clues.map(x => x.msgid))].join(', ');
       issues.push({ category: 'asaUnexpectedReload', severityNorm: 'Medium', count: st.list.length, firstSeen: st.e.timestamp, lastSeen: st.list[st.list.length - 1].timestamp,
-        asaClues: why, ...sampleOf(why ? 'sample.asaUnexpectedReloadClue' : 'sample.asaUnexpectedReload', { host: host !== '-' ? host + ' ' : '', clues: why }),
+        asaClues: why, ...sampleOf(why ? 'sample.asaUnexpectedReloadClue' : 'sample.asaUnexpectedReload', { host: host !== '-' ? host + ' ' : 'Cisco ASA／FTD ', clues: why }),
         relatedHosts: host !== '-' ? [host] : [], relatedEvents: [...clues, ...st.list], confidence: 'heuristic' });
     });
   }
@@ -2646,24 +2646,27 @@ function issueActorIp(issue) {
 }
 
 // 同一行為者的其他高風險問題（RV10-U1）：同一起事件常由多個偵測各產生一筆 High 以上的問題，
-// 表格逐列看像互不相關。行為者取帳號（deriveIssueActorByUser，不分大小寫）優先、否則事件位址
-// （issueActorIp，不用回報設備，避免同一台防火牆的所有問題都被串在一起）。
-// 回傳 Map(issue → {actor, n})，n＝同一行為者「其他」Critical／High 問題數，只收 n ≥ 1。
+// 表格逐列看像互不相關。行為者鍵取帳號（deriveIssueActorByUser，不分大小寫）與事件位址（issueActorIp，
+// 不用回報設備，避免同一台防火牆的所有問題都被串在一起），任一相同即視為相關（同一來源噴灑多個帳號時，
+// 各偵測投票出的帳號可能不同，位址相同）。回傳 Map(issue → {actor, n})，n＝相關的「其他」Critical／High 問題數，只收 n ≥ 1；
+// actor 為與其他問題共用的鍵（帳號優先），供開啟行為者檢視
 function relatedHighIssues(issues) {
   const isHigh = is => is.severityNorm === 'Critical' || is.severityNorm === 'High';
-  const actorOf = new Map(), groups = new Map();
+  const keysOf = new Map(), groups = new Map();
   (issues || []).forEach(is => {
-    const u = deriveIssueActorByUser(is);
-    const a = u || issueActorIp(is);
-    if (!a) return;
-    const key = (u ? 'u:' : 'i:') + String(a).toLowerCase();
-    actorOf.set(is, { key, actor: a });
-    if (isHigh(is)) groups.set(key, (groups.get(key) || 0) + 1);
+    const u = deriveIssueActorByUser(is), ip = issueActorIp(is), keys = [];
+    if (u) keys.push({ key: 'u:' + String(u).toLowerCase(), actor: u });
+    if (ip) keys.push({ key: 'i:' + ip, actor: ip });
+    if (!keys.length) return;
+    keysOf.set(is, keys);
+    if (isHigh(is)) keys.forEach(k => { if (!groups.has(k.key)) groups.set(k.key, new Set()); groups.get(k.key).add(is); });
   });
   const out = new Map();
-  for (const [is, { key, actor }] of actorOf) {
-    const n = (groups.get(key) || 0) - (isHigh(is) ? 1 : 0);
-    if (n >= 1) out.set(is, { actor, n });
+  for (const [is, keys] of keysOf) {
+    const others = new Set();
+    let actor = null;
+    keys.forEach(k => { const g = groups.get(k.key); if (!g) return; let hit = false; g.forEach(o => { if (o !== is) { others.add(o); hit = true; } }); if (hit && !actor) actor = k.actor; });
+    if (others.size) out.set(is, { actor, n: others.size });
   }
   return out;
 }

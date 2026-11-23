@@ -77,7 +77,7 @@ function buildHubHealthReport(list, now) {
     if (kevDevs.length) L.push('- ' + tr('hs.kev').replace('{list}', kevDevs.map(x => `${_hsName(x)} (${x.cves.join(', ') || x.kev})`).join(tr('hs.sep'))));
     // 支援期限（XN188，使用者自備清單）；沒有時不寫，未提供清單不代表支援期間內
     const eolDevs = devs.filter(x => x.eol);
-    if (eolDevs.length) L.push('- ' + tr('hs.eol').replace('{list}', eolDevs.map(x => `${_hsName(x)} (${_hsEolText(x.eol)})`).join(tr('hs.sep'))));
+    if (eolDevs.length) L.push('- ' + tr('hs.eol').replace('{list}', eolDevs.map(x => `${_hsName(x)} — ${_hsEolText(x.eol)}`).join(tr('hs.sep'))));
   }
   const logHigh = logs.filter(x => x.crit > 0);
   if (logs.length) L.push('- ' + (logHigh.length ? tr('hs.log_high').replace('{list}', logHigh.map(x => `${_hsName(x)} (${x.crit})`).join(tr('hs.sep'))) : tr('hs.log_no_high')));
