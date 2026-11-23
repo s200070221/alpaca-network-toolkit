@@ -3,8 +3,27 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.20';
+  const TOOLKIT_VERSION = '2026.11.23';
   const CHANGELOG = [
+    {
+      version: '2026.11.23',
+      items: {
+        zhTW: [
+          '防火牆：設備支援期限比對（使用者自備 CSV，格式與交換器分析相同，不內建廠牌資料）',
+          '防火牆與 log：可疑帳號清單可讀 .txt／.csv 檔並選擇記住，兩個工具共用；log 結果列顯示目前套用的名稱數，另一分頁修改時自動同步',
+          'log：FortiGate 既有管理者被改成 super_admin 列為權限提升',
+          'log：問題清單標示「同一行為者另有 N 項高風險」，點選開啟行為者檢視',
+          '入口頁：工作區匯出時，可疑帳號清單需勾選設定內容才會一起匯出',
+        ],
+        en: [
+          'Firewall: device lifecycle check against your own CSV (same format as the switch analyzer; no built-in vendor data)',
+          'Firewall and Log: the suspect account list can be loaded from .txt/.csv and remembered, shared by both tools; Log shows how many names are applied and syncs changes made in another tab',
+          'Log: an existing FortiGate administrator changed to super_admin is reported as privilege escalation',
+          'Log: issues show "N more high-risk from same actor", opening the actor view',
+          'Hub: the suspect account list is exported with the workspace only when content is selected',
+        ],
+      },
+    },
     {
       version: '2026.11.20',
       items: {
