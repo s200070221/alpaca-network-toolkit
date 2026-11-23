@@ -112,7 +112,7 @@
     if (!V) return { status: 'noRules', hits: [], unknown: [] };
     const rules = V.withBuiltin([]).filter(e => e.scheme === sch);
     if (!rules.length) return { status: 'noRules', hits: [], unknown: [] };
-    if (!V.parse(sch, version)) return { status: 'noVersion', hits: [], unknown: [] };
+    if (!V.parseDevice(sch, version)) return { status: 'noVersion', hits: [], unknown: [] };
     const hits = [], unknown = [];
     rules.forEach(e => { const r = V.inRange(sch, version, e.affected); if (r === true) hits.push(e); else if (r === null) unknown.push(e); });
     return { status: hits.length ? 'affected' : unknown.length ? 'unknown' : 'ok', hits, unknown };

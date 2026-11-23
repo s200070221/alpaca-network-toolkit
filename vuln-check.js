@@ -76,12 +76,20 @@ const VulnCheck = (function () {
         { const d = m[1].split('.').map(Number).slice(0, 4); while (d.length < 4) d.push(0); return { nums: d.concat(+(m[2] || 0)) }; }
       case 'bigip': m = s.match(/\d+(?:\.\d+)+/); return m ? { nums: m[0].split('.').map(Number).slice(0, 4) } : null;
       // Ivanti Connect Secure（XN184）：22.7R2.6 → 22,7,2,6；9.1R18 → 9,1,18；25.x 改為純點分 25.1.1.3
+      // 只有主次版號（22.7、25.1）視為版本不完整，不可補 0 後比對（會把未寫 R 的版本誤判為受影響）
       case 'ivanti': m = s.match(/(\d+)\.(\d+)R(\d+)(?:\.(\d+))?/i);
         if (m) return { nums: [+m[1], +m[2], +m[3], +(m[4] || 0)] };
-        m = s.match(/\d+(?:\.\d+)*/); return m ? { nums: m[0].split('.').map(Number).slice(0, 4) } : null;
+        m = s.match(/\d+\.\d+\.\d+(?:\.\d+)?/); return m ? { nums: m[0].split('.').map(Number) } : null;
       case 'netscaler': m = s.match(/(\d+)\.(\d+)(?:\s*-\s*|:?\s*build\s*)(\d+)\.(\d+)/i); return m ? { nums: m.slice(1, 5).map(Number) } : null;
       default: return null;
     }
+  }
+  // 要比對的設備版本至少要有幾段（點分格式）：只輸入主次版號（FTD 7.2、AOS-CX 10.13）時補 0 比對會誤判為受影響，
+  // 視為版本不完整。只套用在設備版本，清單範圍的界值（如 EOS 的 4.30）不受限
+  const MIN_PARTS = { ftd: 3, eos: 3, aoscx: 3, os10: 3, bigip: 3 };
+  function parseDevice(sch, ver) {
+    const v = parse(sch, ver);
+    return v && (!MIN_PARTS[sch] || v.nums.length >= MIN_PARTS[sch]) ? v : null;
   }
   // a、b 為 parse() 結果；回傳 -1／0／1，train 不同（Cisco IOS）回傳 null
   function cmp(a, b) {
@@ -122,7 +130,7 @@ const VulnCheck = (function () {
   }
   // 回傳 true／false／null（版本或範圍無法判斷）
   function inRange(sch, ver, affected) {
-    const v = parse(sch, ver);
+    const v = parseDevice(sch, ver);
     if (!v) return null;
     let unknown = false;
     for (const part of String(affected || '').split(/[;|]/)) {
@@ -176,7 +184,7 @@ const VulnCheck = (function () {
       if (!sch) return Object.assign(base, { status: 'unsupported' });
       const rules = (entries || []).filter(e => e.scheme === sch);
       if (!rules.length) return Object.assign(base, { status: 'noRules' });
-      if (!parse(sch, d.version)) return Object.assign(base, { status: 'noVersion' });
+      if (!parseDevice(sch, d.version)) return Object.assign(base, { status: 'noVersion' });
       rules.forEach(e => { const r = inRange(sch, d.version, e.affected); if (r === true) base.hits.push(e); else if (r === null) base.unknown.push(e); });
       return Object.assign(base, { status: base.hits.length ? 'affected' : base.unknown.length ? 'unknown' : 'ok' });
     });
@@ -268,6 +276,6 @@ const VulnCheck = (function () {
     Object.keys(all).sort((a, b) => all[b].ts - all[a].ts).slice(0, VER_STORE_MAX).forEach(k => { out[k] = all[k]; });
     return out;
   }
-  const API = { asofAgeDays, STALE_DAYS, verStoreParse, verStorePut, verHostOk, verCompatible, VER_STORE_MAX, scheme, deviceScheme, parse, cmp, inRange, parseCsv, check, withBuiltin, applyFeatures, versionFromText, SHOW_VER_SCHEMES: Object.keys(SHOW_VER_RE), SHOW_VER_CMDS, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
+  const API = { asofAgeDays, STALE_DAYS, verStoreParse, verStorePut, verHostOk, verCompatible, VER_STORE_MAX, scheme, deviceScheme, parse, parseDevice, cmp, inRange, parseCsv, check, withBuiltin, applyFeatures, versionFromText, SHOW_VER_SCHEMES: Object.keys(SHOW_VER_RE), SHOW_VER_CMDS, SCHEMES, CSV_HEADER, BUILTIN: [], BUILTIN_ASOF: '' };
   return API;
 })();

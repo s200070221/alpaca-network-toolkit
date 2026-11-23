@@ -1046,7 +1046,7 @@
       `<textarea id="vuln-showver" spellcheck="false" style="width:100%;height:70px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;${inp}">${esc(st.showverMiss ? st.showverText || '' : '')}</textarea>` +
       `<button class="btn btn-ghost btn-sm" style="margin-top:4px" onclick="window._fwVulnFromShow()">${esc(tr('vuln.showver_btn'))}</button>` +
       (st.showverMiss ? `<div style="color:var(--orange,#f59e0b);margin-top:4px">${esc(tr('vuln.showver_miss'))}</div>` : '') + '</details>';
-    if (!V.parse(sch, ver)) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-bottom:6px">${esc(tr(sch === 'fortios' && /^\d+\.\d{2}\b/.test(fw) ? 'vuln.version_fortios_short' : 'vuln.version_missing'))}</div>`;
+    if (!V.parseDevice(sch, ver)) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-bottom:6px">${esc(tr(sch === 'fortios' && /^\d+\.\d{2}\b/.test(fw) ? 'vuln.version_fortios_short' : 'vuln.version_missing'))}</div>`;
     // Check Point：設定檔只有 train（R81.20），依 Jumbo Hotfix Take 判斷的漏洞需補填 Take（XN42）
     else if (sch === 'gaia' && V.parse(sch, ver).take == null) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-bottom:6px">${esc(tr('vuln.version_gaia_take'))}</div>`;
     h += `<textarea id="vuln-text" spellcheck="false" placeholder="${esc(V.CSV_HEADER)}" style="width:100%;height:90px;box-sizing:border-box;font-family:Menlo,'Courier New',monospace;font-size:11px;${inp}">${esc(st.text || '')}</textarea>`;

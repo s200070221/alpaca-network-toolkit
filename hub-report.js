@@ -82,8 +82,9 @@ function buildHubHealthReport(list, now) {
   const logHigh = logs.filter(x => x.crit > 0);
   if (logs.length) L.push('- ' + (logHigh.length ? tr('hs.log_high').replace('{list}', logHigh.map(x => `${_hsName(x)} (${x.crit})`).join(tr('hs.sep'))) : tr('hs.log_no_high')));
   // 跨設備共同問題：同一個項目名稱出現在兩台以上設備的前三項中
-  const freq = {};
-  list.forEach(x => (x.top || []).forEach(t => { (freq[t.label] = freq[t.label] || []).push(_hsName(x)); }));
+  // 項目名稱來自 localStorage（可由匯入的工作區寫入），以 Object.create(null) 避免 constructor／__proto__ 等名稱出錯
+  const freq = Object.create(null);
+  list.forEach(x => (x.top || []).forEach(t => { const k = String(t.label); (freq[k] = freq[k] || []).push(_hsName(x)); }));
   const common = Object.keys(freq).filter(k => freq[k].length > 1).sort((a, b) => freq[b].length - freq[a].length);
   if (common.length) L.push('- ' + tr('hs.common').replace('{list}', common.slice(0, 5).map(k => `${k} (${freq[k].length})`).join(tr('hs.sep'))));
   L.push('', `## ${tr('hs.detail')}`, '',
