@@ -15,7 +15,7 @@
     ['iosxe', 'Cisco IOS XE', '17.9.4a'], ['ios', 'Cisco IOS', '15.2(7)E8'], ['nxos', 'Cisco NX-OS', '9.3(10)'],
     ['junos', 'Juniper Junos', '21.4R3-S5'], ['sonicos', 'SonicWall SonicOS', '7.0.1-5035'], ['gaia', 'Check Point Gaia', 'R81.20 Take 141'],
     ['eos', 'Arista EOS', '4.30.2F'], ['aoscx', 'HPE Aruba AOS-CX', '10.11.1020'], ['routeros', 'MikroTik RouterOS', '7.15.2'],
-    ['os10', 'Dell SmartFabric OS10', '10.5.6.13'], ['bigip', 'F5 BIG-IP', '17.1.1.4'],
+    ['os10', 'Dell SmartFabric OS10', '10.5.6.13'], ['bigip', 'F5 BIG-IP', '17.1.1.4'], ['ivanti', 'Ivanti Connect Secure', '22.7R2.6'],
   ];
   const st = { audit: null };
   // VulnCheck 是 vuln-check.js 的頂層 const，不在 window 上，以 typeof 判斷

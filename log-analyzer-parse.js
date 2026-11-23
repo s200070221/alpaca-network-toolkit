@@ -746,6 +746,11 @@ function _kvEndpoint(v) {
   const m = String(v || '').replace(/\s+/g, '').match(/^([^:]*):(\d*):?(.*)$/);
   return m ? { ip: m[1], port: m[2], intf: m[3] } : { ip: String(v || ''), port: '', intf: '' };
 }
+// SonicWall 登入事件（XN185）：事件編號（m=）與意義依 Elastic integrations sonicwall_firewall ingest pipeline 內附的
+// SonicOS 事件表註解。[種類, 結果, 方式]：1080＝SSL VPN 使用者登入成功；32／33＝使用者帳密錯誤（不分 SSL VPN 或其他使用者登入）；
+// 29／30＝管理者登入成功／帳密錯誤、235／236＝VPN／WAN 區域管理者登入、199／200＝CLI 管理者登入成功／帳密錯誤
+const SW_AUTH_EVENTS = { 1080: ['user', 'ok', 'sslvpn'], 32: ['user', 'fail', ''], 33: ['user', 'fail', ''],
+  29: ['admin', 'ok', 'web'], 30: ['admin', 'fail', 'web'], 235: ['admin', 'ok', 'web'], 236: ['admin', 'ok', 'web'], 199: ['admin', 'ok', 'cli'], 200: ['admin', 'fail', 'cli'] };
 function normalizeKvFw(kv) {
   if (kv.id !== undefined && kv.sn !== undefined && kv.m !== undefined) {
     const f = {}, a = _kvEndpoint(kv.src), b = _kvEndpoint(kv.dst);
@@ -754,7 +759,10 @@ function normalizeKvFw(kv) {
     const pr = String(kv.proto || '').split('/')[0];
     if (pr) f.proto = pr.toLowerCase();
     const fa = String(kv.fw_action || '').toLowerCase(), msg = String(kv.msg || '');
-    if (fa === 'drop' || /\b(?:dropped|denied|blocked)\b/i.test(msg)) f.action = 'deny';
+    const au = Object.prototype.hasOwnProperty.call(SW_AUTH_EVENTS, String(kv.m)) ? SW_AUTH_EVENTS[String(kv.m)] : null;
+    // 登入事件的訊息含「denied」，不當成流量拒絕
+    if (au) { f.swAuth = au[1]; f.swAuthKind = au[0]; if (au[2]) f.swAuthVia = au[2]; }
+    else if (fa === 'drop' || /\b(?:dropped|denied|blocked)\b/i.test(msg)) f.action = 'deny';
     else if (fa === 'forward' || /^Connection (?:Opened|Closed)$/i.test(msg)) f.action = 'accept';
     if (kv.usr || kv.user) f.user = kv.usr || kv.user;
     return { vendor: 'sonicwall', fields: f };
@@ -1822,6 +1830,8 @@ function adminLoginOf(evt) {
   // PAN-OS（XN133）：SYSTEM auth-success／auth-fail 且描述帶 admin role（登入防火牆管理介面）
   if (evt.netVendor === 'paloalto' && f.logtype === 'SYSTEM' && f.panAuth && f.adminRole && f.srcip)
     return { vendor: 'paloalto', user: f.user || '', src: f.srcip, ok: f.panAuth === 'ok', method: f.adminRole };
+  // SonicWall（XN185）：管理者登入事件（SW_AUTH_EVENTS）
+  if (evt.netVendor === 'sonicwall' && f.swAuthKind === 'admin' && f.srcip) return { vendor: 'sonicwall', user: f.user || '', src: f.srcip, ok: f.swAuth === 'ok', method: f.swAuthVia || '' };
   if (evt.format === 'asa' && (evt.msgid === '605004' || evt.msgid === '605005') && f.auth && f.srcip) {
     return { vendor: 'asa', user: f.user || '', src: f.srcip, ok: f.auth === 'success', method: f.service || '' };
   }

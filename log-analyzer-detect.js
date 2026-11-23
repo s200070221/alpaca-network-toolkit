@@ -775,6 +775,8 @@ function vpnLoginSuccessOf(e, raSaKeys) {
   if (e.netVendor === 'stormshield' && f.sns === 'xvpn' && f.snsError === '0' && /opened/i.test(f.snsMsg || '') && f.srcip) return { user: f.user || '', ip: f.srcip, src: 'stormshield' };
   // Cisco Meraki AnyConnect（XN120）：anyconnect_vpn_auth_success 的 Peer IP
   if (e.netVendor === 'meraki' && f.vpnAuth === 'ok' && f.srcip) return { user: f.user || '', ip: f.srcip, src: 'meraki' };
+  // SonicWall SSL VPN（XN185）：事件 1080 SSL VPN zone remote user login allowed
+  if (e.netVendor === 'sonicwall' && f.swAuthVia === 'sslvpn' && f.swAuth === 'ok' && f.srcip) return { user: f.user || '', ip: f.srcip, src: 'sonicwall' };
   if (e.netVendor === 'netscaler' && f.nsAuth === 'ok' && f.nsModule === 'SSLVPN' && f.srcip) return { user: f.user || '', ip: f.srcip, src: 'netscaler' };
   if (f.ipsec === 'up' && f.srcip && raSaKeys && raSaKeys.has(`${e.host}|${f.saName}|${f.saId}`)) return { user: f.user || '', ip: f.srcip, src: 'strongswan' };
   if (/722051/.test(e.msgid || e.raw || '')) {
@@ -794,8 +796,8 @@ function detectVpnSprayLogin(events) {
     const host = e.host || '-';
     const a = netAdminChangeOf(e);
     if (a && a.kind === 'add') { if (!adminAdds.has(host)) adminAdds.set(host, []); adminAdds.get(host).push({ e, a }); return; }
-    const fail = fgSslVpnFailOf(e), ok = !fail && vpnLoginSuccessOf(e);
-    const ip = fail ? fail.ip : (ok && ok.src === 'fortigate' ? ok.ip : '');
+    const fail = vpnLoginFailOf(e), ok = !fail && vpnLoginSuccessOf(e);
+    const ip = fail ? fail.ip : (ok && (ok.src === 'fortigate' || ok.src === 'sonicwall') ? ok.ip : '');
     if (!ip || iocIsInternalIP(ip)) return;
     const key = host + '|' + ip;
     if (!byKey.has(key)) byKey.set(key, { host, ip, list: [] });
@@ -819,6 +821,42 @@ function detectVpnSprayLogin(events) {
         relatedHosts: [g.ip, x.user, ...accts, g.host !== '-' ? g.host : ''].filter(Boolean), relatedEvents: [...recent.map(y => y.e), x.e, ...adds.map(y => y.e)], confidence: 'heuristic'
       });
       fails.length = 0;
+    });
+  }
+  return issues;
+}
+// Cisco ASA／FTD 非預期重新開機（XN187）：訊息編號依 Cisco Secure Firewall ASA Syslog Messages（199001～199021）：
+// 199005 Startup begin／199002 Startup completed＝開機；199001 Reloaded at … by user＝管理者執行 reload；
+// 199021 記憶體 watchdog 觸發重新開機、199010 程序從嚴重錯誤復原（附在說明）。開機前 ASA_RELOAD_LOOKBACK_MS 內同主機沒有 199001，
+// 且 log 在開機前已有同主機的事件（確認涵蓋開機前的時段）才列出；需人工確認（例如 CVE-2026-76418 SSL VPN 造成重新開機）
+const ASA_RELOAD_LOOKBACK_MS = 30 * 60 * 1000, ASA_STARTUP_MERGE_MS = 10 * 60 * 1000;
+function detectAsaUnexpectedReload(events) {
+  const byHost = new Map();
+  events.forEach(e => {
+    if (e.format !== 'asa' || !e.timestamp) return;
+    const h = e.host || '-';
+    if (!byHost.has(h)) byHost.set(h, []);
+    byHost.get(h).push(e);
+  });
+  const issues = [];
+  for (const [host, list] of byHost) {
+    list.sort((x, y) => x.timestamp - y.timestamp);
+    const starts = [];
+    list.forEach(e => {
+      if (e.msgid !== '199005' && e.msgid !== '199002') return;
+      const last = starts[starts.length - 1];
+      if (last && e.timestamp - last.e.timestamp <= ASA_STARTUP_MERGE_MS) { last.list.push(e); return; }
+      starts.push({ e, list: [e] });
+    });
+    starts.forEach(st => {
+      const t = st.e.timestamp.getTime(), before = list.filter(x => x.timestamp.getTime() < t);
+      if (!before.length) return;
+      if (before.some(x => x.msgid === '199001' && t - x.timestamp.getTime() <= ASA_RELOAD_LOOKBACK_MS)) return;
+      const clues = before.filter(x => (x.msgid === '199021' || x.msgid === '199010') && t - x.timestamp.getTime() <= ASA_RELOAD_LOOKBACK_MS);
+      const why = [...new Set(clues.map(x => x.msgid))].join(', ');
+      issues.push({ category: 'asaUnexpectedReload', severityNorm: 'Medium', count: st.list.length, firstSeen: st.e.timestamp, lastSeen: st.list[st.list.length - 1].timestamp,
+        asaClues: why, ...sampleOf(why ? 'sample.asaUnexpectedReloadClue' : 'sample.asaUnexpectedReload', { host: host !== '-' ? host + ' ' : '', clues: why }),
+        relatedHosts: host !== '-' ? [host] : [], relatedEvents: [...clues, ...st.list], confidence: 'heuristic' });
     });
   }
   return issues;
@@ -1623,6 +1661,7 @@ function formatIssueBasis(is) {
   if (is.category === 'cloudKeyMultiSource' || is.category === 'sshKeyMultiSource') return `key=${is.credKey} | src=${(is.relatedHosts || []).join(', ')}`;
   if (is.category === 'appCredentialAdded') return `app=${is.credApp} | ${(is.relatedEvents[0] && is.relatedEvents[0].msgid) || ''}`;
   if (is.category === 'adminLoginExternal') return `src=${is.adminSrc} | user=${is.adminAcct}${is.adminMethod ? ' | ' + is.adminMethod : ''} | fails=${is.adminFails}`;
+  if (is.category === 'asaUnexpectedReload') return `msgid=199005/199002 | no 199001 @ 30m` + (is.asaClues ? ` | ${is.asaClues}` : '');
   if (is.category === 'vpnSprayLogin') return `src=${is.vpnSrc} | user=${is.vpnUser} | fails=${is.vpnFails} @ 1h` + (is.adminAcct ? ` | admin+=${is.adminAcct} @ 24h` : '') + (is.anonVpn ? ` | anonvpn=${is.anonVpn}` : '');
   if (is.category === 'adminAnonLogin') return `${is.vpnIps.join(', ')} | user=${is.adminAcct} | fails=${is.adminFails} | list=${is.anonLists.join(',') || '-'}`;
   if (is.category === 'adminLoginFailExternal') return `srcs=${is.adminSrcs} | users=${is.adminUsers} | fails=${is.count} @ 24h`;
@@ -2367,6 +2406,7 @@ function buildIssueList(events, intelIndexes, opts) {
   const sshBrute = detectSshBruteSuccess(analyzed);
   const adminLogins = detectAdminLogins(analyzed);
   const vpnSpray = detectVpnSprayLogin(analyzed);
+  const asaReload = detectAsaUnexpectedReload(analyzed);
   const winFail = detectWinFailReasons(analyzed);
   const ldapIss = detectLdapIssues(analyzed);
   const spray = detectPasswordSpray(analyzed);
@@ -2431,7 +2471,7 @@ function buildIssueList(events, intelIndexes, opts) {
   const psModuleLog = detectPowerShellModuleLogging(analyzed, { enablePsModuleLog: o.enablePsModuleLog, psModuleLogWatchlist: o.psModuleLogWatchlist });
   const timeGap = detectTimeGaps(analyzed, { gapThresholdMs: o.gapThresholdMs });
   const custom = detectCustomRules(analyzed, o.customRules);
-  const all = [...suspectAcct, ...vpnHosting, ...vpnAnon, ...adminAnon, ...rmmIss, ...dspray, ...mfaFatigue, ...npsRej, ...nsSess, ...qnapIss, ...veeamIss, ...vaultIss, ...mtTamper, ...riskyPorts, ...fortiMgmtIss, ...appsmith, ...appsmithIntr, ...credTheft, ...gitlabIss, ...awsAcct, ...dbAuth, ...webshell, ...esxi, ...promptInj, ...intel, ...hashIntel, ...freq, ...scanCef, ...scanSys, ...scanWeb, ...exploitWeb, ...dnsAnom, ...nacFail, ...sshBrute, ...adminLogins, ...vpnSpray, ...winFail, ...ldapIss, ...spray, ...rdpIss, ...adIss, ...radIss, ...svcIss, ...ldapSign, ...dcsync, ...crossDom, ...idsAlerts, ...netOps, ...netAdmin, ...volume, ...geo, ...geoIP, ...beaconing, ...lateral, ...privEsc, ...geoVelocity, ...asnRisk, ...acctAudit, ...passTheHash, ...kerberoasting, ...asrepRoasting, ...asrepRoastingRisk, ...lsassAccess, ...sysmonRegPersist, ...adminShare, ...procCreate, ...asnVelocity, ...sysmonProcCreate, ...sysmonRemoteThread, ...psScriptBlock, ...sysmonImageLoad, ...psModuleLog, ...timeGap, ...custom];
+  const all = [...asaReload, ...suspectAcct, ...vpnHosting, ...vpnAnon, ...adminAnon, ...rmmIss, ...dspray, ...mfaFatigue, ...npsRej, ...nsSess, ...qnapIss, ...veeamIss, ...vaultIss, ...mtTamper, ...riskyPorts, ...fortiMgmtIss, ...appsmith, ...appsmithIntr, ...credTheft, ...gitlabIss, ...awsAcct, ...dbAuth, ...webshell, ...esxi, ...promptInj, ...intel, ...hashIntel, ...freq, ...scanCef, ...scanSys, ...scanWeb, ...exploitWeb, ...dnsAnom, ...nacFail, ...sshBrute, ...adminLogins, ...vpnSpray, ...winFail, ...ldapIss, ...spray, ...rdpIss, ...adIss, ...radIss, ...svcIss, ...ldapSign, ...dcsync, ...crossDom, ...idsAlerts, ...netOps, ...netAdmin, ...volume, ...geo, ...geoIP, ...beaconing, ...lateral, ...privEsc, ...geoVelocity, ...asnRisk, ...acctAudit, ...passTheHash, ...kerberoasting, ...asrepRoasting, ...asrepRoastingRisk, ...lsassAccess, ...sysmonRegPersist, ...adminShare, ...procCreate, ...asnVelocity, ...sysmonProcCreate, ...sysmonRemoteThread, ...psScriptBlock, ...sysmonImageLoad, ...psModuleLog, ...timeGap, ...custom];
   all.push(...detectOffHours(all, analyzed, o.offHours));
   all.push(...detectUnusualHours(analyzed, o.actorHourBaseline));
   all.push(...detectNewSources(analyzed, o.actorSourceBaseline, o));

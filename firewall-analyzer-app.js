@@ -825,6 +825,9 @@ const App = (() => {
       // 韌體落在已遭利用漏洞範圍（XN63）：入口頁綜合健檢標示，只存數量與 CVE 編號
       const kev=act.find(i=>i.key==='firmware_kev');
       if(kev){entry.kev=kev.count;entry.cves=(kev.cves||[]).slice(0,5);}
+      // 支援期限（XN188）：依使用者自備清單 fw_eol_list，只存已終止／即將終止的狀態與日期
+      if(typeof invEolSummary==='function'){let t='';try{t=localStorage.getItem('fw_eol_list')||'';}catch(e){}
+        const eol=invEolSummary(fwEolRow(p),t,new Date());if(eol)entry.eol=eol;}
       let a=[];
       try{a=JSON.parse(localStorage.getItem('_netAnalyzer_summaries')||'[]');}catch(e){a=[];}
       if(!Array.isArray(a))a=[];

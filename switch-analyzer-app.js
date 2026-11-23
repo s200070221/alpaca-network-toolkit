@@ -388,6 +388,9 @@ function recordSwitchSummary(p){
     // 韌體落在已遭利用漏洞範圍（XN63）：入口頁綜合健檢標示，只存數量與 CVE 編號
     const kev=act.find(i=>i.id==='firmware-kev');
     if(kev){entry.kev=kev.count;entry.cves=(kev.cves||[]).slice(0,5);}
+    // 支援期限（XN188）：依使用者自備清單 sw_eol_list，只存已終止／即將終止的狀態與日期
+    const eol=invEolSummary(invBuildRow('','',p,null),eolLoadText(),new Date());
+    if(eol)entry.eol=eol;
     _pushToolSummary(entry);
   }catch(e){}
 }

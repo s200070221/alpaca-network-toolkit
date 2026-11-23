@@ -213,6 +213,14 @@ const SYSMON_TAG_EVENT_IDS = { '3': 'sysmonNetConn', '11': 'sysmonFileCreate', '
 // 不新增分類、不需要新 i18n key。AS-REP Roasting heuristic 見 detectAsrepRoasting()
 // FortiGate SSL VPN 登入失敗（XN172）：logid 0101039426 LOG_ID_EVENT_SSL_VPN_USER_SSL_LOGIN_FAIL（FortiOS Log Message Reference，
 // 欄位 action／tunneltype／remip／user／group／reason），action 為 ssl-login-fail；用戶端公網位址在 remip，沒有帳號時 user 可能是 N/A
+// SSL VPN 登入失敗（XN172 FortiGate；XN185 SonicWall 使用者帳密錯誤 32／33，SonicOS 不分 SSL VPN 與其他使用者登入）
+function vpnLoginFailOf(e) {
+  const fg = fgSslVpnFailOf(e);
+  if (fg) return fg;
+  const f = e && e.fields;
+  if (f && e.netVendor === 'sonicwall' && f.swAuthKind === 'user' && f.swAuth === 'fail' && f.srcip) return { user: f.user || '', ip: f.srcip, reason: '' };
+  return null;
+}
 function fgSslVpnFailOf(e) {
   const f = e && e.fields;
   if (!f || e.format !== 'fortigate' || !(f.logid === '0101039426' || /^ssl-login-fail$/i.test(f.action || ''))) return null;
@@ -394,6 +402,8 @@ function classifyByKeyword(evt) {
   // PAN-OS SYSTEM 認證失敗（XN133）：管理者與使用者認證都算認證失敗
   if (evt.netVendor === 'paloalto' && evt.fields && evt.fields.logtype === 'SYSTEM' && evt.fields.panAuth === 'fail') return 'authFail';
   // SonicWall／Sophos（第十四輪 OH）
+  // SonicWall 登入事件（XN185）：失敗歸 authFail，成功為 other
+  if (evt.netVendor === 'sonicwall' && evt.fields && evt.fields.swAuth) return evt.fields.swAuth === 'fail' ? 'authFail' : 'other';
   if ((evt.netVendor === 'sonicwall' || evt.netVendor === 'sophos') && evt.fields && evt.fields.action === 'deny') return 'denyBlock';
   // Veeam（XN112）：MFA／權杖認證失敗歸 authFail、惡意活動歸 attack，其他 Veeam 事件為 other
   if (evt.netVendor === 'veeam' && evt.fields) return evt.fields.veeamKind === 'authFail' ? 'authFail' : evt.fields.veeamKind === 'malware' ? 'attack' : 'other';

@@ -8,6 +8,7 @@
 //   routeros 7.23.3（beta／rc 視為無法比較）、os10 10.5.6.13（Dell SmartFabric OS10）、
 //   sonicos 6.5.4.14-109n／7.0.1-5035（點分補足 4 段＋build，結尾字母不比；範圍的 - 前後須有空白，以免與 build 混淆）
 //   bigip 17.1.1.4（F5 BIG-IP，XN106；點分取前 4 段，Build 與工程 hotfix 的後續段不比）
+//   ivanti 22.7R2.6／25.1.1.3（Ivanti Connect Secure，XN184；R 前後與點分各段依序比較，22.x 與 25.x 編號可直接比大小）
 //   netscaler 14.1-43.50（ns.conf 檔頭 #NS14.1 Build 43.50、show version 的 NS14.1: Build 43.50.nc 也接受；train＋build，範圍規則同 sonicos）
 // affected：以 ; 或 | 分隔多段，任一段符合即受影響。每段可寫
 //   「7.2.0-7.2.6」（含頭尾；右側須以數字開頭，因此 10.2.9-h1、21.4R3-S5 不會被當成範圍）、
@@ -23,8 +24,9 @@ const VulnCheck = (function () {
     [/^(check ?point|gaia|check ?point gaia)$/, 'gaia'], [/^(sonicwall|sonicos|sonicwall sonicos)$/, 'sonicos'],
     [/^(citrix|netscaler|citrix adc|netscaler adc|netscaler gateway|citrix netscaler|netscaler adc and gateway)$/, 'netscaler'],
     [/^(f5|big-?ip|f5 big-?ip|tmos)$/, 'bigip'],
+    [/^(ivanti|ics|ivanti ics|connect secure|ivanti connect secure|pulse ?secure|pulse connect secure)$/, 'ivanti'],
   ];
-  const SCHEMES = ['fortios', 'panos', 'asa', 'ftd', 'junos', 'ios', 'iosxe', 'nxos', 'eos', 'aoscx', 'routeros', 'os10', 'gaia', 'sonicos', 'netscaler', 'bigip'];
+  const SCHEMES = ['fortios', 'panos', 'asa', 'ftd', 'junos', 'ios', 'iosxe', 'nxos', 'eos', 'aoscx', 'routeros', 'os10', 'gaia', 'sonicos', 'netscaler', 'bigip', 'ivanti'];
   function scheme(v) {
     const s = String(v || '').trim().toLowerCase();
     if (SCHEMES.includes(s)) return s;
@@ -73,6 +75,10 @@ const VulnCheck = (function () {
         if (!m) return null;
         { const d = m[1].split('.').map(Number).slice(0, 4); while (d.length < 4) d.push(0); return { nums: d.concat(+(m[2] || 0)) }; }
       case 'bigip': m = s.match(/\d+(?:\.\d+)+/); return m ? { nums: m[0].split('.').map(Number).slice(0, 4) } : null;
+      // Ivanti Connect Secure（XN184）：22.7R2.6 → 22,7,2,6；9.1R18 → 9,1,18；25.x 改為純點分 25.1.1.3
+      case 'ivanti': m = s.match(/(\d+)\.(\d+)R(\d+)(?:\.(\d+))?/i);
+        if (m) return { nums: [+m[1], +m[2], +m[3], +(m[4] || 0)] };
+        m = s.match(/\d+(?:\.\d+)*/); return m ? { nums: m[0].split('.').map(Number).slice(0, 4) } : null;
       case 'netscaler': m = s.match(/(\d+)\.(\d+)(?:\s*-\s*|:?\s*build\s*)(\d+)\.(\d+)/i); return m ? { nums: m.slice(1, 5).map(Number) } : null;
       default: return null;
     }

@@ -25,6 +25,8 @@ const SAMPLE_ZH = {
   'sample.svcUpstreamDown': '{svc}（主機 {host}）的上游 RADIUS {home} 失去回應 {n} 次（標為 {state}），最後狀態 {last}',
   'sample.svcNoUpstream': '{svc}（主機 {host}）找不到可用的上游 RADIUS {n} 次：{why}',
   'sample.sep': '：',
+  'sample.asaUnexpectedReload': '{host}重新開機，開機前 30 分鐘內沒有管理者執行 reload 的紀錄（199001），請確認原因（例如 SSL VPN 漏洞 CVE-2026-76418 造成的重新開機）',
+  'sample.asaUnexpectedReloadClue': '{host}重新開機，開機前 30 分鐘內沒有管理者執行 reload 的紀錄（199001），之前有 {clues} 訊息，請確認原因',
   'sample.vpnSprayLogin': '{host}SSL VPN 從外部位址 {src} 失敗 {n} 次（{users}）後以 {user} 登入成功',
   'sample.vpnSprayAdmin': '{host}SSL VPN 從外部位址 {src} 失敗 {n} 次（{users}）後以 {user} 登入成功，24 小時內新增管理者帳號 {acct}',
   'sample.sshBruteSuccess': '{pre}{src} 失敗 {n} 次（{users}）後以 {user} 登入成功',

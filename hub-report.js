@@ -10,7 +10,17 @@ function _readToolSummaries() {
   return _readObjArray('_netAnalyzer_summaries').filter(x => x.tool)
     .map(x => Object.assign({}, x, { top: Array.isArray(x.top) ? x.top.filter(t => t && typeof t === 'object') : [],
       kev: Number.isInteger(x.kev) && x.kev > 0 ? x.kev : 0,
-      cves: Array.isArray(x.cves) ? x.cves.filter(c => typeof c === 'string' && /^CVE-\d{4}-\d+$/.test(c)).slice(0, 5) : [] }));
+      cves: Array.isArray(x.cves) ? x.cves.filter(c => typeof c === 'string' && /^CVE-\d{4}-\d+$/.test(c)).slice(0, 5) : [],
+      // 支援期限（XN188）：只接受 expired／soon、日期格式與整數天數
+      eol: _hsEolOf(x.eol) }));
+}
+function _hsEolOf(e) {
+  if (!e || typeof e !== 'object' || (e.status !== 'expired' && e.status !== 'soon')) return null;
+  if (typeof e.end !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(e.end) || !Number.isInteger(e.days)) return null;
+  return { status: e.status, end: e.end, days: e.days };
+}
+function _hsEolText(e) {
+  return e ? tr(e.status === 'expired' ? 'hs.eol_expired' : 'hs.eol_soon').replace('{date}', e.end).replace('{d}', e.days) : '';
 }
 const HS_GRADE_ORDER = ['F', 'D', 'C', 'B', 'A'];
 function _hsCell(v) { return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' '); }
@@ -65,6 +75,9 @@ function buildHubHealthReport(list, now) {
     // 韌體落在已遭利用漏洞範圍（XN63）；沒有時不寫「沒有」——版本可能不完整，不能下結論
     const kevDevs = devs.filter(x => x.kev > 0);
     if (kevDevs.length) L.push('- ' + tr('hs.kev').replace('{list}', kevDevs.map(x => `${_hsName(x)} (${x.cves.join(', ') || x.kev})`).join(tr('hs.sep'))));
+    // 支援期限（XN188，使用者自備清單）；沒有時不寫，未提供清單不代表支援期間內
+    const eolDevs = devs.filter(x => x.eol);
+    if (eolDevs.length) L.push('- ' + tr('hs.eol').replace('{list}', eolDevs.map(x => `${_hsName(x)} (${_hsEolText(x.eol)})`).join(tr('hs.sep'))));
   }
   const logHigh = logs.filter(x => x.crit > 0);
   if (logs.length) L.push('- ' + (logHigh.length ? tr('hs.log_high').replace('{list}', logHigh.map(x => `${_hsName(x)} (${x.crit})`).join(tr('hs.sep'))) : tr('hs.log_no_high')));
@@ -82,7 +95,7 @@ function buildHubHealthReport(list, now) {
     const top = (x.top || []).map(t => `${t.label} (${t.count})`).join(tr('hs.sep')) || '—';
     const note = isLog ? tr('hs.note_log').replace('{events}', x.events || 0).replace('{n}', x.n || 0).replace('{open}', x.open || 0)
       : [x.kev ? tr('hs.kev_row').replace('{n}', x.kev) + (x.cves.length ? ' ' + x.cves.join(', ') : '') : '',
-         x.accepted ? tr('hs.note_accepted').replace('{n}', x.accepted) : ''].filter(Boolean).join(tr('hs.sep'));
+         _hsEolText(x.eol), x.accepted ? tr('hs.note_accepted').replace('{n}', x.accepted) : ''].filter(Boolean).join(tr('hs.sep'));
     L.push(`| ${_hsCell(tr('activity.tool_' + x.tool))} | ${_hsCell(_hsName(x) + (x.vendor ? ' (' + x.vendor + ')' : ''))} | ${_hsCell(x.ts ? new Date(x.ts).toLocaleString() : '')} | ${grade} | ${_hsCell(_hsTrend(x) || '—')} | ${_hsCell(_hsSeries(x).length > 1 ? _hsSeries(x).join(' → ') : '—')} | ${x.crit || 0} / ${x.warn || 0} | ${_hsCell(top)} | ${_hsCell(note)} |`);
   });
   L.push('', `> ${tr('hs.source_note')}`, '');
@@ -113,7 +126,8 @@ function renderHealthSummary() {
       : tr('hs.row_dev').replace('{grade}', x.grade).replace('{score}', x.score).replace('{crit}', x.crit || 0);
     const trend = _hsTrend(x), spark = _hsSpark(x);
     const kev = x.kev ? ' | ⚠ ' + tr('hs.kev_row').replace('{n}', x.kev) : '';
-    row.textContent = `${meta.icon} ${_hsName(x)} — ${head}${kev}${trend ? ' | ' + tr('hs.trend_label') + ' ' + trend + (spark ? ' ' + spark : '') : ''}${x.top && x.top.length ? ' | ' + x.top.map(t => t.label).join(tr('hs.sep')) : ''}`;
+    const eol = x.eol ? ' | 📅 ' + _hsEolText(x.eol) : '';
+    row.textContent = `${meta.icon} ${_hsName(x)} — ${head}${kev}${eol}${trend ? ' | ' + tr('hs.trend_label') + ' ' + trend + (spark ? ' ' + spark : '') : ''}${x.top && x.top.length ? ' | ' + x.top.map(t => t.label).join(tr('hs.sep')) : ''}`;
     box.appendChild(row);
   });
   _hsEggs(list);

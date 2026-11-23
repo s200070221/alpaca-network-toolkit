@@ -421,6 +421,16 @@ function invEolBest(row, entries) {
 }
 // rows：invBuildRow() 的清冊列；now：Date（測試可固定）。
 // status：expired（支援已終止）／soon（INV_EOL_SOON_DAYS 天內終止）／eos（已停售、支援未終止或未填）／ok／nomatch／nomodel
+// 入口頁綜合健檢用的支援期限摘要（XN188）：單台設備列＋使用者自備清單文字 → 只在已終止或即將終止時回傳
+// {status, end（YYYY-MM-DD）, days}，其餘（沒有清單、對不到型號、支援期間內）回傳 null；不含清單內容
+function invEolSummary(row, text, now) {
+  if (!String(text || '').trim()) return null;
+  const p = invParseEolCsv(text);
+  if (!p.entries.length) return null;
+  const r = invEolCheck([row], p.entries, now || new Date())[0];
+  if (!r || (r.status !== 'expired' && r.status !== 'soon') || !r.match || !r.match.endOfSupport) return null;
+  return { status: r.status, end: r.match.endOfSupport.toISOString().slice(0, 10), days: r.daysLeft };
+}
 function invEolCheck(rows, entries, now) {
   const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
   const rank = { expired: 0, soon: 1, eos: 2, nomatch: 3, nomodel: 4, ok: 5 };
