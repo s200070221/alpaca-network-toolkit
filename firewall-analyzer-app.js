@@ -1131,6 +1131,15 @@ function onParsed(){
     return `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${esc(tr('vl.picked').replace('{model}', cur))} <select data-fw-limit-pick="${esc(kind)}" aria-label="${esc(tr('ml.title'))}">`
       + _fwLimitModels(kind).slice().sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(m => `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc(m)}</option>`).join('') + '</select></div>';
   }
+  // 實體接線示意圖下載（XN190）：預設遮蔽位址
+  document.addEventListener('click', e => {
+    const b = e.target && e.target.closest ? e.target.closest('[data-fw-panel-dl]') : null;
+    if (!b || !PARSED || !window.FwPanel) return;
+    const m = document.getElementById('fw-panel-mask');
+    const svg = window.FwPanel.panelDownloadSvg(PARSED, !m || m.checked);
+    const host = String((PARSED.deviceInfo && PARSED.deviceInfo.hostname) || 'firewall');
+    if (svg) Reporter.download(svg, host.replace(/[^\w.\-]/g, '_') + '_panel.svg', 'image/svg+xml');
+  });
   document.addEventListener('change', e => {
     const sel = e.target && e.target.closest ? e.target.closest('select[data-fw-limit-pick]') : null;
     if (!sel || !PARSED) return;

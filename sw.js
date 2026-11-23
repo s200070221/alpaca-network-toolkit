@@ -62,6 +62,7 @@ const FILES = [
   'firewall-analyzer-pa-maxvalues.js',
   'firewall-analyzer-zip.js',
   'firewall-analyzer-portmap.js',
+  'firewall-analyzer-panel.js',
   'firewall-analyzer-reporter.js',
   'firewall-analyzer-sections.js',
   'firewall-analyzer-wifi-parser.js',

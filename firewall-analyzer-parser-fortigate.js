@@ -1517,6 +1517,8 @@ const FortigateParser = (() => {
       switchGroups: [...parseSwitchGroups(globalLineArr, isMultiVdom ? 'global' : 'root'),
         ...(isMultiVdom ? vdomBlocks.flatMap(vb => parseSwitchGroups(vb.lines, vb.name)) : [])],
       ...all,
+      // 透通模式（transparent）的 VDOM（XN190 接線示意）：只收 config system settings 明寫 set opmode transparent 者
+      transparentVdoms: vdomBlocks.filter(vb => extractSection(vb.lines, 'system settings').sectionLines.some(l => /^\s*set\s+opmode\s+transparent\s*$/i.test(l))).map(vb => vb.name),
       // VDOM metadata for UI filtering
       _vdomNames: vdomNames,
       _isMultiVdom: isMultiVdom,
