@@ -19,12 +19,21 @@
   // 預設路由：0.0.0.0/0 或 0.0.0.0 0.0.0.0（FortiGate）
   const isDefault = r => { const d = String((r && (r.dst || r.dest || r.prefix)) || '').trim(); return /^0\.0\.0\.0(?:\/0|\s+0\.0\.0\.0)$/.test(d) || d === 'default'; };
 
-  // parsed → {model, source, ports:[...], extra:[...], groups:[...], wan:[...]}
-  function buildPanel(parsed) {
+  // 可選型號：該廠牌的型號資料（FW_MODELS）＋使用者自訂型號（panel-svg.js）
+  const customs = () => (typeof window !== 'undefined' && window.PanelSvg ? window.PanelSvg.customModels() : []);
+  function choicesFor(parsed) {
+    const PM = typeof window !== 'undefined' && window.FwPortMap;
+    const own = PM ? PM.modelsOf(PM.vendorKey(parsed)).map(m => ({ value: m.id, label: m.label || m.id, id: m.id, ports: m.ports })) : [];
+    return own.concat(customs().map(m => ({ value: m.value, label: m.label, id: m.label, ports: m.ports, custom: true })));
+  }
+  // parsed → {model, source, ports:[...], extra:[...], groups:[...], wan:[...]}；opts.modelValue＝使用者選的型號（型號資料 id 或 cu:<自訂>）
+  function buildPanel(parsed, opts) {
     const PM = typeof window !== 'undefined' && window.FwPortMap;
     if (!PM || !parsed) return null;
-    const det = PM.detectSourceModel(parsed);
-    const model = det ? PM.getModel(det.vendor, det.id) : null;
+    const mv = opts && opts.modelValue;
+    const picked = mv ? choicesFor(parsed).find(m => m.value === mv) || null : null;
+    const det = picked ? null : PM.detectSourceModel(parsed);
+    const model = picked || (det ? PM.getModel(det.vendor, det.id) : null);
     const sps = PM.sourcePorts(parsed), use = PM.portUsage(parsed);
     const spBy = Object.create(null), ifBy = Object.create(null);
     sps.forEach(p => { spBy[lc(p.name)] = p; });
@@ -75,7 +84,7 @@
       wan.push({ port: p.name, ips: p.ips, gw: [...new Set(gw)], vpns: vp, exposed: [...new Set(ex.map(x => x.svc))] });
     });
     const vdoms = [...new Set(ports.concat(extra).map(p => p.vdom).filter(Boolean))];
-    return { model: model ? model.id : '', modelRaw: (parsed.deviceInfo && parsed.deviceInfo.model) || '', source: model ? 'model' : 'config', ports, extra, groups, wan, vdoms };
+    return { model: model ? (model.custom ? model.label : model.id) : '', modelValue: picked ? picked.value : '', modelRaw: (parsed.deviceInfo && parsed.deviceInfo.model) || '', source: model ? 'model' : 'config', ports, extra, groups, wan, vdoms };
   }
 
   const COLORS = { wan: '#f59e0b', used: '#3b82f6', unused: '#9ca3af', mgmt: '#8b5cf6', ha: '#8b5cf6', fortilink: '#10b981' };
@@ -114,13 +123,25 @@
     return h + '</div>';
   }
 
+  const _chosen = new WeakMap();   // parsed → 使用者選的型號（只存記憶體）
+  let _last = null;
+  function pickHtml(parsed, pn) {
+    const list = choicesFor(parsed), chosen = !!_chosen.get(parsed);
+    if (!list.length) return '';
+    const opt = m => `<option value="${xesc(m.value)}"${chosen && m.value === pn.modelValue ? ' selected' : ''}>${esc2(m.label)}</option>`;
+    const own = list.filter(m => !m.custom), cu = list.filter(m => m.custom);
+    return `<label style="font-size:12px">${esc2(T('pnl.pick'))} <select data-fw-panel-model style="width:auto;max-width:280px"><option value="">${esc2(T('pnl.pick_auto'))}</option>${own.map(opt).join('')}`
+      + (cu.length ? `<optgroup label="${xesc(T('pcu.group'))}">${cu.map(opt).join('')}</optgroup>` : '') + '</select></label>';
+  }
   // 摘要頁卡片：SVG＋埠明細表＋下載按鈕
-  function panelHtml(parsed) {
-    const pn = buildPanel(parsed);
+  function panelHtml(parsed, editorOpen) {
+    _last = parsed || null;
+    const pn = buildPanel(parsed, { modelValue: (parsed && _chosen.get(parsed)) || '' });
     if (!pn || !pn.ports.length) return '';
     const box = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:12px';
     let h = `<div id="fw-panel-card" style="${box}"><div style="font-weight:600;font-size:13px;margin-bottom:4px">🔌 ${esc2(T('pnl.title'))}</div>`;
     h += `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${esc2(T(pn.source === 'model' ? 'pnl.hint_model' : 'pnl.hint_config', { m: pn.model }))}</div>`;
+    h += pickHtml(parsed, pn);
     h += `<div style="overflow-x:auto" data-fw-panel="${pn.source}">${panelSvg(pn)}</div>${legendHtml(pn)}`;
     const kindTxt = k => T('pnl.kind_' + (GROUP_KINDS.includes(k) ? k : 'other'));
     if (pn.groups.length) h += `<div style="font-size:11px;margin:4px 0">${pn.groups.map(g => `<b>${esc2(g.name)}</b>（${esc2(kindTxt(g.kind))}${g.bridged ? '，' + esc2(T('pnl.bridged')) : ''}）：${esc2(g.members.join(', '))}`).join('<br>')}</div>`;
@@ -132,16 +153,36 @@
     }).join('');
     if (rowsHtml) h += `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('pnl.detail'))}</summary><div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc2(T('pnl.col_port'))}</th><th>${esc2(T('pnl.col_role'))}</th><th>${esc2(T('pnl.col_addr'))}</th><th>${esc2(T('pnl.col_zone'))}</th>${pn.vdoms.length ? '<th>VDOM</th>' : ''}<th>${esc2(T('pnl.col_group'))}</th><th>${esc2(T('pnl.col_vlan'))}</th><th>${esc2(T('pnl.col_refs'))}</th></tr></thead><tbody>${rowsHtml}</tbody></table></div></details>`;
     h += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><button class="btn btn-ghost btn-sm" data-fw-panel-dl>${esc2(T('pnl.download'))}</button>`
-      + `<label style="font-size:11px"><input type="checkbox" id="fw-panel-mask" checked> ${esc2(T('pnl.mask'))}</label></div></div>`;
+      + `<label style="font-size:11px"><input type="checkbox" id="fw-panel-mask" checked> ${esc2(T('pnl.mask'))}</label></div>${window.PanelSvg ? window.PanelSvg.customEditorHtml('fw', editorOpen) : ''}</div>`;
     return h;
   }
   // 下載 SVG（預設遮蔽位址）；由 app 的事件代理呼叫
   function panelDownloadSvg(parsed, mask) {
-    const pn = buildPanel(parsed);
+    const pn = buildPanel(parsed, { modelValue: (parsed && _chosen.get(parsed)) || '' });
     return pn ? '<?xml version="1.0" encoding="UTF-8"?>\n' + panelSvg(pn, { mask }) : '';
   }
 
-  const api = { buildPanel, panelSvg, panelHtml, panelDownloadSvg, maskIp, PANEL_PER_ROW };
+  // 型號選單與自訂型號（事件代理；型號只接受清單內的 value）
+  const redraw = open => { const card = document.getElementById('fw-panel-card'); if (card && _last) card.outerHTML = panelHtml(_last, open); };
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('change', e => {
+      const sel = e.target && e.target.closest ? e.target.closest('select[data-fw-panel-model]') : null;
+      if (!sel || !_last) return;
+      const v = sel.value;
+      if (v && !choicesFor(_last).some(m => m.value === v)) return;
+      if (v) _chosen.set(_last, v); else _chosen.delete(_last);
+      redraw(false);
+    });
+    window.addEventListener('pnl-custom', e => {
+      const d = (e && e.detail) || {};
+      if (d.scope !== 'fw' || !_last) return;
+      if (d.value) _chosen.set(_last, d.value);
+      else if (_chosen.get(_last) && !choicesFor(_last).some(m => m.value === _chosen.get(_last))) _chosen.delete(_last);
+      redraw(true);
+    });
+  }
+
+  const api = { buildPanel, panelSvg, panelHtml, panelDownloadSvg, maskIp, PANEL_PER_ROW, choicesFor };
   if (typeof window !== 'undefined') window.FwPanel = api;
   return api;
 })();

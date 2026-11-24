@@ -4150,7 +4150,7 @@ function renderInventoryCard(){
         <td>${r.score==null?'-':pill(gc,r.score+' '+r.grade)}</td><td style="font-size:11px">${esc(r.file)}</td>
         <td><button style="${btn2};padding:2px 10px" onclick="invOpen(${i})">${esc(tr('inv.open_btn'))}</button></td></tr>`;
     }).join('')+'</tbody></table></div>';
-  return h+renderConsistencyCard()+renderVlanMatrixCard()+renderAccountsCard()+renderGoldenCard()+renderEolCard()+renderVulnCard()+'</div>';
+  return h+(window.SwCabling?window.SwCabling.cablingHtml(_invEntries()):'')+renderConsistencyCard()+renderVlanMatrixCard()+renderAccountsCard()+renderGoldenCard()+renderEolCard()+renderVulnCard()+'</div>';
 }
 // 韌體支援期限（XN6）：invParseEolCsv()／invEolCheck() 在 switch-analyzer-inventory.js；清單存 localStorage（sw_eol_list，已在入口頁 WS_KEYS）
 let eolText=null;
@@ -4500,6 +4500,8 @@ function invAddFiles(inp){
       const cfg=t.replace(/^﻿/,'').replace(/\r\n/g,'\n');
       try{
         const p=parseAny(cfg);
+        // 設定檔後面附上 LLDP／CDP 鄰居輸出時一併讀出（接線拓樸 XN192 使用）
+        if(window.SwCabling&&!(p.lldp&&p.lldp.length))p.lldp=window.SwCabling.lldpFromText(cfg,p.vendor);
         invRows.push(invBuildRow(files[k].name,cfg,p,x=>computeSwitchHealth(x,{vulnText:vulnLoadText(),vulnVersion:vulnVerOverride[files[k].name]||''})));
         invTexts.push(cfg);
         invParsed.push(p);

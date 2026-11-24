@@ -8,7 +8,7 @@
 const WS_FORMAT = 'alpaca-workspace';
 const WS_KEYS = [
   { key: 'cw_lang', tool: 'common', group: 'settings' }, { key: '_netAnalyzer_eggLoud', tool: 'common', group: 'settings' }, { key: 'cw_theme', tool: 'common', group: 'settings' }, { key: 'cw_sb', tool: 'common', group: 'settings' },
-  { key: 'sw_golden_rules', tool: 'switch_analyzer', group: 'settings' }, { key: 'sw_eol_list', tool: 'switch_analyzer', group: 'settings' }, { key: 'sw_vuln_list', tool: 'switch_analyzer', group: 'settings' },
+  { key: 'sw_golden_rules', tool: 'switch_analyzer', group: 'settings' }, { key: 'sw_eol_list', tool: 'switch_analyzer', group: 'settings' }, { key: 'panel_custom_models', tool: 'common', group: 'settings', json: true }, { key: 'sw_vuln_list', tool: 'switch_analyzer', group: 'settings' },
   { key: 'sw_audit_marks', tool: 'switch_analyzer', group: 'settings', json: true }, { key: 'sw_audit_reviewer', tool: 'switch_analyzer', group: 'settings' },
   { key: 'fw_accepted_risks', tool: 'firewall_analyzer', group: 'settings', json: true }, { key: 'fw_naming_rules', tool: 'firewall_analyzer', group: 'settings', json: true },
   { key: 'fw_expiry_keywords', tool: 'firewall_analyzer', group: 'settings' },

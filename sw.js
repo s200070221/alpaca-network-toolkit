@@ -64,6 +64,7 @@ const FILES = [
   'firewall-analyzer-portmap.js',
   'panel-svg.js',
   'switch-analyzer-panel.js',
+  'switch-analyzer-cabling.js',
   'firewall-analyzer-panel.js',
   'firewall-analyzer-reporter.js',
   'firewall-analyzer-sections.js',
