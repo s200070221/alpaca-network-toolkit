@@ -55,7 +55,7 @@ a{text-decoration:none;color:inherit}
 .task-links a{font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid var(--accent);color:var(--accent);text-decoration:none}
 .task-links a:hover{background:var(--accent);color:#fff}
 .task-card details summary{cursor:pointer;font-size:12px;color:var(--text-dim)}
-.task-card[data-task="breach"]{grid-column:1/-1}
+.task-card[data-task="breach"],.task-card[data-task="cabling"]{grid-column:1/-1}
 /* 網站憑證檢查（XN101） */
 .cert-card{margin:0 40px 16px;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:12px;display:flex;flex-direction:column;gap:10px}
 .cert-intro,.cert-hint{font-size:12px;color:var(--text-mid);line-height:1.6;margin:0}
@@ -103,7 +103,7 @@ a{text-decoration:none;color:inherit}
 /* UX35：本機儲存資料面板 */
 .ls-table .ls-col-size{white-space:nowrap;word-break:normal!important}
 @media(max-width:720px){.ls-table .ls-col-tool{display:none}}
-.task-steps{margin:0;padding-left:18px;font-size:12px;color:var(--text-mid);line-height:1.6;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));column-gap:28px;row-gap:4px}
+.task-steps{margin:0;padding-left:18px;font-size:12px;color:var(--text-mid);line-height:1.6;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));column-gap:28px;row-gap:4px}
 .task-steps li{margin:0}
 .task-drop{font-size:12px;color:var(--text-dim);margin:8px 0 0}
 @media (max-width:600px){.tasks{padding:20px 16px 0}}

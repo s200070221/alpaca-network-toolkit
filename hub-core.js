@@ -117,6 +117,8 @@ const TASKS = [
   { id: 'cert', links: [['#certcheck', 'task.cert_go']], howto: [], steps: 3 },
   // 設備版本快速比對（XN107）：連到本頁卡片
   { id: 'devcheck', links: [['#devcheck', 'task.devcheck_go']], howto: [] },
+  // 畫實體接線圖（XN199）：範例連到交換器分析的接線拓樸範例（?demo=cabling，固定合成資料）
+  { id: 'cabling', links: [['switch-config-parser.html?demo=cabling', 'task.cabling_demo'], ['switch-config-parser.html', 'nav.tool_switch'], ['firewall-analyzer-fixed.html', 'nav.tool_fw']], howto: ['sw'], steps: 4 },
 ];
 function renderTasks() {
   const grid = document.getElementById('tasks-grid');
