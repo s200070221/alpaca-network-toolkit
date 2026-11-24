@@ -131,6 +131,35 @@
     return { vendor: vk, model: model ? model.label : '', modelValue: model ? model.value : '', modelRaw: (parsed.sys && (parsed.sys.model || parsed.sys.platform)) || '', source: model ? 'model' : 'config', rows, extra, groups, models: choicesFor(vk) };
   }
 
+  // 終端定位頁貼上的輸出（XN196）：介面錯誤計數器、光模組告警、MAC 表每埠終端數，依設備名稱對到這台；
+  // ep 未給時讀 app 的全域 epModel，只有一台時不比對名稱。回傳 Map（埠正規化名稱 → {sev, phy, opt, macs}）
+  const hostKeyOf = h => { const s = lc(h).trim().replace(/\([^)]*\)$/, ''); return /^\d{1,3}(\.\d{1,3}){3}$/.test(s) ? s : s.split('.')[0]; };
+  function overlayFor(parsed, ep) {
+    const model = ep !== undefined ? ep : (typeof epModel !== 'undefined' ? epModel : null);
+    const devs = (model && model.devices) || [];
+    if (!devs.length || typeof epNormIface !== 'function') return null;
+    const host = hostKeyOf(parsed && parsed.sys && parsed.sys.hostname);
+    const d = devs.find(x => host && hostKeyOf(x.name) === host) || (devs.length === 1 ? devs[0] : null);
+    if (!d) return null;
+    const out = new Map(), at = k => { if (!out.has(k)) out.set(k, { sev: '', phy: [], opt: [], macs: 0 }); return out.get(k); };
+    const bump = (o, sev) => { if (sev === 'high' || (sev === 'medium' && o.sev !== 'high')) o.sev = sev; };
+    if (typeof epPhyIssues === 'function') epPhyIssues({ devices: [d] }).forEach(r => { const o = at(epNormIface(r.port)); o.phy = r.findings; bump(o, r.severity); });
+    if (typeof epOpticsIssues === 'function') epOpticsIssues({ devices: [d] }).forEach(r => { const o = at(epNormIface(r.port)); o.opt = r.findings.map(f => f.metric); bump(o, r.severity); });
+    const seen = new Map();
+    (d.macs || []).forEach(m => { const k = epNormIface(m.port); if (!seen.has(k)) seen.set(k, new Set()); seen.get(k).add(m.mac); });
+    seen.forEach((v, k) => { at(k).macs = v.size; });
+    return out.size ? out : null;
+  }
+  // 疊加到繪圖用的埠：警示點、終端數與提示文字（低嚴重度只有 drops 時不加警示點）
+  function overlayPort(spec, ov, name) {
+    const o = ov && typeof epNormIface === 'function' ? ov.get(epNormIface(name)) : null;
+    if (!o) return spec;
+    const extra = [];
+    if (o.phy.length) extra.push(T('swp.ov_phy', { list: o.phy.map(f => T('ep.phy_' + f)).join('、') }));
+    if (o.opt.length) extra.push(T('swp.ov_opt', { list: o.opt.map(m => T('ep.opt_m_' + m)).join('、') }));
+    if (o.macs) extra.push(T('swp.ov_macs', { n: o.macs }));
+    return Object.assign(spec, { alert: o.sev === 'high' || o.sev === 'medium' ? o.sev : '', count: o.macs || '', tip: [spec.tip].concat(extra).join(' · ') });
+  }
   const COLORS = { access: '#3b82f6', trunk: '#f59e0b', routed: '#10b981', hybrid: '#ec4899', shutdown: '#4b5563', unused: '#9ca3af', mgmt: '#8b5cf6' };
   const GROUP_COLORS = ['#ef4444', '#14b8a6', '#eab308', '#ec4899', '#6366f1', '#84cc16'];
   const kindOf = p => (p.mgmt ? 'mgmt' : p.shutdown ? 'shutdown' : !p.used ? 'unused' : /trunk/i.test(p.mode) ? 'trunk' : /routed/i.test(p.mode) || (p.ip && !p.mode) ? 'routed' : /hybrid/i.test(p.mode) ? 'hybrid' : 'access');
@@ -150,7 +179,7 @@
       const text = k === 'access' ? (p.vlans || '1') : k === 'trunk' ? 'T' : k === 'routed' ? 'L3' : k === 'hybrid' ? 'H' : '';
       const nb = p.neighbors.map(n => '→ ' + n.neighbor + (n.remotePort ? ' ' + n.remotePort : '')).join(' ');
       const tip = [p.name, p.speed, p.desc, k === 'trunk' ? 'trunk ' + (p.vlans || 'all') + (p.nativeVlan ? ' native ' + p.nativeVlan : '') : k === 'access' ? 'VLAN ' + (p.vlans || '1') : '', p.ip ? show(p.ip) : '', p.lag, nb].filter(Boolean).join(' · ');
-      return { id: lc(p.name), name: p.name, label: lbl[pi], color: COLORS[k], dim: k === 'unused' || k === 'shutdown', fiber: false, text, tip, badge: p.stack ? 'S' : p.poe ? 'P' : '' };
+      return overlayPort({ id: lc(p.name), name: p.name, label: lbl[pi], color: COLORS[k], dim: k === 'unused' || k === 'shutdown', fiber: false, text, tip, badge: p.stack ? 'S' : p.poe ? 'P' : '' }, opts && opts.overlay, p.name);
     }) }; });
     const groups = pn.groups.map((g, i) => ({ members: g.members.map(lc), color: GROUP_COLORS[i % GROUP_COLORS.length], dashed: true, label: g.name }));
     return window.PanelSvg.render({ title: pn.model || pn.modelRaw || '', rows, groups, callouts: [] });
@@ -170,9 +199,10 @@
     h += modelSelectHtml(pn, !!_chosen.get(parsed), 'data-sw-panel-model');
     const editor = window.PanelSvg.customEditorHtml('sw', editorOpen);
     if (!pn.rows.some(r => r.ports.length)) return h + `<div class="nodata">${esc2(T('swp.none'))}</div>${editor}</div>`;
-    h += `<div style="overflow-x:auto;margin-top:6px" data-sw-panel="${pn.source}">${panelSvg(pn)}</div>`;
+    const ov = overlayFor(parsed);
+    h += `<div style="overflow-x:auto;margin-top:6px" data-sw-panel="${pn.source}">${panelSvg(pn, { overlay: ov })}</div>`;
     const L = [[COLORS.access, T('swp.lg_access')], [COLORS.trunk, T('swp.lg_trunk')], [COLORS.routed, T('swp.lg_routed')], [COLORS.hybrid, T('swp.lg_hybrid')], [COLORS.shutdown, T('swp.lg_shutdown')], [COLORS.unused, T('swp.lg_unused')], [COLORS.mgmt, T('swp.lg_mgmt')]];
-    h += `<div style="font-size:11px;margin:6px 0">${window.PanelSvg.legend(L, esc2)}<span style="color:var(--text-dim)">${esc2(T('swp.lg_marks'))}</span></div>`;
+    h += `<div style="font-size:11px;margin:6px 0">${window.PanelSvg.legend(L, esc2)}<span style="color:var(--text-dim)">${esc2(T('swp.lg_marks'))}</span>${ov ? `<br><span style="color:var(--text-dim)" data-sw-panel-ov>${esc2(T('swp.ov_note'))}</span>` : ''}</div>`;
     if (pn.groups.length) h += `<div style="font-size:11px;margin:4px 0">${pn.groups.map(g => `<b>${esc2(g.name)}</b>（LACP）：${esc2(g.members.join(', '))}`).join('<br>')}</div>`;
     if (pn.extra.length) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin:4px 0">${esc2(T('swp.extra', { list: pn.extra.map(p => p.name).join(', ') }))}</div>`;
     const all = pn.rows.flatMap(r => r.ports).concat(pn.extra).filter(p => p.used || p.shutdown && p.inConfig || p.neighbors.length);
@@ -192,7 +222,7 @@
   }
   function panelDownloadSvg(parsed, mask) {
     const pn = buildPanel(parsed, { modelValue: _chosen.get(parsed) || '' });
-    return pn && window.PanelSvg ? '<?xml version="1.0" encoding="UTF-8"?>\n' + panelSvg(pn, { mask }) : '';
+    return pn && window.PanelSvg ? '<?xml version="1.0" encoding="UTF-8"?>\n' + panelSvg(pn, { mask, overlay: overlayFor(parsed) }) : '';
   }
   // 卡片上的型號選單與下載（事件代理；型號只接受該廠牌清單內的 value）
   if (typeof document !== 'undefined' && document.addEventListener) {
@@ -227,7 +257,7 @@
     });
   }
 
-  const api = { buildPanel, panelSvg, panelHtml, panelDownloadSvg, matchModel, modelsFor, choicesFor, expandPorts, poePorts, memberName, modelSelectHtml, shortLabels, kindOf, COLORS, chosen: _chosen };
+  const api = { overlayFor, overlayPort, buildPanel, panelSvg, panelHtml, panelDownloadSvg, matchModel, modelsFor, choicesFor, expandPorts, poePorts, memberName, modelSelectHtml, shortLabels, kindOf, COLORS, chosen: _chosen };
   if (typeof window !== 'undefined') window.SwPanel = api;
   return api;
 })();

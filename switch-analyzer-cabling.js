@@ -200,8 +200,11 @@
       (peerOf[ia] = peerOf[ia] || []).push(endName(cb, l.b) + ' ' + l.b.port);
       (peerOf[ib] = peerOf[ib] || []).push(endName(cb, l.a) + ' ' + l.a.port);
     });
-    const rows = [], groups = [];
+    const rows = [], groups = [], ep = opts && opts.ep;
+    let anyOv = false;
     cb.devices.forEach(d => {
+      const ov = d.parsed && sp.overlayFor ? sp.overlayFor(d.parsed, ep) : null;
+      if (ov) anyOv = true;
       if (d.imp) {
         const lbl = d.imp.ports.map(p => p.name);
         rows.push({ label: d.hostname + (d.imp.model ? ' · ' + d.imp.model : '') + ' · ' + T('ptopo.kind_' + (d.imp.kind === 'firewall' ? 'firewall' : 'other')), ports: d.imp.ports.map((p, pi) => {
@@ -219,7 +222,7 @@
         rows.push({ label: head, ports: r.ports.map((p, pi) => {
           const k = sp.kindOf(p), id = 'd' + d.idx + '|' + lc(p.name);
           const tip = [d.hostname + ' ' + p.name, p.desc, p.ip ? show(p.ip) : '', (peerOf[id] || []).map(x => '↔ ' + x).join(' ')].filter(Boolean).join(' · ');
-          return { id, name: p.name, label: lbl[pi], color: sp.COLORS[k], dim: (k === 'unused' || k === 'shutdown') && !peerOf[id], text: k === 'access' ? (p.vlans || '1') : k === 'trunk' ? 'T' : k === 'routed' ? 'L3' : k === 'hybrid' ? 'H' : '', badge: p.stack ? 'S' : p.poe ? 'P' : '', tip };
+          return sp.overlayPort({ id, name: p.name, label: lbl[pi], color: sp.COLORS[k], dim: (k === 'unused' || k === 'shutdown') && !peerOf[id], text: k === 'access' ? (p.vlans || '1') : k === 'trunk' ? 'T' : k === 'routed' ? 'L3' : k === 'hybrid' ? 'H' : '', badge: p.stack ? 'S' : p.poe ? 'P' : '', tip }, ov, p.name);
         }) });
       });
     });
@@ -230,7 +233,67 @@
       const bad = l.issues && l.issues.length;
       return { a: (l.a.ext != null ? 'x' + l.a.ext : 'd' + l.a.dev) + '|' + lc(l.a.port), b: (l.b.ext != null ? 'x' + l.b.ext : 'd' + l.b.dev) + '|' + lc(l.b.port), color: bad ? LINK_COLORS.mismatch : LINK_COLORS[k], dashed: k === 'custom', tip: bad ? tip + ' · ⚠ ' + l.issues.map(issueText).join('；') : tip };
     });
-    return ps.render({ rows, groups, links, separate: true });
+    const svg = ps.render({ rows, groups, links, separate: true });
+    return opts && opts.withFlag ? { svg, overlay: anyOv } : svg;
+  }
+
+  // ── 埠層級匯出（XN195）：draw.io（每台一個容器、埠為子節點、接線連到埠）與 Mermaid（每台一個 subgraph，只列有接線的埠）──
+  // 只含設備名稱、型號、埠名稱與接線來源，不含位址與描述
+  const xa = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  const mm = s => String(s == null ? '' : s).replace(/"/g, '#quot;').replace(/</g, '#lt;').replace(/>/g, '#gt;');
+  function exportGroups(cb) {
+    // 依畫面相同的順序列出每台（含外部鄰居）的埠：[{title, kind, ports:[{key, name}]}]
+    const out = [];
+    cb.devices.forEach(d => {
+      const ports = d.imp ? d.imp.ports.map(p => p.name) : d.pn ? d.pn.rows.flatMap(r => r.ports).concat(d.pn.extra).map(p => p.name) : [];
+      out.push({ title: d.hostname + (d.imp ? (d.imp.model ? ' · ' + d.imp.model : '') : d.pn && d.pn.model ? ' · ' + d.pn.model : ''), kind: d.imp ? 'firewall' : 'switch', ports: ports.map(n => ({ key: 'd' + d.idx + '|' + lc(n), name: n })) });
+    });
+    cb.external.forEach(x => out.push({ title: x.name, kind: 'ext', ports: x.ports.map(n => ({ key: 'x' + x.idx + '|' + lc(n), name: n })) }));
+    return out;
+  }
+  const endKey = e => (e.ext != null ? 'x' + e.ext : 'd' + e.dev) + '|' + lc(e.port);
+  function cablingToDrawio(cb) {
+    const PW = 56, PH = 28, G = 6, PER = 16, HEAD = 26, PADX = 10, GAPY = 60;
+    const STYLE = { switch: 'fillColor=#dae8fc;strokeColor=#6c8ebf;', firewall: 'fillColor=#fff2cc;strokeColor=#d6b656;', ext: 'fillColor=#f5f5f5;strokeColor=#999999;dashed=1;' };
+    const cells = [], idOf = Object.create(null);
+    let y = 20, n = 0;
+    exportGroups(cb).forEach((g, gi) => {
+      const cols = Math.min(PER, Math.max(1, g.ports.length)), lines = Math.max(1, Math.ceil(g.ports.length / PER));
+      const w = PADX * 2 + cols * (PW + G) - G, h = HEAD + lines * (PH + G) + PADX;
+      const gid = 'g' + gi;
+      cells.push(`<mxCell id="${gid}" value="${xa(g.title)}" style="swimlane;startSize=${HEAD};html=1;whiteSpace=wrap;${STYLE[g.kind]}" vertex="1" parent="1"><mxGeometry x="20" y="${y}" width="${w}" height="${h}" as="geometry"/></mxCell>`);
+      g.ports.forEach((p, i) => {
+        const id = 'p' + (n++);
+        idOf[p.key] = id;
+        cells.push(`<mxCell id="${id}" value="${xa(p.name)}" style="rounded=1;html=1;whiteSpace=wrap;fontSize=8;fillColor=#ffffff;" vertex="1" parent="${gid}"><mxGeometry x="${PADX + (i % PER) * (PW + G)}" y="${HEAD + Math.floor(i / PER) * (PH + G) + 4}" width="${PW}" height="${PH}" as="geometry"/></mxCell>`);
+      });
+      y += h + GAPY;
+    });
+    cb.links.forEach((l, i) => {
+      const a = idOf[endKey(l.a)], b = idOf[endKey(l.b)];
+      if (!a || !b) return;
+      const k = linkKind(l), bad = l.issues && l.issues.length;
+      const color = bad ? LINK_COLORS.mismatch : LINK_COLORS[k];
+      cells.push(`<mxCell id="e${i}" value="${xa(T('ptopo.src_' + k))}" style="endArrow=none;html=1;fontSize=8;strokeWidth=2;strokeColor=${color};${k === 'custom' ? 'dashed=1;' : ''}" edge="1" parent="1" source="${a}" target="${b}"><mxGeometry relative="1" as="geometry"/></mxCell>`);
+    });
+    return `<mxfile host="app.diagrams.net"><diagram id="cabling" name="cabling"><mxGraphModel grid="1" gridSize="10" page="1" pageWidth="1169" pageHeight="${Math.max(827, y + 20)}"><root><mxCell id="0"/><mxCell id="1" parent="0"/>${cells.join('')}</root></mxGraphModel></diagram></mxfile>\n`;
+  }
+  function cablingToMermaid(cb) {
+    const used = new Set(cb.links.flatMap(l => [endKey(l.a), endKey(l.b)]));
+    const out = ['flowchart LR'], idOf = Object.create(null);
+    let n = 0;
+    exportGroups(cb).forEach((g, gi) => {
+      const ps = g.ports.filter(p => used.has(p.key));
+      if (!ps.length) return;
+      out.push(`  subgraph g${gi}["${mm(g.title)}"]`);
+      ps.forEach(p => { const id = 'p' + (n++); idOf[p.key] = id; out.push(`    ${id}["${mm(p.name)}"]`); });
+      out.push('  end');
+    });
+    cb.links.forEach(l => {
+      const a = idOf[endKey(l.a)], b = idOf[endKey(l.b)];
+      if (a && b) out.push(`  ${a} ${linkKind(l) === 'custom' ? '-.-' : '---'}|"${mm(T('ptopo.src_' + linkKind(l)) + (l.issues && l.issues.length ? ' ⚠' : ''))}"| ${b}`);
+    });
+    return out.join('\n') + '\n';
   }
 
   // ── 卡片（資產清冊頁）──
@@ -266,7 +329,9 @@
     h += `<details data-ptopo-sec="fw" style="margin-bottom:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.fw_title', { n: _imported.length }))}</summary><div style="font-size:11px;color:var(--text-dim);margin:4px 0">${esc2(T('ptopo.fw_hint'))}</div>`
       + `<input type="file" accept=".json,application/json" multiple data-ptopo-import> <span data-ptopo-import-msg style="font-size:11px">${esc2(_importMsg)}</span>`
       + _imported.map((x, i) => `<div style="font-size:12px;margin:3px 0"><b>${esc2(x.imported.hostname)}</b> ${esc2([x.imported.vendor, x.imported.model].filter(Boolean).join(' '))}（${esc2(T('pcu.ports', { n: x.imported.ports.length }))}） <button style="${btn};padding:2px 10px" data-ptopo-rm="${i}">${esc2(T('pcu.del'))}</button></div>`).join('') + '</details>';
-    h += `<div style="overflow-x:auto" data-ptopo-svg>${cablingSvg(cb)}</div>`;
+    const drawn = cablingSvg(cb, { withFlag: true });
+    h += `<div style="overflow-x:auto" data-ptopo-svg>${drawn.svg}</div>`;
+    if (drawn.overlay) h += `<div style="font-size:11px;color:var(--text-dim)" data-ptopo-ov>${esc2(T('swp.ov_note'))}</div>`;
     const nBad = cb.links.filter(l => l.issues && l.issues.length).length;
     if (nBad) h += `<div style="font-size:12px;color:var(--red,#ef4444);margin:4px 0" data-ptopo-mismatch="${nBad}">⚠ ${esc2(T('ptopo.mismatch_n', { n: nBad }))}</div>`;
     h += `<div style="font-size:11px;margin:6px 0">${ps.legend(LINK_KINDS.map(k => [LINK_COLORS[k], T('ptopo.src_' + k)]).concat([[LINK_COLORS.mismatch, T('ptopo.lg_mismatch')]]), esc2)}<span style="color:var(--text-dim)">${esc2(T('ptopo.lg_note'))}</span></div>`;
@@ -284,6 +349,7 @@
     if (cb.descHints.length) h += `<details data-ptopo-sec="hints" style="margin-top:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.desc_hints', { n: cb.descHints.length }))}</summary><div style="font-size:11px">`
       + cb.descHints.map(x => esc2(`${x.host} ${x.port}「${x.desc}」→ ${x.mention}`)).join('<br>') + '</div></details>';
     h += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><button style="${btn}" data-ptopo-dl>${esc2(T('swp.download'))}</button>`
+      + `<button style="${btn}" data-ptopo-exp="drawio" title="${xesc(T('ptopo.exp_tip'))}">⬇ draw.io</button><button style="${btn}" data-ptopo-exp="mermaid" title="${xesc(T('ptopo.exp_tip'))}">⬇ Mermaid</button>`
       + `<label style="font-size:11px"><input type="checkbox" id="ptopo-mask" checked> ${esc2(T('swp.mask'))}</label></div>`
       + `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><button style="${btn}" data-ptopo-save title="${xesc(T('ptopo.save_hint'))}">${esc2(T('ptopo.save'))}</button>`
       + `<label style="font-size:12px">${esc2(T('ptopo.load'))} <input type="file" accept=".json,application/json" data-ptopo-load></label> <span style="font-size:11px" data-ptopo-proj-msg>${esc2(_projMsg)}</span></div></div>`;
@@ -329,6 +395,17 @@
         if (txt.trim()) _lldpOv.set(key, list); else _lldpOv.delete(key);
         _lldpMsg = T('ptopo.lldp_done', { host: d.imported ? d.imported.hostname : String((d.parsed.sys && d.parsed.sys.hostname) || d.hostname || ''), n: list.length });
         redraw(false);
+        return;
+      }
+      if (t.closest('[data-ptopo-exp]')) {
+        const fmt = t.closest('[data-ptopo-exp]').getAttribute('data-ptopo-exp');
+        const cb = buildCabling(_all(), { linksText: _linksText, modelOf, lldpOf });
+        if (!cb || !cb.devices.length) return;
+        const drawio = fmt === 'drawio';
+        const url = URL.createObjectURL(new Blob([drawio ? cablingToDrawio(cb) : cablingToMermaid(cb)], { type: drawio ? 'application/xml' : 'text/plain' }));
+        const a = document.createElement('a');
+        a.href = url; a.download = drawio ? 'cabling_topology.drawio' : 'cabling_topology.mmd'; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
         return;
       }
       if (t.closest('[data-ptopo-save]')) {
@@ -508,7 +585,7 @@
 
   const IMPORT_ERR_CODES = ['json', 'format', 'host', 'ports', 'size'];
   const PROJ_ERR_CODES = ['json', 'format', 'firewall', 'size'];
-  const api = { buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
+  const api = { cablingToDrawio, cablingToMermaid, buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
   if (typeof window !== 'undefined') window.SwCabling = api;
   return api;
 })();

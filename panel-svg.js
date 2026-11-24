@@ -2,7 +2,8 @@
 // 只負責把「要畫什麼」畫成 SVG 字串，不讀設定檔、不碰 DOM；所有文字一律跳脫。之後多台設備的接線拓樸（XN192）沿用同一份。
 // spec = {
 //   title,                                   面板左上角的型號／名稱
-//   rows: [{ label, ports: [{ id, name, label（圖上顯示，預設 name）, color, dim, fiber, text, tip, stripe:{color,tip}, badge }] }],
+//   rows: [{ label, ports: [{ id, name, label（圖上顯示，預設 name）, color, dim, fiber, text, tip, stripe:{color,tip}, badge,
+//            alert（'high'｜'medium'：左上角警示點）, count（右下角小數字，例如終端數）}] }],
 //                                            每排一台（或一個堆疊成員），埠依陣列順序排列，超過 PER_ROW 換行
 //   groups: [{ members:[id], color, dashed, label }]   同一列連續的成員各畫一框（實線＝透通、虛線＝聚合）
 //   callouts: [{ port:id, lines:[], color, bg, fg }]   面板上方的說明框，以線連到該埠（WAN 等）
@@ -66,6 +67,8 @@
       if (p.stripe) s += `<rect x="${q.x}" y="${q.y - 3}" width="${W}" height="3" fill="${p.stripe.color}"><title>${xesc(p.stripe.tip || '')}</title></rect>`;
       if (p.text) s += `<text x="${q.x + W / 2}" y="${q.y + 16}" fill="#fff" font-size="8" text-anchor="middle">${xesc(short(String(p.text), 7))}</text>`;
       if (p.badge) s += `<text x="${q.x + W - 3}" y="${q.y + 9}" fill="#fde68a" font-size="8" text-anchor="end">${xesc(p.badge)}</text>`;
+      if (p.alert) s += `<circle cx="${q.x + 5}" cy="${q.y + 5}" r="4" fill="${p.alert === 'high' ? '#ef4444' : '#f59e0b'}" stroke="#111827" stroke-width="1" data-alert="${p.alert === 'high' ? 'high' : 'medium'}"/>`;
+      if (p.count) s += `<text x="${q.x + W - 2}" y="${q.y + H - 3}" fill="#a5f3fc" font-size="7" text-anchor="end">${xesc(String(p.count).slice(0, 4))}</text>`;
       s += `<text x="${q.x + W / 2}" y="${q.y + H + 11}" fill="#e5e7eb" font-size="9" text-anchor="middle">${xesc(short(String(p.label || p.name), 10))}</text>`;
     }));
     callouts.forEach((c, i) => {
