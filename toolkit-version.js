@@ -3,8 +3,27 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.24';
+  const TOOLKIT_VERSION = '2026.11.24.1';
   const CHANGELOG = [
+    {
+      version: '2026.11.24.1',
+      items: {
+        zhTW: [
+          '交換器分析：接線拓樸標出兩端設定不一致的線（模式、VLAN、native VLAN、LACP），並可下載／載入接線專案',
+          '交換器分析：接線拓樸可下載 draw.io 與 Mermaid（埠層級）；終端定位的錯誤計數器、光模組告警與終端數會標在前面板與拓樸上',
+          '交換器分析與防火牆：前面板可勾選只顯示使用中與有接線的埠，手機寬度少捲動',
+          '入口頁：新增「畫實體接線圖」任務卡，可直接開啟接線範例',
+          '修正：清除資產清冊後匯入的防火牆與串線不再殘留；終端定位貼上特殊名稱時不再出錯',
+        ],
+        en: [
+          'Switch analyzer: the cabling topology flags links whose ends are configured differently (mode, VLAN, native VLAN, LACP), and cabling projects can be saved and loaded',
+          'Switch analyzer: port-level draw.io and Mermaid export of the cabling topology; endpoint-page error counters, optics alarms and endpoint counts are marked on panels and the topology',
+          'Switch and firewall analyzers: panels can show only ports in use or linked, for less scrolling on phones',
+          'Hub: new "Draw a physical cabling map" task card that opens the cabling example',
+          'Fixes: imported firewalls and custom links no longer linger after clearing the inventory; unusual names in pasted endpoint output no longer cause errors',
+        ],
+      },
+    },
     {
       version: '2026.11.24',
       items: {
