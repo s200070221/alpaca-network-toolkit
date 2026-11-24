@@ -39,12 +39,14 @@
       boxes.push({ y0: y0 - PAD / 2, y1: y });
     });
     const panelW = PAD * 2 + maxCols * (W + GAP) - GAP, panelH = y - top + PAD;
-    const width = Math.max(panelW + 20, callouts.length * (BOX_W + 10) + 10), height = top + panelH + 10;
+    // separate 模式下跨過其他設備的接線改走面板右側的通道，不穿過中間的面板（每條一個通道）
+    const far = sep ? (spec.links || []).filter(l => pos[l.a] && pos[l.b] && Math.abs(pos[l.a].row - pos[l.b].row) > 1) : [];
+    const LANE = 8, laneX = i => 10 + panelW + 14 + i * LANE;
+    const width = Math.max(panelW + 20 + (far.length ? far.length * LANE + 20 : 0), callouts.length * (BOX_W + 10) + 10), height = top + panelH + 10;
     let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="sans-serif" font-size="10">`;
     if (sep) boxes.forEach(b => { s += `<rect x="10" y="${b.y0}" width="${panelW}" height="${b.y1 - b.y0}" rx="6" fill="#1f2937" stroke="#4b5563"/>`; });
     else s += `<rect x="10" y="${top}" width="${panelW}" height="${panelH}" rx="6" fill="#1f2937" stroke="#4b5563"/>`;
     if (spec.title) s += `<text x="${10 + PAD}" y="${top + 12}" fill="#d1d5db" font-size="10">${xesc(spec.title)}</text>`;
-    rowLabels.forEach(l => { s += `<text x="${10 + PAD}" y="${l.y + 10}" fill="#9ca3af" font-size="9">${xesc(l.label)}</text>`; });
     (spec.groups || []).forEach(g => {
       const pts = (g.members || []).map(id => pos[id]).filter(Boolean).sort((a, b) => a.i - b.i);
       let run = [];
@@ -78,9 +80,16 @@
       if (!a || !b) return;
       if (b.y < a.y) { const t = a; a = b; b = t; }
       const ax = a.x + W / 2, bx = b.x + W / 2, ay = a.y + H + LABEL_H, d = l.dashed ? ' stroke-dasharray="5 3"' : '';
-      const path = a.y === b.y ? `M${ax},${ay} C${ax},${ay + 34} ${bx},${ay + 34} ${bx},${ay}` : `M${ax},${ay} C${ax},${ay + 40} ${bx},${b.y - 40} ${bx},${b.y - 3}`;
+      const li = far.indexOf(l);
+      const path = li >= 0
+        // 下到 a 所在面板下方的間隙 → 右側通道 → b 所在面板上方的間隙 → b（間隙內依通道錯開高度）
+        ? (() => { const off = 6 + (li % 6) * 4, gA = boxes[a.row].y1 + off, gB = boxes[b.row].y0 - off, lx = laneX(li);
+          return `M${ax},${ay} L${ax},${gA} L${lx},${gA} L${lx},${gB} L${bx},${gB} L${bx},${b.y - 3}`; })()
+        : a.y === b.y ? `M${ax},${ay} C${ax},${ay + 34} ${bx},${ay + 34} ${bx},${ay}` : `M${ax},${ay} C${ax},${ay + 40} ${bx},${b.y - 40} ${bx},${b.y - 3}`;
       s += `<path d="${path}" fill="none" stroke="${l.color || '#22c55e'}" stroke-width="2" stroke-opacity="0.85"${d}><title>${xesc(l.tip || '')}</title></path>`;
     });
+    // 排的標籤最後畫、加深色描邊，接線經過時文字仍看得清楚
+    rowLabels.forEach(l => { s += `<text x="${10 + PAD}" y="${l.y + 10}" fill="#9ca3af" font-size="9" stroke="#1f2937" stroke-width="3" paint-order="stroke">${xesc(l.label)}</text>`; });
     return s + '</svg>';
   }
   // 圖例（HTML 字串）：[[顏色, 說明], …]
@@ -150,6 +159,7 @@
   function customModels() {
     return customLoad().map(e => ({ value: 'cu:' + e.id, id: 'cu:' + e.id, label: e.name, custom: true, ports: parseCustomModel(e.def).ports })).filter(m => m.ports.length);
   }
+  const CUSTOM_EXAMPLE = { name: 'Example 24P+4SFP', def: '# 24 x 1G PoE + 4 x 10G SFP+ uplinks + mgmt\nGigabitEthernet1/0/{1-24} 1G poe\nTenGigabitEthernet1/1/{1-4} 10G sfp\nmgmt0 mgmt' };
   const T = (k, p) => { let s = typeof tr === 'function' ? tr(k) : k; Object.keys(p || {}).forEach(n => { s = s.split('{' + n + '}').join(String(p[n])); }); return s; };
   const errText = errs => errs.slice(0, 5).map(e => (e.line ? T('pcu.line', { n: e.line }) + ' ' : '') + T('pcu.err_' + e.code, { tok: e.tok })).join('；');
   // 自訂型號編輯區（HTML）：scope 區分工具（sw／fw），事件由本模組處理，存檔或刪除後發出 window 事件 pnl-custom {scope, value}
@@ -160,7 +170,7 @@
       + `<div style="font-size:11px;color:var(--text-dim);margin:4px 0">${e(T('pcu.hint'))}</div>`
       + `<input data-pnl-cu-name maxlength="40" placeholder="${xesc(T('pcu.name_ph'))}" style="width:260px;max-width:100%;font-size:12px;margin-bottom:4px"><br>`
       + `<textarea data-pnl-cu-def rows="5" spellcheck="false" style="width:100%;max-width:520px;font-family:monospace;font-size:11px" placeholder="GigabitEthernet1/0/{1-48} 1G poe&#10;TenGigabitEthernet1/1/{1-4} 10G sfp&#10;mgmt0 mgmt"></textarea><br>`
-      + `<button style="${btn}" data-pnl-cu-save>${e(T('pcu.save'))}</button> <span data-pnl-cu-msg style="font-size:11px"></span>`;
+      + `<button style="${btn}" data-pnl-cu-save>${e(T('pcu.save'))}</button> <button style="${btn}" data-pnl-cu-example>${e(T('pcu.example'))}</button> <span data-pnl-cu-msg style="font-size:11px"></span>`;
     if (list.length) h += `<div style="font-size:11px;margin-top:6px">${e(T('pcu.saved'))}` + list.map(m => `<div style="margin:2px 0"><b>${e(m.name)}</b>（${e(T('pcu.ports', { n: parseCustomModel(m.def).ports.length }))}） <button style="${btn}" data-pnl-cu-edit="${xesc(m.id)}">${e(T('pcu.edit'))}</button> <button style="${btn}" data-pnl-cu-del="${xesc(m.id)}">${e(T('pcu.del'))}</button></div>`).join('') + '</div>';
     return h + '</details>';
   }
@@ -176,6 +186,10 @@
         const msg = box.querySelector('[data-pnl-cu-msg]');
         if (!r.ok) { if (msg) { msg.textContent = errText(r.errors); msg.style.color = 'var(--red,#ef4444)'; } return; }
         fire(r.value);
+      } else if (t.closest('[data-pnl-cu-example]')) {
+        // 範例：24 埠 PoE＋4 個 SFP+ 上行＋管理埠（只填入編輯區，按儲存才寫入）
+        box.querySelector('[data-pnl-cu-name]').value = CUSTOM_EXAMPLE.name;
+        box.querySelector('[data-pnl-cu-def]').value = CUSTOM_EXAMPLE.def;
       } else if (t.closest('[data-pnl-cu-edit]')) {
         const m = customLoad().find(x => x.id === t.closest('[data-pnl-cu-edit]').getAttribute('data-pnl-cu-edit'));
         if (m) { box.querySelector('[data-pnl-cu-name]').value = m.name; box.querySelector('[data-pnl-cu-def]').value = m.def; }
@@ -186,7 +200,7 @@
     });
   }
 
-  const api = { render, legend, maskIp, xesc, PER_ROW, parseCustomModel, customLoad, customSave, customDelete, customModels, customEditorHtml, CUSTOM_ERR_CODES: ['token', 'range', 'name', 'dup', 'max', 'empty', 'noname', 'full', 'store'], CUSTOM_KEY, CUSTOM_MAX, CUSTOM_PORT_MAX };
+  const api = { render, legend, maskIp, xesc, PER_ROW, parseCustomModel, customLoad, customSave, customDelete, customModels, customEditorHtml, CUSTOM_EXAMPLE, CUSTOM_ERR_CODES: ['token', 'range', 'name', 'dup', 'max', 'empty', 'noname', 'full', 'store'], CUSTOM_KEY, CUSTOM_MAX, CUSTOM_PORT_MAX };
   if (typeof window !== 'undefined') window.PanelSvg = api;
   return api;
 })();

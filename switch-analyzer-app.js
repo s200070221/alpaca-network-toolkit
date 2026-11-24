@@ -4129,6 +4129,7 @@ function renderInventoryCard(){
     <div style="font-size:12px;color:var(--text-dim);margin-bottom:10px">${esc(tr('inv.hint'))}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
       <label style="${btn}">${esc(tr('inv.add_btn'))}<input type="file" id="inv-files" multiple accept=".txt,.cfg,.conf,.log,.rsc,.json" onchange="invAddFiles(this)"></label>
+      <button style="${btn2}" onclick="invLoadCablingDemo()" title="${esc(tr('inv.demo_cabling_tip'))}">${esc(tr('inv.demo_cabling'))}</button>
       ${invRows.length?`<button style="${btn2}" onclick="invExportCSV()">${esc(tr('inv.csv_btn'))}</button><button style="${btn2}" onclick="invRows=[];invTexts=[];invFails=[];invParsed=[];goldResult=null;navGo('inventory')">${esc(tr('inv.clear_btn'))}</button>`:''}
     </div>`;
   if(invFails.length)h+=`<div style="font-size:12px;color:var(--red);margin-bottom:8px">${esc(tr('inv.parse_fail').replace('{file}',invFails.join('、')))}</div>`;
@@ -4495,21 +4496,31 @@ function goldExportCSV(){
 function invAddFiles(inp){
   const files=[...(inp.files||[])];
   if(!files.length)return;
-  Promise.all(files.map(swReadText)).then(texts=>{
-    texts.forEach((t,k)=>{
-      const cfg=t.replace(/^﻿/,'').replace(/\r\n/g,'\n');
-      try{
-        const p=parseAny(cfg);
-        // 設定檔後面附上 LLDP／CDP 鄰居輸出時一併讀出（接線拓樸 XN192 使用）
-        if(window.SwCabling&&!(p.lldp&&p.lldp.length))p.lldp=window.SwCabling.lldpFromText(cfg,p.vendor);
-        invRows.push(invBuildRow(files[k].name,cfg,p,x=>computeSwitchHealth(x,{vulnText:vulnLoadText(),vulnVersion:vulnVerOverride[files[k].name]||''})));
-        invTexts.push(cfg);
-        invParsed.push(p);
-      }catch(e){invFails.push(files[k].name);}
-    });
-    if(goldResult){goldRun();return;}
-    navGo('inventory');
+  Promise.all(files.map(swReadText)).then(texts=>invAddTexts(files.map(f=>f.name),texts));
+}
+// 檔名＋文字加入資產清冊（上傳檔案與接線範例共用）
+function invAddTexts(names,texts){
+  texts.forEach((t,k)=>{
+    const cfg=String(t).replace(/^﻿/,'').replace(/\r\n/g,'\n');
+    try{
+      const p=parseAny(cfg);
+      // 設定檔後面附上 LLDP／CDP 鄰居輸出時一併讀出（接線拓樸 XN192 使用）
+      if(window.SwCabling&&!(p.lldp&&p.lldp.length))p.lldp=window.SwCabling.lldpFromText(cfg,p.vendor);
+      invRows.push(invBuildRow(names[k],cfg,p,x=>computeSwitchHealth(x,{vulnText:vulnLoadText(),vulnVersion:vulnVerOverride[names[k]]||''})));
+      invTexts.push(cfg);
+      invParsed.push(p);
+    }catch(e){invFails.push(names[k]);}
   });
+  if(goldResult){goldRun();return;}
+  navGo('inventory');
+}
+// 接線拓樸範例（XN192）：三台合成交換器（附 LLDP 輸出）＋一台防火牆前面板＋自訂串線；已載入過同名範例檔時不重複加入
+function invLoadCablingDemo(){
+  if(!window.SwCabling)return;
+  const D=window.SwCabling.DEMO,cfgs=D.configs.filter(c=>!invRows.some(r=>r.file===c.file));
+  window.SwCabling.loadDemoExtras();
+  if(cfgs.length)invAddTexts(cfgs.map(c=>c.file),cfgs.map(c=>c.text));else navGo('inventory');
+  setTimeout(()=>{const c=document.getElementById('ptopo-card');if(c&&c.scrollIntoView)c.scrollIntoView({block:'start'});},0);
 }
 function invOpen(i){
   const ta=document.getElementById('paste-area');
@@ -4970,6 +4981,8 @@ function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'li
 // 入口頁「看範例」（第二十九輪 NU4）：網址帶 ?demo=1 時開頁即載入範例並分析
 // DOMContentLoaded 而非 load：load 會等外部字型樣式表，連不到 Google Fonts 時範例要等到逾時才出現
 document.addEventListener('DOMContentLoaded', function () { if (/[?&]demo=1(?:&|$)/.test(location.search)) setTimeout(function () { loadSampleConfig(); }, 0); });
+// ?demo=cabling：開頁即到資產清冊載入接線拓樸範例（XN192）
+document.addEventListener('DOMContentLoaded', function () { if (/[?&]demo=cabling(?:&|$)/.test(location.search)) setTimeout(function () { invLoadCablingDemo(); }, 0); });
 
 // 頂端選單（UX19）：展開時依按鈕位置定位面板（fixed，避免手機寬度橫向捲動的工具列裁切），
 // 同時只開一個；點選項目、點選單外或按 Esc 即收起

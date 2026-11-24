@@ -62,17 +62,42 @@
     if (typeof LLDPParser === 'undefined' || !LLDP_MARK.test(String(text || ''))) return [];
     try { return (LLDPParser.parse(String(text), vendor) || []).filter(n => n && n.localPort && n.neighbor); } catch (e) { return []; }
   }
-  // entries：[{hostname, parsed}]；opts.linksText＝自訂串線；opts.modelOf(parsed)＝使用者選的型號 value；opts.lldpOf(parsed)＝使用者另外貼上的鄰居（取代設定檔內的）
+  // 防火牆分析匯出的前面板（FwPanel.panelExport，format alpaca-panel）：逐欄檢查型別與長度，不合格整份拒絕；
+  // 顏色只接受 #rrggbb，其餘欄位一律當文字（畫面與 SVG 都會跳脫）
+  const IMPORT_PORT_MAX = 512, IMPORT_GROUP_MAX = 64;
+  const str = (v, n) => (typeof v === 'string' && v.length <= n ? v : null);
+  const color = v => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v : '#6b7280');
+  function parsePanelExport(text) {
+    let o;
+    try { o = JSON.parse(String(text || '')); } catch (e) { return { ok: false, code: 'json' }; }
+    if (!o || typeof o !== 'object' || o.format !== 'alpaca-panel' || o.version !== 1) return { ok: false, code: 'format' };
+    const host = str(o.hostname, 64);
+    if (!host || !host.trim()) return { ok: false, code: 'host' };
+    if (!Array.isArray(o.ports) || !o.ports.length || o.ports.length > IMPORT_PORT_MAX) return { ok: false, code: 'ports' };
+    const ports = [], seen = new Set();
+    for (const p of o.ports) {
+      const name = p && str(p.name, 64);
+      if (!name || seen.has(lc(name))) return { ok: false, code: 'ports' };
+      seen.add(lc(name));
+      ports.push({ name, color: color(p.color), dim: p.dim === true, fiber: p.fiber === true, text: str(p.text, 16) || '', tip: str(p.tip, 400) || name });
+    }
+    const groups = (Array.isArray(o.groups) ? o.groups : []).slice(0, IMPORT_GROUP_MAX).filter(g => g && Array.isArray(g.members))
+      .map(g => ({ label: str(g.label, 64) || '', color: color(g.color), dashed: g.dashed === true, members: g.members.filter(m => typeof m === 'string' && seen.has(lc(m))) }))
+      .filter(g => g.members.length);
+    return { ok: true, dev: { kind: o.kind === 'firewall' ? 'firewall' : 'other', hostname: host.trim(), vendor: str(o.vendor, 40) || '', model: str(o.model, 64) || '', ports, groups } };
+  }
+  // entries：[{hostname, parsed}]（交換器設定）或 [{imported}]（parsePanelExport 的 dev）；opts.linksText＝自訂串線；opts.modelOf(parsed)＝使用者選的型號 value；opts.lldpOf(parsed)＝使用者另外貼上的鄰居（取代設定檔內的）
   function buildCabling(entries, opts) {
     const o = opts || {}, sp = SP();
     if (!sp) return null;
-    const devices = (entries || []).filter(e => e && e.parsed).map((e, di) => {
+    const devices = (entries || []).filter(e => e && (e.parsed || e.imported)).map((e, di) => {
+      const byKey = Object.create(null);
+      const keyOf = ports => ports.forEach(pt => { const k = portKey(pt.name); if (!(k in byKey)) byKey[k] = pt.name; });
+      if (e.imported) { keyOf(e.imported.ports); return { idx: di, hostname: e.imported.hostname, key: hostKey(e.imported.hostname), parsed: null, imp: e.imported, src: e.imported, pn: null, byKey }; }
       const p = e.parsed, hostname = String((p.sys && p.sys.hostname) || e.hostname || ('#' + (di + 1)));
       const pn = sp.buildPanel(p, { modelValue: (o.modelOf && o.modelOf(p)) || '' });
-      const ports = pn ? pn.rows.flatMap(r => r.ports).concat(pn.extra) : [];
-      const byKey = Object.create(null);
-      ports.forEach(pt => { const k = portKey(pt.name); if (!(k in byKey)) byKey[k] = pt.name; });
-      return { idx: di, hostname, key: hostKey(hostname), parsed: p, pn, byKey };
+      keyOf(pn ? pn.rows.flatMap(r => r.ports).concat(pn.extra) : []);
+      return { idx: di, hostname, key: hostKey(hostname), parsed: p, imp: null, src: p, pn, byKey };
     });
     const devBy = Object.create(null);
     devices.forEach(d => { if (!(d.key in devBy)) devBy[d.key] = d; });
@@ -96,7 +121,7 @@
       return l;
     };
     // LLDP／CDP：本機埠以 portKey 對到面板上的埠（LLDP 表常用縮寫），鄰居名稱對到清冊內的設備
-    devices.forEach(d => (((o.lldpOf && o.lldpOf(d.parsed)) || d.parsed.lldp) || []).forEach(n => {
+    devices.forEach(d => (((o.lldpOf && o.lldpOf(d.src)) || (d.parsed && d.parsed.lldp)) || []).forEach(n => {
       if (!n || !n.localPort || !n.neighbor) return;
       const lp = d.byKey[portKey(n.localPort)];
       if (!lp) { unmatched.push({ host: d.hostname, port: n.localPort, neighbor: n.neighbor, remotePort: n.remotePort || '', reason: 'local' }); return; }
@@ -156,11 +181,20 @@
       (peerOf[ia] = peerOf[ia] || []).push(endName(cb, l.b) + ' ' + l.b.port);
       (peerOf[ib] = peerOf[ib] || []).push(endName(cb, l.a) + ' ' + l.a.port);
     });
-    const rows = [];
+    const rows = [], groups = [];
     cb.devices.forEach(d => {
+      if (d.imp) {
+        const lbl = d.imp.ports.map(p => p.name);
+        rows.push({ label: d.hostname + (d.imp.model ? ' · ' + d.imp.model : '') + ' · ' + T('ptopo.kind_' + (d.imp.kind === 'firewall' ? 'firewall' : 'other')), ports: d.imp.ports.map((p, pi) => {
+          const id = 'd' + d.idx + '|' + lc(p.name);
+          return { id, name: p.name, label: lbl[pi], color: p.color, dim: p.dim && !peerOf[id], fiber: p.fiber, text: p.text, tip: [show(p.tip), (peerOf[id] || []).map(x => '↔ ' + x).join(' ')].filter(Boolean).join(' · ') };
+        }) });
+        d.imp.groups.forEach(g => groups.push({ members: g.members.map(m => 'd' + d.idx + '|' + lc(m)), color: g.color, dashed: g.dashed, label: g.label }));
+        return;
+      }
       if (!d.pn) return;
-      const groups = d.pn.rows.concat(d.pn.extra.length ? [{ member: '', extra: true, ports: d.pn.extra }] : []);
-      groups.forEach(r => {
+      const sets = d.pn.rows.concat(d.pn.extra.length ? [{ member: '', extra: true, ports: d.pn.extra }] : []);
+      sets.forEach(r => {
         const lbl = sp.shortLabels(r.ports);
         const head = d.hostname + (d.pn.model ? ' · ' + d.pn.model : '') + (r.member ? ' · ' + T('swp.member', { n: r.member }) : '') + (r.extra ? ' · ' + T('ptopo.extra_row') : '');
         rows.push({ label: head, ports: r.ports.map((p, pi) => {
@@ -176,11 +210,14 @@
       const tip = endName(cb, l.a) + ' ' + l.a.port + ' ↔ ' + endName(cb, l.b) + ' ' + l.b.port + ' · ' + T('ptopo.src_' + k) + (l.protocols.length ? ' (' + l.protocols.join('/') + ')' : '');
       return { a: (l.a.ext != null ? 'x' + l.a.ext : 'd' + l.a.dev) + '|' + lc(l.a.port), b: (l.b.ext != null ? 'x' + l.b.ext : 'd' + l.b.dev) + '|' + lc(l.b.port), color: LINK_COLORS[k], dashed: k === 'custom', tip };
     });
-    return ps.render({ rows, links, separate: true });
+    return ps.render({ rows, groups, links, separate: true });
   }
 
   // ── 卡片（資產清冊頁）──
-  let _entries = [], _linksText = '', _lldpMsg = '';
+  let _entries = [], _linksText = '', _lldpMsg = '', _importMsg = '';
+  const _imported = [];   // 匯入的防火牆前面板 [{imported}]（只存記憶體）
+  const IMPORT_MAX = 20;
+  const _all = () => _entries.filter(x => x && x.parsed).concat(_imported);
   const _lldpOv = new WeakMap();   // parsed → 使用者貼上的鄰居（只存記憶體）
   const modelOf = p => { const sp = SP(); return (sp && sp.chosen.get(p)) || ''; };
   const lldpOf = p => _lldpOv.get(p) || null;
@@ -190,7 +227,7 @@
     const sp = SP(), ps = PS();
     if (!sp || !ps) return '';
     _entries = entries || [];
-    const cb = buildCabling(_entries, { linksText: _linksText, modelOf, lldpOf });
+    const cb = buildCabling(_all(), { linksText: _linksText, modelOf, lldpOf });
     if (!cb || !cb.devices.length) return '';
     const box = 'background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px';
     const btn = 'background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer';
@@ -198,13 +235,17 @@
       + `<div style="font-size:12px;color:var(--text-dim);margin-bottom:6px">${esc2(T('ptopo.hint'))}</div>`;
     // 逐台型號（大多數設定檔沒有型號，讀不出時可手動選或用自訂型號）
     h += `<details data-ptopo-sec="models" style="margin-bottom:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.models', { n: cb.devices.length }))}</summary><div style="font-size:12px">`
-      + cb.devices.map(d => `<div style="margin:3px 0"><b>${esc2(d.hostname)}</b>：${esc2(d.pn && d.pn.source === 'model' ? d.pn.model : T('ptopo.from_config'))} ${d.pn ? sp.modelSelectHtml(d.pn, !!modelOf(d.parsed), 'data-ptopo-model="' + d.idx + '"') : ''}</div>`).join('')
+      + cb.devices.map(d => `<div style="margin:3px 0"><b>${esc2(d.hostname)}</b>：${esc2(d.imp ? (d.imp.model || '') + ' · ' + T('ptopo.imported') : d.pn && d.pn.source === 'model' ? d.pn.model : T('ptopo.from_config'))} ${d.pn ? sp.modelSelectHtml(d.pn, !!modelOf(d.parsed), 'data-ptopo-model="' + d.idx + '"') : ''}</div>`).join('')
       + ps.customEditorHtml('ptopo', editorOpen) + '</div></details>';
     // 逐台貼上 LLDP／CDP 鄰居（資產清冊只讀設定檔；設定檔後面沒附鄰居輸出時在這裡補）
     h += `<details data-ptopo-sec="lldp" style="margin-bottom:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.lldp_title'))}</summary><div style="font-size:11px;color:var(--text-dim);margin:4px 0">${esc2(T('ptopo.lldp_hint'))}</div>`
-      + `<select data-ptopo-lldp-dev style="width:auto;max-width:280px">${cb.devices.map(d => `<option value="${d.idx}">${esc2(d.hostname)}（${esc2(T('ptopo.lldp_count', { n: (lldpOf(d.parsed) || d.parsed.lldp || []).length }))}）</option>`).join('')}</select><br>`
+      + `<select data-ptopo-lldp-dev style="width:auto;max-width:280px">${cb.devices.map(d => `<option value="${d.idx}">${esc2(d.hostname)}（${esc2(T('ptopo.lldp_count', { n: (lldpOf(d.src) || (d.parsed && d.parsed.lldp) || []).length }))}）</option>`).join('')}</select><br>`
       + `<textarea id="ptopo-lldp" rows="4" spellcheck="false" style="width:100%;max-width:560px;font-family:monospace;font-size:11px" placeholder="show lldp neighbors detail / show cdp neighbors detail"></textarea><br>`
       + `<button style="${btn}" data-ptopo-lldp-apply>${esc2(T('ptopo.lldp_apply'))}</button> <span style="font-size:11px">${esc2(_lldpMsg)}</span></details>`;
+    // 加入防火牆：防火牆分析前面板卡片匯出的 JSON（交換器分析頁不載入防火牆解析器，改用匯出檔）
+    h += `<details data-ptopo-sec="fw" style="margin-bottom:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.fw_title', { n: _imported.length }))}</summary><div style="font-size:11px;color:var(--text-dim);margin:4px 0">${esc2(T('ptopo.fw_hint'))}</div>`
+      + `<input type="file" accept=".json,application/json" multiple data-ptopo-import> <span data-ptopo-import-msg style="font-size:11px">${esc2(_importMsg)}</span>`
+      + _imported.map((x, i) => `<div style="font-size:12px;margin:3px 0"><b>${esc2(x.imported.hostname)}</b> ${esc2([x.imported.vendor, x.imported.model].filter(Boolean).join(' '))}（${esc2(T('pcu.ports', { n: x.imported.ports.length }))}） <button style="${btn};padding:2px 10px" data-ptopo-rm="${i}">${esc2(T('pcu.del'))}</button></div>`).join('') + '</details>';
     h += `<div style="overflow-x:auto" data-ptopo-svg>${cablingSvg(cb)}</div>`;
     h += `<div style="font-size:11px;margin:6px 0">${ps.legend(LINK_KINDS.map(k => [LINK_COLORS[k], T('ptopo.src_' + k)]), esc2)}<span style="color:var(--text-dim)">${esc2(T('ptopo.lg_note'))}</span></div>`;
     h += `<div style="font-size:12px;margin-top:8px">${esc2(T('ptopo.custom_title'))}</div><div style="font-size:11px;color:var(--text-dim)">${esc2(T('ptopo.custom_hint'))}</div>`
@@ -224,7 +265,7 @@
     return h;
   }
   function cablingDownloadSvg(mask) {
-    const cb = buildCabling(_entries, { linksText: _linksText, modelOf, lldpOf });
+    const cb = buildCabling(_all(), { linksText: _linksText, modelOf, lldpOf });
     return cb && cb.devices.length ? '<?xml version="1.0" encoding="UTF-8"?>\n' + cablingSvg(cb, { mask }) : '';
   }
   // 重繪時保留各折疊區的開合狀態（依 data-ptopo-sec；自訂型號存檔後編輯區保持展開）
@@ -242,8 +283,8 @@
     document.addEventListener('change', e => {
       const sel = e.target && e.target.closest ? e.target.closest('select[data-ptopo-model]') : null;
       if (!sel) return;
-      const d = _entries.filter(x => x && x.parsed)[+sel.getAttribute('data-ptopo-model')], sp = SP();
-      if (!d || !sp) return;
+      const d = _all()[+sel.getAttribute('data-ptopo-model')], sp = SP();
+      if (!d || !d.parsed || !sp) return;
       const v = sel.value;
       if (v && !sp.choicesFor(sp.buildPanel(d.parsed, {}).vendor).some(m => m.value === v)) return;
       if (v) sp.chosen.set(d.parsed, v); else sp.chosen.delete(d.parsed);
@@ -254,16 +295,18 @@
       if (!t) return;
       if (t.closest('[data-ptopo-lldp-apply]')) {
         const sel = document.querySelector('select[data-ptopo-lldp-dev]'), ta = document.getElementById('ptopo-lldp');
-        const d = sel ? _entries.filter(x => x && x.parsed)[+sel.value] : null;
+        const d = sel ? _all()[+sel.value] : null;
         if (!d || !ta) return;
+        const key = d.parsed || d.imported, vendor = d.parsed ? d.parsed.vendor : '';
         const txt = String(ta.value).slice(0, 2000000).replace(/\r\n?/g, '\n');
         let list = [];
-        try { list = typeof LLDPParser !== 'undefined' && txt.trim() ? (LLDPParser.parse(txt, d.parsed.vendor) || []).filter(n => n && n.localPort && n.neighbor) : []; } catch (er) { list = []; }
-        if (txt.trim()) _lldpOv.set(d.parsed, list); else _lldpOv.delete(d.parsed);
-        _lldpMsg = T('ptopo.lldp_done', { host: String((d.parsed.sys && d.parsed.sys.hostname) || d.hostname || ''), n: list.length });
+        try { list = typeof LLDPParser !== 'undefined' && txt.trim() ? (LLDPParser.parse(txt, vendor) || []).filter(n => n && n.localPort && n.neighbor) : []; } catch (er) { list = []; }
+        if (txt.trim()) _lldpOv.set(key, list); else _lldpOv.delete(key);
+        _lldpMsg = T('ptopo.lldp_done', { host: d.imported ? d.imported.hostname : String((d.parsed.sys && d.parsed.sys.hostname) || d.hostname || ''), n: list.length });
         redraw(false);
         return;
       }
+      if (t.closest('[data-ptopo-rm]')) { const i = +t.closest('[data-ptopo-rm]').getAttribute('data-ptopo-rm'); if (i >= 0 && i < _imported.length) _imported.splice(i, 1); _importMsg = ''; redraw(false); return; }
       if (t.closest('[data-ptopo-apply]')) { const ta = document.getElementById('ptopo-links'); _linksText = ta ? String(ta.value).slice(0, 50000) : ''; redraw(false); }
       else if (t.closest('[data-ptopo-dl]')) {
         const m = document.getElementById('ptopo-mask'), svg = cablingDownloadSvg(!m || m.checked);
@@ -274,10 +317,80 @@
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
     });
+    // 匯入防火牆前面板 JSON：同主機名稱覆蓋，最多 IMPORT_MAX 台；每份 2 MB 以內
+    document.addEventListener('change', e => {
+      const inp = e.target && e.target.closest ? e.target.closest('input[data-ptopo-import]') : null;
+      if (!inp || !inp.files) return;
+      const files = [...inp.files];
+      Promise.all(files.map(f => (f.size > 2000000 ? Promise.resolve(null) : f.text().catch(() => null)))).then(texts => {
+        const bad = [];
+        texts.forEach((t, i) => {
+          const r = t == null ? { ok: false, code: 'size' } : parsePanelExport(t);
+          if (!r.ok) { bad.push(files[i].name + '：' + T('ptopo.imp_' + (IMPORT_ERR_CODES.includes(r.code) ? r.code : 'format'))); return; }
+          const at = _imported.findIndex(x => hostKey(x.imported.hostname) === hostKey(r.dev.hostname));
+          if (at >= 0) _imported[at] = { imported: r.dev };
+          else if (_imported.length < IMPORT_MAX) _imported.push({ imported: r.dev });
+          else bad.push(files[i].name + '：' + T('ptopo.imp_full', { n: IMPORT_MAX }));
+        });
+        _importMsg = bad.join('；');
+        redraw(false);
+      });
+    });
     window.addEventListener('pnl-custom', e => { if (e && e.detail && e.detail.scope === 'ptopo') redraw(true); });
   }
 
-  const api = { lldpFromText, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
+
+  // ── 範例（?demo=cabling 與資產清冊「載入接線範例」）：合成設定，位址一律用文件用網段 ──
+  // 核心交換器附 LLDP 輸出（對到兩台存取交換器之一、防火牆與一台 AP）；ACC-SW1 附 LLDP 回報核心；
+  // ACC-SW2 沒有鄰居輸出、只有介面描述（示範描述提示與自訂串線）；防火牆為防火牆分析匯出的前面板格式
+  const DEMO_CORE = [
+    '! Sample config - RFC 5737 documentation IPs only, not a real device',
+    'hostname CORE-SW', '!',
+    'interface GigabitEthernet1/0/1', ' description to ACC-SW1', ' switchport mode trunk', '!',
+    'interface GigabitEthernet1/0/2', ' description to ACC-SW2', ' switchport mode trunk', '!',
+    'interface GigabitEthernet1/0/3', ' description FG-EDGE port2', ' switchport mode access', ' switchport access vlan 100', '!',
+    'interface GigabitEthernet1/0/10', ' description server rack A', ' switchport mode access', ' switchport access vlan 20', '!',
+    'interface TenGigabitEthernet1/1/1', ' description AP-LOBBY', ' switchport mode trunk', '!',
+    'interface Vlan100', ' ip address 192.0.2.1 255.255.255.0', '!', 'end',
+    'CORE-SW#show lldp neighbors detail',
+    'Local Intf: Gi1/0/1', '  Chassis id: 0200.5e00.0011', '  Port id: Gi1/0/24', '  System Name: ACC-SW1', '  Management Addresses:', '    IP: 192.0.2.11', '',
+    'Local Intf: Gi1/0/3', '  Chassis id: 0200.5e00.0021', '  Port id: port2', '  System Name: FG-EDGE', '  Management Addresses:', '    IP: 192.0.2.254', '',
+    'Local Intf: Te1/1/1', '  Chassis id: 0200.5e00.0031', '  Port id: eth0', '  System Name: AP-LOBBY', '  Management Addresses:', '    IP: 192.0.2.50', ''].join('\n');
+  const DEMO_ACC1 = [
+    '! Sample config - RFC 5737 documentation IPs only, not a real device',
+    'hostname ACC-SW1', '!',
+    'interface GigabitEthernet1/0/1', ' description PC-101', ' switchport mode access', ' switchport access vlan 20', '!',
+    'interface GigabitEthernet1/0/2', ' description PRINTER-01', ' switchport mode access', ' switchport access vlan 30', '!',
+    'interface GigabitEthernet1/0/24', ' description uplink CORE-SW', ' switchport mode trunk', '!', 'end',
+    'ACC-SW1#show lldp neighbors detail',
+    'Local Intf: Gi1/0/24', '  Chassis id: 0200.5e00.0001', '  Port id: Gi1/0/1', '  System Name: CORE-SW', '  Management Addresses:', '    IP: 192.0.2.1', ''].join('\n');
+  const DEMO_ACC2 = [
+    '! Sample config - RFC 5737 documentation IPs only, not a real device',
+    'hostname ACC-SW2', '!',
+    'interface GigabitEthernet1/0/1', ' description PC-201', ' switchport mode access', ' switchport access vlan 20', '!',
+    'interface GigabitEthernet1/0/24', ' description uplink CORE-SW', ' switchport mode trunk', '!', 'end'].join('\n');
+  const fwPort = (name, color, text, tip, dim) => ({ name, color, dim: !!dim, fiber: false, text, tip });
+  const DEMO_FW = { format: 'alpaca-panel', version: 1, kind: 'firewall', hostname: 'FG-EDGE', vendor: 'FortiGate', model: 'FG-60F',
+    ports: ['internal1', 'internal2', 'internal3', 'internal4', 'internal5'].map((n, i) => fwPort(n, i < 2 ? '#3b82f6' : '#9ca3af', '', n + (i < 2 ? ' [lan]' : ''), i >= 2))
+      .concat([fwPort('a', '#9ca3af', '', 'a', true), fwPort('b', '#9ca3af', '', 'b', true), fwPort('dmz', '#3b82f6', '', 'dmz 198.51.100.1/24'),
+        fwPort('wan1', '#f59e0b', '', 'wan1 203.0.113.2/30'), fwPort('wan2', '#9ca3af', '', 'wan2', true)]),
+    groups: [{ label: 'lan', color: '#ef4444', dashed: false, members: ['internal1', 'internal2'] }] };
+  // 核心 Gi1/0/3 在 LLDP 對到防火牆 port2，但範例防火牆沒有 port2：示範「對端埠名稱對不上」，改用自訂串線接到 internal1
+  // 第一行註解依目前語言（ptopo.demo_comment），其餘為範例接線
+  const DEMO_LINKS = ['# CORE-SW Gi1/0/2 <-> ACC-SW2 Gi1/0/24',
+    'CORE-SW Gi1/0/3 <-> FG-EDGE internal1',
+    'FG-EDGE wan1 <-> ISP-ROUTER ge-0/0/0'].join('\n');
+  const DEMO = { configs: [{ file: 'demo_CORE-SW.cfg', text: DEMO_CORE }, { file: 'demo_ACC-SW1.cfg', text: DEMO_ACC1 }, { file: 'demo_ACC-SW2.cfg', text: DEMO_ACC2 }], firewall: DEMO_FW, links: DEMO_LINKS };
+  // 範例的防火牆與自訂串線帶進卡片狀態（交換器設定由 app 的 invAddTexts() 加入清冊）
+  function loadDemoExtras() {
+    const r = parsePanelExport(JSON.stringify(DEMO_FW));
+    if (r.ok) { const at = _imported.findIndex(x => hostKey(x.imported.hostname) === hostKey(r.dev.hostname)); if (at >= 0) _imported[at] = { imported: r.dev }; else _imported.push({ imported: r.dev }); }
+    _linksText = '# ' + String(T('ptopo.demo_comment')).replace(/[\r\n]+/g, ' ') + '\n' + DEMO_LINKS;
+    _importMsg = '';
+  }
+
+  const IMPORT_ERR_CODES = ['json', 'format', 'host', 'ports', 'size'];
+  const api = { DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
   if (typeof window !== 'undefined') window.SwCabling = api;
   return api;
 })();

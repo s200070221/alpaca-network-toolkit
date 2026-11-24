@@ -95,13 +95,17 @@
   const colorOf = p => (p.wan || p.role === 'wan' ? COLORS.wan : p.role === 'mgmt' || p.role === 'ha' ? COLORS.mgmt : p.fortilink ? COLORS.fortilink : p.used ? COLORS.used : COLORS.unused);
 
   // 前面板 SVG：opts.mask＝遮蔽位址（下載給他人時）。繪圖交給共用的 PanelSvg（panel-svg.js）
-  function panelSvg(pn, opts) {
-    const o = opts || {}, show = s => (o.mask ? maskIp(s) : String(s));
+  // 圖上各埠與群組的繪圖資料（panelSvg 與匯出給交換器分析接線拓樸的 panelExport 共用）
+  function portSpecs(pn, show) {
     const multi = pn.vdoms.length > 1;
-    const ports = pn.ports.map(p => ({ id: lc(p.name), name: p.name, color: colorOf(p), dim: !(p.used || p.wan), fiber: /fiber|sfp|qsfp/i.test(p.media), text: p.speed,
+    return pn.ports.map(p => ({ id: lc(p.name), name: p.name, color: colorOf(p), dim: !(p.used || p.wan), fiber: /fiber|sfp|qsfp/i.test(p.media), text: p.speed,
       tip: p.name + (p.ips.length ? ' ' + show(p.ips.join(', ')) : '') + (p.zones.length ? ' [' + p.zones.join(', ') + ']' : ''),
       stripe: multi && p.vdom ? { color: VDOM_COLORS[pn.vdoms.indexOf(p.vdom) % VDOM_COLORS.length], tip: 'VDOM ' + p.vdom } : null }));
-    const groups = pn.groups.map((g, gi) => ({ members: g.members.map(lc), color: GROUP_COLORS[gi % GROUP_COLORS.length], dashed: !g.bridged, label: g.name }));
+  }
+  const groupSpecs = pn => pn.groups.map((g, gi) => ({ members: g.members.map(lc), color: GROUP_COLORS[gi % GROUP_COLORS.length], dashed: !g.bridged, label: g.name }));
+  function panelSvg(pn, opts) {
+    const o = opts || {}, show = s => (o.mask ? maskIp(s) : String(s));
+    const ports = portSpecs(pn, show), groups = groupSpecs(pn);
     const callouts = pn.wan.map(w => {
       const lines = [w.port + (w.ips.length ? '  ' + show(w.ips.join(', ')) : '')];
       if (w.gw.length) lines.push(T('pnl.gw') + ' ' + show(w.gw.join(', ')));
@@ -153,8 +157,20 @@
     }).join('');
     if (rowsHtml) h += `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('pnl.detail'))}</summary><div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc2(T('pnl.col_port'))}</th><th>${esc2(T('pnl.col_role'))}</th><th>${esc2(T('pnl.col_addr'))}</th><th>${esc2(T('pnl.col_zone'))}</th>${pn.vdoms.length ? '<th>VDOM</th>' : ''}<th>${esc2(T('pnl.col_group'))}</th><th>${esc2(T('pnl.col_vlan'))}</th><th>${esc2(T('pnl.col_refs'))}</th></tr></thead><tbody>${rowsHtml}</tbody></table></div></details>`;
     h += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><button class="btn btn-ghost btn-sm" data-fw-panel-dl>${esc2(T('pnl.download'))}</button>`
+      + `<button class="btn btn-ghost btn-sm" data-fw-panel-export title="${xesc(T('pnl.export_tip'))}">${esc2(T('pnl.export'))}</button>`
       + `<label style="font-size:11px"><input type="checkbox" id="fw-panel-mask" checked> ${esc2(T('pnl.mask'))}</label></div>${window.PanelSvg ? window.PanelSvg.customEditorHtml('fw', editorOpen) : ''}</div>`;
     return h;
+  }
+  // 匯出給交換器分析「多台設備實體接線拓樸」（XN192）：只含埠名稱、顏色、提示與群組，不含規則或設定原文；
+  // mask＝提示中的位址遮蔽（主機名稱保留，接線拓樸要用它對上交換器 LLDP 鄰居名稱）
+  function panelExport(parsed, mask) {
+    const pn = buildPanel(parsed, { modelValue: (parsed && _chosen.get(parsed)) || '' });
+    if (!pn || !pn.ports.length) return null;
+    const show = s => (mask ? maskIp(s) : String(s)), di = parsed.deviceInfo || {};
+    const byId = Object.create(null);
+    const ports = portSpecs(pn, show).map(p => { byId[p.id] = p.name; return { name: p.name, color: p.color, dim: !!p.dim, fiber: !!p.fiber, text: String(p.text || ''), tip: p.tip }; });
+    const groups = groupSpecs(pn).map(g => ({ label: g.label, color: g.color, dashed: g.dashed, members: g.members.map(id => byId[id]).filter(Boolean) })).filter(g => g.members.length);
+    return { format: 'alpaca-panel', version: 1, kind: 'firewall', hostname: dash(di.hostname) ? '' : String(di.hostname), vendor: String(parsed.vendor || ''), model: pn.model || (dash(pn.modelRaw) ? '' : pn.modelRaw), ports, groups };
   }
   // 下載 SVG（預設遮蔽位址）；由 app 的事件代理呼叫
   function panelDownloadSvg(parsed, mask) {
@@ -173,6 +189,16 @@
       if (v) _chosen.set(_last, v); else _chosen.delete(_last);
       redraw(false);
     });
+    document.addEventListener('click', e => {
+      const b = e.target && e.target.closest ? e.target.closest('[data-fw-panel-export]') : null;
+      if (!b || !_last) return;
+      const m = document.getElementById('fw-panel-mask'), obj = panelExport(_last, !m || m.checked);
+      if (!obj) return;
+      const url = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 1)], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = String(obj.hostname || 'firewall').replace(/[^\w.\-]/g, '_') + '_panel.json'; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
     window.addEventListener('pnl-custom', e => {
       const d = (e && e.detail) || {};
       if (d.scope !== 'fw' || !_last) return;
@@ -182,7 +208,7 @@
     });
   }
 
-  const api = { buildPanel, panelSvg, panelHtml, panelDownloadSvg, maskIp, PANEL_PER_ROW, choicesFor };
+  const api = { buildPanel, panelSvg, panelHtml, panelDownloadSvg, panelExport, maskIp, PANEL_PER_ROW, choicesFor };
   if (typeof window !== 'undefined') window.FwPanel = api;
   return api;
 })();
