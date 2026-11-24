@@ -81,6 +81,10 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - Export a port map CSV in the generator's format, edit it in the generator and regenerate the config
 - Golden template: your own "must exist / must not exist" config rules, checked across several devices
 - Multi-device VLAN matrix: VLANs × devices with declared names, SVIs and port counts, flagging VLANs declared on only one device, with mismatched names, or used but not declared
+- Physical cabling schematic: front panel drawn from model data (or your own model), showing VLAN/trunk, LACP, stacking, PoE and LLDP neighbors
+- Multi-device physical cabling topology: connects several switches (and firewall panels exported from the firewall analyzer) using LLDP/CDP neighbors and custom cabling, flags links whose ends are configured differently, and downloads as SVG, draw.io, Mermaid or a cabling project
+
+![Switch Config Parser: multi-device physical cabling topology](docs/images/05-switch-cabling-en.png)
 
 ## 🛠️ Switch Config Generator
 

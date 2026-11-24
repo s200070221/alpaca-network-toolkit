@@ -103,9 +103,11 @@
       stripe: multi && p.vdom ? { color: VDOM_COLORS[pn.vdoms.indexOf(p.vdom) % VDOM_COLORS.length], tip: 'VDOM ' + p.vdom } : null }));
   }
   const groupSpecs = pn => pn.groups.map((g, gi) => ({ members: g.members.map(lc), color: GROUP_COLORS[gi % GROUP_COLORS.length], dashed: !g.bridged, label: g.name }));
+  // 精簡顯示（XN200）：只留使用中、WAN、管理／HA 的埠；下載的 SVG 一律完整
   function panelSvg(pn, opts) {
     const o = opts || {}, show = s => (o.mask ? maskIp(s) : String(s));
-    const ports = portSpecs(pn, show), groups = groupSpecs(pn);
+    const keep = new Set(pn.ports.filter(p => !o.compact || p.used || p.wan || p.role).map(p => lc(p.name)));
+    const ports = portSpecs(pn, show).filter(p => keep.has(p.id)), groups = groupSpecs(pn);
     const callouts = pn.wan.map(w => {
       const lines = [w.port + (w.ips.length ? '  ' + show(w.ips.join(', ')) : '')];
       if (w.gw.length) lines.push(T('pnl.gw') + ' ' + show(w.gw.join(', ')));
@@ -128,7 +130,7 @@
   }
 
   const _chosen = new WeakMap();   // parsed → 使用者選的型號（只存記憶體）
-  let _last = null;
+  let _last = null, _compact = false;
   function pickHtml(parsed, pn) {
     const list = choicesFor(parsed), chosen = !!_chosen.get(parsed);
     if (!list.length) return '';
@@ -146,7 +148,8 @@
     let h = `<div id="fw-panel-card" style="${box}"><div style="font-weight:600;font-size:13px;margin-bottom:4px">🔌 ${esc2(T('pnl.title'))}</div>`;
     h += `<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">${esc2(T(pn.source === 'model' ? 'pnl.hint_model' : 'pnl.hint_config', { m: pn.model }))}</div>`;
     h += pickHtml(parsed, pn);
-    h += `<div style="overflow-x:auto" data-fw-panel="${pn.source}">${panelSvg(pn)}</div>${legendHtml(pn)}`;
+    h += ` <label style="font-size:12px;white-space:nowrap"><input type="checkbox" data-fw-panel-compact${_compact ? ' checked' : ''}> ${esc2(T('pnl.compact'))}</label>`;
+    h += `<div style="overflow-x:auto" data-fw-panel="${pn.source}">${panelSvg(pn, { compact: _compact })}</div>${legendHtml(pn)}`;
     const kindTxt = k => T('pnl.kind_' + (GROUP_KINDS.includes(k) ? k : 'other'));
     if (pn.groups.length) h += `<div style="font-size:11px;margin:4px 0">${pn.groups.map(g => `<b>${esc2(g.name)}</b>（${esc2(kindTxt(g.kind))}${g.bridged ? '，' + esc2(T('pnl.bridged')) : ''}）：${esc2(g.members.join(', '))}`).join('<br>')}</div>`;
     if (pn.extra.length) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin:4px 0">${esc2(T('pnl.extra', { list: pn.extra.map(p => p.name).join(', ') }))}</div>`;
@@ -182,6 +185,8 @@
   const redraw = open => { const card = document.getElementById('fw-panel-card'); if (card && _last) card.outerHTML = panelHtml(_last, open); };
   if (typeof document !== 'undefined' && document.addEventListener) {
     document.addEventListener('change', e => {
+      const cb = e.target && e.target.closest ? e.target.closest('input[data-fw-panel-compact]') : null;
+      if (cb && _last) { _compact = cb.checked; redraw(false); return; }
       const sel = e.target && e.target.closest ? e.target.closest('select[data-fw-panel-model]') : null;
       if (!sel || !_last) return;
       const v = sel.value;

@@ -206,17 +206,20 @@
       const ov = d.parsed && sp.overlayFor ? sp.overlayFor(d.parsed, ep) : null;
       if (ov) anyOv = true;
       if (d.imp) {
-        const lbl = d.imp.ports.map(p => p.name);
-        rows.push({ label: d.hostname + (d.imp.model ? ' · ' + d.imp.model : '') + ' · ' + T('ptopo.kind_' + (d.imp.kind === 'firewall' ? 'firewall' : 'other')), ports: d.imp.ports.map((p, pi) => {
+        const ips = opts && opts.compact ? d.imp.ports.filter(p => !p.dim || peerOf['d' + d.idx + '|' + lc(p.name)]) : d.imp.ports;
+        rows.push({ label: d.hostname + (d.imp.model ? ' · ' + d.imp.model : '') + ' · ' + T('ptopo.kind_' + (d.imp.kind === 'firewall' ? 'firewall' : 'other')), ports: ips.map((p, pi) => {
           const id = 'd' + d.idx + '|' + lc(p.name);
-          return { id, name: p.name, label: lbl[pi], color: p.color, dim: p.dim && !peerOf[id], fiber: p.fiber, text: p.text, tip: [show(p.tip), (peerOf[id] || []).map(x => '↔ ' + x).join(' ')].filter(Boolean).join(' · ') };
+          return { id, name: p.name, label: p.name, color: p.color, dim: p.dim && !peerOf[id], fiber: p.fiber, text: p.text, tip: [show(p.tip), (peerOf[id] || []).map(x => '↔ ' + x).join(' ')].filter(Boolean).join(' · ') };
         }) });
         d.imp.groups.forEach(g => groups.push({ members: g.members.map(m => 'd' + d.idx + '|' + lc(m)), color: g.color, dashed: g.dashed, label: g.label }));
         return;
       }
       if (!d.pn) return;
       const sets = d.pn.rows.concat(d.pn.extra.length ? [{ member: '', extra: true, ports: d.pn.extra }] : []);
-      sets.forEach(r => {
+      sets.forEach(r0 => {
+        // 精簡顯示（XN200）：只留使用中或有接線的埠
+        const r = opts && opts.compact ? Object.assign({}, r0, { ports: r0.ports.filter(p => peerOf['d' + d.idx + '|' + lc(p.name)] || (sp.kindOf(p) !== 'unused' && sp.kindOf(p) !== 'shutdown')) }) : r0;
+        if (!r.ports.length) return;
         const lbl = sp.shortLabels(r.ports);
         const head = d.hostname + (d.pn.model ? ' · ' + d.pn.model : '') + (r.member ? ' · ' + T('swp.member', { n: r.member }) : '') + (r.extra ? ' · ' + T('ptopo.extra_row') : '');
         rows.push({ label: head, ports: r.ports.map((p, pi) => {
@@ -297,7 +300,7 @@
   }
 
   // ── 卡片（資產清冊頁）──
-  let _entries = [], _linksText = '', _lldpMsg = '', _importMsg = '', _projMsg = '';
+  let _entries = [], _linksText = '', _lldpMsg = '', _importMsg = '', _projMsg = '', _compact = false;
   const _imported = [];   // 匯入的防火牆前面板 [{imported}]（只存記憶體）
   const IMPORT_MAX = 20;
   const _all = () => _entries.filter(x => x && x.parsed).concat(_imported);
@@ -329,7 +332,8 @@
     h += `<details data-ptopo-sec="fw" style="margin-bottom:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.fw_title', { n: _imported.length }))}</summary><div style="font-size:11px;color:var(--text-dim);margin:4px 0">${esc2(T('ptopo.fw_hint'))}</div>`
       + `<input type="file" accept=".json,application/json" multiple data-ptopo-import> <span data-ptopo-import-msg style="font-size:11px">${esc2(_importMsg)}</span>`
       + _imported.map((x, i) => `<div style="font-size:12px;margin:3px 0"><b>${esc2(x.imported.hostname)}</b> ${esc2([x.imported.vendor, x.imported.model].filter(Boolean).join(' '))}（${esc2(T('pcu.ports', { n: x.imported.ports.length }))}） <button style="${btn};padding:2px 10px" data-ptopo-rm="${i}">${esc2(T('pcu.del'))}</button></div>`).join('') + '</details>';
-    const drawn = cablingSvg(cb, { withFlag: true });
+    h += `<label style="font-size:12px"><input type="checkbox" data-ptopo-compact${_compact ? ' checked' : ''}> ${esc2(T('swp.compact'))}</label>`;
+    const drawn = cablingSvg(cb, { withFlag: true, compact: _compact });
     h += `<div style="overflow-x:auto" data-ptopo-svg>${drawn.svg}</div>`;
     if (drawn.overlay) h += `<div style="font-size:11px;color:var(--text-dim)" data-ptopo-ov>${esc2(T('swp.ov_note'))}</div>`;
     const nBad = cb.links.filter(l => l.issues && l.issues.length).length;
@@ -372,6 +376,8 @@
   };
   if (typeof document !== 'undefined' && document.addEventListener) {
     document.addEventListener('change', e => {
+      const cc = e.target && e.target.closest ? e.target.closest('input[data-ptopo-compact]') : null;
+      if (cc) { _compact = cc.checked; redraw(false); return; }
       const sel = e.target && e.target.closest ? e.target.closest('select[data-ptopo-model]') : null;
       if (!sel) return;
       const d = _all()[+sel.getAttribute('data-ptopo-model')], sp = SP();

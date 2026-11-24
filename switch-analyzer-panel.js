@@ -172,9 +172,11 @@
     const main = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0];
     return ports.map(p => { const t = typeOf(p.name); return t === main ? lastNum(p.name) : (t.slice(0, 2) || '') + lastNum(p.name); });
   }
+  // 精簡顯示（XN200）：只留使用中或有 LLDP 鄰居的埠（管理埠一併保留），手機寬度少捲動；下載的 SVG 一律完整
+  const keepCompact = p => p.used || p.mgmt || (p.neighbors && p.neighbors.length);
   function panelSvg(pn, opts) {
     const show = s => (opts && opts.mask ? maskIp(s) : String(s));
-    const rows = pn.rows.map(r => { const lbl = shortLabels(r.ports); return { label: r.member ? T('swp.member', { n: r.member }) : '', ports: r.ports.map((p, pi) => {
+    const rows = pn.rows.map(r => { const ports = opts && opts.compact ? r.ports.filter(keepCompact) : r.ports, lbl = shortLabels(ports); return { label: r.member ? T('swp.member', { n: r.member }) : '', ports: ports.map((p, pi) => {
       const k = kindOf(p);
       const text = k === 'access' ? (p.vlans || '1') : k === 'trunk' ? 'T' : k === 'routed' ? 'L3' : k === 'hybrid' ? 'H' : '';
       const nb = p.neighbors.map(n => '→ ' + n.neighbor + (n.remotePort ? ' ' + n.remotePort : '')).join(' ');
@@ -186,7 +188,7 @@
   }
 
   const _chosen = new WeakMap();   // parsed → 使用者在卡片選的型號（只存記憶體）
-  let _last = null;
+  let _last = null, _compact = false;
   function panelHtml(parsed, editorOpen) {
     if (!parsed || typeof window === 'undefined' || !window.PanelSvg) return '';
     _last = parsed;
@@ -200,7 +202,8 @@
     const editor = window.PanelSvg.customEditorHtml('sw', editorOpen);
     if (!pn.rows.some(r => r.ports.length)) return h + `<div class="nodata">${esc2(T('swp.none'))}</div>${editor}</div>`;
     const ov = overlayFor(parsed);
-    h += `<div style="overflow-x:auto;margin-top:6px" data-sw-panel="${pn.source}">${panelSvg(pn, { overlay: ov })}</div>`;
+    h += ` <label style="font-size:12px;white-space:nowrap"><input type="checkbox" data-sw-panel-compact${_compact ? ' checked' : ''}> ${esc2(T('swp.compact'))}</label>`;
+    h += `<div style="overflow-x:auto;margin-top:6px" data-sw-panel="${pn.source}">${panelSvg(pn, { overlay: ov, compact: _compact })}</div>`;
     const L = [[COLORS.access, T('swp.lg_access')], [COLORS.trunk, T('swp.lg_trunk')], [COLORS.routed, T('swp.lg_routed')], [COLORS.hybrid, T('swp.lg_hybrid')], [COLORS.shutdown, T('swp.lg_shutdown')], [COLORS.unused, T('swp.lg_unused')], [COLORS.mgmt, T('swp.lg_mgmt')]];
     h += `<div style="font-size:11px;margin:6px 0">${window.PanelSvg.legend(L, esc2)}<span style="color:var(--text-dim)">${esc2(T('swp.lg_marks'))}</span>${ov ? `<br><span style="color:var(--text-dim)" data-sw-panel-ov>${esc2(T('swp.ov_note'))}</span>` : ''}</div>`;
     if (pn.groups.length) h += `<div style="font-size:11px;margin:4px 0">${pn.groups.map(g => `<b>${esc2(g.name)}</b>（LACP）：${esc2(g.members.join(', '))}`).join('<br>')}</div>`;
@@ -227,6 +230,8 @@
   // 卡片上的型號選單與下載（事件代理；型號只接受該廠牌清單內的 value）
   if (typeof document !== 'undefined' && document.addEventListener) {
     document.addEventListener('change', e => {
+      const cb = e.target && e.target.closest ? e.target.closest('input[data-sw-panel-compact]') : null;
+      if (cb && _last) { _compact = cb.checked; const card = document.getElementById('sw-panel-card'); if (card) card.outerHTML = panelHtml(_last); return; }
       const sel = e.target && e.target.closest ? e.target.closest('select[data-sw-panel-model]') : null;
       if (!sel || !_last) return;
       const v = sel.value, ok = !v || choicesFor(vendorKey(_last)).some(m => m.value === v);
