@@ -203,7 +203,7 @@
     const rows = [], groups = [], ep = opts && opts.ep;
     let anyOv = false;
     cb.devices.forEach(d => {
-      const ov = d.parsed && sp.overlayFor ? sp.overlayFor(d.parsed, ep) : null;
+      const ov = d.parsed && sp.overlayFor ? sp.overlayFor(d.parsed, ep, { strict: true }) : null;
       if (ov) anyOv = true;
       if (d.imp) {
         const ips = opts && opts.compact ? d.imp.ports.filter(p => !p.dim || peerOf['d' + d.idx + '|' + lc(p.name)]) : d.imp.ports;
@@ -242,8 +242,11 @@
 
   // ── 埠層級匯出（XN195）：draw.io（每台一個容器、埠為子節點、接線連到埠）與 Mermaid（每台一個 subgraph，只列有接線的埠）──
   // 只含設備名稱、型號、埠名稱與接線來源，不含位址與描述
-  const xa = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
-  const mm = s => String(s == null ? '' : s).replace(/"/g, '#quot;').replace(/</g, '#lt;').replace(/>/g, '#gt;');
+  // draw.io 標籤樣式為 html=1：XML 解開後會當 HTML 解讀，名稱先做 HTML 跳脫再做 XML 跳脫（與 graphToDrawio 相同，RV13）
+  const xh = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const xa = s => xh(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  // Mermaid 標籤：引號、角括號換實體碼，換行換空白、反引號換實體碼（避免成為 markdown 字串）
+  const mm = s => String(s == null ? '' : s).replace(/[\r\n]+/g, ' ').replace(/"/g, '#quot;').replace(/</g, '#lt;').replace(/>/g, '#gt;').replace(/`/g, '#96;');
   function exportGroups(cb) {
     // 依畫面相同的順序列出每台（含外部鄰居）的埠：[{title, kind, ports:[{key, name}]}]
     const out = [];

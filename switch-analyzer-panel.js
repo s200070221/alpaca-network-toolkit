@@ -134,12 +134,13 @@
   // 終端定位頁貼上的輸出（XN196）：介面錯誤計數器、光模組告警、MAC 表每埠終端數，依設備名稱對到這台；
   // ep 未給時讀 app 的全域 epModel，只有一台時不比對名稱。回傳 Map（埠正規化名稱 → {sev, phy, opt, macs}）
   const hostKeyOf = h => { const s = lc(h).trim().replace(/\([^)]*\)$/, ''); return /^\d{1,3}(\.\d{1,3}){3}$/.test(s) ? s : s.split('.')[0]; };
-  function overlayFor(parsed, ep) {
+  // opts.strict：只依設備名稱對應（多台接線拓樸用；只有一台終端定位資料時也不套到名稱不同的設備）
+  function overlayFor(parsed, ep, opts) {
     const model = ep !== undefined ? ep : (typeof epModel !== 'undefined' ? epModel : null);
     const devs = (model && model.devices) || [];
     if (!devs.length || typeof epNormIface !== 'function') return null;
     const host = hostKeyOf(parsed && parsed.sys && parsed.sys.hostname);
-    const d = devs.find(x => host && hostKeyOf(x.name) === host) || (devs.length === 1 ? devs[0] : null);
+    const d = devs.find(x => host && hostKeyOf(x.name) === host) || (devs.length === 1 && !(opts && opts.strict) ? devs[0] : null);
     if (!d) return null;
     const out = new Map(), at = k => { if (!out.has(k)) out.set(k, { sev: '', phy: [], opt: [], macs: 0 }); return out.get(k); };
     const bump = (o, sev) => { if (sev === 'high' || (sev === 'medium' && o.sev !== 'high')) o.sev = sev; };

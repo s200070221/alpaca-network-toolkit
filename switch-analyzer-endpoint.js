@@ -406,7 +406,8 @@ function epParseStatusRow(line) {
 function parseEndpointText(text) {
   const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
   const devices = [];
-  const byName = {};
+  // 設備與埠名稱來自貼上的文字，當物件鍵時一律用沒有原型的物件（RV13：名稱為 __proto__ 時原本會出錯）
+  const byName = Object.create(null);
   const getDev = name => {
     const key = name.toLowerCase();
     if (!byName[key]) { byName[key] = { name, macs: [], arps: [], ports: [], counters: [], optics: [], _cntLines: [], _optLines: [] }; devices.push(byName[key]); }
@@ -453,8 +454,8 @@ function parseEndpointText(text) {
 
 // 每台裝置每個埠學到幾個不同 MAC（判斷上行／串接埠用）
 function epMacCountByPort(dev) {
-  const cnt = {};
-  const seen = {};
+  const cnt = Object.create(null);
+  const seen = Object.create(null);
   for (const m of dev.macs) {
     const k = epNormIface(m.port);
     seen[k] = seen[k] || new Set();
@@ -468,7 +469,7 @@ const EP_RANDOM_PORT_MIN = 3;
 function epRandomMacPorts(model) {
   const out = [];
   for (const d of (model && model.devices) || []) {
-    const all = epMacCountByPort(d), rnd = {};
+    const all = epMacCountByPort(d), rnd = Object.create(null);
     for (const m of d.macs) if (epIsRandomMac(m.mac)) { const k = epNormIface(m.port); (rnd[k] = rnd[k] || { port: m.port, macs: new Set() }).macs.add(m.mac); }
     for (const k in rnd) {
       const n = rnd[k].macs.size, total = all[k] || n;
@@ -590,7 +591,7 @@ function epPortLookup(parsed, epModel, q) {
 function epBuildCablingSheet(parsed, epModel) {
   const host = String((parsed && parsed.sys && parsed.sys.hostname) || '').toLowerCase();
   const dev = host && epModel && epModel.devices ? epModel.devices.find(d => d.name.toLowerCase() === host) : null;
-  const macCnt = dev ? epMacCountByPort(dev) : {};
+  const macCnt = dev ? epMacCountByPort(dev) : Object.create(null);
   const ipByMac = {};
   if (epModel && epModel.devices) epModel.devices.forEach(d => d.arps.forEach(a => { if (!ipByMac[a.mac]) ipByMac[a.mac] = a.ip; }));
   const lldp = (parsed && parsed.lldp) || [];
