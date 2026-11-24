@@ -99,8 +99,8 @@
       keyOf(pn ? pn.rows.flatMap(r => r.ports).concat(pn.extra) : []);
       return { idx: di, hostname, key: hostKey(hostname), parsed: p, imp: null, src: p, pn, byKey };
     });
-    const devBy = Object.create(null);
-    devices.forEach(d => { if (!(d.key in devBy)) devBy[d.key] = d; });
+    const devBy = Object.create(null), dupHosts = [];
+    devices.forEach(d => { if (!(d.key in devBy)) devBy[d.key] = d; else if (!dupHosts.includes(d.hostname)) dupHosts.push(d.hostname); });
     const external = [], extBy = Object.create(null), unmatched = [], errors = [];
     const extPort = (name, port) => {
       const k = hostKey(name);
@@ -167,10 +167,29 @@
       const hit = devices.find(o2 => o2 !== d && o2.key && words.includes(o2.key));
       if (hit) descHints.push({ host: d.hostname, port: pt.name, desc: pt.desc, mention: hit.hostname });
     }));
-    return { devices, external, links, unmatched, conflicts, descHints, errors };
+    linkIssues(devices, links);
+    return { devices, external, links, unmatched, conflicts, descHints, errors, dupHosts };
+  }
+  // 兩端都是清冊內交換器的線（LLDP 或自訂串線）：沿用 topology.js 的 checkLinkConsistency()（access／trunk、native、允許 VLAN、
+  // hybrid、LACP 成員），結果放在 link.issues；設備名稱改用內部代號，避免同名或含網域時對錯設備
+  function linkIssues(devices, links) {
+    links.forEach(l => { l.issues = []; });
+    if (typeof checkLinkConsistency !== 'function' || typeof _ljDevice !== 'function') return;
+    const sw = links.filter(l => l.a.dev != null && l.b.dev != null && devices[l.a.dev].parsed && devices[l.b.dev].parsed);
+    if (!sw.length) return;
+    const dv = Object.create(null);
+    const devOf = i => { if (!dv[i]) { const x = _ljDevice(devices[i].parsed); x.hostname = 'dev' + i; x.lldp = []; dv[i] = x; } return dv[i]; };
+    sw.forEach(l => { devOf(l.b.dev); devOf(l.a.dev).lldp.push({ localPort: l.a.port, neighbor: 'dev' + l.b.dev, remotePort: l.b.port }); });
+    let r;
+    try { r = checkLinkConsistency(Object.keys(dv).map(k => dv[k])); } catch (e) { return; }
+    const key = (h, p) => h + '|' + lc(p);
+    const by = new Map();
+    r.links.forEach(x => { by.set(key(x.a, x.aPort) + '#' + key(x.b, x.bPort), x.issues); by.set(key(x.b, x.bPort) + '#' + key(x.a, x.aPort), x.issues); });
+    sw.forEach(l => { const iss = by.get(key('dev' + l.a.dev, l.a.port) + '#' + key('dev' + l.b.dev, l.b.port)); if (iss && iss.length) l.issues = iss; });
   }
 
-  const LINK_COLORS = { lldp: '#22c55e', confirmed: '#16a34a', custom: '#a855f7', ext: '#94a3b8' };
+  const LINK_COLORS = { lldp: '#22c55e', confirmed: '#16a34a', custom: '#a855f7', ext: '#94a3b8', mismatch: '#ef4444' };
+  const issueText = i => T('lldp.ljissue_' + i.type).replace('{a}', i.a || '-').replace('{b}', i.b || '-');
   const linkKind = l => (l.custom && l.lldp ? 'confirmed' : l.custom ? 'custom' : l.b.ext != null || l.a.ext != null ? 'ext' : 'lldp');
   const endName = (cb, e) => (e.ext != null ? cb.external[e.ext].name : cb.devices[e.dev].hostname);
   function cablingSvg(cb, opts) {
@@ -208,13 +227,14 @@
     const links = cb.links.map(l => {
       const k = linkKind(l);
       const tip = endName(cb, l.a) + ' ' + l.a.port + ' ↔ ' + endName(cb, l.b) + ' ' + l.b.port + ' · ' + T('ptopo.src_' + k) + (l.protocols.length ? ' (' + l.protocols.join('/') + ')' : '');
-      return { a: (l.a.ext != null ? 'x' + l.a.ext : 'd' + l.a.dev) + '|' + lc(l.a.port), b: (l.b.ext != null ? 'x' + l.b.ext : 'd' + l.b.dev) + '|' + lc(l.b.port), color: LINK_COLORS[k], dashed: k === 'custom', tip };
+      const bad = l.issues && l.issues.length;
+      return { a: (l.a.ext != null ? 'x' + l.a.ext : 'd' + l.a.dev) + '|' + lc(l.a.port), b: (l.b.ext != null ? 'x' + l.b.ext : 'd' + l.b.dev) + '|' + lc(l.b.port), color: bad ? LINK_COLORS.mismatch : LINK_COLORS[k], dashed: k === 'custom', tip: bad ? tip + ' · ⚠ ' + l.issues.map(issueText).join('；') : tip };
     });
     return ps.render({ rows, groups, links, separate: true });
   }
 
   // ── 卡片（資產清冊頁）──
-  let _entries = [], _linksText = '', _lldpMsg = '', _importMsg = '';
+  let _entries = [], _linksText = '', _lldpMsg = '', _importMsg = '', _projMsg = '';
   const _imported = [];   // 匯入的防火牆前面板 [{imported}]（只存記憶體）
   const IMPORT_MAX = 20;
   const _all = () => _entries.filter(x => x && x.parsed).concat(_imported);
@@ -247,21 +267,26 @@
       + `<input type="file" accept=".json,application/json" multiple data-ptopo-import> <span data-ptopo-import-msg style="font-size:11px">${esc2(_importMsg)}</span>`
       + _imported.map((x, i) => `<div style="font-size:12px;margin:3px 0"><b>${esc2(x.imported.hostname)}</b> ${esc2([x.imported.vendor, x.imported.model].filter(Boolean).join(' '))}（${esc2(T('pcu.ports', { n: x.imported.ports.length }))}） <button style="${btn};padding:2px 10px" data-ptopo-rm="${i}">${esc2(T('pcu.del'))}</button></div>`).join('') + '</details>';
     h += `<div style="overflow-x:auto" data-ptopo-svg>${cablingSvg(cb)}</div>`;
-    h += `<div style="font-size:11px;margin:6px 0">${ps.legend(LINK_KINDS.map(k => [LINK_COLORS[k], T('ptopo.src_' + k)]), esc2)}<span style="color:var(--text-dim)">${esc2(T('ptopo.lg_note'))}</span></div>`;
+    const nBad = cb.links.filter(l => l.issues && l.issues.length).length;
+    if (nBad) h += `<div style="font-size:12px;color:var(--red,#ef4444);margin:4px 0" data-ptopo-mismatch="${nBad}">⚠ ${esc2(T('ptopo.mismatch_n', { n: nBad }))}</div>`;
+    h += `<div style="font-size:11px;margin:6px 0">${ps.legend(LINK_KINDS.map(k => [LINK_COLORS[k], T('ptopo.src_' + k)]).concat([[LINK_COLORS.mismatch, T('ptopo.lg_mismatch')]]), esc2)}<span style="color:var(--text-dim)">${esc2(T('ptopo.lg_note'))}</span></div>`;
     h += `<div style="font-size:12px;margin-top:8px">${esc2(T('ptopo.custom_title'))}</div><div style="font-size:11px;color:var(--text-dim)">${esc2(T('ptopo.custom_hint'))}</div>`
       + `<textarea id="ptopo-links" rows="4" spellcheck="false" style="width:100%;max-width:560px;font-family:monospace;font-size:11px" placeholder="CORE-SW Te1/1/1 &lt;-&gt; ACCESS-SW1 Te1/1/2">${xesc(_linksText)}</textarea><br>`
       + `<button style="${btn}" data-ptopo-apply>${esc2(T('ptopo.apply'))}</button>`;
     if (cb.errors.length) h += `<div style="font-size:11px;color:var(--red,#ef4444);margin-top:4px">${cb.errors.slice(0, 10).map(e => esc2(T('pcu.line', { n: e.line }) + ' ' + T('ptopo.err_' + e.code, { tok: e.tok }))).join('<br>')}</div>`;
-    if (cb.links.length) h += `<details data-ptopo-sec="links" style="margin-top:6px" open><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.links', { n: cb.links.length }))}</summary><div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc2(T('ptopo.col_dev'))}</th><th>${esc2(T('ptopo.col_port'))}</th><th>${esc2(T('ptopo.col_dev'))}</th><th>${esc2(T('ptopo.col_port'))}</th><th>${esc2(T('ptopo.col_src'))}</th></tr></thead><tbody>`
-      + cb.links.map(l => `<tr><td>${esc2(endName(cb, l.a))}</td><td class="mono">${esc2(l.a.port)}</td><td>${esc2(endName(cb, l.b))}</td><td class="mono">${esc2(l.b.port)}</td><td>${esc2(T('ptopo.src_' + linkKind(l)) + (l.protocols.length ? ' (' + l.protocols.join('/') + ')' : ''))}</td></tr>`).join('') + '</tbody></table></div></details>';
+    if (cb.links.length) h += `<details data-ptopo-sec="links" style="margin-top:6px" open><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.links', { n: cb.links.length }))}</summary><div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc2(T('ptopo.col_dev'))}</th><th>${esc2(T('ptopo.col_port'))}</th><th>${esc2(T('ptopo.col_dev'))}</th><th>${esc2(T('ptopo.col_port'))}</th><th>${esc2(T('ptopo.col_src'))}</th><th>${esc2(T('ptopo.col_issue'))}</th></tr></thead><tbody>`
+      + cb.links.map(l => `<tr${l.issues && l.issues.length ? ' data-ptopo-bad' : ''}><td>${esc2(endName(cb, l.a))}</td><td class="mono">${esc2(l.a.port)}</td><td>${esc2(endName(cb, l.b))}</td><td class="mono">${esc2(l.b.port)}</td><td>${esc2(T('ptopo.src_' + linkKind(l)) + (l.protocols.length ? ' (' + l.protocols.join('/') + ')' : ''))}</td><td style="color:var(--red,#ef4444)">${(l.issues || []).map(i => esc2(issueText(i))).join('<br>')}</td></tr>`).join('') + '</tbody></table></div></details>';
     else h += `<div class="nodata" style="font-size:12px">${esc2(T('ptopo.no_links'))}</div>`;
+    if (cb.dupHosts.length) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-top:4px">${esc2(T('ptopo.dup_host', { list: cb.dupHosts.join('、') }))}</div>`;
     if (cb.conflicts.length) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-top:4px">${esc2(T('ptopo.conflict', { list: cb.conflicts.map(c => c.host + ' ' + c.port).join('、') }))}</div>`;
     if (cb.unmatched.length) h += `<details data-ptopo-sec="unmatched" style="margin-top:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.unmatched', { n: cb.unmatched.length }))}</summary><div style="font-size:11px">`
       + cb.unmatched.map(u => esc2(`${u.host} ${u.port} → ${u.neighbor} ${u.remotePort}：${T('ptopo.reason_' + (REASONS.includes(u.reason) ? u.reason : 'local'))}`)).join('<br>') + '</div></details>';
     if (cb.descHints.length) h += `<details data-ptopo-sec="hints" style="margin-top:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.desc_hints', { n: cb.descHints.length }))}</summary><div style="font-size:11px">`
       + cb.descHints.map(x => esc2(`${x.host} ${x.port}「${x.desc}」→ ${x.mention}`)).join('<br>') + '</div></details>';
     h += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><button style="${btn}" data-ptopo-dl>${esc2(T('swp.download'))}</button>`
-      + `<label style="font-size:11px"><input type="checkbox" id="ptopo-mask" checked> ${esc2(T('swp.mask'))}</label></div></div>`;
+      + `<label style="font-size:11px"><input type="checkbox" id="ptopo-mask" checked> ${esc2(T('swp.mask'))}</label></div>`
+      + `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><button style="${btn}" data-ptopo-save title="${xesc(T('ptopo.save_hint'))}">${esc2(T('ptopo.save'))}</button>`
+      + `<label style="font-size:12px">${esc2(T('ptopo.load'))} <input type="file" accept=".json,application/json" data-ptopo-load></label> <span style="font-size:11px" data-ptopo-proj-msg>${esc2(_projMsg)}</span></div></div>`;
     return h;
   }
   function cablingDownloadSvg(mask) {
@@ -306,6 +331,14 @@
         redraw(false);
         return;
       }
+      if (t.closest('[data-ptopo-save]')) {
+        const obj = buildProject(_all(), { linksText: _linksText, modelOf, lldpOf });
+        const url = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 1)], { type: 'application/json' }));
+        const a = document.createElement('a');
+        a.href = url; a.download = 'cabling_project.json'; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        return;
+      }
       if (t.closest('[data-ptopo-rm]')) { const i = +t.closest('[data-ptopo-rm]').getAttribute('data-ptopo-rm'); if (i >= 0 && i < _imported.length) _imported.splice(i, 1); _importMsg = ''; redraw(false); return; }
       if (t.closest('[data-ptopo-apply]')) { const ta = document.getElementById('ptopo-links'); _linksText = ta ? String(ta.value).slice(0, 50000) : ''; redraw(false); }
       else if (t.closest('[data-ptopo-dl]')) {
@@ -316,6 +349,18 @@
         a.href = url; a.download = 'cabling_topology.svg'; a.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
+    });
+    // 載入接線專案（每份 5 MB 以內）
+    document.addEventListener('change', e => {
+      const inp = e.target && e.target.closest ? e.target.closest('input[data-ptopo-load]') : null;
+      if (!inp || !inp.files || !inp.files[0]) return;
+      const f = inp.files[0];
+      (f.size > 5000000 ? Promise.resolve(null) : f.text().catch(() => null)).then(t => {
+        const r = t == null ? { ok: false, code: 'size' } : parseProject(t);
+        if (!r.ok) _projMsg = T('ptopo.proj_' + (PROJ_ERR_CODES.includes(r.code) ? r.code : 'format'));
+        else { const x = applyProject(r.proj); _projMsg = T('ptopo.proj_done', { n: x.applied, m: x.missing }); }
+        redraw(false);
+      });
     });
     // 匯入防火牆前面板 JSON：同主機名稱覆蓋，最多 IMPORT_MAX 台；每份 2 MB 以內
     document.addEventListener('change', e => {
@@ -389,8 +434,81 @@
     _importMsg = '';
   }
 
+  // ── 接線專案（XN194）：自訂串線、逐台型號、貼上的鄰居、匯入的防火牆前面板存成一個 JSON（不含設定檔原文、不存 localStorage）──
+  // 自訂型號以名稱記錄（id 只在本機有效），載入時對到同名的本機自訂型號；鄰居只存埠與名稱，不存位址
+  const PROJ_MAX_LLDP = 2000;
+  function buildProject(entries, state) {
+    const sp = SP(), st = state || {}, devs = (entries || []).filter(e => e && (e.parsed || e.imported));
+    const hostOf = e => (e.imported ? e.imported.hostname : String((e.parsed.sys && e.parsed.sys.hostname) || e.hostname || ''));
+    const customs = PS() ? PS().customModels() : [];
+    const models = [], lldp = [];
+    devs.forEach(e => {
+      if (e.parsed && st.modelOf) {
+        const v = st.modelOf(e.parsed);
+        if (v) { const cu = customs.find(m => m.value === v); models.push(cu ? { host: hostOf(e), custom: cu.label } : { host: hostOf(e), value: v }); }
+      }
+      const ov = st.lldpOf ? st.lldpOf(e.parsed || e.imported) : null;
+      if (ov) lldp.push({ host: hostOf(e), neighbors: ov.slice(0, PROJ_MAX_LLDP).map(n => ({ localPort: String(n.localPort), neighbor: String(n.neighbor), remotePort: String(n.remotePort || ''), protocol: String(n.protocol || '') })) });
+    });
+    return { format: 'alpaca-cabling', version: 1, links: String(st.linksText || ''), models, lldp, firewalls: devs.filter(e => e.imported).map(e => Object.assign({ format: 'alpaca-panel', version: 1 }, e.imported)) };
+  }
+  // 逐欄檢查；不合格的項目整份拒絕（回傳 code），合格時回傳整理後的資料
+  function parseProject(text) {
+    let o;
+    try { o = JSON.parse(String(text || '')); } catch (e) { return { ok: false, code: 'json' }; }
+    if (!o || typeof o !== 'object' || o.format !== 'alpaca-cabling' || o.version !== 1) return { ok: false, code: 'format' };
+    const links = o.links == null ? '' : str(o.links, 50000);
+    if (links == null) return { ok: false, code: 'format' };
+    const arr = v => (v == null ? [] : Array.isArray(v) ? v : null);
+    const ms = arr(o.models), ls = arr(o.lldp), fs = arr(o.firewalls);
+    if (!ms || !ls || !fs || ms.length > 200 || ls.length > 200 || fs.length > IMPORT_MAX) return { ok: false, code: 'format' };
+    const models = [];
+    for (const m of ms) {
+      const host = m && str(m.host, 64), v = m && (m.value != null ? str(m.value, 120) : null), cu = m && (m.custom != null ? str(m.custom, 40) : null);
+      if (!host || (!v && !cu)) return { ok: false, code: 'format' };
+      models.push({ host, value: v || '', custom: cu || '' });
+    }
+    const lldp = [];
+    for (const g of ls) {
+      const host = g && str(g.host, 64);
+      if (!host || !Array.isArray(g.neighbors) || g.neighbors.length > PROJ_MAX_LLDP) return { ok: false, code: 'format' };
+      const nb = [];
+      for (const n of g.neighbors) {
+        const lp = n && str(n.localPort, 128), ne = n && str(n.neighbor, 128);
+        if (!lp || !ne) return { ok: false, code: 'format' };
+        nb.push({ localPort: lp, neighbor: ne, remotePort: str(n.remotePort, 128) || '', protocol: str(n.protocol, 16) || '' });
+      }
+      lldp.push({ host, neighbors: nb });
+    }
+    const firewalls = [];
+    for (const f of fs) { const r = parsePanelExport(JSON.stringify(f)); if (!r.ok) return { ok: false, code: 'firewall' }; firewalls.push(r.dev); }
+    return { ok: true, proj: { links, models, lldp, firewalls } };
+  }
+  // 套用到目前清冊：主機名稱對不上的項目略過並計數；型號只接受該設備可選清單內的值
+  function applyProject(proj) {
+    const sp = SP(), ps = PS();
+    _imported.length = 0;
+    proj.firewalls.slice(0, IMPORT_MAX).forEach(d => _imported.push({ imported: d }));
+    _linksText = proj.links;
+    const all = _all(), byHost = Object.create(null);
+    all.forEach(e => { const h = hostKey(e.imported ? e.imported.hostname : (e.parsed.sys && e.parsed.sys.hostname) || e.hostname || ''); if (h && !(h in byHost)) byHost[h] = e; });
+    let applied = 0, missing = 0;
+    proj.models.forEach(m => {
+      const e = byHost[hostKey(m.host)];
+      if (!e || !e.parsed || !sp) { missing++; return; }
+      const choices = sp.choicesFor(sp.buildPanel(e.parsed, {}).vendor);
+      const v = m.custom ? ((ps ? ps.customModels() : []).find(c => c.label === m.custom) || {}).value : m.value;
+      if (v && choices.some(c => c.value === v)) { sp.chosen.set(e.parsed, v); applied++; } else missing++;
+    });
+    proj.lldp.forEach(g => { const e = byHost[hostKey(g.host)]; if (!e) { missing++; return; } _lldpOv.set(e.parsed || e.imported, g.neighbors); applied++; });
+    return { applied, missing };
+  }
+  // 清冊清除時一併清掉（RV12：原本匯入的防火牆與串線留在記憶體，下次載入設定檔又出現）
+  function reset() { _imported.length = 0; _linksText = ''; _lldpMsg = ''; _importMsg = ''; _projMsg = ''; }
+
   const IMPORT_ERR_CODES = ['json', 'format', 'host', 'ports', 'size'];
-  const api = { DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
+  const PROJ_ERR_CODES = ['json', 'format', 'firewall', 'size'];
+  const api = { buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
   if (typeof window !== 'undefined') window.SwCabling = api;
   return api;
 })();

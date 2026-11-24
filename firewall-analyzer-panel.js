@@ -158,7 +158,7 @@
     if (rowsHtml) h += `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('pnl.detail'))}</summary><div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc2(T('pnl.col_port'))}</th><th>${esc2(T('pnl.col_role'))}</th><th>${esc2(T('pnl.col_addr'))}</th><th>${esc2(T('pnl.col_zone'))}</th>${pn.vdoms.length ? '<th>VDOM</th>' : ''}<th>${esc2(T('pnl.col_group'))}</th><th>${esc2(T('pnl.col_vlan'))}</th><th>${esc2(T('pnl.col_refs'))}</th></tr></thead><tbody>${rowsHtml}</tbody></table></div></details>`;
     h += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><button class="btn btn-ghost btn-sm" data-fw-panel-dl>${esc2(T('pnl.download'))}</button>`
       + `<button class="btn btn-ghost btn-sm" data-fw-panel-export title="${xesc(T('pnl.export_tip'))}">${esc2(T('pnl.export'))}</button>`
-      + `<label style="font-size:11px"><input type="checkbox" id="fw-panel-mask" checked> ${esc2(T('pnl.mask'))}</label></div>${window.PanelSvg ? window.PanelSvg.customEditorHtml('fw', editorOpen) : ''}</div>`;
+      + `<label style="font-size:11px"><input type="checkbox" id="fw-panel-mask" checked> ${esc2(T('pnl.mask'))}</label><span data-fw-panel-export-msg style="font-size:11px;color:var(--orange,#f59e0b)"></span></div>${window.PanelSvg ? window.PanelSvg.customEditorHtml('fw', editorOpen) : ''}</div>`;
     return h;
   }
   // 匯出給交換器分析「多台設備實體接線拓樸」（XN192）：只含埠名稱、顏色、提示與群組，不含規則或設定原文；
@@ -194,6 +194,10 @@
       if (!b || !_last) return;
       const m = document.getElementById('fw-panel-mask'), obj = panelExport(_last, !m || m.checked);
       if (!obj) return;
+      // 沒有主機名稱的匯出檔在接線拓樸無法對上 LLDP 鄰居、也會被拒絕（RV12）：改在卡片提示，不下載
+      const msg = document.querySelector('[data-fw-panel-export-msg]');
+      if (!obj.hostname) { if (msg) msg.textContent = T('pnl.export_nohost'); return; }
+      if (msg) msg.textContent = '';
       const url = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 1)], { type: 'application/json' }));
       const a = document.createElement('a');
       a.href = url; a.download = String(obj.hostname || 'firewall').replace(/[^\w.\-]/g, '_') + '_panel.json'; a.click();

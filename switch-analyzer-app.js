@@ -1544,12 +1544,6 @@ function renderLLDPTopo(nbrs){
   return`<div style="background:var(--surface2);border-radius:8px;padding:12px;overflow:auto">${svg}</div>`;
 }
 // 多設備檢視保存的設備資料（第十三輪 NJ 起一併保存介面與聚合成員，供鏈路一致性比對）
-function _ljDevice(p){
-  const lag=new Set();
-  (p.lacp||[]).forEach(l=>{const m=l.members;(Array.isArray(m)?m.map(x=>typeof x==='object'?x.name:x):String(m||'').split(/[\s,]+/)).filter(Boolean).forEach(x=>lag.add(x));});
-  (p.interfaces||[]).forEach(i=>{if(i.lagMember)lag.add(i.name);});
-  return {hostname:p.sys?.hostname||'Local',lldp:p.lldp||[],ifaces:(p.interfaces||[]).map(i=>({name:i.name,type:i.type,mode:i.mode,vlans:i.vlans,nativeVlan:i.nativeVlan,hybrid:i.hybrid?{pvid:i.hybrid.pvid,untagged:i.hybrid.untagged,tagged:i.hybrid.tagged}:null})),lagPorts:[...lag]};
-}
 function renderLinkConsistency(devices){
   const r=checkLinkConsistency(devices);
   if(!r.links.length&&!r.unmatched)return'';
@@ -4130,7 +4124,7 @@ function renderInventoryCard(){
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
       <label style="${btn}">${esc(tr('inv.add_btn'))}<input type="file" id="inv-files" multiple accept=".txt,.cfg,.conf,.log,.rsc,.json" onchange="invAddFiles(this)"></label>
       <button style="${btn2}" onclick="invLoadCablingDemo()" title="${esc(tr('inv.demo_cabling_tip'))}">${esc(tr('inv.demo_cabling'))}</button>
-      ${invRows.length?`<button style="${btn2}" onclick="invExportCSV()">${esc(tr('inv.csv_btn'))}</button><button style="${btn2}" onclick="invRows=[];invTexts=[];invFails=[];invParsed=[];goldResult=null;navGo('inventory')">${esc(tr('inv.clear_btn'))}</button>`:''}
+      ${invRows.length?`<button style="${btn2}" onclick="invExportCSV()">${esc(tr('inv.csv_btn'))}</button><button style="${btn2}" onclick="invRows=[];invTexts=[];invFails=[];invParsed=[];goldResult=null;if(window.SwCabling)SwCabling.reset();navGo('inventory')">${esc(tr('inv.clear_btn'))}</button>`:''}
     </div>`;
   if(invFails.length)h+=`<div style="font-size:12px;color:var(--red);margin-bottom:8px">${esc(tr('inv.parse_fail').replace('{file}',invFails.join('、')))}</div>`;
   if(!invRows.length)return h+`<div class="nodata">${esc(tr('inv.empty'))}</div></div>`;
