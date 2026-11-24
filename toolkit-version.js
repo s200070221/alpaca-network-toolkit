@@ -3,8 +3,29 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.23';
+  const TOOLKIT_VERSION = '2026.11.24';
   const CHANGELOG = [
+    {
+      version: '2026.11.24',
+      items: {
+        zhTW: [
+          '防火牆與交換器分析：實體接線示意圖，依型號資料畫前面板，標出 WAN 對外位址與 VPN、VDOM、透通與聚合群組、VLAN／trunk、堆疊與 PoE，可下載遮蔽位址的 SVG',
+          '防火牆與交換器分析：可自己寫型號（埠清單），兩個工具共用',
+          '交換器分析：資產清冊的多台設備實體接線拓樸，依 LLDP／CDP 鄰居與自訂串線連線，防火牆可匯出前面板加入；附接線範例',
+          '韌體版本比對：新增 Ivanti Connect Secure 版本格式與內建清單；設備版本只有主次版號時不再誤判',
+          'log：SonicWall 登入事件、Cisco ASA／FTD 非預期重新開機',
+          '入口頁：綜合健檢列出已終止或即將終止支援的設備',
+        ],
+        en: [
+          'Firewall and Switch analyzers: physical cabling schematic drawn from model data, showing WAN addresses and VPNs, VDOMs, bridged and aggregate groups, VLAN/trunk, stacking and PoE, with a masked SVG download',
+          'Firewall and Switch analyzers: write your own device models (port lists), shared by both tools',
+          'Switch analyzer: multi-device physical cabling topology on the inventory page, linked by LLDP/CDP neighbors and custom cabling; firewalls can be added by exporting their panel; includes a cabling example',
+          'Firmware check: Ivanti Connect Secure version format and built-in list; versions with only major.minor are no longer misjudged',
+          'Log: SonicWall login events and Cisco ASA/FTD unexpected reloads',
+          'Hub: health summary lists devices past or near end of support',
+        ],
+      },
+    },
     {
       version: '2026.11.23',
       items: {
