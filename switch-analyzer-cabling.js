@@ -57,10 +57,26 @@
 
   // 設定檔後面附上 show lldp／cdp neighbors detail 輸出時（Oxidized、RANCID 或手動收集常見），從同一份文字讀出鄰居。
   // 只在看到鄰居輸出專屬的欄位標題時才解析，避免把設定檔內容當成鄰居資料
-  const LLDP_MARK = /^\s*(Device ID:|Local Intf:|Chassis id:|LLDP neighbor-information of port|Remote Identifier:|NeighborIndex:|LLDP Information from Neighbor:|Neighbor's chassis id:|Local Interface\s*:)/im;
+  const LLDP_MARK = /^\s*(Device ID:|Local Intf:|Chassis id:|LLDP neighbor-information of port|Remote Identifier:|NeighborIndex:|LLDP Information from Neighbor:|Neighbor's chassis id:|Local Interface\s*:|Local information:)/im;
   function lldpFromText(text, vendor) {
     if (typeof LLDPParser === 'undefined' || !LLDP_MARK.test(String(text || ''))) return [];
     try { return (LLDPParser.parse(String(text), vendor) || []).filter(n => n && n.localPort && n.neighbor); } catch (e) { return []; }
+  }
+  // 手動鄰居表（給鄰居輸出格式未查證的設備）：每行「本機埠,鄰居設備,鄰居埠」，以逗號或 Tab 分隔（可從試算表或網頁表格貼上）；
+  // # 之後為註解，第一欄沒有數字的第一行視為標題略過。任一行不合格回傳 null，避免把其他文字誤當成鄰居表
+  const MANUAL_MAX = 512;
+  function parseManualNeighbors(text) {
+    const out = [];
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n').map(l => l.replace(/#.*$/, '').trim()).filter(Boolean);
+    if (!lines.length || LLDP_MARK.test(lines.join('\n'))) return null;
+    for (let i = 0; i < lines.length; i++) {
+      const f = lines[i].split(/\t|,/).map(x => x.trim());
+      if (f.length !== 3 || !f[0] || !f[1]) return null;
+      if (i === 0 && !/\d/.test(f[0])) continue;
+      if (f.some(x => x.length > 128)) return null;
+      if (out.length < MANUAL_MAX) out.push({ localPort: f[0], neighbor: f[1], platform: '', remotePort: f[2], remoteDesc: '', capability: '', ip: '', protocol: 'manual' });
+    }
+    return out;
   }
   // 防火牆分析匯出的前面板（FwPanel.panelExport，format alpaca-panel）：逐欄檢查型別與長度，不合格整份拒絕；
   // 顏色只接受 #rrggbb，其餘欄位一律當文字（畫面與 SVG 都會跳脫）
@@ -129,11 +145,11 @@
       if (peer && peer !== d) {
         const rp = peer.byKey[portKey(n.remotePort)];
         if (!rp) { unmatched.push({ host: d.hostname, port: lp, neighbor: peer.hostname, remotePort: n.remotePort || '', reason: 'remote' }); return; }
-        addLink({ dev: d.idx, port: lp }, { dev: peer.idx, port: rp }, 'lldp', n);
+        addLink({ dev: d.idx, port: lp }, { dev: peer.idx, port: rp }, n.protocol === 'manual' ? 'custom' : 'lldp', n);
       } else if (!peer) {
         const x = extPort(n.neighbor, n.remotePort);
         if (!x) { unmatched.push({ host: d.hostname, port: lp, neighbor: n.neighbor, remotePort: n.remotePort || '', reason: 'extmax' }); return; }
-        addLink({ dev: d.idx, port: lp }, x, 'lldp', n);
+        addLink({ dev: d.idx, port: lp }, x, n.protocol === 'manual' ? 'custom' : 'lldp', n);
       }
     }));
     // 自訂串線：設備 A 必須在清冊內；設備 B 不在清冊時列為外部鄰居
@@ -329,7 +345,7 @@
     // 逐台貼上 LLDP／CDP 鄰居（資產清冊只讀設定檔；設定檔後面沒附鄰居輸出時在這裡補）
     h += `<details data-ptopo-sec="lldp" style="margin-bottom:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.lldp_title'))}</summary><div style="font-size:11px;color:var(--text-dim);margin:4px 0">${esc2(T('ptopo.lldp_hint'))}</div>`
       + `<select data-ptopo-lldp-dev style="width:auto;max-width:280px">${cb.devices.map(d => `<option value="${d.idx}">${esc2(d.hostname)}（${esc2(T('ptopo.lldp_count', { n: (lldpOf(d.src) || (d.parsed && d.parsed.lldp) || []).length }))}）</option>`).join('')}</select><br>`
-      + `<textarea id="ptopo-lldp" rows="4" spellcheck="false" style="width:100%;max-width:560px;font-family:monospace;font-size:11px" placeholder="show lldp neighbors detail / show cdp neighbors detail"></textarea><br>`
+      + `<textarea id="ptopo-lldp" rows="4" spellcheck="false" style="width:100%;max-width:560px;font-family:monospace;font-size:11px" placeholder="show lldp neighbors detail / show cdp neighbors detail / show lldp neighbors all&#10;Gi1/0/1,core-sw1,Te1/1/1"></textarea><br>`
       + `<button style="${btn}" data-ptopo-lldp-apply>${esc2(T('ptopo.lldp_apply'))}</button> <span style="font-size:11px">${esc2(_lldpMsg)}</span></details>`;
     // 加入防火牆：防火牆分析前面板卡片匯出的 JSON（交換器分析頁不載入防火牆解析器，改用匯出檔）
     h += `<details data-ptopo-sec="fw" style="margin-bottom:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.fw_title', { n: _imported.length }))}</summary><div style="font-size:11px;color:var(--text-dim);margin:4px 0">${esc2(T('ptopo.fw_hint'))}</div>`
@@ -400,7 +416,9 @@
         const key = d.parsed || d.imported, vendor = d.parsed ? d.parsed.vendor : '';
         const txt = String(ta.value).slice(0, 2000000).replace(/\r\n?/g, '\n');
         let list = [];
-        try { list = typeof LLDPParser !== 'undefined' && txt.trim() ? (LLDPParser.parse(txt, vendor) || []).filter(n => n && n.localPort && n.neighbor) : []; } catch (er) { list = []; }
+        const manual = parseManualNeighbors(txt);
+        if (manual) list = manual;
+        else try { list = typeof LLDPParser !== 'undefined' && txt.trim() ? (LLDPParser.parse(txt, vendor) || []).filter(n => n && n.localPort && n.neighbor) : []; } catch (er) { list = []; }
         if (txt.trim()) _lldpOv.set(key, list); else _lldpOv.delete(key);
         _lldpMsg = T('ptopo.lldp_done', { host: d.imported ? d.imported.hostname : String((d.parsed.sys && d.parsed.sys.hostname) || d.hostname || ''), n: list.length });
         redraw(false);
@@ -594,7 +612,7 @@
 
   const IMPORT_ERR_CODES = ['json', 'format', 'host', 'ports', 'size'];
   const PROJ_ERR_CODES = ['json', 'format', 'firewall', 'size'];
-  const api = { cablingToDrawio, cablingToMermaid, buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
+  const api = { cablingToDrawio, cablingToMermaid, buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, parseManualNeighbors, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
   if (typeof window !== 'undefined') window.SwCabling = api;
   return api;
 })();

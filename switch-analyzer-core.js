@@ -2177,6 +2177,23 @@ const LLDPParser = (() => {
     return entries;
   }
 
+  // ── Palo Alto PAN-OS（XN198）──────────────────────
+  // show lldp neighbors all：格式依 ntc-templates paloalto_panos_show_lldp_neighbors_all 的真實輸出範例，
+  // 每筆以「Local information:」開頭；欄位沒有值時只留標籤（不可用 \s* 跨行抓到下一行），
+  // 沒有 System name 時以 Chassis ID 當鄰居名稱
+  function parseLLDPPanos(text) {
+    const entries = [];
+    const blocks = text.split(/^(?=Local information:)/m).filter(b => /^Local information:/.test(b));
+    const f = (blk, label) => ((blk.match(new RegExp('^' + label + ':[ \\t]*(.*)$', 'mi')) || [])[1] || '').trim();
+    for (const blk of blocks) {
+      const localPort = f(blk, 'Local interface');
+      const neighbor = f(blk, 'System name') || f(blk, 'Chassis ID');
+      const ip = (f(blk, 'Management address').match(/^[\d.]+$/) || [''])[0];
+      if (localPort && neighbor) entries.push({localPort, neighbor, platform:f(blk, 'System description').slice(0,50), remotePort:f(blk, 'Port ID'), remoteDesc:f(blk, 'Port description'), capability:f(blk, 'Enabled').replace(/,\s*$/, ''), ip, protocol:'LLDP'});
+    }
+    return entries;
+  }
+
   // ── Auto-detect & dispatch ────────────────────────
   function parse(text, vendor) {
     if (!text) return [];
@@ -2194,6 +2211,8 @@ const LLDPParser = (() => {
     // 2026-08-26 新增：EdgeSwitch 的 "Chassis ID:" 大小寫不分時會被下方 Cisco 簽章
     // （/Chassis id:/i）誤撞，故 EdgeSwitch 檢查必須排在 Cisco 之前（比照上方 Arista/Juniper
     // 既有慣例）
+    // PAN-OS 的「Chassis ID:」同樣會被 Cisco 簽章誤撞，排在 Cisco 之前
+    if (/^Local information:/m.test(text) && /^Neighbor information:/m.test(text)) return parseLLDPPanos(text);
     if (/Remote Identifier:/i.test(text))                             return parseLLDPEdgeSwitch(text);
     if (/Local Intf:/i.test(text) || /Chassis id:/i.test(text))      return parseLLDPCisco(text);
     if (/SystemName\s*:/m.test(text) && /Port\s+:/m.test(text))      return parseLLDPArubaCX(text);
