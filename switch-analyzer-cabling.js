@@ -630,11 +630,18 @@
     return { applied, missing };
   }
   // 清冊清除時一併清掉（RV12：原本匯入的防火牆與串線留在記憶體，下次載入設定檔又出現）
+  // 資產清冊以同檔名重新上傳（例如補上鄰居輸出）：沿用原本選的型號；新檔案沒附鄰居時沿用之前貼上的鄰居
+  function replaceDevice(oldP, newP) {
+    if (!oldP || !newP) return;
+    const sp = SP();
+    if (sp && sp.chosen.has(oldP)) sp.chosen.set(newP, sp.chosen.get(oldP));
+    if (_lldpOv.has(oldP) && !(newP.lldp && newP.lldp.length)) _lldpOv.set(newP, _lldpOv.get(oldP));
+  }
   function reset() { _imported.length = 0; _linksText = ''; _lldpMsg = ''; _importMsg = ''; _projMsg = ''; }
 
   const IMPORT_ERR_CODES = ['json', 'format', 'host', 'ports', 'size'];
   const PROJ_ERR_CODES = ['json', 'format', 'firewall', 'size'];
-  const api = { cablingToDrawio, cablingToMermaid, buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, parseManualNeighbors, manualNeighbors, neighborOnly, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
+  const api = { replaceDevice, lldpOf, cablingToDrawio, cablingToMermaid, buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, parseManualNeighbors, manualNeighbors, neighborOnly, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
   if (typeof window !== 'undefined') window.SwCabling = api;
   return api;
 })();
