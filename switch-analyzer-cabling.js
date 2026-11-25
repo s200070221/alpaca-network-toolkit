@@ -62,22 +62,27 @@
     if (typeof LLDPParser === 'undefined' || !LLDP_MARK.test(String(text || ''))) return [];
     try { return (LLDPParser.parse(String(text), vendor) || []).filter(n => n && n.localPort && n.neighbor); } catch (e) { return []; }
   }
-  // 手動鄰居表（給鄰居輸出格式未查證的設備）：每行「本機埠,鄰居設備,鄰居埠」，以逗號或 Tab 分隔（可從試算表或網頁表格貼上）；
-  // # 之後為註解，第一欄沒有數字的第一行視為標題略過。任一行不合格回傳 null，避免把其他文字誤當成鄰居表
+  // 手動鄰居表（給鄰居輸出格式未查證的設備）：每行「本機埠,鄰居設備,鄰居埠」，以逗號或 Tab 分隔（可從試算表或網頁表格貼上，
+  // 欄位外層雙引號去掉、結尾多出的空白欄略過，鄰居埠可留空）；# 之後為註解，第一行是標題（MANUAL_HEAD_RE）時略過。
+  // 任一行不合格時 list 為 null、bad 為第一個不合格的行號；內容像鄰居輸出時 bad 為 0，交給 LLDPParser
   const MANUAL_MAX = 512;
-  function parseManualNeighbors(text) {
+  const MANUAL_HEAD_RE = /^(本機埠|本機介面|本機|local(\s*(port|interface|intf))?|ローカル(ポート)?)$/i;
+  function manualNeighbors(text) {
     const out = [];
-    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n').map(l => l.replace(/#.*$/, '').trim()).filter(Boolean);
-    if (!lines.length || LLDP_MARK.test(lines.join('\n'))) return null;
+    const lines = String(text || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').split('\n').map((l, i) => ({ n: i + 1, t: l.replace(/#.*$/, '').trim() })).filter(l => l.t);
+    if (!lines.length || LLDP_MARK.test(lines.map(l => l.t).join('\n'))) return { list: null, bad: 0 };
     for (let i = 0; i < lines.length; i++) {
-      const f = lines[i].split(/\t|,/).map(x => x.trim());
-      if (f.length !== 3 || !f[0] || !f[1]) return null;
-      if (i === 0 && !/\d/.test(f[0])) continue;
-      if (f.some(x => x.length > 128)) return null;
+      const f = lines[i].t.split(/\t|,/).map(x => x.trim().replace(/^"(.*)"$/, '$1').trim());
+      while (f.length > 3 && !f[f.length - 1]) f.pop();
+      if (i === 0 && f.length === 3 && MANUAL_HEAD_RE.test(f[0])) continue;
+      if (f.length !== 3 || !f[0] || !f[1] || f.some(x => x.length > 128)) return { list: null, bad: lines[i].n };
       if (out.length < MANUAL_MAX) out.push({ localPort: f[0], neighbor: f[1], platform: '', remotePort: f[2], remoteDesc: '', capability: '', ip: '', protocol: 'manual' });
     }
-    return out;
+    return { list: out, bad: 0 };
   }
+  const parseManualNeighbors = text => manualNeighbors(text).list;
+  // 只有鄰居輸出、沒有設定內容的檔案（資產清冊不當成設備加入，改提醒放置位置）
+  const neighborOnly = (text, p) => !!p && p.vendor === 'unknown' && !(p.interfaces || []).length && LLDP_MARK.test(String(text || ''));
   // 防火牆分析匯出的前面板（FwPanel.panelExport，format alpaca-panel）：逐欄檢查型別與長度，不合格整份拒絕；
   // 顏色只接受 #rrggbb，其餘欄位一律當文字（畫面與 SVG 都會跳脫）
   const IMPORT_PORT_MAX = 512, IMPORT_GROUP_MAX = 64;
@@ -142,7 +147,8 @@
       const lp = d.byKey[portKey(n.localPort)];
       if (!lp) { unmatched.push({ host: d.hostname, port: n.localPort, neighbor: n.neighbor, remotePort: n.remotePort || '', reason: 'local' }); return; }
       const peer = devBy[hostKey(n.neighbor)];
-      if (peer && peer !== d) {
+      if (peer === d) { unmatched.push({ host: d.hostname, port: lp, neighbor: n.neighbor, remotePort: n.remotePort || '', reason: 'self' }); return; }
+      if (peer) {
         const rp = peer.byKey[portKey(n.remotePort)];
         if (!rp) { unmatched.push({ host: d.hostname, port: lp, neighbor: peer.hostname, remotePort: n.remotePort || '', reason: 'remote' }); return; }
         addLink({ dev: d.idx, port: lp }, { dev: peer.idx, port: rp }, n.protocol === 'manual' ? 'custom' : 'lldp', n);
@@ -327,7 +333,7 @@
   const modelOf = p => { const sp = SP(); return (sp && sp.chosen.get(p)) || ''; };
   const lldpOf = p => _lldpOv.get(p) || null;
   const LINK_KINDS = ['lldp', 'confirmed', 'custom', 'ext'];
-  const REASONS = ['local', 'remote', 'extmax'];
+  const REASONS = ['local', 'remote', 'extmax', 'self'];
   function cablingHtml(entries, editorOpen) {
     const sp = SP(), ps = PS();
     if (!sp || !ps) return '';
@@ -338,6 +344,13 @@
     const btn = 'background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer';
     let h = `<div id="ptopo-card" style="${box}"><div style="font-size:14px;font-weight:600;margin-bottom:4px">🔗 ${esc2(T('ptopo.title'))}</div>`
       + `<div style="font-size:12px;color:var(--text-dim);margin-bottom:6px">${esc2(T('ptopo.hint'))}</div>`;
+    // 兩台以上、有交換器既沒有鄰居資料也沒有任何接線：提醒鄰居輸出的擺放位置
+    const noNb = cb.devices.filter(d => d.parsed && !((lldpOf(d.src) || d.parsed.lldp || []).length) && !cb.links.some(l => l.a.dev === d.idx || l.b.dev === d.idx));
+    if (cb.devices.length >= 2 && noNb.length) {
+      const names = noNb.slice(0, 10).map(d => d.hostname).join('、') + (noNb.length > 10 ? '…' : '');
+      h += `<div data-ptopo-nolldp="${noNb.length}" style="font-size:12px;color:var(--yellow);margin-bottom:6px">${esc2(T('ptopo.no_lldp', { n: noNb.length, hosts: names }))} `
+        + `<button style="${btn}" data-ptopo-go-lldp="${noNb[0].idx}">${esc2(T('ptopo.go_lldp'))}</button></div>`;
+    }
     // 逐台型號（大多數設定檔沒有型號，讀不出時可手動選或用自訂型號）
     h += `<details data-ptopo-sec="models" style="margin-bottom:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.models', { n: cb.devices.length }))}</summary><div style="font-size:12px">`
       + cb.devices.map(d => `<div style="margin:3px 0"><b>${esc2(d.hostname)}</b>：${esc2(d.imp ? (d.imp.model || '') + ' · ' + T('ptopo.imported') : d.pn && d.pn.source === 'model' ? d.pn.model : T('ptopo.from_config'))} ${d.pn ? sp.modelSelectHtml(d.pn, !!modelOf(d.parsed), 'data-ptopo-model="' + d.idx + '"') : ''}</div>`).join('')
@@ -409,6 +422,13 @@
     document.addEventListener('click', e => {
       const t = e.target && e.target.closest ? e.target : null;
       if (!t) return;
+      if (t.closest('[data-ptopo-go-lldp]')) {
+        const sec = document.querySelector('details[data-ptopo-sec="lldp"]'), sel = document.querySelector('select[data-ptopo-lldp-dev]'), ta = document.getElementById('ptopo-lldp');
+        if (sec) sec.open = true;
+        if (sel) sel.value = String(+t.closest('[data-ptopo-go-lldp]').getAttribute('data-ptopo-go-lldp'));
+        if (ta) { ta.focus(); if (ta.scrollIntoView) ta.scrollIntoView({ block: 'center' }); }
+        return;
+      }
       if (t.closest('[data-ptopo-lldp-apply]')) {
         const sel = document.querySelector('select[data-ptopo-lldp-dev]'), ta = document.getElementById('ptopo-lldp');
         const d = sel ? _all()[+sel.value] : null;
@@ -416,11 +436,13 @@
         const key = d.parsed || d.imported, vendor = d.parsed ? d.parsed.vendor : '';
         const txt = String(ta.value).slice(0, 2000000).replace(/\r\n?/g, '\n');
         let list = [];
-        const manual = parseManualNeighbors(txt);
-        if (manual) list = manual;
+        const man = manualNeighbors(txt);
+        if (man.list) list = man.list;
         else try { list = typeof LLDPParser !== 'undefined' && txt.trim() ? (LLDPParser.parse(txt, vendor) || []).filter(n => n && n.localPort && n.neighbor) : []; } catch (er) { list = []; }
-        if (txt.trim()) _lldpOv.set(key, list); else _lldpOv.delete(key);
-        _lldpMsg = T('ptopo.lldp_done', { host: d.imported ? d.imported.hostname : String((d.parsed.sys && d.parsed.sys.hostname) || d.hostname || ''), n: list.length });
+        // 手動表有一行不合格（又不是鄰居輸出）時不覆蓋已套用的內容，只顯示行號
+        const badMan = !list.length && man.bad;
+        if (!badMan) { if (txt.trim()) _lldpOv.set(key, list); else _lldpOv.delete(key); }
+        _lldpMsg = badMan ? T('ptopo.manual_bad', { n: man.bad }) : T('ptopo.lldp_done', { host: d.imported ? d.imported.hostname : String((d.parsed.sys && d.parsed.sys.hostname) || d.hostname || ''), n: list.length });
         redraw(false);
         return;
       }
@@ -612,7 +634,7 @@
 
   const IMPORT_ERR_CODES = ['json', 'format', 'host', 'ports', 'size'];
   const PROJ_ERR_CODES = ['json', 'format', 'firewall', 'size'];
-  const api = { cablingToDrawio, cablingToMermaid, buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, parseManualNeighbors, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
+  const api = { cablingToDrawio, cablingToMermaid, buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, parseManualNeighbors, manualNeighbors, neighborOnly, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
   if (typeof window !== 'undefined') window.SwCabling = api;
   return api;
 })();

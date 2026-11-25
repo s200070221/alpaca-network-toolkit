@@ -4114,19 +4114,21 @@ function swReadText(f){
 // ── 多設備資產清冊（2026-09-29 新增，第六輪 WF） ─────────────────────────────
 // 擷取邏輯在 switch-analyzer-inventory.js（純函式），這裡只負責 UI；每份設定獨立 parseAny()，
 // 不影響目前主畫面已載入的設定（parsed）
-let invRows=[], invTexts=[], invFails=[], invParsed=[];
+let invRows=[], invTexts=[], invFails=[], invParsed=[], invNbOnly=[];   // invNbOnly：只有鄰居輸出、沒有設定內容而未加入的檔名
 function renderInventoryCard(){
   const btn='background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;cursor:pointer';
   const btn2='background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer';
   let h=`<div style="padding:16px 18px;overflow-y:auto;flex:1">
     <h2 style="margin:0 0 8px">${esc(tr('inv.title'))}</h2>
-    <div style="font-size:12px;color:var(--text-dim);margin-bottom:10px">${esc(tr('inv.hint'))}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px">${esc(tr('inv.hint'))}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:10px">🔗 ${esc(tr('inv.lldp_place'))}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
       <label style="${btn}">${esc(tr('inv.add_btn'))}<input type="file" id="inv-files" multiple accept=".txt,.cfg,.conf,.log,.rsc,.json" onchange="invAddFiles(this)"></label>
       <button style="${btn2}" onclick="invLoadCablingDemo()" title="${esc(tr('inv.demo_cabling_tip'))}">${esc(tr('inv.demo_cabling'))}</button>
-      ${invRows.length?`<button style="${btn2}" onclick="invExportCSV()">${esc(tr('inv.csv_btn'))}</button><button style="${btn2}" onclick="invRows=[];invTexts=[];invFails=[];invParsed=[];goldResult=null;if(window.SwCabling)SwCabling.reset();navGo('inventory')">${esc(tr('inv.clear_btn'))}</button>`:''}
+      ${invRows.length?`<button style="${btn2}" onclick="invExportCSV()">${esc(tr('inv.csv_btn'))}</button><button style="${btn2}" onclick="invRows=[];invTexts=[];invFails=[];invParsed=[];invNbOnly=[];goldResult=null;if(window.SwCabling)SwCabling.reset();navGo('inventory')">${esc(tr('inv.clear_btn'))}</button>`:''}
     </div>`;
   if(invFails.length)h+=`<div style="font-size:12px;color:var(--red);margin-bottom:8px">${esc(tr('inv.parse_fail').replace('{file}',invFails.join('、')))}</div>`;
+  if(invNbOnly.length)h+=`<div data-inv-nbonly="${invNbOnly.length}" style="font-size:12px;color:var(--yellow);margin-bottom:8px">${esc(tr('inv.nb_only').replace('{file}',invNbOnly.join('、')))}</div>`;
   if(!invRows.length)return h+`<div class="nodata">${esc(tr('inv.empty'))}</div></div>`;
   const dup=invDuplicateHosts(invRows);
   if(dup.length)h+=`<div style="font-size:12px;color:var(--yellow);margin-bottom:8px">${esc(tr('inv.dup_warn').replace('{list}',dup.join('、')))}</div>`;
@@ -4498,6 +4500,8 @@ function invAddTexts(names,texts){
     const cfg=String(t).replace(/^﻿/,'').replace(/\r\n/g,'\n');
     try{
       const p=parseAny(cfg);
+      // 只有鄰居輸出的檔案不當成設備（會變成一台 unknown），改提醒放在該設備設定檔的最後面
+      if(window.SwCabling&&window.SwCabling.neighborOnly(cfg,p)){if(!invNbOnly.includes(names[k]))invNbOnly.push(names[k]);return;}
       // 設定檔後面附上 LLDP／CDP 鄰居輸出時一併讀出（接線拓樸 XN192 使用）
       if(window.SwCabling&&!(p.lldp&&p.lldp.length))p.lldp=window.SwCabling.lldpFromText(cfg,p.vendor);
       invRows.push(invBuildRow(names[k],cfg,p,x=>computeSwitchHealth(x,{vulnText:vulnLoadText(),vulnVersion:vulnVerOverride[names[k]]||''})));
