@@ -1,0 +1,323 @@
+// ── 拓樸設計頁（XN202，第一步）──────────────────────────────────────────────────
+// 在畫布上放交換器（廠牌＋型號，型號資料沿用產生器的 DEVICE_MODELS／NetBox 與自訂型號）、拖拉位置、
+// 選兩台設備與各自的埠連線，存成設計檔（format alpaca-design）。這一步不產生設定檔。
+// 純函式（addDevice／addLink／buildDesign／parseDesign 等）不碰 DOM，測試以沙箱載入；畫面部分只在有 document 時啟動。
+// 資料只存記憶體（不寫 localStorage）；設備名稱只當值、不當物件鍵（原型污染），內部以程式產生的 d1、d2… 為 ID。
+(function () {
+  'use strict';
+  const lc = s => String(s || '').toLowerCase();
+  // 與產生器 #vendor 選單相同的值；h3c 的型號沿用 comware
+  const VENDORS = [
+    ['comware', 'HPE Comware'], ['h3c', 'H3C Comware'], ['fortiswitch', 'FortiSwitch'], ['aruba', 'Aruba CX'],
+    ['cisco', 'Cisco IOS/IOS-XE'], ['cisco_nxos', 'Cisco NX-OS'], ['juniper', 'Juniper (Junos)'], ['dell-os10', 'Dell OS10'],
+    ['arista', 'Arista EOS'], ['brocade', 'Ruckus/Brocade ICX'], ['alcatel', 'Alcatel OmniSwitch'], ['extreme', 'Extreme EXOS'],
+    ['procurve', 'Aruba ProCurve / ArubaOS-Switch'], ['routeros', 'MikroTik RouterOS'], ['ruijie', 'Ruijie RGOS'],
+    ['netgear', 'Netgear M4300'], ['edgeswitch', 'Ubiquiti EdgeSwitch'], ['sonic', 'SONiC'], ['planet', 'Planet'],
+  ];
+  const VENDOR_IDS = VENDORS.map(v => v[0]);
+  const vendorName = id => (VENDORS.find(v => v[0] === id) || [id, id])[1];
+  const modelVendor = id => (id === 'h3c' ? 'comware' : id);
+  const MAX_DEVICES = 64, MAX_LINKS = 512;
+  const CANVAS_W = 1000, CANVAS_H = 560, BOX_W = 180, BOX_H = 58;
+  const HOST_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/;
+  const DESIGN_ERR_CODES = ['json', 'format', 'device', 'link', 'max'];
+
+  const SP = () => (typeof window !== 'undefined' && window.SwPanel) || null;
+  // 某廠牌可選的型號：型號資料＋自訂型號（SwPanel.choicesFor）
+  const modelChoices = vendor => { const sp = SP(); return sp ? sp.choicesFor(modelVendor(vendor)) : []; };
+  const findModel = (vendor, value) => (value ? modelChoices(vendor).find(m => m.value === value) || null : null);
+  const portsOf = (vendor, value) => { const m = findModel(vendor, value), sp = SP(); return m && sp ? sp.expandPorts(m).map(p => p.name) : []; };
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(v)));
+
+  function newDesign() { return { devices: [], links: [], seq: 0 }; }
+  const devById = (d, id) => d.devices.find(x => x.id === id) || null;
+  // 已接線的埠（小寫埠名集合）
+  function usedPorts(d, id) {
+    const s = new Set();
+    d.links.forEach(l => [l.a, l.b].forEach(e => { if (e.dev === id) s.add(lc(e.port)); }));
+    return s;
+  }
+  // 新設備預設放在格狀位置，之後再拖拉
+  function nextSlot(d) {
+    const n = d.devices.length, cols = Math.floor(CANVAS_W / (BOX_W + 30));
+    return { x: 20 + (n % cols) * (BOX_W + 30), y: 20 + Math.floor(n / cols) * (BOX_H + 60) % (CANVAS_H - BOX_H) };
+  }
+  function addDevice(d, o) {
+    const hostname = String((o && o.hostname) || '').trim(), vendor = String((o && o.vendor) || ''), model = String((o && o.model) || '');
+    if (d.devices.length >= MAX_DEVICES) return { ok: false, code: 'max' };
+    if (!HOST_RE.test(hostname)) return { ok: false, code: 'host' };
+    if (d.devices.some(x => lc(x.hostname) === lc(hostname))) return { ok: false, code: 'dup' };
+    if (!VENDOR_IDS.includes(vendor)) return { ok: false, code: 'vendor' };
+    if (!findModel(vendor, model)) return { ok: false, code: 'model' };
+    const pos = o.x != null && o.y != null ? { x: o.x, y: o.y } : nextSlot(d);
+    const dev = { id: 'd' + (++d.seq), hostname, vendor, model, x: clamp(pos.x, 0, CANVAS_W - BOX_W), y: clamp(pos.y, 0, CANVAS_H - BOX_H) };
+    d.devices.push(dev);
+    return { ok: true, dev };
+  }
+  function removeDevice(d, id) {
+    d.devices = d.devices.filter(x => x.id !== id);
+    d.links = d.links.filter(l => l.a.dev !== id && l.b.dev !== id);
+  }
+  function moveDevice(d, id, x, y) {
+    const dev = devById(d, id);
+    if (dev) { dev.x = clamp(x, 0, CANVAS_W - BOX_W); dev.y = clamp(y, 0, CANVAS_H - BOX_H); }
+  }
+  function addLink(d, a, b) {
+    if (d.links.length >= MAX_LINKS) return { ok: false, code: 'max' };
+    const da = a && devById(d, a.dev), db = b && devById(d, b.dev);
+    if (!da || !db || !a.port || !b.port) return { ok: false, code: 'port' };
+    if (da === db) return { ok: false, code: 'self' };
+    const pa = portsOf(da.vendor, da.model).find(p => lc(p) === lc(a.port)), pb = portsOf(db.vendor, db.model).find(p => lc(p) === lc(b.port));
+    if (!pa || !pb) return { ok: false, code: 'port' };
+    if (usedPorts(d, da.id).has(lc(pa)) || usedPorts(d, db.id).has(lc(pb))) return { ok: false, code: 'used' };
+    const link = { a: { dev: da.id, port: pa }, b: { dev: db.id, port: pb } };
+    d.links.push(link);
+    return { ok: true, link };
+  }
+  function removeLink(d, i) { if (i >= 0 && i < d.links.length) d.links.splice(i, 1); }
+
+  // 設計檔：設備以名稱互相參照（ID 每次讀入重新產生）；自訂型號只存名稱（value 是本機 localStorage 的編號）
+  function buildDesign(d) {
+    const hostOf = id => (devById(d, id) || {}).hostname || '';
+    return {
+      format: 'alpaca-design', version: 1,
+      devices: d.devices.map(x => {
+        const m = findModel(x.vendor, x.model);
+        return m && m.custom ? { hostname: x.hostname, vendor: x.vendor, model: '', custom: m.label, x: x.x, y: x.y } : { hostname: x.hostname, vendor: x.vendor, model: x.model, x: x.x, y: x.y };
+      }),
+      links: d.links.map(l => ({ a: { host: hostOf(l.a.dev), port: l.a.port }, b: { host: hostOf(l.b.dev), port: l.b.port } })),
+    };
+  }
+  const str = (v, n) => (typeof v === 'string' && v.length <= n ? v : null);
+  const num = v => (typeof v === 'number' && isFinite(v) ? v : null);
+  // 讀入設計檔：結構不合格整份拒絕；本機找不到的型號清空並計數（missing），埠對不上的線略過並計數（dropped）
+  function parseDesign(text) {
+    let o;
+    try { o = JSON.parse(String(text || '')); } catch (e) { return { ok: false, code: 'json' }; }
+    if (!o || typeof o !== 'object' || o.format !== 'alpaca-design' || o.version !== 1 || !Array.isArray(o.devices) || !Array.isArray(o.links)) return { ok: false, code: 'format' };
+    if (o.devices.length > MAX_DEVICES || o.links.length > MAX_LINKS) return { ok: false, code: 'max' };
+    const d = newDesign(), byHost = new Map();
+    let missing = 0, dropped = 0;
+    for (const x of o.devices) {
+      const hostname = x && str(x.hostname, 32), vendor = x && str(x.vendor, 32), model = x && x.model != null ? str(x.model, 200) : '', custom = x && x.custom != null ? str(x.custom, 200) : '';
+      if (!hostname || !HOST_RE.test(hostname) || byHost.has(lc(hostname)) || !vendor || !VENDOR_IDS.includes(vendor) || model == null || custom == null || num(x.x) == null || num(x.y) == null) return { ok: false, code: 'device' };
+      let value = model;
+      if (custom) { const m = modelChoices(vendor).find(c => c.custom && c.label === custom); value = m ? m.value : ''; }
+      if (!findModel(vendor, value)) { value = ''; missing++; }
+      const dev = { id: 'd' + (++d.seq), hostname, vendor, model: value, x: clamp(x.x, 0, CANVAS_W - BOX_W), y: clamp(x.y, 0, CANVAS_H - BOX_H) };
+      d.devices.push(dev);
+      byHost.set(lc(hostname), dev);
+    }
+    for (const l of o.links) {
+      const ah = l && l.a && str(l.a.host, 32), ap = l && l.a && str(l.a.port, 128), bh = l && l.b && str(l.b.host, 32), bp = l && l.b && str(l.b.port, 128);
+      if (!ah || !ap || !bh || !bp || !byHost.has(lc(ah)) || !byHost.has(lc(bh))) return { ok: false, code: 'link' };
+      const r = addLink(d, { dev: byHost.get(lc(ah)).id, port: ap }, { dev: byHost.get(lc(bh)).id, port: bp });
+      if (!r.ok) dropped++;
+    }
+    return { ok: true, design: d, missing, dropped };
+  }
+
+  // ── SVG 畫布 ──
+  const xesc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const cut = (s, n) => (String(s).length > n ? String(s).slice(0, n - 1) + '…' : String(s));
+  const center = dev => ({ x: dev.x + BOX_W / 2, y: dev.y + BOX_H / 2 });
+  // 畫布上的埠名縮寫（只影響顯示）：長名稱的介面型別換成常見縮寫
+  const SHORT = [[/^HundredGigE/i, 'Hu'], [/^FortyGigabitEthernet/i, 'Fo'], [/^TwentyFiveGigE/i, 'Twe'], [/^TenGigabitEthernet/i, 'Te'],
+    [/^Ten-GigabitEthernet/i, 'XGE'], [/^GigabitEthernet/i, 'Gi'], [/^FastEthernet/i, 'Fa'], [/^Ethernet/i, 'Et']];
+  const shortPort = p => { for (const [re, r] of SHORT) if (re.test(p)) return String(p).replace(re, r); return String(p); };
+  function linksSvg(d) {
+    return d.links.map((l, i) => {
+      const a = devById(d, l.a.dev), b = devById(d, l.b.dev);
+      if (!a || !b) return '';
+      const p = center(a), q = center(b), at = t => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
+      const la = at(0.3), lb = at(0.7);
+      const lbl = (pt, txt) => `<text x="${pt.x.toFixed(1)}" y="${pt.y.toFixed(1)}" text-anchor="middle" font-size="10" fill="currentColor" stroke="var(--card)" stroke-width="3" paint-order="stroke"><title>${xesc(txt)}</title>${xesc(cut(shortPort(txt), 22))}</text>`;
+      return `<g data-td-link="${i}"><line x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" stroke="#22c55e" stroke-width="2"/>${lbl(la, l.a.port)}${lbl(lb, l.b.port)}</g>`;
+    }).join('');
+  }
+  function deviceSvg(d, dev, sel, T) {
+    const m = findModel(dev.vendor, dev.model), total = portsOf(dev.vendor, dev.model).length, used = usedPorts(d, dev.id).size;
+    const stroke = sel === dev.id ? 'var(--accent)' : 'var(--border)';
+    return `<g data-td-dev="${xesc(dev.id)}" transform="translate(${dev.x},${dev.y})" style="cursor:grab">`
+      + `<title>${xesc(dev.hostname + ' · ' + vendorName(dev.vendor) + ' · ' + (m ? m.label : '?'))}</title><rect width="${BOX_W}" height="${BOX_H}" rx="6" fill="var(--chip)" stroke="${stroke}" stroke-width="${sel === dev.id ? 2.5 : 1.5}"/>`
+      + `<text x="8" y="18" font-size="13" font-weight="600" fill="currentColor">${xesc(cut(dev.hostname, 24))}</text>`
+      + `<text x="8" y="34" font-size="10" fill="var(--dim)">${xesc(cut(vendorName(dev.vendor) + ' · ' + (m ? m.label : '?'), 34))}</text>`
+      + `<text x="8" y="49" font-size="10" fill="var(--dim)">${xesc(T('td.ports_used', { used, total }))}</text></g>`;
+  }
+  function canvasSvg(d, sel, T) {
+    return `<svg data-td-svg viewBox="0 0 ${CANVAS_W} ${CANVAS_H}" width="100%" style="display:block;max-width:${CANVAS_W}px;min-width:720px;aspect-ratio:${CANVAS_W}/${CANVAS_H};touch-action:none;user-select:none;color:var(--text)" role="img">`
+      + `<rect width="${CANVAS_W}" height="${CANVAS_H}" fill="var(--bg)" stroke="var(--border)"/>`
+      + `<g data-td-links>${linksSvg(d)}</g>${d.devices.map(x => deviceSvg(d, x, sel, T)).join('')}</svg>`;
+  }
+
+  const api = {
+    VENDORS, VENDOR_IDS, vendorName, shortPort, modelChoices, findModel, portsOf, newDesign, addDevice, removeDevice, moveDevice, addLink, removeLink,
+    usedPorts, buildDesign, parseDesign, canvasSvg, DESIGN_ERR_CODES, MAX_DEVICES, MAX_LINKS, CANVAS_W, CANVAS_H, BOX_W, BOX_H,
+  };
+  if (typeof window !== 'undefined') window.TopoDesigner = api;
+  if (typeof document === 'undefined' || typeof LANG_TD === 'undefined') return;
+
+  // ── 畫面 ──
+  const FORMAL = ['zhTW', 'en', 'ja'], LANG_ORDER = ['zhTW', 'en', 'ja', 'tlh', 'pirate', 'emoji', 'bureau', 'cat', 'bean', 'alpaca', 'yanse', 'wuxia'];
+  const LANG_NAME = { zhTW: '繁體中文', en: 'English', ja: '日本語', tlh: 'tlhIngan Hol', pirate: 'Pirate', emoji: 'Emoji', bureau: '公文體', cat: '喵語', bean: '豆語', alpaca: '羊駝語', yanse: '厭世語', wuxia: '武俠' };
+  // 語言：正式語言與其他工具共用 cw_lang，沒存過時依瀏覽器語言；本頁選的彩蛋語言另存 topo_designer_lang
+  function loadLang() {
+    try { const egg = localStorage.getItem('topo_designer_lang'); if (LANG_TD[egg] && FORMAL.indexOf(egg) < 0) return egg; } catch (e) { /* 略過 */ }
+    try { const v = localStorage.getItem('cw_lang'); if (FORMAL.indexOf(v) >= 0) return v; } catch (e) { /* 略過 */ }
+    const n = lc(navigator.language);
+    return n.indexOf('ja') === 0 ? 'ja' : (n.indexOf('zh') === 0 || !n ? 'zhTW' : 'en');
+  }
+  function saveLang(l) {
+    try {
+      if (FORMAL.indexOf(l) >= 0) { localStorage.setItem('cw_lang', l); localStorage.removeItem('topo_designer_lang'); }
+      else localStorage.setItem('topo_designer_lang', l);
+    } catch (e) { /* 略過 */ }
+  }
+  let lang = loadLang();
+  const tr = k => (LANG_TD[lang] && LANG_TD[lang][k]) || LANG_TD.zhTW[k] || k;
+  window.tr = window.tr || tr;   // 共用模組（panel-svg 等）以 typeof tr 取得翻譯
+  const T = (k, p) => { let s = tr(k); Object.keys(p || {}).forEach(n => { s = s.split('{' + n + '}').join(String(p[n])); }); return s; };
+  const esc = xesc;
+  const $ = id => document.getElementById(id);
+  let D = newDesign(), sel = null, pickNext = 'a', msg = '', msgBad = false;
+  const say = (text, bad) => { msg = text; msgBad = !!bad; const el = $('td-msg'); if (el) { el.textContent = msg; el.className = bad ? 'msg bad' : 'msg'; } };
+
+  function fillStatic() {
+    document.documentElement.lang = lang === 'zhTW' ? 'zh-Hant' : lang === 'ja' ? 'ja' : 'en';
+    document.title = tr('td.title');
+    document.querySelectorAll('[data-td-i18n]').forEach(el => { el.textContent = tr(el.getAttribute('data-td-i18n')); });
+    const ls = $('td-lang-sel');
+    ls.innerHTML = LANG_ORDER.map(l => `<option value="${l}"${l === lang ? ' selected' : ''}>${esc(LANG_NAME[l])}</option>`).join('');
+    const vs = $('td-vendor'), cur = vs.value || 'cisco';
+    vs.innerHTML = VENDORS.map(v => `<option value="${esc(v[0])}"${v[0] === cur ? ' selected' : ''}>${esc(v[1])}</option>`).join('');
+    fillModels();
+    if (window.renderToolkitVersion) window.renderToolkitVersion(lang);
+  }
+  function fillModels() {
+    const ms = $('td-model'), keep = ms.value, list = modelChoices($('td-vendor').value);
+    ms.innerHTML = `<option value="">${esc(tr('td.pick'))}</option>` + list.map(m => `<option value="${esc(m.value)}"${m.value === keep ? ' selected' : ''}>${esc(m.label)}${m.custom ? ' (' + esc(tr('td.custom')) + ')' : ''}</option>`).join('');
+  }
+  function fillEnd(end) {
+    const dsel = $('td-' + end + '-dev'), psel = $('td-' + end + '-port'), keepD = dsel.value, keepP = psel.value;
+    dsel.innerHTML = `<option value="">${esc(tr('td.pick'))}</option>` + D.devices.map(x => `<option value="${esc(x.id)}"${x.id === keepD ? ' selected' : ''}>${esc(x.hostname)}</option>`).join('');
+    const dev = devById(D, dsel.value), used = dev ? usedPorts(D, dev.id) : new Set();
+    const ports = dev ? portsOf(dev.vendor, dev.model).filter(p => !used.has(lc(p))) : [];
+    psel.innerHTML = `<option value="">${esc(tr('td.pick'))}</option>` + ports.map(p => `<option value="${esc(p)}"${p === keepP ? ' selected' : ''}>${esc(p)}</option>`).join('');
+  }
+  function render() {
+    $('td-canvas').innerHTML = D.devices.length ? canvasSvg(D, sel, T) : `<div class="hint">${esc(tr('td.empty_canvas'))}</div>`;
+    fillEnd('a'); fillEnd('b');
+    const hostOf = id => (devById(D, id) || {}).hostname || '';
+    $('td-dev-list').innerHTML = D.devices.length
+      ? `<table><thead><tr><th>${esc(tr('td.col_host'))}</th><th>${esc(tr('td.col_vendor'))}</th><th>${esc(tr('td.col_model'))}</th><th>${esc(tr('td.col_ports'))}</th><th></th></tr></thead><tbody>`
+        + D.devices.map(x => { const m = findModel(x.vendor, x.model); return `<tr><td>${esc(x.hostname)}</td><td>${esc(vendorName(x.vendor))}</td><td>${esc(m ? m.label : '?')}</td><td>${usedPorts(D, x.id).size}／${portsOf(x.vendor, x.model).length}</td><td><button class="btn btn-sm" data-td-rm-dev="${esc(x.id)}">${esc(tr('td.rm'))}</button></td></tr>`; }).join('') + '</tbody></table>'
+      : `<div class="hint">${esc(tr('td.no_devices'))}</div>`;
+    $('td-link-list').innerHTML = D.links.length
+      ? `<table><thead><tr><th>${esc(tr('td.col_a'))}</th><th>${esc(tr('td.col_b'))}</th><th></th></tr></thead><tbody>`
+        + D.links.map((l, i) => `<tr><td>${esc(hostOf(l.a.dev))} <span class="mono">${esc(l.a.port)}</span></td><td>${esc(hostOf(l.b.dev))} <span class="mono">${esc(l.b.port)}</span></td><td><button class="btn btn-sm" data-td-rm-link="${i}">${esc(tr('td.rm'))}</button></td></tr>`).join('') + '</tbody></table>'
+      : `<div class="hint">${esc(tr('td.no_links'))}</div>`;
+  }
+
+  // 拖拉：畫布上抓住設備方塊；移動距離很小時視為點選（依序填入 A 端、B 端）
+  let drag = null;
+  const svgPoint = (svg, ev) => { const m = svg.getScreenCTM(); if (!m) return { x: 0, y: 0 }; const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse()); return { x: p.x, y: p.y }; };
+  function onDown(ev) {
+    const g = ev.target.closest && ev.target.closest('[data-td-dev]'), svg = ev.target.closest && ev.target.closest('[data-td-svg]');
+    if (!g || !svg) return;
+    const dev = devById(D, g.getAttribute('data-td-dev'));
+    if (!dev) return;
+    const p = svgPoint(svg, ev);
+    drag = { dev, svg, g, dx: p.x - dev.x, dy: p.y - dev.y, sx: ev.clientX, sy: ev.clientY, moved: false };
+    try { svg.setPointerCapture(ev.pointerId); } catch (e) { /* 略過 */ }
+    ev.preventDefault();
+  }
+  function onMove(ev) {
+    if (!drag) return;
+    if (Math.abs(ev.clientX - drag.sx) + Math.abs(ev.clientY - drag.sy) > 4) drag.moved = true;
+    if (!drag.moved) return;
+    const p = svgPoint(drag.svg, ev);
+    moveDevice(D, drag.dev.id, p.x - drag.dx, p.y - drag.dy);
+    drag.g.setAttribute('transform', `translate(${drag.dev.x},${drag.dev.y})`);
+    const lk = drag.svg.querySelector('[data-td-links]');
+    if (lk) lk.innerHTML = linksSvg(D);
+  }
+  function onUp() {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    if (d.moved) return;
+    // 點選：依序填入 A 端、B 端
+    $('td-' + pickNext + '-dev').value = d.dev.id;
+    sel = d.dev.id;
+    const end = pickNext;
+    pickNext = pickNext === 'a' ? 'b' : 'a';
+    render();
+    say(T(end === 'a' ? 'td.picked_a' : 'td.picked_b', { host: d.dev.hostname }));
+  }
+
+  function download(name, text) {
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function loadText(text) {
+    const r = parseDesign(text);
+    if (!r.ok) { say(tr('td.err_' + r.code), true); return r; }
+    D = r.design; sel = null; pickNext = 'a';
+    render();
+    const parts = [T('td.loaded', { d: D.devices.length, l: D.links.length })];
+    if (r.missing) parts.push(T('td.loaded_missing', { n: r.missing }));
+    if (r.dropped) parts.push(T('td.loaded_dropped', { n: r.dropped }));
+    say(parts.join(' '), !!(r.missing || r.dropped));
+    return r;
+  }
+
+  function init() {
+    fillStatic();
+    render();
+    $('td-lang-sel').addEventListener('change', e => { lang = e.target.value; saveLang(lang); fillStatic(); render(); });
+    $('td-vendor').addEventListener('change', fillModels);
+    ['a', 'b'].forEach(end => $('td-' + end + '-dev').addEventListener('change', () => fillEnd(end)));
+    $('td-dev-add').addEventListener('click', () => {
+      const r = addDevice(D, { hostname: $('td-host').value, vendor: $('td-vendor').value, model: $('td-model').value });
+      if (!r.ok) { say(tr('td.err_' + r.code), true); return; }
+      $('td-host').value = '';
+      render();
+      say(T('td.added_dev', { host: r.dev.hostname }));
+    });
+    $('td-link-add').addEventListener('click', () => {
+      const r = addLink(D, { dev: $('td-a-dev').value, port: $('td-a-port').value }, { dev: $('td-b-dev').value, port: $('td-b-port').value });
+      if (!r.ok) { say(tr('td.err_' + r.code), true); return; }
+      const h = id => devById(D, id).hostname;
+      render();
+      say(T('td.added_link', { a: h(r.link.a.dev), pa: r.link.a.port, b: h(r.link.b.dev), pb: r.link.b.port }));
+    });
+    document.addEventListener('click', e => {
+      const t = e.target && e.target.closest ? e.target : null;
+      if (!t) return;
+      const rd = t.closest('[data-td-rm-dev]'), rl = t.closest('[data-td-rm-link]');
+      if (rd) { removeDevice(D, rd.getAttribute('data-td-rm-dev')); if (!devById(D, sel)) sel = null; render(); }
+      else if (rl) { removeLink(D, +rl.getAttribute('data-td-rm-link')); render(); }
+    });
+    $('td-save').addEventListener('click', () => download('topology-design.json', JSON.stringify(buildDesign(D), null, 2)));
+    $('td-load').addEventListener('change', e => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      f.text().then(loadText).finally(() => { e.target.value = ''; });
+    });
+    $('td-clear').addEventListener('click', () => { D = newDesign(); sel = null; pickNext = 'a'; render(); say(tr('td.cleared')); });
+    const cv = $('td-canvas');
+    cv.addEventListener('pointerdown', onDown);
+    cv.addEventListener('pointermove', onMove);
+    cv.addEventListener('pointerup', onUp);
+    cv.addEventListener('pointercancel', () => { drag = null; });
+  }
+  // 頁面與測試用：直接操作目前的設計
+  api.state = () => D;
+  api.render = () => render();
+  api.loadText = loadText;
+  api.add = o => { const r = addDevice(D, o); if (r.ok) render(); return r; };
+  api.link = (a, b) => { const r = addLink(D, a, b); if (r.ok) render(); return r; };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+})();
