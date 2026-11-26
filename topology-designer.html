@@ -36,6 +36,7 @@ main{max-width:1100px;margin:0 auto;padding:16px}
 #td-model{max-width:min(420px,100%)}
 .end{border:1px solid var(--border);border-radius:6px;padding:6px 10px}
 .end b{font-size:12px}
+[hidden]{display:none!important}
 .msg{min-height:1.4em;font-size:13px;color:var(--green)}
 .msg.bad{color:var(--red)}
 .tbl-wrap{overflow-x:auto}
@@ -76,6 +77,16 @@ a{color:var(--accent)}
     </div>
   </section>
   <section class="card">
+    <h2 data-td-i18n="td.sec_vlan"></h2>
+    <div class="hint" data-td-i18n="td.vlan_hint"></div>
+    <div class="row">
+      <label><span data-td-i18n="td.vlan_id"></span><input id="td-vlan-id" class="txt" inputmode="numeric" maxlength="4" style="width:90px" autocomplete="off"></label>
+      <label><span data-td-i18n="td.vlan_name"></span><input id="td-vlan-name" class="txt" maxlength="32" autocomplete="off" spellcheck="false"></label>
+      <button class="btn" id="td-vlan-add" data-td-i18n="td.vlan_add"></button>
+    </div>
+    <div class="tbl-wrap" id="td-vlan-list"></div>
+  </section>
+  <section class="card">
     <h2 data-td-i18n="td.sec_link"></h2>
     <div class="row">
       <div class="end"><b data-td-i18n="td.end_a"></b><div class="row">
@@ -84,7 +95,25 @@ a{color:var(--accent)}
       <div class="end"><b data-td-i18n="td.end_b"></b><div class="row">
         <label><span data-td-i18n="td.device"></span><select id="td-b-dev"></select></label>
         <label><span data-td-i18n="td.port"></span><select id="td-b-port"></select></label></div></div>
+    </div>
+    <div class="row">
+      <label><span data-td-i18n="td.link_mode"></span><select id="td-l-mode"></select></label>
+      <label data-td-show="l-access" hidden><span data-td-i18n="td.access_vlan"></span><select id="td-l-vlan"></select></label>
+      <label data-td-show="l-trunk" hidden><span data-td-i18n="td.allowed"></span><input id="td-l-allowed" class="txt" maxlength="200" autocomplete="off" spellcheck="false" placeholder="10,20-30 / all"></label>
+      <label data-td-show="l-trunk" hidden><span data-td-i18n="td.native"></span><select id="td-l-native"></select></label>
       <button class="btn primary" id="td-link-add" data-td-i18n="td.add_link"></button>
+    </div>
+    <div class="hint" data-td-i18n="td.mode_hint"></div>
+    <div id="td-end-edit" class="end" hidden>
+      <b id="td-end-title"></b>
+      <div class="row">
+      <label><span data-td-i18n="td.link_mode"></span><select id="td-e-mode"></select></label>
+      <label data-td-show="e-access" hidden><span data-td-i18n="td.access_vlan"></span><select id="td-e-vlan"></select></label>
+      <label data-td-show="e-trunk" hidden><span data-td-i18n="td.allowed"></span><input id="td-e-allowed" class="txt" maxlength="200" autocomplete="off" spellcheck="false" placeholder="10,20-30 / all"></label>
+      <label data-td-show="e-trunk" hidden><span data-td-i18n="td.native"></span><select id="td-e-native"></select></label>
+        <button class="btn primary" id="td-e-save" data-td-i18n="td.end_save"></button>
+        <button class="btn" id="td-e-cancel" data-td-i18n="td.end_cancel"></button>
+      </div>
     </div>
     <div id="td-msg" class="msg" role="status"></div>
   </section>
@@ -100,6 +129,7 @@ a{color:var(--accent)}
   </section>
   <section class="card">
     <h2 data-td-i18n="td.sec_list"></h2>
+    <p class="notice" data-td-i18n="td.send_hint"></p>
     <div class="tbl-wrap" id="td-dev-list"></div>
     <div class="tbl-wrap" id="td-link-list" style="margin-top:10px"></div>
   </section>

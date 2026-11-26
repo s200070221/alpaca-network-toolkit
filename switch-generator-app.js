@@ -5156,6 +5156,16 @@ function _focusRemediationField(findingId){
     if (fnameEl2 && swModel.name) fnameEl2.textContent = swModel.name;
     window._cwHandoffImported = true;
     applyParsedConfigToForm(p, buildAnalyzerFnsAdapter(p), '', v, gv);
+    // 拓樸設計頁（XN202）帶來的型號：在型號選單中才選取，並勾「保留目前介面表」，只標記型號、不重建已帶入的介面
+    if (typeof swModel.deviceModel === 'string' && swModel.deviceModel) {
+      var dmSel = document.getElementById('device-model');
+      if (dmSel && Array.prototype.some.call(dmSel.options, function (o) { return o.value === swModel.deviceModel; })) {
+        var keepBox = document.getElementById('device-model-keep');
+        if (keepBox) keepBox.checked = true;
+        dmSel.value = swModel.deviceModel;
+        applyDeviceModel();
+      }
+    }
     snapshotImportedModel();
     // LLDP／CDP 鄰居（XN46，交換器分析頁貼上的鄰居表）：只存記憶體，轉換卡片第一次顯示時才對到介面名稱
     window._swcNb = Array.isArray(p.lldp) && p.lldp.length ? { lldp: p.lldp } : null;
