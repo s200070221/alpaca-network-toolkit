@@ -2,7 +2,8 @@
 // zhTW／en／ja 為功能文字，其餘彩蛋語言依同一份內容做風格變化（不可省略）
 const LANG_TD = {
   zhTW: {
-    'td.title':"拓樸設計（試作）",
+    'td.title':"拓樸設計",
+    'td.experimental':"實驗中",
     'td.intro':"在畫布上放交換器、拖拉位置、選兩端的埠連線並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前請先存檔。",
     'td.lang':"語言",
     'td.back':"回入口頁",
@@ -109,7 +110,8 @@ const LANG_TD = {
     'td.err_native':"native VLAN 須為清單中的 VLAN，或留空使用預設。",
   },
   en: {
-    'td.title':"Topology designer (preview)",
+    'td.title':"Topology designer",
+    'td.experimental':"Experimental",
     'td.intro':"Place switches on the canvas, drag them around, connect ports and set the link mode, choosing models across vendors. Data lives in this tab's memory only, so save before closing.",
     'td.lang':"Language",
     'td.back':"Back to start page",
@@ -216,7 +218,8 @@ const LANG_TD = {
     'td.err_native':"Native VLAN must be a VLAN from the list, or empty for the default.",
   },
   ja: {
-    'td.title':"トポロジー設計（試作）",
+    'td.title':"トポロジー設計",
+    'td.experimental':"試験中",
     'td.intro':"キャンバスにスイッチを置き、ドラッグで配置し、両端のポートを選んで接続し、接続モードを設定します。ベンダーをまたいで型番を選べます。データはこのタブのメモリにのみ保持されるため、閉じる前に保存してください。",
     'td.lang':"言語",
     'td.back':"トップへ戻る",
@@ -323,7 +326,8 @@ const LANG_TD = {
     'td.err_native':"native VLAN は一覧にある VLAN にするか、空欄で既定値を使ってください。",
   },
   tlh:{
-    'td.title':"Topology designer (preview)",
+    'td.title':"Topology designer",
+    'td.experimental':"Experimental",
     'td.intro':"Place switches on the canvas, drag them around, connect ports and set the link mode, choosing models across vendors. Data lives in this tab's memory only, so save before closing.",
     'td.lang':"Language",
     'td.back':"Back to start page",
@@ -430,7 +434,8 @@ const LANG_TD = {
     'td.err_native':"Native VLAN must be a VLAN from the list, or empty for the default.",
   },
   pirate:{
-    'td.title':"Topology designer (preview)",
+    'td.title':"Topology designer",
+    'td.experimental':"Experimental",
     'td.intro':"Place switches on the canvas, drag them around, connect ports and set the rope mode, choosing models across vendors. Data lives in this tab's memory only, so save before closing. Arr!",
     'td.lang':"Language",
     'td.back':"Back to start page",
@@ -537,7 +542,8 @@ const LANG_TD = {
     'td.err_native':"Native VLAN must be a VLAN from the list, or empty for the default. Arr!",
   },
   emoji:{
-    'td.title':"Topology designer (preview)",
+    'td.title':"Topology designer",
+    'td.experimental':"Experimental",
     'td.intro':"Place switches on the canvas, drag them around, connect ports and set the link mode, choosing models across vendors. Data lives in this tab's memory only, so save before closing.",
     'td.lang':"Language",
     'td.back':"Back to start page",
@@ -644,7 +650,8 @@ const LANG_TD = {
     'td.err_native':"⚠️ Native VLAN must be a VLAN from the list, or empty for the default.",
   },
   bureau:{
-    'td.title':"拓樸設計（試作）",
+    'td.title':"拓樸設計",
+    'td.experimental':"實驗中",
     'td.intro':"在畫布上放交換器、拖拉位置、選兩端的埠連線並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前敬請先存檔。",
     'td.lang':"語言",
     'td.back':"回入口頁",
@@ -751,7 +758,8 @@ const LANG_TD = {
     'td.err_native':"native VLAN 須為清單中的 VLAN，或留空使用預設。",
   },
   cat:{
-    'td.title':"拓樸設計（試作）",
+    'td.title':"拓樸設計",
+    'td.experimental':"實驗中",
     'td.intro':"在畫布上放交換器、拖拉位置、選兩端的埠連線並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前請先存檔喵。",
     'td.lang':"語言",
     'td.back':"回入口頁",
@@ -858,7 +866,8 @@ const LANG_TD = {
     'td.err_native':"native VLAN 須為清單中的 VLAN，或留空使用預設喵。",
   },
   bean:{
-    'td.title':"拓樸設計（試作）",
+    'td.title':"拓樸設計",
+    'td.experimental':"實驗中",
     'td.intro':"在畫布上放交換器、拖拉位置、選兩端的埠連線並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前請先存檔啦。",
     'td.lang':"語言",
     'td.back':"回入口頁",
@@ -965,7 +974,8 @@ const LANG_TD = {
     'td.err_native':"native VLAN 須為清單中的 VLAN，或留空使用預設啦。",
   },
   alpaca:{
-    'td.title':"拓樸設計（試作）",
+    'td.title':"拓樸設計",
+    'td.experimental':"實驗中",
     'td.intro':"在畫布上放交換器、拖拉位置、選兩端的埠連線並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前請先存檔。",
     'td.lang':"語言",
     'td.back':"回入口頁",
@@ -1072,7 +1082,8 @@ const LANG_TD = {
     'td.err_native':"native VLAN 須為清單中的 VLAN，或留空使用預設。",
   },
   yanse:{
-    'td.title':"拓樸設計（試作）",
+    'td.title':"拓樸設計",
+    'td.experimental':"實驗中",
     'td.intro':"在畫布上放交換器、拖拉位置、選兩端的埠連線並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前請先存檔，唉。",
     'td.lang':"語言",
     'td.back':"回入口頁",
@@ -1179,7 +1190,8 @@ const LANG_TD = {
     'td.err_native':"native VLAN 須為清單中的 VLAN，或留空使用預設，唉。",
   },
   wuxia:{
-    'td.title':"拓樸設計（試作）",
+    'td.title':"拓樸設計",
+    'td.experimental':"實驗中",
     'td.intro':"在沙盤上放交換器、拖拉位置、選兩端的埠經脈並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前請先存檔。",
     'td.lang':"語言",
     'td.back':"回入口頁",

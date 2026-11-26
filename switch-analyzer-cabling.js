@@ -342,7 +342,7 @@
     if (!cb || !cb.devices.length) return '';
     const box = 'background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:16px';
     const btn = 'background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer';
-    let h = `<div id="ptopo-card" style="${box}"><div style="font-size:14px;font-weight:600;margin-bottom:4px">🔗 ${esc2(T('ptopo.title'))}</div>`
+    let h = `<div id="ptopo-card" style="${box}"><div style="font-size:14px;font-weight:600;margin-bottom:4px">🔗 ${esc2(T('ptopo.title'))} <span data-experimental style="display:inline-block;margin-left:6px;padding:0 8px;border-radius:10px;font-size:11px;font-weight:600;background:#fef3c7;color:#92400e;border:1px solid #f59e0b;vertical-align:middle">🧪 ${esc2(T('ptopo.experimental'))}</span></div>`
       + `<div style="font-size:12px;color:var(--text-dim);margin-bottom:6px">${esc2(T('ptopo.hint'))}</div>`;
     // 兩台以上、有交換器既沒有鄰居資料也沒有任何接線：提醒鄰居輸出的擺放位置
     const noNb = cb.devices.filter(d => d.parsed && !((lldpOf(d.src) || d.parsed.lldp || []).length) && !cb.links.some(l => l.a.dev === d.idx || l.b.dev === d.idx));

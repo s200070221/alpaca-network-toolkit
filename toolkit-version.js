@@ -3,8 +3,25 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.24.1';
+  const TOOLKIT_VERSION = '2026.11.26';
   const CHANGELOG = [
+    {
+      version: '2026.11.26',
+      items: {
+        zhTW: [
+          '新增拓樸設計頁（實驗中）：跨廠牌選型號、拖拉擺放交換器、設定串接埠的 access／trunk 與 VLAN，兩端不一致時依影響分級提醒；每台可送到交換器設定產生器繼續修改',
+          '各頁載入加快：同時下載頁面用到的程式檔（原本一個接一個下載），慢速網路下開頁時間約縮短到原本的四分之一',
+          '交換器分析：接線拓樸（實驗中）可讀 Palo Alto 的 show lldp neighbors all，鄰居輸出格式不支援的設備可手動輸入鄰居表',
+          '交換器分析：資產清冊提醒鄰居輸出要接在該設備設定檔的最後面；只有鄰居輸出的檔案不再被當成一台設備；同檔名重新上傳會取代原本那一列',
+        ],
+        en: [
+          'New topology designer (experimental): choose models across vendors, drag switches around, set access/trunk and VLANs on the ports that link them, with graded warnings when the two ends differ; send each switch to the switch config generator to keep editing',
+          'Faster page loads: the scripts a page needs are now downloaded in parallel instead of one by one, cutting load time on slow connections to roughly a quarter',
+          'Switch analyzer: the cabling topology (experimental) reads Palo Alto show lldp neighbors all, and accepts a manual neighbor table for devices whose neighbor output is not supported',
+          'Switch analyzer: the inventory explains that neighbor output goes at the end of each device\'s own config; files with only neighbor output are no longer added as a device; re-uploading a file with the same name replaces its row',
+        ],
+      },
+    },
     {
       version: '2026.11.24.1',
       items: {

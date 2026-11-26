@@ -36,6 +36,7 @@ main{max-width:1100px;margin:0 auto;padding:16px}
 #td-model{max-width:min(420px,100%)}
 .end{border:1px solid var(--border);border-radius:6px;padding:6px 10px}
 .end b{font-size:12px}
+.exp-badge{display:inline-block;padding:0 8px;border-radius:10px;font-size:12px;font-weight:600;background:#fef3c7;color:#92400e;border:1px solid #f59e0b;vertical-align:middle}
 [hidden]{display:none!important}
 .msg{min-height:1.4em;font-size:13px;color:var(--green)}
 .msg.bad{color:var(--red)}
@@ -61,7 +62,7 @@ a{color:var(--accent)}
 </head>
 <body>
 <header>
-  <h1 data-td-i18n="td.title"></h1>
+  <h1><span data-td-i18n="td.title"></span> <span class="exp-badge" data-experimental>🧪 <span data-td-i18n="td.experimental"></span></span></h1>
   <label><span data-td-i18n="td.lang"></span> <select id="td-lang-sel"></select></label>
   <a href="network-analyzer.html" id="t-back" data-td-i18n="td.back"></a>
 </header>
