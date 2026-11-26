@@ -92,6 +92,7 @@ function renderGlossary() {
 function openGlossary() {
   const card = document.getElementById('glossary');
   if (!card) return;
+  if (typeof showHubView === 'function') showHubView('glossary', { keepHash: true });
   const m = /^#gl-([a-z0-9]+)$/.exec(location.hash);
   const search = document.getElementById('gl-search');
   // 指定的術語被目前搜尋條件過濾掉時，先清除搜尋
@@ -134,38 +135,74 @@ function renderTasks() {
   const drop = document.getElementById('tasks-drop');
   if (drop) drop.textContent = tr('task.drop');
 }
-function renderCards() {
-  const wrap = document.getElementById('cards');
-  wrap.innerHTML = TOOLS.map(t => {
-    const miss = _missing.has(t.id);
-    return `
-    <div class="card${miss ? ' card-missing' : ''}" style="--card-color:${t.color}"${miss ? '' : ` onclick="openTool('${t.href}')"`}>
-      <div class="card-icon">${t.icon}</div>
-      <div>
-        <div class="card-title">
-          ${tip('tip.' + (TIP_KEY[t.id] || 'cfg_anon'), tr(t.id + '.title'), t.vendors.length)}
-          <span class="card-badge">${tr(t.id + '.badge')}</span>
-          ${t.experimental ? `<span class="card-badge card-badge-experimental">${tr('suite.experimental')}</span>` : ''}
-        </div>
-      </div>
+// 首頁卡片（UX39）：首頁只當導引頁，依用途分組列出工具卡、附加工具卡與首頁內功能畫面卡（hub-views.js 切換）。
+// TOOLS 的順序被拖放交接以索引使用（hub-dispatch.js），分組只影響顯示，不可改動 TOOLS 順序。
+// EXTRA_TOOLS：不在 TOOLS（沒有支援廠牌清單）的其他頁面或功能；文字 key hx.<id>_t／hx.<id>_d
+const EXTRA_TOOLS = [
+  // 多台接線拓樸：交換器分析資產清冊裡的功能（?view=inventory 直接開到資產清冊）
+  { id: 'cabling', icon: '🧵', color: '#a855f7', href: 'switch-config-parser.html?view=inventory', demo: 'switch-config-parser.html?demo=cabling', experimental: true },
+  { id: 'designer', icon: '✏️', color: '#22c55e', href: 'topology-designer.html', experimental: true },
+  { id: 'intel', icon: '🛰️', color: '#f97316', href: 'threat-intel-builder.html' },
+];
+// 分組：tools＝TOOLS 的 id、extra＝EXTRA_TOOLS 的 id、views＝HUB_VIEWS 的 id（hub-views.js）；組名 key hg.<id>
+const HUB_GROUPS = [
+  { id: 'analyze', tools: ['fw', 'sw', 'log'], extra: ['cabling'] },
+  { id: 'build', tools: ['gen'], extra: ['designer'] },
+  { id: 'data', tools: ['ca'], extra: ['intel'] },
+  { id: 'check', views: ['certcheck', 'devcheck'] },
+  { id: 'mine', views: ['health', 'history', 'workspace'] },
+  { id: 'help', views: ['tasks', 'glossary'] },
+];
+// 首頁內功能畫面的卡片圖示（畫面本身在 network-analyzer.html 的 .hub-view；文字 key hv.<id>_t／hv.<id>_d）
+const HUB_VIEW_ICONS = { tasks: '🧭', certcheck: '🔐', devcheck: '🩺', health: '📋', history: '🕘', workspace: '💼', glossary: '📖' };
+const _expBadge = () => `<span class="card-badge card-badge-experimental">${tr('suite.experimental')}</span>`;
+function _toolCardHtml(t) {
+  const miss = _missing.has(t.id);
+  return `
+    <div class="card hub-card${miss ? ' card-missing' : ''}" data-tool="${t.id}" style="--card-color:${t.color}"${miss ? '' : ` onclick="openTool('${t.href}')"`}>
+      <div class="hub-card-head"><span class="card-icon">${t.icon}</span>
+        <div class="card-title">${tip('tip.' + (TIP_KEY[t.id] || 'cfg_anon'), tr(t.id + '.title'), t.vendors.length)}${t.experimental ? _expBadge() : ''}</div></div>
       <p class="card-desc">${tr(t.id + '.desc').replace('{n}', t.vendors.length)}</p>
-      <div class="card-tags">
+      <details class="card-vendors" onclick="event.stopPropagation()"><summary>${tr('hub.vendor_list').replace('{n}', t.vendors.length)}</summary>
+        <div class="card-tags">
         ${t.vendors.map(v => {
           const label = v.startsWith('$') ? tr(v.slice(1)) : v;
           const slug = VENDOR_PERSONA_KEY[v];
           const persona = slug ? tr('egg.vendor_' + slug) : '';
           return persona ? `<span class="tag" data-tip="${persona.replace(/"/g,'&quot;')}">${label}</span>` : `<span class="tag">${label}</span>`;
         }).join('')}
-        ${t.vendors.length > 10 ? `<button class="tag-more" onclick="event.stopPropagation();_toggleTags(this)">${tr('hub.tags_more').replace('{n}', t.vendors.length)}</button>` : ''}
-      </div>
-      <div class="card-features">
-        ${t.features.map(f => `<span class="feat">${tr(f)}</span>`).join('')}
-      </div>
+        </div></details>
       ${miss
         ? `<div class="card-warn">⚠ ${tr('warn.missing')}</div>`
         : `<div class="card-actions"><button class="card-open">${tr('suite.open')}</button><button class="card-demo" onclick="event.stopPropagation();openTool('${t.href}?demo=1')">${tr('hub.demo')}</button></div>`}
     </div>`;
-  }).join('');
+}
+function _extraCardHtml(x) {
+  return `
+    <div class="card hub-card" data-tool="${x.id}" style="--card-color:${x.color}" onclick="openTool('${x.href}')">
+      <div class="hub-card-head"><span class="card-icon">${x.icon}</span><div class="card-title">${_glEsc(tr('hx.' + x.id + '_t'))}${x.experimental ? _expBadge() : ''}</div></div>
+      <p class="card-desc">${_glEsc(tr('hx.' + x.id + '_d'))}</p>
+      <div class="card-actions"><button class="card-open">${tr('suite.open')}</button>${x.demo ? `<button class="card-demo" onclick="event.stopPropagation();openTool('${x.demo}')">${tr('hub.demo')}</button>` : ''}</div>
+    </div>`;
+}
+function _viewCardHtml(id) {
+  return `
+    <a class="card hub-card hub-view-card" data-view-card="${id}" href="#${id}" style="--card-color:#64748b">
+      <div class="hub-card-head"><span class="card-icon">${HUB_VIEW_ICONS[id] || '•'}</span><div class="card-title">${_glEsc(tr('hv.' + id + '_t'))}</div></div>
+      <p class="card-desc">${_glEsc(tr('hv.' + id + '_d'))}</p>
+    </a>`;
+}
+function renderCards() {
+  const wrap = document.getElementById('cards');
+  const toolById = id => TOOLS.find(t => t.id === id), extraById = id => EXTRA_TOOLS.find(x => x.id === id);
+  wrap.innerHTML = HUB_GROUPS.map(g => `<section class="hub-group" data-group="${g.id}"><h2 class="hub-group-title">${_glEsc(tr('hg.' + g.id))}</h2><div class="hub-grid">`
+    + (g.tools || []).map(id => _toolCardHtml(toolById(id))).join('')
+    + (g.extra || []).map(id => _extraCardHtml(extraById(id))).join('')
+    + (g.views || []).map(_viewCardHtml).join('')
+    + '</div></section>').join('');
+
+  const back = document.getElementById('hub-back');
+  if (back) back.textContent = '← ' + tr('hv.back');
 }
 
 function openTool(href) { window.open(href, '_blank'); }

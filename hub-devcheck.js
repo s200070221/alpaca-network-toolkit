@@ -183,6 +183,7 @@
     if (st.audit || ver) { $('dc-product').value = prod; if (ver) $('dc-version').value = ver; renderDevCheckCard(); }
     renderAudit();
     run();
+    if (typeof showHubView === 'function') showHubView('devcheck');   // 首頁改成導引頁（UX39）：先切到該功能畫面
     sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   function renderDevCheckCard() {

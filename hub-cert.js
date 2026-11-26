@@ -199,6 +199,7 @@
     const pa = $('cert-paste');
     const one = Array.isArray(text) ? (text.length === 1 ? text[0] : null) : text;
     if (pa) pa.value = one && one.length <= 200000 ? one : '';
+    if (typeof showHubView === 'function') showHubView('certcheck');   // 首頁改成導引頁（UX39）：先切到該功能畫面
     card.scrollIntoView({ behavior: 'smooth', block: 'start' });
     return Array.isArray(text) ? runMany(text) : runCheck(text);
   }

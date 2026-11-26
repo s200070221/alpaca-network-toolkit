@@ -16,6 +16,7 @@
 <link rel="preload" as="script" href="hub-report.js">
 <link rel="preload" as="script" href="hub-workspace.js">
 <link rel="preload" as="script" href="hub-drop.js">
+<link rel="preload" as="script" href="hub-views.js">
 <link rel="preload" as="script" href="cert-check.js">
 <link rel="preload" as="script" href="cert-roots.js">
 <link rel="preload" as="script" href="cert-scripts.js">
@@ -131,8 +132,29 @@ a{text-decoration:none;color:inherit}
 @media (max-width:600px){.tasks{padding:20px 16px 0}}
 
 /* ── Cards grid ────────────────────────────────────────────── */
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
-  gap:20px;padding:32px 40px;flex:1}
+.cards{padding:8px 40px 24px;flex:1}
+/* 首頁導引卡片（UX39）：依用途分組、每張卡片大小一致；功能畫面以 .hub-view 切換 */
+.hub-group{margin-top:18px}
+.hub-group-title{font-size:13px;font-weight:700;color:var(--text-dim);letter-spacing:.04em;margin:0 0 8px}
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.card.hub-card{padding:14px 16px;gap:8px;border-radius:12px;text-decoration:none;color:inherit}
+.hub-card-head{display:flex;align-items:center;gap:10px}
+.hub-card .card-icon{font-size:24px}
+.hub-card .card-title{font-size:14px}
+.hub-card .card-desc{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;line-height:1.6;flex:0 0 auto;max-height:4.8em}
+.hub-card .card-actions{display:flex;gap:8px;margin-top:auto}
+.hub-card .card-actions .card-open{flex:1;margin-top:0;padding:7px 0}
+.card-vendors{font-size:11px;color:var(--text-dim)}
+.card-vendors summary{cursor:pointer}
+.card-vendors .card-tags{margin-top:6px}
+.hub-view-card .card-desc{margin-bottom:2px}
+.hub-view-bar{padding:12px 40px 0}
+.hub-back{background:none;border:1px solid var(--border);border-radius:8px;color:var(--text);padding:6px 14px;font:inherit;font-size:13px;cursor:pointer}
+.hub-back:hover{border-color:var(--accent)}
+.hub-view{padding-top:12px}
+.hub-view[hidden],.hub-view-bar[hidden],.cards[hidden]{display:none}
+body.hub-in-view .hero,body.hub-in-view #h-notice{display:none}
+@media (max-width:720px){.cards{padding:4px 16px 20px}.hub-view-bar{padding:10px 16px 0}}
 
 .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;
   padding:24px;display:flex;flex-direction:column;gap:16px;
@@ -393,13 +415,19 @@ a{text-decoration:none;color:inherit}
   <input type="file" id="file-pick" multiple style="display:none" accept=".conf,.cfg,.txt,.xml,.log,.json,.ini,.yaml,.yml,.rsc,.gz,.zip,text/*">
 </div>
 
-<!-- 任務入口（XN52）：先問要做什麼，再給工具與取得檔案的方法 -->
-<section class="tasks" id="tasks" aria-labelledby="tasks-title"><h2 class="tasks-title" id="tasks-title"></h2><div class="tasks-grid" id="tasks-grid"></div><p class="task-drop" id="tasks-drop"></p></section>
 
 <div class="notice" id="h-notice"></div>
 
 <div class="cards" id="cards"></div>
 
+<!-- 首頁只當導引頁（UX39）：以下功能各自是一個畫面，點首頁卡片或網址 #<畫面 id> 才顯示（hub-views.js） -->
+<div class="hub-view-bar" id="hub-view-bar" hidden><button type="button" class="hub-back" id="hub-back" onclick="hubGoHome()"></button></div>
+<div id="hub-views">
+<div class="hub-view" data-view="tasks" hidden>
+<!-- 任務入口（XN52）：先問要做什麼，再給工具與取得檔案的方法 -->
+<section class="tasks" id="tasks" aria-labelledby="tasks-title"><h2 class="tasks-title" id="tasks-title"></h2><div class="tasks-grid" id="tasks-grid"></div><p class="task-drop" id="tasks-drop"></p></section>
+</div>
+<div class="hub-view" data-view="certcheck" hidden>
 <!-- 網站憑證檢查（XN101）：抓取腳本＋離線分析；程式在 cert-check.js、cert-roots.js、cert-scripts.js、hub-cert.js -->
 <section class="cert-card" id="certcheck" aria-labelledby="cert-title">
   <h2 class="tasks-title" id="cert-title"></h2>
@@ -425,7 +453,8 @@ a{text-decoration:none;color:inherit}
   <div id="cert-result"></div>
   <p class="cert-hint" id="cert-note"></p>
 </section>
-
+</div>
+<div class="hub-view" data-view="devcheck" hidden>
 <!-- 設備版本快速比對（XN107）：選產品、輸入版本，以內建清單離線比對；貼上 NetScaler ns.conf 另做曝險檢查（XN105） -->
 <section class="cert-card" id="devcheck" aria-labelledby="dc-title">
   <h2 class="tasks-title" id="dc-title"></h2>
@@ -442,7 +471,22 @@ a{text-decoration:none;color:inherit}
   <div id="dc-result"></div>
   <p class="cert-hint" id="dc-note"></p>
 </section>
-
+</div>
+<div class="hub-view" data-view="health" hidden>
+<!-- 綜合健檢報告（2026-09-30 新增，第八輪 XA）：彙整交換器／防火牆／log 分析工具寫入的
+     `_netAnalyzer_summaries`（每台最新一筆），可下載 Markdown 報告 -->
+<div class="recent-anon-card" id="health-summary-card">
+  <div class="recent-anon-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+    <span id="health-summary-title"></span>
+    <span style="display:flex;align-items:center;gap:10px">
+      <span class="recent-anon-clear" id="health-summary-dl-btn" role="button" tabindex="0" onclick="downloadHubHealthReport()" style="cursor:pointer;font-weight:400;font-size:11px;color:var(--text-dim,#94a3b8);text-decoration:underline"></span>
+      <span class="recent-anon-clear" id="health-summary-clear-btn" role="button" tabindex="0" onclick="clearHealthSummary()" style="cursor:pointer;font-weight:400;font-size:11px;color:var(--text-dim,#94a3b8);text-decoration:underline"></span>
+    </span>
+  </div>
+  <div id="health-summary-list"></div>
+</div>
+</div>
+<div class="hub-view" data-view="history" hidden>
 <div class="recent-anon-card" id="recent-anon-card">
   <div class="recent-anon-title" id="recent-anon-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
     <span id="recent-anon-title-text"></span>
@@ -450,7 +494,6 @@ a{text-decoration:none;color:inherit}
   </div>
   <div id="recent-anon-list"></div>
 </div>
-
 <!-- 任務 1（2026-09-23 新增）：跨工具活動時間軸——合併上方 config_anonymizer 專用的
      rolling-history 與其餘工具共用的 `_netAnalyzer_activityHistory`，統一顯示；不砍掉重寫
      上面那張既有卡片，用另一張卡片組合呈現 -->
@@ -465,26 +508,13 @@ a{text-decoration:none;color:inherit}
   </div>
   <div id="activity-timeline-list"></div>
 </div>
-
 <!-- 成就徽章（2026-10-14，第二十四輪 ED）：依活動紀錄解鎖，存在持續性 key `_netAnalyzer_achievements` -->
 <div class="recent-anon-card" id="ach-card">
   <div class="recent-anon-title"><span id="ach-title"></span></div>
   <div id="ach-list" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
 </div>
-
-<!-- 綜合健檢報告（2026-09-30 新增，第八輪 XA）：彙整交換器／防火牆／log 分析工具寫入的
-     `_netAnalyzer_summaries`（每台最新一筆），可下載 Markdown 報告 -->
-<div class="recent-anon-card" id="health-summary-card">
-  <div class="recent-anon-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-    <span id="health-summary-title"></span>
-    <span style="display:flex;align-items:center;gap:10px">
-      <span class="recent-anon-clear" id="health-summary-dl-btn" role="button" tabindex="0" onclick="downloadHubHealthReport()" style="cursor:pointer;font-weight:400;font-size:11px;color:var(--text-dim,#94a3b8);text-decoration:underline"></span>
-      <span class="recent-anon-clear" id="health-summary-clear-btn" role="button" tabindex="0" onclick="clearHealthSummary()" style="cursor:pointer;font-weight:400;font-size:11px;color:var(--text-dim,#94a3b8);text-decoration:underline"></span>
-    </span>
-  </div>
-  <div id="health-summary-list"></div>
 </div>
-
+<div class="hub-view" data-view="workspace" hidden>
 <!-- 工作區打包（2026-10-07，第十二輪 MH）：各工具存在本機瀏覽器的設定匯出成一個 JSON 檔，換電腦或交接時還原 -->
 <div class="recent-anon-card" id="workspace-card">
   <div class="recent-anon-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
@@ -514,8 +544,8 @@ a{text-decoration:none;color:inherit}
     </div>
   </details>
 </div>
-
-
+</div>
+<div class="hub-view" data-view="glossary" hidden>
 <!-- 術語小辭典（第二十九輪 NU8）：各工具常見名詞的白話說明，可搜尋；#glossary 或 #gl-<id> 直接開啟 -->
 <div class="recent-anon-card" id="glossary">
   <div class="recent-anon-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
@@ -524,6 +554,8 @@ a{text-decoration:none;color:inherit}
   </div>
   <div id="gl-intro" style="font-size:12px;color:var(--text-dim,#94a3b8);margin-bottom:6px"></div>
   <div id="gl-list" class="gl-list"></div>
+</div>
+</div>
 </div>
 
 <div class="footer">
@@ -540,6 +572,7 @@ a{text-decoration:none;color:inherit}
 <script src="hub-report.js"></script>
 <script src="hub-workspace.js"></script>
 <script src="hub-drop.js"></script>
+<script src="hub-views.js"></script>
 <script src="cert-check.js"></script>
 <script src="cert-roots.js"></script>
 <script src="cert-scripts.js"></script>

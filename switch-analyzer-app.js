@@ -4989,6 +4989,8 @@ function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'li
 document.addEventListener('DOMContentLoaded', function () { if (/[?&]demo=1(?:&|$)/.test(location.search)) setTimeout(function () { loadSampleConfig(); }, 0); });
 // ?demo=cabling：開頁即到資產清冊載入接線拓樸範例（XN192）
 document.addEventListener('DOMContentLoaded', function () { if (/[?&]demo=cabling(?:&|$)/.test(location.search)) setTimeout(function () { invLoadCablingDemo(); }, 0); });
+// ?view=inventory：開頁即到資產清冊（入口頁「多台接線拓樸」卡片，UX39）
+document.addEventListener('DOMContentLoaded', function () { if (/[?&]view=inventory(?:&|$)/.test(location.search) && !/[?&]demo=/.test(location.search)) setTimeout(function () { navGo('inventory'); }, 0); });
 
 // 頂端選單（UX19）：展開時依按鈕位置定位面板（fixed，避免手機寬度橫向捲動的工具列裁切），
 // 同時只開一個；點選項目、點選單外或按 Esc 即收起

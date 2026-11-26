@@ -10,32 +10,49 @@
 
 - **線上使用（免下載）**：https://s200070221.github.io/alpaca-network-toolkit/
 - **安裝成桌面 App／斷網使用**：用 Chrome 或 Edge 開過一次上面的網址後，整套工具會存進瀏覽器，之後斷網也能開啟（適合隔離網段）；網址列的「安裝」圖示可裝成獨立視窗的 App。連網時一律載入最新版。
-- **離線使用**：下載整個 repo，用瀏覽器開啟 `network-analyzer.html`，把設定檔或 log 拖進去，會自動判斷廠牌並開啟對應工具。
-- **先試試看**：入口頁每張工具卡片都有「試用範例」，會載入範例並直接顯示分析結果（也可在工具網址後加 `?demo=1`）。各工具第一次開啟會有三步驟導覽；不熟的名詞可查入口頁的「術語小辭典」。
+- **離線使用**：下載整個 repo，用瀏覽器開啟 `network-analyzer.html`，把設定檔或 log 拖進去，會自動判斷廠牌並建議對應工具。
+- **首頁怎麼用**：首頁是導引頁，依用途分組列出全部工具與功能卡片（分析、建置與轉換、資料處理、快速檢查、我的資料、引導與說明），點卡片開啟；不確定要用哪個工具時，點「依情境開始」。
+- **先試試看**：工具卡片的「看範例」會載入範例並直接顯示分析結果（也可在工具網址後加 `?demo=1`）。各工具第一次開啟會有三步驟導覽；不熟的名詞可查「術語小辭典」卡片。
 - **不知道怎麼取得設定檔**：交換器工具的「如何取得設定檔？」列出 20 個廠牌的匯出指令；貼錯工具時，結果上方會提示交給入口頁重新判斷。
 
 ![入口頁](docs/images/01-hub-zh.png)
 
 ## 工具一覽
 
-| 工具 | 用途 |
-|---|---|
-| 🌐 [入口頁](#-入口頁) | 拖放檔案，自動判斷廠牌並開啟對應工具 |
-| 🛡️ [防火牆設定分析器](#️-防火牆設定分析器) | 檢視規則、查詢 IP／埠會命中哪條規則、稽核與健康度評分 |
-| 🔀 [交換器設定解析器](#-交換器設定解析器) | 檢視埠、VLAN、路由、堆疊拓撲，安全稽核與配線表 |
-| 🛠️ [交換器設定產生器](#️-交換器設定產生器) | 用表單產生交換器設定，或匯入既有設定修改 |
-| 🔒 [設定檔去識別化工具](#-設定檔去識別化工具) | 分享設定檔前遮蔽 IP、帳號、密碼等敏感資訊 |
-| 📜 [Log 分析工具](#-log-分析工具實驗中) 🧪 | 依嚴重程度整理 log、找出可能問題、去識別化 |
+與首頁卡片的分組相同：
+
+| 分組 | 工具 | 用途 |
+|---|---|---|
+| 分析 | 🛡️ [防火牆設定分析器](#️-防火牆設定分析器) | 檢視規則、查詢 IP／埠會命中哪條規則、稽核與健康度評分 |
+| | 🔀 [交換器設定解析器](#-交換器設定解析器) | 檢視埠、VLAN、路由、堆疊拓撲，安全稽核與配線表 |
+| | 📜 [Log 分析工具](#-log-分析工具) | 依嚴重程度整理 log、找出可能問題、去識別化 |
+| | 🧵 多台接線拓樸 🧪 | 交換器設定解析器資產清冊內的功能：依 LLDP／CDP 與自訂串線畫出埠對埠接線（首頁卡片可直接開啟） |
+| 建置與轉換 | 🛠️ [交換器設定產生器](#️-交換器設定產生器) | 用表單產生交換器設定，或匯入既有設定修改 |
+| | ✏️ [拓樸設計](#️-拓樸設計實驗中) 🧪 | 跨廠牌選型號、拖拉擺放交換器、設定串接埠，再逐台送到產生器 |
+| 資料處理 | 🔒 [設定檔去識別化工具](#-設定檔去識別化工具) | 分享設定檔前遮蔽 IP、帳號、密碼等敏感資訊 |
+| | 🛰️ 情資清單整理（`threat-intel-builder.html`） | 整理公開情資來源的 IP、網域、雜湊與 ASN 清單，送到 log 分析工具 |
+| 快速檢查 | 🔐 網站憑證檢查、🩺 設備版本比對 | 首頁內的功能畫面，見[入口頁](#-入口頁) |
+
+🧪＝實驗中，功能與介面可能還會調整。
 
 ## 🌐 入口頁
 
-`network-analyzer.html`
+`network-analyzer.html`（GitHub Pages 的 `index.html`）
 
-- 拖放設定檔或 log，自動判斷廠牌並導向對應工具；可一次拖放多個檔案，也可直接拖放 .gz／.zip 壓縮檔。
-- 可選擇「去識別化後分析」：先遮蔽敏感資訊，再送到分析工具。
-- 彙整各工具最近的分析結果，顯示與上次相比的分數與問題數變化及歷次趨勢小圖，可下載綜合健檢報告。
-- 依各工具的使用紀錄解鎖羊駝成就徽章。
-- 工作區打包：把各工具存在瀏覽器的設定匯出成一個檔案，在另一台電腦還原。
+首頁只當導引頁，不直接展開任何功能：
+
+- **拖放檔案**：拖放設定檔或 log（可一次多個，也可直接拖放 .gz／.zip），自動判斷廠牌並建議對應工具；可選擇「去識別化後分析」，先遮蔽敏感資訊再送到分析工具。
+- **工具卡片**：依用途分組，每張卡片可開啟工具、看範例，並可展開支援清單。
+- **快速檢查**（點卡片開啟，網址 `#certcheck`、`#devcheck`）：
+  - 網站憑證檢查：用腳本抓取網站送出的憑證鏈，離線檢查缺中繼、到期、簽發者與 CT 紀錄。
+  - 設備版本比對：輸入產品與版本比對內建的已知漏洞清單，也可貼上 NetScaler、F5 設定檢查曝險。
+- **我的資料**：
+  - 綜合健檢：彙整各工具最近的分析結果與分數變化，可下載報告。
+  - 使用紀錄與成就：最近去識別化的檔案、各工具使用時間軸與羊駝成就徽章。
+  - 工作區與本機資料：把各工具存在瀏覽器的設定打包成一個檔案帶到另一台電腦，或檢視、清除本機儲存的資料。
+- **引導與說明**：「依情境開始」（檢查設定、看 log、換設備、懷疑被入侵等）與術語小辭典。
+
+每個功能畫面都有「回首頁」，也可以直接用網址（例如 `network-analyzer.html#glossary`）開啟。
 
 ## 🛡️ 防火牆設定分析器
 
@@ -43,9 +60,9 @@
 
 ![防火牆設定分析器：規則清單](docs/images/02-firewall-policies-zh.png)
 
-**支援來源（20 種）**
+**支援來源**
 - FortiGate、Sophos XG、Check Point（Gaia clish 或 Management API JSON）、Palo Alto（含 Panorama）、Juniper SRX、pfSense、OPNsense、SonicWall、MikroTik、Cisco ASA／FTD、Zyxel USG／ATP、WatchGuard Firebox、H3C SecPath
-- EdgeRouter（EdgeOS）、VyOS、OpenWrt（UCI）、Netgate TNSR、Linux iptables／nftables
+- EdgeRouter（EdgeOS）、VyOS、OpenWrt（UCI）、Netgate TNSR、Linux iptables／nftables、F5 BIG-IP、Cisco IOS／IOS-XE 路由器（介面 ACL、ZBF、NAT）
 - 雲端：AWS 安全群組與 Network ACL、Azure NSG、Azure Firewall Policy、GCP VPC 防火牆規則與 network firewall policy、Oracle Cloud 安全清單／NSG、Kubernetes NetworkPolicy、Cisco Meraki MX（API 回應 JSON）
 - 無線控制器（只做 WiFi 分析）：Cisco Catalyst 9800／AireOS、Aruba 控制器／Instant、H3C WX
 
@@ -69,10 +86,11 @@
 
 ![交換器設定解析器：總覽](docs/images/04-switch-overview-zh.png)
 
-**支援廠牌（26 家）**
+**支援廠牌**
 - H3C Comware、HPE Comware、Cisco IOS-XE、Cisco NX-OS、Cisco Business（CBS／SG）、Aruba CX、Aruba ProCurve、Juniper EX／QFX、Arista EOS、Dell OS10
 - FortiSwitch、Extreme ExtremeXOS、Extreme VOSS／Fabric Engine、Alcatel OmniSwitch、Ruckus-Brocade ICX、MikroTik RouterOS、Ruijie RGOS、Netgear M4300、Netgear Smart Managed Pro（GS7xx）、Ubiquiti EdgeSwitch、Broadcom EFOS、Planet、Allied Telesis AlliedWare Plus、FS.com FSOS
-- SONiC、NVIDIA Cumulus Linux（NVUE）
+- SONiC、NVIDIA Cumulus Linux（NVUE）、NVIDIA Onyx
+- TP-Link JetStream、D-Link DGS、Zyxel GS／XGS（依官方 CLI 手冊實作，尚無真實設定檔驗證）
 
 **主要功能**
 - 埠、VLAN、路由、堆疊拓撲視覺化
@@ -82,7 +100,7 @@
 - 黃金範本：自訂「必須存在／不得存在」的設定規則，多台設定一起檢查
 - 多設備 VLAN 對照表：VLAN × 設備列出宣告名稱、SVI 與埠數，標出只有一台宣告、名稱不一致或未宣告卻在使用的 VLAN
 - 實體接線示意圖：依型號畫前面板（可自己寫型號），標出 VLAN／trunk、LACP、堆疊、PoE 與 LLDP 鄰居
-- 多台設備實體接線拓樸：依 LLDP／CDP 鄰居與自訂串線把多台交換器（與防火牆匯出的前面板）連起來，標出兩端設定不一致的線，可下載 SVG、draw.io、Mermaid 與接線專案
+- 多台設備實體接線拓樸（實驗中，首頁「多台接線拓樸」卡片可直接開啟）：依 LLDP／CDP 鄰居（含 Palo Alto 的 show lldp neighbors all）、手動鄰居表與自訂串線把多台交換器（與防火牆匯出的前面板）連起來，標出兩端設定不一致的線，可下載 SVG、draw.io、Mermaid 與接線專案
 
 ![交換器設定解析器：多台設備實體接線拓樸](docs/images/05-switch-cabling-zh.png)
 
@@ -92,7 +110,7 @@
 
 ![交換器設定產生器：產生結果](docs/images/08-generator-zh.png)
 
-**支援廠牌（19 家）**
+**支援廠牌**
 - H3C Comware、HPE Comware、Cisco IOS-XE、Cisco NX-OS、Aruba CX、ProCurve、Juniper、Arista、Dell OS10、FortiSwitch
 - Brocade ICX、Alcatel、Extreme、MikroTik RouterOS、Ruijie、Netgear、EdgeSwitch、Planet、SONiC
 
@@ -103,19 +121,29 @@
 - 配線表 CSV 匯入與匯出：在試算表整理埠描述與 VLAN 後一次套用
 - 黃金基準線檢查：產生後依與交換器設定解析器共用的黃金範本規則逐條檢查；CSV 批次產生時每台也會檢查
 
+## ✏️ 拓樸設計（實驗中）
+
+`topology-designer.html`
+
+- 跨廠牌選型號（產生器的型號資料，含自訂型號），在畫布上拖拉擺放交換器，選兩端的埠連線。
+- 共用 VLAN 清單；每條連線兩端各自設定 access（單一 VLAN）或 trunk（允許的 VLAN＋native）。
+- 兩端不一致時依影響分級提醒：native VLAN、模式或 access VLAN 不同（會讓 VLAN 混接或中斷）標紅色；允許的 VLAN 不同（只有部分 VLAN 通）標黃色，並列出實際可通過與會被丟掉的 VLAN。
+- 設計頁只設定設備之間的串接埠；每台設備可「送到產生器」，帶入主機名稱、廠牌、型號、VLAN 與串接埠設定，存取埠、SVI、路由等細部設定在交換器設定產生器完成。
+- 設計檔可下載與讀回（JSON）。
+
 ## 🔒 設定檔去識別化工具
 
 `config-anonymizer.html`
 
 ![設定檔去識別化工具：前後對照](docs/images/06-anonymizer-zh.png)
 
-- 支援 43 種防火牆／交換器／無線控制器／雲端設定格式
+- 支援防火牆、交換器、無線控制器、雲端、NetScaler、F5 BIG-IP、Windows NPS 匯出與 .env／docker-compose 等設定格式（清單見首頁卡片的支援清單）
 - 一致性替換 IP、主機名稱、帳號、密碼、金鑰、SNMP community、MAC 等，IPv4／IPv6 皆支援
 - 可保留網段結構：同網段換成同一個假網段，去識別化後的查詢與路由結果不變
 - 檢查去識別化前後的結構是否一致
 - 對照表可用 AES-256 加密保存，需要時還原
 
-## 📜 Log 分析工具（實驗中）
+## 📜 Log 分析工具
 
 `log-analyzer.html`
 

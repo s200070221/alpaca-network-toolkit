@@ -150,6 +150,7 @@ const FILES = [
   'hub-report.js',
   'hub-workspace.js',
   'hub-drop.js',
+  'hub-views.js',
   'cert-check.js',
   'cert-roots.js',
   'cert-scripts.js',

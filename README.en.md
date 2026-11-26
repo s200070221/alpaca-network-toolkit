@@ -10,32 +10,49 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 - **Use online (no download)**: https://s200070221.github.io/alpaca-network-toolkit/
 - **Install as an app / use without network**: open the URL above once in Chrome or Edge and the whole toolkit is stored in the browser, so it keeps working offline (handy on isolated networks); the install icon in the address bar turns it into a standalone app. When online the latest version is always loaded.
-- **Use offline**: download the whole repository, open `network-analyzer.html` in your browser and drop a config file or log onto it. The vendor is detected automatically and the matching tool opens.
-- **Just try it**: every tool card on the entry page has a "Try sample" button that loads a sample and shows the results (or add `?demo=1` to a tool's URL). Each tool shows a three-step guide on first use, and the entry page has a searchable glossary of common terms.
+- **Use offline**: download the whole repository, open `network-analyzer.html` in your browser and drop a config file or log onto it. The vendor is detected automatically and the matching tool is suggested.
+- **The entry page**: it is a navigation page that lists every tool and feature as cards grouped by purpose (analyze, build and convert, data handling, quick checks, my data, guides and help); click a card to open it. Not sure which tool to use? Click "Start from a task".
+- **Just try it**: a tool card's sample button loads a sample and shows the results (or add `?demo=1` to a tool's URL). Each tool shows a three-step guide on first use, and the Glossary card explains common terms.
 - **Not sure how to get a config?** The switch tool's "How to get the config?" lists export commands for 20 vendors. If you paste into the wrong tool, the result bar offers to hand the content back to the entry page for detection.
 
 ![Entry page](docs/images/01-hub-en.png)
 
 ## Tools at a glance
 
-| Tool | What it does |
-|---|---|
-| 🌐 [Entry Page](#-entry-page) | Drop a file; the vendor is detected and the matching tool opens |
-| 🛡️ [Firewall Config Analyzer](#️-firewall-config-analyzer) | Review rules, find which rule matches an IP/port, audit with a health score |
-| 🔀 [Switch Config Parser](#-switch-config-parser) | Review ports, VLANs, routing and stack topology; security audit and cabling sheet |
-| 🛠️ [Switch Config Generator](#️-switch-config-generator) | Generate switch configs from a form, or import an existing config to edit |
-| 🔒 [Config Anonymizer](#-config-anonymizer) | Mask IPs, user names, passwords and other sensitive data before sharing a config |
-| 📜 [Log Analyzer](#-log-analyzer-experimental) 🧪 | Sort logs by severity, flag likely problems, anonymize |
+Grouped the same way as the entry page cards:
+
+| Group | Tool | What it does |
+|---|---|---|
+| Analyze | 🛡️ [Firewall Config Analyzer](#️-firewall-config-analyzer) | Review rules, find which rule matches an IP/port, audit with a health score |
+| | 🔀 [Switch Config Parser](#-switch-config-parser) | Review ports, VLANs, routing and stack topology; security audit and cabling sheet |
+| | 📜 [Log Analyzer](#-log-analyzer) | Sort logs by severity, flag likely problems, anonymize |
+| | 🧵 Multi-device cabling topology 🧪 | A feature of the switch config parser's inventory: port-to-port cabling from LLDP/CDP and custom links (opens directly from the entry page card) |
+| Build and convert | 🛠️ [Switch Config Generator](#️-switch-config-generator) | Generate switch configs from a form, or import an existing config to edit |
+| | ✏️ [Topology Designer](#️-topology-designer-experimental) 🧪 | Choose models across vendors, drag switches around, set the linking ports, then send each switch to the generator |
+| Data handling | 🔒 [Config Anonymizer](#-config-anonymizer) | Mask IPs, user names, passwords and other sensitive data before sharing a config |
+| | 🛰️ Threat intel list builder (`threat-intel-builder.html`) | Build IP, domain, hash and ASN lists from public intel sources and send them to the log analyzer |
+| Quick checks | 🔐 Website certificate check, 🩺 device version check | Views inside the entry page; see [Entry Page](#-entry-page) |
+
+🧪 = experimental; features and layout may still change.
 
 ## 🌐 Entry Page
 
-`network-analyzer.html`
+`network-analyzer.html` (`index.html` on GitHub Pages)
 
-- Drop config files or logs; the vendor is detected and the matching tool opens. Several files can be dropped at once, including .gz / .zip archives.
-- "Anonymize & Analyze" masks sensitive data first, then sends the result to the analysis tool.
-- Collects each tool's latest analysis results, shows how the score and issue count changed since the last run (with a small history sparkline), and can download a combined health report.
-- Alpaca achievement badges unlock as you use the tools.
-- Workspace export: save each tool's browser-stored settings to one file and restore them on another computer.
+The entry page is only a navigation page; it does not lay out any feature by itself:
+
+- **Drop files**: drop config files or logs (several at once, .gz / .zip too); the vendor is detected and the matching tool is suggested. "Anonymize & Analyze" masks sensitive data first, then sends the result to the analysis tool.
+- **Tool cards**: grouped by purpose; each card opens the tool or a sample, and can expand its list of supported sources.
+- **Quick checks** (click a card; URLs `#certcheck`, `#devcheck`):
+  - Website certificate check: fetch the chain a site sends with a script, then check offline for missing intermediates, expiry, issuer and CT records.
+  - Device version check: enter a product and version to compare with the built-in known-vulnerability list; NetScaler and F5 configs can also be checked for exposure.
+- **My data**:
+  - Health summary: each tool's latest results and score changes, with a downloadable report.
+  - Activity and achievements: recently anonymized files, a timeline of tool use and alpaca achievement badges.
+  - Workspace and local data: pack each tool's browser-stored settings into one file for another computer, or view and clear locally stored data.
+- **Guides and help**: "Start from a task" (checking configs, reading logs, replacing devices, a suspected breach and more) and the glossary.
+
+Every feature view has a "Back to start" button and can be opened directly by URL (for example `network-analyzer.html#glossary`).
 
 ## 🛡️ Firewall Config Analyzer
 
@@ -43,9 +60,9 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 ![Firewall Config Analyzer: rule list](docs/images/02-firewall-policies-en.png)
 
-**Supported sources (20)**
+**Supported sources**
 - FortiGate, Sophos XG, Check Point (Gaia clish or Management API JSON), Palo Alto (incl. Panorama), Juniper SRX, pfSense, OPNsense, SonicWall, MikroTik, Cisco ASA / FTD, Zyxel USG / ATP, WatchGuard Firebox, H3C SecPath
-- EdgeRouter (EdgeOS), VyOS, OpenWrt (UCI), Netgate TNSR, Linux iptables / nftables
+- EdgeRouter (EdgeOS), VyOS, OpenWrt (UCI), Netgate TNSR, Linux iptables / nftables, F5 BIG-IP, Cisco IOS / IOS-XE routers (interface ACLs, ZBF, NAT)
 - Cloud: AWS security groups and network ACLs, Azure NSGs, Azure Firewall Policy, GCP VPC firewall rules and network firewall policies, Oracle Cloud security lists / NSGs, Kubernetes NetworkPolicy, Cisco Meraki MX (API response JSON)
 - Wireless LAN controllers (WiFi analysis only): Cisco Catalyst 9800 / AireOS, Aruba controller / Instant, H3C WX
 
@@ -69,10 +86,11 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 ![Switch Config Parser: overview](docs/images/04-switch-overview-en.png)
 
-**Supported vendors (26)**
+**Supported vendors**
 - H3C Comware, HPE Comware, Cisco IOS-XE, Cisco NX-OS, Cisco Business (CBS / SG), Aruba CX, Aruba ProCurve, Juniper EX / QFX, Arista EOS, Dell OS10
 - FortiSwitch, Extreme ExtremeXOS, Extreme VOSS / Fabric Engine, Alcatel OmniSwitch, Ruckus-Brocade ICX, MikroTik RouterOS, Ruijie RGOS, Netgear M4300, Netgear Smart Managed Pro (GS7xx), Ubiquiti EdgeSwitch, Broadcom EFOS, Planet, Allied Telesis AlliedWare Plus, FS.com FSOS
-- SONiC, NVIDIA Cumulus Linux (NVUE)
+- SONiC, NVIDIA Cumulus Linux (NVUE), NVIDIA Onyx
+- TP-Link JetStream, D-Link DGS, Zyxel GS / XGS (built from the official CLI manuals, not yet verified with real configs)
 
 **Main features**
 - Visualizes ports, VLANs, routing and stack topology
@@ -82,7 +100,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - Golden template: your own "must exist / must not exist" config rules, checked across several devices
 - Multi-device VLAN matrix: VLANs × devices with declared names, SVIs and port counts, flagging VLANs declared on only one device, with mismatched names, or used but not declared
 - Physical cabling schematic: front panel drawn from model data (or your own model), showing VLAN/trunk, LACP, stacking, PoE and LLDP neighbors
-- Multi-device physical cabling topology: connects several switches (and firewall panels exported from the firewall analyzer) using LLDP/CDP neighbors and custom cabling, flags links whose ends are configured differently, and downloads as SVG, draw.io, Mermaid or a cabling project
+- Multi-device physical cabling topology (experimental; the entry page's "Multi-device cabling topology" card opens it directly): connects several switches (and firewall panels exported from the firewall analyzer) using LLDP/CDP neighbors (including Palo Alto show lldp neighbors all), a manual neighbor table and custom cabling, flags links whose ends are configured differently, and downloads as SVG, draw.io, Mermaid or a cabling project
 
 ![Switch Config Parser: multi-device physical cabling topology](docs/images/05-switch-cabling-en.png)
 
@@ -92,7 +110,7 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 
 ![Switch Config Generator: generated config](docs/images/08-generator-en.png)
 
-**Supported vendors (19)**
+**Supported vendors**
 - H3C Comware, HPE Comware, Cisco IOS-XE, Cisco NX-OS, Aruba CX, ProCurve, Juniper, Arista, Dell OS10, FortiSwitch
 - Brocade ICX, Alcatel, Extreme, MikroTik RouterOS, Ruijie, Netgear, EdgeSwitch, Planet, SONiC
 
@@ -103,19 +121,29 @@ Browser-based tools for parsing, anonymizing, comparing and generating multi-ven
 - Port map CSV import and export: edit port descriptions and VLANs in a spreadsheet and apply them in one go
 - Golden baseline check: after generating, check the output against the golden template rules shared with the Switch Config Parser; CSV batch generation checks every device too
 
+## ✏️ Topology Designer (experimental)
+
+`topology-designer.html`
+
+- Choose models across vendors (the generator's model data, including your own models), drag switches around the canvas and link ports on two devices.
+- A shared VLAN list; each end of a link is set separately as access (one VLAN) or trunk (allowed VLANs plus native).
+- Warnings are graded by impact when the two ends differ: a different native VLAN, mode or access VLAN (VLANs get bridged or cut off) is red; different allowed VLANs (only some VLANs pass) is yellow and lists which VLANs actually pass and which are dropped.
+- The designer only sets the ports that link devices; "Send to generator" opens each switch in the switch config generator with its hostname, vendor, model, VLANs and link ports filled in, where access ports, SVIs, routing and other details are finished.
+- Designs can be downloaded and loaded back (JSON).
+
 ## 🔒 Config Anonymizer
 
 `config-anonymizer.html`
 
 ![Config Anonymizer: side-by-side comparison](docs/images/06-anonymizer-en.png)
 
-- Supports 43 firewall / switch / wireless controller / cloud config formats
+- Supports firewall, switch, wireless controller, cloud, NetScaler, F5 BIG-IP, Windows NPS export and .env / docker-compose formats (see the supported list on the entry page card)
 - Consistently replaces IPs, hostnames, user names, passwords, keys, SNMP communities, MAC addresses and more; IPv4 and IPv6 supported
 - Optional subnet preservation: addresses in the same subnet map to the same fake subnet, so lookups and routing results stay the same after anonymization
 - Checks that the config structure is unchanged after anonymization
 - The mapping table can be saved encrypted with AES-256 and restored later
 
-## 📜 Log Analyzer (experimental)
+## 📜 Log Analyzer
 
 `log-analyzer.html`
 

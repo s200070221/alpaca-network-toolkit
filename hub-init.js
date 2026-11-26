@@ -17,6 +17,7 @@ autoLabelControls();
 })();
 document.getElementById('alpaca-btn').title = tr('egg.alpaca');
 checkFiles();
+hubRoute();   // 首頁導引頁（UX39）：依網址 #<畫面 id> 開啟對應畫面
 (function(){
   var _t = document.createElement('div');
   _t.className = 'global-tip';
