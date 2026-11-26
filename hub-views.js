@@ -7,7 +7,9 @@ const HUB_VIEWS = ['tasks', 'certcheck', 'devcheck', 'health', 'history', 'works
 let _hubView = '', _hubFromHome = false;
 // 網址錨點 → 畫面 id（不是畫面也不在畫面內時回傳 ''，代表首頁）
 function hubViewOfHash(hash) {
-  const id = decodeURIComponent(String(hash || '').replace(/^#/, ''));
+  // 網址錨點可能是不合格的百分比編碼（手打或外部連結），解不開時當成首頁
+  let id = '';
+  try { id = decodeURIComponent(String(hash || '').replace(/^#/, '')); } catch (e) { return ''; }
   if (!id) return '';
   if (HUB_VIEWS.includes(id)) return id;
   const el = document.getElementById(id), box = el && el.closest ? el.closest('.hub-view') : null;

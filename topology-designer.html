@@ -15,7 +15,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>拓樸設計（試作）</title>
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--text:#1f2328;--dim:#59636e;--border:#d0d7de;--accent:#0969da;--green:#1a7f37;--red:#cf222e;--yellow:#9a6700;--chip:#eef1f4}
+:root{--surface:var(--card);--text-dim:var(--dim);--bg:#f5f6f8;--card:#fff;--text:#1f2328;--dim:#59636e;--border:#d0d7de;--accent:#0969da;--green:#1a7f37;--red:#cf222e;--yellow:#9a6700;--chip:#eef1f4}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0d1117;--card:#161b22;--text:#e6edf3;--dim:#9198a1;--border:#30363d;--accent:#4493f8;--green:#3fb950;--red:#f85149;--yellow:#d29922;--chip:#21262d}}
 :root[data-theme="dark"]{--bg:#0d1117;--card:#161b22;--text:#e6edf3;--dim:#9198a1;--border:#30363d;--accent:#4493f8;--green:#3fb950;--red:#f85149;--yellow:#d29922;--chip:#21262d}
 *{box-sizing:border-box}
@@ -76,6 +76,8 @@ a{color:var(--accent)}
       <label style="flex:1 1 260px"><span data-td-i18n="td.model"></span><select id="td-model"></select></label>
       <button class="btn primary" id="td-dev-add" data-td-i18n="td.add_dev"></button>
     </div>
+    <div class="hint" id="td-model-hint" hidden></div>
+    <div id="td-custom"></div>
   </section>
   <section class="card">
     <h2 data-td-i18n="td.sec_vlan"></h2>

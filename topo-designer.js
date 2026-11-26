@@ -18,7 +18,9 @@
   const vendorName = id => (VENDORS.find(v => v[0] === id) || [id, id])[1];
   const modelVendor = id => (id === 'h3c' ? 'comware' : id);
   const MAX_DEVICES = 64, MAX_LINKS = 512, MAX_VLANS = 512;
-  const CANVAS_W = 1000, CANVAS_H = 560, BOX_W = 180, BOX_H = 58;
+  // 畫布寬度固定；高度至少 CANVAS_H，設備多時往下長（最多 MAX_H，放得下 MAX_DEVICES 台的格狀位置）
+  const CANVAS_W = 1000, CANVAS_H = 560, BOX_W = 180, BOX_H = 58, GAP_X = 30, GAP_Y = 60;
+  const COLS = Math.floor(CANVAS_W / (BOX_W + GAP_X)), MAX_H = 20 + Math.ceil(MAX_DEVICES / COLS) * (BOX_H + GAP_Y);
   const HOST_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/;
   const VLAN_NAME_RE = /^[^\x00-\x1f\x7f]{0,32}$/;
   // 錯誤代碼（td.err_*）；設計檔讀入只會出現前 6 個
@@ -43,11 +45,17 @@
     d.links.forEach(l => [l.a, l.b].forEach(e => { if (e.dev === id) s.add(lc(e.port)); }));
     return s;
   }
-  // 新設備預設放在格狀位置，之後再拖拉
+  // 新設備放在第一個沒有與其他方塊重疊的格狀位置，之後再拖拉
   function nextSlot(d) {
-    const n = d.devices.length, cols = Math.floor(CANVAS_W / (BOX_W + 30));
-    return { x: 20 + (n % cols) * (BOX_W + 30), y: 20 + Math.floor(n / cols) * (BOX_H + 60) % (CANVAS_H - BOX_H) };
+    const free = (x, y) => !d.devices.some(o => Math.abs(o.x - x) < BOX_W && Math.abs(o.y - y) < BOX_H);
+    for (let k = 0; k < COLS * Math.ceil(MAX_DEVICES / COLS); k++) {
+      const x = 20 + (k % COLS) * (BOX_W + GAP_X), y = 20 + Math.floor(k / COLS) * (BOX_H + GAP_Y);
+      if (free(x, y)) return { x, y };
+    }
+    return { x: 20, y: 20 };
   }
+  // 目前畫布高度：容納最下面的設備
+  const canvasH = d => Math.max(CANVAS_H, ...d.devices.map(x => x.y + BOX_H + 20));
   function addDevice(d, o) {
     const hostname = String((o && o.hostname) || '').trim(), vendor = String((o && o.vendor) || ''), model = String((o && o.model) || '');
     if (d.devices.length >= MAX_DEVICES) return { ok: false, code: 'max' };
@@ -56,7 +64,7 @@
     if (!VENDOR_IDS.includes(vendor)) return { ok: false, code: 'vendor' };
     if (!findModel(vendor, model)) return { ok: false, code: 'model' };
     const pos = o.x != null && o.y != null ? { x: o.x, y: o.y } : nextSlot(d);
-    const dev = { id: 'd' + (++d.seq), hostname, vendor, model, x: clamp(pos.x, 0, CANVAS_W - BOX_W), y: clamp(pos.y, 0, CANVAS_H - BOX_H) };
+    const dev = { id: 'd' + (++d.seq), hostname, vendor, model, x: clamp(pos.x, 0, CANVAS_W - BOX_W), y: clamp(pos.y, 0, MAX_H - BOX_H) };
     d.devices.push(dev);
     return { ok: true, dev };
   }
@@ -66,7 +74,7 @@
   }
   function moveDevice(d, id, x, y) {
     const dev = devById(d, id);
-    if (dev) { dev.x = clamp(x, 0, CANVAS_W - BOX_W); dev.y = clamp(y, 0, CANVAS_H - BOX_H); }
+    if (dev) { dev.x = clamp(x, 0, CANVAS_W - BOX_W); dev.y = clamp(y, 0, MAX_H - BOX_H); }
   }
 
   // ── VLAN ──
@@ -124,12 +132,14 @@
     if (c == null || c.mode == null || c.mode === '') return { ok: true, cfg: null };
     if (c.mode === 'access') {
       const id = vlanIdOf(c.vlans);
-      if (id == null) return { ok: false, code: 'vlan_syntax' };
+      // 共用清單還沒有任何 VLAN 時，提示先新增（選單是空的，不是寫法錯）
+      if (id == null) return { ok: false, code: d.vlans.length ? 'vlan_syntax' : 'vlan_missing' };
       if (!hasVlan(d, id)) return { ok: false, code: 'vlan_missing' };
       return { ok: true, cfg: { mode: 'access', vlans: String(id), nativeVlan: '' } };
     }
     if (c.mode !== 'trunk') return { ok: false, code: 'vlan_syntax' };
     const p = parseVlanList(c.vlans);
+    if (!p.invalid.length && !p.all && !p.ids.length && !d.vlans.length) return { ok: false, code: 'vlan_missing' };
     if (p.invalid.length || (!p.all && !p.ids.length)) return { ok: false, code: 'vlan_syntax' };
     if (p.ids.some(id => !hasVlan(d, id))) return { ok: false, code: 'vlan_missing' };
     let nat = '';
@@ -254,7 +264,7 @@
       let value = model;
       if (custom) { const m = modelChoices(vendor).find(c => c.custom && c.label === custom); value = m ? m.value : ''; }
       if (!findModel(vendor, value)) { value = ''; missing++; }
-      const dev = { id: 'd' + (++d.seq), hostname, vendor, model: value, x: clamp(x.x, 0, CANVAS_W - BOX_W), y: clamp(x.y, 0, CANVAS_H - BOX_H) };
+      const dev = { id: 'd' + (++d.seq), hostname, vendor, model: value, x: clamp(x.x, 0, CANVAS_W - BOX_W), y: clamp(x.y, 0, MAX_H - BOX_H) };
       d.devices.push(dev);
       byHost.set(lc(hostname), dev);
     }
@@ -307,14 +317,15 @@
       + `<text x="8" y="49" font-size="10" fill="var(--dim)">${xesc(T('td.ports_used', { used, total }))}</text></g>`;
   }
   function canvasSvg(d, sel, T) {
-    return `<svg data-td-svg viewBox="0 0 ${CANVAS_W} ${CANVAS_H}" width="100%" style="display:block;max-width:${CANVAS_W}px;min-width:720px;aspect-ratio:${CANVAS_W}/${CANVAS_H};touch-action:none;user-select:none;color:var(--text)" role="img">`
-      + `<rect width="${CANVAS_W}" height="${CANVAS_H}" fill="var(--bg)" stroke="var(--border)"/>`
+    const H = canvasH(d);
+    return `<svg data-td-svg viewBox="0 0 ${CANVAS_W} ${H}" width="100%" style="display:block;max-width:${CANVAS_W}px;min-width:720px;aspect-ratio:${CANVAS_W}/${H};touch-action:none;user-select:none;color:var(--text)" role="img">`
+      + `<rect width="${CANVAS_W}" height="${H}" fill="var(--bg)" stroke="var(--border)"/>`
       + `<g data-td-links>${linksSvg(d)}</g>${d.devices.map(x => deviceSvg(d, x, sel, T)).join('')}</svg>`;
   }
 
   const api = {
     VENDORS, VENDOR_IDS, vendorName, shortPort, modelChoices, findModel, portsOf, newDesign, addDevice, removeDevice, moveDevice, addLink, removeLink,
-    usedPorts, buildDesign, parseDesign, canvasSvg, DESIGN_ERR_CODES, ERR_CODES, MAX_DEVICES, MAX_LINKS, MAX_VLANS, CANVAS_W, CANVAS_H, BOX_W, BOX_H,
+    usedPorts, buildDesign, parseDesign, canvasSvg, canvasH, DESIGN_ERR_CODES, ERR_CODES, MAX_DEVICES, MAX_LINKS, MAX_VLANS, CANVAS_W, CANVAS_H, MAX_H, BOX_W, BOX_H,
     parseVlanList, vlanText, addVlan, removeVlan, normCfg, setEndCfg, linkIssues, linkState, LINK_ISSUE_TYPES, ISSUE_LEVEL, generatorModel,
   };
   if (typeof window !== 'undefined') window.TopoDesigner = api;
@@ -356,11 +367,21 @@
     vs.innerHTML = VENDORS.map(v => `<option value="${esc(v[0])}"${v[0] === cur ? ' selected' : ''}>${esc(v[1])}</option>`).join('');
     ['l', 'e'].forEach(pfx => { const m = $('td-' + pfx + '-mode'), keep = m.value; m.innerHTML = ['', 'access', 'trunk'].map(v => `<option value="${v}"${v === keep ? ' selected' : ''}>${esc(tr(v ? 'td.mode_' + v : 'td.mode_none'))}</option>`).join(''); });
     fillModels();
+    fillCustom();
     if (window.renderToolkitVersion) window.renderToolkitVersion(lang);
   }
   function fillModels() {
     const ms = $('td-model'), keep = ms.value, list = modelChoices($('td-vendor').value);
     ms.innerHTML = `<option value="">${esc(tr('td.pick'))}</option>` + list.map(m => `<option value="${esc(m.value)}"${m.value === keep ? ' selected' : ''}>${esc(m.label)}${m.custom ? ' (' + esc(tr('td.custom')) + ')' : ''}</option>`).join('');
+    const hint = $('td-model-hint');
+    if (hint) { hint.hidden = list.length > 0; hint.textContent = tr('td.no_models'); }
+  }
+  // 自訂型號編輯區（panel-svg.js，與交換器分析、防火牆共用同一份 localStorage）；沒有內建型號時預設展開
+  function fillCustom() {
+    const box = $('td-custom'), ps = window.PanelSvg;
+    if (!box || !ps) return;
+    const open = box.querySelector('details[open]') || !modelChoices($('td-vendor').value).length;
+    box.innerHTML = ps.customEditorHtml('td', !!open);
   }
   function fillEnd(end) {
     const dsel = $('td-' + end + '-dev'), psel = $('td-' + end + '-port'), keepD = dsel.value, keepP = psel.value;
@@ -447,7 +468,8 @@
     if (!drag) return;
     const d = drag;
     drag = null;
-    if (d.moved) return;
+    // 拖到最下面時畫布要長高；其他情況方塊已在原位，不必重畫
+    if (d.moved) { if (canvasH(D) !== +String(d.svg.getAttribute('viewBox')).split(' ')[3]) render(); return; }
     // 點選：依序填入 A 端、B 端
     $('td-' + pickNext + '-dev').value = d.dev.id;
     sel = d.dev.id;
@@ -492,7 +514,15 @@
     fillStatic();
     render();
     $('td-lang-sel').addEventListener('change', e => { lang = e.target.value; saveLang(lang); fillStatic(); render(); });
-    $('td-vendor').addEventListener('change', fillModels);
+    $('td-vendor').addEventListener('change', () => { fillModels(); fillCustom(); });
+    // 存檔／刪除自訂型號後：重填型號選單（剛存的直接選取），已放在畫布上的設備重畫
+    window.addEventListener('pnl-custom', e => {
+      if (!e.detail || e.detail.scope !== 'td') return;
+      fillModels();
+      if (e.detail.value) $('td-model').value = e.detail.value;
+      fillCustom();
+      render();
+    });
     ['a', 'b'].forEach(end => $('td-' + end + '-dev').addEventListener('change', () => fillEnd(end)));
     ['l', 'e'].forEach(pfx => $('td-' + pfx + '-mode').addEventListener('change', () => fillCfgForm(pfx)));
     $('td-dev-add').addEventListener('click', () => {

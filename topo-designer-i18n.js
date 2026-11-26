@@ -1,7 +1,7 @@
 // 拓樸設計頁（XN201）的介面文字：12 語言，key 前綴 td.；check_i18n／add_i18n 的 designer 目標，錨點 const LANG_TD = {
 // zhTW／en／ja 為功能文字，其餘彩蛋語言依同一份內容做風格變化（不可省略）
 const LANG_TD = {
-  zhTW: {
+  zhTW: {'pcu.example':"帶入範例",'pcu.title':"自訂型號",'pcu.hint':"每行一個埠或一段埠：名稱 [速率] [mgmt] [poe] [sfp]，名稱可用 {起-迄} 展開（例如 GigabitEthernet1/0/{1-48} 1G poe），# 之後為註解。存在此瀏覽器，交換器分析與防火牆共用。",'pcu.name_ph':"型號名稱（例如 自訂 48 埠）",'pcu.save':"儲存並套用",'pcu.saved':"已儲存：",'pcu.ports':"{n} 埠",'pcu.edit':"編輯",'pcu.del':"刪除",'pcu.group':"自訂型號",'pcu.line':"第 {n} 行",'pcu.err_token':"看不懂「{tok}」（只接受速率、mgmt、poe、sfp）",'pcu.err_range':"範圍「{tok}」不正確（起點須不大於迄點，最多 256 埠）",'pcu.err_name':"埠名稱「{tok}」只能用英數與 / . _ : -（最多 64 字）",'pcu.err_dup':"埠名稱「{tok}」重複",'pcu.err_max':"超過 {tok} 埠上限",'pcu.err_empty':"沒有任何埠",'pcu.err_noname':"請填型號名稱（最多 40 字）",'pcu.err_full':"最多儲存 {tok} 個自訂型號，請先刪除不用的",'pcu.err_store':"無法寫入此瀏覽器的儲存空間",'td.no_models':"這個廠牌沒有內建型號，請在下方「自訂型號」建立後再選。",
     'td.title':"拓樸設計",
     'td.experimental':"實驗中",
     'td.intro':"在畫布上放交換器、拖拉位置、選兩端的埠連線並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前請先存檔。",
@@ -109,7 +109,7 @@ const LANG_TD = {
     'td.err_vlan_syntax':"VLAN 寫法不正確（例：10,20-30 或 all）。",
     'td.err_native':"native VLAN 須為清單中的 VLAN，或留空使用預設。",
   },
-  en: {
+  en: {'pcu.example':"Fill in example",'pcu.title':"Custom model",'pcu.hint':"One port or port range per line: name [speed] [mgmt] [poe] [sfp]; use {from-to} to expand names (e.g. GigabitEthernet1/0/{1-48} 1G poe); text after # is a comment. Saved in this browser and shared by the switch and firewall analyzers.",'pcu.name_ph':"Model name (e.g. My 48-port)",'pcu.save':"Save and apply",'pcu.saved':"Saved:",'pcu.ports':"{n} ports",'pcu.edit':"Edit",'pcu.del':"Delete",'pcu.group':"Custom models",'pcu.line':"Line {n}",'pcu.err_token':"Unknown \"{tok}\" (only speed, mgmt, poe, sfp)",'pcu.err_range':"Invalid range \"{tok}\" (from must not exceed to; at most 256 ports)",'pcu.err_name':"Port name \"{tok}\" may only use letters, digits and / . _ : - (max 64)",'pcu.err_dup':"Duplicate port name \"{tok}\"",'pcu.err_max':"More than {tok} ports",'pcu.err_empty':"No ports defined",'pcu.err_noname':"Enter a model name (max 40 characters)",'pcu.err_full':"At most {tok} custom models; delete one first",'pcu.err_store':"Cannot write to this browser's storage",'td.no_models':"No built-in models for this vendor; create one under \"Custom models\" below, then pick it.",
     'td.title':"Topology designer",
     'td.experimental':"Experimental",
     'td.intro':"Place switches on the canvas, drag them around, connect ports and set the link mode, choosing models across vendors. Data lives in this tab's memory only, so save before closing.",
@@ -217,7 +217,7 @@ const LANG_TD = {
     'td.err_vlan_syntax':"Invalid VLAN list (example: 10,20-30 or all).",
     'td.err_native':"Native VLAN must be a VLAN from the list, or empty for the default.",
   },
-  ja: {
+  ja: {'pcu.example':"例を入力",'pcu.title':"カスタム型番",'pcu.hint':"1 行に 1 ポートまたはポート範囲：名前 [速度] [mgmt] [poe] [sfp]。名前は {開始-終了} で展開できます（例：GigabitEthernet1/0/{1-48} 1G poe）。# 以降はコメント。このブラウザに保存され、スイッチ分析とファイアウォール分析で共用します。",'pcu.name_ph':"型番名（例：自作 48 ポート）",'pcu.save':"保存して適用",'pcu.saved':"保存済み：",'pcu.ports':"{n} ポート",'pcu.edit':"編集",'pcu.del':"削除",'pcu.group':"カスタム型番",'pcu.line':"{n} 行目",'pcu.err_token':"「{tok}」は解釈できません（速度・mgmt・poe・sfp のみ）",'pcu.err_range':"範囲「{tok}」が不正です（開始≦終了、最大 256 ポート）",'pcu.err_name':"ポート名「{tok}」は英数字と / . _ : - のみ（最大 64 文字）",'pcu.err_dup':"ポート名「{tok}」が重複しています",'pcu.err_max':"{tok} ポートの上限を超えています",'pcu.err_empty':"ポートがありません",'pcu.err_noname':"型番名を入力してください（最大 40 文字）",'pcu.err_full':"カスタム型番は最大 {tok} 件です。不要なものを削除してください",'pcu.err_store':"このブラウザのストレージに書き込めません",'td.no_models':"このベンダーには内蔵モデルがありません。下の「カスタムモデル」で作成してから選んでください。",
     'td.title':"トポロジー設計",
     'td.experimental':"試験中",
     'td.intro':"キャンバスにスイッチを置き、ドラッグで配置し、両端のポートを選んで接続し、接続モードを設定します。ベンダーをまたいで型番を選べます。データはこのタブのメモリにのみ保持されるため、閉じる前に保存してください。",
@@ -325,7 +325,7 @@ const LANG_TD = {
     'td.err_vlan_syntax':"VLAN の書き方が正しくありません（例：10,20-30 または all）。",
     'td.err_native':"native VLAN は一覧にある VLAN にするか、空欄で既定値を使ってください。",
   },
-  tlh:{
+  tlh:{'pcu.example':"Example!",'pcu.title':"Custom model (De'wI' ghItlh)",'pcu.hint':"One port per line: name [speed] [mgmt] [poe] [sfp]; {from-to} expands names; # starts a comment. Stored in this browser for switch and firewall.",'pcu.name_ph':"Model name",'pcu.save':"Save and apply! Qapla'",'pcu.saved':"Saved:",'pcu.ports':"{n} ports",'pcu.edit':"Edit",'pcu.del':"Destroy",'pcu.group':"Custom models",'pcu.line':"Line {n}",'pcu.err_token':"\"{tok}\" unknown",'pcu.err_range':"Bad range \"{tok}\"",'pcu.err_name':"Bad port name \"{tok}\"",'pcu.err_dup':"\"{tok}\" twice",'pcu.err_max':"More than {tok} ports",'pcu.err_empty':"No ports",'pcu.err_noname':"Name required",'pcu.err_full':"Max {tok} models",'pcu.err_store':"Storage failed",'td.no_models':"jIH Segh wej tu'lu'. bIngDaq Segh chu' yIchenmoH, vaj yIwIv.",
     'td.title':"Topology designer",
     'td.experimental':"Experimental",
     'td.intro':"Place switches on the canvas, drag them around, connect ports and set the link mode, choosing models across vendors. Data lives in this tab's memory only, so save before closing.",
@@ -433,7 +433,7 @@ const LANG_TD = {
     'td.err_vlan_syntax':"Invalid VLAN list (example: 10,20-30 or all).",
     'td.err_native':"Native VLAN must be a VLAN from the list, or empty for the default.",
   },
-  pirate:{
+  pirate:{'pcu.example':"Show me a sample",'pcu.title':"Custom ship plans",'pcu.hint':"One port per line, matey: name [speed] [mgmt] [poe] [sfp]; {from-to} unrolls the rope; # be a note. Kept in this here browser fer both tools.",'pcu.name_ph':"Ship name",'pcu.save':"Stow and hoist",'pcu.saved':"In the hold:",'pcu.ports':"{n} gunports",'pcu.edit':"Mend",'pcu.del':"Scuttle",'pcu.group':"Custom ships",'pcu.line':"Line {n}",'pcu.err_token':"\"{tok}\" be gibberish",'pcu.err_range':"Range \"{tok}\" be crooked",'pcu.err_name':"Port name \"{tok}\" be foul",'pcu.err_dup':"\"{tok}\" be listed twice",'pcu.err_max':"More than {tok} gunports",'pcu.err_empty':"No ports aboard",'pcu.err_noname':"Name yer ship",'pcu.err_full':"Hold be full ({tok})",'pcu.err_store':"Locker be jammed",'td.no_models':"No ready-made hulls for this shipwright, matey — build yer own below under \"Custom models\", then pick it.",
     'td.title':"Topology designer",
     'td.experimental':"Experimental",
     'td.intro':"Place switches on the canvas, drag them around, connect ports and set the rope mode, choosing models across vendors. Data lives in this tab's memory only, so save before closing. Arr!",
@@ -541,7 +541,7 @@ const LANG_TD = {
     'td.err_vlan_syntax':"Invalid VLAN list (example: 10,20-30 or all). Arr!",
     'td.err_native':"Native VLAN must be a VLAN from the list, or empty for the default. Arr!",
   },
-  emoji:{
+  emoji:{'pcu.example':"📝 example",'pcu.title':"✏️🖥️ Custom model",'pcu.hint':"📝 One port per line: name [speed] [mgmt] [poe] [sfp] · {from-to} ➡️ expand · # 💬 comment · 💾 this browser (switch + firewall)",'pcu.name_ph':"🏷️ Model name",'pcu.save':"💾✅ Save + apply",'pcu.saved':"💾 Saved:",'pcu.ports':"🔌{n}",'pcu.edit':"✏️",'pcu.del':"🗑️",'pcu.group':"✏️ Custom",'pcu.line':"📄{n}",'pcu.err_token':"❓ \"{tok}\"",'pcu.err_range':"❌ range \"{tok}\"",'pcu.err_name':"❌ name \"{tok}\"",'pcu.err_dup':"👯 \"{tok}\"",'pcu.err_max':"🚫 > {tok}",'pcu.err_empty':"🈳",'pcu.err_noname':"🏷️❗",'pcu.err_full':"📦 max {tok}",'pcu.err_store':"💾❌",'td.no_models':"🚫📦 ➡️ ✏️ 自訂型號 ⬇️ ➡️ ✅",
     'td.title':"Topology designer",
     'td.experimental':"Experimental",
     'td.intro':"Place switches on the canvas, drag them around, connect ports and set the link mode, choosing models across vendors. Data lives in this tab's memory only, so save before closing.",
@@ -649,7 +649,7 @@ const LANG_TD = {
     'td.err_vlan_syntax':"⚠️ Invalid VLAN list (example: 10,20-30 or all).",
     'td.err_native':"⚠️ Native VLAN must be a VLAN from the list, or empty for the default.",
   },
-  bureau:{
+  bureau:{'pcu.example':"帶入範本",'pcu.title':"自訂型號登記",'pcu.hint':"每行填寫一個埠或一段埠：名稱 [速率] [mgmt] [poe] [sfp]，名稱以 {起-迄} 展開，# 之後為附註。本表存於此瀏覽器，交換器與防火牆兩單位共用。",'pcu.name_ph':"型號名稱（必填）",'pcu.save':"核准並套用",'pcu.saved':"已登記：",'pcu.ports':"{n} 埠",'pcu.edit':"修訂",'pcu.del':"註銷",'pcu.group':"自訂型號",'pcu.line':"第 {n} 行",'pcu.err_token':"「{tok}」不符格式（限速率、mgmt、poe、sfp）",'pcu.err_range':"範圍「{tok}」有誤（上限 256 埠）",'pcu.err_name':"埠名稱「{tok}」含不允許字元",'pcu.err_dup':"埠名稱「{tok}」重複登記",'pcu.err_max':"超過 {tok} 埠上限",'pcu.err_empty':"未填任何埠",'pcu.err_noname':"型號名稱為必填",'pcu.err_full':"已達 {tok} 筆上限",'pcu.err_store':"儲存空間寫入失敗",'td.no_models':"查本廠牌尚無內建型號，請於下方「自訂型號」先行建檔後再行選用。",
     'td.title':"拓樸設計",
     'td.experimental':"實驗中",
     'td.intro':"在畫布上放交換器、拖拉位置、選兩端的埠連線並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前敬請先存檔。",
@@ -757,7 +757,7 @@ const LANG_TD = {
     'td.err_vlan_syntax':"VLAN 寫法不正確（例：10,20-30 或 all）。",
     'td.err_native':"native VLAN 須為清單中的 VLAN，或留空使用預設。",
   },
-  cat:{
+  cat:{'pcu.example':"給我範例喵",'pcu.title':"喵自己畫的型號",'pcu.hint':"一行一個埠喵：名稱 [速率] [mgmt] [poe] [sfp]，{起-迄} 會自己長出一排，# 後面是喵的悄悄話。存在這個瀏覽器，兩個工具都能用。",'pcu.name_ph':"型號名字喵",'pcu.save':"存起來喵",'pcu.saved':"喵收藏的：",'pcu.ports':"{n} 個洞洞",'pcu.edit':"改改",'pcu.del':"丟掉",'pcu.group':"喵的型號",'pcu.line':"第 {n} 行喵",'pcu.err_token':"「{tok}」喵看不懂",'pcu.err_range':"範圍「{tok}」怪怪的喵",'pcu.err_name':"名字「{tok}」有怪字喵",'pcu.err_dup':"「{tok}」出現兩次喵",'pcu.err_max':"太多洞洞了喵（上限 {tok}）",'pcu.err_empty':"一個洞都沒有喵",'pcu.err_noname':"要取名字喵",'pcu.err_full':"喵的箱子滿了（{tok}）",'pcu.err_store':"存不進去喵",'td.no_models':"這個牌子沒有現成的型號喵，先到下面「自訂型號」做一個再選喵。",
     'td.title':"拓樸設計",
     'td.experimental':"實驗中",
     'td.intro':"在畫布上放交換器、拖拉位置、選兩端的埠連線並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前請先存檔喵。",
@@ -865,7 +865,7 @@ const LANG_TD = {
     'td.err_vlan_syntax':"VLAN 寫法不正確（例：10,20-30 或 all）喵。",
     'td.err_native':"native VLAN 須為清單中的 VLAN，或留空使用預設喵。",
   },
-  bean:{
+  bean:{'pcu.example':"帶入範例豆",'pcu.title':"豆子手作型號",'pcu.hint':"一行一顆埠豆：名稱 [速率] [mgmt] [poe] [sfp]，{起-迄} 一次種一排，# 之後是備註。存在這個瀏覽器，交換器與防火牆共用。",'pcu.name_ph':"型號名稱（豆名）",'pcu.save':"收進豆罐並套用",'pcu.saved':"豆罐裡有：",'pcu.ports':"{n} 顆豆",'pcu.edit':"重種",'pcu.del':"倒掉",'pcu.group':"手作型號",'pcu.line':"第 {n} 行",'pcu.err_token':"「{tok}」不是豆子",'pcu.err_range':"範圍「{tok}」種不出來",'pcu.err_name':"豆名「{tok}」含怪字",'pcu.err_dup':"「{tok}」種了兩次",'pcu.err_max':"豆罐裝不下（上限 {tok}）",'pcu.err_empty':"罐子是空的",'pcu.err_noname':"豆罐要貼名字",'pcu.err_full':"豆罐滿了（{tok}）",'pcu.err_store':"豆罐打不開",'td.no_models':"這豆子沒有現成豆莢，先到下面「自訂型號」種一顆再選。",
     'td.title':"拓樸設計",
     'td.experimental':"實驗中",
     'td.intro':"在畫布上放交換器、拖拉位置、選兩端的埠連線並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前請先存檔啦。",
@@ -973,7 +973,7 @@ const LANG_TD = {
     'td.err_vlan_syntax':"VLAN 寫法不正確（例：10,20-30 或 all）啦。",
     'td.err_native':"native VLAN 須為清單中的 VLAN，或留空使用預設啦。",
   },
-  alpaca:{
+  alpaca:{'pcu.example':"帶入範例",'pcu.title':"羊駝自編型號",'pcu.hint':"一行一個埠：名稱 [速率] [mgmt] [poe] [sfp]，{起-迄} 一口氣排好，# 後面是羊駝碎念。存在這個瀏覽器，兩邊共用。",'pcu.name_ph':"型號名稱",'pcu.save':"存好套用",'pcu.saved':"羊駝收著：",'pcu.ports':"{n} 個埠",'pcu.edit':"改一下",'pcu.del':"咬掉",'pcu.group':"羊駝自編",'pcu.line':"第 {n} 行",'pcu.err_token':"「{tok}」羊駝看不懂",'pcu.err_range':"範圍「{tok}」不對",'pcu.err_name':"名稱「{tok}」有怪字",'pcu.err_dup':"「{tok}」重複了",'pcu.err_max':"太多了（上限 {tok}）",'pcu.err_empty':"一個埠都沒有",'pcu.err_noname':"要取名字",'pcu.err_full':"滿了（{tok}）",'pcu.err_store':"存不進去",'td.no_models':"這個牧場沒有現成的羊駝品種，請到下面「自訂型號」自己養一隻再選。",
     'td.title':"拓樸設計",
     'td.experimental':"實驗中",
     'td.intro':"在畫布上放交換器、拖拉位置、選兩端的埠連線並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前請先存檔。",
@@ -1081,7 +1081,7 @@ const LANG_TD = {
     'td.err_vlan_syntax':"VLAN 寫法不正確（例：10,20-30 或 all）。",
     'td.err_native':"native VLAN 須為清單中的 VLAN，或留空使用預設。",
   },
-  yanse:{
+  yanse:{'pcu.example':"帶入範例",'pcu.title':"自訂型號（自家調色）",'pcu.hint':"一行一個埠：名稱 [速率] [mgmt] [poe] [sfp]，{起-迄} 一次塗一整排，# 之後為註記。存在此瀏覽器，交換器與防火牆共用。",'pcu.name_ph':"型號名稱",'pcu.save':"存檔並套用",'pcu.saved':"已存色票：",'pcu.ports':"{n} 埠",'pcu.edit':"重調",'pcu.del':"洗掉",'pcu.group':"自訂型號",'pcu.line':"第 {n} 行",'pcu.err_token':"「{tok}」不在色票裡",'pcu.err_range':"範圍「{tok}」不對",'pcu.err_name':"名稱「{tok}」有雜色",'pcu.err_dup':"「{tok}」撞色",'pcu.err_max':"超過 {tok} 埠",'pcu.err_empty':"空白畫布",'pcu.err_noname':"請命名",'pcu.err_full':"色票滿了（{tok}）",'pcu.err_store':"存不進去",'td.no_models':"這廠牌連個內建型號都沒有……只好自己到下面「自訂型號」做一個，再選吧。",
     'td.title':"拓樸設計",
     'td.experimental':"實驗中",
     'td.intro':"在畫布上放交換器、拖拉位置、選兩端的埠連線並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前請先存檔，唉。",
@@ -1189,7 +1189,7 @@ const LANG_TD = {
     'td.err_vlan_syntax':"VLAN 寫法不正確（例：10,20-30 或 all），唉。",
     'td.err_native':"native VLAN 須為清單中的 VLAN，或留空使用預設，唉。",
   },
-  wuxia:{
+  wuxia:{'pcu.example':"取範例招式",'pcu.title':"自創機關圖譜",'pcu.hint':"一行記一門：名稱 [速率] [mgmt] [poe] [sfp]，以 {起-迄} 列陣，# 之後為批註。圖譜藏於此瀏覽器，交換器與防火牆兩派共用。",'pcu.name_ph':"圖譜名號",'pcu.save':"收錄並施展",'pcu.saved':"已收錄：",'pcu.ports':"{n} 門",'pcu.edit':"修訂",'pcu.del':"廢去",'pcu.group':"自創圖譜",'pcu.line':"第 {n} 句",'pcu.err_token':"「{tok}」非本門口訣",'pcu.err_range':"陣法「{tok}」有誤",'pcu.err_name':"門名「{tok}」含禁字",'pcu.err_dup':"「{tok}」重名",'pcu.err_max':"超出 {tok} 門",'pcu.err_empty':"空無一門",'pcu.err_noname':"須立名號",'pcu.err_full':"譜冊已滿（{tok}）",'pcu.err_store':"藏經閣進不去",'td.no_models':"此門派並無現成兵器，請至下方「自訂型號」自鑄一柄，再行挑選。",
     'td.title':"拓樸設計",
     'td.experimental':"實驗中",
     'td.intro':"在沙盤上放交換器、拖拉位置、選兩端的埠經脈並設定串接模式，可跨廠牌選型號。資料只存在這個分頁的記憶體，關閉前請先存檔。",
