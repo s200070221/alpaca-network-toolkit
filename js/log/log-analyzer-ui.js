@@ -2,44 +2,14 @@ const EGG_LANGS = ['tlh','pirate','leet','emoji','uwu','bureau','cat','bean','al
 let unlockedEggs = { tlh:false, pirate:false, leet:false, emoji:false, uwu:false, bureau:false, cat:false, bean:false, alpaca:false, yanse:false };
 // 語言偏好跨工具共用（2026-09-29，PB）：共用 localStorage key 'cw_lang'（比照主題 'cw_theme'），
 // 只記住三種正式語言；彩蛋語言需各工具各自解鎖，不跨工具帶入。未存過時依瀏覽器語言決定
-function loadLangPref() {
-  try { const v = localStorage.getItem('cw_lang'); if (v === 'zhTW' || v === 'en' || v === 'ja') return v; } catch (e) {}
-  const n = ((typeof navigator !== 'undefined' && navigator.language) || '').toLowerCase();
-  return n.indexOf('ja') === 0 ? 'ja' : (n.indexOf('zh') === 0 || !n ? 'zhTW' : 'en');
-}
 // 無障礙（UE，2026-09-29 新增）：沒有可存取名稱的輸入欄位，自動關聯到緊鄰的標籤——前一個兄弟元素是
 // 沒有 for 的 <label> 時補 for；是 <span> 時以 aria-labelledby 指向它（語言切換後名稱跟著更新）。
-// 已有 label／aria／title／placeholder（瀏覽器本身會當名稱）者不動。各工具各自一份，不跨檔引用
-function autoLabelControls() {
-  var n = 0;
-  document.querySelectorAll('input:not([type=hidden]):not([type=file]),select,textarea').forEach(function (el) {
-    if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.title || el.placeholder || el.closest('label')) return;
-    if (el.id && document.querySelector('label[for="' + el.id + '"]')) return;
-    var lb = el.previousElementSibling;
-    if (!lb || !/^(LABEL|SPAN)$/.test(lb.tagName) || lb.querySelector('input,select,textarea')) return;
-    if (lb.tagName === 'LABEL' && !lb.htmlFor && el.id) { lb.htmlFor = el.id; return; }
-    if (!lb.id) lb.id = 'auto-lbl-' + (++n);
-    el.setAttribute('aria-labelledby', lb.id);
-  });
-}
-function saveLangPref(code) {
-  if (code === 'zhTW' || code === 'en' || code === 'ja') { try { localStorage.setItem('cw_lang', code); } catch (e) {} }
-}
+// 已有 label／aria／title／placeholder（瀏覽器本身會當名稱）者不動。函式在 toolkit-common.js
 let currentLang = loadLangPref();
 const LANG_BTN_LABEL = { zhTW:'繁中', en:'EN', ja:'日本語', tlh:"Qo'noS", pirate:'☠ Arr', leet:'1337', emoji:'🌈', uwu:'UwU', bureau:'公文', cat:'nyaa', bean:'🥕🫛🌽', alpaca:'🦙咩', yanse:'😮‍💨 算了', wuxia:'武林' };
 
-function leetify(s) { return s.replace(/[aeiostl]/gi, c => ({a:'4',e:'3',i:'1',o:'0',s:'5',t:'7',l:'|'}[c.toLowerCase()] || c)); }
-function uwuify(s) { return s.replace(/th/gi,'d').replace(/[rl]/gi,'w').replace(/n([aeiou])/gi,'ny$1'); }
-const BEAN_MAP = { a:'🫘', e:'🥦', i:'🥕', o:'🥔', u:'🍆' };
-function beanify(s) { return s.replace(/[aeiou]/gi, c => BEAN_MAP[c.toLowerCase()] || c); }
 
 // ── 跨工具導覽（2026-08-24 新增）：見 switch_analyzer 同名函式註解
-function toggleToolsNav(e) {
-  if (e) e.stopPropagation();
-  const p = document.getElementById('tools-nav-panel');
-  if (!p) return;
-  p.style.display = (p.style.display === 'none' || !p.style.display) ? 'block' : 'none';
-}
 document.addEventListener('click', function (e) {
   const p = document.getElementById('tools-nav-panel');
   if (p && p.style.display === 'block' && !p.contains(e.target) && e.target.id !== 'tools-nav-btn') {
@@ -47,13 +17,8 @@ document.addEventListener('click', function (e) {
   }
 });
 
-function tr(key) {
-  if (currentLang === 'leet') return leetify(LANG.en[key] || LANG.zhTW[key] || key);
-  if (currentLang === 'uwu') return uwuify(LANG.en[key] || LANG.zhTW[key] || key);
-  if (currentLang === 'cat') return LANG.cat[key] || ((LANG.en[key] || LANG.zhTW[key] || key) + ' 喵~');
-  if (currentLang === 'bean') return LANG.bean[key] || beanify(LANG.en[key] || LANG.zhTW[key] || key);
-  return (LANG[currentLang] && LANG[currentLang][key]) || LANG.zhTW[key] || key;
-}
+// 翻譯：共用 toolkit-common.js 的 tkTr()（彩蛋語言退回規則、leet／uwu／cat／bean 轉換）
+function tr(key) { return tkTr(LANG, currentLang, key); }
 
 // ============================================================
 // [8] UI 狀態與繪製
@@ -1766,10 +1731,6 @@ function getRiskAsns() {
 }
 
 // <html lang> 對應（2026-09-29，PB）：螢幕閱讀器依此決定朗讀語言；中文系彩蛋語言視為 zh-TW
-function htmlLangFor(code) {
-  if (code === 'ja') return 'ja';
-  return ['zhTW', 'bureau', 'cat', 'bean', 'alpaca', 'yanse', 'wuxia'].indexOf(code) >= 0 ? 'zh-TW' : 'en';
-}
 function renderAll() {
   document.documentElement.lang = htmlLangFor(currentLang);
   renderLangBar();

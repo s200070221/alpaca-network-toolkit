@@ -2,13 +2,8 @@
 // 與其他 hub-*.js 共用全域（不包 IIFE，HTML 內嵌事件與跨檔呼叫依賴全域函式），載入順序見 network-analyzer.html。
 // ── tr / setLang ───────────────────────────────────────────────────
 let _lang = 'zhTW';
-function tr(k){
-  if(_lang==='leet'){const s=LANG.en[k]||LANG.zhTW[k]||k;return s.replace(/a/gi,'4').replace(/e/gi,'3').replace(/i/gi,'1').replace(/o/gi,'0').replace(/s/gi,'5').replace(/t/gi,'7').replace(/l/gi,'|');}
-  if(_lang==='uwu'){const s=LANG.en[k]||LANG.zhTW[k]||k;return s.replace(/r/g,'w').replace(/R/g,'W').replace(/l/g,'w').replace(/L/g,'W').replace(/th/g,'d').replace(/Th/g,'D').replace(/n([aeiou])/g,'ny$1').replace(/N([AEIOU])/g,'Ny$1');}
-  if(_lang==='cat'){const d=LANG.cat&&LANG.cat[k];if(d)return d;const base=LANG.zhTW[k]||LANG.en[k]||k;return base+(/[一-鿿]$/.test(base)?'喵~':' nyaa~');}
-  if(_lang==='bean'){const d=LANG.bean&&LANG.bean[k];if(d)return d;const base=LANG.en[k]||LANG.zhTW[k]||k;const vg=['🥕','🫛','🌽'];return base.split('').map(c=>c===' '?' ':vg[c.charCodeAt(0)%3]).join('');}
-  return (LANG[_lang]||LANG.zhTW)[k]||LANG.en[k]||k;
-}
+// 翻譯：共用 toolkit-common.js 的 tkTr()（彩蛋語言退回規則、leet／uwu／cat／bean 轉換）
+function tr(k) { return tkTr(LANG, _lang, k); }
 
 function tip(key, label, n) {
   // n：說明文字中的 {n}（支援廠牌數，XN52 由 TOOLS 清單長度算出，不寫死在文字裡）
@@ -18,29 +13,9 @@ function tip(key, label, n) {
 }
 // 語言偏好跨工具共用（2026-09-29，PB）：共用 localStorage key 'cw_lang'（比照主題 'cw_theme'），
 // 只記住三種正式語言；彩蛋語言需各工具各自解鎖，不跨工具帶入。未存過時依瀏覽器語言決定
-function loadLangPref() {
-  try { const v = localStorage.getItem('cw_lang'); if (v === 'zhTW' || v === 'en' || v === 'ja') return v; } catch (e) {}
-  const n = ((typeof navigator !== 'undefined' && navigator.language) || '').toLowerCase();
-  return n.indexOf('ja') === 0 ? 'ja' : (n.indexOf('zh') === 0 || !n ? 'zhTW' : 'en');
-}
 // 無障礙（UE，2026-09-29 新增）：沒有可存取名稱的輸入欄位，自動關聯到緊鄰的標籤——前一個兄弟元素是
 // 沒有 for 的 <label> 時補 for；是 <span> 時以 aria-labelledby 指向它（語言切換後名稱跟著更新）。
-// 已有 label／aria／title／placeholder（瀏覽器本身會當名稱）者不動。各工具各自一份，不跨檔引用
-function autoLabelControls() {
-  var n = 0;
-  document.querySelectorAll('input:not([type=hidden]):not([type=file]),select,textarea').forEach(function (el) {
-    if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.title || el.placeholder || el.closest('label')) return;
-    if (el.id && document.querySelector('label[for="' + el.id + '"]')) return;
-    var lb = el.previousElementSibling;
-    if (!lb || !/^(LABEL|SPAN)$/.test(lb.tagName) || lb.querySelector('input,select,textarea')) return;
-    if (lb.tagName === 'LABEL' && !lb.htmlFor && el.id) { lb.htmlFor = el.id; return; }
-    if (!lb.id) lb.id = 'auto-lbl-' + (++n);
-    el.setAttribute('aria-labelledby', lb.id);
-  });
-}
-function saveLangPref(code) {
-  if (code === 'zhTW' || code === 'en' || code === 'ja') { try { localStorage.setItem('cw_lang', code); } catch (e) {} }
-}
+// 已有 label／aria／title／placeholder（瀏覽器本身會當名稱）者不動。函式在 toolkit-common.js
 function setLang(lang) {
   _lang = lang;
   saveLangPref(lang);

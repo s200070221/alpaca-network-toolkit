@@ -136,6 +136,7 @@ const FILES = [
   'js/generator/switch-generator-validate.js',
   'js/generator/switch-generator-zip.js',
   'js/shared/toolkit-version.js',
+  'js/shared/toolkit-common.js',
   'js/shared/vuln-check.js',
   'js/shared/vuln-seed.js',
   'js/shared/payload-sniff.js',

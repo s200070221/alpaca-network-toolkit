@@ -236,12 +236,6 @@ console.log('%c 彩蛋提示 → 盾牌 ×5 | Konami Code ↑↑↓↓←→←�
 
 // 黑/白模式切換
 // ── 跨工具導覽（2026-08-24 新增）：見 switch_analyzer 同名函式註解
-function toggleToolsNav(e){
-  if(e)e.stopPropagation();
-  const p=document.getElementById('tools-nav-panel');
-  if(!p)return;
-  p.style.display=(p.style.display==='none'||!p.style.display)?'block':'none';
-}
 document.addEventListener('click',function(e){
   const p=document.getElementById('tools-nav-panel');
   if(p&&p.style.display==='block'&&!p.contains(e.target)&&e.target.id!=='tools-nav-btn'){

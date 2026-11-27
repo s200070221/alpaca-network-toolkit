@@ -4654,11 +4654,8 @@ function downloadOutput(){
 
 // ── i18n ───────────────────────────────────────────────────────────
 let _lang='zhTW';
-function tr(k){
-  if(_lang==='leet'){const s=LANG.en[k]||LANG.zhTW[k]||k;return s.replace(/a/gi,'4').replace(/e/gi,'3').replace(/i/gi,'1').replace(/o/gi,'0').replace(/s/gi,'5').replace(/t/gi,'7').replace(/l/gi,'|');}
-  if(_lang==='uwu'){const s=LANG.en[k]||LANG.zhTW[k]||k;return s.replace(/r/g,'w').replace(/R/g,'W').replace(/l/g,'w').replace(/L/g,'W').replace(/th/g,'d').replace(/Th/g,'D').replace(/n([aeiou])/g,'ny$1').replace(/N([AEIOU])/g,'Ny$1');}
-  return (LANG[_lang]||LANG.zhTW)[k]||LANG.en[k]||k;
-}
+// 翻譯：共用 toolkit-common.js 的 tkTr()（彩蛋語言退回規則、leet／uwu／cat／bean 轉換）
+function tr(k) { return tkTr(LANG, _lang, k); }
 
 function applyI18n(root){
   (root||document).querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=tr(el.dataset.i18n);});
@@ -4667,29 +4664,9 @@ function applyI18n(root){
 
 // 語言偏好跨工具共用（2026-09-29，PB）：共用 localStorage key 'cw_lang'（比照主題 'cw_theme'），
 // 只記住三種正式語言；彩蛋語言需各工具各自解鎖，不跨工具帶入。未存過時依瀏覽器語言決定
-function loadLangPref() {
-  try { const v = localStorage.getItem('cw_lang'); if (v === 'zhTW' || v === 'en' || v === 'ja') return v; } catch (e) {}
-  const n = ((typeof navigator !== 'undefined' && navigator.language) || '').toLowerCase();
-  return n.indexOf('ja') === 0 ? 'ja' : (n.indexOf('zh') === 0 || !n ? 'zhTW' : 'en');
-}
 // 無障礙（UE，2026-09-29 新增）：沒有可存取名稱的輸入欄位，自動關聯到緊鄰的標籤——前一個兄弟元素是
 // 沒有 for 的 <label> 時補 for；是 <span> 時以 aria-labelledby 指向它（語言切換後名稱跟著更新）。
-// 已有 label／aria／title／placeholder（瀏覽器本身會當名稱）者不動。各工具各自一份，不跨檔引用
-function autoLabelControls() {
-  var n = 0;
-  document.querySelectorAll('input:not([type=hidden]):not([type=file]),select,textarea').forEach(function (el) {
-    if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.title || el.placeholder || el.closest('label')) return;
-    if (el.id && document.querySelector('label[for="' + el.id + '"]')) return;
-    var lb = el.previousElementSibling;
-    if (!lb || !/^(LABEL|SPAN)$/.test(lb.tagName) || lb.querySelector('input,select,textarea')) return;
-    if (lb.tagName === 'LABEL' && !lb.htmlFor && el.id) { lb.htmlFor = el.id; return; }
-    if (!lb.id) lb.id = 'auto-lbl-' + (++n);
-    el.setAttribute('aria-labelledby', lb.id);
-  });
-}
-function saveLangPref(code) {
-  if (code === 'zhTW' || code === 'en' || code === 'ja') { try { localStorage.setItem('cw_lang', code); } catch (e) {} }
-}
+// 已有 label／aria／title／placeholder（瀏覽器本身會當名稱）者不動。函式在 toolkit-common.js
 function setLang(lang){
   _lang=lang;
   saveLangPref(lang);
@@ -4730,12 +4707,6 @@ function setLang(lang){
 
 // ── theme ──────────────────────────────────────────────────────────
 // ── 跨工具導覽（2026-08-24 新增）：見 switch_analyzer 同名函式註解
-function toggleToolsNav(e){
-  if(e)e.stopPropagation();
-  const p=document.getElementById('tools-nav-panel');
-  if(!p)return;
-  p.style.display=(p.style.display==='none'||!p.style.display)?'block':'none';
-}
 document.addEventListener('click',function(e){
   const p=document.getElementById('tools-nav-panel');
   if(p&&p.style.display==='block'&&!p.contains(e.target)&&e.target.id!=='tools-nav-btn'){

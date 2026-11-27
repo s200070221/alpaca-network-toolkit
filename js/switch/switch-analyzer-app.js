@@ -4932,12 +4932,6 @@ function displayStructuredDiff(result){
 // ── 跨工具導覽（2026-08-24 新增）：6 工具互相之間、以及回到 hub 先前完全沒有連結，
 // 使用者只能靠瀏覽器上一頁。各工具各自複製一份自包含元件（比照本專案既有彩蛋/主題切換
 // 慣例，不硬拉共用 JS 檔），連結一律用相對檔名，與 index.html 的 TOOLS 陣列 href 逐字一致
-function toggleToolsNav(e){
-  if(e)e.stopPropagation();
-  const p=document.getElementById('tools-nav-panel');
-  if(!p)return;
-  p.style.display=(p.style.display==='none'||!p.style.display)?'block':'none';
-}
 document.addEventListener('click',function(e){
   const p=document.getElementById('tools-nav-panel');
   if(p&&p.style.display==='block'&&!p.contains(e.target)&&e.target.id!=='tools-nav-btn'){

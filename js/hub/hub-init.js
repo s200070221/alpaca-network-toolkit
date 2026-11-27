@@ -40,12 +40,6 @@ hubRoute();   // 首頁導引頁（UX39）：依網址 #<畫面 id> 開啟對應
 
 // 黑/白模式切換
 // ── 跨工具導覽（2026-08-24 新增）：見 switch_analyzer 同名函式註解
-function toggleToolsNav(e){
-  if(e)e.stopPropagation();
-  const p=document.getElementById('tools-nav-panel');
-  if(!p)return;
-  p.style.display=(p.style.display==='none'||!p.style.display)?'block':'none';
-}
 document.addEventListener('click',function(e){
   const p=document.getElementById('tools-nav-panel');
   if(p&&p.style.display==='block'&&!p.contains(e.target)&&e.target.id!=='tools-nav-btn'){

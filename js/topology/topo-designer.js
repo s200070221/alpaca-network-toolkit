@@ -1087,7 +1087,7 @@
     } catch (e) { /* 略過 */ }
   }
   let lang = loadLang();
-  const tr = k => (LANG_TD[lang] && LANG_TD[lang][k]) || LANG_TD.zhTW[k] || k;
+  const tr = k => tkTr(LANG_TD, lang, k);   // 共用 toolkit-common.js
   window.tr = window.tr || tr;   // 共用模組（panel-svg 等）以 typeof tr 取得翻譯
   const T = (k, p) => { let s = tr(k); Object.keys(p || {}).forEach(n => { s = s.split('{' + n + '}').join(String(p[n])); }); return s; };
   const esc = xesc;
