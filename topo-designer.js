@@ -1161,6 +1161,11 @@
   function fillMemberModels(boxId, vendor, model, members, keep) {
     const box = $(boxId);
     if (!box) return;
+    // 堆疊欄位只在所選型號可堆疊時顯示（RV15）
+    const can = !!model && canStack(vendor, model), lbl = $(boxId === 'td-member-models' ? 'td-members-lbl' : 'td-de-members-lbl'), hint = boxId === 'td-member-models' ? $('td-stack-hint') : null;
+    if (lbl) lbl.hidden = !can;
+    if (hint) hint.hidden = !can;
+    if (!can) { const inp = $(boxId === 'td-member-models' ? 'td-members' : 'td-de-members'); if (inp) inp.value = '1'; members = 1; }
     const n = membersOf(members) || 1, cur = keep || [...box.querySelectorAll('select[data-td-mm]')].reduce((a, el) => { a[+el.getAttribute('data-td-mm') - 1] = el.value; return a; }, []);
     if (n < 2 || !model || !canStack(vendor, model)) { box.innerHTML = ''; box.hidden = true; return; }
     const list = modelChoices(vendor).filter(m => canStack(vendor, m.value));
@@ -1214,7 +1219,7 @@
   }
   // ── 每次成功修改後（XN209）：清掉二層路徑結果、存復原快照、寫草稿（有勾選且已回應還原提示），再重畫 ──
   const DRAFT_KEY = 'topo_designer_draft';
-  let hist = null, l2Res = null, l2Vlan = '', draftWait = false, spofSel = null, spofList = [], l2Tab = 'vlan', lagFold = new Set();
+  let hist = null, l2Res = null, l2Vlan = '', draftWait = false, spofSel = null, spofList = [], l2Tab = 'vlan', lagFold = new Set(), l2Adv = false;
   const snapshot = () => JSON.stringify(buildDesign(D));
   const draftOn = () => !!$('td-draft-on') && $('td-draft-on').checked;
   function saveDraft() { if (!draftOn() || draftWait) return; try { localStorage.setItem(DRAFT_KEY, snapshot()); } catch (e) { /* 空間不足或停用時略過 */ } }
@@ -1280,11 +1285,16 @@
     }).join('') : `<div data-td-spof-item="none" style="color:var(--green)">${esc(tr('td.spof_none'))}</div>`;
     // 分頁（UX40）：標籤帶數量，只顯示目前分頁
     const cnt = { vlan: r.splits.length + r.loops.length, stp: stp.blocked.length, spof: spofList.length, path: null };
+    // 進階分析（STP／單點故障／路徑）預設收起（RV15）；收起時把進階分頁的數量加在按鈕上，避免藏住問題
+    if (!l2Adv && l2Tab !== 'vlan') l2Tab = 'vlan';
     document.querySelectorAll('[data-td-tab]').forEach(b => {
       const k = b.getAttribute('data-td-tab'), n = cnt[k];
       b.textContent = tr('td.tab_' + k) + (n ? ' (' + n + ')' : '');
       b.setAttribute('aria-selected', k === l2Tab ? 'true' : 'false');
+      b.hidden = k !== 'vlan' && !l2Adv;
     });
+    const advN = cnt.stp + cnt.spof, at = $('td-adv-toggle');
+    if (at) { at.textContent = tr(l2Adv ? 'td.adv_hide' : 'td.adv_show') + (!l2Adv && advN ? ' (' + advN + ')' : ''); at.setAttribute('aria-expanded', l2Adv ? 'true' : 'false'); }
     document.querySelectorAll('[data-td-pane]').forEach(el => { el.hidden = el.getAttribute('data-td-pane') !== l2Tab; });
     // 路徑結果
     const po = $('td-l2p-out');
@@ -1383,7 +1393,10 @@
   // 跨機聚合 pair 區（XN212）：可選的設備只列支援的廠牌且還沒組成 pair 的
   function renderPairBox() {
     const cand = D.devices.filter(x => PAIR_VENDORS.includes(x.vendor) && !pairOfDev(D, x.id));
-    if (!pairOpened && (cand.length >= 2 || (D.pairs || []).length)) { pairOpened = true; $('td-pair-sec').open = true; }
+    // 跨機聚合卡片只在有兩台以上支援的設備或已有 pair 時顯示（RV15）
+    const pairShow = D.devices.filter(x => PAIR_VENDORS.includes(x.vendor)).length >= 2 || (D.pairs || []).length > 0, ps = $('td-pair-sec').closest('section');
+    if (ps) ps.hidden = !pairShow;
+    if (!pairOpened && pairShow) { pairOpened = true; $('td-pair-sec').open = true; }
     ['a', 'b'].forEach(k => { const el = $('td-pair-' + k), kv = el.value; el.innerHTML = `<option value="">${esc(tr('td.pick'))}</option>` + cand.map(x => `<option value="${esc(x.id)}"${x.id === kv ? ' selected' : ''}>${esc(x.hostname)}</option>`).join(''); });
     const iss = pairIssues(D);
     $('td-pair-list').innerHTML = (D.pairs || []).length
@@ -1629,6 +1642,7 @@
       if (!t) return;
       const de = t.closest('[data-td-edit-dev]');
       if (de) { openDevEdit(de.getAttribute('data-td-edit-dev')); return; }
+      if (t.closest('#td-adv-toggle')) { l2Adv = !l2Adv; if (!l2Adv) l2Tab = 'vlan'; render(); return; }
       const tb = t.closest('[data-td-tab]');
       if (tb) { l2Tab = tb.getAttribute('data-td-tab'); render(); return; }
       const fx = t.closest('[data-td-stp-fix]');

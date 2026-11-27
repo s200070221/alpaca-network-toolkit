@@ -64,6 +64,7 @@ main.td-grid>.notice{order:0}
 }
 .td-tabs{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--border);margin:0 0 8px}
 .td-tab{border:1px solid transparent;border-bottom:none;background:none;color:var(--dim);padding:6px 12px;border-radius:6px 6px 0 0;font:inherit;cursor:pointer}
+.td-tab.td-adv{margin-left:auto;color:var(--accent)}
 .td-tab[aria-selected="true"]{border-color:var(--border);background:var(--card);color:var(--text);font-weight:600;margin-bottom:-1px}
 .td-out{font-size:13px;display:flex;flex-direction:column;gap:4px}
 details>summary{cursor:pointer}
@@ -119,6 +120,7 @@ tr[data-td-lag-head] td{background:var(--chip);font-size:12px}
       <button class="td-tab" role="tab" data-td-tab="stp"></button>
       <button class="td-tab" role="tab" data-td-tab="spof"></button>
       <button class="td-tab" role="tab" data-td-tab="path"></button>
+      <button class="td-tab td-adv" id="td-adv-toggle" type="button" aria-expanded="false"></button>
     </div>
     <div data-td-pane="vlan">
       <div class="hint" data-td-i18n="td.l2_hint"></div>
@@ -155,7 +157,7 @@ tr[data-td-lag-head] td{background:var(--chip);font-size:12px}
         <label><span data-td-i18n="td.host"></span><input id="td-de-host" class="txt" maxlength="32" autocomplete="off" spellcheck="false"></label>
         <label><span data-td-i18n="td.vendor"></span><select id="td-de-vendor"></select></label>
         <label style="flex:1 1 260px"><span data-td-i18n="td.model"></span><select id="td-de-model"></select></label>
-        <label><span data-td-i18n="td.members"></span><input id="td-de-members" class="txt" type="number" min="1" max="9" style="width:70px"></label>
+        <label id="td-de-members-lbl"><span data-td-i18n="td.members"></span><input id="td-de-members" class="txt" type="number" min="1" max="9" style="width:70px"></label>
         <button class="btn primary" id="td-de-apply" data-td-i18n="td.dev_apply"></button>
         <button class="btn" id="td-de-cancel" data-td-i18n="td.end_cancel"></button>
       </div>
@@ -217,11 +219,11 @@ tr[data-td-lag-head] td{background:var(--chip);font-size:12px}
       <label><span data-td-i18n="td.host"></span><input id="td-host" class="txt" maxlength="32" autocomplete="off" spellcheck="false"></label>
       <label><span data-td-i18n="td.vendor"></span><select id="td-vendor"></select></label>
       <label style="flex:1 1 260px"><span data-td-i18n="td.model"></span><select id="td-model"></select></label>
-      <label><span data-td-i18n="td.members"></span><input id="td-members" class="txt" type="number" min="1" max="9" value="1" style="width:70px"></label>
+      <label id="td-members-lbl" hidden><span data-td-i18n="td.members"></span><input id="td-members" class="txt" type="number" min="1" max="9" value="1" style="width:70px"></label>
       <button class="btn primary" id="td-dev-add" data-td-i18n="td.add_dev"></button>
     </div>
     <div class="row" id="td-member-models" hidden></div>
-    <div class="hint" data-td-i18n="td.stack_hint"></div>
+    <div class="hint" id="td-stack-hint" data-td-i18n="td.stack_hint" hidden></div>
     <div class="hint" id="td-model-hint" hidden></div>
     <div id="td-custom"></div>
   </section>

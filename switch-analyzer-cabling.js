@@ -401,54 +401,6 @@
     const p = dv.parsed || {}, st = p.irf && p.irf.members ? p.irf : p.stack && /^(StackWise|ICX-Stack|Stack|VSF)$/.test(String(p.stack.type || '')) ? p.stack : null;
     return st && Array.isArray(st.members) ? Math.max(1, st.members.length) : 1;
   }
-  function cablingL2Graph(cb) {
-    const nodes = [], edges = [], ports = Object.create(null), lagEdge = new Map();
-    cb.devices.forEach(dv => { if (dv.parsed) { nodes.push({ id: String(dv.idx), name: dv.hostname }); ports[dv.idx] = portsByName(dv); } });
-    cb.links.forEach(l => {
-      if (l.a.ext != null || l.b.ext != null || !ports[l.a.dev] || !ports[l.b.dev]) return;
-      const pa = ports[l.a.dev][lc(l.a.port)], pb = ports[l.b.dev][lc(l.b.port)];
-      if (pa && pa.lag && pb && pb.lag) {
-        const ka = l.a.dev + '|' + lc(pa.lag), kb = l.b.dev + '|' + lc(pb.lag), key = ka < kb ? ka + '#' + kb : kb + '#' + ka;
-        if (lagEdge.has(key)) { lagEdge.get(key).refs.push(l); return; }
-      }
-      const e = { id: edges.length, a: { node: String(l.a.dev), port: l.a.port, cfg: portCfg(pa) }, b: { node: String(l.b.dev), port: l.b.port, cfg: portCfg(pb) }, refs: [l], lag: !!(pa && pa.lag && pb && pb.lag) };
-      if (e.lag) { const ka = l.a.dev + '|' + lc(pa.lag), kb = l.b.dev + '|' + lc(pb.lag); lagEdge.set(ka < kb ? ka + '#' + kb : kb + '#' + ka, e); e.lagName = pa.lag; }
-      edges.push(e);
-    });
-    const vlans = [...new Set(cb.devices.flatMap(dv => ((dv.parsed && dv.parsed.vlans) || []).map(v => +v.id).filter(n => n >= 1 && n <= 4094)))].sort((x, y) => x - y);
-    return { g: { nodes, edges }, vlans };
-  }
-  function l2Html(cb) {
-    const td = TDS();
-    if (!td) return '';
-    const { g, vlans } = cablingL2Graph(cb);
-    if (!g.edges.length) return '';
-    const r = td.l2Analyze(g, vlans), nm = id => (g.nodes.find(n => n.id === id) || {}).name || '';
-    const linkTxt = id => { const e = g.edges[id]; return nm(e.a.node) + ' ' + e.a.port + ' ↔ ' + nm(e.b.node) + ' ' + e.b.port; };
-    const rows = [];
-    r.splits.forEach(x => rows.push(`<div data-ptopo-l2="split" style="color:var(--red,#ef4444)">${esc2(T('ptopo.l2_split', { vlan: x.vlan, groups: x.groups.map(gr => gr.join(T('ptopo.list_sep'))).join(' ｜ ') }))}`
-      + x.breaks.map(b => `<div style="margin-left:14px">${esc2(T('ptopo.l2_break', { node: b.node, port: b.port, link: linkTxt(b.edge) }))}</div>`).join('') + '</div>'));
-    r.loops.forEach(x => rows.push(`<div data-ptopo-l2="loop" style="color:var(--orange,#f59e0b)">${esc2(T('ptopo.l2_loop', { nodes: x.nodes.join(T('ptopo.list_sep')), n: x.edges.length }))}</div>`));
-    r.roots.forEach(x => rows.push(`<div data-ptopo-l2="root">${esc2(T('ptopo.l2_root', { name: x.name, n: x.nodes }))}</div>`));
-    if (r.undef.length) rows.push(`<div data-ptopo-l2="undef" style="color:var(--text-dim)">${esc2(T('ptopo.l2_undef', { n: r.undef.length }))}</div>`);
-    if (!r.splits.length && !r.loops.length) rows.unshift(`<div data-ptopo-l2="ok" style="color:var(--green,#22c55e)">${esc2(T('ptopo.l2_ok'))}</div>`);
-    // 單點故障（XN213）：每條實體線一筆；堆疊設備的成員取三段式埠名第一段（與前面板 memberName() 同規則）
-    const stacked = new Set(cb.devices.filter(dv => dv.parsed && stackMembers(dv) > 1).map(dv => String(dv.idx)));
-    const cables = g.edges.flatMap(e => e.refs.map(l => ({ a: { node: String(l.a.dev), port: l.a.port }, b: { node: String(l.b.dev), port: l.b.port } })));
-    const fails = td.failureImpact ? td.failureImpact(g.nodes, cables, (node, port) => {
-      if (!stacked.has(node)) return null;
-      const m = String(port).match(/^\D*(\d+)\/\d+\/\d+$/);
-      return m ? +m[1] : null;
-    }) : [];
-    const sep = T('ptopo.list_sep');
-    const spof = fails.length ? fails.map(f => {
-      const c = f.kind === 'link' ? cables[f.cable] : null, link = c ? nm(c.a.node) + ' ' + c.a.port + ' ↔ ' + nm(c.b.node) + ' ' + c.b.port : '';
-      return `<div data-ptopo-spof="${f.kind}" style="color:${f.cut.length > 1 ? 'var(--red,#ef4444)' : 'var(--orange,#f59e0b)'}">${esc2(T('ptopo.spof_' + f.kind, { name: nm(f.node), member: f.member || '', link, cut: f.cut.map(nm).join(sep), n: f.cut.length }))}</div>`;
-    }).join('') : `<div data-ptopo-spof="none" style="color:var(--green,#22c55e)">${esc2(T('ptopo.spof_none'))}</div>`;
-    rows.push(`<div style="font-weight:600;margin-top:6px">${esc2(T('ptopo.spof_title'))}</div><div style="font-size:11px;color:var(--text-dim)">${esc2(T('ptopo.spof_hint'))}</div>` + spof);
-    const n = r.splits.length + r.loops.length;
-    return `<details data-ptopo-sec="l2" style="margin-top:6px"${n ? ' open' : ''}><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.l2_title', { n }))}</summary><div style="font-size:11px;color:var(--text-dim);margin:4px 0">${esc2(T('ptopo.l2_hint'))}</div><div style="font-size:12px;display:flex;flex-direction:column;gap:3px">${rows.join('')}</div></details>`;
-  }
   // 設計（readDesignRaw 的結果）與實際接線比對：主機名稱與埠名稱以 hostKey()／portKey() 正規化
   // ok＝兩端相同（另比兩端設定）、wrong＝只有一端相同、missing＝兩台都在清冊但實際沒有、extra＝兩端都在設計中但設計沒有、unverifiable＝設計中的設備不在清冊
   const cfgText = c => {
@@ -530,6 +482,8 @@
       h += `<div data-ptopo-nolldp="${noNb.length}" style="font-size:12px;color:var(--yellow);margin-bottom:6px">${esc2(T('ptopo.no_lldp', { n: noNb.length, hosts: names }))} `
         + `<button style="${btn}" data-ptopo-go-lldp="${noNb[0].idx}">${esc2(T('ptopo.go_lldp'))}</button></div>`;
     }
+    // 資料來源與設定（RV15）：型號、貼上鄰居、匯入防火牆、自訂串線收在同一個折疊；還沒有接線時預設展開
+    h += `<details data-ptopo-sec="src" style="margin-bottom:8px;border:1px solid var(--border);border-radius:6px;padding:4px 8px"${cb.links.length ? '' : ' open'}><summary style="cursor:pointer;font-size:13px;font-weight:600">${esc2(T('ptopo.src_title'))}</summary>`;
     // 逐台型號（大多數設定檔沒有型號，讀不出時可手動選或用自訂型號）
     h += `<details data-ptopo-sec="models" style="margin-bottom:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.models', { n: cb.devices.length }))}</summary><div style="font-size:12px">`
       + cb.devices.map(d => `<div style="margin:3px 0"><b>${esc2(d.hostname)}</b>：${esc2(d.imp ? (d.imp.model || '') + ' · ' + T('ptopo.imported') : d.pn && d.pn.source === 'model' ? d.pn.model : T('ptopo.from_config'))} ${d.pn ? sp.modelSelectHtml(d.pn, !!modelOf(d.parsed), 'data-ptopo-model="' + d.idx + '"') : ''}</div>`).join('')
@@ -543,6 +497,11 @@
     h += `<details data-ptopo-sec="fw" style="margin-bottom:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.fw_title', { n: _imported.length }))}</summary><div style="font-size:11px;color:var(--text-dim);margin:4px 0">${esc2(T('ptopo.fw_hint'))}</div>`
       + `<input type="file" accept=".json,application/json" multiple data-ptopo-import> <span data-ptopo-import-msg style="font-size:11px">${esc2(_importMsg)}</span>`
       + _imported.map((x, i) => `<div style="font-size:12px;margin:3px 0"><b>${esc2(x.imported.hostname)}</b> ${esc2([x.imported.vendor, x.imported.model].filter(Boolean).join(' '))}（${esc2(T('pcu.ports', { n: x.imported.ports.length }))}） <button style="${btn};padding:2px 10px" data-ptopo-rm="${i}">${esc2(T('pcu.del'))}</button></div>`).join('') + '</details>';
+    h += `<div style="font-size:12px;margin-top:8px">${esc2(T('ptopo.custom_title'))}</div><div style="font-size:11px;color:var(--text-dim)">${esc2(T('ptopo.custom_hint'))}</div>`
+      + `<textarea id="ptopo-links" rows="4" spellcheck="false" style="width:100%;max-width:560px;font-family:monospace;font-size:11px" placeholder="CORE-SW Te1/1/1 &lt;-&gt; ACCESS-SW1 Te1/1/2">${xesc(_linksText)}</textarea><br>`
+      + `<button style="${btn}" data-ptopo-apply>${esc2(T('ptopo.apply'))}</button>`;
+    if (cb.errors.length) h += `<div style="font-size:11px;color:var(--red,#ef4444);margin-top:4px">${cb.errors.slice(0, 10).map(e => esc2(T('pcu.line', { n: e.line }) + ' ' + T('ptopo.err_' + e.code, { tok: e.tok }))).join('<br>')}</div>`;
+    h += '</details>';
     h += `<label style="font-size:12px"><input type="checkbox" data-ptopo-compact${_compact ? ' checked' : ''}> ${esc2(T('swp.compact'))}</label>`;
     const drawn = cablingSvg(cb, { withFlag: true, compact: _compact });
     h += `<div style="overflow-x:auto" data-ptopo-svg>${drawn.svg}</div>`;
@@ -550,14 +509,11 @@
     const nBad = cb.links.filter(l => l.issues && l.issues.length).length;
     if (nBad) h += `<div style="font-size:12px;color:var(--red,#ef4444);margin:4px 0" data-ptopo-mismatch="${nBad}">⚠ ${esc2(T('ptopo.mismatch_n', { n: nBad }))}</div>`;
     h += `<div style="font-size:11px;margin:6px 0">${ps.legend(LINK_KINDS.map(k => [LINK_COLORS[k], T('ptopo.src_' + k)]).concat([[LINK_COLORS.mismatch, T('ptopo.lg_mismatch')]]), esc2)}<span style="color:var(--text-dim)">${esc2(T('ptopo.lg_note'))}</span></div>`;
-    h += `<div style="font-size:12px;margin-top:8px">${esc2(T('ptopo.custom_title'))}</div><div style="font-size:11px;color:var(--text-dim)">${esc2(T('ptopo.custom_hint'))}</div>`
-      + `<textarea id="ptopo-links" rows="4" spellcheck="false" style="width:100%;max-width:560px;font-family:monospace;font-size:11px" placeholder="CORE-SW Te1/1/1 &lt;-&gt; ACCESS-SW1 Te1/1/2">${xesc(_linksText)}</textarea><br>`
-      + `<button style="${btn}" data-ptopo-apply>${esc2(T('ptopo.apply'))}</button>`;
-    if (cb.errors.length) h += `<div style="font-size:11px;color:var(--red,#ef4444);margin-top:4px">${cb.errors.slice(0, 10).map(e => esc2(T('pcu.line', { n: e.line }) + ' ' + T('ptopo.err_' + e.code, { tok: e.tok }))).join('<br>')}</div>`;
     if (cb.links.length) h += `<details data-ptopo-sec="links" style="margin-top:6px" open><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.links', { n: cb.links.length }))}</summary><div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc2(T('ptopo.col_dev'))}</th><th>${esc2(T('ptopo.col_port'))}</th><th>${esc2(T('ptopo.col_dev'))}</th><th>${esc2(T('ptopo.col_port'))}</th><th>${esc2(T('ptopo.col_src'))}</th><th>${esc2(T('ptopo.col_issue'))}</th></tr></thead><tbody>`
       + cb.links.map(l => `<tr${l.issues && l.issues.length ? ' data-ptopo-bad' : ''}><td>${esc2(endName(cb, l.a))}</td><td class="mono">${esc2(l.a.port)}</td><td>${esc2(endName(cb, l.b))}</td><td class="mono">${esc2(l.b.port)}</td><td>${esc2(T('ptopo.src_' + linkKind(l)) + (l.protocols.length ? ' (' + l.protocols.join('/') + ')' : ''))}</td><td style="color:var(--red,#ef4444)">${(l.issues || []).map(i => esc2(issueText(i))).join('<br>')}</td></tr>`).join('') + '</tbody></table></div></details>';
     else h += `<div class="nodata" style="font-size:12px">${esc2(T('ptopo.no_links'))}</div>`;
-    h += l2Html(cb);
+    // 二層分析、STP、單點故障只在拓樸設計頁做（RV15）
+    if (cb.links.length && TDS()) h += `<div data-ptopo-analyze-hint style="font-size:12px;color:var(--text-dim);margin-top:6px">${esc2(T('ptopo.analyze_hint'))} <a href="topology-designer.html" target="_blank" rel="noopener">${esc2(T('ptopo.open_designer'))}</a></div>`;
     if (cb.dupHosts.length) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-top:4px">${esc2(T('ptopo.dup_host', { list: cb.dupHosts.join('、') }))}</div>`;
     if (cb.conflicts.length) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-top:4px">${esc2(T('ptopo.conflict', { list: cb.conflicts.map(c => c.host + ' ' + c.port).join('、') }))}</div>`;
     if (cb.unmatched.length) h += `<details data-ptopo-sec="unmatched" style="margin-top:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.unmatched', { n: cb.unmatched.length }))}</summary><div style="font-size:11px">`
@@ -567,8 +523,7 @@
     h += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><button style="${btn}" data-ptopo-dl>${esc2(T('swp.download'))}</button>`
       + `<button style="${btn}" data-ptopo-exp="drawio" title="${xesc(T('ptopo.exp_tip'))}">⬇ draw.io</button><button style="${btn}" data-ptopo-exp="mermaid" title="${xesc(T('ptopo.exp_tip'))}">⬇ Mermaid</button>`
       + `<label style="font-size:11px"><input type="checkbox" id="ptopo-mask" checked> ${esc2(T('swp.mask'))}</label></div>`
-      + `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><button style="${btn}" data-ptopo-save title="${xesc(T('ptopo.save_hint'))}">${esc2(T('ptopo.save'))}</button>`
-      + `<label style="font-size:12px">${esc2(T('ptopo.load'))} <input type="file" accept=".json,application/json" data-ptopo-load></label> <span style="font-size:11px" data-ptopo-proj-msg>${esc2(_projMsg)}</span></div>`;
+      + `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><label style="font-size:12px">${esc2(T('ptopo.load'))} <input type="file" accept=".json,application/json" data-ptopo-load></label> <span style="font-size:11px" data-ptopo-proj-msg>${esc2(_projMsg)}</span></div>`;
     if (TDS()) h += designHtml(cb, btn);
     return h + '</div>';
   }
@@ -628,6 +583,8 @@
       if (!t) return;
       if (t.closest('[data-ptopo-go-lldp]')) {
         const sec = document.querySelector('details[data-ptopo-sec="lldp"]'), sel = document.querySelector('select[data-ptopo-lldp-dev]'), ta = document.getElementById('ptopo-lldp');
+        const src = document.querySelector('details[data-ptopo-sec="src"]');
+        if (src) src.open = true;
         if (sec) sec.open = true;
         if (sel) sel.value = String(+t.closest('[data-ptopo-go-lldp]').getAttribute('data-ptopo-go-lldp'));
         if (ta) { ta.focus(); if (ta.scrollIntoView) ta.scrollIntoView({ block: 'center' }); }
@@ -664,8 +621,10 @@
       if (t.closest('[data-ptopo-todesign]')) {
         const cb = buildCabling(_all(), { linksText: _linksText, modelOf, lldpOf }), r = cablingToDesign(cb);
         if (!r) return;
-        if (r.devices) {
-          const url = URL.createObjectURL(new Blob([JSON.stringify(r.design, null, 1)], { type: 'application/json' }));
+        {
+          // 單一存檔（RV15）：設計檔另帶 cabling 欄位（串線、逐台型號、貼上的鄰居、匯入的防火牆），交換器分析讀回時還原；設計頁忽略此欄位
+          const obj = Object.assign({}, r.design, { cabling: projectData(_all(), { linksText: _linksText, modelOf, lldpOf }) });
+          const url = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 1)], { type: 'application/json' }));
           const a = document.createElement('a');
           a.href = url; a.download = 'topology-design.json'; a.click();
           setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -677,14 +636,6 @@
         return;
       }
       if (t.closest('[data-ptopo-cmp-clear]')) { _design = null; _designName = ''; _designMsg = ''; redraw(false); return; }
-      if (t.closest('[data-ptopo-save]')) {
-        const obj = buildProject(_all(), { linksText: _linksText, modelOf, lldpOf });
-        const url = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 1)], { type: 'application/json' }));
-        const a = document.createElement('a');
-        a.href = url; a.download = 'cabling_project.json'; a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        return;
-      }
       if (t.closest('[data-ptopo-rm]')) { const i = +t.closest('[data-ptopo-rm]').getAttribute('data-ptopo-rm'); if (i >= 0 && i < _imported.length) _imported.splice(i, 1); _importMsg = ''; redraw(false); return; }
       if (t.closest('[data-ptopo-apply]')) { const ta = document.getElementById('ptopo-links'); _linksText = ta ? String(ta.value).slice(0, 50000) : ''; redraw(false); }
       else if (t.closest('[data-ptopo-dl]')) {
@@ -794,7 +745,7 @@
   // ── 接線專案（XN194）：自訂串線、逐台型號、貼上的鄰居、匯入的防火牆前面板存成一個 JSON（不含設定檔原文、不存 localStorage）──
   // 自訂型號以名稱記錄（id 只在本機有效），載入時對到同名的本機自訂型號；鄰居只存埠與名稱，不存位址
   const PROJ_MAX_LLDP = 2000;
-  function buildProject(entries, state) {
+  function projectData(entries, state) {
     const sp = SP(), st = state || {}, devs = (entries || []).filter(e => e && (e.parsed || e.imported));
     const hostOf = e => (e.imported ? e.imported.hostname : String((e.parsed.sys && e.parsed.sys.hostname) || e.hostname || ''));
     const customs = PS() ? PS().customModels() : [];
@@ -807,13 +758,17 @@
       const ov = st.lldpOf ? st.lldpOf(e.parsed || e.imported) : null;
       if (ov) lldp.push({ host: hostOf(e), neighbors: ov.slice(0, PROJ_MAX_LLDP).map(n => ({ localPort: String(n.localPort), neighbor: String(n.neighbor), remotePort: String(n.remotePort || ''), protocol: String(n.protocol || '') })) });
     });
-    return { format: 'alpaca-cabling', version: 1, links: String(st.linksText || ''), models, lldp, firewalls: devs.filter(e => e.imported).map(e => Object.assign({ format: 'alpaca-panel', version: 1 }, e.imported)) };
+    return { links: String(st.linksText || ''), models, lldp, firewalls: devs.filter(e => e.imported).map(e => Object.assign({ format: 'alpaca-panel', version: 1 }, e.imported)) };
   }
   // 逐欄檢查；不合格的項目整份拒絕（回傳 code），合格時回傳整理後的資料
   function parseProject(text) {
     let o;
     try { o = JSON.parse(String(text || '')); } catch (e) { return { ok: false, code: 'json' }; }
-    if (!o || typeof o !== 'object' || o.format !== 'alpaca-cabling' || o.version !== 1) return { ok: false, code: 'format' };
+    // 讀兩種：拓樸設計檔帶 cabling 欄位（RV15），或舊的接線專案檔；純設計檔（沒有 cabling）回 nocabling
+    if (o && typeof o === 'object' && o.format === 'alpaca-design') {
+      if (!o.cabling || typeof o.cabling !== 'object') return { ok: false, code: 'nocabling' };
+      o = o.cabling;
+    } else if (!o || typeof o !== 'object' || o.format !== 'alpaca-cabling' || o.version !== 1) return { ok: false, code: 'format' };
     const links = o.links == null ? '' : str(o.links, 50000);
     if (links == null) return { ok: false, code: 'format' };
     const arr = v => (v == null ? [] : Array.isArray(v) ? v : null);
@@ -871,8 +826,8 @@
   function reset() { _imported.length = 0; _linksText = ''; _lldpMsg = ''; _importMsg = ''; _projMsg = ''; _design = null; _designName = ''; _designMsg = ''; }
 
   const IMPORT_ERR_CODES = ['json', 'format', 'host', 'ports', 'size'];
-  const PROJ_ERR_CODES = ['json', 'format', 'firewall', 'size'];
-  const api = { cablingL2Graph, cablingToDesign, compareDesign, portCfg, SKIP_REASONS, CMP_KINDS, replaceDevice, lldpOf, cablingToDrawio, cablingToMermaid, buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, parseManualNeighbors, manualNeighbors, neighborOnly, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
+  const PROJ_ERR_CODES = ['json', 'format', 'firewall', 'size', 'nocabling'];
+  const api = { cablingToDesign, compareDesign, portCfg, SKIP_REASONS, CMP_KINDS, replaceDevice, lldpOf, cablingToDrawio, cablingToMermaid, projectData, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, parseManualNeighbors, manualNeighbors, neighborOnly, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
   if (typeof window !== 'undefined') window.SwCabling = api;
   return api;
 })();
