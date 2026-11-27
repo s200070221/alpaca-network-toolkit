@@ -49,6 +49,25 @@ th{color:var(--dim);font-weight:600;white-space:nowrap}
 #td-canvas{overflow-x:auto}
 footer{color:var(--dim);font-size:12px;text-align:center;padding:16px}
 a{color:var(--accent)}
+/* UX40：寬螢幕兩欄（畫布在左、操作面板在右且固定），窄螢幕單欄依 td-o* 順序 */
+main.td-grid{max-width:1500px;display:flex;flex-direction:column}
+.td-col{display:contents}
+.td-o1{order:1}.td-o2{order:2}.td-o3{order:3}.td-o4{order:4}.td-o5{order:5}.td-o6{order:6}.td-o7{order:7}
+main.td-grid>.notice{order:0}
+@media (min-width:1180px){
+  main.td-grid{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:0 14px;align-items:start}
+  main.td-grid>.notice{grid-column:1/-1}
+  .td-col{display:block;min-width:0}
+  .td-side{position:sticky;top:8px;max-height:calc(100vh - 16px);overflow:auto}
+  .td-side .row label{flex:1 1 140px}
+  .td-side .end{flex:1 1 100%}
+}
+.td-tabs{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--border);margin:0 0 8px}
+.td-tab{border:1px solid transparent;border-bottom:none;background:none;color:var(--dim);padding:6px 12px;border-radius:6px 6px 0 0;font:inherit;cursor:pointer}
+.td-tab[aria-selected="true"]{border-color:var(--border);background:var(--card);color:var(--text);font-weight:600;margin-bottom:-1px}
+.td-out{font-size:13px;display:flex;flex-direction:column;gap:4px}
+details>summary{cursor:pointer}
+tr[data-td-lag-head] td{background:var(--chip);font-size:12px}
 @media (max-width:600px){main{padding:10px}.card{padding:12px}}
 /* UX29：手機寬度加大點擊目標（至少 32px）；8 頁相同，只影響 ≤720px */
 @media (max-width:720px){
@@ -67,33 +86,100 @@ a{color:var(--accent)}
   <label><span data-td-i18n="td.lang"></span> <select id="td-lang-sel"></select></label>
   <a href="network-analyzer.html" id="t-back" data-td-i18n="td.back"></a>
 </header>
-<main>
+<main class="td-grid">
   <div class="notice" id="td-draft-bar" hidden><span data-td-i18n="td.draft_found"></span> <button class="btn btn-sm primary" id="td-draft-restore" data-td-i18n="td.draft_restore"></button> <button class="btn btn-sm" id="td-draft-discard" data-td-i18n="td.draft_discard"></button></div>
   <p class="notice"><span data-td-i18n="td.intro"></span> <span data-td-i18n="td.next_step"></span></p>
-  <section class="card">
-    <h2 data-td-i18n="td.sec_add"></h2>
+  <div class="td-col td-main">
+<section class="card td-o1">
+    <h2 data-td-i18n="td.sec_canvas"></h2>
+    <div class="hint" data-td-i18n="td.canvas_hint"></div>
+    <div id="td-canvas"></div>
     <div class="row">
-      <label><span data-td-i18n="td.host"></span><input id="td-host" class="txt" maxlength="32" autocomplete="off" spellcheck="false"></label>
-      <label><span data-td-i18n="td.vendor"></span><select id="td-vendor"></select></label>
-      <label style="flex:1 1 260px"><span data-td-i18n="td.model"></span><select id="td-model"></select></label>
-      <label><span data-td-i18n="td.members"></span><input id="td-members" class="txt" type="number" min="1" max="9" value="1" style="width:70px"></label>
-      <button class="btn primary" id="td-dev-add" data-td-i18n="td.add_dev"></button>
+      <button class="btn" id="td-save" data-td-i18n="td.save"></button>
+      <label class="btn" style="flex-direction:row;color:var(--text);font-size:14px"><span data-td-i18n="td.load"></span><input type="file" id="td-load" accept=".json,application/json" hidden></label>
+      <button class="btn" id="td-clear" data-td-i18n="td.clear"></button>
+      <button class="btn" id="td-layout" data-td-i18n="td.layout"></button>
+      <button class="btn" id="td-demo" data-td-i18n="td.demo"></button>
+      <button class="btn" id="td-undo" data-td-i18n="td.undo"></button>
+      <button class="btn" id="td-redo" data-td-i18n="td.redo"></button>
+      <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="td-draft-on"> <span data-td-i18n="td.draft_label"></span></label>
     </div>
-    <div class="hint" data-td-i18n="td.stack_hint"></div>
-    <div class="hint" id="td-model-hint" hidden></div>
-    <div id="td-custom"></div>
-  </section>
-  <section class="card">
-    <h2 data-td-i18n="td.sec_vlan"></h2>
-    <div class="hint" data-td-i18n="td.vlan_hint"></div>
+    <div class="hint" data-td-i18n="td.undo_hint"></div>
     <div class="row">
-      <label><span data-td-i18n="td.vlan_id"></span><input id="td-vlan-id" class="txt" inputmode="numeric" maxlength="4" style="width:90px" autocomplete="off"></label>
-      <label><span data-td-i18n="td.vlan_name"></span><input id="td-vlan-name" class="txt" maxlength="32" autocomplete="off" spellcheck="false"></label>
-      <button class="btn" id="td-vlan-add" data-td-i18n="td.vlan_add"></button>
+      <button class="btn" id="td-exp-svg" data-td-i18n="td.exp_svg"></button>
+      <button class="btn" id="td-exp-drawio" data-td-i18n="td.exp_drawio"></button>
+      <button class="btn" id="td-exp-mmd" data-td-i18n="td.exp_mmd"></button>
     </div>
-    <div class="tbl-wrap" id="td-vlan-list"></div>
+    <div class="hint" data-td-i18n="td.exp_hint"></div>
   </section>
-  <section class="card">
+  <section class="card td-o6" id="td-l2">
+    <h2 data-td-i18n="td.l2_sec"></h2>
+    <div class="td-tabs" role="tablist">
+      <button class="td-tab" role="tab" data-td-tab="vlan"></button>
+      <button class="td-tab" role="tab" data-td-tab="stp"></button>
+      <button class="td-tab" role="tab" data-td-tab="spof"></button>
+      <button class="td-tab" role="tab" data-td-tab="path"></button>
+    </div>
+    <div data-td-pane="vlan">
+      <div class="hint" data-td-i18n="td.l2_hint"></div>
+      <div class="row"><label><span data-td-i18n="td.l2_vlan"></span><select id="td-l2-vlan"></select></label></div>
+      <div id="td-l2-out" class="td-out"></div>
+    </div>
+    <div data-td-pane="stp" hidden>
+      <div class="hint" data-td-i18n="td.stp_hint"></div>
+      <div id="td-stp-out" class="td-out"></div>
+    </div>
+    <div data-td-pane="spof" hidden>
+      <div class="hint" data-td-i18n="td.spof_hint"></div>
+      <div id="td-spof-out" class="td-out"></div>
+    </div>
+    <div data-td-pane="path" hidden>
+      <div class="row">
+        <label><span data-td-i18n="td.l2p_from"></span><select id="td-l2p-from"></select></label>
+        <label><span data-td-i18n="td.l2p_to"></span><select id="td-l2p-to"></select></label>
+        <label><span data-td-i18n="td.l2p_vlan"></span><select id="td-l2p-vlan"></select></label>
+        <button class="btn primary" id="td-l2p-run" data-td-i18n="td.l2p_run"></button>
+        <button class="btn" id="td-l2p-clear" data-td-i18n="td.l2p_clear"></button>
+      </div>
+      <label style="display:flex;gap:6px;align-items:center;margin:4px 0;font-size:13px"><input type="checkbox" id="td-stp-on"><span data-td-i18n="td.l2p_use_stp"></span></label>
+      <div id="td-l2p-out" style="font-size:13px"></div>
+    </div>
+  </section>
+<section class="card td-o7">
+    <h2 data-td-i18n="td.sec_list"></h2>
+    <p class="notice" data-td-i18n="td.send_hint"></p>
+    <div class="tbl-wrap" id="td-dev-list"></div>
+    <div id="td-dev-edit" class="end" hidden>
+      <b id="td-de-title"></b>
+      <div class="row">
+        <label><span data-td-i18n="td.host"></span><input id="td-de-host" class="txt" maxlength="32" autocomplete="off" spellcheck="false"></label>
+        <label><span data-td-i18n="td.vendor"></span><select id="td-de-vendor"></select></label>
+        <label style="flex:1 1 260px"><span data-td-i18n="td.model"></span><select id="td-de-model"></select></label>
+        <label><span data-td-i18n="td.members"></span><input id="td-de-members" class="txt" type="number" min="1" max="9" style="width:70px"></label>
+        <button class="btn primary" id="td-de-apply" data-td-i18n="td.dev_apply"></button>
+        <button class="btn" id="td-de-cancel" data-td-i18n="td.end_cancel"></button>
+      </div>
+      <div class="msg bad" id="td-de-drop" hidden></div>
+      <button class="btn" id="td-de-confirm" data-td-i18n="td.dev_confirm" hidden></button>
+    </div>
+    <div class="end" id="td-lag-box" style="margin-top:10px" hidden>
+      <b id="td-lag-picked"></b>
+      <div class="hint" data-td-i18n="td.lag_hint"></div>
+      <div class="row">
+        <label><span id="td-lag-a-lbl"></span><input id="td-lag-a" class="txt" inputmode="numeric" maxlength="4" style="width:90px" autocomplete="off"></label>
+        <label><span id="td-lag-b-lbl"></span><input id="td-lag-b" class="txt" inputmode="numeric" maxlength="4" style="width:90px" autocomplete="off"></label>
+        <label><span data-td-i18n="td.lag_mode"></span><select id="td-lag-mode"></select></label>
+        <button class="btn primary" id="td-lag-add" data-td-i18n="td.lag_add"></button>
+      </div>
+    </div>
+    <div class="tbl-wrap" id="td-link-list" style="margin-top:10px"></div>
+    <details id="td-lag-sec" style="margin-top:10px"><summary><b data-td-i18n="td.lag_sec"></b></summary>
+      <div class="tbl-wrap" id="td-lag-list"></div>
+    </details>
+  </section>
+  </div>
+  <aside class="td-col td-side">
+<section class="card td-o2" id="td-link-card">
     <h2 data-td-i18n="td.sec_link"></h2>
     <div class="row">
       <div class="end"><b data-td-i18n="td.end_a"></b><div class="row">
@@ -124,69 +210,33 @@ a{color:var(--accent)}
     </div>
     <div id="td-msg" class="msg" role="status"></div>
   </section>
-  <section class="card">
-    <h2 data-td-i18n="td.sec_canvas"></h2>
-    <div class="hint" data-td-i18n="td.canvas_hint"></div>
-    <div id="td-canvas"></div>
+<section class="card td-o3">
+    <h2 data-td-i18n="td.sec_add"></h2>
     <div class="row">
-      <button class="btn" id="td-save" data-td-i18n="td.save"></button>
-      <label class="btn" style="flex-direction:row;color:var(--text);font-size:14px"><span data-td-i18n="td.load"></span><input type="file" id="td-load" accept=".json,application/json" hidden></label>
-      <button class="btn" id="td-clear" data-td-i18n="td.clear"></button>
-      <button class="btn" id="td-layout" data-td-i18n="td.layout"></button>
-      <button class="btn" id="td-undo" data-td-i18n="td.undo"></button>
-      <button class="btn" id="td-redo" data-td-i18n="td.redo"></button>
-      <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="td-draft-on"> <span data-td-i18n="td.draft_label"></span></label>
+      <label><span data-td-i18n="td.host"></span><input id="td-host" class="txt" maxlength="32" autocomplete="off" spellcheck="false"></label>
+      <label><span data-td-i18n="td.vendor"></span><select id="td-vendor"></select></label>
+      <label style="flex:1 1 260px"><span data-td-i18n="td.model"></span><select id="td-model"></select></label>
+      <label><span data-td-i18n="td.members"></span><input id="td-members" class="txt" type="number" min="1" max="9" value="1" style="width:70px"></label>
+      <button class="btn primary" id="td-dev-add" data-td-i18n="td.add_dev"></button>
     </div>
-    <div class="hint" data-td-i18n="td.undo_hint"></div>
-    <div class="row">
-      <button class="btn" id="td-exp-svg" data-td-i18n="td.exp_svg"></button>
-      <button class="btn" id="td-exp-drawio" data-td-i18n="td.exp_drawio"></button>
-      <button class="btn" id="td-exp-mmd" data-td-i18n="td.exp_mmd"></button>
-    </div>
-    <div class="hint" data-td-i18n="td.exp_hint"></div>
+    <div class="hint" data-td-i18n="td.stack_hint"></div>
+    <div class="hint" id="td-model-hint" hidden></div>
+    <div id="td-custom"></div>
   </section>
-  <section class="card" id="td-l2">
-    <h2 data-td-i18n="td.l2_sec"></h2>
-    <div class="hint" data-td-i18n="td.l2_hint"></div>
-    <div class="row"><label><span data-td-i18n="td.l2_vlan"></span><select id="td-l2-vlan"></select></label></div>
-    <div id="td-l2-out" style="font-size:13px;display:flex;flex-direction:column;gap:4px"></div>
-    <h3 data-td-i18n="td.stp_title" style="font-size:14px;margin:12px 0 4px"></h3>
-    <div class="hint" data-td-i18n="td.stp_hint"></div>
-    <label style="display:flex;gap:6px;align-items:center;margin:4px 0"><input type="checkbox" id="td-stp-on"><span data-td-i18n="td.stp_on"></span></label>
-    <div id="td-stp-out" style="font-size:13px;display:flex;flex-direction:column;gap:4px"></div>
-    <h3 data-td-i18n="td.spof_title" style="font-size:14px;margin:12px 0 4px"></h3>
-    <div class="hint" data-td-i18n="td.spof_hint"></div>
-    <div id="td-spof-out" style="font-size:13px;display:flex;flex-direction:column;gap:4px"></div>
-    <h3 data-td-i18n="td.l2p_title" style="font-size:14px;margin:12px 0 4px"></h3>
+<section class="card td-o4">
+    <h2 data-td-i18n="td.sec_vlan"></h2>
+    <div class="hint" data-td-i18n="td.vlan_hint"></div>
     <div class="row">
-      <label><span data-td-i18n="td.l2p_from"></span><select id="td-l2p-from"></select></label>
-      <label><span data-td-i18n="td.l2p_to"></span><select id="td-l2p-to"></select></label>
-      <label><span data-td-i18n="td.l2p_vlan"></span><select id="td-l2p-vlan"></select></label>
-      <button class="btn primary" id="td-l2p-run" data-td-i18n="td.l2p_run"></button>
-      <button class="btn" id="td-l2p-clear" data-td-i18n="td.l2p_clear"></button>
+      <label><span data-td-i18n="td.vlan_id"></span><input id="td-vlan-id" class="txt" inputmode="numeric" maxlength="4" style="width:90px" autocomplete="off"></label>
+      <label><span data-td-i18n="td.vlan_name"></span><input id="td-vlan-name" class="txt" maxlength="32" autocomplete="off" spellcheck="false"></label>
+      <button class="btn" id="td-vlan-add" data-td-i18n="td.vlan_add"></button>
     </div>
-    <div id="td-l2p-out" style="font-size:13px"></div>
+    <div class="tbl-wrap" id="td-vlan-list"></div>
   </section>
-  <section class="card">
-    <h2 data-td-i18n="td.sec_list"></h2>
-    <p class="notice" data-td-i18n="td.send_hint"></p>
-    <div class="tbl-wrap" id="td-dev-list"></div>
-    <div id="td-dev-edit" class="end" hidden>
-      <b id="td-de-title"></b>
-      <div class="row">
-        <label><span data-td-i18n="td.host"></span><input id="td-de-host" class="txt" maxlength="32" autocomplete="off" spellcheck="false"></label>
-        <label><span data-td-i18n="td.vendor"></span><select id="td-de-vendor"></select></label>
-        <label style="flex:1 1 260px"><span data-td-i18n="td.model"></span><select id="td-de-model"></select></label>
-        <label><span data-td-i18n="td.members"></span><input id="td-de-members" class="txt" type="number" min="1" max="9" style="width:70px"></label>
-        <button class="btn primary" id="td-de-apply" data-td-i18n="td.dev_apply"></button>
-        <button class="btn" id="td-de-cancel" data-td-i18n="td.end_cancel"></button>
-      </div>
-      <div class="msg bad" id="td-de-drop" hidden></div>
-      <button class="btn" id="td-de-confirm" data-td-i18n="td.dev_confirm" hidden></button>
-    </div>
-    <div class="tbl-wrap" id="td-link-list" style="margin-top:10px"></div>
-    <div class="end" id="td-pair-box" style="margin-top:10px">
-      <b data-td-i18n="td.pair_sec"></b>
+  <section class="card td-o5">
+    <details id="td-pair-sec">
+      <summary><b data-td-i18n="td.pair_sec"></b></summary>
+      <div id="td-pair-box">
       <div class="hint" data-td-i18n="td.pair_hint"></div>
       <div class="row">
         <label><span data-td-i18n="td.pair_a"></span><select id="td-pair-a"></select></label>
@@ -195,19 +245,10 @@ a{color:var(--accent)}
         <button class="btn primary" id="td-pair-add" data-td-i18n="td.pair_add"></button>
       </div>
       <div class="tbl-wrap" id="td-pair-list"></div>
-    </div>
-    <div class="end" id="td-lag-box" style="margin-top:10px">
-      <b data-td-i18n="td.lag_sec"></b>
-      <div class="hint" data-td-i18n="td.lag_hint"></div>
-      <div class="row">
-        <label><span id="td-lag-a-lbl"></span><input id="td-lag-a" class="txt" inputmode="numeric" maxlength="4" style="width:90px" autocomplete="off"></label>
-        <label><span id="td-lag-b-lbl"></span><input id="td-lag-b" class="txt" inputmode="numeric" maxlength="4" style="width:90px" autocomplete="off"></label>
-        <label><span data-td-i18n="td.lag_mode"></span><select id="td-lag-mode"></select></label>
-        <button class="btn primary" id="td-lag-add" data-td-i18n="td.lag_add"></button>
       </div>
-      <div class="tbl-wrap" id="td-lag-list"></div>
-    </div>
+    </details>
   </section>
+  </aside>
 </main>
 <footer data-toolkit-version></footer>
 <script src="switch-generator-device-models.js"></script>

@@ -19,7 +19,7 @@
   const modelVendor = id => (id === 'h3c' ? 'comware' : id);
   const MAX_DEVICES = 64, MAX_LINKS = 512, MAX_VLANS = 512;
   // 畫布寬度固定；高度至少 CANVAS_H，設備多時往下長（最多 MAX_H，放得下 MAX_DEVICES 台的格狀位置）
-  const CANVAS_W = 1000, CANVAS_H = 560, BOX_W = 180, BOX_H = 58, GAP_X = 30, GAP_Y = 60;
+  const CANVAS_W = 1000, CANVAS_H = 260, BOX_W = 180, BOX_H = 58, GAP_X = 30, GAP_Y = 60;
   const COLS = Math.floor(CANVAS_W / (BOX_W + GAP_X)), MAX_H = 20 + Math.ceil(MAX_DEVICES / COLS) * (BOX_H + GAP_Y);
   const HOST_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/;
   const VLAN_NAME_RE = /^[^\x00-\x1f\x7f]{0,32}$/;
@@ -77,7 +77,8 @@
     return { x: 20, y: 20 };
   }
   // 目前畫布高度：容納最下面的設備
-  const canvasH = d => Math.max(CANVAS_H, ...d.devices.map(x => x.y + BOX_H + 20));
+  // 畫布高度依內容（UX40）：最低的設備下方再留一格給拖拉與新增，下限 CANVAS_H
+  const canvasH = d => Math.max(CANVAS_H, ...d.devices.map(x => x.y + BOX_H + GAP_Y + BOX_H));
   function addDevice(d, o) {
     const hostname = String((o && o.hostname) || '').trim(), vendor = String((o && o.vendor) || ''), model = String((o && o.model) || '');
     if (d.devices.length >= MAX_DEVICES) return { ok: false, code: 'max' };
@@ -721,6 +722,20 @@
     return Object.assign({ g }, stpTree(g, priOf, costOf));
   }
 
+  // 根橋建議（UX40）：每個連通塊的 STP 根橋不是拓樸中心（l2Analyze 的 roots）時，建議把中心的優先權設成 4096；
+  // 中心已手動設過優先權（不論多少）時不再建議，交給使用者決定。回傳 [{root, suggest, devs}]（節點 id；devs 為要設定的設備）
+  function stpAdvice(d) {
+    const st = designStp(d), an = l2Analyze(st.g, []), comps = compsOf(st.g), out = [];
+    an.roots.forEach(r => {
+      const root = st.roots.find(x => comps.comp.get(x) === comps.comp.get(r.node));
+      if (!root || root === r.node) return;
+      const n = st.g.nodes.find(x => x.id === r.node), devs = n && n.devs ? n.devs : [r.node];
+      if (devs.some(id => { const x = devById(d, id); return x && x.stpPri != null; })) return;
+      out.push({ root, suggest: r.node, devs });
+    });
+    return out;
+  }
+
   // ── 單點故障（XN213）：只依接線判斷（不含電源、控制平面等因素） ──
   // nodes:[{id,name}]、cables:[{a:{node,port},b:{node,port}}]（每條實體線一筆）、memberOf(node,port)→堆疊成員號（非堆疊為 null）
   // 逐一拿掉每台設備、每個堆疊成員（接在該成員埠上的線）、每條線，列出因此與其他設備斷開的設備：
@@ -785,37 +800,68 @@
 
   // ── 自動排版（XN208）：每個連通塊以中心設備為第 0 層、依跳數分層，同層依上一層相鄰設備的平均位置排序 ──
   const LAYER_GAP = BOX_H + 90;
+  // 跨機聚合 pair 以合併後的節點分層（UX40），pair 兩台在同一列並排、佔兩格；堆疊本來就是一個節點
   function autoLayout(d) {
-    const g = l2Graph(d, { physical: true }), adj = adjOf(g), an = l2Analyze(g, []), placed = new Map();
+    const g = l2Graph(d), adj = adjOf(g), an = l2Analyze(g, []), placed = new Map();
+    const devsOf = id => { const n = g.nodes.find(x => x.id === id); return n && n.devs ? n.devs : [id]; };
+    const slot = BOX_W + GAP_X, per = Math.max(1, Math.floor((CANVAS_W - 20) / slot)), overflow = [], PAIR_EXTRA = 50;
     let y = 20;
     const rowAt = (ids, yy) => {
-      const per = Math.max(1, Math.floor((CANVAS_W - 20) / (BOX_W + GAP_X)));
-      for (let k = 0; k < ids.length; k += per) {
-        const row = ids.slice(k, k + per), w = row.length * (BOX_W + GAP_X) - GAP_X, x0 = Math.max(10, (CANVAS_W - w) / 2);
+      // 依格數切列：pair 佔 2 格，放不下就換到下一列
+      const rows = [];
+      let cur = [], used = 0;
+      ids.forEach(id => { const w = devsOf(id).length; if (used + w > per && cur.length) { rows.push(cur); cur = []; used = 0; } cur.push(id); used += w; });
+      if (cur.length) rows.push(cur);
+      rows.forEach(row => {
+        const cells = row.reduce((n, id) => n + devsOf(id).length, 0), pairs = row.filter(id => devsOf(id).length > 1).length;
+        const x0 = Math.max(10, (CANVAS_W - (cells * slot - GAP_X + pairs * PAIR_EXTRA)) / 2);
         // 畫布高度放不下的設備最後再找空位
-        if (yy > MAX_H - BOX_H) { row.forEach(id => { overflow.push(id); placed.set(id, CANVAS_W / 2); }); continue; }
-        row.forEach((id, i) => { moveDevice(d, id, x0 + i * (BOX_W + GAP_X), yy); placed.set(id, x0 + i * (BOX_W + GAP_X)); });
+        if (yy > MAX_H - BOX_H) { row.forEach(id => { overflow.push(id); placed.set(id, CANVAS_W / 2); }); return; }
+        let x = x0;
+        row.forEach(id => {
+          const ds = devsOf(id), w = ds.length > 1 ? slot + PAIR_EXTRA : 0;
+          ds.forEach((dev, j) => moveDevice(d, dev, x + j * w, yy));
+          placed.set(id, x + w / 2);
+          x += ds.length > 1 ? 2 * slot + PAIR_EXTRA : slot;
+        });
         yy += LAYER_GAP;
-      }
+      });
       return yy;
     };
-    const overflow = [];
     an.roots.forEach(r => {
       const dist = hopsFrom(adj, r.node), layers = [];
       dist.forEach((k, id) => { (layers[k] = layers[k] || []).push(id); });
       layers.forEach(ids => {
         // 依上一層相鄰設備的平均位置排序，減少交叉；沒有上層鄰居時依名稱
         const key = id => { const xs = adj.get(id).filter(x => placed.has(x.to)).map(x => placed.get(x.to)); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : Infinity; };
-        const nm = id => devById(d, id).hostname;
+        const nm = id => (g.nodes.find(n => n.id === id) || {}).name || '';
         ids.sort((a, b) => key(a) - key(b) || (nm(a) < nm(b) ? -1 : 1));
         y = rowAt(ids, y);
       });
     });
-    const lone = d.devices.filter(x => !placed.has(x.id)).map(x => x.id);
-    if (lone.length) rowAt(lone, y);
-    // 層數多到畫布放不下（例如一長串）：改用一般格狀排列，順序沿用分層順序，相鄰設備仍靠在一起
-    if (overflow.length) [...placed.keys()].forEach((id, k) => moveDevice(d, id, 20 + (k % COLS) * (BOX_W + GAP_X), 20 + Math.floor(k / COLS) * (BOX_H + GAP_Y)));
+    const lone = g.nodes.filter(n => !placed.has(n.id)).map(n => n.id);
+    if (lone.length) y = rowAt(lone, y);
+    // 層數多到畫布放不下（例如一長串）：改用一般格狀排列，順序沿用分層順序，pair 兩台仍相鄰
+    if (overflow.length) [...placed.keys()].flatMap(devsOf).forEach((id, k) => moveDevice(d, id, 20 + (k % COLS) * slot, 20 + Math.floor(k / COLS) * (BOX_H + GAP_Y)));
     return d;
+  }
+
+  // ── 範例設計（UX40）：兩台 NX-OS 核心組 vPC（Eth1/47–48 為 peer link 聚合 Po100），三台兩成員 Catalyst 9300 堆疊以跨機聚合雙上行 ──
+  function demoDesign() {
+    const d = newDesign(), tk = { mode: 'trunk', vlans: '10,20,30' };
+    [[10, 'USERS'], [20, 'VOICE'], [30, 'SERVERS']].forEach(([id, name]) => addVlan(d, { id, name }));
+    const c1 = addDevice(d, { hostname: 'CORE-1', vendor: 'cisco_nxos', model: 'n9k-c9372px' }).dev, c2 = addDevice(d, { hostname: 'CORE-2', vendor: 'cisco_nxos', model: 'n9k-c9372px' }).dev;
+    setStpPri(d, c1.id, 4096); setStpPri(d, c2.id, 4096);
+    addPair(d, c1.id, c2.id, { domain: '1' });
+    ['Ethernet1/47', 'Ethernet1/48'].forEach(p => { addLink(d, { dev: c1.id, port: p }, { dev: c2.id, port: p }, { mode: 'trunk', vlans: 'all' }); setPeer(d, d.links.length - 1, true); });
+    addLag(d, [0, 1], { aNum: 100, bNum: 100 });
+    [1, 2, 3].forEach(k => {
+      const a = addDevice(d, { hostname: 'ACC-' + k, vendor: 'cisco', model: 'c9300-24', members: 2 }).dev;
+      addLink(d, { dev: a.id, port: 'TenGigabitEthernet1/1/1' }, { dev: c1.id, port: 'Ethernet1/' + k }, tk);
+      addLink(d, { dev: a.id, port: 'TenGigabitEthernet2/1/1' }, { dev: c2.id, port: 'Ethernet1/' + k }, tk);
+      addLag(d, [d.links.length - 2, d.links.length - 1], { aNum: 1, bNum: 10 + k });
+    });
+    return autoLayout(d);
   }
 
   // ── 復原／重做（XN209）：快照為設計檔 JSON 字串，最多 max 份 ──
@@ -969,7 +1015,7 @@
 
   const api = {
     addPair, removePair, setPeer, pairIssues, PAIR_VENDORS, PAIR_ISSUE_TYPES, unitOf,
-    readDesignRaw, changeDevice, canStack, devPortObjs, STACK_VENDORS, MAX_MEMBERS, parallelOffsets, l2Graph, carries, edgeCarries, l2Analyze, l2Path, L2P_REASONS, failureImpact, designFailures, FAIL_KINDS, setStpPri, stpTree, designStp, stpCost, speedBps, STP_PRI_DEFAULT, autoLayout, makeHistory, designToSvg, designToDrawio, designToMermaid,
+    readDesignRaw, changeDevice, canStack, devPortObjs, STACK_VENDORS, MAX_MEMBERS, parallelOffsets, l2Graph, carries, edgeCarries, l2Analyze, l2Path, L2P_REASONS, failureImpact, designFailures, FAIL_KINDS, setStpPri, stpTree, designStp, stpAdvice, demoDesign, stpCost, speedBps, STP_PRI_DEFAULT, autoLayout, makeHistory, designToSvg, designToDrawio, designToMermaid,
     VENDORS, VENDOR_IDS, vendorName, shortPort, modelChoices, findModel, portsOf, newDesign, addDevice, removeDevice, moveDevice, addLink, removeLink,
     usedPorts, buildDesign, parseDesign, canvasSvg, canvasH, DESIGN_ERR_CODES, ERR_CODES, MAX_DEVICES, MAX_LINKS, MAX_VLANS, CANVAS_W, CANVAS_H, MAX_H, BOX_W, BOX_H,
     addLag, removeLag, LAG_MODES, LAG_NUM_MAX,
@@ -1101,7 +1147,7 @@
   }
   // ── 每次成功修改後（XN209）：清掉二層路徑結果、存復原快照、寫草稿（有勾選且已回應還原提示），再重畫 ──
   const DRAFT_KEY = 'topo_designer_draft';
-  let hist = null, l2Res = null, l2Vlan = '', draftWait = false, spofSel = null, spofList = [];
+  let hist = null, l2Res = null, l2Vlan = '', draftWait = false, spofSel = null, spofList = [], l2Tab = 'vlan', lagFold = new Set();
   const snapshot = () => JSON.stringify(buildDesign(D));
   const draftOn = () => !!$('td-draft-on') && $('td-draft-on').checked;
   function saveDraft() { if (!draftOn() || draftWait) return; try { localStorage.setItem(DRAFT_KEY, snapshot()); } catch (e) { /* 空間不足或停用時略過 */ } }
@@ -1145,24 +1191,34 @@
     const devPri = id => { const x = devById(D, id); return x && x.stpPri != null ? x.stpPri : ''; };
     const linkOf = e => nameOfId2(e.a.node) + ' ' + e.a.port + ' ↔ ' + nameOfId2(e.b.node) + ' ' + e.b.port;
     function nameOfId2(id) { return stpNode(id).name || nameOfId(id); }
+    const rpTxt = rp => { const e = stp.g.edges[rp.edge]; return e && e.lagName ? `<span title="${esc(rp.port)}">${esc(e.lagName)}</span>` : esc(rp.port); };
+    const advice = stpAdvice(D).map(a => `<div data-td-stp="advice" style="color:var(--yellow)">${esc(T('td.stp_root_mismatch', { root: stpNode(a.root).name, suggest: stpNode(a.suggest).name }))} <button class="btn btn-sm" data-td-stp-fix="${esc(a.devs.join(','))}">${esc(T('td.stp_set_root', { name: stpNode(a.suggest).name }))}</button></div>`).join('');
     const stpRows = stp.g.nodes.filter(n => stp.dist.has(n.id)).sort((x, y) => stp.dist.get(x.id) - stp.dist.get(y.id) || (x.name < y.name ? -1 : 1)).map(n => {
       const ids = n.devs || [n.id], rp = stp.rootPort.get(n.id), cur = n.devs ? (devPri(n.devs[0]) === devPri(n.devs[1]) ? devPri(n.devs[0]) : '') : devPri(n.id);
-      return `<tr data-td-stp-node="${esc(n.id)}"><td>${esc(n.name)}${stp.roots.includes(n.id) ? ' <b data-td-stp-root>★</b>' : ''}</td><td><select data-td-stp-pri="${esc(ids.join(','))}">${priOpts(cur)}</select></td><td>${stp.dist.get(n.id)}</td><td class="mono" style="font-size:12px">${rp ? esc(rp.port) : '-'}</td></tr>`;
+      return `<tr data-td-stp-node="${esc(n.id)}"><td>${esc(n.name)}${stp.roots.includes(n.id) ? ' <b data-td-stp-root>★</b>' : ''}</td><td><select data-td-stp-pri="${esc(ids.join(','))}">${priOpts(cur)}</select></td><td>${stp.dist.get(n.id)}</td><td class="mono" style="font-size:12px">${rp ? rpTxt(rp) : '-'}</td></tr>`;
     });
     const so2 = $('td-stp-out');
-    if (so2) so2.innerHTML = !D.links.length ? '' : stp.roots.map(r => `<div data-td-stp="root">${esc(T('td.stp_root', { name: stpNode(r).name, pri: stp.pri.get(r) }))}</div>`).join('')
+    if (so2) so2.innerHTML = !D.links.length ? `<div class="hint">${esc(tr('td.no_links'))}</div>` : advice + stp.roots.map(r => `<div data-td-stp="root">${esc(T('td.stp_root', { name: stpNode(r).name, pri: stp.pri.get(r) }))}</div>`).join('')
       + (stp.blocked.length ? stp.blocked.map(b => `<div data-td-stp="blocked" style="color:var(--yellow)">${esc(T('td.stp_blocked', { link: linkOf(stp.g.edges[b.edge]), node: stpNode(b.node).name, port: b.port }))}</div>`).join('') : `<div data-td-stp="none" style="color:var(--green)">${esc(tr('td.stp_none_blocked'))}</div>`)
       + `<div style="overflow-x:auto"><table><thead><tr><th>${esc(tr('td.stp_col_bridge'))}</th><th>${esc(tr('td.stp_col_pri'))}</th><th>${esc(tr('td.stp_col_cost'))}</th><th>${esc(tr('td.stp_col_rootport'))}</th></tr></thead><tbody>${stpRows.join('')}</tbody></table></div>`;
     // 單點故障（XN213）
     spofList = designFailures(D);
     if (spofSel != null && !spofList[spofSel]) spofSel = null;
     const so = $('td-spof-out');
-    if (so) so.innerHTML = !D.links.length ? '' : spofList.length ? spofList.map((f, i) => {
+    if (so) so.innerHTML = !D.links.length ? `<div class="hint">${esc(tr('td.no_links'))}</div>` : spofList.length ? spofList.map((f, i) => {
       const name = nameOfId(f.node), cutTxt = f.cut.map(nameOfId).join('、');
       const l = f.kind === 'link' ? D.links[f.cable] : null, link = l ? nameOfId(l.a.dev) + ' ' + l.a.port + ' ↔ ' + nameOfId(l.b.dev) + ' ' + l.b.port : '';
       return `<div data-td-spof-item="${f.kind}" style="display:flex;gap:6px;align-items:baseline;flex-wrap:wrap"><span style="color:${f.cut.length > 1 ? 'var(--red)' : 'var(--yellow)'}">${esc(T('td.spof_' + f.kind, { name, member: f.member || '', link, cut: cutTxt, n: f.cut.length }))}</span>`
         + `<button class="btn btn-sm" data-td-spof="${i}">${esc(tr(spofSel === i ? 'td.spof_hide' : 'td.spof_show'))}</button></div>`;
     }).join('') : `<div data-td-spof-item="none" style="color:var(--green)">${esc(tr('td.spof_none'))}</div>`;
+    // 分頁（UX40）：標籤帶數量，只顯示目前分頁
+    const cnt = { vlan: r.splits.length + r.loops.length, stp: stp.blocked.length, spof: spofList.length, path: null };
+    document.querySelectorAll('[data-td-tab]').forEach(b => {
+      const k = b.getAttribute('data-td-tab'), n = cnt[k];
+      b.textContent = tr('td.tab_' + k) + (n ? ' (' + n + ')' : '');
+      b.setAttribute('aria-selected', k === l2Tab ? 'true' : 'false');
+    });
+    document.querySelectorAll('[data-td-pane]').forEach(el => { el.hidden = el.getAttribute('data-td-pane') !== l2Tab; });
     // 路徑結果
     const po = $('td-l2p-out');
     if (!l2Res) { po.innerHTML = ''; return; }
@@ -1173,16 +1229,17 @@
   }
   // 畫布標示：選了 VLAN 時只亮出帶它的線；有路徑結果時標出路徑（藍）或斷點（紅）
   function viewOpts() {
-    const v = { vlan: l2Vlan === '' ? null : +l2Vlan, path: null, broken: null, spof: null, stp: null };
+    // 畫布只畫目前分頁的標示（UX40）：vlan 變淡、stp 被擋的線、spof 故障項目、path 路徑（勾選依 STP 時也標被擋的線）
+    const v = { vlan: l2Tab === 'vlan' && l2Vlan !== '' ? +l2Vlan : null, path: null, broken: null, spof: null, stp: null };
     // STP 被擋的線（XN214）
-    if (stpOn()) { const st = designStp(D); v.stp = new Set(st.blocked.flatMap(b => st.g.edges[b.edge].refs)); }
+    if (l2Tab === 'stp' || (l2Tab === 'path' && stpOn())) { const st = designStp(D); v.stp = new Set(st.blocked.flatMap(b => st.g.edges[b.edge].refs)); }
     // 單點故障標示（XN213）：拿掉的設備與線標紅、斷開的設備變淡
-    const f = spofSel != null && spofList[spofSel];
+    const f = l2Tab === 'spof' && spofSel != null && spofList[spofSel];
     if (f) {
       const on = e => (f.kind === 'device' && e.dev === f.node) || (f.kind === 'member' && e.dev === f.node && memberOfPort(e.dev, e.port) === f.member);
       v.spof = { dev: f.kind === 'device' ? f.node : null, cut: new Set(f.cut), links: new Set(D.links.map((l, i) => (f.kind === 'link' ? i === f.cable : on(l.a) || on(l.b)) ? i : -1).filter(i => i >= 0)) };
     }
-    if (l2Res) {
+    if (l2Res && l2Tab === 'path') {
       const g = l2Res.g, refs = ids => new Set(ids.flatMap(id => g.edges[id].refs));
       if (l2Res.r.ok) v.path = refs(l2Res.r.hops.map(h => h.edge));
       else if (l2Res.r.edge != null) { v.broken = refs([l2Res.r.edge]); if (l2Res.r.hops) v.path = refs(l2Res.r.hops.map(h => h.edge).filter(id => id !== l2Res.r.edge)); }
@@ -1219,29 +1276,47 @@
     const color = { high: 'var(--red)', medium: 'var(--yellow)', info: 'var(--dim)' };
     $('td-link-list').innerHTML = D.links.length
       ? `<table><thead><tr><th></th><th>${esc(tr('td.col_a'))}</th><th>${esc(tr('td.col_cfg_a'))}</th><th>${esc(tr('td.col_b'))}</th><th>${esc(tr('td.col_cfg_b'))}</th><th>${esc(tr('td.col_status'))}</th><th></th></tr></thead><tbody>`
-        + D.links.map((l, i) => {
+        + linkRowsGrouped((l, i) => {
           const is = linkIssues(D, l);
           const st = is.length ? is.map(x => `<div data-td-issue="${x.type}" style="color:${color[x.level]}">${esc(issueText(x))}</div>`).join('') : `<span style="color:var(--green)">${esc(tr('td.st_ok'))}</span>`;
           const g = l.lag && lagById(D, l.lag);
           const pr = pairOfDev(D, l.a.dev), intra = pr && pairOfDev(D, l.b.dev) === pr;
           const peerBtn = intra ? ` <button class="btn btn-sm" data-td-peer="${i}" aria-pressed="${l.peer ? 'true' : 'false'}">${esc(tr(l.peer ? 'td.peer_on' : 'td.peer_off'))}</button>` : '';
-          const pick = (g ? `<span class="mono" style="color:#a855f7">${esc(lagName(g))}</span>` : l.peer ? '' : `<input type="checkbox" data-td-lag-pick="${i}"${lagPick.has(i) ? ' checked' : ''} aria-label="${esc(tr('td.lag_add'))}">`) + peerBtn;
+          const pick = (g || l.peer ? '' : `<input type="checkbox" data-td-lag-pick="${i}"${lagPick.has(i) ? ' checked' : ''} aria-label="${esc(tr('td.lag_add'))}">`) + peerBtn;
           return `<tr data-td-link-row="${i}"><td>${pick}</td><td>${esc(hostOf(l.a.dev))} <span class="mono">${esc(l.a.port)}</span></td><td>${esc(cfgText(l.a.cfg))} <button class="btn btn-sm" data-td-edit="${i}:a">${esc(tr('td.edit'))}</button></td>`
             + `<td>${esc(hostOf(l.b.dev))} <span class="mono">${esc(l.b.port)}</span></td><td>${esc(cfgText(l.b.cfg))} <button class="btn btn-sm" data-td-edit="${i}:b">${esc(tr('td.edit'))}</button></td>`
             + `<td>${st}</td><td><button class="btn btn-sm" data-td-rm-link="${i}">${esc(tr('td.rm'))}</button></td></tr>`;
-        }).join('') + '</tbody></table>'
+        }, color) + '</tbody></table>'
       : `<div class="hint">${esc(tr('td.no_links'))}</div>`;
     renderLagBox();
     renderPairBox();
     renderL2();
     if ($('td-undo')) { $('td-undo').disabled = !(hist && hist.canUndo()); $('td-redo').disabled = !(hist && hist.canRedo()); }
   }
+  // 連線清單依聚合分組（UX40）：同一聚合的成員連續排列，前面一列群組標題（名稱、兩端、條數、問題數），可收合
+  function linkRowsGrouped(rowOf, color) {
+    const done = new Set(), out = [];
+    D.links.forEach((l, i) => {
+      const g = l.lag && lagById(D, l.lag);
+      if (!g) { out.push(rowOf(l, i)); return; }
+      if (done.has(g.id)) return;
+      done.add(g.id);
+      const idx = D.links.map((x, k) => (x.lag === g.id ? k : -1)).filter(k => k >= 0), folded = lagFold.has(g.id);
+      const iss = idx.flatMap(k => linkIssues(D, D.links[k])), worst = ['high', 'medium', 'info'].find(lv => iss.some(x => x.level === lv));
+      const st = worst ? `<span style="color:${color[worst]}">⚠ ${iss.length}</span>` : `<span style="color:var(--green)">${esc(tr('td.st_ok'))}</span>`;
+      out.push(`<tr data-td-lag-head="${esc(g.id)}"><td colspan="7"><button class="btn btn-sm" data-td-lag-fold="${esc(g.id)}" aria-expanded="${folded ? 'false' : 'true'}" title="${esc(tr(folded ? 'td.unfold' : 'td.fold'))}">${folded ? '▸' : '▾'}</button> `
+        + `<b class="mono" style="color:#a855f7">${esc(lagName(g))}</b> ${esc(T('td.lag_group', { a: unitName(g.a.dev), b: unitName(g.b.dev), n: idx.length }))} · ${st}</td></tr>`);
+      if (!folded) idx.forEach(k => out.push(rowOf(D.links[k], k)));
+    });
+    return out.join('');
+  }
   // 聚合區（XN204）：勾選的線、兩端編號欄位標示設備名稱、已建立的聚合清單
   const lagName = g => 'Po' + g.a.num + (g.a.num === g.b.num ? '' : '/' + g.b.num);
-  let lagPick = new Set();
+  let lagPick = new Set(), pairOpened = false;
   // 跨機聚合 pair 區（XN212）：可選的設備只列支援的廠牌且還沒組成 pair 的
   function renderPairBox() {
     const cand = D.devices.filter(x => PAIR_VENDORS.includes(x.vendor) && !pairOfDev(D, x.id));
+    if (!pairOpened && (cand.length >= 2 || (D.pairs || []).length)) { pairOpened = true; $('td-pair-sec').open = true; }
     ['a', 'b'].forEach(k => { const el = $('td-pair-' + k), kv = el.value; el.innerHTML = `<option value="">${esc(tr('td.pick'))}</option>` + cand.map(x => `<option value="${esc(x.id)}"${x.id === kv ? ' selected' : ''}>${esc(x.hostname)}</option>`).join(''); });
     const iss = pairIssues(D);
     $('td-pair-list').innerHTML = (D.pairs || []).length
@@ -1257,6 +1332,8 @@
   function renderLagBox() {
     lagPick = new Set([...lagPick].filter(i => D.links[i] && !D.links[i].lag && !D.links[i].peer));
     const first = D.links[[...lagPick][0]], hostOf = id => unitName(unitOf(D, id));
+    $('td-lag-box').hidden = !lagPick.size;
+    $('td-lag-picked').textContent = T('td.lag_picked', { n: lagPick.size });
     $('td-lag-a-lbl').textContent = first ? T('td.lag_num', { host: hostOf(first.a.dev) }) : T('td.lag_num', { host: 'A' });
     $('td-lag-b-lbl').textContent = first ? T('td.lag_num', { host: hostOf(first.b.dev) }) : T('td.lag_num', { host: 'B' });
     $('td-lag-list').innerHTML = (D.lags || []).length
@@ -1303,8 +1380,17 @@
     pickNext = pickNext === 'a' ? 'b' : 'a';
     render();
     say(T(end === 'a' ? 'td.picked_a' : 'td.picked_b', { host: d.dev.hostname }));
+    // 兩端都選好時，連線表單不在視窗內（窄螢幕）就捲過去選埠（UX40）
+    if (end === 'b') { const c = $('td-link-card'), r = c && c.getBoundingClientRect(); if (r && (r.top < 0 || r.bottom > innerHeight)) c.scrollIntoView({ block: 'nearest' }); }
   }
 
+  // 範例設計（UX40）：目前設計非空時先確認；可復原
+  function loadDemo() {
+    if (D.devices.length && !confirm(tr('td.demo_confirm'))) return;
+    D = demoDesign(); sel = null; pickNext = 'a'; editing = null; devEdit = null; lagPick = new Set(); lagFold = new Set();
+    changed();
+    say(T('td.demo_loaded', { d: D.devices.length, l: D.links.length }));
+  }
   function download(name, text, type) {
     const url = URL.createObjectURL(new Blob([text], { type: type || 'application/json' }));
     const a = document.createElement('a');
@@ -1345,6 +1431,7 @@
     try { draft = localStorage.getItem(DRAFT_KEY); } catch (e) { draft = null; }
     if (draft) { $('td-draft-on').checked = true; draftWait = true; $('td-draft-bar').hidden = false; }
     render();
+    if (/[?&]demo=1(&|$)/.test(location.search) && !draft) loadDemo();
     $('td-draft-restore').addEventListener('click', () => {
       draftWait = false; $('td-draft-bar').hidden = true;
       const r = loadText(draft || '');
@@ -1374,6 +1461,7 @@
     $('td-layout').addEventListener('click', () => { if (!D.devices.length) return; autoLayout(D); changed(); say(tr('td.layout_done')); });
     $('td-l2-vlan').addEventListener('change', e => { l2Vlan = e.target.value; render(); });
     $('td-stp-on').addEventListener('change', () => { l2Res = null; render(); });
+    $('td-demo').addEventListener('click', loadDemo);
     $('td-l2p-run').addEventListener('click', () => {
       const v = $('td-l2p-vlan').value;
       if (!v) { say(tr('td.l2p_novlan'), true); return; }
@@ -1471,6 +1559,12 @@
       if (!t) return;
       const de = t.closest('[data-td-edit-dev]');
       if (de) { openDevEdit(de.getAttribute('data-td-edit-dev')); return; }
+      const tb = t.closest('[data-td-tab]');
+      if (tb) { l2Tab = tb.getAttribute('data-td-tab'); render(); return; }
+      const fx = t.closest('[data-td-stp-fix]');
+      if (fx) { if (fx.getAttribute('data-td-stp-fix').split(',').every(id => setStpPri(D, id, 4096).ok)) changed(); return; }
+      const lf = t.closest('[data-td-lag-fold]');
+      if (lf) { const id = lf.getAttribute('data-td-lag-fold'); if (lagFold.has(id)) lagFold.delete(id); else lagFold.add(id); render(); return; }
       const sf = t.closest('[data-td-spof]');
       if (sf) { const i = +sf.getAttribute('data-td-spof'); spofSel = spofSel === i ? null : i; render(); return; }
       const pe = t.closest('[data-td-peer]');
