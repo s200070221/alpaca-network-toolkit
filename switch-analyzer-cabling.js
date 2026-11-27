@@ -388,6 +388,41 @@
     });
     return { design: td.buildDesign(d), devices: d.devices.length, links: d.links.length, lags: d.lags.length, skipped, dropped, cfgSkip };
   }
+  // 二層分析（XN207）：清冊內兩端都是交換器的線組成圖，兩端設定取面板埠（portCfg），同一聚合（依兩端聚合名稱）合成一條邊
+  function cablingL2Graph(cb) {
+    const nodes = [], edges = [], ports = Object.create(null), lagEdge = new Map();
+    cb.devices.forEach(dv => { if (dv.parsed) { nodes.push({ id: String(dv.idx), name: dv.hostname }); ports[dv.idx] = portsByName(dv); } });
+    cb.links.forEach(l => {
+      if (l.a.ext != null || l.b.ext != null || !ports[l.a.dev] || !ports[l.b.dev]) return;
+      const pa = ports[l.a.dev][lc(l.a.port)], pb = ports[l.b.dev][lc(l.b.port)];
+      if (pa && pa.lag && pb && pb.lag) {
+        const ka = l.a.dev + '|' + lc(pa.lag), kb = l.b.dev + '|' + lc(pb.lag), key = ka < kb ? ka + '#' + kb : kb + '#' + ka;
+        if (lagEdge.has(key)) { lagEdge.get(key).refs.push(l); return; }
+      }
+      const e = { id: edges.length, a: { node: String(l.a.dev), port: l.a.port, cfg: portCfg(pa) }, b: { node: String(l.b.dev), port: l.b.port, cfg: portCfg(pb) }, refs: [l], lag: !!(pa && pa.lag && pb && pb.lag) };
+      if (e.lag) { const ka = l.a.dev + '|' + lc(pa.lag), kb = l.b.dev + '|' + lc(pb.lag); lagEdge.set(ka < kb ? ka + '#' + kb : kb + '#' + ka, e); e.lagName = pa.lag; }
+      edges.push(e);
+    });
+    const vlans = [...new Set(cb.devices.flatMap(dv => ((dv.parsed && dv.parsed.vlans) || []).map(v => +v.id).filter(n => n >= 1 && n <= 4094)))].sort((x, y) => x - y);
+    return { g: { nodes, edges }, vlans };
+  }
+  function l2Html(cb) {
+    const td = TDS();
+    if (!td) return '';
+    const { g, vlans } = cablingL2Graph(cb);
+    if (!g.edges.length) return '';
+    const r = td.l2Analyze(g, vlans), nm = id => (g.nodes.find(n => n.id === id) || {}).name || '';
+    const linkTxt = id => { const e = g.edges[id]; return nm(e.a.node) + ' ' + e.a.port + ' ↔ ' + nm(e.b.node) + ' ' + e.b.port; };
+    const rows = [];
+    r.splits.forEach(x => rows.push(`<div data-ptopo-l2="split" style="color:var(--red,#ef4444)">${esc2(T('ptopo.l2_split', { vlan: x.vlan, groups: x.groups.map(gr => gr.join(T('ptopo.list_sep'))).join(' ｜ ') }))}`
+      + x.breaks.map(b => `<div style="margin-left:14px">${esc2(T('ptopo.l2_break', { node: b.node, port: b.port, link: linkTxt(b.edge) }))}</div>`).join('') + '</div>'));
+    r.loops.forEach(x => rows.push(`<div data-ptopo-l2="loop" style="color:var(--orange,#f59e0b)">${esc2(T('ptopo.l2_loop', { nodes: x.nodes.join(T('ptopo.list_sep')), n: x.edges.length }))}</div>`));
+    r.roots.forEach(x => rows.push(`<div data-ptopo-l2="root">${esc2(T('ptopo.l2_root', { name: x.name, n: x.nodes }))}</div>`));
+    if (r.undef.length) rows.push(`<div data-ptopo-l2="undef" style="color:var(--text-dim)">${esc2(T('ptopo.l2_undef', { n: r.undef.length }))}</div>`);
+    if (!r.splits.length && !r.loops.length) rows.unshift(`<div data-ptopo-l2="ok" style="color:var(--green,#22c55e)">${esc2(T('ptopo.l2_ok'))}</div>`);
+    const n = r.splits.length + r.loops.length;
+    return `<details data-ptopo-sec="l2" style="margin-top:6px"${n ? ' open' : ''}><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.l2_title', { n }))}</summary><div style="font-size:11px;color:var(--text-dim);margin:4px 0">${esc2(T('ptopo.l2_hint'))}</div><div style="font-size:12px;display:flex;flex-direction:column;gap:3px">${rows.join('')}</div></details>`;
+  }
   // 設計（readDesignRaw 的結果）與實際接線比對：主機名稱與埠名稱以 hostKey()／portKey() 正規化
   // ok＝兩端相同（另比兩端設定）、wrong＝只有一端相同、missing＝兩台都在清冊但實際沒有、extra＝兩端都在設計中但設計沒有、unverifiable＝設計中的設備不在清冊
   const cfgText = c => {
@@ -496,6 +531,7 @@
     if (cb.links.length) h += `<details data-ptopo-sec="links" style="margin-top:6px" open><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.links', { n: cb.links.length }))}</summary><div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc2(T('ptopo.col_dev'))}</th><th>${esc2(T('ptopo.col_port'))}</th><th>${esc2(T('ptopo.col_dev'))}</th><th>${esc2(T('ptopo.col_port'))}</th><th>${esc2(T('ptopo.col_src'))}</th><th>${esc2(T('ptopo.col_issue'))}</th></tr></thead><tbody>`
       + cb.links.map(l => `<tr${l.issues && l.issues.length ? ' data-ptopo-bad' : ''}><td>${esc2(endName(cb, l.a))}</td><td class="mono">${esc2(l.a.port)}</td><td>${esc2(endName(cb, l.b))}</td><td class="mono">${esc2(l.b.port)}</td><td>${esc2(T('ptopo.src_' + linkKind(l)) + (l.protocols.length ? ' (' + l.protocols.join('/') + ')' : ''))}</td><td style="color:var(--red,#ef4444)">${(l.issues || []).map(i => esc2(issueText(i))).join('<br>')}</td></tr>`).join('') + '</tbody></table></div></details>';
     else h += `<div class="nodata" style="font-size:12px">${esc2(T('ptopo.no_links'))}</div>`;
+    h += l2Html(cb);
     if (cb.dupHosts.length) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-top:4px">${esc2(T('ptopo.dup_host', { list: cb.dupHosts.join('、') }))}</div>`;
     if (cb.conflicts.length) h += `<div style="font-size:11px;color:var(--orange,#f59e0b);margin-top:4px">${esc2(T('ptopo.conflict', { list: cb.conflicts.map(c => c.host + ' ' + c.port).join('、') }))}</div>`;
     if (cb.unmatched.length) h += `<details data-ptopo-sec="unmatched" style="margin-top:6px"><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.unmatched', { n: cb.unmatched.length }))}</summary><div style="font-size:11px">`
@@ -810,7 +846,7 @@
 
   const IMPORT_ERR_CODES = ['json', 'format', 'host', 'ports', 'size'];
   const PROJ_ERR_CODES = ['json', 'format', 'firewall', 'size'];
-  const api = { cablingToDesign, compareDesign, portCfg, SKIP_REASONS, CMP_KINDS, replaceDevice, lldpOf, cablingToDrawio, cablingToMermaid, buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, parseManualNeighbors, manualNeighbors, neighborOnly, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
+  const api = { cablingL2Graph, cablingToDesign, compareDesign, portCfg, SKIP_REASONS, CMP_KINDS, replaceDevice, lldpOf, cablingToDrawio, cablingToMermaid, buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, parseManualNeighbors, manualNeighbors, neighborOnly, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
   if (typeof window !== 'undefined') window.SwCabling = api;
   return api;
 })();

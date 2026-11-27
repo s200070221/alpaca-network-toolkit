@@ -29,6 +29,8 @@ const WS_KEYS = [
   { key: '_netAnalyzer_achievements', tool: 'common', group: 'history', json: true },
   { key: '_netAnalyzer_tourSeen', tool: 'common', group: 'settings', json: true },
   { key: 'cw_templates', tool: 'switch_config_generator', group: 'content', json: true },
+  // 拓樸設計頁草稿（XN209，使用者勾選才有）：名稱、型號、埠與 VLAN，含主機名稱
+  { key: 'topo_designer_draft', tool: 'switch_config_generator', group: 'content', json: true },
   { key: 'cw_section_templates', tool: 'switch_config_generator', group: 'content', json: true },
   { key: 'cw_draft', tool: 'switch_config_generator', group: 'content', json: true },
 ];
@@ -156,7 +158,7 @@ function renderWorkspaceCard() {
 // ── 本機儲存資料盤點與清除（XN104）────────────────────────────────────
 // 各工具共用同一個瀏覽器儲存區；這裡只列 key、所屬工具與大小（不顯示內容），標出可能含設定原文、
 // 帳密（content 群組、一次性交接 key）或檔名／設備名稱（歷史類）的項目，讓使用者在共用電腦上清除。
-const LS_NAME_KEYS = ['_netAnalyzer_anonHistory', '_netAnalyzer_summaries', '_netAnalyzer_activityHistory', 'fw_vuln_ver', 'sw_vuln_ver', 'suspect_accts'];
+const LS_NAME_KEYS = ['topo_designer_draft', '_netAnalyzer_anonHistory', '_netAnalyzer_summaries', '_netAnalyzer_activityHistory', 'fw_vuln_ver', 'sw_vuln_ver', 'suspect_accts'];
 // entries：[{key,size}]；回傳依風險（secret → names → none）、工具、key 排序的列。純函式
 function lsInventory(entries) {
   const handoff = Object.keys(typeof HANDOFF_TTL === 'object' ? HANDOFF_TTL : {});

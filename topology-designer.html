@@ -30,6 +30,7 @@ main{max-width:1100px;margin:0 auto;padding:16px}
 .btn{border:1px solid var(--border);background:var(--chip);color:var(--text);border-radius:6px;padding:5px 12px;font:inherit;cursor:pointer}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn-sm{padding:2px 8px;font-size:12px}
+.btn:disabled{opacity:.45;cursor:default}
 .row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;margin:6px 0}
 .row label{display:flex;flex-direction:column;font-size:12px;color:var(--dim);gap:2px;min-width:0}
 .txt,select{border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;padding:5px 8px;font:inherit;max-width:100%}
@@ -67,6 +68,7 @@ a{color:var(--accent)}
   <a href="network-analyzer.html" id="t-back" data-td-i18n="td.back"></a>
 </header>
 <main>
+  <div class="notice" id="td-draft-bar" hidden><span data-td-i18n="td.draft_found"></span> <button class="btn btn-sm primary" id="td-draft-restore" data-td-i18n="td.draft_restore"></button> <button class="btn btn-sm" id="td-draft-discard" data-td-i18n="td.draft_discard"></button></div>
   <p class="notice"><span data-td-i18n="td.intro"></span> <span data-td-i18n="td.next_step"></span></p>
   <section class="card">
     <h2 data-td-i18n="td.sec_add"></h2>
@@ -128,13 +130,33 @@ a{color:var(--accent)}
       <button class="btn" id="td-save" data-td-i18n="td.save"></button>
       <label class="btn" style="flex-direction:row;color:var(--text);font-size:14px"><span data-td-i18n="td.load"></span><input type="file" id="td-load" accept=".json,application/json" hidden></label>
       <button class="btn" id="td-clear" data-td-i18n="td.clear"></button>
+      <button class="btn" id="td-layout" data-td-i18n="td.layout"></button>
+      <button class="btn" id="td-undo" data-td-i18n="td.undo"></button>
+      <button class="btn" id="td-redo" data-td-i18n="td.redo"></button>
+      <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="td-draft-on"> <span data-td-i18n="td.draft_label"></span></label>
     </div>
+    <div class="hint" data-td-i18n="td.undo_hint"></div>
     <div class="row">
       <button class="btn" id="td-exp-svg" data-td-i18n="td.exp_svg"></button>
       <button class="btn" id="td-exp-drawio" data-td-i18n="td.exp_drawio"></button>
       <button class="btn" id="td-exp-mmd" data-td-i18n="td.exp_mmd"></button>
     </div>
     <div class="hint" data-td-i18n="td.exp_hint"></div>
+  </section>
+  <section class="card" id="td-l2">
+    <h2 data-td-i18n="td.l2_sec"></h2>
+    <div class="hint" data-td-i18n="td.l2_hint"></div>
+    <div class="row"><label><span data-td-i18n="td.l2_vlan"></span><select id="td-l2-vlan"></select></label></div>
+    <div id="td-l2-out" style="font-size:13px;display:flex;flex-direction:column;gap:4px"></div>
+    <h3 data-td-i18n="td.l2p_title" style="font-size:14px;margin:12px 0 4px"></h3>
+    <div class="row">
+      <label><span data-td-i18n="td.l2p_from"></span><select id="td-l2p-from"></select></label>
+      <label><span data-td-i18n="td.l2p_to"></span><select id="td-l2p-to"></select></label>
+      <label><span data-td-i18n="td.l2p_vlan"></span><select id="td-l2p-vlan"></select></label>
+      <button class="btn primary" id="td-l2p-run" data-td-i18n="td.l2p_run"></button>
+      <button class="btn" id="td-l2p-clear" data-td-i18n="td.l2p_clear"></button>
+    </div>
+    <div id="td-l2p-out" style="font-size:13px"></div>
   </section>
   <section class="card">
     <h2 data-td-i18n="td.sec_list"></h2>
