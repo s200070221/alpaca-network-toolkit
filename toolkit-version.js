@@ -3,8 +3,25 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.26';
+  const TOOLKIT_VERSION = '2026.11.27';
   const CHANGELOG = [
+    {
+      version: '2026.11.27',
+      items: {
+        zhTW: [
+          '首頁改成導引頁：拖放檔案自動建議工具，工具與功能分組成卡片；網站憑證檢查、設備版本比對、健檢、工作區等點卡片後以獨立畫面開啟',
+          '拓樸設計頁（實驗中）：可編輯設備（改名、換型號）、同一對設備的多條線分開畫、勾選合成鏈路聚合（送到產生器會帶入），設計圖可下載 SVG／draw.io／Mermaid；SONiC 等沒有內建型號的廠牌可建立自訂型號',
+          '交換器分析：接線拓樸可存成拓樸設計，也可與拓樸設計比對，列出接錯埠、缺少、多出與設定不同的線',
+          '防火牆分析：多台路徑查詢結果畫在前面板上，標出每一跳的進入與出口埠，被擋或沒有路由的那一跳標紅',
+        ],
+        en: [
+          'The home page is now a navigation page: drop a file to get a tool suggestion, tools and features are grouped into cards, and the certificate check, version check, health summary, workspace and more open as their own views',
+          'Topology designer (experimental): edit devices (rename, change model), parallel links between the same two switches are drawn apart, tick links to form a link aggregate (carried over to the generator), and download the design as SVG, draw.io or Mermaid; vendors without built-in models such as SONiC can use custom models',
+          'Switch analyzer: the cabling topology can be saved as a topology design and compared with one, listing wrong ports, missing, extra and mismatched links',
+          'Firewall analyzer: multi-device path query results are drawn on the front panels, marking each hop\'s ingress and egress ports, with the blocked or unrouted hop in red',
+        ],
+      },
+    },
     {
       version: '2026.11.26',
       items: {
