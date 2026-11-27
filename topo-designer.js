@@ -146,12 +146,15 @@
     const byLc = new Map(devPortObjs(vendor, model, members, mm).map(p => [lc(p.name), p.name]));
     const drop = [];
     d.links.forEach((l, i) => { if ([l.a, l.b].some(e => e.dev === id && !byLc.has(lc(e.port)))) drop.push(i); });
-    if (opts && opts.dryRun) return { ok: true, drop };
+    // 換廠牌時跨機聚合 pair 兩台不再同廠牌：解散 pair（peer link 標記與跨機聚合一併拆掉），否則存出的設計檔讀不回來
+    const pr = pairOfDev(d, id), unpair = !!(pr && vendor !== dev.vendor);
+    if (opts && opts.dryRun) return { ok: true, drop, unpair };
+    if (unpair) removePair(d, pr.id);
     for (let k = drop.length - 1; k >= 0; k--) removeLink(d, drop[k]);
     Object.assign(dev, { hostname, vendor, model, members });
     if (mm) dev.memberModels = mm; else delete dev.memberModels;
     d.links.forEach(l => [l.a, l.b].forEach(e => { if (e.dev === id) e.port = byLc.get(lc(e.port)); }));
-    return { ok: true, drop };
+    return { ok: true, drop, unpair };
   }
 
   // ── VLAN ──
@@ -1194,10 +1197,13 @@
     const o = readDevEdit();
     const dry = changeDevice(D, devEdit.id, o, { dryRun: true });
     if (!dry.ok) { say(tr('td.err_' + dry.code), true); return; }
-    if (dry.drop.length && !confirmed) {
+    if ((dry.drop.length || dry.unpair) && !confirmed) {
       const hostOf = id => (devById(D, id) || {}).hostname || '';
       devEdit.pending = dry.drop.slice();
-      $('td-de-drop').textContent = T('td.dev_drop', { n: dry.drop.length, links: dry.drop.map(i => { const l = D.links[i]; return hostOf(l.a.dev) + ' ' + l.a.port + ' ↔ ' + hostOf(l.b.dev) + ' ' + l.b.port; }).join('；') });
+      const msgs = [];
+      if (dry.drop.length) msgs.push(T('td.dev_drop', { n: dry.drop.length, links: dry.drop.map(i => { const l = D.links[i]; return hostOf(l.a.dev) + ' ' + l.a.port + ' ↔ ' + hostOf(l.b.dev) + ' ' + l.b.port; }).join('；') }));
+      if (dry.unpair) msgs.push(T('td.dev_unpair', { pair: unitName(pairOfDev(D, devEdit.id).id) }));
+      $('td-de-drop').textContent = msgs.join(' ');
       $('td-de-drop').hidden = false; $('td-de-confirm').hidden = false;
       return;
     }
