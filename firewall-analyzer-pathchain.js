@@ -593,7 +593,8 @@ const FwPath = (function () {
       const stage = _natStage(parsed.vendor);
       const fwdDst = dnat ? dnat.toIp : dst, fwdPort = dnat && dnat.toPort ? dnat.toPort : port;
       const route = lookupRoute(parsed, fwdDst, vdom, dev.routes);
-      const hop = { device: dev.name, vendor: parsed.vendor, ingress: ingress ? ingress.name : '', src, dst, dnat: dnat ? { toIp: dnat.toIp, toPort: dnat.toPort || '' } : null,
+      // dev＝這一跳在 devices 陣列的位置（XN206 依此畫前面板）
+      const hop = { dev: cur, device: dev.name, vendor: parsed.vendor, ingress: ingress ? ingress.name : '', src, dst, dnat: dnat ? { toIp: dnat.toIp, toPort: dnat.toPort || '' } : null,
         natStage: stage, route: route ? { connected: route.connected, dst: route.route ? route.route.dst : '', gateway: route.gateway, pasted: !!route.pasted } : null,
         egress: route && route.iface ? route.iface.name : '' };
       hops.push(hop);

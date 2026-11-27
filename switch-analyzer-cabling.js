@@ -324,8 +324,126 @@
     return out.join('\n') + '\n';
   }
 
+  // ── 拓樸設計（XN205）：接線拓樸存成設計頁的設計檔、與設計檔比對實際接線 ──
+  // 設計頁模組 topo-designer.js 在本頁沒有畫面（沒有 LANG_TD），只提供 window.TopoDesigner 的純函式
+  const TDS = () => (typeof window !== 'undefined' && window.TopoDesigner) || null;
+  const SKIP_REASONS = ['firewall', 'vendor', 'model', 'host', 'dup'];
+  const CMP_KINDS = ['wrong', 'missing', 'extra', 'unverifiable', 'ok'];
+  const lagNo = name => { const m = String(name || '').match(/(\d+)\s*$/); return m ? +m[1] : null; };
+  const portsByName = dv => { const m = Object.create(null); (dv.pn ? dv.pn.rows.flatMap(r => r.ports).concat(dv.pn.extra) : []).forEach(p => { m[lc(p.name)] = p; }); return m; };
+  // 面板埠的設定 → 設計頁一端的設定（access／trunk；hybrid、routed、沒有模式為 null；VLAN 太多視為 all）
+  function portCfg(pt) {
+    const td = TDS(), mode = lc(pt && pt.mode);
+    if (!td || !pt) return null;
+    if (mode === 'access') { const v = String(pt.vlans || '1').split(/[,\s]+/)[0]; return /^\d+$/.test(v) ? { mode: 'access', vlans: v } : null; }
+    if (mode !== 'trunk') return null;
+    const raw = String(pt.vlans || '').trim(), p = td.parseVlanList(raw);
+    const vlans = !raw || p.all || /^1-4094$/.test(raw) || p.ids.length > 200 ? 'all' : p.invalid.length || !p.ids.length ? null : td.vlanText(p.ids);
+    return vlans == null ? null : { mode: 'trunk', vlans, nativeVlan: /^\d+$/.test(String(pt.nativeVlan || '')) && String(pt.nativeVlan) !== '1' ? String(pt.nativeVlan) : '' };
+  }
+  function cablingToDesign(cb) {
+    const td = TDS();
+    if (!td || !cb) return null;
+    const d = td.newDesign(), skipped = [], idOf = Object.create(null), portsOf = Object.create(null), vname = Object.create(null);
+    cb.devices.forEach(dv => {
+      if (dv.imp) { skipped.push({ host: dv.hostname, reason: 'firewall' }); return; }
+      const brand = dv.parsed && dv.parsed.sys && dv.parsed.sys.brand, vk = dv.pn && dv.pn.vendor, vendor = vk === 'comware' && brand === 'h3c' ? 'h3c' : vk;
+      if (!td.VENDOR_IDS.includes(vendor)) { skipped.push({ host: dv.hostname, reason: 'vendor' }); return; }
+      if (!dv.pn.modelValue) { skipped.push({ host: dv.hostname, reason: 'model' }); return; }
+      const r = td.addDevice(d, { hostname: dv.hostname, vendor, model: dv.pn.modelValue });
+      if (!r.ok) { skipped.push({ host: dv.hostname, reason: r.code === 'dup' || r.code === 'host' ? r.code : 'model' }); return; }
+      idOf[dv.idx] = r.dev.id; portsOf[dv.idx] = portsByName(dv);
+      ((dv.parsed && dv.parsed.vlans) || []).forEach(v => { const k = String(v && v.id); if (!(k in vname)) vname[k] = String((v && v.name) || ''); });
+    });
+    const ensureVlan = id => { if (!d.vlans.some(v => v.id === id) && !td.addVlan(d, { id, name: (vname[id] || '').slice(0, 32) }).ok) td.addVlan(d, { id, name: '' }); };
+    let dropped = 0, cfgSkip = 0;
+    const lagGroups = new Map();
+    cb.links.forEach(l => {
+      if (l.a.ext != null || l.b.ext != null || idOf[l.a.dev] == null || idOf[l.b.dev] == null) return;
+      const r = td.addLink(d, { dev: idOf[l.a.dev], port: l.a.port }, { dev: idOf[l.b.dev], port: l.b.port });
+      if (!r.ok) { dropped++; return; }
+      const i = d.links.length - 1;
+      [['a', l.a], ['b', l.b]].forEach(([end, e]) => {
+        const c = portCfg(portsOf[e.dev][lc(e.port)]);
+        if (!c) return;
+        const ids = c.mode === 'access' ? [+c.vlans] : c.vlans === 'all' ? [] : td.parseVlanList(c.vlans).ids;
+        if (c.nativeVlan) ids.push(+c.nativeVlan);
+        ids.forEach(ensureVlan);
+        if (!td.setEndCfg(d, i, end, c).ok) cfgSkip++;
+      });
+      // 兩端都是聚合成員：依兩端的聚合名稱分組（不分方向）
+      const pa = portsOf[l.a.dev][lc(l.a.port)], pb = portsOf[l.b.dev][lc(l.b.port)];
+      if (pa && pa.lag && pb && pb.lag) {
+        const ka = l.a.dev + '|' + lc(pa.lag), kb = l.b.dev + '|' + lc(pb.lag), key = ka < kb ? ka + '#' + kb : kb + '#' + ka;
+        if (!lagGroups.has(key)) lagGroups.set(key, { idxs: [], lagOf: Object.create(null) });
+        const g = lagGroups.get(key);
+        g.idxs.push(i); g.lagOf[l.a.dev] = pa.lag; g.lagOf[l.b.dev] = pb.lag;
+      }
+    });
+    const modeOf = (dv, name) => { const x = ((dv.parsed && dv.parsed.lacp) || []).find(z => lc(z.name) === lc(name)); return x && /active|passive|lacp|dynamic/i.test(String(x.mode || '')) ? 'active' : 'static'; };
+    lagGroups.forEach(g => {
+      const first = d.links[g.idxs[0]], devA = cb.devices.find(dv => idOf[dv.idx] === first.a.dev), devB = cb.devices.find(dv => idOf[dv.idx] === first.b.dev);
+      if (!devA || !devB) return;
+      td.addLag(d, g.idxs, { aNum: lagNo(g.lagOf[devA.idx]), bNum: lagNo(g.lagOf[devB.idx]), mode: modeOf(devA, g.lagOf[devA.idx]) });
+    });
+    return { design: td.buildDesign(d), devices: d.devices.length, links: d.links.length, lags: d.lags.length, skipped, dropped, cfgSkip };
+  }
+  // 設計（readDesignRaw 的結果）與實際接線比對：主機名稱與埠名稱以 hostKey()／portKey() 正規化
+  // ok＝兩端相同（另比兩端設定）、wrong＝只有一端相同、missing＝兩台都在清冊但實際沒有、extra＝兩端都在設計中但設計沒有、unverifiable＝設計中的設備不在清冊
+  const cfgText = c => {
+    const td = TDS();
+    if (!c || !c.mode) return '';
+    if (c.mode === 'access') return 'A ' + String(c.vlans).trim();
+    const p = td ? td.parseVlanList(c.vlans) : { all: /^all$/i.test(c.vlans), ids: [] };
+    return 'T ' + (p.all ? 'all' : td ? td.vlanText(p.ids) : String(c.vlans)) + (c.nativeVlan && String(c.nativeVlan) !== '1' ? ' n' + c.nativeVlan : '');
+  };
+  function compareDesign(raw, cb) {
+    const inv = Object.create(null), endK = (h, p) => hostKey(h) + '|' + portKey(p);
+    cb.devices.forEach(dv => { if (!(dv.key in inv)) inv[dv.key] = dv; });
+    const designHosts = new Set(raw.devices.map(x => hostKey(x.hostname)));
+    const ports = Object.create(null), portOf = (dv, name) => { if (!ports[dv.idx]) ports[dv.idx] = portsByName(dv); return ports[dv.idx][lc(name)]; };
+    const act = [], byEnd = new Map();
+    cb.links.forEach(l => {
+      if (l.a.ext != null || l.b.ext != null) return;
+      const x = { a: { host: cb.devices[l.a.dev].hostname, port: l.a.port, dv: cb.devices[l.a.dev] }, b: { host: cb.devices[l.b.dev].hostname, port: l.b.port, dv: cb.devices[l.b.dev] }, used: false };
+      act.push(x); byEnd.set(endK(x.a.host, x.a.port), x); byEnd.set(endK(x.b.host, x.b.port), x);
+    });
+    const rows = [];
+    raw.links.forEach(dl => {
+      const miss = [dl.a.host, dl.b.host].filter(h => !inv[hostKey(h)]);
+      if (miss.length) { rows.push({ kind: 'unverifiable', d: dl, missing: [...new Set(miss)] }); return; }
+      const xa = byEnd.get(endK(dl.a.host, dl.a.port)), xb = byEnd.get(endK(dl.b.host, dl.b.port));
+      if (xa && xa === xb) {
+        xa.used = true;
+        // 設計 A 端對應實際的哪一端
+        const ea = endK(xa.a.host, xa.a.port) === endK(dl.a.host, dl.a.port) ? xa.a : xa.b, eb = ea === xa.a ? xa.b : xa.a;
+        const cfg = [[dl.a, ea], [dl.b, eb]].map(([de, ae]) => {
+          if (!de.cfg || !ae.dv.parsed) return null;
+          const want = cfgText(de.cfg), got = cfgText(portCfg(portOf(ae.dv, ae.port)));
+          return want && want !== got ? { host: de.host, port: de.port, design: want, actual: got } : null;
+        }).filter(Boolean);
+        rows.push({ kind: 'ok', d: dl, act: [xa], cfg });
+        return;
+      }
+      if (xa || xb) { [xa, xb].forEach(x => { if (x) x.used = true; }); rows.push({ kind: 'wrong', d: dl, act: [...new Set([xa, xb].filter(Boolean))] }); return; }
+      rows.push({ kind: 'missing', d: dl, act: [] });
+    });
+    let outside = 0;
+    act.forEach(x => {
+      if (x.used) return;
+      if (designHosts.has(hostKey(x.a.host)) && designHosts.has(hostKey(x.b.host))) rows.push({ kind: 'extra', d: null, act: [x] });
+      else outside++;
+    });
+    const count = Object.create(null);
+    CMP_KINDS.forEach(k => { count[k] = rows.filter(r => r.kind === k).length; });
+    count.cfg = rows.filter(r => r.kind === 'ok' && r.cfg.length).length;
+    rows.sort((x, y) => CMP_KINDS.indexOf(x.kind) - CMP_KINDS.indexOf(y.kind));
+    return { rows, count, outside };
+  }
+
   // ── 卡片（資產清冊頁）──
   let _entries = [], _linksText = '', _lldpMsg = '', _importMsg = '', _projMsg = '', _compact = false;
+  let _design = null, _designName = '', _designMsg = '';   // 比對用的拓樸設計（只存記憶體）
   const _imported = [];   // 匯入的防火牆前面板 [{imported}]（只存記憶體）
   const IMPORT_MAX = 20;
   const _all = () => _entries.filter(x => x && x.parsed).concat(_imported);
@@ -388,8 +506,32 @@
       + `<button style="${btn}" data-ptopo-exp="drawio" title="${xesc(T('ptopo.exp_tip'))}">⬇ draw.io</button><button style="${btn}" data-ptopo-exp="mermaid" title="${xesc(T('ptopo.exp_tip'))}">⬇ Mermaid</button>`
       + `<label style="font-size:11px"><input type="checkbox" id="ptopo-mask" checked> ${esc2(T('swp.mask'))}</label></div>`
       + `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><button style="${btn}" data-ptopo-save title="${xesc(T('ptopo.save_hint'))}">${esc2(T('ptopo.save'))}</button>`
-      + `<label style="font-size:12px">${esc2(T('ptopo.load'))} <input type="file" accept=".json,application/json" data-ptopo-load></label> <span style="font-size:11px" data-ptopo-proj-msg>${esc2(_projMsg)}</span></div></div>`;
-    return h;
+      + `<label style="font-size:12px">${esc2(T('ptopo.load'))} <input type="file" accept=".json,application/json" data-ptopo-load></label> <span style="font-size:11px" data-ptopo-proj-msg>${esc2(_projMsg)}</span></div>`;
+    if (TDS()) h += designHtml(cb, btn);
+    return h + '</div>';
+  }
+  // 拓樸設計區（XN205）：存成設計檔、讀入設計檔比對
+  function designHtml(cb, btn) {
+    let h = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px"><button style="${btn}" data-ptopo-todesign title="${xesc(T('ptopo.to_design_tip'))}">${esc2(T('ptopo.to_design'))}</button>`
+      + `<label style="font-size:12px">${esc2(T('ptopo.cmp_load'))} <input type="file" accept=".json,application/json" data-ptopo-cmp-load></label> <span style="font-size:11px" data-ptopo-design-msg>${esc2(_designMsg)}</span></div>`;
+    if (!_design) return h;
+    const r = compareDesign(_design, cb), c = r.count, col = { wrong: 'var(--red,#ef4444)', missing: 'var(--red,#ef4444)', extra: 'var(--orange,#f59e0b)', unverifiable: 'var(--text-dim)', ok: 'var(--green,#22c55e)' };
+    const lk = (x, side) => esc2(x[side].host) + ' <span class="mono">' + esc2(x[side].port) + '</span>';
+    const dTxt = dl => dl ? lk(dl, 'a') + ' ↔ ' + lk(dl, 'b') : '-';
+    const aTxt = acts => acts.length ? acts.map(x => lk(x, 'a') + ' ↔ ' + lk(x, 'b')).join('<br>') : esc2(T('ptopo.cmp_no_actual'));
+    h += `<div data-ptopo-cmp style="margin-top:8px"><div style="font-size:13px;font-weight:600">${esc2(T('ptopo.cmp_title', { name: _designName }))} <button style="${btn};padding:2px 10px" data-ptopo-cmp-clear>${esc2(T('ptopo.cmp_clear'))}</button></div>`
+      + `<div style="font-size:12px;margin:4px 0" data-ptopo-cmp-sum>${esc2(T('ptopo.cmp_sum', { ok: c.ok, cfg: c.cfg, wrong: c.wrong, missing: c.missing, extra: c.extra, unverifiable: c.unverifiable }))}</div>`;
+    if (r.outside) h += `<div style="font-size:11px;color:var(--text-dim)">${esc2(T('ptopo.cmp_outside', { n: r.outside }))}</div>`;
+    const shown = r.rows.filter(x => x.kind !== 'ok' || x.cfg.length);
+    if (!shown.length) return h + `<div style="font-size:12px;color:var(--green,#22c55e)" data-ptopo-cmp-allok>${esc2(T('ptopo.cmp_all_ok'))}</div></div>`;
+    h += `<div style="overflow-x:auto"><table class="data-tbl"><thead><tr><th>${esc2(T('ptopo.cmp_col_kind'))}</th><th>${esc2(T('ptopo.cmp_col_design'))}</th><th>${esc2(T('ptopo.cmp_col_actual'))}</th></tr></thead><tbody>`
+      + shown.map(x => {
+        const kind = x.kind === 'ok' ? T('ptopo.cmp_cfg') : T('ptopo.cmp_kind_' + x.kind), clr = x.kind === 'ok' ? 'var(--orange,#f59e0b)' : col[x.kind];
+        let act = x.kind === 'unverifiable' ? esc2(T('ptopo.cmp_missing_host', { list: x.missing.join('、') })) : aTxt(x.act);
+        if (x.kind === 'ok') act += '<br>' + x.cfg.map(z => esc2(z.host + ' ' + z.port + '：' + T('ptopo.cmp_col_design') + ' ' + z.design + ' ／ ' + T('ptopo.cmp_col_actual') + ' ' + (z.actual || '-'))).join('<br>');
+        return `<tr data-ptopo-cmp-kind="${x.kind}"><td style="color:${clr};white-space:nowrap">${esc2(kind)}</td><td>${dTxt(x.d)}</td><td>${act}</td></tr>`;
+      }).join('') + '</tbody></table></div>';
+    return h + '</div>';
   }
   function cablingDownloadSvg(mask) {
     const cb = buildCabling(_all(), { linksText: _linksText, modelOf, lldpOf });
@@ -457,6 +599,22 @@
         setTimeout(() => URL.revokeObjectURL(url), 1000);
         return;
       }
+      if (t.closest('[data-ptopo-todesign]')) {
+        const cb = buildCabling(_all(), { linksText: _linksText, modelOf, lldpOf }), r = cablingToDesign(cb);
+        if (!r) return;
+        if (r.devices) {
+          const url = URL.createObjectURL(new Blob([JSON.stringify(r.design, null, 1)], { type: 'application/json' }));
+          const a = document.createElement('a');
+          a.href = url; a.download = 'topology-design.json'; a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+        _designMsg = [T('ptopo.to_design_done', { d: r.devices, l: r.links, g: r.lags })]
+          .concat(r.skipped.length ? [T('ptopo.to_design_skip', { list: r.skipped.map(x => T('ptopo.skip_item', { host: x.host, reason: T('ptopo.skip_' + (SKIP_REASONS.includes(x.reason) ? x.reason : 'model')) })).join(T('ptopo.list_sep')) })] : [])
+          .concat(r.dropped ? [T('ptopo.to_design_dropped', { n: r.dropped })] : []).join(' ');
+        redraw(false);
+        return;
+      }
+      if (t.closest('[data-ptopo-cmp-clear]')) { _design = null; _designName = ''; _designMsg = ''; redraw(false); return; }
       if (t.closest('[data-ptopo-save]')) {
         const obj = buildProject(_all(), { linksText: _linksText, modelOf, lldpOf });
         const url = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 1)], { type: 'application/json' }));
@@ -475,6 +633,17 @@
         a.href = url; a.download = 'cabling_topology.svg'; a.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
+    });
+    // 讀入拓樸設計檔比對（每份 5 MB 以內；只存記憶體）
+    document.addEventListener('change', e => {
+      const inp = e.target && e.target.closest ? e.target.closest('input[data-ptopo-cmp-load]') : null;
+      if (!inp || !inp.files || !inp.files[0] || !TDS()) return;
+      const f = inp.files[0];
+      (f.size > 5000000 ? Promise.resolve(null) : f.text().catch(() => null)).then(t => {
+        const r = t == null ? { ok: false } : TDS().readDesignRaw(t);
+        if (r.ok) { _design = r; _designName = String(f.name).slice(0, 80); _designMsg = ''; } else _designMsg = T('ptopo.cmp_bad');
+        redraw(false);
+      });
     });
     // 載入接線專案（每份 5 MB 以內）
     document.addEventListener('change', e => {
@@ -637,11 +806,11 @@
     if (sp && sp.chosen.has(oldP)) sp.chosen.set(newP, sp.chosen.get(oldP));
     if (_lldpOv.has(oldP) && !(newP.lldp && newP.lldp.length)) _lldpOv.set(newP, _lldpOv.get(oldP));
   }
-  function reset() { _imported.length = 0; _linksText = ''; _lldpMsg = ''; _importMsg = ''; _projMsg = ''; }
+  function reset() { _imported.length = 0; _linksText = ''; _lldpMsg = ''; _importMsg = ''; _projMsg = ''; _design = null; _designName = ''; _designMsg = ''; }
 
   const IMPORT_ERR_CODES = ['json', 'format', 'host', 'ports', 'size'];
   const PROJ_ERR_CODES = ['json', 'format', 'firewall', 'size'];
-  const api = { replaceDevice, lldpOf, cablingToDrawio, cablingToMermaid, buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, parseManualNeighbors, manualNeighbors, neighborOnly, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
+  const api = { cablingToDesign, compareDesign, portCfg, SKIP_REASONS, CMP_KINDS, replaceDevice, lldpOf, cablingToDrawio, cablingToMermaid, buildProject, parseProject, applyProject, reset, PROJ_ERR_CODES, linkIssues, DEMO, loadDemoExtras, parsePanelExport, IMPORT_ERR_CODES, lldpFromText, parseManualNeighbors, manualNeighbors, neighborOnly, portKey, hostKey, parseCustomLinks, buildCabling, cablingSvg, cablingHtml, cablingDownloadSvg, LINK_KINDS, REASONS, LINK_ERR_CODES: ['syntax', 'host', 'port', 'extmax'], setLinksText: t => { _linksText = String(t || ''); } };
   if (typeof window !== 'undefined') window.SwCabling = api;
   return api;
 })();

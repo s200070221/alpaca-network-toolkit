@@ -3013,6 +3013,19 @@ function onParsed(){
     // 路由表的 ASA 物件名稱依設定檔解析，換廠牌重新解析設定後一併重算
     d.routeInfo = d.routeText && d.routeText.trim() ? FwPath.parseRouteTable(d.routeText, d.parsed) : null;
   }
+  // 查詢結果＋路徑前面板（XN206，FwPanel.pathPanelHtml；設備索引與 _pcDevs() 一致，設備變動時結果已清除）
+  function _pcResultHtml(r) { return buildPathChainResultHtml(r) + (!r.error && window.FwPanel ? window.FwPanel.pathPanelHtml(_pcDevs(), r) : ''); }
+  // 下載路徑前面板 SVG（預設遮蔽位址）
+  document.addEventListener('click', e => {
+    const b = e.target && e.target.closest ? e.target.closest('[data-pc-panel-dl]') : null;
+    if (!b || !_pc.last || !window.FwPanel) return;
+    const m = $('pc-panel-mask'), pp = window.FwPanel.pathPanel(_pcDevs(), _pc.last.r, { mask: !m || m.checked });
+    if (!pp) return;
+    const url = URL.createObjectURL(new Blob(['<?xml version="1.0" encoding="UTF-8"?>\n' + pp.svg], { type: 'image/svg+xml' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'path_panel.svg'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
   function _pcResetResult() { _pc.last = null; if ($('pc-result')) $('pc-result').innerHTML = ''; }
   function _pcRenderDevices() {
     const box = $('pc-devices'); if (!box) return;
@@ -3026,7 +3039,7 @@ function onParsed(){
       st.value = idx >= 0 ? String(idx) : '';
     }
     _pcLinksChanged(true);
-    if (_pc.last && $('pc-result')) $('pc-result').innerHTML = buildPathChainResultHtml(_pc.last.r);
+    if (_pc.last && $('pc-result')) $('pc-result').innerHTML = _pcResultHtml(_pc.last.r);
   }
   window._pcAddFiles = async function(input) {
     const files = [...(input.files || [])]; input.value = '';
@@ -3084,7 +3097,7 @@ function onParsed(){
     const q = { src: $('pc-src').value.trim(), dst: $('pc-dst').value.trim(), proto: $('pc-proto').value, port: $('pc-port').value.trim(), start };
     const r = FwPath.trace(devs, q, { links: _pcLinks(devs).links });
     _pc.last = r.error ? null : { q, r };
-    out.innerHTML = buildPathChainResultHtml(r);
+    out.innerHTML = _pcResultHtml(r);
     // 彩蛋：繞圈與走滿 16 跳
     if (!r.error && r.result.kind === 'loop') showEggToast(r.hops.length >= FwPath.MAX_HOPS ? tr('egg.pc_ttl') : tr('egg.pc_loop').replace('{n}', r.hops.length));
   };

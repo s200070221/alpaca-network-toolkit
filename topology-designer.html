@@ -129,12 +129,41 @@ a{color:var(--accent)}
       <label class="btn" style="flex-direction:row;color:var(--text);font-size:14px"><span data-td-i18n="td.load"></span><input type="file" id="td-load" accept=".json,application/json" hidden></label>
       <button class="btn" id="td-clear" data-td-i18n="td.clear"></button>
     </div>
+    <div class="row">
+      <button class="btn" id="td-exp-svg" data-td-i18n="td.exp_svg"></button>
+      <button class="btn" id="td-exp-drawio" data-td-i18n="td.exp_drawio"></button>
+      <button class="btn" id="td-exp-mmd" data-td-i18n="td.exp_mmd"></button>
+    </div>
+    <div class="hint" data-td-i18n="td.exp_hint"></div>
   </section>
   <section class="card">
     <h2 data-td-i18n="td.sec_list"></h2>
     <p class="notice" data-td-i18n="td.send_hint"></p>
     <div class="tbl-wrap" id="td-dev-list"></div>
+    <div id="td-dev-edit" class="end" hidden>
+      <b id="td-de-title"></b>
+      <div class="row">
+        <label><span data-td-i18n="td.host"></span><input id="td-de-host" class="txt" maxlength="32" autocomplete="off" spellcheck="false"></label>
+        <label><span data-td-i18n="td.vendor"></span><select id="td-de-vendor"></select></label>
+        <label style="flex:1 1 260px"><span data-td-i18n="td.model"></span><select id="td-de-model"></select></label>
+        <button class="btn primary" id="td-de-apply" data-td-i18n="td.dev_apply"></button>
+        <button class="btn" id="td-de-cancel" data-td-i18n="td.end_cancel"></button>
+      </div>
+      <div class="msg bad" id="td-de-drop" hidden></div>
+      <button class="btn" id="td-de-confirm" data-td-i18n="td.dev_confirm" hidden></button>
+    </div>
     <div class="tbl-wrap" id="td-link-list" style="margin-top:10px"></div>
+    <div class="end" id="td-lag-box" style="margin-top:10px">
+      <b data-td-i18n="td.lag_sec"></b>
+      <div class="hint" data-td-i18n="td.lag_hint"></div>
+      <div class="row">
+        <label><span id="td-lag-a-lbl"></span><input id="td-lag-a" class="txt" inputmode="numeric" maxlength="4" style="width:90px" autocomplete="off"></label>
+        <label><span id="td-lag-b-lbl"></span><input id="td-lag-b" class="txt" inputmode="numeric" maxlength="4" style="width:90px" autocomplete="off"></label>
+        <label><span data-td-i18n="td.lag_mode"></span><select id="td-lag-mode"></select></label>
+        <button class="btn primary" id="td-lag-add" data-td-i18n="td.lag_add"></button>
+      </div>
+      <div class="tbl-wrap" id="td-lag-list"></div>
+    </div>
   </section>
 </main>
 <footer data-toolkit-version></footer>

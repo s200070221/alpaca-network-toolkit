@@ -120,6 +120,68 @@
   }
 
 
+  // ── 多台路徑畫在前面板上（XN206）──
+  // 介面名稱 → 面板上的實體埠：埠本身、掛在埠上的介面（VLAN 子介面等）、群組（聚合／hardware switch）的成員、上層介面
+  function ifacePorts(parsed, pn, name, depth) {
+    const n = lc(name);
+    if (!n || !pn) return [];
+    const all = pn.ports.concat(pn.extra);
+    const direct = all.filter(p => lc(p.name) === n);
+    if (direct.length) return direct;
+    const onPort = all.filter(p => p.vlans.some(v => lc(v) === n));
+    if (onPort.length) return onPort;
+    const grp = all.filter(p => p.group && lc(p.group) === n);
+    if (grp.length) return grp;
+    const i = (parsed.interfaces || []).find(x => x && lc(x.name) === n), parent = i && (i.interface || i.parent);
+    return parent && lc(parent) !== n && !depth ? ifacePorts(parsed, pn, parent, 1) : [];
+  }
+  const PATH_COLORS = { in: '#3b82f6', out: '#22c55e', bad: '#ef4444' };
+  const BAD_ACTIONS = ['deny', 'noRoute', 'blackhole'];
+  // devices＝FwPath.trace() 收到的設備陣列、r＝trace() 結果；每一跳一排（同一台設備繞回時另起一排）
+  // 回傳 {svg, unmapped:[{device, iface}]}；r 沒有跳時回傳 null
+  function pathPanel(devices, r, opts) {
+    const PS = typeof window !== 'undefined' && window.PanelSvg;
+    if (!PS || !r || r.error || !r.hops || !r.hops.length) return null;
+    const o = opts || {}, show = s => (o.mask ? maskIp(s) : String(s));
+    const rows = [], links = [], unmapped = [];
+    let prevOut = null;
+    r.hops.forEach((h, k) => {
+      const dv = devices[h.dev], parsed = dv && dv.parsed;
+      const pn = parsed ? buildPanel(parsed, { modelValue: _chosen.get(parsed) || '' }) : null;
+      if (!pn) { prevOut = null; return; }
+      const bad = BAD_ACTIONS.includes(h.action);
+      const inP = h.ingress ? ifacePorts(parsed, pn, h.ingress) : [], outP = h.egress ? ifacePorts(parsed, pn, h.egress) : [];
+      if (h.ingress && !inP.length) unmapped.push({ device: h.device, iface: h.ingress });
+      if (h.egress && !outP.length) unmapped.push({ device: h.device, iface: h.egress });
+      const inSet = new Set(inP.map(p => lc(p.name))), outSet = new Set(outP.map(p => lc(p.name)));
+      const id = name => 'h' + k + '|' + lc(name);
+      // 沒有出口（沒有路由、黑洞）時，進入埠就是被丟棄的位置
+      const inColor = bad && !outP.length ? PATH_COLORS.bad : PATH_COLORS.in, outColor = bad ? PATH_COLORS.bad : PATH_COLORS.out;
+      const ports = pn.ports.concat(pn.extra).map(p => {
+        const key = lc(p.name), isIn = inSet.has(key), isOut = outSet.has(key);
+        return { id: id(p.name), name: p.name, color: isOut ? outColor : isIn ? inColor : colorOf(p), dim: !(isIn || isOut), fiber: /fiber|sfp|qsfp/i.test(p.media),
+          text: isIn && isOut ? 'IN/OUT' : isIn ? 'IN' : isOut ? 'OUT' : '', tip: p.name + (p.ips.length ? ' ' + show(p.ips.join(', ')) : '') + (isIn ? ' · ' + T('pc.panel_in') + ' ' + h.ingress : '') + (isOut ? ' · ' + T('pc.panel_out') + ' ' + h.egress : '') };
+      });
+      rows.push({ label: (k + 1) + '. ' + h.device + (pn.model ? ' · ' + pn.model : '') + ' · ' + T('pc.act_' + h.action), ports });
+      // 上一跳的出口接到這一跳的進入埠
+      if (prevOut && inP.length) links.push({ a: prevOut, b: id(inP[0].name), color: PATH_COLORS.out, tip: T('pc.panel_hop', { n: k + 1 }) });
+      prevOut = outP.length && !bad ? id(outP[0].name) : null;
+    });
+    if (!rows.length) return null;
+    return { svg: PS.render({ rows, links, separate: true }), unmapped };
+  }
+  function pathPanelHtml(devices, r) {
+    const pp = pathPanel(devices, r);
+    if (!pp) return '';
+    const sw = (c, label) => `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:10px"><span style="width:12px;height:12px;border-radius:2px;background:${c};display:inline-block"></span>${esc2(label)}</span>`;
+    const btn = 'background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer';
+    let h = `<div id="pc-panel" style="margin-top:12px"><div style="font-size:13px;font-weight:600">${esc2(T('pc.panel_title'))}</div><div style="font-size:11px;color:var(--text-dim);margin:2px 0 6px">${esc2(T('pc.panel_hint'))}</div>`
+      + `<div style="font-size:11px;margin-bottom:4px">${sw(PATH_COLORS.in, T('pc.panel_in'))}${sw(PATH_COLORS.out, T('pc.panel_out'))}${sw(PATH_COLORS.bad, T('pc.panel_bad'))}</div>`
+      + `<div style="overflow-x:auto" data-pc-panel-svg>${pp.svg}</div>`;
+    if (pp.unmapped.length) h += `<div style="font-size:11px;color:var(--text-dim);margin-top:4px" data-pc-panel-unmapped="${pp.unmapped.length}">${esc2(T('pc.panel_unmapped', { list: pp.unmapped.map(u => u.device + ' ' + u.iface).join('、') }))}</div>`;
+    return h + `<div style="display:flex;gap:8px;align-items:center;margin-top:6px"><button style="${btn}" data-pc-panel-dl>${esc2(T('pc.panel_dl'))}</button><label style="font-size:11px"><input type="checkbox" id="pc-panel-mask" checked> ${esc2(T('pnl.mask'))}</label></div></div>`;
+  }
+
   const esc2 = s => (typeof esc === 'function' ? esc(s) : xesc(s));
   function legendHtml(pn) {
     const sw = (c, label) => `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:10px"><span style="width:12px;height:12px;border-radius:2px;background:${c};display:inline-block"></span>${esc2(label)}</span>`;
@@ -217,7 +279,7 @@
     });
   }
 
-  const api = { buildPanel, panelSvg, panelHtml, panelDownloadSvg, panelExport, maskIp, PANEL_PER_ROW, choicesFor };
+  const api = { pathPanel, pathPanelHtml, ifacePorts, PATH_COLORS, buildPanel, panelSvg, panelHtml, panelDownloadSvg, panelExport, maskIp, PANEL_PER_ROW, choicesFor };
   if (typeof window !== 'undefined') window.FwPanel = api;
   return api;
 })();
