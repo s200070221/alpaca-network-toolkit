@@ -25,7 +25,7 @@
   const VLAN_NAME_RE = /^[^\x00-\x1f\x7f]{0,32}$/;
   // 錯誤代碼（td.err_*）；設計檔讀入只會出現 DESIGN_ERR_CODES
   const DESIGN_ERR_CODES = ['json', 'format', 'device', 'link', 'max', 'vlan', 'lag', 'pair'];
-  const ERR_CODES = DESIGN_ERR_CODES.concat(['stack_unsupported', 'stack_n', 'pair_dev', 'pair_self', 'pair_vendor', 'pair_dup', 'pair_domain', 'pair_lag', 'peer_link', 'host', 'dup', 'vendor', 'model', 'self', 'port', 'used', 'vlan_id', 'vlan_dup', 'vlan_name', 'vlan_used', 'vlan_missing', 'vlan_syntax', 'native', 'lag_links', 'lag_num', 'lag_num_dup', 'lag_mode', 'stp_pri']);
+  const ERR_CODES = DESIGN_ERR_CODES.concat(['stack_unsupported', 'stack_n', 'pair_dev', 'pair_self', 'pair_vendor', 'pair_dup', 'pair_domain', 'pair_lag', 'peer_link', 'host', 'dup', 'vendor', 'model', 'self', 'port', 'used', 'vlan_id', 'vlan_dup', 'vlan_name', 'vlan_used', 'vlan_missing', 'vlan_syntax', 'native', 'lag_links', 'lag_num', 'lag_num_dup', 'lag_mode', 'stp_pri', 'stack_model']);
   // 連線兩端不一致的類型（td.li_*）與等級：high＝VLAN 混接或中斷、medium＝只有部分 VLAN 通、info＝無法比對
   // 聚合（XN204）：lag_cfg＝同一聚合成員設定不一致（成員無法加入聚合）、parallel＝同一對設備有多條獨立連線（STP 會擋掉多出來的）
   const LINK_ISSUE_TYPES = ['undef', 'mode', 'access_vlan', 'native', 'allowed', 'native_not_allowed', 'lag_cfg', 'parallel'];
@@ -45,17 +45,34 @@
     const data = sp.expandPorts(m).filter(p => !p.mgmt);
     return data.length > 0 && data.every(p => sp.memberName(p.name, '2'));
   }
-  // 依成員展開的埠物件（管理埠只在成員 1，與 SwPanel.buildPanel 相同）
-  function devPortObjs(vendor, value, members) {
+  // 依成員展開的埠物件（管理埠只在成員 1，與 SwPanel.buildPanel 相同）；混型號堆疊（XN215）成員 k 用 memberModels[k-1]（空＝與成員 1 相同）
+  function devPortObjs(vendor, value, members, memberModels) {
     const m = findModel(vendor, value), sp = SP(), n = members > 1 ? members : 1;
     if (!m || !sp) return [];
-    const base = sp.expandPorts(m);
-    if (n === 1) return base;
+    if (n === 1) return sp.expandPorts(m);
     const out = [];
-    for (let k = 1; k <= n; k++) base.forEach(p => { if (p.mgmt && k > 1) return; const nm = k === 1 ? p.name : sp.memberName(p.name, String(k)); if (nm) out.push(Object.assign({}, p, { name: nm, member: k })); });
+    for (let k = 1; k <= n; k++) {
+      const mk = (k > 1 && memberModels && memberModels[k - 1] && findModel(vendor, memberModels[k - 1])) || m;
+      sp.expandPorts(mk).forEach(p => { if (p.mgmt && k > 1) return; const nm = k === 1 ? p.name : sp.memberName(p.name, String(k)); if (nm) out.push(Object.assign({}, p, { name: nm, member: k })); });
+    }
     return out;
   }
-  const devPorts = dev => devPortObjs(dev.vendor, dev.model, dev.members).map(p => p.name);
+  const portObjsOf = dev => devPortObjs(dev.vendor, dev.model, dev.members, dev.memberModels);
+  const devPorts = dev => portObjsOf(dev).map(p => p.name);
+  // 成員型號檢查與正規化（XN215）：截到成員數、與成員 1 相同的改空字串、全部相同回 undefined；
+  // 不同的型號須同廠牌找得到且可堆疊，否則 null（stack_model）。型號能否互疊依各廠牌文件，這裡不判斷
+  function normMemberModels(vendor, model, members, arr) {
+    if (!Array.isArray(arr) || members < 2) return undefined;
+    const out = [''];
+    for (let k = 1; k < members; k++) {
+      const v = arr[k] == null ? '' : String(arr[k]);
+      if (!v || v === model) { out.push(''); continue; }
+      if (!findModel(vendor, v) || !canStack(vendor, v)) return null;
+      out.push(v);
+    }
+    return out.some(Boolean) ? out : undefined;
+  }
+  const isMixedStack = dev => !!(dev && dev.members > 1 && Array.isArray(dev.memberModels) && dev.memberModels.some(Boolean));
   const membersOf = v => { const n = v == null || v === '' ? 1 : Number(v); return Number.isInteger(n) && n >= 1 && n <= MAX_MEMBERS ? n : null; };
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(v)));
 
@@ -89,8 +106,11 @@
     const members = membersOf(o.members);
     if (members == null) return { ok: false, code: 'stack_n' };
     if (members > 1 && !canStack(vendor, model)) return { ok: false, code: 'stack_unsupported' };
+    const mm = normMemberModels(vendor, model, members, o.memberModels);
+    if (mm === null) return { ok: false, code: 'stack_model' };
     const pos = o.x != null && o.y != null ? { x: o.x, y: o.y } : nextSlot(d);
     const dev = { id: 'd' + (++d.seq), hostname, vendor, model, members, x: clamp(pos.x, 0, CANVAS_W - BOX_W), y: clamp(pos.y, 0, MAX_H - BOX_H) };
+    if (mm) dev.memberModels = mm;
     d.devices.push(dev);
     return { ok: true, dev };
   }
@@ -119,12 +139,17 @@
     const members = membersOf(o.members === undefined ? dev.members : o.members);
     if (members == null) return { ok: false, code: 'stack_n' };
     if (members > 1 && !canStack(vendor, model)) return { ok: false, code: 'stack_unsupported' };
-    const byLc = new Map(devPortObjs(vendor, model, members).map(p => [lc(p.name), p.name]));
+    // 沒帶 memberModels 時沿用原本的成員型號（廠牌或型號換了而原本的成員型號不合格時清掉）
+    let mm = normMemberModels(vendor, model, members, o.memberModels === undefined ? dev.memberModels : o.memberModels);
+    if (mm === null && o.memberModels === undefined) mm = undefined;
+    if (mm === null) return { ok: false, code: 'stack_model' };
+    const byLc = new Map(devPortObjs(vendor, model, members, mm).map(p => [lc(p.name), p.name]));
     const drop = [];
     d.links.forEach((l, i) => { if ([l.a, l.b].some(e => e.dev === id && !byLc.has(lc(e.port)))) drop.push(i); });
     if (opts && opts.dryRun) return { ok: true, drop };
     for (let k = drop.length - 1; k >= 0; k--) removeLink(d, drop[k]);
     Object.assign(dev, { hostname, vendor, model, members });
+    if (mm) dev.memberModels = mm; else delete dev.memberModels;
     d.links.forEach(l => [l.a, l.b].forEach(e => { if (e.dev === id) e.port = byLc.get(lc(e.port)); }));
     return { ok: true, drop };
   }
@@ -383,7 +408,7 @@
       if (l.a.dev === id) ends.set(lc(l.a.port), { cfg: l.a.cfg, peer: l.b });
       if (l.b.dev === id) ends.set(lc(l.b.port), { cfg: l.b.cfg, peer: l.a });
     });
-    const interfaces = devPortObjs(dev.vendor, dev.model, dev.members).filter(p => !p.mgmt).map(p => {
+    const interfaces = portObjsOf(dev).filter(p => !p.mgmt).map(p => {
       const e = ends.get(lc(p.name)), c = e && e.cfg, peer = e && devById(d, e.peer.dev);
       // vlan 與 vlans 同值：產生器對 NX-OS 交接會以 vlan 欄位覆寫 vlans（normalizeNXOSInterfaceVlans）
       return { name: p.name, type: 'physical', speed: p.speed, mode: c ? c.mode : 'access', vlans: c ? c.vlans : '', vlan: c ? c.vlans : '', nativeVlan: c && c.mode === 'trunk' ? c.nativeVlan : '',
@@ -434,7 +459,7 @@
     // 聚合的一端是 pair 時記 pair 索引，否則記主機名稱
     const side = e => (pairIdx.has(e.dev) ? { pair: pairIdx.get(e.dev), num: e.num } : { host: hostOf(e.dev), num: e.num });
     return {
-      format: 'alpaca-design', version: 4,
+      format: 'alpaca-design', version: 5,
       pairs: pairs.map(p => ({ a: hostOf(p.a), b: hostOf(p.b), domain: p.domain })),
       lags: lags.map(g => ({ a: side(g.a), b: side(g.b), mode: g.mode })),
       vlans: d.vlans.map(v => ({ id: v.id, name: v.name })),
@@ -442,6 +467,8 @@
         const m = findModel(x.vendor, x.model);
         const base = m && m.custom ? { hostname: x.hostname, vendor: x.vendor, model: '', custom: m.label, x: x.x, y: x.y } : { hostname: x.hostname, vendor: x.vendor, model: x.model, x: x.x, y: x.y };
         if (x.members > 1) base.members = x.members;
+        // 成員型號（第 5 版）：與成員 1 相同為空字串，自訂型號存名稱
+        if (isMixedStack(x)) base.memberModels = x.memberModels.map(v => { if (!v) return ''; const mm = findModel(x.vendor, v); return mm && mm.custom ? { custom: mm.label } : v; });
         if (stpPriOk(x.stpPri)) base.stpPri = x.stpPri;
         return base;
       }),
@@ -457,7 +484,7 @@
   function parseDesign(text) {
     let o;
     try { o = JSON.parse(String(text || '')); } catch (e) { return { ok: false, code: 'json' }; }
-    if (!o || typeof o !== 'object' || o.format !== 'alpaca-design' || ![1, 2, 3, 4].includes(o.version) || !Array.isArray(o.devices) || !Array.isArray(o.links)) return { ok: false, code: 'format' };
+    if (!o || typeof o !== 'object' || o.format !== 'alpaca-design' || ![1, 2, 3, 4, 5].includes(o.version) || !Array.isArray(o.devices) || !Array.isArray(o.links)) return { ok: false, code: 'format' };
     if ((o.vlans != null && !Array.isArray(o.vlans)) || (o.lags != null && !Array.isArray(o.lags)) || (o.pairs != null && !Array.isArray(o.pairs))) return { ok: false, code: 'format' };
     if (o.devices.length > MAX_DEVICES || o.links.length > MAX_LINKS || (o.vlans || []).length > MAX_VLANS) return { ok: false, code: 'max' };
     const d = newDesign(), byHost = new Map();
@@ -476,7 +503,23 @@
       let members = membersOf(x.members == null ? 1 : x.members);
       if (members == null || (x.members != null && typeof x.members !== 'number')) return { ok: false, code: 'device' };
       if (members > 1 && !canStack(vendor, value)) { if (value) missing++; members = 1; }
+      // 成員型號（第 5 版）：陣列，每格為空字串、型號 value 或 {custom: 名稱}；本機找不到或不可堆疊的成員改為與成員 1 相同並計入 missing
+      let mm;
+      if (x.memberModels != null) {
+        if (!Array.isArray(x.memberModels) || x.memberModels.length > MAX_MEMBERS) return { ok: false, code: 'device' };
+        const arr = [];
+        for (const e of x.memberModels) {
+          let v = '';
+          if (typeof e === 'string') v = str(e, 200) || '';
+          else if (e && typeof e === 'object' && typeof e.custom === 'string') { const c = modelChoices(vendor).find(q => q.custom && q.label === e.custom); v = c ? c.value : '?'; }
+          else if (e !== null && e !== '') return { ok: false, code: 'device' };
+          if (v && (!findModel(vendor, v) || !canStack(vendor, v))) { missing++; v = ''; }
+          arr.push(v);
+        }
+        mm = value && members > 1 ? normMemberModels(vendor, value, members, arr) || undefined : undefined;
+      }
       const dev = { id: 'd' + (++d.seq), hostname, vendor, model: value, members, x: clamp(x.x, 0, CANVAS_W - BOX_W), y: clamp(x.y, 0, MAX_H - BOX_H) };
+      if (mm) dev.memberModels = mm;
       // STP 優先權（XN214，選填）：不合格整份拒絕
       if (x.stpPri != null) { if (!stpPriOk(x.stpPri)) return { ok: false, code: 'device' }; dev.stpPri = x.stpPri; }
       d.devices.push(dev);
@@ -710,7 +753,7 @@
   function designStp(d) {
     const g = l2Graph(d), speeds = new Map();
     const speedOf = (dev, port) => {
-      if (!speeds.has(dev)) { const x = devById(d, dev); speeds.set(dev, new Map(x ? devPortObjs(x.vendor, x.model, x.members).map(p => [p.name, speedBps(p.speed)]) : [])); }
+      if (!speeds.has(dev)) { const x = devById(d, dev); speeds.set(dev, new Map(x ? portObjsOf(x).map(p => [p.name, speedBps(p.speed)]) : [])); }
       return speeds.get(dev).get(port) || null;
     };
     const priOfDev = id => { const x = devById(d, id); return x && stpPriOk(x.stpPri) ? x.stpPri : STP_PRI_DEFAULT; };
@@ -793,7 +836,7 @@
   // 設計頁：每條連線一筆，堆疊設備的成員號取自型號展開的埠（pair 兩台分開算）
   function designFailures(d) {
     const mem = new Map();
-    d.devices.forEach(x => { if (x.members > 1) mem.set(x.id, new Map(devPortObjs(x.vendor, x.model, x.members).map(p => [p.name, p.member]))); });
+    d.devices.forEach(x => { if (x.members > 1) mem.set(x.id, new Map(portObjsOf(x).map(p => [p.name, p.member]))); });
     return failureImpact(d.devices.map(x => ({ id: x.id, name: x.hostname })), d.links.map(l => ({ a: { node: l.a.dev, port: l.a.port }, b: { node: l.b.dev, port: l.b.port } })),
       (node, port) => { const m = mem.get(node); return m && m.has(port) ? m.get(port) : null; });
   }
@@ -880,7 +923,7 @@
   function readDesignRaw(text) {
     let o;
     try { o = JSON.parse(String(text || '')); } catch (e) { return { ok: false, code: 'json' }; }
-    if (!o || typeof o !== 'object' || o.format !== 'alpaca-design' || ![1, 2, 3, 4].includes(o.version) || !Array.isArray(o.devices) || !Array.isArray(o.links)) return { ok: false, code: 'format' };
+    if (!o || typeof o !== 'object' || o.format !== 'alpaca-design' || ![1, 2, 3, 4, 5].includes(o.version) || !Array.isArray(o.devices) || !Array.isArray(o.links)) return { ok: false, code: 'format' };
     if (o.devices.length > MAX_DEVICES || o.links.length > MAX_LINKS) return { ok: false, code: 'max' };
     const devices = [], hosts = new Set();
     for (const x of o.devices) {
@@ -971,7 +1014,7 @@
       + `<title>${xesc(dev.hostname + ' · ' + vendorName(dev.vendor) + ' · ' + (m ? m.label : '?'))}</title><rect width="${BOX_W}" height="${BOX_H}" rx="6" fill="var(--chip)" stroke="${stroke}" stroke-width="${failed || sel === dev.id ? 2.5 : 1.5}"${failed ? ' stroke-dasharray="6 3"' : ''}/>`
       + `<text x="8" y="18" font-size="13" font-weight="600" fill="currentColor">${xesc(cut(dev.hostname, 24))}</text>`
       + `<text x="8" y="34" font-size="10" fill="var(--dim)">${xesc(cut(vendorName(dev.vendor) + ' · ' + (m ? m.label : '?'), 34))}</text>`
-      + `<text x="8" y="49" font-size="10" fill="var(--dim)">${xesc(T('td.ports_used', { used, total }) + (dev.members > 1 ? ' · ' + T('td.stack_badge', { n: dev.members }) : '') + (pairOfDev(d, dev.id) ? ' · ' + T('td.pair_badge') : ''))}</text></g>`;
+      + `<text x="8" y="49" font-size="10" fill="var(--dim)">${xesc(T('td.ports_used', { used, total }) + (dev.members > 1 ? ' · ' + T(isMixedStack(dev) ? 'td.stack_mixed' : 'td.stack_badge', { n: dev.members }) : '') + (pairOfDev(d, dev.id) ? ' · ' + T('td.pair_badge') : ''))}</text></g>`;
   }
   function canvasSvg(d, sel, T, view) {
     const H = canvasH(d);
@@ -1015,7 +1058,7 @@
 
   const api = {
     addPair, removePair, setPeer, pairIssues, PAIR_VENDORS, PAIR_ISSUE_TYPES, unitOf,
-    readDesignRaw, changeDevice, canStack, devPortObjs, STACK_VENDORS, MAX_MEMBERS, parallelOffsets, l2Graph, carries, edgeCarries, l2Analyze, l2Path, L2P_REASONS, failureImpact, designFailures, FAIL_KINDS, setStpPri, stpTree, designStp, stpAdvice, demoDesign, stpCost, speedBps, STP_PRI_DEFAULT, autoLayout, makeHistory, designToSvg, designToDrawio, designToMermaid,
+    readDesignRaw, changeDevice, canStack, devPortObjs, normMemberModels, isMixedStack, STACK_VENDORS, MAX_MEMBERS, parallelOffsets, l2Graph, carries, edgeCarries, l2Analyze, l2Path, L2P_REASONS, failureImpact, designFailures, FAIL_KINDS, setStpPri, stpTree, designStp, stpAdvice, demoDesign, stpCost, speedBps, STP_PRI_DEFAULT, autoLayout, makeHistory, designToSvg, designToDrawio, designToMermaid,
     VENDORS, VENDOR_IDS, vendorName, shortPort, modelChoices, findModel, portsOf, newDesign, addDevice, removeDevice, moveDevice, addLink, removeLink,
     usedPorts, buildDesign, parseDesign, canvasSvg, canvasH, DESIGN_ERR_CODES, ERR_CODES, MAX_DEVICES, MAX_LINKS, MAX_VLANS, CANVAS_W, CANVAS_H, MAX_H, BOX_W, BOX_H,
     addLag, removeLag, LAG_MODES, LAG_NUM_MAX,
@@ -1111,6 +1154,23 @@
   const issueText = is => T('td.li_' + is.type, Object.assign({ none: tr('td.none') }, is.p, { onlyA: is.p.onlyA || tr('td.none'), onlyB: is.p.onlyB || tr('td.none'), common: is.p.common || tr('td.none') }));
   let editing = null;   // 正在編輯的一端 {i, end}
   let devEdit = null;   // 正在編輯的設備 {id, pending}（pending＝已確認要刪除的線，等使用者按確認）
+  // 成員型號選單（XN215）：成員數 > 1 時列出成員 2～N，選項為同廠牌可堆疊的型號，第一項＝與成員 1 相同；保留原本的選擇
+  function fillMemberModels(boxId, vendor, model, members, keep) {
+    const box = $(boxId);
+    if (!box) return;
+    const n = membersOf(members) || 1, cur = keep || [...box.querySelectorAll('select[data-td-mm]')].reduce((a, el) => { a[+el.getAttribute('data-td-mm') - 1] = el.value; return a; }, []);
+    if (n < 2 || !model || !canStack(vendor, model)) { box.innerHTML = ''; box.hidden = true; return; }
+    const list = modelChoices(vendor).filter(m => canStack(vendor, m.value));
+    box.hidden = false;
+    box.innerHTML = Array.from({ length: n - 1 }, (_, i) => i + 2).map(k => {
+      const v = cur[k - 1] && cur[k - 1] !== model ? cur[k - 1] : '';
+      return `<label><span>${esc(T('td.member_model', { k }))}</span><select data-td-mm="${k}"><option value="">${esc(tr('td.same_as_m1'))}</option>`
+        + list.filter(m => m.value !== model).map(m => `<option value="${esc(m.value)}"${m.value === v ? ' selected' : ''}>${esc(m.label)}</option>`).join('') + '</select></label>';
+    }).join('');
+  }
+  const readMemberModels = boxId => { const out = ['']; ($(boxId) ? [...$(boxId).querySelectorAll('select[data-td-mm]')] : []).forEach(el => { out[+el.getAttribute('data-td-mm') - 1] = el.value; }); return out.length > 1 ? out : undefined; };
+  const refreshAddMembers = () => fillMemberModels('td-member-models', $('td-vendor').value, $('td-model').value, $('td-members').value);
+  const refreshEditMembers = keep => fillMemberModels('td-de-member-models', $('td-de-vendor').value, $('td-de-model').value, $('td-de-members').value, keep);
   function fillDevEditModels(keep) {
     const ms = $('td-de-model'), list = modelChoices($('td-de-vendor').value), k = keep !== undefined ? keep : ms.value;
     ms.innerHTML = `<option value="">${esc(tr('td.pick'))}</option>` + list.map(m => `<option value="${esc(m.value)}"${m.value === k ? ' selected' : ''}>${esc(m.label)}${m.custom ? ' (' + esc(tr('td.custom')) + ')' : ''}</option>`).join('');
@@ -1123,11 +1183,12 @@
     $('td-de-vendor').value = dev.vendor;
     $('td-de-members').value = String(dev.members || 1);
     fillDevEditModels(dev.model);
+    refreshEditMembers(dev.memberModels || []);
     render();
     const box = $('td-dev-edit');
     if (box.scrollIntoView) box.scrollIntoView({ block: 'nearest' });
   }
-  const readDevEdit = () => ({ hostname: $('td-de-host').value, vendor: $('td-de-vendor').value, model: $('td-de-model').value, members: $('td-de-members').value });
+  const readDevEdit = () => ({ hostname: $('td-de-host').value, vendor: $('td-de-vendor').value, model: $('td-de-model').value, members: $('td-de-members').value, memberModels: readMemberModels('td-de-member-models') || [] });
   function applyDevEdit(confirmed) {
     if (!devEdit) return;
     const o = readDevEdit();
@@ -1250,7 +1311,7 @@
   function memberOfPort(dev, port) {
     const x = devById(D, dev);
     if (!x || !(x.members > 1)) return null;
-    const p = devPortObjs(x.vendor, x.model, x.members).find(q => q.name === port);
+    const p = portObjsOf(x).find(q => q.name === port);
     return p ? p.member : null;
   }
   function render() {
@@ -1271,7 +1332,7 @@
     const hostOf = id => (devById(D, id) || {}).hostname || '';
     $('td-dev-list').innerHTML = D.devices.length
       ? `<table><thead><tr><th>${esc(tr('td.col_host'))}</th><th>${esc(tr('td.col_vendor'))}</th><th>${esc(tr('td.col_model'))}</th><th>${esc(tr('td.col_ports'))}</th><th></th></tr></thead><tbody>`
-        + D.devices.map(x => { const m = findModel(x.vendor, x.model); return `<tr><td>${esc(x.hostname)}</td><td>${esc(vendorName(x.vendor))}</td><td>${esc(m ? m.label : '?')}</td><td>${usedPorts(D, x.id).size}／${devPorts(x).length}${x.members > 1 ? ' · ' + esc(T('td.stack_badge', { n: x.members })) : ''}</td><td style="white-space:nowrap"><button class="btn btn-sm" data-td-send="${esc(x.id)}">${esc(tr('td.send'))}</button> <button class="btn btn-sm" data-td-edit-dev="${esc(x.id)}">${esc(tr('td.edit_dev'))}</button> <button class="btn btn-sm" data-td-rm-dev="${esc(x.id)}">${esc(tr('td.rm'))}</button></td></tr>`; }).join('') + '</tbody></table>'
+        + D.devices.map(x => { const m = findModel(x.vendor, x.model); return `<tr><td>${esc(x.hostname)}</td><td>${esc(vendorName(x.vendor))}</td><td>${esc(m ? m.label : '?')}${isMixedStack(x) ? x.memberModels.map((v, k) => (v ? `<div class="hint" style="margin:0">${esc(T('td.member_model', { k: k + 1 }))}: ${esc((findModel(x.vendor, v) || {}).label || v)}</div>` : '')).join('') : ''}</td><td>${usedPorts(D, x.id).size}／${devPorts(x).length}${x.members > 1 ? ' · ' + esc(T(isMixedStack(x) ? 'td.stack_mixed' : 'td.stack_badge', { n: x.members })) : ''}</td><td style="white-space:nowrap"><button class="btn btn-sm" data-td-send="${esc(x.id)}">${esc(tr('td.send'))}</button> <button class="btn btn-sm" data-td-edit-dev="${esc(x.id)}">${esc(tr('td.edit_dev'))}</button> <button class="btn btn-sm" data-td-rm-dev="${esc(x.id)}">${esc(tr('td.rm'))}</button></td></tr>`; }).join('') + '</tbody></table>'
       : `<div class="hint">${esc(tr('td.no_devices'))}</div>`;
     const color = { high: 'var(--red)', medium: 'var(--yellow)', info: 'var(--dim)' };
     $('td-link-list').innerHTML = D.links.length
@@ -1471,8 +1532,8 @@
       render();
     });
     $('td-l2p-clear').addEventListener('click', () => { l2Res = null; render(); });
-    $('td-lang-sel').addEventListener('change', e => { lang = e.target.value; saveLang(lang); fillStatic(); render(); });
-    $('td-vendor').addEventListener('change', () => { fillModels(); fillCustom(); });
+    $('td-lang-sel').addEventListener('change', e => { lang = e.target.value; saveLang(lang); fillStatic(); refreshAddMembers(); if (devEdit) refreshEditMembers(); render(); });
+    $('td-vendor').addEventListener('change', () => { fillModels(); fillCustom(); refreshAddMembers(); });
     // 存檔／刪除自訂型號後：重填型號選單（剛存的直接選取），已放在畫布上的設備重畫
     window.addEventListener('pnl-custom', e => {
       if (!e.detail || e.detail.scope !== 'td') return;
@@ -1485,7 +1546,7 @@
     ['a', 'b'].forEach(end => $('td-' + end + '-dev').addEventListener('change', () => fillEnd(end)));
     ['l', 'e'].forEach(pfx => $('td-' + pfx + '-mode').addEventListener('change', () => fillCfgForm(pfx)));
     $('td-dev-add').addEventListener('click', () => {
-      const r = addDevice(D, { hostname: $('td-host').value, vendor: $('td-vendor').value, model: $('td-model').value, members: $('td-members').value });
+      const r = addDevice(D, { hostname: $('td-host').value, vendor: $('td-vendor').value, model: $('td-model').value, members: $('td-members').value, memberModels: readMemberModels('td-member-models') });
       if (!r.ok) { say(tr('td.err_' + r.code), true); return; }
       $('td-host').value = '';
       changed();
@@ -1517,10 +1578,13 @@
     $('td-e-cancel').addEventListener('click', () => { editing = null; render(); });
     // 編輯設備：改了表單就要重新確認要刪除的線
     const resetDrop = () => { if (devEdit) devEdit.pending = null; $('td-de-drop').hidden = true; $('td-de-confirm').hidden = true; };
-    $('td-de-vendor').addEventListener('change', () => { fillDevEditModels(); resetDrop(); });
-    $('td-de-model').addEventListener('change', resetDrop);
+    $('td-de-vendor').addEventListener('change', () => { fillDevEditModels(); refreshEditMembers(); resetDrop(); });
+    $('td-de-model').addEventListener('change', () => { refreshEditMembers(); resetDrop(); });
     $('td-de-host').addEventListener('input', resetDrop);
-    $('td-de-members').addEventListener('input', resetDrop);
+    $('td-de-members').addEventListener('input', () => { refreshEditMembers(); resetDrop(); });
+    $('td-de-member-models').addEventListener('change', resetDrop);
+    $('td-model').addEventListener('change', refreshAddMembers);
+    $('td-members').addEventListener('input', refreshAddMembers);
     $('td-de-apply').addEventListener('click', () => applyDevEdit(false));
     $('td-de-confirm').addEventListener('click', () => applyDevEdit(true));
     $('td-de-cancel').addEventListener('click', () => { devEdit = null; render(); });

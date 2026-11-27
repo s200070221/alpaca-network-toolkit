@@ -352,7 +352,11 @@
       if (!dv.pn.modelValue) { skipped.push({ host: dv.hostname, reason: 'model' }); return; }
       // 堆疊（XN211）：成員數取自 parsed.irf（Comware）或 parsed.stack（StackWise／ICX／Alcatel／VSF；MLAG／vPC／VLT 不算）
       const members = Math.min(td.MAX_MEMBERS, stackMembers(dv));
-      let r = td.addDevice(d, { hostname: dv.hostname, vendor, model: dv.pn.modelValue, members });
+      // 混型號堆疊（XN215）：各成員料號比對到的型號與整台不同時帶入 memberModels（成員依堆疊清單順序）
+      const sp = window.SwPanel, mids = (((dv.parsed.irf && dv.parsed.irf.members) || (dv.parsed.stack && dv.parsed.stack.members)) || []).map(m => String(m.id)).slice(0, members);
+      const memberModels = members > 1 && sp && sp.memberModel ? mids.map(id => { const mm = sp.memberModel(dv.parsed, id); return mm && mm.value !== dv.pn.modelValue ? mm.value : ''; }) : undefined;
+      let r = td.addDevice(d, { hostname: dv.hostname, vendor, model: dv.pn.modelValue, members, memberModels });
+      if (!r.ok && r.code === 'stack_model') r = td.addDevice(d, { hostname: dv.hostname, vendor, model: dv.pn.modelValue, members });
       if (!r.ok && r.code === 'stack_unsupported') r = td.addDevice(d, { hostname: dv.hostname, vendor, model: dv.pn.modelValue });
       if (!r.ok) { skipped.push({ host: dv.hostname, reason: r.code === 'dup' || r.code === 'host' ? r.code : 'model' }); return; }
       idOf[dv.idx] = r.dev.id; portsOf[dv.idx] = portsByName(dv);

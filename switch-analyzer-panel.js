@@ -64,6 +64,11 @@
     }
     return null;
   }
+  // 混型號堆疊（XN215）：成員 k 的料號（例如 switch 2 provision c9300-48p）比對到的型號；比對不到為 null
+  function memberModel(parsed, k) {
+    const m = ((parsed && parsed.stack && parsed.stack.members) || []).find(x => String(x.id) === String(k) && x.model);
+    return m ? matchModel({ vendor: parsed.vendor, sys: { brand: parsed.sys && parsed.sys.brand }, stack: { members: [m] } }) : null;
+  }
   // 堆疊成員 k 的埠名稱：三段式名稱第一段為成員編號（GigabitEthernet1/0/1、1/1/1）才換算；管理埠只在成員 1
   const memberName = (name, k) => { const m = String(name).match(/^(\D*)1(\/\d+\/\d+)$/); return m ? m[1] + k + m[2] : (k === '1' ? name : null); };
 
@@ -74,7 +79,7 @@
     const o = opts || {}, vk = vendorKey(parsed);
     const picked = o.modelValue ? (choicesFor(vk).find(m => m.value === o.modelValue) || null) : null;
     const auto = picked || o.noAuto ? null : matchModel(parsed);
-    const pn = _build(parsed, vk, picked || auto);
+    const pn = _build(parsed, vk, picked || auto, !picked);
     // 自動比對到的型號若對不上大部分設定檔的實體埠（例如同廠牌不同作業系統的命名），改依設定檔繪製；手動選的照用
     if (auto && pn.extra.length > pn.rows.reduce((n, r) => n + r.ports.filter(p => p.inConfig).length, 0)) {
       const fb = _build(parsed, vk, null);
@@ -83,7 +88,7 @@
     }
     return pn;
   }
-  function _build(parsed, vk, model) {
+  function _build(parsed, vk, model, perMember) {
     const ifBy = Object.create(null);
     (parsed.interfaces || []).forEach(i => { if (i && i.name) ifBy[lc(i.name)] = i; });
     const lag = Object.create(null);
@@ -112,9 +117,10 @@
     const rows = [];
     let extra = [];
     if (model) {
-      const base = expandPorts(model);
       const ids = mems.length > 1 ? mems : ['1'];
       ids.forEach(k => {
+        // 自動比對時，成員有自己的料號就依該型號展開（混型號堆疊），否則用整台型號；手動選型號時一律用選的
+        const base = expandPorts((perMember && ids.length > 1 && memberModel(parsed, k)) || model);
         const ports = base.map(p => ({ p, n: memberName(p.name, k) })).filter(x => x.n).map(x => mk(x.n, x.p));
         rows.push({ member: mems.length > 1 ? k : '', ports });
       });
@@ -263,7 +269,7 @@
     });
   }
 
-  const api = { overlayFor, overlayPort, buildPanel, panelSvg, panelHtml, panelDownloadSvg, matchModel, modelsFor, choicesFor, expandPorts, poePorts, memberName, modelSelectHtml, shortLabels, kindOf, COLORS, chosen: _chosen };
+  const api = { overlayFor, overlayPort, buildPanel, panelSvg, panelHtml, panelDownloadSvg, matchModel, memberModel, modelsFor, choicesFor, expandPorts, poePorts, memberName, modelSelectHtml, shortLabels, kindOf, COLORS, chosen: _chosen };
   if (typeof window !== 'undefined') window.SwPanel = api;
   return api;
 })();
