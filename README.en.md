@@ -56,7 +56,7 @@ Every feature view has a "Back to start" button and can be opened directly by UR
 
 ## 🛡️ Firewall Config Analyzer
 
-`firewall-analyzer-fixed.html` + `firewall-analyzer-*.js`
+`firewall-analyzer-fixed.html` + `js/firewall/firewall-analyzer-*.js`
 
 ![Firewall Config Analyzer: rule list](docs/images/02-firewall-policies-en.png)
 
@@ -82,7 +82,7 @@ Every feature view has a "Back to start" button and can be opened directly by UR
 
 ## 🔀 Switch Config Parser
 
-`switch-config-parser.html` + `switch-analyzer-*.js`
+`switch-config-parser.html` + `js/switch/switch-analyzer-*.js`
 
 ![Switch Config Parser: overview](docs/images/04-switch-overview-en.png)
 
@@ -106,7 +106,7 @@ Every feature view has a "Back to start" button and can be opened directly by UR
 
 ## 🛠️ Switch Config Generator
 
-`switch-config-generator.html` + `switch-generator-*.js`
+`switch-config-generator.html` + `js/generator/switch-generator-*.js`
 
 ![Switch Config Generator: generated config](docs/images/08-generator-en.png)
 
@@ -187,7 +187,7 @@ Detailed guides are in `docs/` (.docx, currently in Traditional Chinese only):
 
 ## Download notes
 
-- Some tools consist of an `.html` file plus several `.js` files. **Keep the `.js` files in the same folder as the `.html` file** when downloading or sharing; a single `.html` file on its own will not work, so downloading the whole repository is recommended.
+- Some tools consist of an `.html` file plus several `.js` files. **Keep the `js/` folder next to the `.html` files** when downloading or sharing; a single `.html` file on its own will not work, so downloading the whole repository is recommended.
 - For a true single-file version (for example, to send as one attachment), run `build-standalone.ps1`; merged files are written to `dist/`.
 - The UI is available in Traditional Chinese, English and Japanese (plus several hidden easter-egg languages).
 

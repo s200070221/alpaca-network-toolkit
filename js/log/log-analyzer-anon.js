@@ -1,6 +1,6 @@
 // ============================================================
 // [6] 去識別化模組（重用 config_anonymizer 核心引擎邏輯，改配 CEF/Syslog 欄位；
-// 詳見 config_anonymizer/result/config-anonymizer.html 的 mappings/anonIP/checkResidual）
+// 詳見 network_analyzer/result/config-anonymizer.html 的 mappings/anonIP/checkResidual）
 // ============================================================
 const mappings = { ip: new Map(), hostname: new Map(), user: new Map(), mac: new Map() };
 const ctrs = { n1: 0, n2: 0, n3: 0, ip6: 0, dev: 0, usr: 0, mac: 0 };

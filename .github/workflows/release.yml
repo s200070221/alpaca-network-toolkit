@@ -47,7 +47,7 @@ jobs:
           cat > "$RUNNER_TEMP/notes.js" <<'EOF'
           const fs = require('fs');
           const tag = process.env.TAG, ver = tag.replace(/^v/, '');
-          const src = fs.readFileSync('toolkit-version.js', 'utf8').replace(/\r\n/g, '\n');
+          const src = fs.readFileSync('js/shared/toolkit-version.js', 'utf8').replace(/\r\n/g, '\n');
           const sw = fs.readFileSync('sw.js', 'utf8');
           const tv = (src.match(/const TOOLKIT_VERSION = '([^']+)'/) || [])[1];
           const first = (src.match(/const CHANGELOG = \[\s*\{\s*version: '([^']+)'/) || [])[1];

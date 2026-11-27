@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// payload-sniff.js — 可疑注入字串彩蛋（2026-10-24，XN20；主控在 network_analyzer/result，同步到 5 個工具 result 與 public）
+// payload-sniff.js — 可疑注入字串彩蛋（2026-10-24，XN20；主控在 network_analyzer/result，同步到 public）
 // 設定檔裡出現常見的注入測試字串時，跳一則調侃的羊駝提示。工具輸出前一律跳脫，這些字串本來就不會被執行；
 // 這裡只負責「看到了」，不改變任何分析結果。log 工具不用 sniff()（log 裡出現攻擊字串是正常內容），
 // 改用 logMessage() 與漏洞利用嘗試偵測連動。文字表比照 toolkit-version.js 自帶 12 語言；全域物件 PayloadSniff

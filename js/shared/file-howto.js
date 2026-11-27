@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════════════════════
-// file-howto.js — 怎麼從設備取得檔案（2026-10-29，XN52）與錯誤檔案判斷（XN53）；主控在 network_analyzer/result，同步到防火牆、交換器分析、log 工具 result 與 public
+// file-howto.js — 怎麼從設備取得檔案（2026-10-29，XN52）與錯誤檔案判斷（XN53）；主控在 network_analyzer/result，同步到 public
 // 入口頁任務卡、防火牆上傳頁、log 上傳區共用的「取得設定檔／log 的指令與 GUI 路徑」表。只收能確定的指令與選單路徑，
 // 查不到可靠來源的廠牌不列；交換器的指令與交換器分析的 swExportCmds() 相同（qa test_hub_tasks 比對）。
 // 介面文字比照 payload-sniff.js 自帶 12 語言；GUI 路徑只寫 zhTW／en／ja，中文系彩蛋語言用 zhTW、其餘用 en。全域物件 FileHowto

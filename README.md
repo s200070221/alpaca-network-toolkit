@@ -56,7 +56,7 @@
 
 ## 🛡️ 防火牆設定分析器
 
-`firewall-analyzer-fixed.html` ＋ `firewall-analyzer-*.js`
+`firewall-analyzer-fixed.html` ＋ `js/firewall/firewall-analyzer-*.js`
 
 ![防火牆設定分析器：規則清單](docs/images/02-firewall-policies-zh.png)
 
@@ -82,7 +82,7 @@
 
 ## 🔀 交換器設定解析器
 
-`switch-config-parser.html` ＋ `switch-analyzer-*.js`
+`switch-config-parser.html` ＋ `js/switch/switch-analyzer-*.js`
 
 ![交換器設定解析器：總覽](docs/images/04-switch-overview-zh.png)
 
@@ -106,7 +106,7 @@
 
 ## 🛠️ 交換器設定產生器
 
-`switch-config-generator.html` ＋ `switch-generator-*.js`
+`switch-config-generator.html` ＋ `js/generator/switch-generator-*.js`
 
 ![交換器設定產生器：產生結果](docs/images/08-generator-zh.png)
 
@@ -187,7 +187,7 @@
 
 ## 下載與檔案說明
 
-- 部分工具由 `.html` 加上多個 `.js` 檔組成，**下載或分享時請把 `.js` 檔和 `.html` 放在同一資料夾**，只複製 `.html` 會無法運作；建議直接下載整個 repo。
+- 部分工具由 `.html` 加上多個 `.js` 檔組成，**下載或分享時請把 `js/` 資料夾和 `.html` 放在一起**，只複製 `.html` 會無法運作；建議直接下載整個 repo。
 - 需要單一檔案版本（例如寄成一個附件）時，執行 `build-standalone.ps1`，會在 `dist/` 產生合併後的單檔；也可以直接到 [Releases](https://github.com/s200070221/alpaca-network-toolkit/releases) 下載已合併好的單檔，附 `SHA256SUMS.txt` 可驗證檔案未被竄改（PowerShell：`Get-FileHash 檔名 -Algorithm SHA256`）。
 - 整套工具共用一個日期版號（例如 2026.10.21），顯示在各工具頁尾或側欄，點「本版新增」可看這一版的更新內容。
 - 介面支援繁體中文、English、日本語（另有多組隱藏彩蛋語言）。
