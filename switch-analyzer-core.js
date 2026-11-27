@@ -656,7 +656,11 @@ function parseLACP(cfg, vendor){
       const gidM=name.match(/\d+/);
       if(!gidM)return;
       const gid=gidM[0];
-      lacp.push({name,mode:modeByGid[gid]||'Static',members:membersByGid[gid]||[]});
+      const item={name,mode:modeByGid[gid]||'Static',members:membersByGid[gid]||[]};
+      // 跨機聚合序號（XN212）：Arista "mlag N"、NX-OS "vpc N"（不含 vpc peer-link）、Dell OS10 "vlt-port-channel N"
+      const mid=blk.match(vendor==='arista'?/^\s+mlag\s+(\d+)\s*$/m:vendor==='nxos'?/^\s+vpc\s+(\d+)\s*$/m:vendor==='dell-os10'?/^\s+vlt-port-channel\s+(\d+)\s*$/m:/$^/);
+      if(mid)item.mlagId=mid[1];
+      lacp.push(item);
     });
     lacp.sort((a,b)=>parseInt(a.name.match(/\d+/)[0])-parseInt(b.name.match(/\d+/)[0]));
   }else if(vendor==='aruba'){

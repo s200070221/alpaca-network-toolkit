@@ -155,6 +155,9 @@ function renderNXOSInterface(iface,lacpList,dhcpList,aclList,securityList,stp,vp
   if(vpc&&vpc.peerLink&&iface.name.toLowerCase()===vpc.peerLink.toLowerCase()){
     lines.push(' vpc peer-link');
   }
+  // 介面表裡已有 port-channel 時，跨機聚合序號（XN212）寫在這個區塊
+  const ownLag=(lacpList||[]).find(l=>('port-channel'+l.id)===iface.name.toLowerCase());
+  if(ownLag&&/^\d+$/.test(String(ownLag.mlagId||''))&&!(vpc&&vpc.peerLink&&iface.name.toLowerCase()===vpc.peerLink.toLowerCase()))lines.push(` vpc ${ownLag.mlagId}`);
   // ACL 套用／Port Security-802.1X／STP 逐 port：NX-OS 與 Cisco IOS 共用同一套 Cisco-style
   // 通用解析分支（parseACL/parseSecurity/parseSTP 對 nxos 走的正是這條），語法與
   // renderDellOS10Interface 完全相同，直接沿用同一套內嵌邏輯與輸出行
@@ -206,7 +209,7 @@ function renderNxosClassMapQoS(list){
   return blocks.join('\n!\n');
 }
 
-function renderNXOSLACPExtra(lacpList,ifaces){
+function renderNXOSLACPExtra(lacpList,ifaces,vpc){
   const existingNames=new Set((ifaces||[]).map(i=>i.name));
   const blocks=[];
   (lacpList||[]).forEach(l=>{
@@ -216,6 +219,11 @@ function renderNXOSLACPExtra(lacpList,ifaces){
       if(l.desc)lines.push(` description ${l.desc}`);
       const refIface=(l.members||[]).map(m=>(ifaces||[]).find(i=>i.name===m)).find(Boolean);
       lines.push(...nxosSwitchportLines(refIface));
+      // peer link 的 port-channel 不在介面表時也要宣告 vpc peer-link（XN212，比照 renderNXOSInterface()）
+      const isPeer=!!(vpc&&vpc.peerLink&&portChanName.toLowerCase()===vpc.peerLink.toLowerCase());
+      if(isPeer)lines.push(' vpc peer-link');
+      // 跨機聚合序號（XN212）：vPC 的 port-channel 介面內 "vpc N"
+      else if(/^\d+$/.test(String(l.mlagId||'')))lines.push(` vpc ${l.mlagId}`);
       blocks.push(lines.join('\n'));
     }
     // 不在介面表的成員埠（RV6，比照 renderCiscoLACPExtra()）：原本整組成員遺失
@@ -413,7 +421,7 @@ function assembleNXOSConfig(model){
   const nxosVpcBlock=renderNXOSVpc(model.vpc);
   if(nxosVpcBlock)blocks.push(nxosVpcBlock);
   if(model.interfaces&&model.interfaces.length)blocks.push(renderNXOSInterfaces(model.interfaces,model.lacp,model.dhcp,model.acl,model.security,model.stp,model.vpc,model.ospf6,model.qosApply,model.ospf));
-  const nxosLacpExtra=renderNXOSLACPExtra(model.lacp,model.interfaces);
+  const nxosLacpExtra=renderNXOSLACPExtra(model.lacp,model.interfaces,model.vpc);
   if(nxosLacpExtra)blocks.push(nxosLacpExtra);
   const nxosVxlanBlock=renderNXOSVXLAN(model.vxlan);
   if(nxosVxlanBlock)blocks.push(nxosVxlanBlock);

@@ -76,8 +76,10 @@ a{color:var(--accent)}
       <label><span data-td-i18n="td.host"></span><input id="td-host" class="txt" maxlength="32" autocomplete="off" spellcheck="false"></label>
       <label><span data-td-i18n="td.vendor"></span><select id="td-vendor"></select></label>
       <label style="flex:1 1 260px"><span data-td-i18n="td.model"></span><select id="td-model"></select></label>
+      <label><span data-td-i18n="td.members"></span><input id="td-members" class="txt" type="number" min="1" max="9" value="1" style="width:70px"></label>
       <button class="btn primary" id="td-dev-add" data-td-i18n="td.add_dev"></button>
     </div>
+    <div class="hint" data-td-i18n="td.stack_hint"></div>
     <div class="hint" id="td-model-hint" hidden></div>
     <div id="td-custom"></div>
   </section>
@@ -148,6 +150,13 @@ a{color:var(--accent)}
     <div class="hint" data-td-i18n="td.l2_hint"></div>
     <div class="row"><label><span data-td-i18n="td.l2_vlan"></span><select id="td-l2-vlan"></select></label></div>
     <div id="td-l2-out" style="font-size:13px;display:flex;flex-direction:column;gap:4px"></div>
+    <h3 data-td-i18n="td.stp_title" style="font-size:14px;margin:12px 0 4px"></h3>
+    <div class="hint" data-td-i18n="td.stp_hint"></div>
+    <label style="display:flex;gap:6px;align-items:center;margin:4px 0"><input type="checkbox" id="td-stp-on"><span data-td-i18n="td.stp_on"></span></label>
+    <div id="td-stp-out" style="font-size:13px;display:flex;flex-direction:column;gap:4px"></div>
+    <h3 data-td-i18n="td.spof_title" style="font-size:14px;margin:12px 0 4px"></h3>
+    <div class="hint" data-td-i18n="td.spof_hint"></div>
+    <div id="td-spof-out" style="font-size:13px;display:flex;flex-direction:column;gap:4px"></div>
     <h3 data-td-i18n="td.l2p_title" style="font-size:14px;margin:12px 0 4px"></h3>
     <div class="row">
       <label><span data-td-i18n="td.l2p_from"></span><select id="td-l2p-from"></select></label>
@@ -168,6 +177,7 @@ a{color:var(--accent)}
         <label><span data-td-i18n="td.host"></span><input id="td-de-host" class="txt" maxlength="32" autocomplete="off" spellcheck="false"></label>
         <label><span data-td-i18n="td.vendor"></span><select id="td-de-vendor"></select></label>
         <label style="flex:1 1 260px"><span data-td-i18n="td.model"></span><select id="td-de-model"></select></label>
+        <label><span data-td-i18n="td.members"></span><input id="td-de-members" class="txt" type="number" min="1" max="9" style="width:70px"></label>
         <button class="btn primary" id="td-de-apply" data-td-i18n="td.dev_apply"></button>
         <button class="btn" id="td-de-cancel" data-td-i18n="td.end_cancel"></button>
       </div>
@@ -175,6 +185,17 @@ a{color:var(--accent)}
       <button class="btn" id="td-de-confirm" data-td-i18n="td.dev_confirm" hidden></button>
     </div>
     <div class="tbl-wrap" id="td-link-list" style="margin-top:10px"></div>
+    <div class="end" id="td-pair-box" style="margin-top:10px">
+      <b data-td-i18n="td.pair_sec"></b>
+      <div class="hint" data-td-i18n="td.pair_hint"></div>
+      <div class="row">
+        <label><span data-td-i18n="td.pair_a"></span><select id="td-pair-a"></select></label>
+        <label><span data-td-i18n="td.pair_b"></span><select id="td-pair-b"></select></label>
+        <label><span data-td-i18n="td.pair_domain"></span><input id="td-pair-domain" class="txt" inputmode="numeric" maxlength="4" style="width:80px" placeholder="1" autocomplete="off"></label>
+        <button class="btn primary" id="td-pair-add" data-td-i18n="td.pair_add"></button>
+      </div>
+      <div class="tbl-wrap" id="td-pair-list"></div>
+    </div>
     <div class="end" id="td-lag-box" style="margin-top:10px">
       <b data-td-i18n="td.lag_sec"></b>
       <div class="hint" data-td-i18n="td.lag_hint"></div>

@@ -768,7 +768,7 @@ function addRouteRow(dst='',gw='',metric='',vrf=''){
   document.getElementById('route-body').appendChild(tr);
 }
 
-function addLacpRow(id='',mode='static',members=''){
+function addLacpRow(id='',mode='static',members='',mlagId=''){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input class="lg-id" value="${escAttr(id)}"></td>
     <td><select class="lg-mode">
@@ -777,11 +777,16 @@ function addLacpRow(id='',mode='static',members=''){
       <option value="passive" data-i18n="opt.lacpPassive">Passive</option>
     </select></td>
     <td><input class="lg-members" value="${escAttr(members)}" placeholder="port1 port2"></td>
+    <td class="lg-mlag-col"><input class="lg-mlag" value="${escAttr(mlagId)}" inputmode="numeric" style="width:70px"></td>
     ${RM_BTN_TD}`;
   tr.querySelector('.lg-mode').value=mode;
   document.getElementById('lacp-body').appendChild(tr);
   applyI18n(tr);
+  refreshMlagCol();
 }
+// 跨機聚合序號（XN212）：Arista mlag N／NX-OS vpc N／Dell OS10 vlt-port-channel N，寫在 port-channel 介面內；其他廠牌隱藏此欄
+const MLAG_ID_VENDORS=['arista','cisco_nxos','dell-os10'];
+function refreshMlagCol(){const show=MLAG_ID_VENDORS.includes(currentVendor());document.querySelectorAll('.lg-mlag-col').forEach(el=>{el.hidden=!show;});}
 
 function addVsuMemberRow(id='',priority='',vslPorts=''){
   const tr=document.createElement('tr');
@@ -1117,6 +1122,7 @@ const CLASSMAP_TYPE_I18N={'access-group':'opt.cmapAccessGroup',dscp:'opt.cmapDsc
 
 function updateModeOptions(){
   refreshAutomationButtons();
+  refreshMlagCol();
   const vendor=currentVendor();
   // VLAN IP 欄位（withSviInterfaces()）：SONiC/EdgeSwitch/RouterOS 三家不支援，vendor 切換時
   // 重新評估全部既有 VLAN 列的停用狀態＋提示文字
@@ -1475,6 +1481,7 @@ function collectModel(){
   const lacp=rowsOf('#lacp-body tr').map(tr=>({
     id:val(tr,'lg-id'), mode:val(tr,'lg-mode'),
     members:parseLacpMembers(val(tr,'lg-members')),
+    mlagId:val(tr,'lg-mlag'),
   })).filter(l=>l.id);
 
   const vrrp=rowsOf('#vrrp-body tr').map(tr=>({
@@ -1798,7 +1805,7 @@ function applyModelToForm(model){
 
   (model.routes||[]).forEach(rt=>addRouteRow(rt.dst,rt.gw,rt.metric,rt.vrf||''));
 
-  (model.lacp||[]).forEach(l=>addLacpRow(l.id,l.mode,lacpMembersText(l.members)));
+  (model.lacp||[]).forEach(l=>addLacpRow(l.id,l.mode,lacpMembersText(l.members),l.mlagId||''));
 
   (model.vrrp||[]).forEach(v=>addVrrpRow(v.vlanId,v.ip,v.vrid,v.vip,v.priority,!!v.preempt,v.authMode,v.authKey,v.trackIf,v.trackReduced,v.vip6));
 
@@ -3526,7 +3533,7 @@ function applyParsedConfigToForm(parsed,fns,text,vendor,genVendor){
     // 陣列形狀，直接 .map() 會拋錯（TypeError: members.map is not a function）並中止整個匯入
     // 流程；統一先正規化成陣列再處理，陣列輸入行為完全不變
     const memberList=Array.isArray(l.members)?l.members:String(l.members||'').split(/[,\s]+/).filter(Boolean);
-    addLacpRow(gid,mode,lacpMembersText(memberList));
+    addLacpRow(gid,mode,lacpMembersText(memberList),/^\d+$/.test(String(l.mlagId||''))?String(l.mlagId):'');
   });
 
   // DHCP：BasicParser 未涵蓋此欄位，只有完整版（fns）才映射；Brocade 通用 dispatcher

@@ -350,7 +350,10 @@
       const brand = dv.parsed && dv.parsed.sys && dv.parsed.sys.brand, vk = dv.pn && dv.pn.vendor, vendor = vk === 'comware' && brand === 'h3c' ? 'h3c' : vk;
       if (!td.VENDOR_IDS.includes(vendor)) { skipped.push({ host: dv.hostname, reason: 'vendor' }); return; }
       if (!dv.pn.modelValue) { skipped.push({ host: dv.hostname, reason: 'model' }); return; }
-      const r = td.addDevice(d, { hostname: dv.hostname, vendor, model: dv.pn.modelValue });
+      // 堆疊（XN211）：成員數取自 parsed.irf（Comware）或 parsed.stack（StackWise／ICX／Alcatel／VSF；MLAG／vPC／VLT 不算）
+      const members = Math.min(td.MAX_MEMBERS, stackMembers(dv));
+      let r = td.addDevice(d, { hostname: dv.hostname, vendor, model: dv.pn.modelValue, members });
+      if (!r.ok && r.code === 'stack_unsupported') r = td.addDevice(d, { hostname: dv.hostname, vendor, model: dv.pn.modelValue });
       if (!r.ok) { skipped.push({ host: dv.hostname, reason: r.code === 'dup' || r.code === 'host' ? r.code : 'model' }); return; }
       idOf[dv.idx] = r.dev.id; portsOf[dv.idx] = portsByName(dv);
       ((dv.parsed && dv.parsed.vlans) || []).forEach(v => { const k = String(v && v.id); if (!(k in vname)) vname[k] = String((v && v.name) || ''); });
@@ -389,6 +392,11 @@
     return { design: td.buildDesign(d), devices: d.devices.length, links: d.links.length, lags: d.lags.length, skipped, dropped, cfgSkip };
   }
   // 二層分析（XN207）：清冊內兩端都是交換器的線組成圖，兩端設定取面板埠（portCfg），同一聚合（依兩端聚合名稱）合成一條邊
+  // 堆疊成員數（IRF 或 StackWise／ICX／Alcatel／VSF 的成員清單），沒有為 1
+  function stackMembers(dv) {
+    const p = dv.parsed || {}, st = p.irf && p.irf.members ? p.irf : p.stack && /^(StackWise|ICX-Stack|Stack|VSF)$/.test(String(p.stack.type || '')) ? p.stack : null;
+    return st && Array.isArray(st.members) ? Math.max(1, st.members.length) : 1;
+  }
   function cablingL2Graph(cb) {
     const nodes = [], edges = [], ports = Object.create(null), lagEdge = new Map();
     cb.devices.forEach(dv => { if (dv.parsed) { nodes.push({ id: String(dv.idx), name: dv.hostname }); ports[dv.idx] = portsByName(dv); } });
@@ -420,6 +428,20 @@
     r.roots.forEach(x => rows.push(`<div data-ptopo-l2="root">${esc2(T('ptopo.l2_root', { name: x.name, n: x.nodes }))}</div>`));
     if (r.undef.length) rows.push(`<div data-ptopo-l2="undef" style="color:var(--text-dim)">${esc2(T('ptopo.l2_undef', { n: r.undef.length }))}</div>`);
     if (!r.splits.length && !r.loops.length) rows.unshift(`<div data-ptopo-l2="ok" style="color:var(--green,#22c55e)">${esc2(T('ptopo.l2_ok'))}</div>`);
+    // 單點故障（XN213）：每條實體線一筆；堆疊設備的成員取三段式埠名第一段（與前面板 memberName() 同規則）
+    const stacked = new Set(cb.devices.filter(dv => dv.parsed && stackMembers(dv) > 1).map(dv => String(dv.idx)));
+    const cables = g.edges.flatMap(e => e.refs.map(l => ({ a: { node: String(l.a.dev), port: l.a.port }, b: { node: String(l.b.dev), port: l.b.port } })));
+    const fails = td.failureImpact ? td.failureImpact(g.nodes, cables, (node, port) => {
+      if (!stacked.has(node)) return null;
+      const m = String(port).match(/^\D*(\d+)\/\d+\/\d+$/);
+      return m ? +m[1] : null;
+    }) : [];
+    const sep = T('ptopo.list_sep');
+    const spof = fails.length ? fails.map(f => {
+      const c = f.kind === 'link' ? cables[f.cable] : null, link = c ? nm(c.a.node) + ' ' + c.a.port + ' ↔ ' + nm(c.b.node) + ' ' + c.b.port : '';
+      return `<div data-ptopo-spof="${f.kind}" style="color:${f.cut.length > 1 ? 'var(--red,#ef4444)' : 'var(--orange,#f59e0b)'}">${esc2(T('ptopo.spof_' + f.kind, { name: nm(f.node), member: f.member || '', link, cut: f.cut.map(nm).join(sep), n: f.cut.length }))}</div>`;
+    }).join('') : `<div data-ptopo-spof="none" style="color:var(--green,#22c55e)">${esc2(T('ptopo.spof_none'))}</div>`;
+    rows.push(`<div style="font-weight:600;margin-top:6px">${esc2(T('ptopo.spof_title'))}</div><div style="font-size:11px;color:var(--text-dim)">${esc2(T('ptopo.spof_hint'))}</div>` + spof);
     const n = r.splits.length + r.loops.length;
     return `<details data-ptopo-sec="l2" style="margin-top:6px"${n ? ' open' : ''}><summary style="cursor:pointer;font-size:12px">${esc2(T('ptopo.l2_title', { n }))}</summary><div style="font-size:11px;color:var(--text-dim);margin:4px 0">${esc2(T('ptopo.l2_hint'))}</div><div style="font-size:12px;display:flex;flex-direction:column;gap:3px">${rows.join('')}</div></details>`;
   }

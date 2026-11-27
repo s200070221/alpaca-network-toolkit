@@ -118,7 +118,8 @@ function renderAristaLACPExtra(lacpList,ifaces){
   const blocks=[];
   (lacpList||[]).forEach(l=>{
     const refIface=(l.members||[]).map(m=>(ifaces||[]).find(i=>i.name===m)).find(Boolean);
-    blocks.push([`interface Port-Channel${l.id}`,...aristaSwitchportLines(refIface)].join('\n'));
+    // 跨機聚合序號（XN212）：MLAG 的 port-channel 介面內 "mlag N"
+    blocks.push([`interface Port-Channel${l.id}`,...aristaSwitchportLines(refIface)].concat(/^\d+$/.test(String(l.mlagId||''))?[` mlag ${l.mlagId}`]:[]).join('\n'));
     (l.members||[]).forEach(mem=>{
       if(existingNames.has(mem))return;
       const modeWord=l.mode==='active'?'active':l.mode==='passive'?'passive':'on';
