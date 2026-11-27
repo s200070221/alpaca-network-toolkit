@@ -3,8 +3,27 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.27';
+  const TOOLKIT_VERSION = '2026.11.27.1';
   const CHANGELOG = [
+    {
+      version: '2026.11.27.1',
+      items: {
+        zhTW: [
+          '拓樸設計頁（實驗中）：設備可設堆疊成員數（埠依成員展開）；兩台 Arista／NX-OS／Dell OS10 可組成跨機聚合（MLAG／vPC／VLT）並設 peer link，下游雙上行可合成同一個聚合',
+          '拓樸設計頁：新增單點故障分析（拿掉任一台設備、堆疊成員或一條線時哪些設備會斷開）與 STP 模擬（各台優先權、根橋、根埠與被擋的線，根橋不在拓樸中心時提示）',
+          '拓樸設計頁版面：寬螢幕畫布在左、表單在右側固定；二層分析分成 VLAN／STP／單點故障／路徑分頁；新增範例設計，連線清單依聚合分組',
+          '交換器設定產生器：鏈路聚合可填跨機序號，輸出 Arista mlag、NX-OS vpc、Dell OS10 vlt-port-channel；NX-OS peer link 的 port-channel 不在介面表時也會輸出 vpc peer-link',
+          '交換器分析：讀出 port-channel 的跨機序號；多台接線拓樸列出單點故障，堆疊設定檔存成拓樸設計時保留 2 號以後成員的線',
+        ],
+        en: [
+          'Topology designer (experimental): devices can be stacks (ports expanded per member); two Arista, NX-OS or Dell OS10 switches can form a multi-chassis pair (MLAG/vPC/VLT) with a peer link, and dual-homed downstream links can form one aggregate',
+          'Topology designer: single-point-of-failure analysis (which devices are cut off when any one device, stack member or link fails) and STP simulation (per-device priority, root bridge, root ports and blocked links, with a hint when the root is not at the center of the topology)',
+          'Topology designer layout: on wide screens the canvas is on the left and the forms stay on the right; layer 2 analysis is split into VLAN, STP, failure and path tabs; an example design and a link list grouped by aggregate',
+          'Switch config generator: link aggregates take a multi-chassis ID and output Arista mlag, NX-OS vpc or Dell OS10 vlt-port-channel; an NX-OS peer-link port-channel missing from the interface table now still gets vpc peer-link',
+          'Switch analyzer: reads the multi-chassis ID of port-channels; the multi-device cabling view lists single points of failure, and saving a stack config as a topology design keeps links on member 2 and above',
+        ],
+      },
+    },
     {
       version: '2026.11.27',
       items: {
