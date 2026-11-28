@@ -5477,7 +5477,6 @@ document.addEventListener('DOMContentLoaded', function () { if (/[?&]demo=1(?:&|
 
 // 首次使用導覽（第二十九輪 NU6）：上傳區的三步驟提示，持續性 key `_netAnalyzer_tourSeen`（{工具:1}，已加入入口頁 WS_KEYS）；
 // 按「知道了」或第一次分析出結果後不再顯示。行內卡片不覆蓋畫面
-function _tourSeen(){try{return JSON.parse(localStorage.getItem('_netAnalyzer_tourSeen')||'{}')||{};}catch(e){return {};}}
 function tourInit(){const el=document.getElementById('tour');if(el&&!_tourSeen()['anon'])el.hidden=false;}
 function tourDone(){const el=document.getElementById('tour');if(el)el.hidden=true;try{const s=_tourSeen();if(s['anon'])return;s['anon']=1;localStorage.setItem('_netAnalyzer_tourSeen',JSON.stringify(s));}catch(e){}}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',tourInit);else tourInit();
@@ -6683,7 +6682,6 @@ document.addEventListener('click',function(e){
 });
 
 function setTheme(t){document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';try{localStorage.setItem('cw_theme',t);}catch(e){}}
-function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
 (function(){let s=null;try{s=localStorage.getItem('cw_theme');}catch(e){}const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
 
 

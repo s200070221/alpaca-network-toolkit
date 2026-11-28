@@ -1094,11 +1094,6 @@ function renderIRF(){
   return html;
 }
 // buildTopoSVG() 已搬到 switch-analyzer-topology.js（2026-09，純函式零 DOM/parsed 全域依賴，比照既有 switch-analyzer-diff.js 拆分先例）
-function buildTable(containerId,headers,rows,filterFn){
-  tableData=rows; tableKeys=headers.map(h=>h.key);
-  const tc=document.getElementById(containerId)||document.getElementById('tab-content');
-  return renderTable(headers,rows,filterFn);
-}
 function renderTable(headers,rows,filterFn){
   const search=document.getElementById('search-inp')?.value?.toLowerCase()||'';
   let filtered=rows.filter(r=>{
@@ -1709,7 +1704,6 @@ function dlCSV(rows,hdrs,fn){
   const b=new Blob(['\uFEFF'+lines.join('\n')],{type:'text/csv;charset=utf-8;'});
   const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);
 }
-function dlTxt(t,fn){const b=new Blob([t],{type:'text/plain;charset=utf-8;'});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);}
 function dlHtml(t,fn){const b=new Blob([t],{type:'text/html;charset=utf-8;'});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);}
 function exportVLANsCSV(){if(!parsed){alert(tr('msg.no_config'));return;}dlCSV(parsed.vlans.map(v=>[v.id,v.name,v.ipSubnets.map(s=>s.cidr).join(';'),v.ipSubnets.length]),['VLAN_ID',tr('col.vlan_name'),'ip-subnet-vlan',tr('col.subnet_count')],`${hn()}_vlans.csv`);}
 function exportPortsCSV(){if(!parsed){alert(tr('msg.no_config'));return;}const ph=parsed.interfaces.filter(i=>i.type!=='null');dlCSV(ph.map(i=>[i.name,i.member,i.type,i.desc,i.mode,i.vlans,i.nativeVlan,i.ip,i.ip6||'',(i.secondaryIps&&i.secondaryIps.length)?i.secondaryIps.join(';'):'',i.vrf,i.shutdown?tr('rt.auto_sum_off'):tr('rt.auto_sum_on'),i.hybrid?[i.hybrid.pvid,...i.hybrid.untagged,...i.hybrid.tagged].join(';'):'',i.hybrid?.hasIPSub?tr('val.yes'):'',i.hybrid?.hasQinQ?tr('val.yes'):'']),[tr('col.iface'),tr('col.member'),tr('col.type'),tr('col.desc'),tr('col.mode'),'VLAN','Native','IP',tr('col.ipv6_addr'),tr('col.secondaryIp'),'VRF',tr('col.status'),tr('col.hybrid_info'),'IPsub','QinQ'],`${hn()}_ports.csv`);}
@@ -3896,7 +3890,6 @@ function _sendReportToAnonymizer(){
 
 // 首次使用導覽（第二十九輪 NU6）：上傳區的三步驟提示，持續性 key `_netAnalyzer_tourSeen`（{工具:1}，已加入入口頁 WS_KEYS）；
 // 按「知道了」或第一次分析出結果後不再顯示。行內卡片不覆蓋畫面
-function _tourSeen(){try{return JSON.parse(localStorage.getItem('_netAnalyzer_tourSeen')||'{}')||{};}catch(e){return {};}}
 function tourInit(){const el=document.getElementById('tour');if(el&&!_tourSeen()['switch'])el.hidden=false;}
 function tourDone(){const el=document.getElementById('tour');if(el)el.hidden=true;try{const s=_tourSeen();if(s['switch'])return;s['switch']=1;localStorage.setItem('_netAnalyzer_tourSeen',JSON.stringify(s));}catch(e){}}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',tourInit);else tourInit();
@@ -4882,42 +4875,10 @@ document.addEventListener('click',function(e){
 
 // 黑/白模式切換
 function setTheme(t){document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';localStorage.setItem('cw_theme',t);}
-function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
 (function(){const s=localStorage.getItem('cw_theme');const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
 
-// ── 名詞小辭典（2026-09-29 新增，第七輪 NC）─────────────────────────────────
-// 表頭（th）文字含常見網路名詞時，自動加上滑鼠提示（沿用既有 [data-tip] 提示框）與 ⓘ 標記。
-// 以 MutationObserver 監看畫面變動後統一處理，不需改動各頁面的渲染程式；已有 data-tip 的表頭不覆蓋。
-// 切換語言時表頭文字重繪會觸發同一流程，依 data-gl-term 以新語言更新提示。整段包在 IIFE 內，
-// 避免與其他 classic <script> 的頂層識別字撞名。
-(function(){
-  var TERMS=[["native", "Native VLAN"], ["vlan", "VLAN"], ["trunk", "Trunk"], ["svi", "SVI"], ["lacp", "LACP"], ["vrrp", "VRRP"], ["hsrp", "HSRP"], ["stp", "STP"], ["bpdu", "BPDU"], ["portfast", "PortFast"], ["dot1x", "802.1X"], ["acl", "ACL"], ["qos", "QoS"], ["ospf", "OSPF"], ["bgp", "BGP"], ["snmp", "SNMP"], ["nat", "NAT"], ["vdom", "VDOM"], ["vpn", "VPN"], ["dhcp", "DHCP"], ["lldp", "LLDP"], ["mtu", "MTU"], ["poe", "PoE"], ["vrf", "VRF"]];
-  var RE=TERMS.map(function(t){return [t[0],t[1],new RegExp('(^|[^A-Za-z0-9])'+t[1].replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'($|[^A-Za-z0-9])','i')];});
-  function tipOf(k,term){var s=tr('gl.'+k);return (!s||s==='gl.'+k)?'':term+': '+s;}
-  function mark(th){
-    if(!th.querySelector('sup.gl-mark')){var sup=document.createElement('sup');sup.className='gl-mark';sup.textContent='ⓘ';sup.style.cssText='font-size:8px;opacity:.45;margin-left:2px;cursor:help';th.appendChild(sup);}
-  }
-  function applyGlossary(){
-    var ths=document.querySelectorAll('th');
-    for(var i=0;i<ths.length;i++){
-      var th=ths[i], k=th.getAttribute('data-gl-term');
-      if(k){var t=tipOf(k,th.getAttribute('data-gl-label'));if(t&&th.getAttribute('data-tip')!==t)th.setAttribute('data-tip',t);if(t)mark(th);continue;}
-      if(th.hasAttribute('data-gl-skip'))continue;
-      if(th.hasAttribute('data-tip')||th.querySelector('[data-tip]')){th.setAttribute('data-gl-skip','1');continue;}
-      var text=th.textContent||'', hit=null;
-      for(var j=0;j<RE.length;j++){if(RE[j][2].test(text)){hit=RE[j];break;}}
-      if(!hit){th.setAttribute('data-gl-skip','1');continue;}
-      var tip=tipOf(hit[0],hit[1]);
-      if(!tip)continue;
-      th.setAttribute('data-gl-term',hit[0]);th.setAttribute('data-gl-label',hit[1]);th.setAttribute('data-tip',tip);mark(th);
-    }
-  }
-  window.applyGlossary=applyGlossary;
-  var timer=null;
-  function schedule(){clearTimeout(timer);timer=setTimeout(applyGlossary,150);}
-  if(document.body)new MutationObserver(schedule).observe(document.body,{childList:true,subtree:true,characterData:true});
-  schedule();
-})();
+// 名詞小辭典（第七輪 NC）：表頭加名詞提示，實作在共用 toolkit-common.js
+tkGlossary();   // 共用 toolkit-common.js
 
 // 入口頁「看範例」（第二十九輪 NU4）：網址帶 ?demo=1 時開頁即載入範例並分析
 // DOMContentLoaded 而非 load：load 會等外部字型樣式表，連不到 Google Fonts 時範例要等到逾時才出現
@@ -4929,26 +4890,7 @@ document.addEventListener('DOMContentLoaded', function () { if (/[?&]view=invent
 
 // 頂端選單（UX19）：展開時依按鈕位置定位面板（fixed，避免手機寬度橫向捲動的工具列裁切），
 // 同時只開一個；點選項目、點選單外或按 Esc 即收起
-(function () {
-  function place(d) {
-    var r = d.querySelector('summary').getBoundingClientRect(), p = d.querySelector('.tb-menu-panel');
-    p.style.top = Math.round(r.bottom + 4) + 'px';
-    p.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - p.offsetWidth - 8))) + 'px';
-  }
-  function closeAll(except) { document.querySelectorAll('details.tb-menu[open]').forEach(function (d) { if (d !== except) d.open = false; }); }
-  document.addEventListener('toggle', function (e) {
-    var d = e.target;
-    if (!d.classList || !d.classList.contains('tb-menu') || !d.open) return;
-    closeAll(d); place(d);
-  }, true);
-  document.addEventListener('click', function (e) {
-    var m = e.target.closest && e.target.closest('details.tb-menu');
-    if (!m) { closeAll(null); return; }
-    if (e.target.closest('.tb-menu-panel button')) m.open = false;
-  });
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeAll(null); });
-  window.addEventListener('resize', function () { closeAll(null); });
-})();
+tkTbMenu();   // 共用 toolkit-common.js
 
 // Ctrl／⌘＋Enter 在貼上框直接開始（UX24）；按鈕加提示與 aria-keyshortcuts
 (function () {

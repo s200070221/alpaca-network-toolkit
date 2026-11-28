@@ -532,27 +532,7 @@ function swPriorityItems(health){
     .slice().sort((a,b)=>first(a)-first(b)||RANK[a.sev]-RANK[b.sev]||b.count-a.count);
 }
 
-// 健康度分數時序追蹤（2026-09-16 新增）：輕量單序列折線圖，比照 log_analyzer 既有
-// buildTimelineSVG() 零依賴、inline SVG 的既有風格，但資料形狀不同——非多系列堆疊長條，是
-// 單一數值隨時間的折線。entries 傳入慣例是「新到舊」（比照既有 rolling-history 儲存慣例，
-// 見 config_anonymizer 的 _netAnalyzer_anonHistory），繪圖時反轉成「舊到新」由左至右，符合
-// 趨勢圖的自然閱讀方向；空陣列/單筆/多筆皆需安全產出合法 SVG 字串
-function buildHealthSparklineSVG(entries){
-  const w=280,h=60,pad=6;
-  const list=(entries||[]).slice().reverse();
-  if(!list.length) return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"></svg>`;
-  const yOf=score=>pad+(100-score)/100*(h-2*pad);
-  const titleOf=e=>`${e.score} (${new Date(e.ts).toLocaleDateString()})`;
-  if(list.length===1){
-    const y=yOf(list[0].score);
-    return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><circle cx="${w/2}" cy="${y.toFixed(1)}" r="3" fill="var(--accent)"><title>${titleOf(list[0])}</title></circle></svg>`;
-  }
-  const stepX=(w-2*pad)/(list.length-1);
-  const pts=list.map((e,i)=>({x:pad+i*stepX,y:yOf(e.score),e}));
-  const path=pts.map((p,i)=>`${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-  const dots=pts.map(p=>`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.5" fill="var(--accent)"><title>${titleOf(p.e)}</title></circle>`).join('');
-  return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${dots}</svg>`;
-}
+// 健康度歷史折線圖 buildHealthSparklineSVG() 在共用 toolkit-common.js（RV17，與防火牆共用）
 
 // ── VLAN 使用率（2026-09-24 新增）──────────────────────────────────────────
 // 既有 unused-vlan-trunk 稽核只看「trunk 上攜帶但無 access 埠」；此函式對每個宣告的 VLAN
@@ -658,7 +638,6 @@ function buildSwitchSarifReport(parsed,text){
   };
 }
 // Markdown 表格儲存格跳脫：| 會破壞欄位切割、換行會破壞整列，其餘字元原樣保留
-function _mdCell(v){return String(v==null?'':v).replace(/\\/g,'\\\\').replace(/\|/g,'\\|').replace(/\r?\n/g,' ');}
 function buildSwitchExecSummary(host,health){
   // 主管摘要（2026-09-30 新增，第八輪 XG）：報表開頭一段白話文字，給不看細節的主管或客戶。
   // 只用 computeSwitchHealth() 已算好的結果（等級、各項扣分），不另外計算；已標記接受風險者不列入待改善，另行註明

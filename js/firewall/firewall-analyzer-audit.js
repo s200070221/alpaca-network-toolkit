@@ -2390,25 +2390,7 @@
     return h + '</tbody></table></div></div>';
   }
 
-  // 健康度歷史折線圖（2026-09-24 新增）：比照 switch-analyzer-audit.js buildHealthSparklineSVG()
-  // 同一套零依賴 inline SVG 寫法（各工具各自維護一份純函式的既有慣例）。entries 為「新到舊」，
-  // 繪圖時反轉成由左至右的舊到新
-  function buildHealthSparklineSVG(entries) {
-    const w = 280, h = 60, pad = 6;
-    const list = (entries || []).slice().reverse();
-    if (!list.length) return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"></svg>`;
-    const yOf = score => pad + (100 - score) / 100 * (h - 2 * pad);
-    const titleOf = e => `${e.score} (${new Date(e.ts).toLocaleDateString()})`;
-    if (list.length === 1) {
-      const y = yOf(list[0].score);
-      return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><circle cx="${w / 2}" cy="${y.toFixed(1)}" r="3" fill="var(--accent)"><title>${titleOf(list[0])}</title></circle></svg>`;
-    }
-    const stepX = (w - 2 * pad) / (list.length - 1);
-    const pts = list.map((e, i) => ({ x: pad + i * stepX, y: yOf(e.score), e }));
-    const path = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-    const dots = pts.map(p => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.5" fill="var(--accent)"><title>${titleOf(p.e)}</title></circle>`).join('');
-    return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${dots}</svg>`;
-  }
+  // 健康度歷史折線圖 buildHealthSparklineSVG() 在共用 toolkit-common.js（RV17，與交換器分析共用）
 
   // 無法解析設定檔回報觸發判斷（2026-09-29 新增）：unknownSlots 為上傳時未命中任何廠牌簽章的
   // 欄位廠牌清單（app.js 在 detectFwVendor() 檢查時收集）；有值即 'unknown_vendor'。否則若介面、
@@ -2470,7 +2452,6 @@
   // 稽核結果 Markdown 匯出（2026-09-24 新增）：供貼到工單／Wiki。內容重新呼叫 analyze* 系列
   // 即時計算（比照 buildSarifAuditReport() 慣例，不依賴稽核分頁渲染快取）；各區塊命中數與稽核頁
   // 摘要卡片同一組函式，合規檢查與健康度問題另列明細表
-  function _mdCell(v) { return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' '); }
   // 優先處理清單（XN50）：結果列、稽核頁、主管摘要、羊駝值勤共用同一份排序。
   // 韌體已遭利用 → 高風險服務對外 → 明文管理 → any-any → 其他高風險（依數量）→ 中風險；
   // 韌體已遭利用且管理介面／VPN 開在外部時合併為第一項（兩者相加才是實際被入侵的路徑）

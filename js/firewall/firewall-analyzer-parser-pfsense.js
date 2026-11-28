@@ -48,12 +48,6 @@ const PfsenseParser = (() => {
     const n = bitsN === 0 ? 0 : (0xFFFFFFFF << (32 - bitsN)) >>> 0;
     return [(n>>>24)&0xFF,(n>>>16)&0xFF,(n>>>8)&0xFF,n&0xFF].join('.');
   }
-  function subnetToIp(sub) {
-    // "192.168.1.0/24" → {ip, mask}
-    if (!sub) return {ip:'-',mask:'-'};
-    const p = sub.split('/');
-    return { ip: p[0], mask: p[1] ? prefixToMask(parseInt(p[1])) : '255.255.255.255' };
-  }
 
   // ── Interface name resolution ─────────────────────────────────────────────
   // pfSense uses internal names (wan, lan, opt1...) that map to real if names

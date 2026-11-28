@@ -181,10 +181,6 @@ function renderCards() {
 }
 
 function openTool(href) { window.open(href, '_blank'); }
-function _toggleTags(btn) {
-  const box = btn.parentElement, open = box.classList.toggle('open');
-  btn.textContent = open ? tr('hub.tags_less') : tr('hub.tags_more').replace('{n}', box.querySelectorAll('.tag').length);
-}
 
 async function checkFiles() {
   if (location.protocol === 'file:') {

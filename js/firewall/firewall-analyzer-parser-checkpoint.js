@@ -16,25 +16,8 @@ const CheckpointParser = (() => {
     return raw.replace(/^"|"$/g,'').replace(/\\"/g,'"');
   }
 
-  function clishLines(text, prefix) {
-    const re = new RegExp(`^set\\s+${prefix.replace(/[-\s]/g, '[\\s\\-]')}\\s+(.+)$`, 'gim');
-    const results = [];
-    let m;
-    while ((m = re.exec(text)) !== null) results.push(m[1].trim());
-    return results;
-  }
 
   // ─── objects_5_0.C / .W format helpers ───────────────────────────────────
-  function parseObjectsC(text) {
-    // Format: ( :Name (value) :Attr (value) )
-    const objects = [];
-    const re = /\(\s*:([\w\-]+)\s*\(([\s\S]*?)\)\s*\)/g;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      objects.push({ _type: m[1], _body: m[2] });
-    }
-    return objects;
-  }
 
   function objVal(body, key) {
     const re = new RegExp(`:${key}\\s+\\(([^)]*?)\\)`, 'i');

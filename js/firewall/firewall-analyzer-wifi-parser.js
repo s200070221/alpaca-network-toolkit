@@ -131,11 +131,6 @@ function parseFortigateWifi(text) {
     if (!m) return '-';
     return m[1].trim().replace(/^"|"$/g, '');
   }
-  function gvMulti(body, key) {
-    const m = new RegExp(`^\\s*set ${key}\\s+(.+)$`, 'im').exec(body);
-    if (!m) return [];
-    return m[1].trim().replace(/^"|"$/g, '').split(/\s+/).map(s => s.replace(/^"|"$/g,'').trim()).filter(Boolean);
-  }
   // 逐行掃描＋depth 計數抽取 config radio-N 區塊（比照同檔案 getSection()/parseEdits() 既有
   // depth-tracking 手法），取代原本依賴「end 前面剛好縮排4格」的正則收尾——真實 FortiGate
   // 匯出檔巢狀層級縮排常見是 8 格（wtp-profile→edit→config radio-N），並非固定4格，

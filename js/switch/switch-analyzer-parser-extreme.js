@@ -16,19 +16,6 @@ function parseExtremeXOSSysInfo(cfg){
   return{hostname,version,contact,location};
 }
 
-function exosExpandPorts(portStr){
-  const ports=[];
-  portStr.split(',').forEach(tok=>{
-    const tok2=tok.trim();
-    const rangeM=tok2.match(/^(\d+)-(\d+)$/);
-    if(rangeM){
-      for(let p=parseInt(rangeM[1]);p<=parseInt(rangeM[2]);p++) ports.push(String(p));
-    } else if(tok2) {
-      ports.push(tok2);
-    }
-  });
-  return ports;
-}
 
 function parseExtremeXOSVLANs(cfg){
   const vlans=[]; const seen=new Set(); let m;

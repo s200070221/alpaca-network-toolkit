@@ -130,9 +130,6 @@ const JuniperParser = (() => {
     );
   }
 
-  function childKeys(node) {
-    return node ? Object.keys(node._children) : [];
-  }
 
   // ── Device info ───────────────────────────────────────────────────────────
   function parseDeviceInfo(text, tree) {

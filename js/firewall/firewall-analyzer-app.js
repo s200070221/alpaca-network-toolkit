@@ -1704,18 +1704,6 @@ function onParsed(){
     $('sum-wrap').insertAdjacentHTML('afterbegin', notice);
   }
 
-  function _origRenderTable(data,thead,rowFn){
-    _renderState={thead,rowFn};
-    const rows=data.map(r=>{
-      let row = rowFn(r);
-      if (r._vdom) row = row.replace('<tr>', `<tr data-vdom="${esc(r._vdom)}">`);
-      return row;
-    }).join('');
-    $('tbl-wrap').innerHTML=`<table class="data-tbl"><thead>${thead}</thead><tbody>${rows||`<tr><td colspan="20"><div class="nodata">⚠ ${tr('msg.no_data')}</div></td></tr>`}</tbody></table>`;
-    $('tbl-cnt').textContent=`${data.length} ${tr('unit.records')}`;
-    // 截斷儲存格自動加上 title，讓 hover 可見完整內容
-    requestAnimationFrame(()=>{document.querySelectorAll('.data-tbl td').forEach(td=>{if(!td.title&&td.scrollWidth>td.clientWidth)td.title=td.textContent.trim();});});
-  }
 
   function doSearch(q){
     const ql=q.trim().toLowerCase();
@@ -4108,23 +4096,4 @@ function onParsed(){
 
 // 頂端選單（UX19）：展開時依按鈕位置定位面板（fixed，避免手機寬度橫向捲動的工具列裁切），
 // 同時只開一個；點選項目、點選單外或按 Esc 即收起
-(function () {
-  function place(d) {
-    var r = d.querySelector('summary').getBoundingClientRect(), p = d.querySelector('.tb-menu-panel');
-    p.style.top = Math.round(r.bottom + 4) + 'px';
-    p.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - p.offsetWidth - 8))) + 'px';
-  }
-  function closeAll(except) { document.querySelectorAll('details.tb-menu[open]').forEach(function (d) { if (d !== except) d.open = false; }); }
-  document.addEventListener('toggle', function (e) {
-    var d = e.target;
-    if (!d.classList || !d.classList.contains('tb-menu') || !d.open) return;
-    closeAll(d); place(d);
-  }, true);
-  document.addEventListener('click', function (e) {
-    var m = e.target.closest && e.target.closest('details.tb-menu');
-    if (!m) { closeAll(null); return; }
-    if (e.target.closest('.tb-menu-panel button')) m.open = false;
-  });
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeAll(null); });
-  window.addEventListener('resize', function () { closeAll(null); });
-})();
+tkTbMenu();   // 共用 toolkit-common.js

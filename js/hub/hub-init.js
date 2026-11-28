@@ -48,6 +48,5 @@ document.addEventListener('click',function(e){
 });
 
 function setTheme(t){document.documentElement.setAttribute('data-theme',t);document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';try{localStorage.setItem('cw_theme',t);}catch(e){}}
-function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
 (function(){let s=null;try{s=localStorage.getItem('cw_theme');}catch(e){}const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
 

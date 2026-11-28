@@ -156,7 +156,6 @@ async function doAnalyze() {
 //（多半是貼錯工具，例如設定檔）提示交給入口頁判斷（一次性交接 key `_netAnalyzer_route`）
 // 首次使用導覽（第二十九輪 NU6）：上傳區的三步驟提示，持續性 key `_netAnalyzer_tourSeen`（{工具:1}，已加入入口頁 WS_KEYS）；
 // 按「知道了」或第一次分析出結果後不再顯示。行內卡片不覆蓋畫面
-function _tourSeen(){try{return JSON.parse(localStorage.getItem('_netAnalyzer_tourSeen')||'{}')||{};}catch(e){return {};}}
 function tourInit(){const el=document.getElementById('tour');if(el&&!_tourSeen()['log'])el.hidden=false;}
 function tourDone(){const el=document.getElementById('tour');if(el)el.hidden=true;try{const s=_tourSeen();if(s['log'])return;s['log']=1;localStorage.setItem('_netAnalyzer_tourSeen',JSON.stringify(s));}catch(e){}}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',tourInit);else tourInit();
@@ -720,7 +719,6 @@ function buildReportSummaryText(issues, chains) {
 // 問題清單 Markdown 匯出（2026-09-24 新增）：供貼到工單／Wiki。問題列沿用 buildCSVRows() 同一份
 // ISSUES 與相同欄位語意（MITRE 查表去 freq: 前綴、分析師備註），攻擊鏈沿用 buildChainsRowsHtml()
 // 的階段序列文字；表格儲存格需跳脫 | 與換行，避免破壞 Markdown 表格結構
-function _mdCell(v) { return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' '); }
 function buildIssuesMarkdown(issues, chains) {
   const L = [`# ${tr('report.title')}`, '', `## ${tr('exec.title')}`, '', ...buildLogExecSummary(issues, EVENTS, is => issueStatusOf(_baselineDiffKey(is))).map(x => '- ' + x), '', buildReportSummaryText(issues, chains), '',
     `## ${tr('issues.title')}`, ''];
@@ -1236,7 +1234,6 @@ renderAll();
 // 主題切換（2026-08-25 新增，比照其餘 5 工具既有的 setTheme()/toggleTheme() 慣例搬過來，
 // 本工具先前完全沒有主題切換機制，CSS 已用 body[data-theme=...] 選擇器，零 CSS 改動即可相容）
 function setTheme(t){document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';localStorage.setItem('cw_theme',t);}
-function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
 (function(){const s=localStorage.getItem('cw_theme');const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
 
 // 關鍵字框「帶入範例」（UX38）：只補上還沒有的範例，不覆蓋、不勾選啟用開關；觸發 input 讓設定照常保存

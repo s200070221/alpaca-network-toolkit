@@ -244,49 +244,16 @@ document.addEventListener('click',function(e){
 });
 
 function setTheme(t){document.body.dataset.theme=t;const b=document.getElementById('theme-btn');if(b)b.textContent=t==='light'?'🌙':'☀️';localStorage.setItem('cw_theme',t);}
-function toggleTheme(){setTheme(document.body.dataset.theme==='light'?'dark':'light');}
 (function(){const s=localStorage.getItem('cw_theme');const p=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(p==='light')setTheme('light');})();
 
-// ── 名詞小辭典（2026-09-29 新增，第七輪 NC）─────────────────────────────────
-// 表頭（th）文字含常見網路名詞時，自動加上滑鼠提示（沿用既有 [data-tip] 提示框）與 ⓘ 標記。
-// 以 MutationObserver 監看畫面變動後統一處理，不需改動各頁面的渲染程式；已有 data-tip 的表頭不覆蓋。
-// 切換語言時表頭文字重繪會觸發同一流程，依 data-gl-term 以新語言更新提示。整段包在 IIFE 內，
-// 避免與其他 classic <script> 的頂層識別字撞名。
-(function(){
-  var TERMS=[["native", "Native VLAN"], ["vlan", "VLAN"], ["trunk", "Trunk"], ["svi", "SVI"], ["lacp", "LACP"], ["vrrp", "VRRP"], ["hsrp", "HSRP"], ["stp", "STP"], ["bpdu", "BPDU"], ["portfast", "PortFast"], ["dot1x", "802.1X"], ["acl", "ACL"], ["qos", "QoS"], ["ospf", "OSPF"], ["bgp", "BGP"], ["snmp", "SNMP"], ["nat", "NAT"], ["vdom", "VDOM"], ["vpn", "VPN"], ["dhcp", "DHCP"], ["lldp", "LLDP"], ["mtu", "MTU"], ["poe", "PoE"], ["vrf", "VRF"]];
-  var RE=TERMS.map(function(t){return [t[0],t[1],new RegExp('(^|[^A-Za-z0-9])'+t[1].replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'($|[^A-Za-z0-9])','i')];});
-  function tipOf(k,term){var s=tr('gl.'+k);return (!s||s==='gl.'+k)?'':term+': '+s;}
-  function mark(th){
-    if(!th.querySelector('sup.gl-mark')){var sup=document.createElement('sup');sup.className='gl-mark';sup.textContent='ⓘ';sup.style.cssText='font-size:8px;opacity:.45;margin-left:2px;cursor:help';th.appendChild(sup);}
-  }
-  function applyGlossary(){
-    var ths=document.querySelectorAll('th');
-    for(var i=0;i<ths.length;i++){
-      var th=ths[i], k=th.getAttribute('data-gl-term');
-      if(k){var t=tipOf(k,th.getAttribute('data-gl-label'));if(t&&th.getAttribute('data-tip')!==t)th.setAttribute('data-tip',t);if(t)mark(th);continue;}
-      if(th.hasAttribute('data-gl-skip'))continue;
-      if(th.hasAttribute('data-tip')||th.querySelector('[data-tip]')){th.setAttribute('data-gl-skip','1');continue;}
-      var text=th.textContent||'', hit=null;
-      for(var j=0;j<RE.length;j++){if(RE[j][2].test(text)){hit=RE[j];break;}}
-      if(!hit){th.setAttribute('data-gl-skip','1');continue;}
-      var tip=tipOf(hit[0],hit[1]);
-      if(!tip)continue;
-      th.setAttribute('data-gl-term',hit[0]);th.setAttribute('data-gl-label',hit[1]);th.setAttribute('data-tip',tip);mark(th);
-    }
-  }
-  window.applyGlossary=applyGlossary;
-  var timer=null;
-  function schedule(){clearTimeout(timer);timer=setTimeout(applyGlossary,150);}
-  if(document.body)new MutationObserver(schedule).observe(document.body,{childList:true,subtree:true,characterData:true});
-  schedule();
-})();
+// 名詞小辭典（第七輪 NC）：表頭加名詞提示，實作在共用 toolkit-common.js
+tkGlossary();   // 共用 toolkit-common.js
 
 // 入口頁「看範例」（第二十九輪 NU4）：網址帶 ?demo=1 時開頁即載入範例並分析
 // DOMContentLoaded 而非 load：load 會等外部字型樣式表，連不到 Google Fonts 時範例要等到逾時才出現
 document.addEventListener('DOMContentLoaded', function () { if (/[?&]demo=1(?:&|$)/.test(location.search)) setTimeout(function () { window._loadSampleConfig(); }, 0); });
 // 首次使用導覽（第二十九輪 NU6）：上傳區的三步驟提示，持續性 key `_netAnalyzer_tourSeen`（{工具:1}，已加入入口頁 WS_KEYS）；
 // 按「知道了」或第一次分析出結果後不再顯示。行內卡片不覆蓋畫面
-function _tourSeen(){try{return JSON.parse(localStorage.getItem('_netAnalyzer_tourSeen')||'{}')||{};}catch(e){return {};}}
 function tourInit(){const el=document.getElementById('tour');if(el&&!_tourSeen()['firewall'])el.hidden=false;}
 function tourDone(){const el=document.getElementById('tour');if(el)el.hidden=true;try{const s=_tourSeen();if(s['firewall'])return;s['firewall']=1;localStorage.setItem('_netAnalyzer_tourSeen',JSON.stringify(s));}catch(e){}}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',tourInit);else tourInit();
