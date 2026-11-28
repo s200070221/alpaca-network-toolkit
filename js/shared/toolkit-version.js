@@ -3,8 +3,25 @@
 // 切換語言時呼叫 renderToolkitVersion(lang)。版本號＝GitHub Release tag，發版時只改這個檔案：
 // 把 TOOLKIT_VERSION 改成發版日期，CHANGELOG 最前面插入一筆（items 只寫 zhTW／en，其餘語言顯示 en）。
 (function () {
-  const TOOLKIT_VERSION = '2026.11.27.1';
+  const TOOLKIT_VERSION = '2026.11.28';
   const CHANGELOG = [
+    {
+      version: '2026.11.28',
+      items: {
+        zhTW: [
+          '開頁變快：彩蛋語言的文字改為切換到該語言時才下載，各工具第一次載入的程式少約 24～36%（防火牆分析約少 1.3 MB）',
+          '去識別化：開啟「保留 IP 末段」時，若原檔已有相同的文件用位址，不再讓兩台主機換成同一個假位址（與 log 工具一致）',
+          '拓樸設計頁（實驗中）：堆疊設備的每個成員可選不同型號；交換器分析的接線拓樸只留接線圖與比對，二層分析與單點故障統一在拓樸設計頁，存檔只剩一種格式',
+          '整套工具整理：重複的共用程式合併、程式檔依工具分到 js/ 資料夾；下載整個 repo 使用時請保留 js/ 資料夾',
+        ],
+        en: [
+          'Faster page loads: egg-language strings are downloaded only when you switch to that language, so each tool loads about 24-36% less code on first open (about 1.3 MB less for the firewall analyzer)',
+          'Anonymizer: with "keep last octet" on, two hosts no longer get the same fake address when the original file already contains that documentation address (now matches the log tool)',
+          'Topology designer (experimental): each member of a stack can be a different model; the switch analyzer cabling view keeps the diagram and comparison, while layer 2 and failure analysis live in the topology designer, with a single save format',
+          'Cleanup across the toolkit: duplicated shared code is merged and scripts are grouped by tool under js/; if you download the whole repository, keep the js/ folder',
+        ],
+      },
+    },
     {
       version: '2026.11.27.1',
       items: {
