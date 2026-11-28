@@ -16,6 +16,8 @@ function tkTr(L, lang, key) {
   // leet／uwu 沒有儲存區塊，套用英文（缺則中文）即時轉換
   if (lang === 'leet') return tkLeet(en[key] || zh[key] || key);
   if (lang === 'uwu') return tkUwu(en[key] || zh[key] || key);
+  // 彩蛋語言的區塊在另一個檔案，第一次用到時才載入（RV17-A）；載入完成前先照下列規則退回顯示
+  if (!L[lang] && lang !== 'zhTW' && lang !== 'en' && lang !== 'ja') tkLoadEggs(L);
   // cat／bean 先查自己的區塊，缺才用演算法
   if (lang === 'cat') { var c = L.cat && L.cat[key]; if (c) return c; var cb = zh[key] || en[key] || key; return cb + (/[一-鿿]$/.test(cb) ? '喵~' : ' nyaa~'); }
   if (lang === 'bean') { var b = L.bean && L.bean[key]; if (b) return b; var bb = en[key] || zh[key] || key; var vg = ['🥕', '🫛', '🌽']; return bb.split('').map(function (ch) { return ch === ' ' ? ' ' : vg[ch.charCodeAt(0) % 3]; }).join(''); }
@@ -24,6 +26,27 @@ function tkTr(L, lang, key) {
   var fb = TK_LANG_FALLBACK[lang];
   if (fb && L[fb] && L[fb][key]) return L[fb][key];
   return (lang === 'en' ? zh[key] : en[key]) || zh[key] || en[key] || key;
+}
+
+// ── 彩蛋語言延後載入（RV17-A）──────────────────────────────────────────
+// 各工具 i18n 核心檔只含 zhTW／en／ja，結尾以 tkRegisterEggs() 登記彩蛋檔路徑與重繪函式；
+// tkTr() 遇到尚未載入的彩蛋語言時呼叫 tkLoadEggs()，插入一次 <script src>，載入後重繪。
+// 單檔版（build-standalone.ps1）已把彩蛋檔內嵌，L[lang] 一開始就存在，不會發出請求。Node 測試沒有 document，不做事。
+var TK_EGG_REG = [];
+function tkRegisterEggs(L, src, redraw) { TK_EGG_REG.push({ L: L, src: src, redraw: redraw, state: 0 }); }
+function tkLoadEggs(L) {
+  for (var i = 0; i < TK_EGG_REG.length; i++) {
+    var r = TK_EGG_REG[i];
+    if (r.L !== L) continue;
+    if (r.state || typeof document === 'undefined' || !document.createElement) return;
+    r.state = 1;
+    var s = document.createElement('script');
+    s.src = r.src;
+    s.onload = function () { r.state = 2; try { if (r.redraw) r.redraw(); } catch (e) { /* 重繪失敗不影響已顯示的退回文字 */ } };
+    s.onerror = function () { r.state = 0; };
+    (document.head || document.documentElement).appendChild(s);
+    return;
+  }
 }
 
 // 沒有標籤的輸入欄位，以前一個 label／span 當無障礙名稱

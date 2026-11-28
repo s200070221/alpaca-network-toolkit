@@ -54,6 +54,29 @@ foreach ($file in $htmlFiles) {
         $mergedCount++
     }
 
+    # Egg-language strings live in separate *-i18n-eggs.js files that the page loads only when such a language is chosen
+    # (registered with tkRegisterEggs(LANG, 'path', ...)). A single-file build has nothing to fetch, so inline them before </body>.
+    $eggInline = ''
+    $eggSeen = @{}
+    foreach ($em in [regex]::Matches($merged, "tkRegisterEggs\((\w+),\s*'([^']+-i18n-eggs\.js)'")) {
+        $eggRel = $em.Groups[2].Value
+        if ($eggSeen.ContainsKey($eggRel)) { continue }
+        $eggSeen[$eggRel] = $true
+        $eggPath = Join-Path $file.DirectoryName $eggRel
+        if (-not (Test-Path $eggPath)) {
+            Write-Warning "  $($file.Name): egg-language file '$eggRel' not found"
+            continue
+        }
+        $eggContent = Get-Content -Path $eggPath -Raw -Encoding UTF8
+        $eggInline += "<script>`r`n$eggContent`r`n</script>`r`n"
+        $mergedCount++
+    }
+    if ($eggInline) {
+        $bodyEnd = $merged.LastIndexOf('</body>')
+        if ($bodyEnd -ge 0) { $merged = $merged.Substring(0, $bodyEnd) + $eggInline + $merged.Substring($bodyEnd) }
+        else { $merged += $eggInline }
+    }
+
     $outPath = Join-Path $OutDir $file.Name
     Set-Content -Path $outPath -Value $merged -Encoding utf8 -NoNewline
     Write-Host "  merged $mergedCount script(s) -> $($file.Name)"
