@@ -104,89 +104,9 @@ function applyImportedMappings(parsed) {
   }
   return { applied, skipped };
 }
-const IPV4_SHAPE_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-function isValidIPv4(s) {
-  if (!IPV4_SHAPE_RE.test(s)) return false;
-  return s.split('.').every(p => +p <= 255);
-}
-function classifyIP(ip) {
-  const [a, b] = ip.split('.').map(Number);
-  // 0 開頭（0.0.0.0＝未指定／任意位址，常見於 Palo Alto CSV 的 NAT 欄位、防火牆 any 規則）不是
-  // 主機位址，保留原樣；config_anonymizer 同名函式 2026-09-30 已修正，這份副本未同步（2026-10-01）
-  if (a === 0 || a === 127 || a >= 224) return 'skip';
-  if (a === 10) return 'n2';
-  if (a === 172 && b >= 16 && b <= 31) return 'n3';
-  if (a === 192 && b === 168) return 'n1';
-  return 'n3';
-}
-// ---- 保留網段結構（2026-10-02，第十輪 ZN，規則與 config_anonymizer 的 anonIPSubnet() 相同）----
-// 第 1、2 段整組換成假 /16、第 3 段在同一假 /16 內一對一換掉、第 4 段保留；0／255 原樣保留。
-// 假位址放在 241-253 開頭（Class E 保留位址），248／252 為遮罩值不使用
-const SUBNET_PUB_FIRST = [244, 245, 246, 247, 249, 250, 251, 253];
-const SUBNET_FAKE_RE = /^(?:24[1-7]|249|25[013])\.\d+\.\d+\.\d+$/;
-function _octetCandidates(v) { return v === 0 || v === 255 ? [v] : Array.from({ length: 254 }, (_, i) => i + 1); }
-let _subnetPubCands = null;
-function _subnetAlloc(map, used, key, cands) {
-  if (map.has(key)) return map.get(key);
-  const v = cands.find(c => !used.has(c));
-  if (v === undefined) return null;
-  map.set(key, v); used.add(v);
-  return v;
-}
-function anonIPSubnet(ip) {
-  const [a, b, c, d] = ip.split('.').map(Number);
-  let cands;
-  if (a === 10) cands = _octetCandidates(b).map(x => '241.' + x);
-  else if (a === 172 && b >= 16 && b <= 31) cands = Array.from({ length: 16 }, (_, i) => '242.' + (16 + i));
-  else if (a === 192 && b === 168) cands = ['243.168'];
-  else {
-    if (!_subnetPubCands) _subnetPubCands = SUBNET_PUB_FIRST.flatMap(f => Array.from({ length: 254 }, (_, i) => f + '.' + (i + 1)));
-    cands = _subnetPubCands;
-  }
-  const top = _subnetAlloc(subnetMaps.top, subnetMaps.topUsed, a + '.' + b, cands);
-  if (!top) return null;
-  const o3 = _subnetAlloc(subnetMaps.oct3, subnetMaps.oct3Used, top + '|' + c, _octetCandidates(c).map(x => top + '.' + x));
-  return o3 ? o3 + '.' + d : null;
-}
-function registerSubnetMapping(orig, mapped) {
-  if (!isValidIPv4(orig) || !SUBNET_FAKE_RE.test(mapped)) return false;
-  const [a, b, c] = orig.split('.').map(Number);
-  const [x, y, z] = mapped.split('.');
-  const top = x + '.' + y, k = a + '.' + b;
-  if (!subnetMaps.top.has(k)) { subnetMaps.top.set(k, top); subnetMaps.topUsed.add(top); }
-  if (subnetMaps.top.get(k) === top && !subnetMaps.oct3.has(top + '|' + c)) {
-    subnetMaps.oct3.set(top + '|' + c, top + '.' + z); subnetMaps.oct3Used.add(top + '.' + z);
-  }
-  return true;
-}
-// opts.preserveLastOctet（2026-08-20 新增，移植自 config_anonymizer 既有邏輯）：開啟後不同
-// 子網但末位相同的 IP 會被映射成相同的假 IP（保留末段方便交叉比對同一台主機在不同網段的紀錄）
-function anonIP(ip, opts) {
-  const hit = mappings.ip.get(ip);
-  if (hit !== undefined) return hit;
-  if (!isValidIPv4(ip)) return ip;
-  const cls = classifyIP(ip);
-  if (cls === 'skip') return ip;
-  if (anonOutputIPs.has(ip)) return ip;
-  const sub = opts && opts.preserveSubnet ? anonIPSubnet(ip) : null;
-  if (sub) {
-    mappings.ip.set(ip, sub);
-    anonOutputIPs.add(sub);
-    stats.ip++;
-    return sub;
-  }
-  bucketSeen[cls].add(ip);
-  const lastPart = opts && opts.preserveLastOctet ? Number(ip.split('.')[3]) : null;
-  let mapped;
-  const pre = cls === 'n1' ? '192.0.2.' : cls === 'n2' ? '198.51.100.' : '203.0.113.';
-  // 保留末段時若假位址剛好是原檔已有的位址，改用一般配發（否則兩台主機變成同一個位址）
-  if (lastPart != null && !srcIPv4.has(pre + lastPart)) mapped = pre + lastPart;
-  else for (let i = 0; i < 254; i++) { ctrs[cls] = (ctrs[cls] % 254) + 1; mapped = pre + ctrs[cls]; if (!srcIPv4.has(mapped)) break; }
-  mappings.ip.set(ip, mapped);
-  anonOutputIPs.add(mapped);
-  stats.ip++;
-  return mapped;
-}
+// 位址替換核心在共用 anon-core.js（RV16，與 log 工具共用）：IPv4 驗證／分類、IPv4／IPv6 假位址、保留網段結構
+const { isValidIPv4, classifyIP, canonIPv6 } = AnonCore;
+const { anonIP, anonIPSubnet, registerSubnetMapping, anonIPv6 } = AnonCore.create({ mappings, ctrs, stats, anonOutputIPs, srcIPv4, srcIPv6, subnetMaps, bucketSeen });
 function anonHostname(name) {
   if (!name || !String(name).trim()) return name;
   const key = String(name).trim();
@@ -242,38 +162,6 @@ const IPv4_RE = /(?<!\d|\d\.)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?!\d|\.\d)/g;
 // 供情資比對/掃描偵測的候選 IP 擷取共用，此處沿用同一份不重複定義
 // IPv6 正規化（2026-09-29 QB）：同一位址的不同寫法（大小寫、省略前導零、:: 縮寫與否）轉成
 // 8 組小寫、去前導零的標準形式；無法解析（含 IPv4 內嵌等）時回傳 null，維持原本逐字比對
-function canonIPv6(ip) {
-  const s = String(ip).toLowerCase();
-  if (!/^[0-9a-f:]+$/.test(s) || (s.match(/::/g) || []).length > 1) return null;
-  let parts;
-  if (s.includes('::')) {
-    const [a, b] = s.split('::');
-    const head = a ? a.split(':') : [], tail = b ? b.split(':') : [];
-    const fill = 8 - head.length - tail.length;
-    if (fill < 1) return null;
-    parts = [...head, ...Array(fill).fill('0'), ...tail];
-  } else parts = s.split(':');
-  if (parts.length !== 8 || parts.some(p => !/^[0-9a-f]{1,4}$/.test(p))) return null;
-  return parts.map(p => p.replace(/^0+(?=.)/, '')).join(':');
-}
-function anonIPv6(ip) {
-  if (mappings.ip.has(ip)) return mappings.ip.get(ip);
-  // 已配發的假值不再換一次（同一段文字被處理兩次時 2001:db8::1 會再被換成 ::2）
-  if (anonOutputIPs.has(String(ip).toLowerCase())) return ip;
-  // 映射表裡已有同一位址的其他寫法時沿用同一個假值（不新增狀態，匯入的對照表種子與批次共用映射也適用）
-  const c = canonIPv6(ip);
-  if (c) {
-    for (const [k, v] of mappings.ip) {
-      if (k.includes(':') && canonIPv6(k) === c) { mappings.ip.set(ip, v); return v; }
-    }
-  }
-  let mapped;
-  for (let i = 0; i < 1000; i++) { ctrs.ip6++; mapped = `2001:db8::${ctrs.ip6}`; if (!srcIPv6.has(mapped)) break; }
-  mappings.ip.set(ip, mapped);
-  anonOutputIPs.add(mapped);
-  stats.ip++;
-  return mapped;
-}
 const MAC_COLON_RE = /\b([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b/g;
 const MAC_HYPHEN_RE = /\b([0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}\b/g;
 const MAC_DOT_RE = /\b([0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}\b/g;

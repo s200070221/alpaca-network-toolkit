@@ -136,6 +136,7 @@ const FILES = [
   'js/shared/toolkit-version.js',
   'js/shared/toolkit-common.js',
   'js/shared/toolkit-data.js',
+  'js/shared/anon-core.js',
   'js/shared/vuln-check.js',
   'js/shared/vuln-seed.js',
   'js/shared/payload-sniff.js',
