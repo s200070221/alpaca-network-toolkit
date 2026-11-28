@@ -4799,68 +4799,9 @@ function performDiff(){
     }else{
       const oldLines=oldText.split('\n');
       const newLines=newText.split('\n');
-      displayDiff(computeDiff(oldLines,newLines));
+      ToolkitData.renderDiff(document.getElementById('diff-result'),ToolkitData.computeDiff(oldLines,newLines),tr);  // 共用 toolkit-data.js
     }
   });
-}
-function computeDiff(oldLines,newLines){
-  const n=oldLines.length,m=newLines.length;
-  if(n*m>4000000){
-    // 檔案過大（LCS DP table 記憶體/時間成本過高），退回簡易逐行比對，避免瀏覽器分頁卡死
-    return computeDiffSimple(oldLines,newLines);
-  }
-  const dp=Array.from({length:n+1},()=>new Int32Array(m+1));
-  for(let i=n-1;i>=0;i--){
-    for(let j=m-1;j>=0;j--){
-      dp[i][j]=oldLines[i]===newLines[j]?dp[i+1][j+1]+1:Math.max(dp[i+1][j],dp[i][j+1]);
-    }
-  }
-  const diff=[];
-  let i=0,j=0;
-  while(i<n&&j<m){
-    if(oldLines[i]===newLines[j]){diff.push({type:'same',content:oldLines[i]});i++;j++;}
-    else if(dp[i+1][j]>=dp[i][j+1]){diff.push({type:'del',content:oldLines[i]});i++;}
-    else{diff.push({type:'add',content:newLines[j]});j++;}
-  }
-  while(i<n){diff.push({type:'del',content:oldLines[i]});i++;}
-  while(j<m){diff.push({type:'add',content:newLines[j]});j++;}
-  return diff;
-}
-function computeDiffSimple(oldLines,newLines){
-  // 舊版逐 index 比對邏輯，僅作超大檔案 fallback（非真正 diff，只在檔案過大無法跑 LCS 時使用）
-  const diff=[];
-  const maxLen=Math.max(oldLines.length,newLines.length);
-  for(let i=0;i<maxLen;i++){
-    const old=oldLines[i]||'';
-    const newL=newLines[i]||'';
-    if(old===newL)diff.push({type:'same',content:old});
-    else if(!old)diff.push({type:'add',content:newL});
-    else if(!newL)diff.push({type:'del',content:old});
-    else{diff.push({type:'del',content:old});diff.push({type:'add',content:newL});}
-  }
-  return diff;
-}
-function displayDiff(diff){
-  const resultDiv=document.getElementById('diff-result');
-  if(!resultDiv)return;
-  resultDiv.style.display='block';
-  let html='';
-  let addCount=0,delCount=0;
-  diff.forEach(item=>{
-    if(item.type==='same'){
-      html+=`<div style="color:var(--text-dim)">${esc(item.content)}</div>`;
-    }else if(item.type==='add'){
-      html+=`<div style="color:var(--green);background:rgba(16,185,129,.1)">+ ${esc(item.content)}</div>`;
-      addCount++;
-    }else if(item.type==='del'){
-      html+=`<div style="color:var(--red);background:rgba(239,68,68,.1)">- ${esc(item.content)}</div>`;
-      delCount++;
-    }
-  });
-  const summary=`<div style="border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:8px;font-weight:600">
-    📊 ${esc(tr('diff.added'))} ${addCount} | ${esc(tr('diff.deleted'))} ${delCount} | ${esc(tr('diff.total'))} ${diff.length}
-  </div>`;
-  resultDiv.innerHTML=summary+html;
 }
 
 // 結構化 diff 渲染：不可逐字複製 firewall-analyzer-audit.js 的 buildDiffHtml/_buildDiffSection——

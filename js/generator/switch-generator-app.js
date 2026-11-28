@@ -2866,7 +2866,7 @@ function renderSessionDiff(oldCfg,newCfg){
   const box=document.getElementById('session-diff-result');
   if(!box)return;
   if(oldCfg===null||oldCfg===newCfg){box.style.display='none';box.innerHTML='';return;}
-  const diff=computeDiff(oldCfg.split('\n'),newCfg.split('\n'));
+  const diff=ToolkitData.computeDiff(oldCfg.split('\n'),newCfg.split('\n'));
   const addCount=diff.filter(d=>d.type==='add').length;
   const delCount=diff.filter(d=>d.type==='del').length;
   if(!addCount&&!delCount){box.style.display='none';box.innerHTML='';return;}
@@ -2889,7 +2889,7 @@ function toggleImportDiff(){
   if(box.style.display==='block'){box.style.display='none';return;}
   const out=document.getElementById('output').value;
   if(!_importedOriginalText||!out){box.innerHTML=`<div>${escapeHtml(tr('importDiff.needBoth'))}</div>`;box.style.display='block';return;}
-  const diff=computeDiff(normalizeConfigLinesForDiff(_importedOriginalText),normalizeConfigLinesForDiff(out));
+  const diff=ToolkitData.computeDiff(normalizeConfigLinesForDiff(_importedOriginalText),normalizeConfigLinesForDiff(out));
   const addCount=diff.filter(d=>d.type==='add').length;
   const delCount=diff.filter(d=>d.type==='del').length;
   const head=`<div style="border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:8px;font-weight:600">⇄ ${escapeHtml(tr('importDiff.title'))}：${tr('diff.added')} ${addCount} | ${tr('diff.deleted')} ${delCount}</div><div style="margin-bottom:6px;color:var(--text-dim)">${escapeHtml(tr('importDiff.hint'))}</div>`;
@@ -3917,74 +3917,11 @@ function performDiff(){
   Promise.all([oldFile.text(),newFile.text()]).then(([oldText,newText])=>{
     const oldLines=oldText.split('\n');
     const newLines=newText.split('\n');
-    const result=computeDiff(oldLines,newLines);
-    displayDiff(result);
+    ToolkitData.renderDiff(document.getElementById('diff-result'),ToolkitData.computeDiff(oldLines,newLines),tr);  // 共用 toolkit-data.js
   });
 }
 
-// 簡單的 LCS（最長公共子序列）based diff 算法
-function computeDiff(oldLines,newLines){
-  const n=oldLines.length,m=newLines.length;
-  if(n*m>4000000){
-    // 檔案過大（LCS DP table 記憶體/時間成本過高），退回簡易逐行比對，避免瀏覽器分頁卡死
-    return computeDiffSimple(oldLines,newLines);
-  }
-  const dp=Array.from({length:n+1},()=>new Int32Array(m+1));
-  for(let i=n-1;i>=0;i--){
-    for(let j=m-1;j>=0;j--){
-      dp[i][j]=oldLines[i]===newLines[j]?dp[i+1][j+1]+1:Math.max(dp[i+1][j],dp[i][j+1]);
-    }
-  }
-  const diff=[];
-  let i=0,j=0;
-  while(i<n&&j<m){
-    if(oldLines[i]===newLines[j]){diff.push({type:'same',content:oldLines[i]});i++;j++;}
-    else if(dp[i+1][j]>=dp[i][j+1]){diff.push({type:'del',content:oldLines[i]});i++;}
-    else{diff.push({type:'add',content:newLines[j]});j++;}
-  }
-  while(i<n){diff.push({type:'del',content:oldLines[i]});i++;}
-  while(j<m){diff.push({type:'add',content:newLines[j]});j++;}
-  return diff;
-}
-function computeDiffSimple(oldLines,newLines){
-  // 舊版逐 index 比對邏輯，僅作超大檔案 fallback（非真正 diff，只在檔案過大無法跑 LCS 時使用）
-  const diff=[];
-  const maxLen=Math.max(oldLines.length,newLines.length);
-  for(let i=0;i<maxLen;i++){
-    const old=oldLines[i]||'';
-    const newL=newLines[i]||'';
-    if(old===newL)diff.push({type:'same',content:old});
-    else if(!old)diff.push({type:'add',content:newL});
-    else if(!newL)diff.push({type:'del',content:old});
-    else{diff.push({type:'del',content:old});diff.push({type:'add',content:newL});}
-  }
-  return diff;
-}
 
-function displayDiff(diff){
-  const resultDiv=document.getElementById('diff-result');
-  resultDiv.style.display='block';
-  let html='';
-  let addCount=0,delCount=0;
-
-  diff.forEach(item=>{
-    if(item.type==='same'){
-      html+=`<div style="color:var(--text-dim)">${escapeHtml(item.content)}</div>`;
-    }else if(item.type==='add'){
-      html+=`<div style="color:var(--green);background:rgba(16,185,129,.1)">+ ${escapeHtml(item.content)}</div>`;
-      addCount++;
-    }else if(item.type==='del'){
-      html+=`<div style="color:var(--red);background:rgba(239,68,68,.1)">- ${escapeHtml(item.content)}</div>`;
-      delCount++;
-    }
-  });
-
-  const summary=`<div style="border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:8px;font-weight:600">
-    📊 ${tr('diff.added')} ${addCount} | ${tr('diff.deleted')} ${delCount} | ${tr('diff.total')} ${diff.length}
-  </div>`;
-
-  resultDiv.innerHTML=summary+html;
-}
 
 function escapeHtml(text){
   const div=document.createElement('div');
@@ -4238,10 +4175,13 @@ function csvCell(v){
 }
 // 2026-09（續）資安審查修復（Zip Slip）：devicename 同樣來自使用者上傳的批次 CSV，且完全不
 // 經過任何 <input> 元素（不像 hostname/介面描述等欄位天生受瀏覽器 value 消毒演算法保護），
-// 直接被當成 window.bulkConfigs 的鍵、最終寫入 ZIP 壓縮檔的項目名稱（見 switch-generator-zip.js
-// 的 createZip()）。若不清理，惡意 CSV 內容如 "../../evil" 會讓下載的 ZIP 內含路徑穿越項目名稱，
+// 直接被當成 window.bulkConfigs 的鍵、最終寫入 ZIP 壓縮檔的項目名稱（見 createZip()（toolkit-data.js））。若不清理，惡意 CSV 內容如 "../../evil" 會讓下載的 ZIP 內含路徑穿越項目名稱，
 // 使用者日後用較舊/未防護的解壓工具解壓縮時可能寫出到預期目錄之外——清理路徑分隔符號與連續
 // 句點，取代成底線，避免任何巡遊可能
+// 批次／Ansible 匯出 ZIP：files 為 {檔名: 內容}，另附 manifest.csv；寫入器在共用 toolkit-data.js
+function createZip(files,manifestContent){
+  return ToolkitData.createZip(Object.entries({...files,'manifest.csv':manifestContent}).map(([name,text])=>({name,text})));
+}
 function sanitizeZipEntryName(name){
   return String(name==null?'':name)
     .replace(/[\\/]+/g,'_')
@@ -4277,8 +4217,7 @@ function downloadBulkZip(){
 // 移植自 config_anonymizer 的 makeZip()：舊版用 String.fromCharCode 拼字串
 // 再 TextEncoder 編碼，byte 值 ≥128 時會被誤當 UTF-8 多位元組編碼，導致中央
 // 目錄位移損毀；CRC-32 也原本恆為 0，一併修正為真正計算）
-// crc32() 已搬到 switch-generator-zip.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
-// createZip() 已搬到 switch-generator-zip.js（2026-09，純函式零 DOM 依賴，比照 switch_analyzer 側 switch-analyzer-topology.js／switch-analyzer-audit.js 同批拆分先例）
+// crc32()／ZIP 寫入器在共用 toolkit-data.js（RV16）
 
 // 純 JavaScript 文件下載（不依賴外部庫）
 function downloadFile(data,filename,mimeType='application/octet-stream'){

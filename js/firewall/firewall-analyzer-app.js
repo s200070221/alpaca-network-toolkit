@@ -2292,7 +2292,7 @@ function onParsed(){
       let convStatusHtml=`<span style="color:var(--green)">${tr('conv.done')}</span> — ${CONV_RESULT.split('\n').length} ${tr('conv.lines_unit')}  |  ${(CONV_RESULT.length/1024).toFixed(1)} KB`
         +` <button type="button" class="btn btn-ghost btn-sm" data-conv-report style="margin-left:8px">📄 ${tr('crpt.download')}</button>`
         +(()=>{ /* 匯入包（XN146／XN147）：逐行執行的廠牌為順序包，整份載入的廠牌為說明包 */
-          const k=window.FwZip&&Converter.importPackKind?Converter.importPackKind(targetVendor):null; if(!k) return '';
+          const k=window.ToolkitData&&Converter.importPackKind?Converter.importPackKind(targetVendor):null; if(!k) return '';
           const bk=k==='order'?'imp.btn':'imp.btn_guide';
           return ` <button type="button" class="btn btn-ghost btn-sm" data-conv-pack style="margin-left:8px" title="${esc(tr(bk+'_tip'))}">📦 ${tr(bk)}</button>`; })();
       const warnHtml=buildConversionWarningsHtml(srcParsed, targetVendor, _pm.applied ? { portModel: _pm.appliedModel } : null);
@@ -2531,14 +2531,14 @@ function onParsed(){
 
   // FortiGate 匯入順序包（XN146）：依參照順序拆成編號檔案＋00_README_order.txt，打包成 zip
   function buildConvPack(){
-    if(!CONV_RESULT||!window.FwZip||!Converter.importPackKind(CONV_TARGET))return null;
+    if(!CONV_RESULT||!window.ToolkitData||!Converter.importPackKind(CONV_TARGET))return null;
     const src=(_CONV_NAMES[_pm.src]||_pm.src||'')+(_pm.vdom?` (VDOM ${_pm.vdom})`:'')+(_pm.applied&&_pm.appliedModel?` → ${_pm.appliedModel}`:'');
     return Converter.buildImportPack(CONV_TARGET,CONV_RESULT,tr,{ source:src, vendorName:_CONV_NAMES[CONV_TARGET]||CONV_TARGET, parsed:_pm.parsed, convParsed:_pm.convInput||_pm.parsed });
   }
   function downloadConvPack(){
     const files=buildConvPack();
     if(!files){showErr(tr('conv.no_result'));return;}
-    const blob=new Blob([window.FwZip.createZip(files)],{type:'application/zip'});
+    const blob=new Blob([window.ToolkitData.createZip(files)],{type:'application/zip'});
     const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`fw_${CONV_TARGET}_import_${dateStr()}.zip`;
     document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
   }
@@ -2559,7 +2559,7 @@ function onParsed(){
     };
     const files=Converter.buildVdomPack(srcParsed,target,tr,{ ext:CONV_EXT[target]||'txt', vendorName:_CONV_NAMES[target]||target, srcName:_CONV_NAMES[src]||src, verify });
     if(!files){showErr(tr('conv.vdom_required'));return;}
-    const blob=new Blob([window.FwZip.createZip(files)],{type:'application/zip'});
+    const blob=new Blob([window.ToolkitData.createZip(files)],{type:'application/zip'});
     const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`fw_${target}_all_vdoms_${dateStr()}.zip`;
     document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
   }

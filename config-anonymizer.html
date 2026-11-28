@@ -6,6 +6,7 @@
 <!-- preload:begin（scripts/sync_preload.py 產生，勿手改） -->
 <link rel="preload" as="script" href="js/shared/toolkit-version.js">
 <link rel="preload" as="script" href="js/shared/toolkit-common.js">
+<link rel="preload" as="script" href="js/shared/toolkit-data.js">
 <link rel="preload" as="script" href="js/shared/payload-sniff.js">
 <link rel="preload" as="script" href="js/shared/alpaca-buddy.js">
 <!-- preload:end -->
@@ -334,6 +335,7 @@ select.vendor-sel{background:var(--surface2);border:1px solid var(--border2);col
 </style>
 <script src="js/shared/toolkit-version.js"></script>
 <script src="js/shared/toolkit-common.js"></script>
+<script src="js/shared/toolkit-data.js"></script>
 <script src="js/shared/payload-sniff.js"></script>
 <script src="js/shared/alpaca-buddy.js"></script>
 </head>
@@ -5549,77 +5551,9 @@ function exportBatchMapping() {
 function _strToU8(s) {
   return new TextEncoder().encode(s);
 }
-function crc32(buf) {
-  let c = ~0;
-  const t = (() => {
-    const T = new Uint32Array(256);
-    for (let i = 0; i < 256; i++) { let v = i; for (let j = 0; j < 8; j++) v = (v & 1) ? (0xEDB88320 ^ (v >>> 1)) : (v >>> 1); T[i] = v; }
-    return T;
-  })();
-  for (let i = 0; i < buf.length; i++) c = t[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
-  return (~c) >>> 0;
-}
+// 寫入器在共用 toolkit-data.js；entries：[{name, data: Uint8Array}]
 function makeZip(entries) {
-  const enc = (s) => new TextEncoder().encode(s);
-  const u16 = (n) => [n & 0xFF, (n >> 8) & 0xFF];
-  const u32 = (n) => [n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF, (n >> 24) & 0xFF];
-  const now = new Date();
-  const dosTime = ((now.getHours()<<11)|(now.getMinutes()<<5)|(now.getSeconds()>>1));
-  const dosDate = (((now.getFullYear()-1980)<<9)|((now.getMonth()+1)<<5)|now.getDate());
-  const parts = [];
-  const centralDir = [];
-  let offset = 0;
-  for (const entry of entries) {
-    const nameBytes = enc(entry.name);
-    const data = entry.data;
-    const crc = crc32(data);
-    const size = data.length;
-    // local file header
-    const lhdr = new Uint8Array([
-      0x50,0x4B,0x03,0x04, // signature
-      0x14,0x00,           // version needed
-      0x00,0x08,           // flags：bit 11 = 檔名為 UTF-8（避免中文檔名亂碼）
-      0x00,0x00,           // compression (stored)
-      ...u16(dosTime), ...u16(dosDate),
-      ...u32(crc),
-      ...u32(size), ...u32(size),
-      ...u16(nameBytes.length), 0x00,0x00, // filename len, extra len
-    ]);
-    parts.push(lhdr, nameBytes, data);
-    // central dir entry
-    const cdEntry = new Uint8Array([
-      0x50,0x4B,0x01,0x02,
-      0x14,0x00, 0x14,0x00,
-      0x00,0x08, 0x00,0x00, // flags：bit 11 = UTF-8 檔名，與 local header 一致
-      ...u16(dosTime), ...u16(dosDate),
-      ...u32(crc),
-      ...u32(size), ...u32(size),
-      ...u16(nameBytes.length), 0x00,0x00, // filename length, extra field length
-      0x00,0x00,             // file comment length
-      0x00,0x00,             // disk number start
-      0x00,0x00,             // internal file attributes
-      0x00,0x00,0x00,0x00,   // external file attributes（此前誤寫成 8 bytes，會讓中央目錄
-                              // 每筆多 4 bytes 偏移，多檔案 zip 會整個損毀，2026-07-21 移植
-                              // 到 switch_config_generator 驗證時發現並回頭修正）
-      ...u32(offset),         // relative offset of local header
-    ]);
-    centralDir.push(cdEntry, nameBytes);
-    offset += lhdr.length + nameBytes.length + size;
-  }
-  const cdSize = centralDir.reduce((s,b) => s+b.length, 0);
-  const eocd = new Uint8Array([
-    0x50,0x4B,0x05,0x06,
-    0x00,0x00, 0x00,0x00,
-    ...u16(entries.length), ...u16(entries.length),
-    ...u32(cdSize), ...u32(offset),
-    0x00,0x00,
-  ]);
-  const all = [...parts, ...centralDir, eocd];
-  const total = all.reduce((s,b) => s+b.length, 0);
-  const out = new Uint8Array(total);
-  let pos = 0;
-  for (const b of all) { out.set(b, pos); pos += b.length; }
-  return new Blob([out], { type: 'application/zip' });
+  return new Blob([ToolkitData.createZip(entries)], { type: 'application/zip' });
 }
 
 function setButtons(enabled) {
