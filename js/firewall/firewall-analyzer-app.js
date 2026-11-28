@@ -1196,6 +1196,8 @@ function onParsed(){
     $('tbl-wrap').style.padding=['summary','snmp','log','audit','query'].includes(sec)?'12px 18px':'';
     // 摘要頁沒有表格，搜尋列與匯出 CSV 不適用（XN51）
     const _tbar=document.querySelector('#view-data .tbar'); if(_tbar) _tbar.style.display=sec==='summary'?'none':'';
+    // 表格頁尾（筆數）在摘要頁也用不到，原本留下一條空白列（UX41）
+    const _tfoot=document.querySelector('#view-data .tbl-foot'); if(_tfoot) _tfoot.style.display=sec==='summary'?'none':'';
     $('tbl-section-label').textContent=(typeof SEC_LABELS[sec]==='function'?SEC_LABELS[sec]():SEC_LABELS[sec])||sec;
     const d=PARSED;
     let data,sumCards,thead,rowFn,_extraHtml='';

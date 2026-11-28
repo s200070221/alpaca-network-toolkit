@@ -1397,12 +1397,15 @@ function buildF5ScopeHtml(box,pfx){
 }
 window.buildF5ScopeHtml=buildF5ScopeHtml;
 function buildFwSummaryHtml(st){
-  const h=st.health,p=st.parsed||{},info=p.deviceInfo||{},v=st.vuln;
+  const h=st.health,p=st.parsed||{},v=st.vuln;
   const box='padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);margin-bottom:14px';
+  const cnt=k=>(p[k]||[]).length;
   let o=`<div id="fw-summary">`;
   o+=`<div style="${box};display:flex;gap:18px;align-items:center;flex-wrap:wrap"><div style="font-size:40px;font-weight:800;color:${h.gradeColor};line-height:1">${esc(h.grade)}</div>`
     +`<div><div style="font-size:15px;font-weight:700">${esc(tr('sum.health').replace('{score}',h.score))}</div>`
-    +`<div style="font-size:12px;color:var(--text-dim);margin-top:2px">${esc(tr('exec.grade_'+h.grade))}</div></div></div>`;
+    +`<div style="font-size:12px;color:var(--text-dim);margin-top:2px">${esc(tr('exec.grade_'+h.grade))}</div>`
+    // 規則／介面／NAT／VPN 數併在健康度卡內；廠牌、主機名稱與版本頂端標題已有，不再另開設備卡（UX41）
+    +`<div style="font-size:12px;margin-top:6px">${esc(tr('sum.counts').replace('{pol}',cnt('policies')).replace('{intf}',cnt('interfaces')).replace('{nat}',cnt('nat')).replace('{vpn}',cnt('vpn')))}</div></div></div>`;
   const top=(st.prio||[]).slice(0,3);
   // 標題寫出實際列出數與總數，避免「高風險 N 類」與只列 3 件看起來對不上（UX12）
   const prioN=(st.prio||[]).length;
@@ -1413,10 +1416,6 @@ function buildFwSummaryHtml(st){
   // F5 BIG-IP（XN116）：負載平衡器只分析部分項目，摘要頁明列涵蓋與不涵蓋的範圍
   if(/F5 BIG-IP/.test(p.vendor||'')) o+=buildF5ScopeHtml(box);
   if(p.vendor==='Cisco IOS') o+=buildF5ScopeHtml(box,'ios');
-  const cnt=k=>(p[k]||[]).length;
-  o+=`<div style="${box};font-size:12px"><div style="font-weight:600;margin-bottom:4px">${esc(tr('sum.device'))}</div>`
-    +`<div class="mono" style="color:var(--text-dim)">${esc([p.vendor,info.hostname,info.firmware].filter(x=>x&&x!=='-').join(' · '))}</div>`
-    +`<div style="margin-top:4px">${esc(tr('sum.counts').replace('{pol}',cnt('policies')).replace('{intf}',cnt('interfaces')).replace('{nat}',cnt('nat')).replace('{vpn}',cnt('vpn')))}</div></div>`;
   // 實體接線示意圖（XN190）
   if(window.FwPanel) o+=window.FwPanel.panelHtml(p);
   const btn=(fn,k)=>`<button class="btn btn-ghost btn-sm" onclick="${fn}">${esc(tr(k))}</button>`;

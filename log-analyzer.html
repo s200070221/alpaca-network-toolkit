@@ -154,7 +154,8 @@ input.txt{background:var(--surface2);border:1px solid var(--border2);border-radi
 #import-card .import-compact{display:none;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--text-mid);margin:-2px 0 8px}
 #import-card.compact .import-compact{display:flex}
 #import-card.compact > .hint,#import-card.compact > details,#import-card.compact > .large-file-notice{display:none}
-#import-card.compact #paste-area{height:44px;min-height:44px}
+/* 收合時連貼上框與按鈕列也收起，只留一行摘要與「顯示匯入區」（UX41）；展開後照舊 */
+#import-card.compact #paste-area,#import-card.compact #paste-area + .btn-row{display:none}
 .large-file-notice{font-size:11px;color:var(--text-dim);padding:8px 10px;background:var(--surface2);border:1px dashed var(--border2);border-radius:8px;margin-bottom:8px}
 .timeline-wrap{margin-bottom:10px}
 .timeline-label{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
@@ -216,7 +217,7 @@ section.card{scroll-margin-top:64px}
 @media (max-width:720px){.next-bar{flex-wrap:nowrap;overflow-x:auto;white-space:nowrap}.next-bar>*{flex:none}.nb-nav{margin-left:0}.nb-nav button{min-height:32px}.exp-menu[open]{flex-basis:100%}.exp-menu-panel{position:static;width:auto;margin-top:6px;box-shadow:none}.exp-menu-panel button{min-height:32px}}
 /* UX29：手機寬度加大點擊目標（至少 32px）；8 頁相同，只影響 ≤720px */
 @media (max-width:720px){
-  .lang-btn,.theme-btn,#theme-btn,.tools-nav-btn,#tools-nav-btn,.sb-toggle,.howto-copy,.rm-btn,.note-btn,.btn-sm,#t-back,#t-intel-builder,#send-to-tool-select,#filter-preset-select{min-height:32px;min-width:32px}
+  .lang-btn,.theme-btn,#theme-btn,.tools-nav-btn,#tools-nav-btn,.sb-toggle,.howto-copy,.rm-btn,.note-btn,.btn-sm,#t-back,#t-intel-builder,#send-to-tool-select,#filter-preset-select,#sec-nav-sel{min-height:32px;min-width:32px}
   .actor-link,.fwq-btn,.rel-btn,#t-intel-builder,.tag-more,#ws-export-btn,#ws-import-btn{display:inline-block;padding:6px 4px;min-height:32px;box-sizing:border-box}
   #gl-search{min-height:32px}
   .fwq-btn{min-width:32px;text-align:center}

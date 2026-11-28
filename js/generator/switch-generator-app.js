@@ -5199,6 +5199,61 @@ function discardDraft(){try{localStorage.removeItem(DRAFT_KEY);}catch(e){}_close
   tkGlossary(labelRowInputs);
 })();
 
+// 段落導覽（UX41）：表單有幾十張卡片（依廠牌顯示），寬螢幕在左側 #sec-nav 列出目前看得到的卡片並標出所在段落，
+// 窄螢幕用底部產生列的 #sec-nav-sel 跳轉。卡片顯示／隱藏或切換語言（h2 文字改變）時重建
+(function(){
+  var nav=document.getElementById('sec-nav'), sel=document.getElementById('sec-nav-sel'), wrap=document.querySelector('.wrap');
+  if(!nav||!sel||!wrap) return;
+  var cards=[], raf=0, timer=null, seq=0;
+  function titleOf(card){var h=card.querySelector('h2');return h?(h.textContent||'').replace(/ⓘ/g,'').trim():'';}
+  function visibleCards(){
+    var out=[];
+    wrap.querySelectorAll(':scope > .card').forEach(function(c){
+      if(c.id==='generate-card'||c.offsetParent===null) return;
+      var t=titleOf(c); if(!t) return;
+      if(!c.id) c.id='gen-sec-'+(++seq);
+      out.push({id:c.id,title:t});
+    });
+    return out;
+  }
+  function go(id){var c=document.getElementById(id);if(c)c.scrollIntoView({behavior:'smooth',block:'start'});}
+  function build(){
+    var list=visibleCards();
+    nav.textContent='';
+    var h=document.createElement('div');h.className='sn-title';h.textContent=tr('gen.secnav_title');nav.appendChild(h);
+    list.forEach(function(x){var a=document.createElement('a');a.href='#'+x.id;a.dataset.sec=x.id;a.textContent=x.title;a.title=x.title;nav.appendChild(a);});
+    nav.setAttribute('aria-label',tr('gen.secnav_title'));
+    nav.hidden=!list.length;
+    sel.textContent='';
+    var o0=document.createElement('option');o0.value='';o0.textContent=tr('gen.secnav_jump');sel.appendChild(o0);
+    list.forEach(function(x){var o=document.createElement('option');o.value=x.id;o.textContent=x.title;sel.appendChild(o);});
+    sel.setAttribute('aria-label',tr('gen.secnav_jump'));
+    cards=list.map(function(x){return document.getElementById(x.id);});
+    place();
+  }
+  // 位置與目前段落：側欄頂端對齊表單開頭（不蓋住上方提示列），捲動後固定在 80px；
+  // 目前段落＝頂端已捲到視窗上方 50px 內的最後一張卡，捲到頁底時為最後一張
+  function place(){
+    raf=0;
+    var top=Math.max(80,Math.round(wrap.getBoundingClientRect().top));
+    nav.style.top=top+'px'; nav.style.maxHeight='calc(100vh - '+(top+90)+'px)';
+    var cur=null, atEnd=window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-4;
+    for(var i=0;i<cards.length;i++){ if(cards[i]&&cards[i].getBoundingClientRect().top<=50) cur=cards[i]; }
+    if(atEnd&&cards.length) cur=cards[cards.length-1];
+    if(!cur&&cards.length) cur=cards[0];
+    nav.querySelectorAll('a').forEach(function(a){a.classList.toggle('active',!!cur&&a.dataset.sec===cur.id);});
+  }
+  function onScroll(){ if(!raf) raf=requestAnimationFrame(place); }
+  window.addEventListener('scroll',onScroll,{passive:true});
+  window.addEventListener('resize',onScroll);
+  function schedule(){clearTimeout(timer);timer=setTimeout(build,150);}
+  nav.addEventListener('click',function(e){var a=e.target.closest('a[data-sec]');if(!a)return;e.preventDefault();go(a.dataset.sec);});
+  sel.addEventListener('change',function(){if(sel.value)go(sel.value);sel.value='';});
+  new MutationObserver(schedule).observe(wrap,{attributes:true,attributeFilter:['style','class','hidden'],subtree:true,childList:true,characterData:true});
+  window.buildSectionNav=build;
+  schedule();
+})();
+
 // 入口頁「看範例」（第二十九輪 NU4）：網址帶 ?demo=1 時開頁即載入範例並分析
 window.addEventListener('load', function () { if (/[?&]demo=1(?:&|$)/.test(location.search)) setTimeout(function () { loadExampleData(); if (typeof generate === 'function') generate(); showDemoBanner(); }, 0); });
 // UX30：範例模式第一屏是空白的匯入區，看不出範例已帶入表單；在頂端提示並提供跳到表單／產生結果

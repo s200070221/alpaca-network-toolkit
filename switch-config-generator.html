@@ -107,6 +107,16 @@ td input.i-name{min-width:170px}
 /* 「產生設定」按鈕卡片改為固定懸浮在畫面下方，避免長表單捲動時找不到按鈕；
    z-index 低於 .validation-panel(5000)/.mini-alpaca(9999)，避免懸浮元件互相遮擋 */
 #generate-card{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:4000;width:auto;max-width:calc(100vw - 32px);margin:0;box-shadow:0 6px 20px rgba(0,0,0,.35)}
+/* 段落導覽（UX41）：寬螢幕在左側固定欄列出可見的卡片，目前段落反白；窄螢幕改用底部產生列裡的下拉選單 */
+#sec-nav{position:fixed;top:80px;left:16px;width:170px;max-height:calc(100vh - 170px);overflow-y:auto;z-index:3900;font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px}
+#sec-nav[hidden]{display:none}
+#sec-nav .sn-title{font-weight:700;color:var(--text-dim);margin:0 0 4px 6px}
+#sec-nav a{display:block;padding:3px 6px;border-radius:4px;color:var(--text-mid);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sec-nav a:hover{color:var(--text)}
+#sec-nav a.active{background:var(--accent);color:#fff}
+#sec-nav-sel{margin-left:10px;max-width:220px}
+@media(max-width:1439px){#sec-nav{display:none}}
+@media(min-width:1440px){#sec-nav-sel{display:none}}
 /* 寬螢幕時移到左下角空白處，不蓋住置中的表單（UX17）；窄螢幕仍置中，頁底由羊駝模組留白 */
 @media(min-width:1440px){#generate-card{left:16px;transform:none}}
 /* 1440 以下沒有左側空白可放，改成整條底部列（實底色），內容從列下方捲過，不會只蓋住欄位標籤的一半（UX22）；頁底留出列的高度 */
@@ -161,7 +171,7 @@ body[data-theme="light"] .notice{color:#92400e}
 @keyframes matrixDrop{0%{transform:translateY(-120%);}100%{transform:translateY(110vh);}}
 
 /* ── 表單驗證 UI ── */
-.validation-panel{position:fixed;top:70px;right:20px;z-index:5000;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;max-width:320px;max-height:400px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:opacity .2s;font-size:11px}
+.validation-panel{position:fixed;bottom:72px;right:20px;z-index:5000;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;max-width:320px;max-height:400px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:opacity .2s;font-size:11px}
 .validation-panel.show{opacity:1;pointer-events:auto}
 .validation-panel h3{font-size:12px;font-weight:700;margin-bottom:8px;color:var(--accent)}
 .validation-item{margin-bottom:6px;padding:6px;border-radius:4px;border-left:3px solid;font-family:Menlo,'Courier New',monospace}
@@ -227,7 +237,7 @@ input.valid,select.valid{border-color:var(--green)!important}
 .qs-compact{display:inline-flex;align-items:center;gap:4px;font-size:12px;cursor:pointer}
 /* UX29：手機寬度加大點擊目標（至少 32px）；8 頁相同，只影響 ≤720px */
 @media (max-width:720px){
-  .lang-btn,.theme-btn,#theme-btn,.tools-nav-btn,#tools-nav-btn,.sb-toggle,.howto-copy,.rm-btn,.note-btn,.btn-sm,#t-back,#t-intel-builder,#send-to-tool-select,#filter-preset-select{min-height:32px;min-width:32px}
+  .lang-btn,.theme-btn,#theme-btn,.tools-nav-btn,#tools-nav-btn,.sb-toggle,.howto-copy,.rm-btn,.note-btn,.btn-sm,#t-back,#t-intel-builder,#send-to-tool-select,#filter-preset-select,#sec-nav-sel{min-height:32px;min-width:32px}
   .actor-link,.fwq-btn,.rel-btn,#t-intel-builder,.tag-more,#ws-export-btn,#ws-import-btn{display:inline-block;padding:6px 4px;min-height:32px;box-sizing:border-box}
   #gl-search{min-height:32px}
   .fwq-btn{min-width:32px;text-align:center}
@@ -294,6 +304,7 @@ input.valid,select.valid{border-color:var(--green)!important}
 
 <div class="notice" data-i18n="notice.disclaimer">此功能匯出之設定檔僅供參考，請謹慎使用</div>
 
+<nav id="sec-nav" hidden aria-label="段落"></nav>
 <div class="wrap">
 
   <div id="tour" class="tour" role="note" hidden><div class="tour-title" data-i18n="tour.title">第一次使用？三步驟上手</div><ol class="tour-steps"><li data-i18n="tour.s1">在「基本資訊」選擇廠牌與常用機種，或先「載入範例資料」看看</li><li data-i18n="tour.s2">填寫主機名稱、VLAN 與介面，其他功能卡片用不到可以留空</li><li data-i18n="tour.s3">按「產生設定」，看過產生前稽核與提示再複製或下載</li></ol><button type="button" class="tour-ok" data-i18n="tour.ok" onclick="tourDone()">知道了，不再顯示</button></div>
@@ -1378,6 +1389,7 @@ end</pre>
 
   <div class="card" id="generate-card">
     <button class="gen-btn" data-i18n="btn.generate" onclick="generate()">產生設定</button>
+    <select id="sec-nav-sel" aria-label="跳到段落"></select>
   </div>
 
   <div class="card" style="display:none" id="bulk-card">
